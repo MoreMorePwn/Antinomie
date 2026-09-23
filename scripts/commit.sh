@@ -97,6 +97,6 @@ Series:         $SERIES
 Core patch:     $corepatch
 
 Next:
-  git commit -m "antinomie: ${desc}"
+  git commit -m "${desc}"
   git push
 EOF

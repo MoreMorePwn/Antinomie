@@ -55,7 +55,15 @@ if [ ! -d "$CORE/.git" ]; then
     git config user.email >/dev/null 2>&1 || git config user.email "antinomie@localhost"
     git config user.name  >/dev/null 2>&1 || git config user.name  "Antinomie Builder"
     printf '.pc/\ndebian/build/\ndebian/stamps/\n*.deb\n' >> .git/info/exclude
-    git add -A
+    # The kernel .gitignore ignores everything at the top level (`/*` with
+    # `!/debian/`), which would hide the source tree and block adding new
+    # files. Neutralise it in the author repo; .gitignore is not kernel code,
+    # so this never reaches a generated patch.
+    sed -i -e '/ignore everything at the top level/d' \
+           -e '/included in our repository/d' \
+           -e '/^\/\*$/d' -e '/^!\/debian\/$/d' .gitignore
+    git add -A -f
+    git reset -q -- .pc 2>/dev/null || true
     git commit -q -m "baseline: $ADAPTER ($SOURCE_VERSION)"
     git branch -M "$UPSTREAM_LINE"
     git tag "baseline/$ADAPTER"
