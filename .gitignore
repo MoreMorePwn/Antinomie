@@ -1,0 +1,21 @@
+# ---------------------------------------------------------------------------
+# Disposable per-adapter work trees. Rebuilt by scripts/bootstrap.sh; never
+# committed. See CONTRIBUTING.md.
+# ---------------------------------------------------------------------------
+/work/
+
+# Build products
+*.deb
+*.udeb
+*.changes
+*.buildinfo
+*.build
+
+# Quilt state and generated images
+.pc/
+*.qcow2
+
+# Editor / OS noise
+*.swp
+*.swo
+.DS_Store
