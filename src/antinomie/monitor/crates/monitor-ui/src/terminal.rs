@@ -1,3 +1,4 @@
+use crate::theme;
 use eframe::egui::{self, Color32, FontId, Key, Sense};
 
 pub struct Terminal {
@@ -55,7 +56,7 @@ impl Terminal {
             }
         }
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0.0, Color32::from_rgb(27, 30, 33));
+        painter.rect_filled(rect, 0.0, theme::TERMINAL);
         let screen = self.parser.screen();
         for row in 0..rows {
             for col in 0..cols {
@@ -63,8 +64,8 @@ impl Terminal {
                     continue;
                 };
                 let pos = rect.min + egui::vec2(f32::from(col) * cell.x, f32::from(row) * cell.y);
-                let mut fg = color(content.fgcolor(), Color32::from_rgb(224, 228, 232));
-                let mut bg = color(content.bgcolor(), Color32::from_rgb(27, 30, 33));
+                let mut fg = color(content.fgcolor(), theme::TEXT);
+                let mut bg = color(content.bgcolor(), theme::TERMINAL);
                 if content.inverse() {
                     std::mem::swap(&mut fg, &mut bg);
                 }
@@ -202,5 +203,37 @@ fn color(value: vt100::Color, default: Color32) -> Color32 {
             };
             Color32::from_rgb(rgb[0], rgb[1], rgb[2])
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vt100_parser_keeps_terminal_state_and_ansi_colors() {
+        let mut terminal = Terminal::default();
+        terminal.process(b"hello\r\n\x1b[31mred\x1b[0m");
+        assert!(terminal.parser.screen().contents().contains("hello\nred"));
+        assert_eq!(
+            terminal.parser.screen().cell(1, 0).unwrap().fgcolor(),
+            vt100::Color::Idx(1)
+        );
+        terminal.invalidate_resize();
+        assert_eq!(terminal.size, (0, 0));
+        assert!(terminal.parser.screen().contents().contains("red"));
+    }
+
+    #[test]
+    fn terminal_defaults_use_native_theme_without_overriding_explicit_color() {
+        assert_eq!(color(vt100::Color::Default, theme::TEXT), theme::TEXT);
+        assert_eq!(
+            color(vt100::Color::Rgb(1, 2, 3), theme::TEXT),
+            Color32::from_rgb(1, 2, 3)
+        );
+        assert_eq!(
+            color(vt100::Color::Idx(255), theme::TEXT),
+            Color32::from_rgb(238, 238, 238)
+        );
     }
 }

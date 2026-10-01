@@ -1,5 +1,6 @@
 mod app;
 mod terminal;
+mod theme;
 
 use antinomie_monitor_core::BackendOptions;
 use clap::Parser;
@@ -38,7 +39,7 @@ fn main() -> eframe::Result<()> {
     options.force_tcg = args.tcg;
     let smoke = args.smoke_exit.then_some(Duration::from_secs(3));
     eframe::run_native(
-        "Antinomie",
+        "Antinomie Monitor",
         eframe::NativeOptions {
             viewport: eframe::egui::ViewportBuilder::default()
                 .with_inner_size([1280.0, 820.0])
