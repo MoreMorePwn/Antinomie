@@ -1,0 +1,2267 @@
+From d704373a2f39e316d24e92bd81b6d28fb88a3b37 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Thu, 1 Oct 2026 23:22:05 +0700
+Subject: [PATCH] antinomie: add kernel control and scoped syscall telemetry
+ over V7
+
+Integrate the production V7 transport without changing its ABI. Register versioned upload, execution, PTY, signal, stats and synced shutdown commands. Launch the requested target directly through UMH with explicit credentials and cwd, and retain scoped descendant task identities through fork and exec.
+
+Stream ANTT application protocol 1 entry, dispatch result and lifecycle records for the initial 30 native syscalls, retaining entry vector and output capacity snapshots. Bound scratch rather than capture extents, use nofault observations, and expose copy, resource, schema and transport failures. Keep compat layouts and unsupported nested ioctl/clone schemas explicitly incomplete.
+---
+ arch/x86/boot/compressed/kaslr.c    |  20 +
+ arch/x86/entry/common.c             |   6 +
+ arch/x86/kernel/setup.c             |   6 +
+ fs/exec.c                           |   2 +
+ include/linux/antinomie.h           |  25 +
+ include/linux/antinomie_boot.h      |   6 +
+ include/linux/antinomie_monitor.h   |  25 +
+ include/linux/sched.h               |   5 +
+ init/Kconfig                        |   1 +
+ kernel/Makefile                     |   2 +
+ kernel/antinomie/Kconfig            |   7 +
+ kernel/antinomie/Makefile           |   1 +
+ kernel/antinomie/abi.h              |  92 ++++
+ kernel/antinomie/bootstrap.c        |  38 ++
+ kernel/antinomie/bootstrap_layout.h |   6 +
+ kernel/antinomie/control.c          | 510 +++++++++++++++++++
+ kernel/antinomie/control_wire.h     |  61 +++
+ kernel/antinomie/guest.c            | 295 +++++++++++
+ kernel/antinomie/queue.h            |  79 +++
+ kernel/antinomie/recorder.c         | 756 ++++++++++++++++++++++++++++
+ kernel/exit.c                       |   2 +
+ kernel/fork.c                       |   7 +
+ 22 files changed, 1952 insertions(+)
+ create mode 100644 include/linux/antinomie.h
+ create mode 100644 include/linux/antinomie_boot.h
+ create mode 100644 include/linux/antinomie_monitor.h
+ create mode 100644 kernel/antinomie/Kconfig
+ create mode 100644 kernel/antinomie/Makefile
+ create mode 100644 kernel/antinomie/abi.h
+ create mode 100644 kernel/antinomie/bootstrap.c
+ create mode 100644 kernel/antinomie/bootstrap_layout.h
+ create mode 100644 kernel/antinomie/control.c
+ create mode 100644 kernel/antinomie/control_wire.h
+ create mode 100644 kernel/antinomie/guest.c
+ create mode 100644 kernel/antinomie/queue.h
+ create mode 100644 kernel/antinomie/recorder.c
+
+diff --git a/arch/x86/boot/compressed/kaslr.c b/arch/x86/boot/compressed/kaslr.c
+index f4d82379b..2dd562fe1 100644
+--- a/arch/x86/boot/compressed/kaslr.c
++++ b/arch/x86/boot/compressed/kaslr.c
+@@ -23,6 +23,9 @@
+ #include "error.h"
+ #include "../string.h"
+ #include "efi.h"
++#ifdef CONFIG_ANTINOMIE
++#include <linux/antinomie_boot.h>
++#endif
+ 
+ #include <generated/compile.h>
+ #include <linux/module.h>
+@@ -92,6 +95,9 @@ enum mem_avoid_index {
+ 	MEM_AVOID_INITRD,
+ 	MEM_AVOID_CMDLINE,
+ 	MEM_AVOID_BOOTPARAMS,
++#ifdef CONFIG_ANTINOMIE
++	MEM_AVOID_ANTINOMIE,
++#endif
+ 	MEM_AVOID_MEMMAP_BEGIN,
+ 	MEM_AVOID_MEMMAP_END = MEM_AVOID_MEMMAP_BEGIN + MAX_MEMMAP_REGIONS - 1,
+ 	MEM_AVOID_MAX,
+@@ -257,6 +263,16 @@ static void handle_mem_options(void)
+ 		if (!val && strcmp(param, "--") == 0)
+ 			break;
+ 
++#ifdef CONFIG_ANTINOMIE
++		if (!strcmp(param, "antinomie_boot_gpa")) {
++			u64 gpa;
++
++			if (val && !kstrtoull(val, 0, &gpa) && !(gpa & (ANT_BOOT_SIZE - 1)) &&
++			    gpa >= 0x100000 && gpa <= ~0ULL - ANT_BOOT_SIZE)
++				mem_avoid[MEM_AVOID_ANTINOMIE].start = gpa;
++			continue;
++		}
++#endif
+ 		if (!strcmp(param, "memmap")) {
+ 			mem_avoid_memmap(val);
+ 		} else if (IS_ENABLED(CONFIG_X86_64) && strstr(param, "hugepages")) {
+@@ -394,6 +410,10 @@ static void mem_avoid_init(unsigned long input, unsigned long input_size,
+ 	/* We don't need to set a mapping for setup_data. */
+ 
+ 	/* Mark the memmap regions we need to avoid */
++#ifdef CONFIG_ANTINOMIE
++	mem_avoid[MEM_AVOID_ANTINOMIE].start = ANT_BOOT_GPA;
++	mem_avoid[MEM_AVOID_ANTINOMIE].size = ANT_BOOT_SIZE;
++#endif
+ 	handle_mem_options();
+ 
+ 	/* Enumerate the immovable memory regions */
+diff --git a/arch/x86/entry/common.c b/arch/x86/entry/common.c
+index 040ff04e3..0c6bdd0c2 100644
+--- a/arch/x86/entry/common.c
++++ b/arch/x86/entry/common.c
+@@ -20,6 +20,7 @@
+ #include <linux/syscalls.h>
+ #include <linux/uaccess.h>
+ #include <linux/init.h>
++#include <linux/antinomie_monitor.h>
+ 
+ #include <asm/apic.h>
+ #include <asm/desc.h>
+@@ -74,11 +75,13 @@ __visible noinstr bool do_syscall_64(struct pt_regs *regs, int nr)
+ 	nr = syscall_enter_from_user_mode(regs, nr);
+ 
+ 	instrumentation_begin();
++	ant_monitor_enter(regs, nr);
+ 
+ 	if (!do_syscall_x64(regs, nr) && !do_syscall_x32(regs, nr) && nr != -1) {
+ 		/* Invalid system call, but still a system call. */
+ 		regs->ax = __x64_sys_ni_syscall(regs);
+ 	}
++	ant_monitor_exit(regs);
+ 
+ 	instrumentation_end();
+ 	syscall_exit_to_user_mode(regs);
+@@ -155,12 +158,15 @@ static __always_inline void do_syscall_32_irqs_on(struct pt_regs *regs, int nr)
+ 	 */
+ 	unsigned int unr = nr;
+ 
++	ant_monitor_enter(regs, nr);
++
+ 	if (likely(unr < IA32_NR_syscalls)) {
+ 		unr = array_index_nospec(unr, IA32_NR_syscalls);
+ 		regs->ax = ia32_sys_call(regs, unr);
+ 	} else if (nr != -1) {
+ 		regs->ax = __ia32_sys_ni_syscall(regs);
+ 	}
++	ant_monitor_exit(regs);
+ }
+ 
+ #ifdef CONFIG_IA32_EMULATION
+diff --git a/arch/x86/kernel/setup.c b/arch/x86/kernel/setup.c
+index 93844a247..4b80081dd 100644
+--- a/arch/x86/kernel/setup.c
++++ b/arch/x86/kernel/setup.c
+@@ -16,6 +16,9 @@
+ #include <linux/initrd.h>
+ #include <linux/iscsi_ibft.h>
+ #include <linux/memblock.h>
++#ifdef CONFIG_ANTINOMIE
++#include <linux/antinomie.h>
++#endif
+ #include <linux/panic_notifier.h>
+ #include <linux/pci.h>
+ #include <linux/root_dev.h>
+@@ -991,6 +994,9 @@ void __init setup_arch(char **cmdline_p)
+ 
+ 	memblock_set_current_limit(ISA_END_ADDRESS);
+ 	e820__memblock_setup();
++#ifdef CONFIG_ANTINOMIE
++	ant_bootstrap_reserve();
++#endif
+ 
+ 	/*
+ 	 * Needs to run after memblock setup because it needs the physical
+diff --git a/fs/exec.c b/fs/exec.c
+index 030240d99..173e830c8 100644
+--- a/fs/exec.c
++++ b/fs/exec.c
+@@ -33,6 +33,7 @@
+ #include <linux/swap.h>
+ #include <linux/string.h>
+ #include <linux/init.h>
++#include <linux/antinomie_monitor.h>
+ #include <linux/sched/mm.h>
+ #include <linux/sched/coredump.h>
+ #include <linux/sched/signal.h>
+@@ -1848,6 +1849,7 @@ static int exec_binprm(struct linux_binprm *bprm)
+ 
+ 	audit_bprm(bprm);
+ 	trace_sched_process_exec(current, old_pid, bprm);
++	ant_monitor_exec();
+ 	ptrace_event(PTRACE_EVENT_EXEC, old_vpid);
+ 	proc_exec_connector(current);
+ 	return 0;
+diff --git a/include/linux/antinomie.h b/include/linux/antinomie.h
+new file mode 100644
+index 000000000..d68866bce
+--- /dev/null
++++ b/include/linux/antinomie.h
+@@ -0,0 +1,25 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef ANTINOMIE_GUEST_API_H
++#define ANTINOMIE_GUEST_API_H
++#include <linux/types.h>
++
++/* Task context only. data is valid kernel memory; copied before return.
++ * Zero means local acceptance, not delivery. No allocation or sleep on send.
++ * A zero-length message is valid. Maximum payload length is ring capacity minus framing.
++ */
++int ant_send(const void *data, size_t payload_len);
++
++/* Handlers run in sleepable worker context. No recursive registration changes.
++ * reply is transport-owned, valid only during the callback.
++ * Set reply_len on success; return zero or a negative errno.
++ */
++typedef int (*ant_command_handler)(const void *args, size_t args_len,
++		void *reply, size_t capacity, size_t *reply_len, void *context);
++int ant_register_command(u32 opcode, ant_command_handler handler, void *context);
++int ant_unregister_command(u32 opcode);
++
++/* Architecture integration only; consumers must not call these. */
++void ant_bootstrap_reserve(void);
++bool ant_bootstrap_reserved(void);
++u64 ant_bootstrap_gpa(void);
++#endif
+diff --git a/include/linux/antinomie_boot.h b/include/linux/antinomie_boot.h
+new file mode 100644
+index 000000000..1da2fd9f3
+--- /dev/null
++++ b/include/linux/antinomie_boot.h
+@@ -0,0 +1,6 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef ANTINOMIE_BOOTSTRAP_LAYOUT_H
++#define ANTINOMIE_BOOTSTRAP_LAYOUT_H
++#define ANT_BOOT_GPA 0x70000000ULL
++#define ANT_BOOT_SIZE 4096U
++#endif
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+new file mode 100644
+index 000000000..2bb06a093
+--- /dev/null
++++ b/include/linux/antinomie_monitor.h
+@@ -0,0 +1,25 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _LINUX_ANTINOMIE_MONITOR_H
++#define _LINUX_ANTINOMIE_MONITOR_H
++#include <linux/types.h>
++struct task_struct;
++struct pt_regs;
++struct ant_task;
++#ifdef CONFIG_ANTINOMIE
++void ant_monitor_enter(struct pt_regs *regs, long nr);
++void ant_monitor_exit(struct pt_regs *regs);
++void ant_monitor_fork(struct task_struct *child);
++void ant_monitor_exec(void);
++void ant_monitor_task_exit(void);
++void ant_monitor_release(struct task_struct *task);
++int ant_monitor_launch(const char *path, char **argv, char **envp);
++void ant_monitor_stats(void *out);
++#else
++static inline void ant_monitor_enter(struct pt_regs *regs, long nr) {}
++static inline void ant_monitor_exit(struct pt_regs *regs) {}
++static inline void ant_monitor_fork(struct task_struct *child) {}
++static inline void ant_monitor_exec(void) {}
++static inline void ant_monitor_task_exit(void) {}
++static inline void ant_monitor_release(struct task_struct *task) {}
++#endif
++#endif
+diff --git a/include/linux/sched.h b/include/linux/sched.h
+index f9ffe42ca..33d05cc66 100644
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -800,6 +800,11 @@ struct task_struct {
+ 	 */
+ 	randomized_struct_fields_start
+ 
++#ifdef CONFIG_ANTINOMIE
++	u64 ant_cookie;
++	struct ant_task *ant_monitor;
++#endif
++
+ 	void				*stack;
+ 	refcount_t			usage;
+ 	/* Per task flags (PF_*), defined further below: */
+diff --git a/init/Kconfig b/init/Kconfig
+index f4b91b185..b6b060ff1 100644
+--- a/init/Kconfig
++++ b/init/Kconfig
+@@ -2054,6 +2054,7 @@ config ASN1
+ 	  functions to call on what tags.
+ 
+ source "kernel/Kconfig.locks"
++source "kernel/antinomie/Kconfig"
+ 
+ config ARCH_HAS_NON_OVERLAPPING_ADDRESS_SPACE
+ 	bool
+diff --git a/kernel/Makefile b/kernel/Makefile
+index 87866b037..c20e08d03 100644
+--- a/kernel/Makefile
++++ b/kernel/Makefile
+@@ -12,6 +12,8 @@ obj-y     = fork.o exec_domain.o panic.o \
+ 	    notifier.o ksysfs.o cred.o reboot.o \
+ 	    async.o range.o smpboot.o ucount.o regset.o ksyms_common.o
+ 
++obj-$(CONFIG_ANTINOMIE) += antinomie/
++
+ obj-$(CONFIG_USERMODE_DRIVER) += usermode_driver.o
+ obj-$(CONFIG_MULTIUSER) += groups.o
+ obj-$(CONFIG_VHOST_TASK) += vhost_task.o
+diff --git a/kernel/antinomie/Kconfig b/kernel/antinomie/Kconfig
+new file mode 100644
+index 000000000..faae29aee
+--- /dev/null
++++ b/kernel/antinomie/Kconfig
+@@ -0,0 +1,7 @@
++config ANTINOMIE
++	bool "Antinomie host control and syscall recorder"
++	depends on X86_64 && UNIX98_PTYS
++	help
++	  Host control, PTY sessions and observational syscall telemetry over
++	  the Antinomie V7 memory transport. Only host-launched tasks and their
++	  descendants are traced. Host access includes guest execution authority.
+diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
+new file mode 100644
+index 000000000..fc4c6699f
+--- /dev/null
++++ b/kernel/antinomie/Makefile
+@@ -0,0 +1 @@
++obj-y += bootstrap.o guest.o recorder.o control.o
+diff --git a/kernel/antinomie/abi.h b/kernel/antinomie/abi.h
+new file mode 100644
+index 000000000..9a25e440a
+--- /dev/null
++++ b/kernel/antinomie/abi.h
+@@ -0,0 +1,92 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef ANTINOMIE_TRANSPORT_ABI_H
++#define ANTINOMIE_TRANSPORT_ABI_H
++#include <linux/types.h>
++#ifdef __KERNEL__
++#include <linux/antinomie_boot.h>
++#else
++#include "bootstrap_layout.h"
++#endif
++
++/* Wire profile: x86-64, little endian. Memory translation is supplied by host. */
++#define ANT_MAGIC 0x354e5441U
++#define ANT_ABI 7U
++#define ANT_MAX_CPUS 256U
++#define ANT_CONTROL_SIZE 1048576U
++#define ANT_REQUEST_OFFSET 4096U
++#define ANT_RESPONSE_OFFSET (ANT_REQUEST_OFFSET + ANT_COMMAND_RING_SIZE)
++#define ANT_DIRECTORY_OFFSET (ANT_RESPONSE_OFFSET + ANT_COMMAND_RING_SIZE)
++#define ANT_COMMAND_RING_SIZE 262144U
++#define ANT_TELEMETRY_RING_SIZE 262144U
++#define ANT_MAX_MESSAGE_LEN (ANT_TELEMETRY_RING_SIZE - 32U)
++#define ANT_MAX_COMMAND_LEN 16352U
++#define ANT_MAX_RESULT_LEN 16352U
++#define ANT_POLL_MS 10U
++#define ANT_HOST_TIMEOUT_DEFAULT_MS 250U
++#define ANT_HOST_TIMEOUT_MAX_MS 60000U
++#define ANT_HEALTH_OVERFLOW 1U
++#define ANT_HEALTH_BAD_COMMAND 2U
++#define ANT_HEALTH_REPLY_FULL 4U
++#define ANT_HEALTH_RING_FAULT 8U
++#define ANT_HEALTH_HOST_STALE 16U
++#define ANT_HEALTH_BAD_CONFIG 32U
++
++struct ant_boot {
++	__u32 magic, version;
++	__u64 session, control_gpa;
++	__u32 control_size, profile;
++	__u8 pad[32];
++	__u64 owner;
++	__u8 owner_pad[56];
++} __attribute__((aligned(64)));
++
++/* Descriptor, producer and consumer each occupy their own cache line. */
++struct ant_queue {
++	__u64 data_gpa;
++	__u32 data_size, cpu_id;
++	__u8 descriptor_pad[48];
++	__u64 head, attempted, dropped;
++	__u32 fault;
++	__u8 producer_pad[36];
++	__u64 tail;
++	__u8 consumer_pad[56];
++} __attribute__((aligned(64)));
++
++struct ant_geometry {
++	__u32 magic, version;
++	__u64 session;
++	__u32 queue_count, max_message_len, max_command_len, size, max_result_len;
++	__u8 geometry_pad[28];
++};
++
++struct ant_control {
++	struct ant_geometry geometry;
++	__u64 guest_heartbeat, bad_commands, reply_stalls;
++	__u32 health, live;
++	__u32 applied_host_timeout_ms;
++	__u8 guest_pad[28];
++	__u64 host_heartbeat;
++	__u32 host_timeout_ms;
++	__u8 host_pad[316];
++	struct ant_queue requests, responses;
++} __attribute__((aligned(64)));
++
++struct ant_region {
++	struct ant_control control;
++	__u8 control_pad[ANT_REQUEST_OFFSET - sizeof(struct ant_control)];
++	__u8 request_data[ANT_COMMAND_RING_SIZE];
++	__u8 response_data[ANT_COMMAND_RING_SIZE];
++	struct ant_queue directory[ANT_MAX_CPUS];
++	__u8 allocation_pad[ANT_CONTROL_SIZE - ANT_DIRECTORY_OFFSET -
++		ANT_MAX_CPUS * sizeof(struct ant_queue)];
++};
++
++/* All queues carry complete length-delimited messages, aligned to eight bytes. */
++struct ant_message {
++	__u32 payload_len, opcode;
++	__u64 id;
++	__s32 status;
++	__u32 flags;
++	__u64 reserved;
++};
++#endif
+diff --git a/kernel/antinomie/bootstrap.c b/kernel/antinomie/bootstrap.c
+new file mode 100644
+index 000000000..b460eb675
+--- /dev/null
++++ b/kernel/antinomie/bootstrap.c
+@@ -0,0 +1,38 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#include <linux/init.h>
++#include <linux/memblock.h>
++#include <linux/kernel.h>
++#include <linux/antinomie.h>
++#include "abi.h"
++
++static bool reserved;
++static u64 bootstrap_gpa = ANT_BOOT_GPA;
++
++static int __init set_bootstrap_gpa(char *value)
++{
++	u64 gpa;
++	if (!value || kstrtoull(value, 0, &gpa) || (gpa & (ANT_BOOT_SIZE - 1)) ||
++	    gpa < 0x100000 || gpa > U64_MAX - ANT_BOOT_SIZE)
++		return -EINVAL;
++	bootstrap_gpa = gpa;
++	return 0;
++}
++early_param("antinomie_boot_gpa", set_bootstrap_gpa);
++
++void __init ant_bootstrap_reserve(void)
++{
++	if (memblock_is_region_memory(bootstrap_gpa, ANT_BOOT_SIZE) &&
++	    !memblock_is_region_reserved(bootstrap_gpa, ANT_BOOT_SIZE) &&
++	    !memblock_reserve(bootstrap_gpa, ANT_BOOT_SIZE))
++		reserved = true;
++}
++
++bool ant_bootstrap_reserved(void)
++{
++	return reserved;
++}
++
++u64 ant_bootstrap_gpa(void)
++{
++	return bootstrap_gpa;
++}
+diff --git a/kernel/antinomie/bootstrap_layout.h b/kernel/antinomie/bootstrap_layout.h
+new file mode 100644
+index 000000000..1da2fd9f3
+--- /dev/null
++++ b/kernel/antinomie/bootstrap_layout.h
+@@ -0,0 +1,6 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef ANTINOMIE_BOOTSTRAP_LAYOUT_H
++#define ANTINOMIE_BOOTSTRAP_LAYOUT_H
++#define ANT_BOOT_GPA 0x70000000ULL
++#define ANT_BOOT_SIZE 4096U
++#endif
+diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
+new file mode 100644
+index 000000000..638467267
+--- /dev/null
++++ b/kernel/antinomie/control.c
+@@ -0,0 +1,510 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#include <linux/antinomie.h>
++#include <linux/antinomie_monitor.h>
++#include <linux/cred.h>
++#include <linux/tty.h>
++#include <linux/devpts_fs.h>
++#include <linux/file.h>
++#include <linux/fdtable.h>
++#include <linux/fs.h>
++#include <linux/fs_struct.h>
++#include <linux/init.h>
++#include <linux/namei.h>
++#include <linux/pid.h>
++#include <linux/reboot.h>
++#include <linux/sched/signal.h>
++#include <linux/sched/user.h>
++#include <linux/slab.h>
++#include <linux/syscalls.h>
++#include <linux/tty_driver.h>
++#include <linux/umh.h>
++#include <linux/unaligned.h>
++#include <linux/workqueue.h>
++#include "control_wire.h"
++
++#define ANT_SESSION_MAX 64
++
++struct ant_session {
++	struct list_head node;
++	u64 id, task_cookie;
++	u32 pid;
++	struct pid *pgrp;
++	struct file *master;
++	bool eof;
++};
++
++struct ant_launch {
++	struct ant_session *session;
++	char *path, *cwd, **argv, **envp;
++	kuid_t uid;
++	kgid_t gid;
++};
++
++static LIST_HEAD(sessions);
++static unsigned int session_count;
++static u64 next_session_id, next_upload_id, upload_id, upload_size, upload_offset;
++static struct file *upload_file;
++
++static void power_off(struct work_struct *work)
++{
++	ksys_sync();
++	kernel_power_off();
++}
++static DECLARE_DELAYED_WORK(power_off_work, power_off);
++
++/* Transport invokes handlers serially on its single sleepable owner worker.
++ * The UMH callback only modifies its private session before WAIT_EXEC ends.
++ */
++static struct ant_session *find_session(u64 id)
++{
++	struct ant_session *session;
++
++	list_for_each_entry(session, &sessions, node)
++		if (session->id == id)
++			return session;
++	return NULL;
++}
++
++static void free_session(struct ant_session *session)
++{
++	if (session->master)
++		fput(session->master);
++	put_pid(session->pgrp);
++	kfree(session);
++}
++
++static void reap_sessions(void)
++{
++	struct ant_session *session, *next;
++
++	list_for_each_entry_safe(session, next, &sessions, node)
++		if (session->eof) {
++			list_del(&session->node);
++			session_count--;
++			free_session(session);
++		}
++}
++
++static int string_arg(const u8 *args, size_t args_len, size_t *offset,
++		      u32 string_len, bool absolute, char **out)
++{
++	if (!string_len || string_len > PATH_MAX || *offset > args_len ||
++	    string_len > args_len - *offset || memchr(args + *offset, 0, string_len) ||
++	    (absolute && args[*offset] != '/'))
++		return -EINVAL;
++	*out = kmemdup_nul(args + *offset, string_len, GFP_KERNEL);
++	if (!*out)
++		return -ENOMEM;
++	*offset += string_len;
++	return 0;
++}
++
++static int vector_arg(const u8 *args, size_t args_len, size_t *offset,
++		      u32 count, char ***out)
++{
++	char **vector;
++	u32 i, size;
++
++	/* Each item requires at least its length word; validate before allocation. */
++	if (count > (args_len - *offset) / sizeof(u32))
++		return -EINVAL;
++	vector = kcalloc((size_t)count + 1, sizeof(*vector), GFP_KERNEL);
++	if (!vector)
++		return -ENOMEM;
++	*out = vector;
++	for (i = 0; i < count; i++) {
++		if (args_len - *offset < sizeof(u32))
++			return -EINVAL;
++		size = get_unaligned_le32(args + *offset);
++		*offset += sizeof(u32);
++		if (size > args_len - *offset || memchr(args + *offset, 0, size))
++			return -EINVAL;
++		vector[i] = kmemdup_nul(args + *offset, size, GFP_KERNEL);
++		if (!vector[i])
++			return -ENOMEM;
++		*offset += size;
++	}
++	return 0;
++}
++
++static void free_vector(char **vector)
++{
++	u32 i;
++
++	if (vector) {
++		for (i = 0; vector[i]; i++)
++			kfree(vector[i]);
++		kfree(vector);
++	}
++}
++
++static void free_launch(struct ant_launch *launch)
++{
++	free_vector(launch->argv);
++	free_vector(launch->envp);
++	kfree(launch->path);
++	kfree(launch->cwd);
++	kfree(launch);
++}
++
++static void launch_cleanup(struct subprocess_info *info)
++{
++	free_launch(info->data);
++}
++
++static int launch_init(struct subprocess_info *info, struct cred *cred)
++{
++	struct ant_launch *launch = info->data;
++	struct ant_session *session = launch->session;
++	struct tty_struct *tty = ((struct tty_file_private *)session->master->private_data)->tty;
++	struct file *slave;
++	struct path cwd;
++	struct user_struct *user;
++	struct group_info *groups;
++	const struct cred *old_cred;
++	int error, fd, i;
++
++	user = alloc_uid(launch->uid);
++	if (!user)
++		return -ENOMEM;
++	free_uid(cred->user);
++	cred->user = user;
++	cred->uid = cred->euid = cred->suid = cred->fsuid = launch->uid;
++	cred->gid = cred->egid = cred->sgid = cred->fsgid = launch->gid;
++	groups = groups_alloc(0);
++	if (!groups)
++		return -ENOMEM;
++	set_groups(cred, groups);
++	put_group_info(groups);
++	if (!uid_eq(launch->uid, GLOBAL_ROOT_UID)) {
++		cred->cap_inheritable = cred->cap_permitted = cred->cap_effective = CAP_EMPTY_SET;
++		cred->cap_ambient = CAP_EMPTY_SET;
++	}
++	error = set_cred_ucounts(cred);
++	if (error)
++		return error;
++	old_cred = override_creds(cred);
++	error = kern_path(launch->cwd, LOOKUP_DIRECTORY | LOOKUP_FOLLOW, &cwd);
++	if (!error) {
++		error = inode_permission(mnt_idmap(cwd.mnt), d_inode(cwd.dentry), MAY_EXEC);
++		if (!error)
++			set_fs_pwd(current->fs, &cwd);
++		path_put(&cwd);
++	}
++	revert_creds(old_cred);
++	if (error)
++		return error;
++	error = ksys_setsid();
++	if (error < 0)
++		return error;
++	tty_lock(tty);
++	clear_bit(TTY_PTY_LOCK, &tty->flags);
++	tty_unlock(tty);
++	fd = ptm_open_peer(session->master, tty, O_RDWR);
++	if (fd < 0)
++		return fd;
++	slave = fget(fd);
++	if (!slave) {
++		close_fd(fd);
++		return -EBADF;
++	}
++	for (i = 0; i < 3; i++) {
++		error = replace_fd(i, slave, 0);
++		if (error)
++			break;
++	}
++	fput(slave);
++	if (fd > 2)
++		close_fd(fd);
++	if (error)
++		return error;
++	error = ant_monitor_launch(launch->path, launch->argv, launch->envp);
++	if (error)
++		return error;
++	session->pid = task_pid_nr(current);
++	session->task_cookie = current->ant_cookie;
++	session->pgrp = get_task_pid(current, PIDTYPE_PGID);
++	return 0;
++}
++
++static int execute(const u8 *args, size_t args_len, void *reply, size_t *reply_len)
++{
++	struct ant_launch *launch;
++	struct ant_session *session;
++	struct subprocess_info *info;
++	u32 argc, envc;
++	size_t offset = 32;
++	int error;
++
++	if (args_len < offset || get_unaligned_le32(args + 4))
++		return -EINVAL;
++	argc = get_unaligned_le32(args + 16);
++	envc = get_unaligned_le32(args + 20);
++	if (!argc)
++		return -EINVAL;
++	reap_sessions();
++	if (session_count >= ANT_SESSION_MAX)
++		return -ENOSPC;
++	launch = kzalloc(sizeof(*launch), GFP_KERNEL);
++	session = kzalloc(sizeof(*session), GFP_KERNEL);
++	if (!launch || !session) {
++		kfree(launch);
++		kfree(session);
++		return -ENOMEM;
++	}
++	launch->session = session;
++	launch->uid = make_kuid(&init_user_ns, get_unaligned_le32(args + 8));
++	launch->gid = make_kgid(&init_user_ns, get_unaligned_le32(args + 12));
++	if (!uid_valid(launch->uid) || !gid_valid(launch->gid)) {
++		error = -EINVAL;
++		goto fail;
++	}
++	error = string_arg(args, args_len, &offset, get_unaligned_le32(args + 24), true, &launch->path);
++	if (error)
++		goto fail;
++	error = string_arg(args, args_len, &offset, get_unaligned_le32(args + 28), true, &launch->cwd);
++	if (error)
++		goto fail;
++	error = vector_arg(args, args_len, &offset, argc, &launch->argv);
++	if (error)
++		goto fail;
++	error = vector_arg(args, args_len, &offset, envc, &launch->envp);
++	if (error)
++		goto fail;
++	if (offset != args_len) {
++		error = -EINVAL;
++		goto fail;
++	}
++	session->master = filp_open("/dev/ptmx", O_RDWR | O_NONBLOCK | O_NOCTTY, 0);
++	if (IS_ERR(session->master)) {
++		error = PTR_ERR(session->master);
++		session->master = NULL;
++		goto fail;
++	}
++	session->id = ++next_session_id;
++	info = call_usermodehelper_setup(launch->path, launch->argv, launch->envp,
++		GFP_KERNEL, launch_init, launch_cleanup, launch);
++	if (!info) {
++		error = -ENOMEM;
++		goto fail;
++	}
++	error = call_usermodehelper_exec(info, UMH_WAIT_EXEC);
++	/* UMH owns and has freed launch regardless of success. */
++	if (error) {
++		free_session(session);
++		return error;
++	}
++	list_add_tail(&session->node, &sessions);
++	session_count++;
++	put_unaligned_le64(session->id, reply);
++	put_unaligned_le64(session->task_cookie, reply + 8);
++	put_unaligned_le32(session->pid, reply + 16);
++	put_unaligned_le32(0, reply + 20);
++	*reply_len = 24;
++	return 0;
++fail:
++	free_session(session);
++	free_launch(launch);
++	return error;
++}
++
++static int upload_begin(const u8 *args, size_t args_len, void *reply, size_t *reply_len)
++{
++	u32 flags;
++	char *path = NULL;
++	size_t offset = 24;
++	struct file *file;
++	int error, open_flags;
++
++	if (args_len < offset || get_unaligned_le32(args + 20) || upload_file)
++		return upload_file ? -EBUSY : -EINVAL;
++	flags = get_unaligned_le32(args + 4);
++	if (flags & ~(ANTC_UPLOAD_OVERWRITE | ANTC_UPLOAD_EXECUTABLE) ||
++	    get_unaligned_le64(args + 8) > MAX_LFS_FILESIZE)
++		return -EINVAL;
++	error = string_arg(args, args_len, &offset, get_unaligned_le32(args + 16), true, &path);
++	if (error)
++		return error;
++	if (offset != args_len) {
++		kfree(path);
++		return -EINVAL;
++	}
++	open_flags = O_WRONLY | O_CREAT | O_LARGEFILE | O_NOFOLLOW | O_NONBLOCK;
++	open_flags |= flags & ANTC_UPLOAD_OVERWRITE ? O_TRUNC : O_EXCL;
++	file = filp_open(path, open_flags, 0600);
++	kfree(path);
++	if (IS_ERR(file))
++		return PTR_ERR(file);
++	if (!S_ISREG(file_inode(file)->i_mode)) {
++		fput(file);
++		return -EINVAL;
++	}
++	error = vfs_fchmod(file, flags & ANTC_UPLOAD_EXECUTABLE ? 0755 : 0644);
++	if (error) {
++		fput(file);
++		return error;
++	}
++	upload_file = file;
++	upload_id = ++next_upload_id;
++	upload_size = get_unaligned_le64(args + 8);
++	upload_offset = 0;
++	put_unaligned_le64(upload_id, reply);
++	*reply_len = 8;
++	return 0;
++}
++
++static int upload_command(u32 opcode, const u8 *args, size_t args_len,
++			  void *reply, size_t *reply_len)
++{
++	loff_t pos;
++	ssize_t result;
++	int error;
++
++	if (args_len < 16 || !upload_file || get_unaligned_le64(args + 8) != upload_id)
++		return -ENOENT;
++	if (opcode == ANTC_UPLOAD_CHUNK) {
++		if (args_len < 24 || get_unaligned_le64(args + 16) != upload_offset ||
++		    args_len - 24 > upload_size - upload_offset)
++			return -EINVAL;
++		pos = upload_offset;
++		result = kernel_write(upload_file, args + 24, args_len - 24, &pos);
++		if (result < 0)
++			return result;
++		upload_offset += result;
++		put_unaligned_le64(result, reply);
++		*reply_len = 8;
++		return 0;
++	}
++	if (args_len != 16)
++		return -EINVAL;
++	if (opcode == ANTC_UPLOAD_COMMIT) {
++		if (upload_offset != upload_size)
++			return -ENODATA;
++		error = vfs_fsync(upload_file, 0);
++		if (error)
++			return error;
++	}
++	fput(upload_file);
++	upload_file = NULL;
++	return 0;
++}
++
++static int terminal_command(u32 opcode, const u8 *args, size_t args_len,
++			    void *reply, size_t capacity, size_t *reply_len)
++{
++	struct ant_session *session;
++	struct tty_struct *tty;
++	struct winsize ws;
++	loff_t pos = 0;
++	ssize_t result;
++	u32 size, signal;
++
++	if (args_len < 16)
++		return -EINVAL;
++	session = find_session(get_unaligned_le64(args + 8));
++	if (!session)
++		return -ENOENT;
++	if (opcode == ANTC_TERMINAL_INPUT) {
++		if (session->eof)
++			return -EPIPE;
++		result = kernel_write(session->master, args + 16, args_len - 16, &pos);
++		if (result < 0)
++			return result;
++		put_unaligned_le64(result, reply);
++		*reply_len = 8;
++		return 0;
++	}
++	if (args_len != 24)
++		return -EINVAL;
++	if (opcode == ANTC_TERMINAL_READ) {
++		if (get_unaligned_le32(args + 20))
++			return -EINVAL;
++		size = get_unaligned_le32(args + 16);
++		if (size > capacity - 8)
++			return -EMSGSIZE;
++		result = session->eof || !size ? 0 : kernel_read(session->master, reply + 8, size, &pos);
++		if (result == -EAGAIN)
++			result = 0;
++		else if (result == -EIO || (!result && size))
++			session->eof = true;
++		else if (result < 0)
++			return result;
++		put_unaligned_le32(session->eof ? 1 : 0, reply);
++		put_unaligned_le32(result > 0 ? result : 0, reply + 4);
++		*reply_len = 8 + (result > 0 ? result : 0);
++		return 0;
++	}
++	if (opcode == ANTC_SIGNAL) {
++		signal = get_unaligned_le32(args + 16);
++		if (get_unaligned_le32(args + 20) || !valid_signal(signal))
++			return -EINVAL;
++		return kill_pgrp(session->pgrp, signal, 1);
++	}
++	if (session->eof)
++		return -EPIPE;
++	ws.ws_row = get_unaligned_le16(args + 16);
++	ws.ws_col = get_unaligned_le16(args + 18);
++	ws.ws_xpixel = get_unaligned_le16(args + 20);
++	ws.ws_ypixel = get_unaligned_le16(args + 22);
++	if (!ws.ws_row || !ws.ws_col)
++		return -EINVAL;
++	tty = ((struct tty_file_private *)session->master->private_data)->tty;
++	return tty->ops->resize ? tty->ops->resize(tty, &ws) : tty_do_resize(tty, &ws);
++}
++
++static int command(const void *data, size_t args_len, void *reply,
++		   size_t capacity, size_t *reply_len, void *context)
++{
++	const u8 *args = data;
++	u32 opcode = (unsigned long)context;
++
++	*reply_len = 0;
++	if (args_len < ANTC_HEADER_SIZE || get_unaligned_le16(args) != ANTC_VERSION ||
++	    get_unaligned_le16(args + 2) != ANTC_HEADER_SIZE)
++		return -EPROTO;
++	if (opcode != ANTC_UPLOAD_BEGIN && get_unaligned_le32(args + 4))
++		return -EINVAL;
++	switch (opcode) {
++	case ANTC_UPLOAD_BEGIN:
++		return upload_begin(args, args_len, reply, reply_len);
++	case ANTC_UPLOAD_CHUNK: case ANTC_UPLOAD_COMMIT: case ANTC_UPLOAD_ABORT:
++		return upload_command(opcode, args, args_len, reply, reply_len);
++	case ANTC_EXEC:
++		return execute(args, args_len, reply, reply_len);
++	case ANTC_TERMINAL_INPUT: case ANTC_TERMINAL_READ:
++	case ANTC_TERMINAL_RESIZE: case ANTC_SIGNAL:
++		return terminal_command(opcode, args, args_len, reply, capacity, reply_len);
++	case ANTC_STATS:
++		if (args_len != 8 || capacity < 80)
++			return -EINVAL;
++		ant_monitor_stats(reply);
++		*reply_len = 80;
++		return 0;
++	case ANTC_SHUTDOWN:
++		if (args_len != 8)
++			return -EINVAL;
++		schedule_delayed_work(&power_off_work, msecs_to_jiffies(250));
++		return 0;
++	default:
++		return -EOPNOTSUPP;
++	}
++}
++
++static int __init ant_control_init(void)
++{
++	static const u32 opcodes[] = { ANTC_UPLOAD_BEGIN, ANTC_UPLOAD_CHUNK,
++		ANTC_UPLOAD_COMMIT, ANTC_UPLOAD_ABORT, ANTC_EXEC, ANTC_TERMINAL_INPUT,
++		ANTC_TERMINAL_READ, ANTC_TERMINAL_RESIZE, ANTC_SIGNAL, ANTC_STATS, ANTC_SHUTDOWN };
++	int i, error;
++
++	for (i = 0; i < ARRAY_SIZE(opcodes); i++) {
++		error = ant_register_command(opcodes[i], command, (void *)(unsigned long)opcodes[i]);
++		if (error) {
++			while (i--)
++				ant_unregister_command(opcodes[i]);
++			return error;
++		}
++	}
++	return 0;
++}
++late_initcall(ant_control_init);
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+new file mode 100644
+index 000000000..74565ab77
+--- /dev/null
++++ b/kernel/antinomie/control_wire.h
+@@ -0,0 +1,61 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef ANTINOMIE_MONITOR_CONTROL_H
++#define ANTINOMIE_MONITOR_CONTROL_H
++
++/* Application control protocol 1, inside the unchanged V7 command/reply.
++ * Every argument begins with u16 version=1, u16 header_len=8, u32 flags.
++ * All integers are little endian; strings are byte strings without NUL.
++ * No native structure casts. Error replies use transport status -errno and
++ * have no payload. Successful replies have the opcode-specific payload below.
++ */
++#define ANTC_VERSION 1
++#define ANTC_HEADER_SIZE 8
++#define ANTC_UPLOAD_BEGIN 0x1001
++#define ANTC_UPLOAD_CHUNK 0x1002
++#define ANTC_UPLOAD_COMMIT 0x1003
++#define ANTC_UPLOAD_ABORT 0x1004
++#define ANTC_EXEC 0x1010
++#define ANTC_TERMINAL_INPUT 0x1011
++#define ANTC_TERMINAL_READ 0x1012
++#define ANTC_TERMINAL_RESIZE 0x1013
++#define ANTC_SIGNAL 0x1014
++#define ANTC_STATS 0x1020
++#define ANTC_SHUTDOWN 0x1030
++#define ANTC_UPLOAD_OVERWRITE 1
++#define ANTC_UPLOAD_EXECUTABLE 2
++
++/* BEGIN: header flags=OVERWRITE|EXECUTABLE, u64 total at 8, u32 path_len
++ * at 16, u32 reserved=0 at 20, path at 24. Absolute path required.
++ * Reply: u64 upload_id. One active upload; creates destination with
++ * O_EXCL unless overwrite is explicitly set, then truncates it.
++ * CHUNK: header, u64 upload_id at 8, u64 offset at 16, bytes at 24.
++ * Reply: u64 bytes_written. Offsets must be contiguous.
++ * COMMIT / ABORT: header, u64 upload_id at 8; empty success reply.
++ * COMMIT verifies total, fsyncs and closes; ABORT closes (partial destination
++ * remains, visibly incomplete). No implicit execution.
++ *
++ * EXEC: header flags=0, u32 uid at 8, u32 gid at 12, u32 argc at 16,
++ * u32 envc at 20, u32 path_len at 24, u32 cwd_len at 28; path then cwd
++ * at 32, followed by argc then envc entries, each u32 byte_len + bytes.
++ * argc >= 1, explicit argv[0], absolute executable and cwd, no interior NUL.
++ * Reply: u64 session_id, u64 task_cookie, u32 pid, u32 reserved=0 (24 bytes).
++ * Each launch owns a Unix98 PTY. Target is spawned directly by kernel
++ * usermodehelper_exec; no userspace control/helper process.
++ *
++ * INPUT: header, u64 session_id at 8, bytes at 16.
++ * Reply: u64 bytes_written (partial writes possible).
++ * READ: header, u64 session_id at 8, u32 capacity at 16,
++ * u32 reserved=0 at 20. Reply: u32 flags at 0 (bit0 EOF), u32 count at 4,
++ * bytes at 8. No data available is successful count=0, flags=0.
++ * RESIZE: header, u64 session_id at 8, u16 rows at 16, u16 cols at 18,
++ * u16 pixel_width at 20, u16 pixel_height at 22. Empty success reply.
++ * SIGNAL: header, u64 session_id at 8, u32 signal at 16,
++ * u32 reserved=0 at 20. Signals launch process group. Empty success reply.
++ *
++ * STATS: header only. Reply: ten u64 counters in order: stream_id,
++ * tasks_created, tasks_live, calls_entered, events_attempted,
++ * packets_attempted, packets_failed, copy_faults, schema_gaps,
++ * context_failures (80 bytes). Counters persist despite telemetry loss.
++ * SHUTDOWN: header only; empty success reply, delayed kernel_power_off.
++ */
++#endif
+diff --git a/kernel/antinomie/guest.c b/kernel/antinomie/guest.c
+new file mode 100644
+index 000000000..f4e7fe8ba
+--- /dev/null
++++ b/kernel/antinomie/guest.c
+@@ -0,0 +1,295 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#include <linux/antinomie.h>
++#include <linux/cpu.h>
++#include <linux/export.h>
++#include <linux/init.h>
++#include <linux/io.h>
++#include <linux/jiffies.h>
++#include <linux/mm.h>
++#include <linux/random.h>
++#include <linux/rwsem.h>
++#include <linux/slab.h>
++#include <linux/workqueue.h>
++#include "queue.h"
++
++struct ant_cpu {
++	struct page *pages;
++	void *data;
++};
++struct ant_producer {
++	u64 head, cached_tail, attempted, dropped;
++	u32 index;
++	bool fault;
++};
++static DEFINE_PER_CPU(struct ant_producer, producers);
++static struct ant_cpu *cpus;
++static struct ant_control *control;
++static struct ant_queue *directory;
++static struct ant_region *region;
++static u32 queue_count;
++static bool ready, broken;
++static struct workqueue_struct *worker;
++static void control_tick(struct work_struct *work);
++static DECLARE_DELAYED_WORK(control_work, control_tick);
++
++struct ant_handler {
++	u32 opcode;
++	ant_command_handler fn;
++	void *context;
++};
++static struct ant_handler handlers[32];
++static DECLARE_RWSEM(handler_lock);
++static u8 command_args[ANT_MAX_COMMAND_LEN], command_result[ANT_MAX_RESULT_LEN];
++static u64 last_request_id;
++static u64 request_tail, request_head_seen, response_head, response_tail_seen;
++static u64 last_heartbeat;
++static unsigned long host_seen;
++static bool host_attached;
++
++int ant_send(const void *data, size_t payload_len)
++{
++	struct ant_producer *p;
++	struct ant_queue *q;
++	struct ant_message msg = { .payload_len = payload_len };
++	int error;
++
++	if (!in_task()) return -EWOULDBLOCK;
++	if (payload_len > ANT_MAX_MESSAGE_LEN) return -EMSGSIZE;
++	if (!data && payload_len) return -EINVAL;
++	if (!smp_load_acquire(&ready)) return -ENOTCONN;
++	preempt_disable();
++	p = this_cpu_ptr(&producers);
++	q = &directory[p->index];
++	p->attempted++;
++	if (p->fault) {
++		error = -EPROTO;
++		goto drop;
++	}
++	error = ant_space(q, ANT_TELEMETRY_RING_SIZE, p->head, &p->cached_tail, ant_span(payload_len));
++	if (error) {
++		if (error != -ENOSPC) {
++			p->fault = true;
++			WRITE_ONCE(q->fault, -error);
++		}
++		goto drop;
++	}
++	ant_publish(q, cpus[p->index].data, ANT_TELEMETRY_RING_SIZE, &p->head, &msg, data);
++	goto out;
++drop:
++	p->dropped++;
++out:
++	WRITE_ONCE(q->attempted, p->attempted);
++	WRITE_ONCE(q->dropped, p->dropped);
++	preempt_enable();
++	return error;
++}
++EXPORT_SYMBOL_GPL(ant_send);
++
++int ant_register_command(u32 opcode, ant_command_handler fn, void *context)
++{
++	int i, free_slot = -1, error = -ENOSPC;
++	if (!opcode || !fn) return -EINVAL;
++	if (!in_task() || in_atomic() || irqs_disabled()) return -EWOULDBLOCK;
++	down_write(&handler_lock);
++	for (i = 0; i < ARRAY_SIZE(handlers); i++) {
++		if (handlers[i].opcode == opcode) {
++			error = -EEXIST;
++			goto out;
++		}
++		if (!handlers[i].fn) free_slot = i;
++	}
++	if (free_slot >= 0) {
++		handlers[free_slot] = (struct ant_handler){ opcode, fn, context };
++		error = 0;
++	}
++out:
++	up_write(&handler_lock);
++	return error;
++}
++EXPORT_SYMBOL_GPL(ant_register_command);
++
++int ant_unregister_command(u32 opcode)
++{
++	int i, error = -ENOENT;
++	if (!opcode) return -EINVAL;
++	if (!in_task() || in_atomic() || irqs_disabled()) return -EWOULDBLOCK;
++	down_write(&handler_lock);
++	for (i = 0; i < ARRAY_SIZE(handlers); i++)
++		if (handlers[i].opcode == opcode) {
++			memset(&handlers[i], 0, sizeof(handlers[i]));
++			error = 0;
++			break;
++		}
++	up_write(&handler_lock);
++	return error;
++}
++EXPORT_SYMBOL_GPL(ant_unregister_command);
++
++static int dispatch(const struct ant_message *req, size_t *payload_len)
++{
++	int i, error = -EOPNOTSUPP;
++	down_read(&handler_lock);
++	for (i = 0; i < ARRAY_SIZE(handlers); i++)
++		if (handlers[i].fn && handlers[i].opcode == req->opcode) {
++			error = handlers[i].fn(command_args, req->payload_len, command_result,
++					     ANT_MAX_RESULT_LEN, payload_len, handlers[i].context);
++			break;
++		}
++	up_read(&handler_lock);
++	if (*payload_len > ANT_MAX_RESULT_LEN || error > 0) error = -EOVERFLOW;
++	if (error) *payload_len = 0;
++	return error;
++}
++
++static void service_commands(void)
++{
++	unsigned int budget;
++	if (broken) return;
++	for (budget = 0; budget < 16; budget++) {
++		struct ant_message req, resp = { 0 };
++		size_t payload_len = 0;
++		int error = ant_peek(&control->requests, region->request_data,
++			ANT_COMMAND_RING_SIZE, ANT_MAX_COMMAND_LEN, request_tail, &request_head_seen, &req);
++		if (error == -EAGAIN) return;
++		if (error) goto fault;
++		/* Reserve worst-case result space before invoking any side effect. */
++		error = ant_space(&control->responses, ANT_COMMAND_RING_SIZE, response_head,
++			&response_tail_seen, ant_span(ANT_MAX_RESULT_LEN));
++		if (error == -ENOSPC) {
++			control->reply_stalls++;
++			control->health |= ANT_HEALTH_REPLY_FULL;
++			return;
++		}
++		if (error) goto fault;
++		ant_copy_out(region->request_data, ANT_COMMAND_RING_SIZE,
++			request_tail + sizeof(req), command_args, req.payload_len);
++		resp.id = req.id;
++		resp.opcode = req.opcode;
++		if (!req.id || !req.opcode || req.status) resp.status = -EPROTO;
++		else if (req.id <= last_request_id) resp.status = -ESTALE;
++		else {
++			last_request_id = req.id;
++			/* Zero output so a buggy handler cannot expose old kernel bytes. */
++			memset(command_result, 0, sizeof(command_result));
++			resp.status = dispatch(&req, &payload_len);
++			resp.payload_len = payload_len;
++		}
++		if (resp.status) {
++			control->bad_commands++;
++			control->health |= ANT_HEALTH_BAD_COMMAND;
++		}
++		ant_publish(&control->responses, region->response_data, ANT_COMMAND_RING_SIZE,
++			    &response_head, &resp, command_result);
++		request_tail += ant_span(req.payload_len);
++		ANT_REL(&control->requests.tail, request_tail);
++	}
++	return;
++fault:
++	broken = true;
++	control->health |= ANT_HEALTH_RING_FAULT;
++}
++
++static void control_tick(struct work_struct *work)
++{
++	u64 heartbeat = ANT_ACQ(&control->host_heartbeat);
++	u32 timeout_ms = ANT_ACQ(&control->host_timeout_ms);
++	u32 i;
++	if (!timeout_ms) timeout_ms = ANT_HOST_TIMEOUT_DEFAULT_MS;
++	if (timeout_ms > ANT_HOST_TIMEOUT_MAX_MS) {
++		control->health |= ANT_HEALTH_BAD_CONFIG;
++		timeout_ms = control->applied_host_timeout_ms;
++	}
++	WRITE_ONCE(control->applied_host_timeout_ms, timeout_ms);
++	if (heartbeat != last_heartbeat) {
++		last_heartbeat = heartbeat;
++		host_seen = jiffies;
++		host_attached = true;
++	}
++	control->live = host_attached && time_before(jiffies, host_seen + msecs_to_jiffies(timeout_ms));
++	if (host_attached && !control->live) control->health |= ANT_HEALTH_HOST_STALE;
++	for (i = 0; i < queue_count; i++) {
++		if (READ_ONCE(directory[i].dropped)) control->health |= ANT_HEALTH_OVERFLOW;
++		if (READ_ONCE(directory[i].fault)) control->health |= ANT_HEALTH_RING_FAULT;
++	}
++	service_commands();
++	ANT_REL(&control->guest_heartbeat, control->guest_heartbeat + 1);
++	queue_delayed_work(worker, &control_work, msecs_to_jiffies(ANT_POLL_MS));
++}
++
++static int __init ant_guest_init(void)
++{
++	struct page *pages;
++	struct ant_boot *boot;
++	u32 cpu, index = 0;
++	int error = -ENOMEM;
++	BUILD_BUG_ON(sizeof(struct ant_queue) != 192);
++	BUILD_BUG_ON(sizeof(struct ant_geometry) != 64);
++	BUILD_BUG_ON(offsetof(struct ant_control, guest_heartbeat) != 64);
++	BUILD_BUG_ON(offsetof(struct ant_control, host_heartbeat) != 128);
++	BUILD_BUG_ON(offsetof(struct ant_region, request_data) != ANT_REQUEST_OFFSET);
++	BUILD_BUG_ON(offsetof(struct ant_region, response_data) != ANT_RESPONSE_OFFSET);
++	BUILD_BUG_ON(offsetof(struct ant_region, directory) != ANT_DIRECTORY_OFFSET);
++	BUILD_BUG_ON(sizeof(struct ant_region) != ANT_CONTROL_SIZE);
++	BUILD_BUG_ON(sizeof(struct ant_message) != 32);
++	BUILD_BUG_ON(offsetof(struct ant_control, requests) != 512);
++	BUILD_BUG_ON(sizeof(struct ant_control) > ANT_REQUEST_OFFSET);
++	BUILD_BUG_ON(ANT_REQUEST_OFFSET + ANT_COMMAND_RING_SIZE > ANT_RESPONSE_OFFSET);
++	BUILD_BUG_ON(ANT_RESPONSE_OFFSET + ANT_COMMAND_RING_SIZE > ANT_DIRECTORY_OFFSET);
++	BUILD_BUG_ON(ANT_MAX_COMMAND_LEN + sizeof(struct ant_message) > ANT_COMMAND_RING_SIZE);
++	BUILD_BUG_ON(ANT_MAX_RESULT_LEN + sizeof(struct ant_message) > ANT_COMMAND_RING_SIZE);
++	BUILD_BUG_ON(ANT_DIRECTORY_OFFSET + ANT_MAX_CPUS * sizeof(struct ant_queue) > ANT_CONTROL_SIZE);
++	if (!ant_bootstrap_reserved()) return -ENXIO;
++	boot = phys_to_virt(ant_bootstrap_gpa());
++	memset(boot, 0, ANT_BOOT_SIZE);
++	queue_count = num_possible_cpus();
++	if (!queue_count || queue_count > ANT_MAX_CPUS) return -E2BIG;
++	pages = alloc_pages(GFP_KERNEL | __GFP_ZERO, get_order(ANT_CONTROL_SIZE));
++	if (!pages) return -ENOMEM;
++	region = page_address(pages);
++	control = &region->control;
++	directory = region->directory;
++	cpus = kcalloc(queue_count, sizeof(*cpus), GFP_KERNEL);
++	if (!cpus) goto free_control;
++	for_each_possible_cpu(cpu) {
++		cpus[index].pages = alloc_pages(GFP_KERNEL | __GFP_ZERO, get_order(ANT_TELEMETRY_RING_SIZE));
++		if (!cpus[index].pages) goto free_rings;
++		cpus[index].data = page_address(cpus[index].pages);
++		directory[index].data_gpa = page_to_phys(cpus[index].pages);
++		directory[index].data_size = ANT_TELEMETRY_RING_SIZE;
++		directory[index].cpu_id = cpu;
++		per_cpu(producers, cpu).index = index++;
++	}
++	worker = alloc_ordered_workqueue("antinomie-control", WQ_MEM_RECLAIM);
++	if (!worker) goto free_rings;
++	control->geometry.version = ANT_ABI;
++	control->geometry.session = get_random_u64() ?: 1;
++	control->geometry.size = ANT_CONTROL_SIZE;
++	control->geometry.queue_count = queue_count;
++	control->geometry.max_message_len = ANT_MAX_MESSAGE_LEN;
++	control->geometry.max_command_len = ANT_MAX_COMMAND_LEN;
++	control->geometry.max_result_len = ANT_MAX_RESULT_LEN;
++	control->applied_host_timeout_ms = ANT_HOST_TIMEOUT_DEFAULT_MS;
++	control->requests.data_gpa = page_to_phys(pages) + ANT_REQUEST_OFFSET;
++	control->requests.data_size = ANT_COMMAND_RING_SIZE;
++	control->responses.data_gpa = page_to_phys(pages) + ANT_RESPONSE_OFFSET;
++	control->responses.data_size = ANT_COMMAND_RING_SIZE;
++	ANT_REL(&control->geometry.magic, ANT_MAGIC);
++	boot->version = ANT_ABI;
++	boot->session = control->geometry.session;
++	boot->control_gpa = page_to_phys(pages);
++	boot->control_size = ANT_CONTROL_SIZE;
++	boot->profile = 1;
++	host_seen = jiffies;
++	smp_store_release(&ready, true);
++	queue_delayed_work(worker, &control_work, 0);
++	ANT_REL(&boot->magic, ANT_MAGIC);
++	return 0;
++free_rings:
++	for (index = 0; index < queue_count; index++)
++		if (cpus[index].pages) __free_pages(cpus[index].pages, get_order(ANT_TELEMETRY_RING_SIZE));
++	kfree(cpus);
++free_control:
++	__free_pages(pages, get_order(ANT_CONTROL_SIZE));
++	return error;
++}
++late_initcall(ant_guest_init);
+diff --git a/kernel/antinomie/queue.h b/kernel/antinomie/queue.h
+new file mode 100644
+index 000000000..44cc02dd5
+--- /dev/null
++++ b/kernel/antinomie/queue.h
+@@ -0,0 +1,79 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef ANTINOMIE_QUEUE_H
++#define ANTINOMIE_QUEUE_H
++#include "abi.h"
++#ifdef __KERNEL__
++#include <linux/errno.h>
++#include <linux/string.h>
++#include <asm/barrier.h>
++#define ANT_ACQ(p) virt_load_acquire(p)
++#define ANT_REL(p, v) virt_store_release(p, v)
++#else
++#include <errno.h>
++#include <string.h>
++#define ANT_ACQ(p) __atomic_load_n((p), __ATOMIC_ACQUIRE)
++#define ANT_REL(p, v) __atomic_store_n((p), (v), __ATOMIC_RELEASE)
++#endif
++
++static inline __u64 ant_span(__u32 payload_len)
++{
++	return (sizeof(struct ant_message) + (__u64)payload_len + 7) & ~7ULL;
++}
++
++static inline void ant_copy_in(void *ring, __u32 size, __u64 pos,
++			       const void *src, __u32 payload_len)
++{
++	__u32 off = pos & (size - 1), first = size - off;
++	if (first > payload_len) first = payload_len;
++	if (first) memcpy((char *)ring + off, src, first);
++	if (payload_len > first) memcpy(ring, (const char *)src + first, payload_len - first);
++}
++
++static inline void ant_copy_out(const void *ring, __u32 size, __u64 pos,
++				void *dst, __u32 payload_len)
++{
++	__u32 off = pos & (size - 1), first = size - off;
++	if (first > payload_len) first = payload_len;
++	if (first) memcpy(dst, (const char *)ring + off, first);
++	if (payload_len > first) memcpy((char *)dst + first, ring, payload_len - first);
++}
++
++/* Private counters are authoritative; never accept a peer-written geometry. */
++static inline int ant_space(struct ant_queue *q, __u32 size, __u64 head,
++			    __u64 *cached_tail, __u64 span)
++{
++	__u64 tail = ANT_ACQ(&q->tail);
++	if ((tail & 7) || (head & 7) || tail < *cached_tail || tail > head || head - tail > size)
++		return -EPROTO;
++	*cached_tail = tail;
++	if (head > (~0ULL) - span) return -EOVERFLOW;
++	return span <= size - (head - tail) ? 0 : -ENOSPC;
++}
++
++static inline void ant_publish(struct ant_queue *q, void *ring, __u32 size,
++			       __u64 *head, const struct ant_message *msg, const void *data)
++{
++	__u64 zero = 0, span = ant_span(msg->payload_len);
++	ant_copy_in(ring, size, *head, msg, sizeof(*msg));
++	ant_copy_in(ring, size, *head + sizeof(*msg), data, msg->payload_len);
++	ant_copy_in(ring, size, *head + sizeof(*msg) + msg->payload_len, &zero,
++		    span - sizeof(*msg) - msg->payload_len);
++	*head += span;
++	ANT_REL(&q->head, *head);
++}
++
++static inline int ant_peek(struct ant_queue *q, const void *ring, __u32 size,
++			   __u32 limit, __u64 tail, __u64 *seen_head,
++			   struct ant_message *msg)
++{
++	__u64 head = ANT_ACQ(&q->head);
++	if ((head & 7) || (tail & 7) || head < *seen_head || head < tail || head - tail > size) return -EPROTO;
++	*seen_head = head;
++	if (head == tail) return -EAGAIN;
++	if (head - tail < sizeof(*msg)) return -EPROTO;
++	ant_copy_out(ring, size, tail, msg, sizeof(*msg));
++	if (msg->payload_len > limit || msg->flags || msg->reserved ||
++	    ant_span(msg->payload_len) > head - tail) return -EPROTO;
++	return 0;
++}
++#endif
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+new file mode 100644
+index 000000000..1dd1f462e
+--- /dev/null
++++ b/kernel/antinomie/recorder.c
+@@ -0,0 +1,756 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#include <linux/antinomie.h>
++#include <linux/antinomie_monitor.h>
++#include <linux/binfmts.h>
++#include <linux/cred.h>
++#include <linux/compat.h>
++#include <linux/file.h>
++#include <linux/fs.h>
++#include <linux/init.h>
++#include <linux/ktime.h>
++#include <linux/random.h>
++#include <linux/sched.h>
++#include <linux/sched/signal.h>
++#include <linux/slab.h>
++#include <linux/socket.h>
++#include <linux/uaccess.h>
++#include <linux/uio.h>
++#include <linux/unaligned.h>
++#include <uapi/linux/major.h>
++#include <uapi/asm/termios.h>
++#include <asm/stat.h>
++#include <asm/syscall.h>
++
++/* Scratch bounds packet size, never the logical capture extent. A task owns
++ * its context across migration; failure to allocate does not lose lineage.
++ */
++#define ANT_CHUNK_SIZE 4096
++#define ANT_HEADER_SIZE 128
++#define ANT_X32_BIT 0x40000000UL
++#define ANT_SCHEMA 1
++#define ANT_INCOMPLETE 1
++#define ANT_OBSERVATIONAL 8
++#define ANT_LIFECYCLE 16
++
++enum ant_status {
++	ANT_COMPLETE, ANT_COPY_FAULT, ANT_INVALID_EXTENT, ANT_UNKNOWN_EXTENT,
++	ANT_NO_DECODER, ANT_NULL_POINTER, ANT_ADDRESS_ONLY, ANT_ASYNC_UNOBSERVED,
++	ANT_RESOURCE_EXHAUSTED, ANT_ABORTED_ON_LOSS, ANT_CONTEXT_MISSING,
++	ANT_NOT_WRITTEN,
++};
++
++struct ant_task {
++	u64 call_id, event_seq, packet_seq, nr, args[6];
++	u64 entry_ns, timestamp_ns, ip, sp;
++	u64 object_count, packet_count, failed_count, state;
++	u32 flags, object_id, sock_capacity;
++	u8 phase, abi, arg_count;
++	bool active, busy, entry_lost, sock_capacity_valid, kernel_imported;
++	struct iovec *iov;
++	u32 iov_count;
++	u8 packet[ANT_HEADER_SIZE + ANT_CHUNK_SIZE];
++};
++
++static u64 stream_id;
++static atomic64_t cookies = ATOMIC64_INIT(0);
++static atomic64_t tasks_created = ATOMIC64_INIT(0);
++static atomic64_t tasks_live = ATOMIC64_INIT(0);
++static atomic64_t calls_entered = ATOMIC64_INIT(0);
++static atomic64_t events_attempted = ATOMIC64_INIT(0);
++static atomic64_t packets_attempted = ATOMIC64_INIT(0);
++static atomic64_t packets_failed = ATOMIC64_INIT(0);
++static atomic64_t copy_faults = ATOMIC64_INIT(0);
++static atomic64_t schema_gaps = ATOMIC64_INIT(0);
++static atomic64_t context_failures = ATOMIC64_INIT(0);
++
++static const u8 syscall_arg_count[323] = {
++	[0] = 3, [1] = 3, [2] = 3, [3] = 1, [4] = 2, [5] = 2,
++	[9] = 6, [10] = 3, [11] = 2, [16] = 3, [19] = 3, [20] = 3,
++	[41] = 3, [42] = 3, [43] = 3, [44] = 6, [45] = 6, [49] = 3,
++	[50] = 2, [56] = 5, [59] = 3, [60] = 1, [62] = 2, [82] = 2,
++	[87] = 1, [231] = 1, [257] = 4, [322] = 5,
++};
++
++static int publish(struct ant_task *ctx, u8 kind, u32 object_id,
++		   u64 object_offset, u64 object_size, size_t body_len)
++{
++	u8 *p = ctx->packet;
++	int error;
++
++	memset(p, 0, ANT_HEADER_SIZE);
++	memcpy(p, "ANTT", 4);
++	put_unaligned_le16(1, p + 4);
++	put_unaligned_le16(ANT_HEADER_SIZE, p + 8);
++	put_unaligned_le16(1, p + 10);
++	put_unaligned_le32(ANT_HEADER_SIZE + body_len, p + 12);
++	put_unaligned_le32(ctx->flags, p + 16);
++	put_unaligned_le32(ANT_SCHEMA, p + 20);
++	put_unaligned_le64(stream_id, p + 24);
++	put_unaligned_le64(current->ant_cookie, p + 32);
++	put_unaligned_le64(ctx->call_id, p + 40);
++	put_unaligned_le64(ctx->event_seq, p + 48);
++	put_unaligned_le64(++ctx->packet_seq, p + 56);
++	put_unaligned_le64(ctx->timestamp_ns, p + 64);
++	put_unaligned_le32(task_tgid_nr(current), p + 72);
++	put_unaligned_le32(task_pid_nr(current), p + 76);
++	put_unaligned_le32(raw_smp_processor_id(), p + 80);
++	put_unaligned_le32(1, p + 84);
++	put_unaligned_le64(ctx->nr, p + 88);
++	put_unaligned_le16(ctx->abi, p + 96);
++	p[98] = ctx->phase;
++	p[99] = kind;
++	put_unaligned_le32(object_id, p + 100);
++	put_unaligned_le64(object_offset, p + 104);
++	put_unaligned_le64(object_size, p + 112);
++	put_unaligned_le32(body_len, p + 120);
++	ctx->packet_count++;
++	atomic64_inc(&packets_attempted);
++	error = ant_send(p, ANT_HEADER_SIZE + body_len);
++	if (error) {
++		ctx->failed_count++;
++		ctx->state |= 2;
++		ctx->flags |= ANT_INCOMPLETE;
++		atomic64_inc(&packets_failed);
++	}
++	return error;
++}
++
++static void event_begin(struct ant_task *ctx, u8 phase, long result)
++{
++	u8 *body = ctx->packet + ANT_HEADER_SIZE;
++	const struct cred *cred = current_cred();
++	u32 validity = BIT(6) | BIT(9);
++	int i;
++
++	ctx->phase = phase;
++	ctx->timestamp_ns = ktime_get_ns();
++	ctx->event_seq++;
++	ctx->object_count = ctx->packet_count = ctx->failed_count = ctx->state = 0;
++	ctx->object_id = 0;
++	ctx->flags = 0;
++	if (phase == 3)
++		ctx->flags |= ANT_LIFECYCLE;
++	if (phase == 2 && ctx->entry_lost)
++		ctx->flags |= ANT_INCOMPLETE | 2;
++	memset(body, 0, 120);
++	for (i = 0; i < 6; i++)
++		put_unaligned_le64(ctx->args[i], body + i * 8);
++	body[48] = ctx->arg_count;
++	if (phase == 2) {
++		body[49] = result >= 0 ? 1 : 2;
++		if (ctx->abi != 1)
++			body[49] = 4;
++		if (result == -ERESTARTSYS || result == -ERESTARTNOINTR ||
++		    result == -ERESTARTNOHAND || result == -ERESTART_RESTARTBLOCK)
++			body[49] = 3;
++		put_unaligned_le16(1, body + 50);
++		put_unaligned_le64(result, body + 56);
++	}
++	put_unaligned_le64(ctx->entry_ns, body + 64);
++	put_unaligned_le64(ctx->ip, body + 72);
++	put_unaligned_le64(ctx->sp, body + 80);
++	put_unaligned_le32(from_kuid(&init_user_ns, cred->uid), body + 88);
++	put_unaligned_le32(from_kgid(&init_user_ns, cred->gid), body + 92);
++	put_unaligned_le32(from_kuid(&init_user_ns, cred->euid), body + 96);
++	put_unaligned_le32(from_kgid(&init_user_ns, cred->egid), body + 100);
++	put_unaligned_le64(current->start_boottime, body + 104);
++	validity |= ctx->arg_count == 255 ? 0x3f : (1U << ctx->arg_count) - 1;
++	if (ctx->entry_ns)
++		validity |= BIT(7) | BIT(8) | BIT(10);
++	put_unaligned_le32(validity, body + 112);
++	atomic64_inc(&events_attempted);
++	publish(ctx, 1, 0, 0, 0, 120);
++}
++
++static void event_end(struct ant_task *ctx)
++{
++	u8 *body = ctx->packet + ANT_HEADER_SIZE;
++
++	put_unaligned_le64(ctx->object_count, body);
++	put_unaligned_le64(ctx->packet_count + 1, body + 8);
++	put_unaligned_le64(ctx->failed_count, body + 16);
++	put_unaligned_le64(ctx->state, body + 24);
++	publish(ctx, 5, 0, 0, 0, 32);
++}
++
++static void incomplete(struct ant_task *ctx, enum ant_status status)
++{
++	if (status == ANT_COMPLETE || status == ANT_NULL_POINTER ||
++	    status == ANT_ADDRESS_ONLY || status == ANT_NOT_WRITTEN)
++		return;
++	ctx->flags |= ANT_INCOMPLETE;
++	ctx->state |= 1;
++	if (status == ANT_NO_DECODER) {
++		ctx->state |= 8;
++		atomic64_inc(&schema_gaps);
++	} else if (status == ANT_COPY_FAULT) {
++		atomic64_inc(&copy_faults);
++	} else if (status == ANT_RESOURCE_EXHAUSTED || status == ANT_CONTEXT_MISSING) {
++		ctx->state |= 4;
++		atomic64_inc(&context_failures);
++	}
++}
++
++static void field(struct ant_task *ctx, u8 arg_index, const char *key,
++		  const char *layout, u16 encoding, u64 address,
++		  const void *snapshot, u64 object_size, u64 declared_size,
++		  enum ant_status status)
++{
++	u8 *body = ctx->packet + ANT_HEADER_SIZE;
++	size_t key_len = strlen(key), layout_len = strlen(layout);
++	u64 captured_len = 0, chunk_count = 0;
++	u32 id = ++ctx->object_id;
++	int error = 0;
++
++	ctx->object_count++;
++	if (address && ctx->phase != 3)
++		ctx->flags |= ANT_OBSERVATIONAL;
++	memset(body, 0, 40);
++	body[0] = arg_index;
++	body[1] = ctx->phase == 2 ? 2 : 1;
++	put_unaligned_le16(encoding, body + 2);
++	put_unaligned_le16(ctx->kernel_imported ? 3 : ctx->phase == 3 ? 5 : ctx->phase,
++			   body + 4);
++	put_unaligned_le64(address, body + 8);
++	put_unaligned_le64(declared_size, body + 24);
++	put_unaligned_le16(key_len, body + 32);
++	put_unaligned_le16(layout_len, body + 34);
++	put_unaligned_le32((encoding == 2 ? 2 : 0) |
++			     (encoding == 1 && (ctx->nr == 1 || ctx->nr == 20 || ctx->nr == 44) &&
++			      declared_size > object_size ? 4 : 0), body + 36);
++	memcpy(body + 40, key, key_len);
++	memcpy(body + 40 + key_len, layout, layout_len);
++	if (publish(ctx, 2, id, 0, object_size, 40 + key_len + layout_len))
++		status = ANT_ABORTED_ON_LOSS;
++	if (!address && !snapshot && status == ANT_COMPLETE)
++		status = ANT_NULL_POINTER;
++	if (status == ANT_COMPLETE && object_size != U64_MAX &&
++	    object_size > ULONG_MAX - address)
++		status = ANT_INVALID_EXTENT;
++	while (status == ANT_COMPLETE && captured_len < object_size) {
++		size_t chunk_size = min_t(u64, ANT_CHUNK_SIZE,
++					object_size - captured_len);
++
++		if (snapshot)
++			memcpy(body, snapshot + captured_len, chunk_size);
++		else
++			error = copy_from_user_nofault(body,
++				(void __user *)(unsigned long)(address + captured_len),
++				chunk_size);
++		if (error) {
++			status = ANT_COPY_FAULT;
++			break;
++		}
++		chunk_count++;
++		captured_len += chunk_size;
++		if (publish(ctx, 3, id, captured_len - chunk_size, object_size, chunk_size))
++			status = ANT_ABORTED_ON_LOSS;
++	}
++	incomplete(ctx, status);
++	put_unaligned_le64(object_size, body);
++	put_unaligned_le64(captured_len, body + 8);
++	put_unaligned_le32(status, body + 16);
++	put_unaligned_le32(error, body + 20);
++	put_unaligned_le64(chunk_count, body + 24);
++	publish(ctx, 4, id, 0, object_size, 32);
++}
++
++static void user_field(struct ant_task *ctx, u8 arg_index, const char *key,
++		       const char *layout, u16 encoding, u64 address, u64 size)
++{
++	field(ctx, arg_index, key, layout, encoding, address, NULL,
++	      size, size, ANT_COMPLETE);
++}
++
++static u64 user_string(struct ant_task *ctx, u8 arg_index, const char *key,
++		       u64 address, u64 ceiling)
++{
++	long len = address ? strnlen_user_nofault((void __user *)(unsigned long)address,
++					       ceiling) : 0;
++	enum ant_status status = ANT_COMPLETE;
++
++	if (!address)
++		status = ANT_NULL_POINTER;
++	else if (!len)
++		status = ANT_COPY_FAULT;
++	else if (len > ceiling)
++		status = ANT_INVALID_EXTENT;
++	field(ctx, arg_index, key, "", 2, address, NULL,
++	      status == ANT_COMPLETE ? len : U64_MAX, ceiling, status);
++	return status == ANT_COMPLETE ? len : 0;
++}
++
++static void exec_vector(struct ant_task *ctx, u8 arg_index, u64 address,
++			u64 *budget)
++{
++	u64 index, ptr, used;
++	char key[80];
++	int error;
++
++	if (!address)
++		return;
++	for (index = 0; index < MAX_ARG_STRINGS; index++) {
++		if (*budget < sizeof(ptr) || address > ULONG_MAX - index * sizeof(ptr)) {
++			scnprintf(key, sizeof(key), "arg%u.vector", arg_index);
++			field(ctx, arg_index, key, "", 1, address, NULL,
++			      U64_MAX, *budget, ANT_INVALID_EXTENT);
++			return;
++		}
++		error = copy_from_user_nofault(&ptr,
++			(void __user *)(unsigned long)(address + index * sizeof(ptr)), sizeof(ptr));
++		scnprintf(key, sizeof(key), "arg%u.ptr[%llu]", arg_index, index);
++		field(ctx, arg_index, key, "linux-6.12.94/x86_64/pointer", 3,
++		      address + index * sizeof(ptr), &ptr, sizeof(ptr), sizeof(ptr),
++		      error ? ANT_COPY_FAULT : ANT_COMPLETE);
++		if (error || !ptr || ctx->failed_count)
++			return;
++		*budget -= sizeof(ptr);
++		scnprintf(key, sizeof(key), "arg%u.string[%llu]", arg_index, index);
++		used = user_string(ctx, arg_index, key, ptr,
++				   min_t(u64, MAX_ARG_STRLEN, *budget));
++		if (!used || ctx->failed_count)
++			return;
++		*budget -= used;
++	}
++}
++
++static void vector_entry(struct ant_task *ctx, bool input)
++{
++	u64 count = ctx->args[2];
++	u64 i, remaining = MAX_RW_COUNT;
++	char key[80];
++	enum ant_status status = ANT_COMPLETE;
++
++	if (count > UIO_MAXIOV)
++		status = ANT_INVALID_EXTENT;
++	else if (count) {
++		ctx->iov = kmalloc_array(count, sizeof(*ctx->iov), GFP_NOWAIT);
++		if (!ctx->iov)
++			status = ANT_RESOURCE_EXHAUSTED;
++		else if (copy_from_user_nofault(ctx->iov,
++				(void __user *)(unsigned long)ctx->args[1], count * sizeof(*ctx->iov)))
++			status = ANT_COPY_FAULT;
++		else
++			ctx->iov_count = count;
++	}
++	field(ctx, 1, "arg1.iov", "linux-6.12.94/x86_64/iovec[]", 3,
++	      ctx->args[1], ctx->iov,
++	      count > UIO_MAXIOV ? U64_MAX : count * sizeof(*ctx->iov),
++	      count > UIO_MAXIOV ? U64_MAX : count * sizeof(*ctx->iov), status);
++	if (!input || status != ANT_COMPLETE)
++		return;
++	for (i = 0; i < ctx->iov_count && !ctx->failed_count; i++) {
++		u64 size = min_t(u64, ctx->iov[i].iov_len, remaining);
++
++		scnprintf(key, sizeof(key), "arg1.iov[%llu].data", i);
++		field(ctx, 1, key, "", 1, (unsigned long)ctx->iov[i].iov_base, NULL,
++		      size, ctx->iov[i].iov_len,
++		      ctx->iov[i].iov_len > SSIZE_MAX ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++		remaining -= size;
++	}
++}
++
++static void vector_exit(struct ant_task *ctx, long result)
++{
++	u64 remaining = result > 0 ? result : 0, i;
++	char key[80];
++
++	if (!ctx->iov && ctx->args[2]) {
++		field(ctx, 1, "arg1.iov.output", "", 1, ctx->args[1], NULL,
++		      U64_MAX, U64_MAX, ANT_CONTEXT_MISSING);
++		return;
++	}
++	for (i = 0; i < ctx->iov_count && remaining && !ctx->failed_count; i++) {
++		u64 size = min_t(u64, remaining, ctx->iov[i].iov_len);
++
++		scnprintf(key, sizeof(key), "arg1.iov[%llu].data", i);
++		user_field(ctx, 1, key, "", 1, (unsigned long)ctx->iov[i].iov_base, size);
++		remaining -= size;
++	}
++}
++
++static bool selected(long nr)
++{
++	if (in_ia32_syscall() || (nr & ANT_X32_BIT))
++		return true;
++	switch (nr & ~ANT_X32_BIT) {
++	case 0: case 1: case 2: case 3: case 4: case 5: case 9: case 10:
++	case 11: case 16: case 19: case 20: case 41: case 42: case 43:
++	case 44: case 45: case 49: case 50: case 56: case 57: case 58:
++	case 59: case 60: case 62: case 82: case 87: case 231: case 257: case 322:
++		return true;
++	default:
++		return false;
++	}
++}
++
++static void ioctl_field(struct ant_task *ctx, bool output, long result)
++{
++	struct fd fd = fdget(ctx->args[0]);
++	struct file *file = fd_file(fd);
++	u32 major;
++	u64 size = U64_MAX;
++	const char *layout = "";
++	bool tty_file = false, input = false;
++
++	if (file && S_ISCHR(file_inode(file)->i_mode)) {
++		major = imajor(file_inode(file));
++		tty_file = major == TTY_MAJOR || major == TTYAUX_MAJOR ||
++			(major >= UNIX98_PTY_SLAVE_MAJOR &&
++			 major < UNIX98_PTY_SLAVE_MAJOR + UNIX98_PTY_MAJOR_COUNT);
++	}
++	if (tty_file)
++		switch (ctx->args[1]) {
++		case TCSETS: case TCSETSW: case TCSETSF:
++			input = true;
++			fallthrough;
++		case TCGETS:
++			size = sizeof(struct termios);
++			layout = "linux-6.12.94/x86_64/termios";
++			break;
++		case TIOCSWINSZ:
++			input = true;
++			fallthrough;
++		case TIOCGWINSZ:
++			size = sizeof(struct winsize);
++			layout = "linux-6.12.94/x86_64/winsize";
++			break;
++		case FIONREAD:
++			size = sizeof(int);
++			layout = "linux-6.12.94/x86_64/int";
++			break;
++		}
++	fdput(fd);
++	if (size == U64_MAX) {
++		if (!output)
++			field(ctx, 2, "arg2.ioctl", "", 1, ctx->args[2], NULL,
++			      U64_MAX, U64_MAX, ANT_NO_DECODER);
++	} else if ((input && !output) || (!input && output && !result)) {
++		user_field(ctx, 2, "arg2.ioctl", layout, 3, ctx->args[2], size);
++	}
++}
++
++static void capture_entry(struct ant_task *ctx)
++{
++	u64 *a = ctx->args;
++	u64 budget;
++	int error;
++
++	if (ctx->abi != 1) {
++		field(ctx, 255, "schema.unsupported_abi", "", 1, 0, NULL,
++		      U64_MAX, U64_MAX, ANT_NO_DECODER);
++		return;
++	}
++	switch (ctx->nr) {
++	case 1: case 44:
++		field(ctx, 1, "arg1.data", "", 1, a[1], NULL,
++		      min_t(u64, a[2], MAX_RW_COUNT), a[2], ANT_COMPLETE);
++		if (ctx->nr == 44 && a[4])
++			field(ctx, 4, "arg4.address", "linux-6.12.94/x86_64/sockaddr", 3,
++			      a[4], NULL, a[5], a[5],
++			      a[5] > sizeof(struct sockaddr_storage) ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++		break;
++	case 2: case 4: case 87:
++		user_string(ctx, 0, "arg0.path", a[0], PATH_MAX);
++		break;
++	case 257: case 322:
++		user_string(ctx, 1, "arg1.path", a[1], PATH_MAX);
++		if (ctx->nr == 257)
++			break;
++		fallthrough;
++	case 59:
++		if (ctx->nr == 59)
++			user_string(ctx, 0, "arg0.path", a[0], PATH_MAX);
++		budget = max_t(u64, ARG_MAX,
++			min_t(u64, _STK_LIM * 3 / 4, rlimit(RLIMIT_STACK) / 4));
++		exec_vector(ctx, ctx->nr == 59 ? 1 : 2, a[ctx->nr == 59 ? 1 : 2], &budget);
++		exec_vector(ctx, ctx->nr == 59 ? 2 : 3, a[ctx->nr == 59 ? 2 : 3], &budget);
++		break;
++	case 82:
++		user_string(ctx, 0, "arg0.path", a[0], PATH_MAX);
++		user_string(ctx, 1, "arg1.path", a[1], PATH_MAX);
++		break;
++	case 19: case 20:
++		vector_entry(ctx, ctx->nr == 20);
++		break;
++	case 42: case 49:
++		field(ctx, 1, "arg1.address", "linux-6.12.94/x86_64/sockaddr", 3,
++		      a[1], NULL, a[2], a[2],
++		      a[2] > sizeof(struct sockaddr_storage) ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++		break;
++	case 43: case 45:
++		if (a[ctx->nr == 43 ? 2 : 5]) {
++			error = copy_from_user_nofault(&ctx->sock_capacity,
++				(void __user *)(unsigned long)a[ctx->nr == 43 ? 2 : 5], sizeof(u32));
++			field(ctx, ctx->nr == 43 ? 2 : 5, "address.capacity",
++			      "linux-6.12.94/x86_64/socklen_t", 3,
++			      a[ctx->nr == 43 ? 2 : 5], &ctx->sock_capacity,
++			      sizeof(u32), sizeof(u32), error ? ANT_COPY_FAULT : ANT_COMPLETE);
++			if (error)
++				ctx->sock_capacity = 0;
++			else
++				ctx->sock_capacity_valid = true;
++		}
++		break;
++	case 16:
++		ioctl_field(ctx, false, 0);
++		break;
++	case 56:
++		if (a[0] & (CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID))
++			field(ctx, 3, "arg3.child_tid", "", 1, a[3], NULL,
++			      sizeof(u32), sizeof(u32), ANT_NO_DECODER);
++		break;
++	}
++}
++
++static void capture_exit(struct ant_task *ctx, long result)
++{
++	u64 *a = ctx->args;
++	u32 len = 0;
++	u8 address_index, length_index;
++	int error;
++
++	if (ctx->abi != 1)
++		return;
++	switch (ctx->nr) {
++	case 0: case 45:
++		if (result > 0)
++			user_field(ctx, 1, "arg1.data", "", 1, a[1],
++				   min_t(u64, result, min_t(u64, a[2], MAX_RW_COUNT)));
++		if (ctx->nr == 0)
++			break;
++		fallthrough;
++	case 43:
++		address_index = ctx->nr == 43 ? 1 : 4;
++		length_index = ctx->nr == 43 ? 2 : 5;
++		if (result >= 0 && a[address_index] && a[length_index]) {
++			error = copy_from_user_nofault(&len,
++				(void __user *)(unsigned long)a[length_index], sizeof(len));
++			field(ctx, length_index, "address.length",
++			      "linux-6.12.94/x86_64/socklen_t", 3, a[length_index], &len,
++			      sizeof(len), sizeof(len), error ? ANT_COPY_FAULT : ANT_COMPLETE);
++			if (!error)
++				field(ctx, address_index, "address.data",
++				      "linux-6.12.94/x86_64/sockaddr", 3, a[address_index], NULL,
++				      min_t(u64, sizeof(struct sockaddr_storage),
++					    min(len, ctx->sock_capacity)), ctx->sock_capacity,
++				      ctx->sock_capacity_valid ? ANT_COMPLETE : ANT_CONTEXT_MISSING);
++		}
++		break;
++	case 4: case 5:
++		if (!result)
++			user_field(ctx, 1, "arg1.stat", "linux-6.12.94/x86_64/stat", 3,
++				   a[1], sizeof(struct stat));
++		break;
++	case 19:
++		vector_exit(ctx, result);
++		break;
++	case 16:
++		ioctl_field(ctx, true, result);
++		break;
++	case 56:
++		if (result > 0 && (a[0] & CLONE_PARENT_SETTID))
++			user_field(ctx, 2, "arg2.parent_tid", "linux-6.12.94/x86_64/pid_t", 3,
++				   a[2], sizeof(u32));
++		break;
++	}
++}
++
++void ant_monitor_enter(struct pt_regs *regs, long nr)
++{
++	struct ant_task *ctx;
++	int i;
++
++	if (!current->ant_cookie || !selected(nr))
++		return;
++	ctx = current->ant_monitor;
++	if (!ctx) {
++		ctx = kzalloc(sizeof(*ctx), GFP_NOWAIT);
++		if (!ctx) {
++			atomic64_inc(&context_failures);
++			return;
++		}
++		current->ant_monitor = ctx;
++	}
++	if (ctx->busy)
++		return;
++	ctx->busy = true;
++	kfree(ctx->iov);
++	ctx->iov = NULL;
++	ctx->iov_count = 0;
++	ctx->sock_capacity = 0;
++	ctx->sock_capacity_valid = false;
++	ctx->nr = nr;
++	ctx->abi = in_ia32_syscall() ? 0 : nr & ANT_X32_BIT ? 2 : 1;
++	ctx->arg_count = ctx->abi == 1 ? syscall_arg_count[nr] : 255;
++	ctx->call_id++;
++	ctx->entry_ns = ktime_get_ns();
++	ctx->ip = instruction_pointer(regs);
++	ctx->sp = user_stack_pointer(regs);
++	syscall_get_arguments(current, regs, (unsigned long *)ctx->args);
++	if (ctx->arg_count != 255)
++		for (i = ctx->arg_count; i < 6; i++)
++			ctx->args[i] = 0;
++	ctx->active = true;
++	ctx->entry_lost = false;
++	atomic64_inc(&calls_entered);
++	event_begin(ctx, 1, 0);
++	capture_entry(ctx);
++	event_end(ctx);
++	ctx->entry_lost = ctx->failed_count != 0;
++	ctx->busy = false;
++}
++
++void ant_monitor_exit(struct pt_regs *regs)
++{
++	struct ant_task *ctx = current->ant_monitor;
++
++	if (!ctx || !ctx->active || ctx->busy)
++		return;
++	ctx->busy = true;
++	event_begin(ctx, 2, regs->ax);
++	capture_exit(ctx, regs->ax);
++	event_end(ctx);
++	ctx->active = false;
++	kfree(ctx->iov);
++	ctx->iov = NULL;
++	ctx->iov_count = 0;
++	ctx->busy = false;
++}
++
++static void lifecycle(struct ant_task *ctx, const char *key, u64 value)
++{
++	u8 scalar[8];
++
++	if (!ctx || ctx->busy)
++		return;
++	ctx->busy = true;
++	put_unaligned_le64(value, scalar);
++	event_begin(ctx, 3, 0);
++	field(ctx, 255, key, "", 4, 0, scalar, sizeof(scalar), sizeof(scalar), ANT_COMPLETE);
++	event_end(ctx);
++	ctx->busy = false;
++}
++
++int ant_monitor_launch(const char *path, char **argv, char **envp)
++{
++	struct ant_task *ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
++	char key[80];
++	u64 index;
++	u8 cookie[8];
++
++	if (!ctx)
++		return -ENOMEM;
++	current->ant_cookie = atomic64_inc_return(&cookies);
++	current->ant_monitor = ctx;
++	atomic64_inc(&tasks_created);
++	atomic64_inc(&tasks_live);
++	ctx->nr = U64_MAX;
++	ctx->abi = 1;
++	ctx->busy = true;
++	event_begin(ctx, 3, 0);
++	put_unaligned_le64(current->ant_cookie, cookie);
++	field(ctx, 255, "lifecycle.launch", "", 4, 0, cookie, sizeof(cookie), sizeof(cookie), ANT_COMPLETE);
++	ctx->kernel_imported = true;
++	field(ctx, 255, "context.exec.path", "", 2, 0, path, strlen(path) + 1,
++	      strlen(path) + 1, ANT_COMPLETE);
++	for (index = 0; argv[index] && !ctx->failed_count; index++) {
++		scnprintf(key, sizeof(key), "context.exec.argv[%llu]", index);
++		field(ctx, 255, key, "", 2, 0, argv[index], strlen(argv[index]) + 1,
++		      strlen(argv[index]) + 1, ANT_COMPLETE);
++	}
++	for (index = 0; envp[index] && !ctx->failed_count; index++) {
++		scnprintf(key, sizeof(key), "context.exec.envp[%llu]", index);
++		field(ctx, 255, key, "", 2, 0, envp[index], strlen(envp[index]) + 1,
++		      strlen(envp[index]) + 1, ANT_COMPLETE);
++	}
++	ctx->kernel_imported = false;
++	event_end(ctx);
++	ctx->busy = false;
++	return 0;
++}
++
++void ant_monitor_fork(struct task_struct *child)
++{
++	struct ant_task *ctx = current->ant_monitor;
++	u8 scalar[8];
++	u64 values[4];
++	static const char * const keys[] = { "lifecycle.child_cookie", "lifecycle.child_pid",
++		"lifecycle.child_tgid", "lifecycle.child_start_boot_ns" };
++	int i;
++
++	if (!current->ant_cookie)
++		return;
++	child->ant_cookie = atomic64_inc_return(&cookies);
++	child->ant_monitor = kzalloc(sizeof(*ctx), GFP_NOWAIT);
++	if (child->ant_monitor) {
++		child->ant_monitor->nr = U64_MAX;
++		child->ant_monitor->abi = 1;
++	} else {
++		atomic64_inc(&context_failures);
++	}
++	atomic64_inc(&tasks_created);
++	atomic64_inc(&tasks_live);
++	if (!ctx || ctx->busy)
++		return;
++	ctx->busy = true;
++	event_begin(ctx, 3, 0);
++	values[0] = child->ant_cookie;
++	values[1] = task_pid_nr(child);
++	values[2] = task_tgid_nr(child);
++	values[3] = child->start_boottime;
++	for (i = 0; i < ARRAY_SIZE(values); i++) {
++		put_unaligned_le64(values[i], scalar);
++		field(ctx, 255, keys[i], "", 4, 0, scalar, sizeof(scalar), sizeof(scalar), ANT_COMPLETE);
++	}
++	if (!child->ant_monitor)
++		field(ctx, 255, "lifecycle.child_context", "", 1, 0, NULL,
++		      U64_MAX, U64_MAX, ANT_RESOURCE_EXHAUSTED);
++	event_end(ctx);
++	ctx->busy = false;
++}
++
++void ant_monitor_exec(void)
++{
++	lifecycle(current->ant_monitor, "lifecycle.exec_commit", task_pid_nr(current));
++}
++
++void ant_monitor_task_exit(void)
++{
++	if (!current->ant_cookie)
++		return;
++	lifecycle(current->ant_monitor, "lifecycle.task_exit", current->exit_code);
++	atomic64_dec(&tasks_live);
++}
++
++void ant_monitor_release(struct task_struct *task)
++{
++	struct ant_task *ctx = task->ant_monitor;
++
++	if (ctx) {
++		kfree(ctx->iov);
++		kfree(ctx);
++	}
++}
++
++void ant_monitor_stats(void *out)
++{
++	u64 values[] = { stream_id, atomic64_read(&tasks_created), atomic64_read(&tasks_live),
++		atomic64_read(&calls_entered), atomic64_read(&events_attempted),
++		atomic64_read(&packets_attempted), atomic64_read(&packets_failed),
++		atomic64_read(&copy_faults), atomic64_read(&schema_gaps),
++		atomic64_read(&context_failures) };
++	int i;
++
++	for (i = 0; i < ARRAY_SIZE(values); i++)
++		put_unaligned_le64(values[i], out + i * sizeof(u64));
++}
++
++static int __init ant_recorder_init(void)
++{
++	stream_id = get_random_u64();
++	if (!stream_id)
++		stream_id = 1;
++	return 0;
++}
++subsys_initcall(ant_recorder_init);
+diff --git a/kernel/exit.c b/kernel/exit.c
+index e798078f9..a8cc5744a 100644
+--- a/kernel/exit.c
++++ b/kernel/exit.c
+@@ -6,6 +6,7 @@
+  */
+ 
+ #include <linux/mm.h>
++#include <linux/antinomie_monitor.h>
+ #include <linux/slab.h>
+ #include <linux/sched/autogroup.h>
+ #include <linux/sched/mm.h>
+@@ -937,6 +938,7 @@ void __noreturn do_exit(long code)
+ 	if (group_dead)
+ 		acct_process();
+ 	trace_sched_process_exit(tsk);
++	ant_monitor_task_exit();
+ 
+ 	exit_sem(tsk);
+ 	exit_shm(tsk);
+diff --git a/kernel/fork.c b/kernel/fork.c
+index c39f8d39e..2507c790c 100644
+--- a/kernel/fork.c
++++ b/kernel/fork.c
+@@ -13,6 +13,7 @@
+  */
+ 
+ #include <linux/anon_inodes.h>
++#include <linux/antinomie_monitor.h>
+ #include <linux/slab.h>
+ #include <linux/sched/autogroup.h>
+ #include <linux/sched/mm.h>
+@@ -991,6 +992,7 @@ static inline void put_signal_struct(struct signal_struct *sig)
+ 
+ void __put_task_struct(struct task_struct *tsk)
+ {
++	ant_monitor_release(tsk);
+ 	WARN_ON(!tsk->exit_state);
+ 	WARN_ON(refcount_read(&tsk->usage));
+ 	WARN_ON(tsk == current);
+@@ -1136,6 +1138,10 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
+ 	err = arch_dup_task_struct(tsk, orig);
+ 	if (err)
+ 		goto free_tsk;
++#ifdef CONFIG_ANTINOMIE
++	tsk->ant_cookie = 0;
++	tsk->ant_monitor = NULL;
++#endif
+ 
+ 	err = alloc_thread_stack_node(tsk, node);
+ 	if (err)
+@@ -2838,6 +2844,7 @@ pid_t kernel_clone(struct kernel_clone_args *args)
+ 	 * might get invalid after that point, if the thread exits quickly.
+ 	 */
+ 	trace_sched_process_fork(current, p);
++	ant_monitor_fork(p);
+ 
+ 	pid = get_task_pid(p, PIDTYPE_PID);
+ 	nr = pid_vnr(pid);
+-- 
+2.53.0
+

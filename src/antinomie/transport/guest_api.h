@@ -1,0 +1,25 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+#ifndef ANTINOMIE_GUEST_API_H
+#define ANTINOMIE_GUEST_API_H
+#include <linux/types.h>
+
+/* Task context only. data is valid kernel memory; copied before return.
+ * Zero means local acceptance, not delivery. No allocation or sleep on send.
+ * A zero-length message is valid. Maximum payload length is ring capacity minus framing.
+ */
+int ant_send(const void *data, size_t payload_len);
+
+/* Handlers run in sleepable worker context. No recursive registration changes.
+ * reply is transport-owned, valid only during the callback.
+ * Set reply_len on success; return zero or a negative errno.
+ */
+typedef int (*ant_command_handler)(const void *args, size_t args_len,
+		void *reply, size_t capacity, size_t *reply_len, void *context);
+int ant_register_command(u32 opcode, ant_command_handler handler, void *context);
+int ant_unregister_command(u32 opcode);
+
+/* Architecture integration only; consumers must not call these. */
+void ant_bootstrap_reserve(void);
+bool ant_bootstrap_reserved(void);
+u64 ant_bootstrap_gpa(void);
+#endif

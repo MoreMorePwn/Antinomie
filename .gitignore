@@ -11,6 +11,14 @@
 *.buildinfo
 *.build
 
+# Rust build output (Cargo.lock is tracked for the desktop application)
+target/
+
+# Local capture and runtime artifacts
+*.antcap
+*.sock
+*.ram
+
 # Quilt state and generated images
 .pc/
 *.qcow2
@@ -19,3 +27,5 @@
 *.swp
 *.swo
 .DS_Store
+__pycache__/
+*.pyc

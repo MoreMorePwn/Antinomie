@@ -27,6 +27,10 @@ git commit -m "antinomie: <change>" && git push
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, patch
 conventions, and the maintenance playbook.
 
+The initial native monitoring application, kernel-only controls and BusyBox
+guest workflow are documented in [Native Monitor](src/antinomie/monitor/README.md).
+Shared agent conventions are in [AGENTS.md](AGENTS.md).
+
 ## Layout
 
 ```
