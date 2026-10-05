@@ -1,9 +1,9 @@
 use eframe::egui::{self, Color32, FontId, Stroke, TextStyle};
 
-pub const BG: Color32 = Color32::from_rgb(32, 34, 37);
-pub const PANEL: Color32 = Color32::from_rgb(37, 39, 43);
-pub const RAISED: Color32 = Color32::from_rgb(44, 47, 52);
-pub const LINE: Color32 = Color32::from_rgb(59, 62, 68);
+pub const BG: Color32 = Color32::from_rgb(31, 31, 32);
+pub const PANEL: Color32 = Color32::from_rgb(37, 37, 38);
+pub const RAISED: Color32 = Color32::from_rgb(44, 44, 46);
+pub const LINE: Color32 = Color32::from_rgb(62, 62, 65);
 pub const TEXT: Color32 = Color32::from_rgb(210, 214, 220);
 pub const MUTED: Color32 = Color32::from_rgb(147, 155, 166);
 pub const BLUE: Color32 = Color32::from_rgb(148, 188, 235);
@@ -11,7 +11,7 @@ pub const PRIMARY: Color32 = Color32::from_rgb(49, 93, 139);
 pub const GOOD: Color32 = Color32::from_rgb(128, 192, 153);
 pub const WARN: Color32 = Color32::from_rgb(224, 182, 111);
 pub const ERROR: Color32 = Color32::from_rgb(235, 139, 139);
-pub const TERMINAL: Color32 = Color32::from_rgb(29, 31, 34);
+pub const TERMINAL: Color32 = Color32::from_rgb(26, 26, 27);
 
 pub fn install(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
@@ -43,8 +43,8 @@ pub fn install(ctx: &egui::Context) {
     style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, MUTED);
     style.visuals.widgets.inactive.bg_fill = RAISED;
     style.visuals.widgets.inactive.weak_bg_fill = RAISED;
-    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(52, 57, 64);
-    style.visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(52, 57, 64);
+    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(54, 54, 57);
+    style.visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(54, 54, 57);
     style.visuals.widgets.active.bg_fill = PRIMARY;
     style.visuals.widgets.active.weak_bg_fill = PRIMARY;
     style.spacing.item_spacing = egui::vec2(8.0, 5.0);
@@ -77,7 +77,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn native_theme_matches_reference_palette() {
+    fn compact_native_theme_installs_readable_dark_controls() {
         let ctx = egui::Context::default();
         install(&ctx);
         let style = ctx.style();

@@ -2,7 +2,7 @@ use crate::{terminal::Terminal, theme};
 use antinomie_monitor_core::{
     Backend, BackendOptions, Command, ExecRequest, Notification, Snapshot, VmConfig, VmState,
 };
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -31,15 +31,23 @@ impl Default for Settings {
 enum Confirm {
     Reset(String),
     Delete(String),
-    Upload,
-    Nat,
+    Upload {
+        source: PathBuf,
+        destination: String,
+        executable: bool,
+        vm_id: Option<String>,
+    },
+    Nat {
+        vm: VmConfig,
+        creating: bool,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq)]
 enum Workspace {
-    Images,
-    Syscalls,
+    Details,
     Terminal,
+    Activity,
 }
 
 struct Activity {
@@ -57,6 +65,9 @@ pub struct MonitorApp {
     settings: Settings,
     settings_open: bool,
     create_open: bool,
+    config_open: bool,
+    launch_open: bool,
+    upload_open: bool,
     draft: VmConfig,
     confirm: Option<Confirm>,
     status: String,
@@ -64,7 +75,6 @@ pub struct MonitorApp {
     selected_event: Option<(u64, u64, u64, u64)>,
     tab: Workspace,
     activity: VecDeque<Activity>,
-    activity_visible: bool,
     exec: ExecRequest,
     args: String,
     env: String,
@@ -112,14 +122,16 @@ impl MonitorApp {
             settings,
             settings_open: false,
             create_open: false,
+            config_open: false,
+            launch_open: false,
+            upload_open: false,
             draft: VmConfig::default(),
             confirm: None,
             status,
             filter: String::new(),
             selected_event: None,
-            tab: Workspace::Images,
+            tab: Workspace::Details,
             activity: VecDeque::new(),
-            activity_visible: true,
             exec,
             args: String::new(),
             env,
@@ -203,6 +215,7 @@ impl MonitorApp {
                             if success {
                                 self.terminal_ready = true;
                                 self.terminal.invalidate_resize();
+                                self.tab = Workspace::Terminal;
                             }
                         }
                         self.status = if success {
@@ -243,14 +256,25 @@ impl MonitorApp {
 
     fn new_image(&mut self) {
         self.draft = VmConfig::default();
-        self.draft.name = "New image".into();
+        self.draft.name = "New VM".into();
         self.create_open = true;
     }
 
     fn new_run(&mut self) {
         if let Some(vm_id) = self.selected.clone() {
-            self.tab = Workspace::Terminal;
             self.send(Command::Start { vm_id });
+        }
+    }
+
+    fn configure_vm(&mut self) {
+        if let Some(vm) = self
+            .snapshot
+            .vms
+            .iter()
+            .find(|vm| Some(&vm.id) == self.selected.as_ref())
+        {
+            self.draft = vm.clone();
+            self.config_open = true;
         }
     }
 
@@ -264,7 +288,7 @@ impl MonitorApp {
                 egui::menu::bar(ui, |ui| {
                     ui.menu_button("File", |ui| {
                         if ui
-                            .add_enabled(stopped, egui::Button::new("New image"))
+                            .add_enabled(stopped, egui::Button::new("New VM"))
                             .clicked()
                         {
                             self.new_image();
@@ -276,7 +300,17 @@ impl MonitorApp {
                             ui.close_menu();
                         }
                     });
-                    ui.menu_button("Image", |ui| {
+                    ui.menu_button("VM", |ui| {
+                        if ui
+                            .add_enabled(
+                                self.selected.is_some() && self.snapshot.active_vm != self.selected,
+                                egui::Button::new("Configuration"),
+                            )
+                            .clicked()
+                        {
+                            self.configure_vm();
+                            ui.close_menu();
+                        }
                         if ui
                             .add_enabled(selected, egui::Button::new("Reset disk to base"))
                             .clicked()
@@ -285,7 +319,7 @@ impl MonitorApp {
                             ui.close_menu();
                         }
                         if ui
-                            .add_enabled(selected, egui::Button::new("Delete image and disk"))
+                            .add_enabled(selected, egui::Button::new("Delete VM and disk"))
                             .clicked()
                         {
                             self.confirm = self.selected.clone().map(Confirm::Delete);
@@ -294,7 +328,7 @@ impl MonitorApp {
                     });
                     ui.menu_button("Run", |ui| {
                         if ui
-                            .add_enabled(selected, egui::Button::new("New run"))
+                            .add_enabled(selected, egui::Button::new("Start VM"))
                             .clicked()
                         {
                             self.new_run();
@@ -307,26 +341,43 @@ impl MonitorApp {
                             self.send(Command::Stop);
                             ui.close_menu();
                         }
+                        ui.separator();
+                        if ui
+                            .add_enabled(self.running(), egui::Button::new("Launch program"))
+                            .clicked()
+                        {
+                            self.launch_open = true;
+                            ui.close_menu();
+                        }
+                        if ui
+                            .add_enabled(self.running(), egui::Button::new("Upload file"))
+                            .clicked()
+                        {
+                            self.upload_open = true;
+                            ui.close_menu();
+                        }
+                        if ui
+                            .add_enabled(
+                                self.running() && self.terminal_ready,
+                                egui::Button::new("Send SIGINT"),
+                            )
+                            .clicked()
+                        {
+                            self.send(Command::Signal { pid: 0, signal: 2 });
+                            ui.close_menu();
+                        }
                     });
                     ui.menu_button("View", |ui| {
                         for (view, label) in [
-                            (Workspace::Images, "Images"),
-                            (Workspace::Syscalls, "Syscalls"),
+                            (Workspace::Details, "Details"),
                             (Workspace::Terminal, "Terminal"),
+                            (Workspace::Activity, "Activity"),
                         ] {
-                            if ui
-                                .add_enabled(
-                                    view == Workspace::Images || self.selected.is_some(),
-                                    egui::Button::new(label),
-                                )
-                                .clicked()
-                            {
+                            if ui.button(label).clicked() {
                                 self.tab = view;
                                 ui.close_menu();
                             }
                         }
-                        ui.separator();
-                        ui.checkbox(&mut self.activity_visible, "Activity");
                     });
                     ui.menu_button("Tools", |ui| {
                         if ui.button("Settings").clicked() {
@@ -351,63 +402,91 @@ impl MonitorApp {
 
     fn toolbar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("toolbar")
-            .exact_height(49.0)
+            .exact_height(34.0)
             .frame(theme::frame(theme::PANEL))
             .show(ctx, |ui| {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     let stopped = self.snapshot.active_vm.is_none();
-                    if tool(
-                        ui,
-                        egui_phosphor::regular::PLUS,
-                        "New image",
-                        "Create a persistent VM image",
-                        stopped,
-                        true,
-                    ) {
+                    if icon(ui, egui_phosphor::regular::PLUS, "New VM", stopped) {
                         self.new_image();
                     }
-                    if tool(
+                    if icon(
                         ui,
                         egui_phosphor::regular::SLIDERS_HORIZONTAL,
-                        "Settings",
-                        "Selected image configuration",
+                        "VM configuration",
                         self.selected.is_some() && self.snapshot.active_vm != self.selected,
-                        false,
                     ) {
-                        self.tab = Workspace::Images;
+                        self.configure_vm();
                     }
                     ui.separator();
-                    if tool(
+                    if icon(
                         ui,
                         egui_phosphor::regular::PLAY,
-                        "New run",
-                        "Start selected image in QEMU",
+                        "Start selected VM",
                         self.selected.is_some() && stopped,
-                        false,
                     ) {
                         self.new_run();
                     }
-                    if tool(
+                    if icon(
                         ui,
                         egui_phosphor::regular::STOP,
-                        "Stop",
                         "Shut down the current VM",
                         !stopped,
-                        false,
                     ) {
                         self.send(Command::Stop);
                     }
+                    ui.separator();
+                    if icon(
+                        ui,
+                        egui_phosphor::regular::TERMINAL_WINDOW,
+                        "Launch program",
+                        self.running(),
+                    ) {
+                        self.launch_open = true;
+                    }
+                    if icon(
+                        ui,
+                        egui_phosphor::regular::UPLOAD_SIMPLE,
+                        "Upload file",
+                        self.running(),
+                    ) {
+                        self.upload_open = true;
+                    }
+                    if icon(
+                        ui,
+                        egui_phosphor::regular::HAND,
+                        "Send SIGINT",
+                        self.running() && self.terminal_ready,
+                    ) {
+                        self.send(Command::Signal { pid: 0, signal: 2 });
+                    }
+                    ui.separator();
+                    if icon(
+                        ui,
+                        egui_phosphor::regular::GEAR,
+                        "Recording and base settings",
+                        true,
+                    ) {
+                        self.settings_open = true;
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            RichText::new(if stopped {
-                                "No active session".into()
+                        let name = self
+                            .snapshot
+                            .vms
+                            .iter()
+                            .find(|vm| Some(&vm.id) == self.snapshot.active_vm.as_ref())
+                            .map(|vm| vm.name.as_str())
+                            .unwrap_or(if self.snapshot.capture_dir.is_some() {
+                                "Last recording"
                             } else {
-                                format!("{:?}", self.snapshot.state)
-                            })
-                            .color(theme::MUTED),
-                        );
+                                "No active VM"
+                            });
+                        ui.add(
+                            egui::Label::new(RichText::new(name).color(theme::MUTED)).truncate(),
+                        )
+                        .on_hover_text(name);
                         ui.colored_label(
-                            if self.running() {
+                            if self.snapshot.state == VmState::Running {
                                 theme::GOOD
                             } else {
                                 theme::MUTED
@@ -421,98 +500,69 @@ impl MonitorApp {
 
     fn sidebar(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("vms")
-            .default_width(246.0)
-            .min_width(190.0)
-            .max_width(320.0)
+            .default_width(190.0)
+            .min_width(150.0)
+            .max_width(300.0)
             .resizable(true)
             .frame(
                 egui::Frame::new()
-                    .fill(Color32::from_rgb(34, 36, 40))
-                    .inner_margin(egui::Margin::same(12)),
+                    .fill(theme::PANEL)
+                    .inner_margin(egui::Margin::same(8)),
             )
             .show(ctx, |ui| {
-                ui.add_space(2.0);
-                ui.strong("Library");
-                ui.separator();
-                if library_row(
-                    ui,
-                    egui_phosphor::regular::HARD_DRIVES,
-                    "Images",
-                    self.snapshot.vms.len(),
-                    self.tab == Workspace::Images,
-                ) {
-                    self.tab = Workspace::Images;
-                }
-                if self.snapshot.vms.is_empty() {
-                    ui.add_space(8.0);
-                    ui.label(RichText::new("       No images").color(theme::MUTED));
-                }
-                for vm in &self.snapshot.vms {
-                    ui.indent(&vm.id, |ui| {
-                        if ui
-                            .selectable_label(self.selected.as_ref() == Some(&vm.id), &vm.name)
-                            .clicked()
-                        {
-                            self.selected = Some(vm.id.clone());
-                            self.tab = Workspace::Images;
+                ui.horizontal(|ui| {
+                    ui.strong("Virtual machines");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if icon(
+                            ui,
+                            egui_phosphor::regular::PLUS,
+                            "New VM",
+                            self.snapshot.active_vm.is_none(),
+                        ) {
+                            self.new_image();
                         }
                     });
-                }
-                ui.add_space(18.0);
-                let run_count = usize::from(
-                    self.snapshot.active_vm.is_some() || self.snapshot.capture_dir.is_some(),
-                );
-                if library_row(
-                    ui,
-                    egui_phosphor::regular::TERMINAL_WINDOW,
-                    "Runs",
-                    run_count,
-                    self.tab != Workspace::Images,
-                ) && run_count > 0
-                {
-                    self.tab = if self.snapshot.active_vm.is_some() {
-                        Workspace::Terminal
-                    } else {
-                        Workspace::Syscalls
-                    };
-                }
-                if run_count == 0 {
-                    ui.label(RichText::new("       No runs").color(theme::MUTED));
-                } else {
-                    ui.indent("run", |ui| {
-                        if ui
-                            .selectable_label(
-                                self.tab != Workspace::Images,
-                                if self.snapshot.active_vm.is_some() {
-                                    "Current session"
-                                } else {
-                                    "Last recording"
-                                },
-                            )
-                            .clicked()
-                        {
-                            self.tab = if self.snapshot.active_vm.is_some() {
-                                Workspace::Terminal
-                            } else {
-                                Workspace::Syscalls
-                            };
-                        }
-                        if let Some(path) = &self.snapshot.capture_dir {
-                            ui.label(
-                                RichText::new(
-                                    path.file_name().unwrap_or_default().to_string_lossy(),
-                                )
-                                .small()
-                                .color(theme::MUTED),
-                            )
-                            .on_hover_text(path.display().to_string());
-                        }
-                    });
-                }
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                    ui.label(RichText::new("Local workspace").small().color(theme::MUTED));
-                    ui.separator();
                 });
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .id_salt("vm_list")
+                    .show(ui, |ui| {
+                        if self.snapshot.vms.is_empty() {
+                            ui.label(RichText::new("No saved VMs").color(theme::MUTED));
+                        }
+                        for vm in &self.snapshot.vms {
+                            let active = self.snapshot.active_vm.as_ref() == Some(&vm.id);
+                            let label = format!(
+                                "{}  {}",
+                                if active {
+                                    egui_phosphor::regular::PLAY
+                                } else {
+                                    egui_phosphor::regular::HARD_DRIVE
+                                },
+                                vm.name
+                            );
+                            if ui
+                                .add_sized(
+                                    [ui.available_width(), 24.0],
+                                    egui::Button::new(RichText::new(label))
+                                        .frame(false)
+                                        .selected(self.selected.as_ref() == Some(&vm.id))
+                                        .truncate(),
+                                )
+                                .on_hover_text(format!(
+                                    "{}\n{} CPU / {} MiB / {} GiB\nNetwork: {}",
+                                    vm.name,
+                                    vm.cpus,
+                                    vm.ram_mib,
+                                    vm.disk_gib,
+                                    if vm.nat { "NAT" } else { "disconnected" }
+                                ))
+                                .clicked()
+                            {
+                                self.selected = Some(vm.id.clone());
+                            }
+                        }
+                    });
             });
     }
 
@@ -522,66 +572,29 @@ impl MonitorApp {
             .show(ctx, |ui| {
                 let health = &self.snapshot.health;
                 ui.add_space(3.0);
-                ui.style_mut()
-                    .text_styles
-                    .insert(egui::TextStyle::Body, egui::FontId::proportional(11.0));
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(if self.closing {
-                        "Closing"
-                    } else if self.snapshot.state == VmState::Failed {
-                        "Failed"
-                    } else if self.snapshot.active_vm.is_none() {
-                        "Idle"
-                    } else if self.snapshot.state == VmState::Running {
-                        "Connected"
-                    } else if self.snapshot.state == VmState::Starting {
-                        "Starting"
-                    } else {
-                        "Stopping"
-                    });
+                    ui.label(format!("{:?}", self.snapshot.state));
                     ui.separator();
-                    ui.label(format!("Images: {}", self.snapshot.vms.len()));
-                    ui.label(format!("Events: {}", self.snapshot.events.len()));
-                    let loss = health.dropped.saturating_add(health.ui_dropped);
-                    ui.colored_label(
-                        if loss == 0 { theme::GOOD } else { theme::WARN },
-                        format!(
-                            "Transport loss: {} / UI: {}",
-                            health.dropped, health.ui_dropped
-                        ),
-                    );
-                    ui.colored_label(
-                        if health.storage_dropped_packets > 0 || health.persistence_error.is_some()
-                        {
-                            theme::WARN
-                        } else {
-                            theme::GOOD
-                        },
-                        format!("Storage loss: {}", health.storage_dropped_packets),
-                    );
-                    ui.label(format!("Parser: {}", health.parser_errors));
-                    ui.label(format!(
-                        "Disk: {:.1}/{} GiB",
-                        health.persisted_len as f64 / 1073741824.0,
-                        self.settings.quota_gib
-                    ));
-                    ui.label(format!(
-                        "Packets {}/{}",
-                        health.persisted_packets, health.received_packets
-                    ))
-                    .on_hover_text("Raw packets saved / received");
-                    ui.label(if self.snapshot.state == VmState::Running {
-                        "Guest: BusyBox / 6.12.94"
-                    } else {
-                        "Guest: disconnected"
-                    })
-                    .on_hover_text(format!(
-                        "Replies stalled {} / transport {:#x}",
-                        health.reply_stalls, health.transport_health
-                    ));
+                    ui.colored_label(if health.dropped == 0 { theme::GOOD } else { theme::WARN },
+                        format!("Transport loss: {}", health.dropped));
+                    ui.colored_label(if health.ui_dropped == 0 { theme::GOOD } else { theme::WARN },
+                        format!("UI loss: {}", health.ui_dropped));
+                    ui.colored_label(if health.storage_dropped_packets == 0 && health.persistence_error.is_none() { theme::GOOD } else { theme::WARN },
+                        format!("Storage loss: {}", health.storage_dropped_packets));
+                    let recording = format!("Saved {:.1} / {} GiB",
+                        health.persisted_len as f64 / 1073741824.0, self.settings.quota_gib);
+                    ui.add(egui::Label::new(recording).truncate()).on_hover_text(format!(
+                        "Packets saved / received: {} / {}\nParser errors: {}\nReply stalls: {}\nTransport health: {:#x}\nRecording: {}",
+                        health.persisted_packets, health.received_packets, health.parser_errors,
+                        health.reply_stalls, health.transport_health,
+                        self.snapshot.capture_dir.as_ref().map(|path| path.display().to_string()).unwrap_or_else(|| "none".into())));
+                    if health.parser_errors > 0 {
+                        ui.colored_label(theme::WARN, format!("Parser errors: {}", health.parser_errors));
+                    }
                 });
                 if let Some(error) = &health.persistence_error {
-                    ui.colored_label(theme::ERROR, format!("Saving stopped: {error}"));
+                    ui.add(egui::Label::new(RichText::new(format!("Saving stopped: {error}")).color(theme::ERROR)).truncate())
+                        .on_hover_text(error);
                 }
                 if let Some(error) = &self.snapshot.last_error {
                     ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).truncate())
@@ -589,6 +602,8 @@ impl MonitorApp {
                 }
                 if self.closing {
                     ui.label("Waiting for guest shutdown and recording finalization...");
+                } else if !self.status.is_empty() {
+                    ui.add(egui::Label::new(&self.status).truncate()).on_hover_text(&self.status);
                 }
                 ui.add_space(3.0);
             });
@@ -615,354 +630,220 @@ impl MonitorApp {
         });
     }
 
-    fn activity(&mut self, ctx: &egui::Context) {
-        if !self.activity_visible {
-            return;
-        }
-        egui::TopBottomPanel::bottom("activity")
-            .default_height(166.0)
-            .min_height(64.0)
-            .max_height(if ctx.screen_rect().height() < 680.0 {
-                125.0
-            } else {
-                166.0
-            })
+    fn bottom_panel(&mut self, ctx: &egui::Context) {
+        egui::TopBottomPanel::bottom("inspection")
+            .default_height(230.0)
+            .min_height(130.0)
+            .max_height((ctx.screen_rect().height() * 0.65).max(130.0))
             .resizable(true)
-            .frame(theme::frame(theme::TERMINAL))
+            .frame(theme::frame(theme::BG))
             .show(ctx, |ui| {
                 ui.set_min_height(ui.max_rect().height());
                 ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
                 ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(format!("Activity  {}", self.activity.len()))
-                            .color(theme::TEXT),
-                    );
-                    ui.add_enabled(false, egui::Button::new("Build output").frame(false))
-                        .on_hover_text("Image build tasks are not implemented");
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if icon(ui, egui_phosphor::regular::X, "Hide activity", true) {
-                            self.activity_visible = false;
+                    for (target, label) in [
+                        (Workspace::Details, "Details"),
+                        (Workspace::Terminal, "Terminal"),
+                        (Workspace::Activity, "Activity"),
+                    ] {
+                        workspace_tab(ui, &mut self.tab, target, label, true);
+                    }
+                    if self.tab == Workspace::Terminal {
+                        ui.separator();
+                        if icon(
+                            ui,
+                            egui_phosphor::regular::ARROW_CLOCKWISE,
+                            "Read terminal output",
+                            self.running() && self.terminal_ready,
+                        ) {
+                            self.send(Command::TerminalRead);
                         }
-                        ui.label(
-                            RichText::new(if self.snapshot.active_vm.is_some() {
-                                "Session active"
-                            } else {
-                                "No tasks running"
-                            })
-                            .small()
-                            .color(theme::MUTED),
-                        );
-                    });
+                        if icon(
+                            ui,
+                            egui_phosphor::regular::HAND,
+                            "Send SIGINT",
+                            self.running() && self.terminal_ready,
+                        ) {
+                            self.send(Command::Signal { pid: 0, signal: 2 });
+                        }
+                    }
                 });
                 ui.separator();
-                let log_height = (ui.available_height() - 24.0).max(0.0);
-                let empty_center = ui.cursor().min
-                    + egui::vec2(ui.available_width() * 0.5, 24.0 + log_height * 0.5);
-                TableBuilder::new(ui)
-                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                    .column(Column::exact(112.0))
-                    .column(Column::exact(72.0))
-                    .column(Column::remainder())
-                    .min_scrolled_height(0.0)
-                    .max_scroll_height(log_height)
-                    .auto_shrink([false, false])
-                    .stick_to_bottom(true)
-                    .header(22.0, |mut header| {
-                        for text in ["Time", "Level", "Message"] {
-                            header.col(|ui| {
-                                ui.label(RichText::new(text).small().color(theme::MUTED));
-                            });
-                        }
-                    })
-                    .body(|body| {
-                        body.rows(22.0, self.activity.len(), |mut row| {
-                            let activity = &self.activity[row.index()];
-                            row.col(|ui| {
-                                ui.monospace(&activity.time).on_hover_text("UTC");
-                            });
-                            row.col(|ui| {
-                                ui.colored_label(
-                                    if activity.level == "ERROR" {
-                                        theme::ERROR
-                                    } else {
-                                        theme::MUTED
-                                    },
-                                    activity.level,
-                                );
-                            });
-                            row.col(|ui| {
-                                ui.add(egui::Label::new(&activity.message).truncate())
-                                    .on_hover_text(&activity.message);
-                            });
-                        });
-                    });
-                if self.activity.is_empty() {
-                    ui.painter().text(
-                        empty_center,
-                        egui::Align2::CENTER_CENTER,
-                        "No activity to display.",
-                        egui::FontId::proportional(12.0),
-                        theme::MUTED,
-                    );
+                match self.tab {
+                    Workspace::Details => self.details(ui),
+                    Workspace::Terminal => self.terminal_view(ui),
+                    Workspace::Activity => self.activity(ui),
                 }
             });
     }
 
-    fn images(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.strong("Image catalog");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    RichText::new(format!("{} images", self.snapshot.vms.len()))
-                        .small()
-                        .color(theme::MUTED),
-                );
-            });
-        });
-        ui.separator();
-        if self.snapshot.vms.is_empty() {
-            let height = ui.available_height();
-            ui.add_space((height * 0.28).max(10.0));
-            ui.vertical_centered(|ui| {
-                ui.label(
-                    RichText::new(egui_phosphor::regular::HARD_DRIVE)
-                        .size(44.0)
-                        .color(Color32::from_rgb(120, 137, 158)),
-                );
-                ui.add_space(12.0);
-                ui.heading("No images yet");
-                ui.add_space(12.0);
-                if tool(
-                    ui,
-                    egui_phosphor::regular::PLUS,
-                    "New image",
-                    "Create a persistent VM from base artifacts",
-                    true,
-                    true,
-                ) {
-                    self.new_image();
-                }
-            });
+    fn activity(&mut self, ui: &mut egui::Ui) {
+        if self.activity.is_empty() {
+            ui.label(RichText::new("No activity").color(theme::MUTED));
             return;
         }
-        egui::ScrollArea::vertical()
-            .id_salt("images")
-            .show(ui, |ui| {
-                for vm in &self.snapshot.vms {
-                    ui.horizontal(|ui| {
-                        if ui
-                            .selectable_label(
-                                self.selected.as_ref() == Some(&vm.id),
-                                format!("{}  {}", egui_phosphor::regular::HARD_DRIVE, vm.name),
-                            )
-                            .clicked()
-                        {
-                            self.selected = Some(vm.id.clone());
-                        }
-                        ui.label(
-                            RichText::new(format!(
-                                "{} CPU  /  {} MiB  /  {} GiB",
-                                vm.cpus, vm.ram_mib, vm.disk_gib
-                            ))
-                            .color(theme::MUTED),
+        let height = (ui.available_height() - 22.0).max(0.0);
+        TableBuilder::new(ui)
+            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+            .column(Column::exact(68.0))
+            .column(Column::exact(50.0))
+            .column(Column::remainder())
+            .min_scrolled_height(0.0)
+            .max_scroll_height(height)
+            .auto_shrink([false, false])
+            .stick_to_bottom(true)
+            .header(22.0, |mut header| {
+                for text in ["Time", "Level", "Message"] {
+                    header.col(|ui| {
+                        ui.label(RichText::new(text).color(theme::MUTED));
+                    });
+                }
+            })
+            .body(|body| {
+                body.rows(22.0, self.activity.len(), |mut row| {
+                    let activity = &self.activity[row.index()];
+                    row.col(|ui| {
+                        ui.monospace(&activity.time).on_hover_text("UTC");
+                    });
+                    row.col(|ui| {
+                        ui.colored_label(
+                            if activity.level == "ERROR" {
+                                theme::ERROR
+                            } else {
+                                theme::MUTED
+                            },
+                            activity.level,
                         );
                     });
-                }
-                ui.separator();
-                if let Some(vm) = self
-                    .snapshot
-                    .vms
-                    .iter()
-                    .find(|vm| Some(&vm.id) == self.selected.as_ref())
-                    .cloned()
-                {
-                    let mut edit = vm.clone();
-                    ui.add_space(12.0);
-                    ui.strong("Image configuration");
-                    ui.add_space(8.0);
-                    ui.add_enabled_ui(self.snapshot.active_vm.as_ref() != Some(&vm.id), |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label("Name");
-                            ui.text_edit_singleline(&mut edit.name);
-                        });
-                        numeric(ui, "CPU count", &mut edit.cpus, 1..=64);
-                        numeric(ui, "RAM (MiB)", &mut edit.ram_mib, 256..=3072);
-                        ui.label(format!("Disk: {} GiB", edit.disk_gib));
-                        if ui.checkbox(&mut edit.nat, "NAT network").changed() && edit.nat {
-                            self.confirm = Some(Confirm::Nat);
-                            edit.nat = false;
-                            self.draft = edit.clone();
-                        }
-                        if edit != vm {
-                            self.send(Command::Save(edit));
-                        }
-                        ui.add_space(8.0);
-                        ui.horizontal(|ui| {
-                            if tool(
-                                ui,
-                                egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE,
-                                "Reset disk",
-                                "Reset overlay to base; requires confirmation",
-                                true,
-                                false,
-                            ) {
-                                self.confirm = Some(Confirm::Reset(vm.id.clone()));
-                            }
-                            if tool(
-                                ui,
-                                egui_phosphor::regular::TRASH,
-                                "Delete",
-                                "Delete image and overlay; requires confirmation",
-                                true,
-                                false,
-                            ) {
-                                self.confirm = Some(Confirm::Delete(vm.id.clone()));
-                            }
-                        });
+                    row.col(|ui| {
+                        ui.add(egui::Label::new(&activity.message).truncate())
+                            .on_hover_text(&activity.message);
                     });
-                    ui.add_space(12.0);
-                    ui.label(RichText::new("BusyBox  /  Linux 6.12.94").color(theme::MUTED));
-                    ui.label(
-                        RichText::new(if vm.nat {
-                            "Network: NAT"
-                        } else {
-                            "Network: disconnected"
-                        })
-                        .color(theme::MUTED),
-                    );
-                }
+                });
             });
     }
 
-    fn controls(&mut self, ui: &mut egui::Ui) {
-        let form_height = (ui.available_height() - 130.0).clamp(60.0, 300.0);
-        egui::ScrollArea::vertical()
-            .id_salt("control_forms")
-            .max_height(form_height)
-            .show(ui, |ui| {
-                egui::CollapsingHeader::new("Launch configuration")
-                    .id_salt(("launch_configuration", self.terminal_ready))
-                    .default_open(!self.terminal_ready)
-                    .show(ui, |ui| {
-                        ui.add_enabled_ui(self.running(), |ui| {
-                            egui::Grid::new("launch")
-                                .num_columns(2)
-                                .spacing([14.0, 6.0])
-                                .show(ui, |ui| {
-                                    ui.label("Executable");
-                                    ui.add(
-                                        egui::TextEdit::singleline(&mut self.exec.path)
-                                            .desired_width(f32::INFINITY),
-                                    );
-                                    ui.end_row();
-                                    ui.label("Arguments");
-                                    ui.add(
-                                        egui::TextEdit::multiline(&mut self.args)
-                                            .desired_rows(2)
-                                            .desired_width(f32::INFINITY),
-                                    )
-                                    .on_hover_text("One argument per line");
-                                    ui.end_row();
-                                    ui.label("Working directory");
-                                    ui.text_edit_singleline(&mut self.exec.cwd);
-                                    ui.end_row();
-                                    ui.label("Environment");
-                                    ui.add(
-                                        egui::TextEdit::multiline(&mut self.env)
-                                            .desired_rows(2)
-                                            .desired_width(f32::INFINITY),
-                                    );
-                                    ui.end_row();
-                                    ui.label("Identity");
-                                    ui.horizontal(|ui| {
-                                        numeric(ui, "UID", &mut self.exec.uid, 0..=u32::MAX);
-                                        numeric(ui, "GID", &mut self.exec.gid, 0..=u32::MAX);
-                                    });
-                                    ui.end_row();
-                                });
-                            ui.horizontal(|ui| {
-                                if ui
-                                    .button(format!("{} Launch", egui_phosphor::regular::PLAY))
-                                    .clicked()
-                                {
-                                    self.exec.args = self.args.lines().map(str::to_owned).collect();
-                                    self.exec.env = self
-                                        .env
-                                        .lines()
-                                        .filter(|value| !value.is_empty())
-                                        .map(str::to_owned)
-                                        .collect();
-                                    self.send(Command::Execute(self.exec.clone()));
-                                }
-                                if icon(
-                                    ui,
-                                    egui_phosphor::regular::STOP,
-                                    "Send SIGINT to launched process",
-                                    self.terminal_ready,
-                                ) {
-                                    self.send(Command::Signal { pid: 0, signal: 2 });
-                                }
-                            });
-                        });
+    fn launch_form(&mut self, ui: &mut egui::Ui) {
+        ui.add_enabled_ui(self.running() && self.pending_launch.is_none(), |ui| {
+            egui::Grid::new("launch")
+                .num_columns(2)
+                .spacing([12.0, 6.0])
+                .show(ui, |ui| {
+                    ui.label("Executable");
+                    ui.add(egui::TextEdit::singleline(&mut self.exec.path).desired_width(290.0));
+                    ui.end_row();
+                    ui.label("Arguments");
+                    ui.add(
+                        egui::TextEdit::multiline(&mut self.args)
+                            .desired_rows(3)
+                            .desired_width(290.0),
+                    )
+                    .on_hover_text("One argument per line");
+                    ui.end_row();
+                    ui.label("Working directory");
+                    ui.add(egui::TextEdit::singleline(&mut self.exec.cwd).desired_width(290.0));
+                    ui.end_row();
+                    ui.label("Environment");
+                    ui.add(
+                        egui::TextEdit::multiline(&mut self.env)
+                            .desired_rows(3)
+                            .desired_width(290.0),
+                    )
+                    .on_hover_text("One NAME=value entry per line");
+                    ui.end_row();
+                    ui.label("Identity");
+                    ui.horizontal(|ui| {
+                        numeric(ui, "UID", &mut self.exec.uid, 0..=u32::MAX);
+                        numeric(ui, "GID", &mut self.exec.gid, 0..=u32::MAX);
                     });
-                egui::CollapsingHeader::new("File upload")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        ui.add_enabled_ui(self.running(), |ui| {
-                            egui::Grid::new("upload").num_columns(2).show(ui, |ui| {
-                                ui.label("Host file");
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.source)
-                                        .desired_width(f32::INFINITY),
-                                );
-                                ui.end_row();
-                                ui.label("Guest path");
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.destination)
-                                        .desired_width(f32::INFINITY),
-                                );
-                                ui.end_row();
-                            });
-                            ui.horizontal(|ui| {
-                                ui.checkbox(&mut self.executable, "Executable");
-                                ui.checkbox(&mut self.overwrite, "Overwrite existing file");
-                                if ui
-                                    .button(format!(
-                                        "{} Upload",
-                                        egui_phosphor::regular::UPLOAD_SIMPLE
-                                    ))
-                                    .clicked()
-                                {
-                                    if self.overwrite {
-                                        self.confirm = Some(Confirm::Upload);
-                                    } else {
-                                        self.upload();
-                                    }
-                                }
-                            });
-                        });
-                    });
-            });
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Terminal").strong());
-            if icon(
-                ui,
-                egui_phosphor::regular::ARROW_CLOCKWISE,
-                "Read terminal output",
-                self.running() && self.terminal_ready,
-            ) {
-                self.send(Command::TerminalRead);
+                    ui.end_row();
+                });
+            ui.separator();
+            if ui
+                .add_enabled(
+                    !self.exec.path.trim().is_empty(),
+                    egui::Button::new(format!("{} Launch", egui_phosphor::regular::PLAY))
+                        .fill(theme::PRIMARY),
+                )
+                .clicked()
+            {
+                self.exec.args = self.args.lines().map(str::to_owned).collect();
+                self.exec.env = self
+                    .env
+                    .lines()
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                self.send(Command::Execute(self.exec.clone()));
+                if self.pending_launch.is_some() {
+                    self.launch_open = false;
+                }
             }
         });
-        let (bytes, resize) = self
-            .terminal
-            .show(ui, self.running() && self.terminal_ready);
+    }
+
+    fn upload_form(&mut self, ui: &mut egui::Ui) {
+        ui.add_enabled_ui(self.running(), |ui| {
+            egui::Grid::new("upload").num_columns(2).show(ui, |ui| {
+                ui.label("Host file");
+                ui.add(egui::TextEdit::singleline(&mut self.source).desired_width(290.0));
+                ui.end_row();
+                ui.label("Guest path");
+                ui.add(egui::TextEdit::singleline(&mut self.destination).desired_width(290.0));
+                ui.end_row();
+            });
+            ui.checkbox(&mut self.executable, "Executable");
+            ui.checkbox(&mut self.overwrite, "Overwrite existing file");
+            ui.separator();
+            if ui
+                .add_enabled(
+                    !self.source.trim().is_empty() && !self.destination.trim().is_empty(),
+                    egui::Button::new(format!("{} Upload", egui_phosphor::regular::UPLOAD_SIMPLE)),
+                )
+                .clicked()
+            {
+                if self.overwrite {
+                    self.confirm = Some(Confirm::Upload {
+                        source: PathBuf::from(&self.source),
+                        destination: self.destination.clone(),
+                        executable: self.executable,
+                        vm_id: self.snapshot.active_vm.clone(),
+                    });
+                } else {
+                    self.upload();
+                }
+            }
+        });
+    }
+
+    fn terminal_view(&mut self, ui: &mut egui::Ui) {
+        let enabled = self.running()
+            && self.terminal_ready
+            && !self.closing
+            && !self.launch_open
+            && !self.upload_open
+            && !self.settings_open
+            && !self.create_open
+            && !self.config_open
+            && self.confirm.is_none();
+        if !enabled {
+            ui.label(
+                RichText::new(if self.snapshot.active_vm.is_some() && !self.running() {
+                    "Select the active VM to use its terminal"
+                } else if self.terminal_ready {
+                    "Session stopped"
+                } else {
+                    "No launched program"
+                })
+                .color(theme::MUTED),
+            );
+        }
+        let (bytes, resize) = self.terminal.show(ui, enabled);
         if !bytes.is_empty() {
             self.send(Command::TerminalInput(bytes));
         }
         if let Some((rows, cols)) = resize {
-            if self.running() && self.terminal_ready {
+            if enabled {
                 self.send(Command::TerminalResize { rows, cols });
             }
         }
@@ -979,10 +860,14 @@ impl MonitorApp {
 
     fn events(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label("Filter");
-            ui.add(egui::TextEdit::singleline(&mut self.filter).desired_width(280.0))
-                .on_hover_text("Syscall, task, field or issue");
-            ui.label(format!("{} events", self.snapshot.events.len()));
+            ui.strong("Syscalls");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.filter)
+                    .hint_text("Filter")
+                    .desired_width(180.0),
+            )
+            .on_hover_text("Syscall, task, field or issue");
+            ui.add(egui::Label::new(format!("{} events", self.snapshot.events.len())).truncate());
         });
         let filter = self.filter.to_lowercase();
         let indices: Vec<usize> = self
@@ -1005,24 +890,26 @@ impl MonitorApp {
             })
             .map(|(index, _)| index)
             .collect();
-        let table_height = (ui.available_height() * 0.54).max(100.0);
+        let table_height = (ui.available_height() - 25.0).max(0.0);
         ui.allocate_ui(
             egui::vec2(ui.available_width(), table_height + 25.0),
             |ui| {
                 ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+                ui.style_mut().interaction.selectable_labels = false;
                 TableBuilder::new(ui)
                     .striped(true)
                     .resizable(true)
+                    .sense(egui::Sense::click())
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                     .max_scroll_height(table_height)
                     .min_scrolled_height(0.0)
                     .auto_shrink([false, false])
-                    .column(Column::initial(70.0))
-                    .column(Column::initial(70.0))
-                    .column(Column::initial(140.0))
-                    .column(Column::initial(55.0))
-                    .column(Column::initial(90.0))
-                    .column(Column::remainder())
+                    .column(Column::initial(66.0).at_least(40.0).clip(true))
+                    .column(Column::initial(48.0).at_least(35.0).clip(true))
+                    .column(Column::initial(115.0).at_least(70.0).clip(true))
+                    .column(Column::initial(34.0).at_least(28.0).clip(true))
+                    .column(Column::initial(70.0).at_least(40.0).clip(true))
+                    .column(Column::remainder().clip(true))
                     .header(25.0, |mut header| {
                         for label in ["Sequence", "TID", "Syscall", "CPU", "Return", "Capture"] {
                             header.col(|ui| {
@@ -1039,64 +926,80 @@ impl MonitorApp {
                                 event.call_id,
                                 event.event_seq,
                             );
+                            row.set_selected(self.selected_event == Some(key));
                             row.col(|ui| {
                                 if ui
-                                    .selectable_label(
-                                        self.selected_event == Some(key),
-                                        event.event_seq.to_string(),
+                                    .add(
+                                        egui::Button::new(event.event_seq.to_string())
+                                            .frame(false)
+                                            .selected(self.selected_event == Some(key))
+                                            .truncate(),
                                     )
+                                    .on_hover_text(event.event_seq.to_string())
                                     .clicked()
                                 {
                                     self.selected_event = Some(key);
                                 }
                             });
                             row.col(|ui| {
-                                ui.label(event.tid.to_string()).on_hover_text(format!(
-                                    "Task cookie {} / call {} / stream {}",
-                                    event.task_cookie, event.call_id, event.stream_id
-                                ));
+                                ui.add(egui::Label::new(event.tid.to_string()).truncate())
+                                    .on_hover_text(format!(
+                                        "Task cookie {} / call {} / stream {}",
+                                        event.task_cookie, event.call_id, event.stream_id
+                                    ));
                             });
                             row.col(|ui| {
                                 if ui
-                                    .selectable_label(
-                                        self.selected_event == Some(key),
-                                        &event.syscall_name,
+                                    .add(
+                                        egui::Button::new(&event.syscall_name)
+                                            .frame(false)
+                                            .selected(self.selected_event == Some(key))
+                                            .truncate(),
                                     )
+                                    .on_hover_text(&event.syscall_name)
                                     .clicked()
                                 {
                                     self.selected_event = Some(key);
                                 }
                             });
                             row.col(|ui| {
-                                ui.label(event.cpu.to_string());
+                                ui.add(egui::Label::new(event.cpu.to_string()).truncate())
+                                    .on_hover_text(event.cpu.to_string());
                             });
                             row.col(|ui| {
-                                ui.label(
-                                    event
-                                        .result
-                                        .map(|value| value.to_string())
-                                        .unwrap_or_else(|| "-".into()),
-                                );
+                                let value = event
+                                    .result
+                                    .map(|value| value.to_string())
+                                    .unwrap_or_else(|| "-".into());
+                                ui.add(egui::Label::new(&value).truncate())
+                                    .on_hover_text(value);
                             });
                             row.col(|ui| {
-                                ui.colored_label(
-                                    if event.complete && event.issues.is_empty() {
-                                        theme::GOOD
-                                    } else {
-                                        theme::WARN
-                                    },
-                                    if event.complete && event.issues.is_empty() {
-                                        "Complete".into()
-                                    } else {
-                                        format!("Incomplete {}", event.issues.join(", "))
-                                    },
-                                );
+                                let color = if event.complete && event.issues.is_empty() {
+                                    theme::GOOD
+                                } else {
+                                    theme::WARN
+                                };
+                                let label = if event.complete && event.issues.is_empty() {
+                                    "Complete".into()
+                                } else {
+                                    format!("Incomplete {}", event.issues.join(", "))
+                                };
+                                ui.add(
+                                    egui::Label::new(RichText::new(&label).color(color)).truncate(),
+                                )
+                                .on_hover_text(label);
                             });
+                            if row.response().clicked() {
+                                self.selected_event = Some(key);
+                            }
                         })
                     });
             },
         );
-        ui.separator();
+    }
+
+    fn details(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::both().id_salt("detail").show(ui, |ui| {
             if let Some(event) = self.snapshot.events.iter().find(|event| {
                 Some((
@@ -1114,6 +1017,9 @@ impl MonitorApp {
                     "Time {} ns  |  phase {}  |  stream {}",
                     event.timestamp_ns, event.phase, event.stream_id
                 ));
+                if let Some(result) = event.result {
+                    ui.monospace(format!("Return: {result}"));
+                }
                 if let Some(args) = event.args {
                     ui.monospace(format!("args: {:x?}", args));
                 }
@@ -1160,77 +1066,217 @@ impl MonitorApp {
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
-        if self.create_open {
+        if self.create_open || self.config_open {
+            let creating = self.create_open;
             let mut open = true;
-            let mut create = false;
-            egui::Window::new("New image")
+            let mut save = false;
+            let mut reset = false;
+            let mut delete = false;
+            let mut nat = false;
+            egui::Window::new(if creating {
+                "New VM"
+            } else {
+                "VM configuration"
+            })
+            .id(egui::Id::new("vm_configuration"))
+            .collapsible(false)
+            .resizable(false)
+            .default_width(420.0)
+            .default_height(0.0)
+            .max_width(460.0)
+            .max_height((ctx.screen_rect().height() - 90.0).max(200.0))
+            .open(&mut open)
+            .show(ctx, |ui| {
+                scroll_dialog(ui, ctx, |ui| {
+                    let editable = if creating {
+                        self.snapshot.active_vm.is_none()
+                    } else {
+                        self.snapshot.active_vm.as_ref() != Some(&self.draft.id)
+                            && self.snapshot.vms.iter().any(|vm| vm.id == self.draft.id)
+                    };
+                    ui.add_enabled_ui(editable, |ui| {
+                        egui::Grid::new("vm_config")
+                            .num_columns(2)
+                            .spacing([12.0, 6.0])
+                            .show(ui, |ui| {
+                                ui.label("Name");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.draft.name)
+                                        .desired_width(280.0),
+                                );
+                                ui.end_row();
+                                ui.label("CPU count");
+                                ui.add(egui::DragValue::new(&mut self.draft.cpus).range(1..=64));
+                                ui.end_row();
+                                ui.label("RAM (MiB)");
+                                ui.add(
+                                    egui::DragValue::new(&mut self.draft.ram_mib).range(256..=3072),
+                                );
+                                ui.end_row();
+                                ui.label("Disk (GiB)");
+                                if creating {
+                                    ui.add(
+                                        egui::DragValue::new(&mut self.draft.disk_gib)
+                                            .range(1..=2048),
+                                    );
+                                } else {
+                                    ui.label(self.draft.disk_gib.to_string());
+                                }
+                                ui.end_row();
+                                if creating {
+                                    ui.label("Base directory");
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut self.settings.bundle)
+                                            .desired_width(280.0),
+                                    );
+                                    ui.end_row();
+                                }
+                            });
+                        if ui.checkbox(&mut self.draft.nat, "NAT network").changed()
+                            && self.draft.nat
+                        {
+                            self.draft.nat = false;
+                            nat = true;
+                        }
+                        if self.draft.nat {
+                            ui.colored_label(
+                                theme::WARN,
+                                "NAT permits guest access to the host network and Internet.",
+                            );
+                        }
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            save = ui
+                                .add_enabled(
+                                    !self.draft.name.trim().is_empty(),
+                                    egui::Button::new(if creating {
+                                        "Create VM"
+                                    } else {
+                                        "Save configuration"
+                                    })
+                                    .fill(theme::PRIMARY),
+                                )
+                                .clicked();
+                            if !creating {
+                                reset = icon(
+                                    ui,
+                                    egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE,
+                                    "Reset disk to base",
+                                    self.snapshot.active_vm.is_none(),
+                                );
+                                delete = icon(
+                                    ui,
+                                    egui_phosphor::regular::TRASH,
+                                    "Delete VM and disk",
+                                    self.snapshot.active_vm.is_none(),
+                                );
+                            }
+                        });
+                    });
+                });
+            });
+            self.create_open = creating && open;
+            self.config_open = !creating && open;
+            if nat {
+                self.confirm = Some(Confirm::Nat {
+                    vm: self.draft.clone(),
+                    creating,
+                });
+            }
+            if reset {
+                self.confirm = Some(Confirm::Reset(self.draft.id.clone()));
+            }
+            if delete {
+                self.confirm = Some(Confirm::Delete(self.draft.id.clone()));
+            }
+            if save {
+                if creating {
+                    self.update_options();
+                    self.send(Command::Create(self.draft.clone()));
+                } else {
+                    self.send(Command::Save(self.draft.clone()));
+                }
+                self.create_open = false;
+                self.config_open = false;
+            }
+        }
+        if self.launch_open {
+            let mut open = true;
+            egui::Window::new("Launch program")
+                .open(&mut open)
                 .collapsible(false)
                 .resizable(false)
-                .open(&mut open)
+                .default_width(440.0)
+                .default_height(0.0)
+                .max_width(480.0)
+                .max_height((ctx.screen_rect().height() - 90.0).max(200.0))
                 .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Name");
-                        ui.text_edit_singleline(&mut self.draft.name);
+                    scroll_dialog(ui, ctx, |ui| {
+                        self.launch_form(ui);
                     });
-                    numeric(ui, "CPU count", &mut self.draft.cpus, 1..=64);
-                    numeric(ui, "RAM (MiB)", &mut self.draft.ram_mib, 256..=3072);
-                    numeric(ui, "Disk (GiB)", &mut self.draft.disk_gib, 1..=2048);
-                    ui.horizontal(|ui| {
-                        ui.label("Base artifact directory");
-                        ui.text_edit_singleline(&mut self.settings.bundle);
-                    });
-                    ui.checkbox(&mut self.draft.nat, "NAT network");
-                    if self.draft.nat {
-                        ui.colored_label(
-                            theme::WARN,
-                            "NAT permits guest connections to the host network and Internet.",
-                        );
-                    }
-                    create = ui
-                        .add_enabled(
-                            !self.draft.name.trim().is_empty() && self.snapshot.active_vm.is_none(),
-                            egui::Button::new(format!(
-                                "{} Create image",
-                                egui_phosphor::regular::PLUS
-                            ))
-                            .fill(theme::PRIMARY),
-                        )
-                        .clicked();
                 });
-            self.create_open = open;
-            if create {
-                self.update_options();
-                self.send(Command::Create(self.draft.clone()));
-                self.create_open = false;
-            }
+            self.launch_open &= open;
+        }
+        if self.upload_open {
+            let mut open = true;
+            egui::Window::new("Upload file")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .default_width(420.0)
+                .default_height(0.0)
+                .max_width(460.0)
+                .max_height((ctx.screen_rect().height() - 90.0).max(200.0))
+                .show(ctx, |ui| {
+                    scroll_dialog(ui, ctx, |ui| {
+                        self.upload_form(ui);
+                    });
+                });
+            self.upload_open &= open;
         }
         if self.settings_open {
             let mut open = true;
             let mut save = false;
-            egui::Window::new("Recording and base image")
+            egui::Window::new("Recording and base settings")
                 .open(&mut open)
                 .collapsible(false)
+                .resizable(false)
+                .default_width(420.0)
+                .default_height(0.0)
+                .max_width(460.0)
+                .max_height((ctx.screen_rect().height() - 90.0).max(200.0))
                 .show(ctx, |ui| {
-                    ui.add_enabled_ui(self.snapshot.active_vm.is_none(), |ui| {
-                        ui.label("Base artifact directory");
-                        ui.text_edit_singleline(&mut self.settings.bundle);
-                        numeric(
-                            ui,
-                            "Recording quota (GiB)",
-                            &mut self.settings.quota_gib,
-                            1..=4096,
-                        );
-                        numeric(
-                            ui,
-                            "Shutdown timeout (seconds)",
-                            &mut self.settings.timeout,
-                            1..=120,
-                        );
-                        save = ui.button("Save settings").clicked();
+                    scroll_dialog(ui, ctx, |ui| {
+                        ui.add_enabled_ui(self.snapshot.active_vm.is_none(), |ui| {
+                            ui.label("Base artifact directory");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.settings.bundle)
+                                    .desired_width(400.0),
+                            );
+                            numeric(
+                                ui,
+                                "Recording quota (GiB)",
+                                &mut self.settings.quota_gib,
+                                1..=4096,
+                            );
+                            numeric(
+                                ui,
+                                "Shutdown timeout (seconds)",
+                                &mut self.settings.timeout,
+                                1..=120,
+                            );
+                            ui.separator();
+                            save = ui.button("Save settings").clicked();
+                        });
+                        if let Some(path) = &self.snapshot.capture_dir {
+                            ui.separator();
+                            ui.add(
+                                egui::Label::new(format!("Recording: {}", path.display()))
+                                    .truncate(),
+                            )
+                            .on_hover_text(path.display().to_string());
+                        }
                     });
-                    if let Some(path) = &self.snapshot.capture_dir {
-                        ui.label(format!("Recording: {}", path.display()));
-                    }
                 });
             self.settings_open = open;
             if save {
@@ -1244,23 +1290,43 @@ impl MonitorApp {
                     "Reset this VM's disk to the base image? All VM disk changes will be lost."
                 }
                 Confirm::Delete(_) => "Delete this VM and its disk? All VM disk data will be lost.",
-                Confirm::Upload => "Overwrite the chosen guest path with this host file?",
-                Confirm::Nat => {
+                Confirm::Upload { .. } => "Overwrite the chosen guest path with this host file?",
+                Confirm::Nat { .. } => {
                     "Enable NAT? The guest can connect to the host network and Internet."
                 }
             };
             let mut yes = false;
             let mut cancel = false;
-            egui::Window::new("Confirm action")
-                .collapsible(false)
-                .resizable(false)
-                .show(ctx, |ui| {
-                    ui.label(text);
-                    ui.horizontal(|ui| {
-                        yes = ui.button("Confirm").clicked();
-                        cancel = ui.button("Cancel").clicked();
-                    });
+            egui::Modal::new(egui::Id::new("confirm_action")).show(ctx, |ui| {
+                ui.set_width(360.0);
+                ui.strong("Confirm action");
+                ui.separator();
+                ui.label(text);
+                ui.horizontal(|ui| {
+                    let enabled = !self.closing
+                        && match confirm {
+                            Confirm::Reset(_) | Confirm::Delete(_) => {
+                                self.snapshot.active_vm.is_none()
+                            }
+                            Confirm::Upload { vm_id, .. } => {
+                                vm_id.is_some()
+                                    && self.snapshot.active_vm == *vm_id
+                                    && self.snapshot.state == VmState::Running
+                            }
+                            Confirm::Nat { vm, creating } => {
+                                if *creating {
+                                    self.snapshot.active_vm.is_none()
+                                } else {
+                                    self.snapshot.active_vm.as_ref() != Some(&vm.id)
+                                }
+                            }
+                        };
+                    yes = ui
+                        .add_enabled(enabled, egui::Button::new("Confirm"))
+                        .clicked();
+                    cancel = ui.button("Cancel").clicked();
                 });
+            });
             if yes {
                 if let Some(confirm) = self.confirm.take() {
                     match confirm {
@@ -1272,10 +1338,25 @@ impl MonitorApp {
                             vm_id,
                             confirmed: true,
                         }),
-                        Confirm::Upload => self.upload(),
-                        Confirm::Nat => {
-                            self.draft.nat = true;
-                            self.send(Command::Save(self.draft.clone()));
+                        Confirm::Upload {
+                            source,
+                            destination,
+                            executable,
+                            ..
+                        } => self.send(Command::Upload {
+                            source,
+                            destination,
+                            executable,
+                            overwrite: true,
+                        }),
+                        Confirm::Nat { mut vm, creating } => {
+                            vm.nat = true;
+                            if self.draft.id == vm.id {
+                                self.draft.nat = true;
+                            }
+                            if !creating {
+                                self.send(Command::Save(vm));
+                            }
                         }
                     }
                 }
@@ -1284,6 +1365,24 @@ impl MonitorApp {
                 self.confirm = None;
             }
         }
+    }
+
+    fn draw(&mut self, ctx: &egui::Context) {
+        self.menus(ctx);
+        self.toolbar(ctx);
+        self.health(ctx);
+        self.sidebar(ctx);
+        self.bottom_panel(ctx);
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::BG)
+                    .inner_margin(egui::Margin::same(8)),
+            )
+            .show(ctx, |ui| {
+                self.events(ui);
+            });
+        self.dialogs(ctx);
     }
 
     fn update_options(&mut self) {
@@ -1313,7 +1412,9 @@ impl eframe::App for MonitorApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
-        if self.running() && self.last_poll.elapsed() >= Duration::from_millis(100) {
+        if self.snapshot.state == VmState::Running
+            && self.last_poll.elapsed() >= Duration::from_millis(100)
+        {
             if let Some(backend) = &self.backend {
                 if let Err(error) = backend.send(Command::TerminalRead) {
                     self.status = error;
@@ -1321,47 +1422,7 @@ impl eframe::App for MonitorApp {
             }
             self.last_poll = Instant::now();
         }
-        self.menus(ctx);
-        self.toolbar(ctx);
-        self.health(ctx);
-        self.activity(ctx);
-        self.sidebar(ctx);
-        egui::CentralPanel::default()
-            .frame(
-                egui::Frame::new()
-                    .fill(theme::BG)
-                    .inner_margin(egui::Margin::same(12)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    workspace_tab(ui, &mut self.tab, Workspace::Images, "Images", true);
-                    ui.add_enabled(false, egui::Button::new("Processes").frame(false))
-                        .on_hover_text("Process view is not implemented");
-                    workspace_tab(
-                        ui,
-                        &mut self.tab,
-                        Workspace::Syscalls,
-                        "Syscalls",
-                        self.selected.is_some(),
-                    );
-                    ui.add_enabled(false, egui::Button::new("Rules").frame(false))
-                        .on_hover_text("Rules are not implemented");
-                    workspace_tab(
-                        ui,
-                        &mut self.tab,
-                        Workspace::Terminal,
-                        "Terminal",
-                        self.selected.is_some(),
-                    );
-                });
-                ui.separator();
-                match self.tab {
-                    Workspace::Images => self.images(ui),
-                    Workspace::Syscalls => self.events(ui),
-                    Workspace::Terminal => self.controls(ui),
-                }
-            });
-        self.dialogs(ctx);
+        self.draw(ctx);
         ctx.request_repaint_after(Duration::from_millis(50));
     }
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -1385,64 +1446,6 @@ fn icon(ui: &mut egui::Ui, icon: &str, tooltip: &str, enabled: bool) -> bool {
     )
     .on_hover_text(tooltip)
     .clicked()
-}
-
-fn tool(
-    ui: &mut egui::Ui,
-    icon: &str,
-    label: &str,
-    tooltip: &str,
-    enabled: bool,
-    primary: bool,
-) -> bool {
-    let mut button = egui::Button::new(format!("{icon}  {label}")).min_size(egui::vec2(0.0, 30.0));
-    if primary {
-        button = button
-            .fill(theme::PRIMARY)
-            .stroke(egui::Stroke::new(1.0_f32, Color32::from_rgb(83, 123, 166)));
-    } else {
-        button = button.frame(false);
-    }
-    ui.add_enabled(enabled, button)
-        .on_hover_text(tooltip)
-        .clicked()
-}
-
-fn library_row(ui: &mut egui::Ui, icon: &str, label: &str, count: usize, selected: bool) -> bool {
-    let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 30.0), egui::Sense::click());
-    if selected || response.hovered() {
-        ui.painter().rect_filled(
-            rect,
-            0.0,
-            if selected {
-                Color32::from_rgb(45, 62, 82)
-            } else {
-                theme::RAISED
-            },
-        );
-    }
-    if selected {
-        ui.painter().line_segment(
-            [rect.left_top(), rect.left_bottom()],
-            egui::Stroke::new(2.0_f32, theme::BLUE),
-        );
-    }
-    ui.painter().text(
-        rect.left_center() + egui::vec2(10.0, 0.0),
-        egui::Align2::LEFT_CENTER,
-        format!("{}  {icon}  {label}", egui_phosphor::regular::CARET_DOWN),
-        egui::FontId::proportional(12.0),
-        theme::TEXT,
-    );
-    ui.painter().text(
-        rect.right_center() - egui::vec2(10.0, 0.0),
-        egui::Align2::RIGHT_CENTER,
-        count.to_string(),
-        egui::FontId::monospace(11.0),
-        theme::MUTED,
-    );
-    response.clicked()
 }
 
 fn workspace_tab(
@@ -1469,6 +1472,16 @@ fn workspace_tab(
         *view = target;
     }
 }
+fn scroll_dialog(ui: &mut egui::Ui, ctx: &egui::Context, content: impl FnOnce(&mut egui::Ui)) {
+    let height = (ctx.screen_rect().height() - 110.0).max(150.0);
+    // Measure against the viewport even when restored window geometry is short.
+    ui.set_max_height(height);
+    egui::ScrollArea::vertical()
+        .max_height(height)
+        .auto_shrink([false, true])
+        .show(ui, content);
+}
+
 fn numeric<T: egui::emath::Numeric>(
     ui: &mut egui::Ui,
     label: &str,
@@ -1479,4 +1492,318 @@ fn numeric<T: egui::emath::Numeric>(
         ui.label(label);
         ui.add(egui::DragValue::new(value).range(range));
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app() -> MonitorApp {
+        let exec = ExecRequest::default();
+        MonitorApp {
+            backend: None,
+            snapshot: Snapshot::default(),
+            selected: None,
+            settings: Settings::default(),
+            settings_open: false,
+            create_open: false,
+            config_open: false,
+            launch_open: false,
+            upload_open: false,
+            draft: VmConfig::default(),
+            confirm: None,
+            status: String::new(),
+            filter: String::new(),
+            selected_event: None,
+            tab: Workspace::Details,
+            activity: VecDeque::new(),
+            env: exec.env.join("\n"),
+            exec,
+            args: String::new(),
+            source: String::new(),
+            destination: "/tmp/program".into(),
+            executable: false,
+            overwrite: false,
+            terminal: Terminal::default(),
+            terminal_ready: false,
+            pending_launch: None,
+            last_poll: Instant::now(),
+            started: Instant::now(),
+            smoke: None,
+            closing: false,
+        }
+    }
+
+    fn render(app: &mut MonitorApp, ctx: &egui::Context, size: egui::Vec2) -> egui::FullOutput {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                ..Default::default()
+            },
+            |ctx| app.draw(ctx),
+        )
+    }
+
+    fn texts(output: &egui::FullOutput) -> Vec<(String, egui::Rect)> {
+        fn collect(shape: &egui::Shape, clip: egui::Rect, texts: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::Shape::Text(text) => {
+                    let rect = text.visual_bounding_rect();
+                    if clip.contains_rect(rect) {
+                        texts.push((text.galley.text().to_owned(), rect));
+                    }
+                }
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, clip, texts);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut texts = Vec::new();
+        for shape in &output.shapes {
+            collect(&shape.shape, shape.clip_rect, &mut texts);
+        }
+        texts
+    }
+
+    #[test]
+    fn monitor_and_losses_stay_visible_above_and_below_each_inspection_tab() {
+        for size in [egui::vec2(800.0, 600.0), egui::vec2(1280.0, 820.0)] {
+            for tab in [Workspace::Details, Workspace::Terminal, Workspace::Activity] {
+                let ctx = egui::Context::default();
+                theme::install(&ctx);
+                let mut app = app();
+                app.tab = tab;
+                app.snapshot.health.dropped = 3;
+                app.snapshot.health.persistence_error = Some("disk full".into());
+                app.log("ERROR", "disk full".into());
+                let _ = render(&mut app, &ctx, size);
+                let output = render(&mut app, &ctx, size);
+                let texts = texts(&output);
+                let rect = |label: &str| {
+                    texts
+                        .iter()
+                        .find(|(text, _)| text == label)
+                        .unwrap_or_else(|| panic!("missing visible {label}: {texts:?}"))
+                        .1
+                };
+                assert!(rect("Capture").bottom() < rect("Details").top());
+                assert!(rect("Details").bottom() < rect("Transport loss: 3").top());
+                assert!(rect("Saving stopped: disk full").bottom() <= size.y);
+                assert!(!texts.iter().any(|(text, _)| [
+                    "Processes",
+                    "Rules",
+                    "Build output",
+                    "Library",
+                    "Runs"
+                ]
+                .contains(&text.as_str())));
+            }
+        }
+    }
+
+    #[test]
+    fn long_return_values_do_not_overlap_the_capture_column() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut app = app();
+        app.snapshot
+            .events
+            .push(antinomie_monitor_core::EventSummary {
+                stream_id: 1,
+                task_cookie: 1,
+                call_id: 1,
+                event_seq: u64::MAX,
+                phase: 2,
+                syscall_nr: 9,
+                syscall_name: "mmap".into(),
+                tid: u32::MAX,
+                cpu: 0,
+                timestamp_ns: 1,
+                args: None,
+                result: Some(i64::MAX),
+                complete: false,
+                issues: vec!["capture content is incomplete".into()],
+                fields: Vec::new(),
+            });
+        let _ = render(&mut app, &ctx, egui::vec2(800.0, 600.0));
+        let output = render(&mut app, &ctx, egui::vec2(800.0, 600.0));
+        let texts = texts(&output);
+        let return_rect = texts
+            .iter()
+            .find(|(text, _)| text == &i64::MAX.to_string())
+            .unwrap()
+            .1;
+        let capture_rect = texts.iter().find(|(text, _)| text == "Capture").unwrap().1;
+        assert!(
+            return_rect.right() < capture_rect.left(),
+            "Return {return_rect:?}, Capture {capture_rect:?}"
+        );
+        let pos = egui::pos2(capture_rect.left() + 30.0, return_rect.center().y);
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| app.draw(ctx),
+            );
+        }
+        assert_eq!(app.selected_event, Some((1, 1, 1, u64::MAX)));
+    }
+
+    #[test]
+    fn dialogs_show_all_fields_and_actions_with_fresh_or_restored_small_geometry() {
+        for (kind, dialog, labels) in [
+            (
+                "create",
+                "vm_configuration",
+                vec![
+                    "Name",
+                    "CPU count",
+                    "RAM (MiB)",
+                    "Disk (GiB)",
+                    "Base directory",
+                    "NAT network",
+                    "Create VM",
+                ],
+            ),
+            (
+                "config",
+                "vm_configuration",
+                vec![
+                    "Name",
+                    "CPU count",
+                    "RAM (MiB)",
+                    "Disk (GiB)",
+                    "NAT network",
+                    "Save configuration",
+                ],
+            ),
+            (
+                "launch",
+                "Launch program",
+                vec![
+                    "Executable",
+                    "Arguments",
+                    "Working directory",
+                    "Environment",
+                    "UID",
+                    "GID",
+                    "Launch",
+                ],
+            ),
+            (
+                "upload",
+                "Upload file",
+                vec![
+                    "Host file",
+                    "Guest path",
+                    "Executable",
+                    "Overwrite existing file",
+                    "Upload",
+                ],
+            ),
+            (
+                "settings",
+                "Recording and base settings",
+                vec![
+                    "Base artifact directory",
+                    "Recording quota (GiB)",
+                    "Shutdown timeout (seconds)",
+                    "Save settings",
+                ],
+            ),
+        ] {
+            for restored in [false, true] {
+                let mut ctx = egui::Context::default();
+                theme::install(&ctx);
+                if restored {
+                    let _ = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(800.0, 600.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::Window::new(dialog)
+                                .id(egui::Id::new(dialog))
+                                .fixed_size([420.0, 64.0])
+                                .show(ctx, |ui| {
+                                    ui.label("Previous geometry");
+                                });
+                        },
+                    );
+                    let memory = ctx.memory(Clone::clone);
+                    ctx = egui::Context::default();
+                    theme::install(&ctx);
+                    ctx.memory_mut(|restored_memory| *restored_memory = memory);
+                }
+                let mut app = app();
+                match kind {
+                    "create" => app.new_image(),
+                    "config" => {
+                        app.snapshot.vms.push(VmConfig {
+                            id: "saved".into(),
+                            ..Default::default()
+                        });
+                        app.selected = Some("saved".into());
+                        app.configure_vm();
+                    }
+                    "launch" => app.launch_open = true,
+                    "upload" => app.upload_open = true,
+                    _ => app.settings_open = true,
+                }
+                for _ in 0..3 {
+                    let _ = render(&mut app, &ctx, egui::vec2(800.0, 600.0));
+                }
+                let output = render(&mut app, &ctx, egui::vec2(800.0, 600.0));
+                let rect = ctx
+                    .memory(|memory| memory.area_rect(egui::Id::new(dialog)))
+                    .unwrap();
+                assert!(
+                    rect.left() >= 0.0
+                        && rect.top() >= 0.0
+                        && rect.right() <= 800.0
+                        && rect.bottom() <= 600.0,
+                    "{kind}, restored={restored}: {rect:?}"
+                );
+                assert!(
+                    rect.height() < 400.0,
+                    "{kind} has surplus empty space: {rect:?}"
+                );
+                let visible = texts(&output);
+                for label in &labels {
+                    let (_, label_rect) = visible.iter().find(|(text, _)| text == label || text.ends_with(&format!(" {label}")))
+                        .unwrap_or_else(|| panic!("{kind}, restored={restored}: missing visible {label}, visible={visible:?}"));
+                    assert!(
+                        rect.contains_rect(*label_rect),
+                        "{kind}, restored={restored}: {label} outside dialog"
+                    );
+                }
+            }
+        }
+    }
 }

@@ -43,6 +43,18 @@ different validated memory profile, not guessed GPA-to-file arithmetic.
 
 ## Ownership and APIs
 
+The native workspace uses one saved-VM list, a filtered syscall table, and a
+resizable lower pane with Details, Terminal and Activity tabs. Configuration,
+launch, upload and recording settings open in bounded dialogs. Toolbar icons
+have tooltips; menus expose the same implemented commands. There are no
+placeholder process/rules/build views or duplicate image/run catalogs.
+
+Selecting an event row reveals its full return value, correlation identity,
+capture status and byte previews. Long table values are clipped with full
+hover text. Loss counters and recording failures stay visible on every tab.
+Terminal input is disabled while forms or confirmations are open, and guest
+terminal polling continues independently of the selected inspection tab.
+
 | Module | Responsibility |
 |---|---|
 | `crates/monitor-core/src/api.rs` | Owned VM/launch options, commands, status and notifications |
