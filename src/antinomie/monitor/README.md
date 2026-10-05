@@ -63,6 +63,24 @@ chooses an aligned bootstrap GPA from the configured RAM size and passes the
 same value to the guest and V7 API. Larger/non-flat RAM layouts require a
 different validated memory profile, not guessed GPA-to-file arithmetic.
 
+## Display troubleshooting
+
+If WSLg reports `Io error: Broken pipe` and `WinitEventLoop(ExitFailure(1))`,
+the Wayland display connection may have been lost. A process-local X11 launch
+was verified on the development host:
+
+```bash
+env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET scripts/run-monitor.sh
+```
+
+Keep `DISPLAY` and `XDG_RUNTIME_DIR` intact. The pinned winit version does not
+honor `WINIT_UNIX_BACKEND`; remove both Wayland variables for this comparison.
+This does not change saved settings, automatically restart the monitor, reconnect
+an earlier capture, or repair a crashed compositor. WSLg hosts XWayland too,
+so X11 does not isolate the application from all WSLg display-server failures.
+Check `/mnt/wslg/stderr.log` and `weston.log` if the failure recurs. Do not
+restart display/WSL services while a VM or another application is active.
+
 ## Ownership and APIs
 
 The native workspace uses one saved-VM list, a filtered syscall table, and a
