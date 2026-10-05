@@ -90,7 +90,12 @@ pub fn open_recording_cancellable(
             .invocation_page_cancellable(0, 128, cancel)?
             .invocations
             .into_iter()
-            .flat_map(|row| row.entry.into_iter().chain(row.exit))
+            .flat_map(|row| {
+                row.entry
+                    .into_iter()
+                    .chain(row.exit)
+                    .chain(row.async_events)
+            })
             .collect();
         return Ok(recording);
     }
@@ -123,7 +128,7 @@ pub fn open_recording_cancellable(
 type InvocationKey = (u64, u64, u64);
 fn invocation_key(packet: &[u8]) -> Option<InvocationKey> {
     let (header, _) = parser::parse_packet(packet).ok()?;
-    (header.record_type == 1 && matches!(header.phase, 1 | 2)).then_some((
+    (header.record_type == 1 && matches!(header.phase, 1..=3)).then_some((
         header.stream_id,
         header.task_cookie,
         header.call_id,
@@ -163,7 +168,7 @@ fn raw_identity(path: &Path) -> Result<String, RecordingError> {
     )?
     .metadata()?;
     Ok(format!(
-        "index-v2:{}:{}:{}:{}:{}",
+        "index-v5:{}:{}:{}:{}:{}",
         m.dev(),
         m.ino(),
         m.len(),
@@ -225,7 +230,14 @@ fn archive_index(
                     let offset = i64::try_from(offset).map_err(|_| {
                         RecordingError::Limit("raw archive offset exceeds index range")
                     })?;
-                    invocation.execute(rusqlite::params![key, offset])?;
+                    let (header, _) = parser::parse_packet(&packet)
+                        .map_err(|_| RecordingError::Limit("invalid indexed packet"))?;
+                    // Index candidates even when all identifying fields were lost.
+                    // Assembly/pairing excludes known lifecycle-only observations.
+                    let async_parent = header.phase == 3 && header.call_id != 0;
+                    if matches!(header.phase, 1 | 2) || async_parent {
+                        invocation.execute(rusqlite::params![key, offset])?;
+                    }
                     packets.execute(rusqlite::params![key, offset])?;
                 }
             }
@@ -315,9 +327,21 @@ impl Recording {
                                 event.task_cookie,
                                 event.call_id,
                                 event.phase,
+                                if event.phase == 3 { event.event_seq } else { 0 },
                             ),
                             event,
                         );
+                        if latest.len() > 2048 {
+                            let key = latest
+                                .keys()
+                                .next()
+                                .cloned()
+                                .ok_or(RecordingError::Limit("missing event index"))?;
+                            latest.remove(&key);
+                            if issues.len() < 32 {
+                                issues.push("archive page exceeds 2048 event preview limit; raw records retained".into());
+                            }
+                        }
                     }
                     Ok(None) => {}
                     Err(error) => {
@@ -410,6 +434,77 @@ impl Recording {
     }
 }
 
+/// Read bounded history for one stable VM identity, including prior recording parents.
+pub fn list_vm_runs(
+    options: &BackendOptions,
+    vm_id: &str,
+) -> Result<Vec<RunSummary>, RecordingError> {
+    let location = crate::locations::locations(options, vm_id)
+        .map_err(|error| RecordingError::Io(std::io::Error::other(error)))?;
+    let mut runs = Vec::new();
+    for directory in location.recording_directories {
+        if !directory.exists() {
+            continue;
+        }
+        let root = fs::canonicalize(&directory)?;
+        let run_directory = root.join("runs");
+        if !run_directory.exists() {
+            continue;
+        }
+        for entry in fs::read_dir(run_directory)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let path = entry.path().join("run.json");
+            if !path.exists() {
+                continue;
+            }
+            let file = archive_io::open_regular(&root, &path)?;
+            if file.metadata()?.len() > 1024 * 1024 {
+                return Err(RecordingError::Limit("run metadata exceeds limit"));
+            }
+            let mut run: RunSummary = serde_json::from_reader(file)?;
+            if run.vm_id != vm_id {
+                continue;
+            }
+            run.directory = entry.path();
+            if matches!(run.state, RunState::Running | RunState::StopRequested) {
+                run.state = RunState::Unknown;
+            }
+            if !runs
+                .iter()
+                .any(|existing: &RunSummary| existing.id == run.id)
+            {
+                runs.push(run);
+            }
+            if runs.len() > 1024 {
+                return Err(RecordingError::Limit(
+                    "VM history exceeds 1024 runs; open archive directly",
+                ));
+            }
+        }
+    }
+    let legacy = options.data_dir.join("captures");
+    if legacy.exists() {
+        for run in list_runs(&options.data_dir)?
+            .into_iter()
+            .filter(|run| run.vm_id == vm_id && run.root_task_cookie == 0)
+        {
+            if !runs.iter().any(|existing| existing.id == run.id) {
+                runs.push(run);
+            }
+            if runs.len() > 1024 {
+                return Err(RecordingError::Limit(
+                    "VM history exceeds 1024 runs; open archive directly",
+                ));
+            }
+        }
+    }
+    runs.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(runs)
+}
+
 pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
     let data_root = fs::canonicalize(data_root)?;
     let mut runs = Vec::new();
@@ -434,6 +529,9 @@ pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
             }
             let mut run: RunSummary = serde_json::from_reader(file)?;
             run.directory = entry.path();
+            if matches!(run.state, RunState::Running | RunState::StopRequested) {
+                run.state = RunState::Unknown;
+            }
             runs.push(run);
             if runs.len() > 1024 {
                 return Err(RecordingError::Limit(
@@ -482,6 +580,7 @@ pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
                     .get("persistence_error")
                     .and_then(|e| e.as_str())
                     .map(String::from),
+                execution: None,
             });
             if runs.len() > 1024 {
                 return Err(RecordingError::Limit(
@@ -617,6 +716,72 @@ mod tests {
         packet[128..136].copy_from_slice(&99u64.to_le_bytes());
         packet.extend(body);
         packet
+    }
+    #[test]
+    fn archive_page_attaches_distinct_async_events_to_parent_only() {
+        let directory =
+            std::env::temp_dir().join(format!("ant-async-archive-{}", storage::unique_id()));
+        storage::private_dir(&directory).unwrap();
+        let mut raw = File::create(directory.join("telemetry.raw")).unwrap();
+        let mut write = |packet: Vec<u8>| {
+            raw.write_all(&(packet.len() as u32).to_le_bytes()).unwrap();
+            raw.write_all(&packet).unwrap();
+        };
+        write(event_packet(1, 1, 1, 1));
+        write(event_packet(1, 1, 5, 2));
+        write(event_packet(1, 3, 1, 3));
+        write(event_packet(1, 3, 5, 4));
+        for (call, event_seq) in [(1u64, 100u64), (1, 101), (2, 200)] {
+            let mut start = event_packet(call, 3, 1, 1);
+            start[48..56].copy_from_slice(&event_seq.to_le_bytes());
+            write(start);
+            let key: &[u8] = if call == 2 {
+                b"async.stage"
+            } else {
+                b"async.request_id"
+            };
+            let mut body = vec![0; 40];
+            body[0] = 255;
+            body[1] = 1;
+            body[2..4].copy_from_slice(&1u16.to_le_bytes());
+            body[4..6].copy_from_slice(&1u16.to_le_bytes());
+            body[32..34].copy_from_slice(&(key.len() as u16).to_le_bytes());
+            body.extend(key);
+            let mut field = event_packet(call, 3, 2, 2);
+            field.truncate(136);
+            field[48..56].copy_from_slice(&event_seq.to_le_bytes());
+            field[100..104].copy_from_slice(&1u32.to_le_bytes());
+            field[12..16].copy_from_slice(&(136u32 + body.len() as u32).to_le_bytes());
+            field[120..124].copy_from_slice(&(body.len() as u32).to_le_bytes());
+            field.extend(body);
+            write(field);
+            let mut end = event_packet(call, 3, 5, 3);
+            end[48..56].copy_from_slice(&event_seq.to_le_bytes());
+            write(end);
+        }
+        write(event_packet(3, 3, 1, 1));
+        let mut orphan_end = event_packet(3, 3, 5, 10);
+        orphan_end[136..144].copy_from_slice(&10u64.to_le_bytes());
+        orphan_end[160..168].copy_from_slice(&1u64.to_le_bytes());
+        write(orphan_end);
+        raw.sync_all().unwrap();
+        storage::atomic_json(&directory.join("manifest.json"), &serde_json::json!({})).unwrap();
+        let recording = open_recording(&directory).unwrap();
+        let page = recording.invocation_page(0, 10).unwrap();
+        assert_eq!(page.invocations.len(), 3);
+        assert_eq!(page.invocations[0].async_events.len(), 3);
+        assert!(page.invocations[0].async_events[0].fields.is_empty());
+        assert!(!page.invocations[0].async_events[0].complete);
+        assert_eq!(page.invocations[0].async_events[1].event_seq, 100);
+        assert_eq!(page.invocations[0].async_events[2].event_seq, 101);
+        assert!(page.invocations[1].entry.is_none());
+        assert!(page.invocations[1].exit.is_none());
+        assert_eq!(page.invocations[1].async_events[0].event_seq, 200);
+        assert_eq!(page.invocations[2].call_id, 3);
+        assert!(page.invocations[2].entry.is_none());
+        assert!(page.invocations[2].exit.is_none());
+        assert!(!page.invocations[2].async_events[0].complete);
+        fs::remove_dir_all(directory).unwrap();
     }
     #[test]
     fn pages_all_three_thousand_calls_with_missing_phases_and_lifecycle() {

@@ -21,6 +21,7 @@ pub(crate) struct ProgramRun {
     pub sequence: u64,
     pub boot_bundle_identity: Option<String>,
     pub disk_base_identity: Option<String>,
+    pub execution_generation: u64,
 }
 
 impl ProgramRun {
@@ -50,6 +51,7 @@ impl ProgramRun {
             sequence: 0,
             boot_bundle_identity: None,
             disk_base_identity: None,
+            execution_generation: 0,
         };
         run.persist_summary()?;
         Ok(run)
@@ -155,7 +157,7 @@ impl ProgramRun {
             return Ok(());
         }
         self.summary.terminal_eof = true;
-        if self.summary.state != RunState::StopRequested {
+        if self.summary.execution.is_none() && self.summary.state != RunState::StopRequested {
             self.summary.state = RunState::TerminalClosed;
         }
         self.journal(3, &[], available)?;
@@ -186,7 +188,9 @@ impl ProgramRun {
         Ok(())
     }
     pub fn finalize(&mut self, available: u64, state: &str, health: &Health) -> Result<(), String> {
-        self.summary.state = RunState::Finalized;
+        if !matches!(self.summary.state, RunState::Finished | RunState::Stopped) {
+            self.summary.state = RunState::Finalized;
+        }
         let results = [
             self.capture.sync(),
             self.save_screen(available),
@@ -215,6 +219,55 @@ impl ProgramRun {
 mod tests {
     use super::*;
     #[test]
+    fn eof_and_execution_completion_do_not_stop_recording_or_erase_root_exit() {
+        let directory =
+            std::env::temp_dir().join(format!("ant-run-state-{}", storage::unique_id()));
+        let execution = RunExecution {
+            generation: 1,
+            live_task_count: 1,
+            pending_async_count: 0,
+            flags: 1,
+            root_wait_status: Some(7 << 8),
+            root_exit: Some(WaitStatus::Exited { code: 7 }),
+            async_loss_count: 0,
+            total_task_count: 2,
+        };
+        let summary = RunSummary {
+            id: "run".into(),
+            vm_id: "vm".into(),
+            boot_id: "boot".into(),
+            session_id: 1,
+            root_task_cookie: 2,
+            pid: 3,
+            request: ExecRequest::default(),
+            directory: directory.clone(),
+            terminal_eof: false,
+            state: RunState::Running,
+            recording_error: None,
+            execution: Some(execution),
+        };
+        let mut run = ProgramRun::new(summary, 65536).unwrap();
+        run.eof(65536).unwrap();
+        assert_eq!(run.summary.state, RunState::Running);
+        let execution = run.summary.execution.as_mut().unwrap();
+        execution.live_task_count = 0;
+        execution.flags = 11;
+        run.summary.state = RunState::Finished;
+        assert!(
+            run.capture
+                .append(b"late telemetry after process completion")
+        );
+        assert!(run.output(b"late terminal tail", 65536).is_ok());
+        run.finalize(65536, "vm-stop", &Health::default()).unwrap();
+        assert_eq!(run.summary.state, RunState::Finished);
+        assert_eq!(
+            run.summary.execution.as_ref().unwrap().root_exit,
+            Some(WaitStatus::Exited { code: 7 })
+        );
+        drop(run);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
     fn headless_terminal_reopens_journal_screen_and_quota_failure_preserves_prefix() {
         let directory = std::env::temp_dir().join(format!("ant-terminal-{}", storage::unique_id()));
         let summary = RunSummary {
@@ -229,6 +282,7 @@ mod tests {
             terminal_eof: false,
             state: RunState::Running,
             recording_error: None,
+            execution: None,
         };
         let mut run = ProgramRun::new(summary, 65536).unwrap();
         run.resize(4, 20, 65536).unwrap();

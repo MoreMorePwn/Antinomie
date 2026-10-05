@@ -67,8 +67,118 @@ fn sha256_file(path: &Path) -> Result<[u8; 32], String> {
     }
     Ok(digest.finalize().into())
 }
-pub(crate) fn atomic_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
+#[derive(Debug)]
+pub(crate) struct PublicationError {
+    pub published: bool,
+    message: String,
+}
+impl std::fmt::Display for PublicationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.published {
+            write!(
+                f,
+                "{}; change is visible, durability is uncertain; data retained",
+                self.message
+            )
+        } else {
+            f.write_str(&self.message)
+        }
+    }
+}
+impl std::error::Error for PublicationError {}
+impl From<String> for PublicationError {
+    fn from(message: String) -> Self {
+        Self {
+            published: false,
+            message,
+        }
+    }
+}
+impl From<&str> for PublicationError {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
+}
+impl From<PublicationError> for String {
+    fn from(error: PublicationError) -> Self {
+        error.to_string()
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static FAIL_DIRECTORY_SYNC: std::cell::RefCell<Option<(PathBuf, usize)>> = const {
+        std::cell::RefCell::new(None)
+    };
+    static FAIL_JSON_RENAME: std::cell::RefCell<Option<PathBuf>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+#[cfg(test)]
+pub(crate) fn fail_next_json_rename(path: &Path) {
+    FAIL_JSON_RENAME.with(|target| *target.borrow_mut() = Some(path.to_owned()));
+}
+fn rename_json(temporary: &Path, path: &Path) -> io::Result<()> {
+    #[cfg(test)]
+    if FAIL_JSON_RENAME.with(|target| {
+        let mut target = target.borrow_mut();
+        if target.as_deref() == Some(path) {
+            target.take();
+            true
+        } else {
+            false
+        }
+    }) {
+        return Err(io::Error::other("injected JSON rename failure"));
+    }
+    fs::rename(temporary, path)
+}
+#[cfg(test)]
+pub(crate) fn fail_next_directory_sync(path: &Path) {
+    fail_directory_sync_after(path, 0);
+}
+#[cfg(test)]
+pub(crate) fn fail_directory_sync_after(path: &Path, successful_calls: usize) {
+    FAIL_DIRECTORY_SYNC
+        .with(|target| *target.borrow_mut() = Some((path.to_owned(), successful_calls)));
+}
+fn sync_json_parent(path: &Path) -> io::Result<()> {
+    #[cfg(test)]
+    if FAIL_DIRECTORY_SYNC.with(|target| {
+        let mut target = target.borrow_mut();
+        if let Some((wanted, remaining)) = target.as_mut()
+            && wanted == path
+        {
+            if *remaining == 0 {
+                target.take();
+                return true;
+            }
+            *remaining -= 1;
+        }
+        false
+    }) {
+        return Err(io::Error::other("injected directory sync failure"));
+    }
+    File::open(
+        path.parent()
+            .ok_or_else(|| io::Error::other("missing parent"))?,
+    )?
+    .sync_all()
+}
+
+pub(crate) fn sync_directory_parent(directory: &Path) -> Result<(), String> {
+    let parent = directory.parent().ok_or("missing VM directory parent")?;
+    File::open(parent)
+        .and_then(|file| file.sync_all())
+        .map_err(|error| format!("sync VM parent {}: {error}", parent.display()))
+}
+
+pub(crate) fn atomic_json_checked(
+    path: &Path,
+    value: &impl Serialize,
+) -> Result<(), PublicationError> {
     let temporary = path.with_extension(format!("tmp-{}", unique_id()));
+    let mut published = false;
     let result = (|| -> Result<(), String> {
         let mut f = OpenOptions::new()
             .write(true)
@@ -79,15 +189,33 @@ pub(crate) fn atomic_json(path: &Path, value: &impl Serialize) -> Result<(), Str
         serde_json::to_writer_pretty(&mut f, value).map_err(|e| e.to_string())?;
         f.write_all(b"\n").map_err(|e| e.to_string())?;
         f.sync_all().map_err(|e| e.to_string())?;
-        fs::rename(&temporary, path).map_err(|e| e.to_string())?;
-        File::open(path.parent().ok_or("missing parent")?)
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())
+        rename_json(&temporary, path).map_err(|e| e.to_string())?;
+        published = true;
+        sync_json_parent(path).map_err(|e| format!("sync {}: {e}", path.display()))
     })();
     if result.is_err() {
         let _ = fs::remove_file(temporary);
     }
-    result
+    result.map_err(|message| PublicationError { published, message })
+}
+pub(crate) fn atomic_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
+    atomic_json_checked(path, value).map_err(Into::into)
+}
+
+pub(crate) fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|e| e.to_string())?
+            .join(path)
+    };
+    let file = crate::archive_io::open_regular(path.parent().ok_or("missing JSON parent")?, &path)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    if file.metadata().map_err(|e| e.to_string())?.len() > 1024 * 1024 {
+        return Err("configuration JSON exceeds 1 MiB limit".into());
+    }
+    serde_json::from_reader(file).map_err(|error| format!("{}: {error}", path.display()))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -107,10 +235,7 @@ pub struct Bundle {
 impl Bundle {
     pub fn load(dir: &Path) -> Result<Self, String> {
         let root = fs::canonicalize(dir).map_err(|e| format!("bundle {}: {e}", dir.display()))?;
-        let mut b: Self = serde_json::from_reader(
-            File::open(root.join("bundle.json")).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())?;
+        let mut b: Self = read_json(&root.join("bundle.json"))?;
         let resolve = |p: &Path| -> Result<PathBuf, String> {
             let path = fs::canonicalize(root.join(p))
                 .map_err(|e| format!("artifact {}: {e}", p.display()))?;
@@ -136,7 +261,18 @@ impl Bundle {
             self.initrd.as_ref(),
         ] {
             if let Some(path) = path {
-                let mut file = File::open(path).map_err(|e| e.to_string())?;
+                if !fs::symlink_metadata(path)
+                    .map_err(|e| e.to_string())?
+                    .file_type()
+                    .is_file()
+                {
+                    return Err("bundle artifacts must be regular files".into());
+                }
+                let mut file = crate::archive_io::open_regular(
+                    path.parent().ok_or("missing artifact parent")?,
+                    path,
+                )
+                .map_err(|e| e.to_string())?;
                 let mut content = Sha256::new();
                 let mut chunk = [0; 65536];
                 loop {
@@ -264,15 +400,20 @@ pub(crate) fn vm_dir(options: &BackendOptions, id: &str) -> Result<PathBuf, Stri
     {
         return Err("invalid VM id".into());
     }
+    if let Some(directory) = crate::locations::disk_directory(options, id)? {
+        return Ok(directory);
+    }
     let direct = options.data_dir.join(id);
-    if direct.exists() {
+    if direct.exists()
+        && let Ok(vm) = read_json::<VmConfig>(&direct.join("config.json"))
+        && vm.id == id
+    {
         return Ok(direct);
     }
     if let Ok(entries) = fs::read_dir(&options.data_dir) {
         for entry in entries.flatten() {
             let config = entry.path().join("config.json");
-            if let Ok(file) = File::open(config)
-                && let Ok(vm) = serde_json::from_reader::<_, VmConfig>(file)
+            if let Ok(vm) = read_json::<VmConfig>(&config)
                 && vm.id == id
             {
                 return Ok(entry.path());
@@ -280,14 +421,22 @@ pub(crate) fn vm_dir(options: &BackendOptions, id: &str) -> Result<PathBuf, Stri
         }
     }
     let legacy = options.data_dir.join("vms").join(id);
-    if legacy.exists() {
+    if legacy.exists()
+        && let Ok(vm) = read_json::<VmConfig>(&legacy.join("config.json"))
+        && vm.id == id
+    {
         return Ok(legacy);
+    }
+    if direct.exists() || legacy.exists() {
+        return Err(
+            "VM directory collision or invalid configuration; existing files retained".into(),
+        );
     }
     Ok(direct)
 }
 pub(crate) fn load_vms(options: &BackendOptions) -> Result<Vec<VmConfig>, String> {
     let dir = &options.data_dir;
-    let mut vms = Vec::new();
+    let mut vms = crate::locations::registered_vms(options)?;
     for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         if !entry.file_type().map_err(|e| e.to_string())?.is_dir() {
@@ -297,10 +446,11 @@ pub(crate) fn load_vms(options: &BackendOptions) -> Result<Vec<VmConfig>, String
         if !path.exists() {
             continue;
         }
-        let vm: VmConfig = serde_json::from_reader(File::open(&path).map_err(|e| e.to_string())?)
-            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let vm: VmConfig = read_json(&path)?;
         validate_vm(&vm)?;
-        vms.push(vm);
+        if !vms.iter().any(|existing| existing.id == vm.id) {
+            vms.push(vm);
+        }
     }
     vms.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(vms)
@@ -563,6 +713,7 @@ pub(crate) fn create_overlay(
     bundle: &Bundle,
 ) -> Result<(), String> {
     bundle.verify_installed()?;
+    validate_disk_chain(options, &bundle.base_disk, None)?;
     let disk = dir.join("disk.qcow2");
     if disk.exists() {
         return Err("VM disk already exists".into());
@@ -582,6 +733,199 @@ pub(crate) fn create_overlay(
     }
     fs::set_permissions(&disk, fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
     atomic_json(&dir.join("bundle.json"), bundle)
+}
+
+pub(crate) fn duplicate_vm(
+    options: &BackendOptions,
+    source: &VmConfig,
+    name: String,
+) -> Result<VmConfig, String> {
+    let source_dir = vm_dir(options, &source.id)?;
+    let source_disk = source_dir.join("disk.qcow2");
+    if !fs::symlink_metadata(&source_disk)
+        .map_err(|e| e.to_string())?
+        .file_type()
+        .is_file()
+    {
+        return Err("source disk must be a regular file".into());
+    }
+    let bundle: Bundle = read_json(&source_dir.join("bundle.json"))?;
+    bundle.verify_installed()?;
+    validate_disk_chain(options, &source_disk, Some(&bundle.base_disk))?;
+    let mut vm = source.clone();
+    vm.id = vm_id(&name);
+    vm.name = name;
+    validate_vm(&vm)?;
+    let location = crate::locations::prepare(options, &mut vm)?;
+    fs::create_dir(&location.disk_directory).map_err(|e| e.to_string())?;
+    fs::set_permissions(&location.disk_directory, fs::Permissions::from_mode(0o700))
+        .map_err(|e| e.to_string())?;
+    let result = (|| -> Result<(), PublicationError> {
+        let disk = location.disk_directory.join("disk.qcow2");
+        let result = Command::new(&options.qemu_img)
+            .args(["convert", "-f", "qcow2", "-O", "qcow2"])
+            .arg(&source_disk)
+            .arg(&disk)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !result.status.success() {
+            return Err(format!(
+                "disk duplication: {}",
+                String::from_utf8_lossy(&result.stderr)
+            )
+            .into());
+        }
+        File::open(&disk)
+            .and_then(|file| file.sync_all())
+            .map_err(|e| e.to_string())?;
+        fs::set_permissions(&disk, fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
+        atomic_json(&location.disk_directory.join("bundle.json"), &bundle)?;
+        atomic_json(&location.disk_directory.join("config.json"), &vm)?;
+        sync_directory_parent(&location.disk_directory)?;
+        crate::locations::publish(options, &location)?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        if error.published {
+            return Err(error.into());
+        }
+        let cleanup = fs::remove_dir_all(&location.disk_directory).map_err(|e| e.to_string());
+        return Err(format!("{error}; duplicate rollback {:?}", cleanup.err()));
+    }
+    Ok(vm)
+}
+
+pub(crate) fn validate_disk_chain(
+    options: &BackendOptions,
+    disk: &Path,
+    expected_base: Option<&Path>,
+) -> Result<(), String> {
+    let output = Command::new(&options.qemu_img)
+        .args(["info", "-f", "qcow2", "--backing-chain", "--output=json"])
+        .arg(disk)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(format!(
+            "disk backing validation: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    if output.stdout.len() > 1024 * 1024 {
+        return Err("disk backing metadata exceeds limit".into());
+    }
+    let chain: Vec<serde_json::Value> =
+        serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())?;
+    if chain.is_empty() || chain.len() > 2 {
+        return Err("unsupported disk backing chain".into());
+    }
+    if chain
+        .iter()
+        .any(|image| image.get("format").and_then(|value| value.as_str()) != Some("qcow2"))
+    {
+        return Err("disk chain must use qcow2 images".into());
+    }
+    if chain.len() == 2 {
+        let expected = expected_base.ok_or("installed base must be self contained")?;
+        let actual = chain[1]
+            .get("filename")
+            .and_then(|value| value.as_str())
+            .ok_or("missing disk backing path")?;
+        if fs::canonicalize(actual).map_err(|e| e.to_string())?
+            != fs::canonicalize(expected).map_err(|e| e.to_string())?
+        {
+            return Err("disk backing differs from pinned installed base".into());
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn delete_vm(options: &BackendOptions, id: &str) -> Result<(), String> {
+    let dir = vm_dir(options, id)?;
+    let config: VmConfig = read_json(&dir.join("config.json"))?;
+    if config.id != id {
+        return Err("VM configuration identity mismatch".into());
+    }
+    let bundle: Bundle = read_json(&dir.join("bundle.json"))?;
+    bundle.verify_installed()?;
+    validate_disk_chain(options, &dir.join("disk.qcow2"), Some(&bundle.base_disk))?;
+    crate::locations::publish(options, &crate::locations::locations(options, id)?)?;
+    let mut paths = Vec::new();
+    for name in ["disk.qcow2", "config.json", "bundle.json"] {
+        let path = dir.join(name);
+        if !fs::symlink_metadata(&path)
+            .map_err(|e| e.to_string())?
+            .file_type()
+            .is_file()
+        {
+            return Err("VM deletion requires owned regular disk/configuration files".into());
+        }
+        paths.push(path);
+    }
+    let staging = dir.join(format!("delete-{}", unique_id()));
+    fs::create_dir(&staging).map_err(|e| e.to_string())?;
+    let mut staged = Vec::new();
+    let result = (|| -> Result<(), PublicationError> {
+        for path in &paths {
+            let target = staging.join(path.file_name().ok_or("missing file name")?);
+            fs::rename(path, &target).map_err(|e| e.to_string())?;
+            staged.push((path.clone(), target));
+        }
+        crate::locations::mark_deleted(options, id)
+    })();
+    if let Err(error) = result {
+        if error.published {
+            return Err(format!(
+                "{error}; deleted VM files retained in {}",
+                staging.display()
+            ));
+        }
+        let mut rollback_errors = Vec::new();
+        for (path, target) in staged.into_iter().rev() {
+            if let Err(rollback) = fs::rename(target, path) {
+                rollback_errors.push(rollback.to_string());
+            }
+        }
+        let _ = fs::remove_dir(&staging);
+        return Err(format!(
+            "{error}; deletion rollback errors {rollback_errors:?}"
+        ));
+    }
+    for (_, target) in staged {
+        fs::remove_file(target).map_err(|e| e.to_string())?;
+    }
+    fs::remove_dir(staging).map_err(|e| e.to_string())?;
+    File::open(&dir)
+        .and_then(|file| file.sync_all())
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) fn save_vm_config(
+    options: &BackendOptions,
+    directory: &Path,
+    previous: &VmConfig,
+    next: &VmConfig,
+    location: &crate::api::VmLocations,
+) -> Result<(), PublicationError> {
+    let path = directory.join("config.json");
+    let config_warning = match atomic_json_checked(&path, next) {
+        Ok(()) => None,
+        Err(error) if error.published => Some(error),
+        Err(error) => return Err(error),
+    };
+    match crate::locations::publish(options, location) {
+        Ok(()) => config_warning.map_or(Ok(()), Err),
+        Err(error) if error.published => Err(error),
+        Err(error) => {
+            atomic_json_checked(&path, previous).map_err(|rollback| PublicationError {
+                // A successful rollback rename restored the previous config,
+                // even when syncing that restoration subsequently failed.
+                published: !rollback.published,
+                message: format!("{error}; settings rollback failed: {rollback}"),
+            })?;
+            Err(error)
+        }
+    }
 }
 
 #[derive(Serialize)]

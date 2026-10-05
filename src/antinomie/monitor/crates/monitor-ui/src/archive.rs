@@ -1,6 +1,7 @@
 //! Bounded offline work, independent of rendering and the transport owner.
 use antinomie_monitor_core::{
-    recording, FieldSummary, InvocationPage, RunSummary, TerminalPage, TerminalRecord,
+    recording, BackendOptions, FieldSummary, InvocationPage, RunSummary, TerminalPage,
+    TerminalRecord,
 };
 use std::{
     path::PathBuf,
@@ -12,7 +13,11 @@ use std::{
 };
 
 pub(crate) enum Request {
-    List(PathBuf),
+    ListVm {
+        options: BackendOptions,
+        vm_id: String,
+        generation: u64,
+    },
     Invocations {
         generation: u64,
         directory: PathBuf,
@@ -39,7 +44,13 @@ pub(crate) struct TerminalReplay {
 }
 
 pub(crate) enum Answer {
+    #[cfg(test)]
     List(Result<Vec<RunSummary>, String>),
+    ListVm {
+        vm_id: String,
+        generation: u64,
+        result: Result<Vec<RunSummary>, String>,
+    },
     Invocations {
         generation: u64,
         offset: u64,
@@ -78,9 +89,16 @@ impl ArchiveWorker {
                         break;
                     }
                     let answer = match request {
-                        Request::List(root) => {
-                            Answer::List(recording::list_runs(&root).map_err(|e| e.to_string()))
-                        }
+                        Request::ListVm {
+                            options,
+                            vm_id,
+                            generation,
+                        } => Answer::ListVm {
+                            result: recording::list_vm_runs(&options, &vm_id)
+                                .map_err(|e| e.to_string()),
+                            vm_id,
+                            generation,
+                        },
                         Request::Invocations {
                             generation,
                             directory,

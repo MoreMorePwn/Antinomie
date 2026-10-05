@@ -9,6 +9,15 @@ pub struct VmConfig {
     pub ram_mib: u32,
     pub disk_gib: u32,
     pub nat: bool,
+    /// Host parent for newly created VM disk directories; None uses data_dir.
+    #[serde(default)]
+    pub disk_root: Option<PathBuf>,
+    /// Host parent for future recording directories; existing archives are retained.
+    #[serde(default)]
+    pub recording_root: Option<PathBuf>,
+    /// Installed immutable boot bundle identity; existing disk backings stay pinned.
+    #[serde(default)]
+    pub base_identity: Option<String>,
 }
 impl Default for VmConfig {
     fn default() -> Self {
@@ -19,6 +28,9 @@ impl Default for VmConfig {
             ram_mib: 2048,
             disk_gib: 8,
             nat: false,
+            disk_root: None,
+            recording_root: None,
+            base_identity: None,
         }
     }
 }
@@ -79,12 +91,51 @@ pub struct RunSummary {
     pub terminal_eof: bool,
     pub state: RunState,
     pub recording_error: Option<String>,
+    #[serde(default)]
+    pub execution: Option<RunExecution>,
+}
+
+/// Authoritative boot-scoped guest status, independent of archive/terminal state.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RunExecution {
+    pub generation: u64,
+    pub live_task_count: u64,
+    pub pending_async_count: u64,
+    pub flags: u32,
+    pub root_wait_status: Option<i32>,
+    pub root_exit: Option<WaitStatus>,
+    pub async_loss_count: u64,
+    pub total_task_count: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum WaitStatus {
+    Exited { code: u8 },
+    Signaled { signal: u8, core_dumped: bool },
+}
+
+#[derive(Clone, Debug)]
+pub struct BaseSummary {
+    pub id: String,
+    pub label: String,
+    pub directory: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+pub struct VmLocations {
+    pub vm_id: String,
+    pub disk_directory: PathBuf,
+    pub recording_directory: PathBuf,
+    pub recording_directories: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum RunState {
+    Unknown,
     Running,
     StopRequested,
+    Finished,
+    Stopped,
     /// PTY EOF does not prove all traced descendants have exited.
     TerminalClosed,
     Finalized,
@@ -97,6 +148,8 @@ pub struct InvocationSummary {
     pub call_id: u64,
     pub entry: Option<EventSummary>,
     pub exit: Option<EventSummary>,
+    /// Correlated async observations; capped at 256 records per invocation.
+    pub async_events: Vec<EventSummary>,
 }
 
 #[derive(Clone, Debug)]
@@ -138,6 +191,14 @@ impl Default for ExecRequest {
 pub enum Command {
     Create(VmConfig),
     Save(VmConfig),
+    Rename {
+        vm_id: String,
+        name: String,
+    },
+    Duplicate {
+        vm_id: String,
+        name: String,
+    },
     Start {
         vm_id: String,
     },
@@ -224,6 +285,8 @@ pub enum VmState {
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     pub vms: Vec<VmConfig>,
+    pub bases: Vec<BaseSummary>,
+    pub vm_locations: Vec<VmLocations>,
     pub active_vm: Option<String>,
     pub state: VmState,
     pub health: Health,
@@ -310,6 +373,7 @@ pub fn pair_events(events: &[EventSummary]) -> Vec<InvocationSummary> {
                 call_id: key.2,
                 entry: None,
                 exit: None,
+                async_events: Vec::new(),
             });
             rows.len() - 1
         });
@@ -317,6 +381,43 @@ pub fn pair_events(events: &[EventSummary]) -> Vec<InvocationSummary> {
             rows[index].exit = Some(event.clone());
         } else {
             rows[index].entry = Some(event.clone());
+        }
+    }
+    for event in events.iter().filter(|event| {
+        event.phase == 3
+            && event.call_id != 0
+            && event
+                .fields
+                .iter()
+                .any(|field| field.key.starts_with("async."))
+            || (event.phase == 3
+                && event.call_id != 0
+                && !event.complete
+                && !event
+                    .fields
+                    .iter()
+                    .any(|field| field.key.starts_with("lifecycle.")))
+    }) {
+        let key = (event.stream_id, event.task_cookie, event.call_id);
+        let index = *indexes.entry(key).or_insert_with(|| {
+            rows.push(InvocationSummary {
+                stream_id: key.0,
+                task_cookie: key.1,
+                call_id: key.2,
+                entry: None,
+                exit: None,
+                async_events: Vec::new(),
+            });
+            rows.len() - 1
+        });
+        if rows[index].async_events.len() < 256 {
+            rows[index].async_events.push(event.clone());
+        } else if let Some(last) = rows[index].async_events.last_mut() {
+            let issue =
+                "additional async observations exceed bounded preview; raw records retained";
+            if !last.issues.iter().any(|existing| existing == issue) {
+                last.issues.push(issue.into());
+            }
         }
     }
     rows
@@ -369,5 +470,86 @@ mod tests {
         assert_eq!(health.persisted_packets, 17);
         assert_eq!(health.received_packets, 0);
         assert_eq!(health.storage_dropped_packets, 0);
+    }
+    #[test]
+    fn old_vm_config_defaults_independent_storage_fields() {
+        let vm: VmConfig = serde_json::from_str(
+            r#"{"id":"old","name":"Old VM","cpus":4,"ram_mib":2048,"disk_gib":8,"nat":false}"#,
+        )
+        .unwrap();
+        assert!(vm.disk_root.is_none());
+        assert!(vm.recording_root.is_none());
+        assert!(vm.base_identity.is_none());
+    }
+    #[test]
+    fn async_pairing_is_bounded_and_does_not_invent_unknown_parents() {
+        let entry = EventSummary {
+            root_task_cookie: 99,
+            stream_id: 1,
+            task_cookie: 2,
+            call_id: 3,
+            event_seq: 4,
+            phase: 1,
+            syscall_nr: 426,
+            syscall_name: "io_uring_enter".into(),
+            tid: 5,
+            cpu: 0,
+            timestamp_ns: 6,
+            args: Some([0; 6]),
+            result: None,
+            complete: true,
+            issues: vec![],
+            fields: vec![],
+        };
+        let mut async_event = entry.clone();
+        async_event.phase = 3;
+        async_event.fields.push(FieldSummary {
+            object_id: 1,
+            key: "async.request_id".into(),
+            layout: "u64".into(),
+            logical_len: Some(8),
+            captured_len: 8,
+            status: Some(0),
+            capture_error: 0,
+            complete: true,
+            preview: vec![0; 8],
+            raw_path: None,
+            ranges: vec![(0, 8)],
+        });
+        let mut events = vec![entry];
+        for event_seq in 0..260 {
+            let mut event = async_event.clone();
+            event.event_seq = event_seq;
+            events.push(event);
+        }
+        let mut missing = async_event.clone();
+        missing.call_id = 900;
+        missing.fields[0].key = "async.stage".into();
+        events.push(missing);
+        let mut orphan = async_event.clone();
+        orphan.call_id = 901;
+        orphan.complete = false;
+        orphan.fields.clear();
+        orphan.issues.push("missing field metadata".into());
+        events.push(orphan);
+        let mut unknown = async_event;
+        unknown.call_id = 0;
+        events.push(unknown);
+        let rows = pair_events(&events);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[1].call_id, 900);
+        assert!(rows[1].entry.is_none());
+        assert!(rows[1].exit.is_none());
+        assert_eq!(rows[1].async_events.len(), 1);
+        assert_eq!(rows[2].call_id, 901);
+        assert!(rows[2].entry.is_none());
+        assert_eq!(rows[2].async_events.len(), 1);
+        assert_eq!(rows[0].async_events.len(), 256);
+        assert!(
+            rows[0].async_events[255]
+                .issues
+                .iter()
+                .any(|issue| issue.contains("bounded preview"))
+        );
     }
 }

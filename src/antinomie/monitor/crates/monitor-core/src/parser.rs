@@ -298,7 +298,7 @@ impl Event {
                 event_seq: h.event_seq,
                 phase: h.phase,
                 syscall_nr: h.syscall_nr,
-                syscall_name: syscall_name(h.syscall_nr).into(),
+                syscall_name: crate::syscalls::name(h.syscall_nr),
                 tid: h.tid,
                 cpu: h.cpu,
                 timestamp_ns: h.timestamp_ns,
@@ -736,39 +736,7 @@ impl Assembler {
 }
 
 pub fn syscall_name(nr: u64) -> &'static str {
-    match nr {
-        0 => "read",
-        1 => "write",
-        2 => "open",
-        3 => "close",
-        4 => "stat",
-        5 => "fstat",
-        9 => "mmap",
-        10 => "mprotect",
-        11 => "munmap",
-        16 => "ioctl",
-        19 => "readv",
-        20 => "writev",
-        41 => "socket",
-        42 => "connect",
-        43 => "accept",
-        44 => "sendto",
-        45 => "recvfrom",
-        49 => "bind",
-        50 => "listen",
-        56 => "clone",
-        57 => "fork",
-        58 => "vfork",
-        59 => "execve",
-        60 => "exit",
-        62 => "kill",
-        82 => "rename",
-        87 => "unlink",
-        231 => "exit_group",
-        257 => "openat",
-        322 => "execveat",
-        _ => "unknown",
-    }
+    crate::syscalls::syscall(nr).map_or("unknown", |entry| entry.name.as_str())
 }
 
 #[cfg(test)]

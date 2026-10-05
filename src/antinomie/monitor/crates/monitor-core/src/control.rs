@@ -8,6 +8,7 @@ pub(crate) const INPUT: u32 = 0x1011;
 pub(crate) const READ: u32 = 0x1012;
 pub(crate) const RESIZE: u32 = 0x1013;
 pub(crate) const SIGNAL: u32 = 0x1014;
+pub(crate) const RUN_STATUS: u32 = 0x1016;
 pub(crate) const STATS: u32 = 0x1020;
 pub(crate) const SHUTDOWN: u32 = 0x1030;
 pub(crate) fn header(flags: u32) -> Vec<u8> {

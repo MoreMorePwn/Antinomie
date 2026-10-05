@@ -2,7 +2,8 @@
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 use antinomie_monitor_core::{
     recording::{list_runs, open_recording},
-    Backend, BackendOptions, Command, ExecRequest, Notification, RunSummary, Snapshot, VmConfig,
+    Backend, BackendOptions, Command, ExecRequest, Notification, RunExecution, RunState,
+    RunSummary, Snapshot, VmConfig, WaitStatus,
 };
 use std::{
     collections::BTreeMap,
@@ -119,11 +120,31 @@ impl Harness {
             thread::sleep(Duration::from_millis(20));
         }
     }
+
+    fn execution_until(
+        &mut self,
+        run_id: &str,
+        predicate: impl Fn(&RunExecution) -> bool,
+    ) -> Result<RunSummary, String> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            self.receive()?;
+            if let Some(run) = self.snapshot.runs.iter().find(|run| run.id == run_id) {
+                if run.execution.as_ref().is_some_and(&predicate) {
+                    return Ok(run.clone());
+                }
+            }
+            if Instant::now() > deadline {
+                return Err(format!("authoritative execution deadline for {run_id}"));
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
 }
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.len() != 2 {
-        return Err("usage: run-history-check BUNDLE NEW_DATA_DIR".into());
+    if !(2..=3).contains(&args.len()) {
+        return Err("usage: run-history-check BUNDLE NEW_DATA_DIR [NATIVE_PROBE_ELF]".into());
     }
     let root = PathBuf::from(&args[1]);
     let mut test = Harness {
@@ -188,6 +209,12 @@ fn run() -> Result<(), String> {
     test.output_until(&second.id, b"INPUT-B:beta")?;
     let detached = test.launch("setsid /bin/sh -c 'sleep 1; echo DETACHED-C; sleep 30' </dev/null >/tmp/detached-c.log 2>&1 & sleep 0.2; echo ROOT-C; exit 0")?;
     test.output_until(&detached.id, b"ROOT-C")?;
+    let root_exited = test.execution_until(&detached.id, |status| {
+        status.live_task_count > 0 && status.root_exit == Some(WaitStatus::Exited { code: 0 })
+    })?;
+    if root_exited.state != RunState::Running {
+        return Err("root exit was mistaken for full-tree completion".into());
+    }
     test.captured_write_until(detached.root_task_cookie, b"DETACHED-C")?;
     // No TerminalRead commands were issued: persistence must outlive a closed view.
     test.command(Command::StopRun {
@@ -199,17 +226,63 @@ fn run() -> Result<(), String> {
     test.command(Command::StopRun {
         run_id: second.id.clone(),
     })?;
-    thread::sleep(Duration::from_millis(500));
+    for stopped in [&detached, &first, &second] {
+        let run = test.execution_until(&stopped.id, |status| {
+            status.live_task_count == 0 && status.pending_async_count == 0 && status.flags & 8 != 0
+        })?;
+        if !matches!(run.state, RunState::Stopped | RunState::Finished) {
+            return Err("stopped tree was not authoritatively reconciled".into());
+        }
+    }
+    let mut extra = Vec::new();
+    if let Some(probe) = args.get(2) {
+        test.command(Command::Upload {
+            source: PathBuf::from(probe),
+            destination: "/tmp/native-lifecycle-probe".into(),
+            overwrite: false,
+            executable: true,
+        })?;
+        let nonleader = test.launch("exec /tmp/native-lifecycle-probe --nonleader-exec")?;
+        test.output_until(&nonleader.id, b"NONLEADER-EXEC")?;
+        let done = test.execution_until(&nonleader.id, |status| status.live_task_count == 0)?;
+        if done
+            .execution
+            .as_ref()
+            .and_then(|status| status.root_exit.clone())
+            != Some(WaitStatus::Exited { code: 19 })
+        {
+            return Err("nonleader exec corrupted root-process wait status".into());
+        }
+        let leader_exit = test.launch("exec /tmp/native-lifecycle-probe --leader-exit")?;
+        test.output_until(&leader_exit.id, b"ROOT-GROUP-LIVE")?;
+        test.execution_until(&leader_exit.id, |status| {
+            status.live_task_count > 0 && status.root_exit.is_none()
+        })?;
+        let done = test.execution_until(&leader_exit.id, |status| status.live_task_count == 0)?;
+        if done
+            .execution
+            .as_ref()
+            .and_then(|status| status.root_exit.clone())
+            != Some(WaitStatus::Exited { code: 23 })
+        {
+            return Err("leader-only pthread exit corrupted root-process wait status".into());
+        }
+        extra.extend([nonleader, leader_exit]);
+    }
     test.command(Command::RecorderStats)?;
     test.command(Command::Stop)?;
     test.receive()?;
     test.backend.shutdown()?;
     let saved = list_runs(&root).map_err(|error| error.to_string())?;
-    if saved.len() != 3 {
-        return Err(format!("expected three saved runs, got {}", saved.len()));
+    if saved.len() != 3 + extra.len() {
+        return Err(format!(
+            "expected {} saved runs, got {}",
+            3 + extra.len(),
+            saved.len()
+        ));
     }
     let mut total_rows = 0;
-    for expected in [&first, &second, &detached] {
+    for expected in [&first, &second, &detached].into_iter().chain(extra.iter()) {
         let recording = open_recording(&expected.directory).map_err(|error| error.to_string())?;
         let mut offset = 0;
         let mut seen = std::collections::BTreeSet::new();
@@ -262,8 +335,12 @@ fn run() -> Result<(), String> {
             "INPUT-A:alpha"
         } else if expected.id == second.id {
             "INPUT-B:beta"
-        } else {
+        } else if expected.id == detached.id {
             "ROOT-C"
+        } else if expected.request.args[1].contains("--nonleader-exec") {
+            "NONLEADER-EXEC"
+        } else {
+            "ROOT-GROUP-LIVE"
         };
         if !terminal
             .windows(marker.len())
@@ -281,8 +358,8 @@ fn run() -> Result<(), String> {
         );
     }
     println!(
-        "PASS: 4 CPUs; 3 concurrent/separate runs; detached child stop; {} paged invocations; automatic terminal retention",
-        total_rows
+        "PASS: 4 CPUs; {} separate runs; root/tree reconciliation; {} paged invocations; automatic terminal retention",
+        saved.len(), total_rows
     );
     Ok(())
 }

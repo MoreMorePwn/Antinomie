@@ -1,9 +1,11 @@
 mod app;
 mod archive;
+mod folders;
 mod runs;
 mod terminal;
 mod theme;
 mod trace;
+mod workspace;
 
 use antinomie_monitor_core::BackendOptions;
 use clap::Parser;

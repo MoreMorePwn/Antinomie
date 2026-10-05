@@ -36,6 +36,15 @@ impl Backend {
         storage::private_dir(&options.data_dir).map_err(|e| e.to_string())?;
         options.data_dir = fs::canonicalize(&options.data_dir).map_err(|e| e.to_string())?;
         let vms = storage::load_vms(&options)?;
+        let mut bases = crate::locations::installed_bases(&options)?;
+        if bases.is_empty() && options.bundle_dir.join("bundle.json").is_file() {
+            crate::locations::boot_bundle(&options, None)?;
+            bases = crate::locations::installed_bases(&options)?;
+        }
+        let vm_locations = vms
+            .iter()
+            .map(|vm| crate::locations::locations(&options, &vm.id))
+            .collect::<Result<Vec<_>, _>>()?;
         let (commands, receiver) = mpsc::sync_channel(32);
         let (sender, notifications) = mpsc::sync_channel(64);
         let closing = Arc::new(AtomicBool::new(false));
@@ -50,6 +59,8 @@ impl Backend {
                     options,
                     snapshot: Snapshot {
                         vms,
+                        bases,
+                        vm_locations,
                         ..Snapshot::default()
                     },
                     receiver,
@@ -137,6 +148,8 @@ struct Session {
     pending_len: usize,
     pending_overflow: bool,
     terminal_cursor: usize,
+    status_cursor: usize,
+    last_status_query: Instant,
     persisted_packets: u64,
 }
 impl Session {
@@ -166,6 +179,55 @@ impl Session {
     }
     fn update_runs(&self, snapshot: &mut Snapshot) {
         snapshot.runs = self.runs.values().map(|run| run.summary.clone()).collect();
+    }
+    fn query_run_status(
+        &mut self,
+        snapshot: &mut Snapshot,
+        sender: &SyncSender<Notification>,
+    ) -> Result<(), String> {
+        if self.runs.is_empty() || self.last_status_query.elapsed() < Duration::from_millis(100) {
+            return Ok(());
+        }
+        self.last_status_query = Instant::now();
+        let cookie = *self
+            .runs
+            .keys()
+            .nth(self.status_cursor % self.runs.len())
+            .ok_or("missing run status owner")?;
+        self.status_cursor = self.status_cursor.wrapping_add(1);
+        let result = self.request(
+            control::RUN_STATUS,
+            &control::with_session(cookie),
+            snapshot,
+            sender,
+            Duration::from_millis(100),
+        );
+        let run = self
+            .runs
+            .get_mut(&cookie)
+            .ok_or("missing run status owner")?;
+        let result = result
+            .and_then(|reply| crate::execution::decode(&reply, cookie, run.execution_generation));
+        match result {
+            Ok(execution) => {
+                if run.summary.execution.as_ref() != Some(&execution) {
+                    run.execution_generation = execution.generation;
+                    run.summary.state = crate::execution::state(&execution);
+                    run.summary.execution = Some(execution);
+                    run.persist_summary()?;
+                }
+                Ok(())
+            }
+            Err(error) => {
+                let changed = run.summary.execution.take().is_some()
+                    || run.summary.state != RunState::Unknown;
+                run.summary.state = RunState::Unknown;
+                if changed {
+                    run.persist_summary()?;
+                }
+                Err(error)
+            }
+        }
     }
     fn history(&self) -> Vec<EventSummary> {
         let mut events = self.assembler.history();
@@ -456,6 +518,16 @@ struct Worker {
     latest_snapshot: Arc<Mutex<Option<Snapshot>>>,
 }
 impl Worker {
+    fn refresh_locations(&mut self) -> Result<(), String> {
+        self.snapshot.bases = crate::locations::installed_bases(&self.options)?;
+        self.snapshot.vm_locations = self
+            .snapshot
+            .vms
+            .iter()
+            .map(|vm| crate::locations::locations(&self.options, &vm.id))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(())
+    }
     fn emit(&mut self, notification: Notification) {
         if self.sender.try_send(notification).is_err() {
             self.snapshot.health.ui_dropped += 1;
@@ -526,6 +598,11 @@ impl Worker {
                             self.snapshot.last_error = Some(e);
                             self.snapshot.state = VmState::Failed;
                         }
+                        if let Err(error) =
+                            session.query_run_status(&mut self.snapshot, &self.sender)
+                        {
+                            self.snapshot.last_error = Some(error);
+                        }
                     }
                     Err(e) => {
                         self.snapshot.last_error = Some(e.to_string());
@@ -559,7 +636,13 @@ impl Worker {
                 }
             });
             if let Some(run_id) = automatic_read
-                && let Err(error) = self.guest_command(Command::TerminalRead { run_id })
+                && let Some(session) = self.session.as_mut()
+                && let Err(error) = session.read_terminal(
+                    &run_id,
+                    &mut self.snapshot,
+                    &self.sender,
+                    Duration::from_millis(100),
+                )
             {
                 self.snapshot.last_error = Some(error);
             }
@@ -582,22 +665,36 @@ impl Worker {
                     vm.id = storage::vm_id(&vm.name);
                 }
                 storage::validate_vm(&vm)?;
-                let dir = storage::vm_dir(&self.options, &vm.id)?;
-                if dir.exists() {
-                    return Err("VM already exists".into());
+                if self.snapshot.vms.iter().any(|current| current.id == vm.id) {
+                    return Err("VM identity already exists".into());
                 }
-                let bundle = Bundle::load(&self.options.bundle_dir)?.install(&self.options)?;
-                storage::private_dir(&dir).map_err(|e| e.to_string())?;
-                if let Err(e) = storage::create_overlay(&self.options, &dir, vm.disk_gib, &bundle)
+                let location = crate::locations::prepare(&self.options, &mut vm)?;
+                let dir = &location.disk_directory;
+                let bundle =
+                    crate::locations::boot_bundle(&self.options, vm.base_identity.as_deref())?;
+                vm.base_identity = bundle.base_identity.clone();
+                fs::create_dir(dir).map_err(|e| e.to_string())?;
+                storage::private_dir(dir).map_err(|e| e.to_string())?;
+                if let Err(e) = storage::create_overlay(&self.options, dir, vm.disk_gib, &bundle)
                     .and_then(|_| storage::atomic_json(&dir.join("config.json"), &vm))
+                    .and_then(|_| storage::sync_directory_parent(dir))
                 {
-                    let _ = fs::remove_dir_all(&dir);
+                    let _ = fs::remove_dir_all(dir);
                     return Err(e);
                 }
+                let publication = crate::locations::publish(&self.options, &location);
+                if let Err(error) = &publication
+                    && !error.published
+                {
+                    let cleanup = fs::remove_dir_all(dir);
+                    return Err(format!("{error}; creation rollback {:?}", cleanup.err()));
+                }
                 self.snapshot.vms.push(vm);
+                self.refresh_locations()?;
+                publication?;
                 Ok("VM created".into())
             }
-            Command::Save(vm) => {
+            Command::Save(mut vm) => {
                 storage::validate_vm(&vm)?;
                 self.ensure_stopped(&vm.id)?;
                 let current = self
@@ -606,6 +703,11 @@ impl Worker {
                     .iter()
                     .find(|v| v.id == vm.id)
                     .ok_or("unknown VM")?;
+                let location =
+                    crate::locations::future_recordings(&self.options, current, &mut vm)?;
+                if let Some(identity) = &vm.base_identity {
+                    crate::locations::boot_bundle(&self.options, Some(identity))?;
+                }
                 if vm.disk_gib < current.disk_gib {
                     return Err("persistent VM disks cannot be shrunk".into());
                 }
@@ -624,7 +726,14 @@ impl Worker {
                         ));
                     }
                 }
-                storage::atomic_json(&dir.join("config.json"), &vm)?;
+                let previous = current.clone();
+                let publication =
+                    storage::save_vm_config(&self.options, &dir, &previous, &vm, &location);
+                if let Err(error) = &publication
+                    && !error.published
+                {
+                    return Err(error.to_string());
+                }
                 let slot = self
                     .snapshot
                     .vms
@@ -632,7 +741,45 @@ impl Worker {
                     .find(|v| v.id == vm.id)
                     .ok_or("unknown VM")?;
                 *slot = vm;
+                self.refresh_locations()?;
+                publication?;
                 Ok("VM saved".into())
+            }
+            Command::Rename { vm_id, name } => {
+                let mut vm = self
+                    .snapshot
+                    .vms
+                    .iter()
+                    .find(|vm| vm.id == vm_id)
+                    .ok_or("unknown VM")?
+                    .clone();
+                vm.name = name;
+                storage::validate_vm(&vm)?;
+                let dir = storage::vm_dir(&self.options, &vm_id)?;
+                storage::atomic_json(&dir.join("config.json"), &vm)?;
+                if let Some(slot) = self.snapshot.vms.iter_mut().find(|vm| vm.id == vm_id) {
+                    *slot = vm;
+                }
+                Ok("VM renamed; identity, disk and recordings retained".into())
+            }
+            Command::Duplicate { vm_id, name } => {
+                self.ensure_stopped(&vm_id)?;
+                let source = self
+                    .snapshot
+                    .vms
+                    .iter()
+                    .find(|vm| vm.id == vm_id)
+                    .ok_or("unknown VM")?
+                    .clone();
+                let result = storage::duplicate_vm(&self.options, &source, name);
+                if result.is_err() {
+                    self.snapshot.vms = storage::load_vms(&self.options)?;
+                    self.refresh_locations()?;
+                }
+                let vm = result?;
+                self.snapshot.vms.push(vm);
+                self.refresh_locations()?;
+                Ok("VM duplicated with an independent disk; no history copied".into())
             }
             Command::Delete { vm_id, confirmed } => {
                 if !confirmed {
@@ -642,10 +789,15 @@ impl Worker {
                 if !self.snapshot.vms.iter().any(|v| v.id == vm_id) {
                     return Err("unknown VM".into());
                 }
-                fs::remove_dir_all(storage::vm_dir(&self.options, &vm_id)?)
-                    .map_err(|e| e.to_string())?;
+                let result = storage::delete_vm(&self.options, &vm_id);
+                if result.is_err() {
+                    self.snapshot.vms = storage::load_vms(&self.options)?;
+                    self.refresh_locations()?;
+                    result?;
+                }
                 self.snapshot.vms.retain(|v| v.id != vm_id);
-                Ok("VM deleted".into())
+                self.refresh_locations()?;
+                Ok("VM disk and configuration deleted; recordings retained".into())
             }
             Command::Reset { vm_id, confirmed } => {
                 if !confirmed {
@@ -659,10 +811,7 @@ impl Worker {
                     .find(|v| v.id == vm_id)
                     .ok_or("unknown VM")?;
                 let dir = storage::vm_dir(&self.options, &vm_id)?;
-                let bundle: Bundle = serde_json::from_reader(
-                    File::open(dir.join("bundle.json")).map_err(|e| e.to_string())?,
-                )
-                .map_err(|e| e.to_string())?;
+                let bundle: Bundle = storage::read_json(&dir.join("bundle.json"))?;
                 let staging = dir.join(format!("reset-{}", storage::unique_id()));
                 storage::private_dir(&staging).map_err(|e| e.to_string())?;
                 let result = storage::create_overlay(&self.options, &staging, vm.disk_gib, &bundle)
@@ -724,12 +873,14 @@ impl Worker {
             .clone();
         storage::validate_vm(&vm)?;
         let dir = storage::vm_dir(&self.options, id)?;
-        let disk_bundle: Bundle = serde_json::from_reader(
-            File::open(dir.join("bundle.json")).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())?;
+        let disk_bundle: Bundle = storage::read_json(&dir.join("bundle.json"))?;
         disk_bundle.verify_installed()?;
-        let bundle = Bundle::load(&self.options.bundle_dir)?.install(&self.options)?;
+        storage::validate_disk_chain(
+            &self.options,
+            &dir.join("disk.qcow2"),
+            Some(&disk_bundle.base_disk),
+        )?;
+        let bundle = crate::locations::boot_bundle(&self.options, vm.base_identity.as_deref())?;
         if !bundle.kernel_version.is_empty() && !bundle.kernel_version.starts_with("6.12.94") {
             return Err("boot bundle must use the approved Linux 6.12.94 baseline".into());
         }
@@ -743,7 +894,11 @@ impl Worker {
             let process = VmProcess::launch(&self.options, &vm, &bundle)?;
             self.snapshot.serial_log = Some(process.runtime_dir.join("serial.log"));
             let boot_id = storage::unique_id();
-            let capture_dir = dir.join("boots").join(&boot_id).join("unassigned");
+            let capture_dir = crate::locations::locations(&self.options, id)?
+                .recording_directory
+                .join("boots")
+                .join(&boot_id)
+                .join("unassigned");
             let mut capture =
                 RawCapture::new(capture_dir.clone(), self.options.capture_quota_size)?;
             capture.manifest(&vm, &bundle, &disk_bundle, "starting")?;
@@ -774,6 +929,8 @@ impl Worker {
                 pending_len: 0,
                 pending_overflow: false,
                 terminal_cursor: 0,
+                status_cursor: 0,
+                last_status_query: Instant::now(),
                 persisted_packets: 0,
             })
         })();
@@ -937,7 +1094,8 @@ impl Worker {
                 }
                 let args = control::execute(&request)?;
                 let run_id = storage::unique_id();
-                let directory = storage::vm_dir(&self.options, &session.vm.id)?
+                let directory = crate::locations::locations(&self.options, &session.vm.id)?
+                    .recording_directory
                     .join("runs")
                     .join(&run_id);
                 let summary = RunSummary {
@@ -950,8 +1108,9 @@ impl Worker {
                     request,
                     directory,
                     terminal_eof: false,
-                    state: RunState::Running,
+                    state: RunState::Unknown,
                     recording_error: Some("execution has not been acknowledged".into()),
+                    execution: None,
                 };
                 let mut run = ProgramRun::new(summary, session.capture.quota())?;
                 run.summary.recording_error = None;
@@ -986,6 +1145,7 @@ impl Worker {
                 run.summary.session_id = id;
                 run.summary.root_task_cookie = cookie;
                 run.summary.pid = pid;
+                run.summary.state = RunState::Running;
                 if let Some(error) = session.capture.error.clone() {
                     run.capture.error = Some(error.clone());
                     run.storage_error(error);
@@ -1335,6 +1495,75 @@ fn remaining_request_budget(deadline: Instant, maximum: Duration) -> Duration {
 mod tests {
     use super::*;
     #[test]
+    fn running_vm_duplicate_and_delete_guards_preserve_data() {
+        let root = std::env::temp_dir().join(format!("ant-vm-guards-{}", storage::unique_id()));
+        let options = BackendOptions {
+            data_dir: root.clone(),
+            ..BackendOptions::default()
+        };
+        let vm = VmConfig {
+            id: "source".into(),
+            ..VmConfig::default()
+        };
+        storage::private_dir(&root.join(&vm.id)).unwrap();
+        storage::atomic_json(&root.join(&vm.id).join("config.json"), &vm).unwrap();
+        let (_commands, receiver) = mpsc::sync_channel(1);
+        let (sender, _notifications) = mpsc::sync_channel(1);
+        let mut worker = Worker {
+            options,
+            snapshot: Snapshot {
+                vms: vec![vm.clone()],
+                active_vm: Some(vm.id.clone()),
+                state: VmState::Running,
+                ..Snapshot::default()
+            },
+            receiver,
+            sender,
+            closing: Arc::new(AtomicBool::new(false)),
+            stopping: Arc::new(AtomicBool::new(false)),
+            session: None,
+            last_publish: Instant::now(),
+            latest_snapshot: Arc::new(Mutex::new(None)),
+        };
+        assert!(
+            worker
+                .command(Command::Duplicate {
+                    vm_id: vm.id.clone(),
+                    name: "Copy".into()
+                })
+                .unwrap_err()
+                .contains("stop")
+        );
+        assert!(
+            worker
+                .command(Command::Delete {
+                    vm_id: vm.id.clone(),
+                    confirmed: false
+                })
+                .unwrap_err()
+                .contains("confirmation")
+        );
+        assert!(
+            worker
+                .command(Command::Delete {
+                    vm_id: vm.id.clone(),
+                    confirmed: true
+                })
+                .unwrap_err()
+                .contains("stop")
+        );
+        worker
+            .command(Command::Rename {
+                vm_id: vm.id.clone(),
+                name: "Renamed".into(),
+            })
+            .unwrap();
+        assert_eq!(worker.snapshot.vms[0].id, vm.id);
+        assert_eq!(worker.snapshot.vms[0].name, "Renamed");
+        assert!(root.join(&vm.id).join("config.json").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn pending_raw_copy_quota_failure_stops_existing_and_acknowledged_runs() {
         let root =
             std::env::temp_dir().join(format!("ant-pending-copy-quota-{}", storage::unique_id()));
@@ -1354,6 +1583,7 @@ mod tests {
                     terminal_eof: false,
                     state: RunState::Running,
                     recording_error: None,
+                    execution: None,
                 },
                 1024,
             )
@@ -1413,6 +1643,7 @@ mod tests {
                             terminal_eof: false,
                             state: RunState::Running,
                             recording_error: None,
+                            execution: None,
                         },
                         1024,
                     )
@@ -1513,6 +1744,7 @@ mod tests {
                     terminal_eof: false,
                     state: RunState::Running,
                     recording_error: None,
+                    execution: None,
                 },
                 65536,
             )

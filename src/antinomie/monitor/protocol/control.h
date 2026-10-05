@@ -21,6 +21,13 @@
 #define ANTC_TERMINAL_RESIZE 0x1013
 #define ANTC_SIGNAL 0x1014
 #define ANTC_STOP_RUN 0x1015
+#define ANTC_RUN_STATUS 0x1016
+#define ANTC_RUN_STATUS_SIZE 64
+#define ANTC_RUN_ROOT_EXITED 1
+#define ANTC_RUN_TREE_EXITED 2
+#define ANTC_RUN_STOP_REQUESTED 4
+#define ANTC_RUN_ASYNC_COMPLETE 8
+#define ANTC_RUN_OBSERVATION_INCOMPLETE 16
 #define ANTC_STATS 0x1020
 #define ANTC_SHUTDOWN 0x1030
 #define ANTC_UPLOAD_OVERWRITE 1
@@ -58,6 +65,9 @@
  * including descendants after root exit or PTY/session reaping. Empty reply.
  * Status 0 means signal requests issued, not proven tree termination; -ESRCH
  * means no signalable matching task. Concurrent forks may escape this pass.
+ * RUN_STATUS: header flags=0, nonzero u64 root cookie at 8 (16 bytes).
+ * Success: 64-byte reply specified in protocol/run-status.md. Task/tree
+ * completion, root wait status, async observations and saving are distinct.
  *
  * STATS: header only. Reply: ten u64 counters in order: stream_id,
  * tasks_created, tasks_live, calls_entered, events_attempted,

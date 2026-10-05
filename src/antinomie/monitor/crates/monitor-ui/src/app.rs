@@ -1,12 +1,14 @@
 use crate::{
     archive::{Answer, ArchiveWorker, Request},
+    folders::{FolderPicker, Target as FolderTarget},
     runs::RunTerminal,
     theme,
     trace::{self, Inspector, InvocationKey},
+    workspace::{Panel, WorkspaceLayout},
 };
 use antinomie_monitor_core::{
     pair_events, Backend, BackendOptions, Command, ExecRequest, InvocationSummary, Notification,
-    RunState, RunSummary, Snapshot, TerminalRecord, VmConfig, VmState,
+    RunState, RunSummary, Snapshot, TerminalRecord, VmConfig, VmState, WaitStatus,
 };
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
@@ -52,12 +54,6 @@ enum Confirm {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Workspace {
-    Details,
-    Activity,
-}
-
-#[derive(Clone, Copy, PartialEq)]
 enum RunFilter {
     All,
     Live,
@@ -78,24 +74,28 @@ pub struct MonitorApp {
     snapshot: Snapshot,
     selected: Option<String>,
     settings: Settings,
+    options: BackendOptions,
     settings_open: bool,
     create_open: bool,
     config_open: bool,
     launch_open: bool,
     upload_open: bool,
     draft: VmConfig,
+    draft_generation: u64,
+    folder_picker: FolderPicker,
     confirm: Option<Confirm>,
+    name_action: Option<(String, bool, String)>,
     status: String,
     filter: String,
     selected_event: Option<InvocationKey>,
     selected_run: Option<String>,
+    archive_selected: bool,
+    history_generation: u64,
     run_filter: RunFilter,
     terminals: BTreeMap<String, RunTerminal>,
     archive: Option<ArchiveWorker>,
     pending_archive: Option<Request>,
-    data_root: PathBuf,
     history: Vec<RunSummary>,
-    history_path: String,
     archive_generation: u64,
     archive_page: Vec<InvocationSummary>,
     archive_offset: u64,
@@ -104,7 +104,8 @@ pub struct MonitorApp {
     archive_pending: bool,
     archive_error: Option<String>,
     inspector: Inspector,
-    tab: Workspace,
+    layout: WorkspaceLayout,
+    focus_panel: Option<Panel>,
     activity: VecDeque<Activity>,
     exec: ExecRequest,
     args: String,
@@ -117,6 +118,8 @@ pub struct MonitorApp {
     started: Instant,
     smoke: Option<Duration>,
     closing: bool,
+    #[cfg(test)]
+    submitted: Vec<Command>,
 }
 
 impl MonitorApp {
@@ -136,11 +139,10 @@ impl MonitorApp {
         }
         settings.font_size = settings.font_size.clamp(12.0, 24.0);
         theme::text_size(&cc.egui_ctx, settings.font_size);
-        let data_root = options.data_dir.clone();
         options.bundle_dir = PathBuf::from(&settings.bundle);
         options.capture_quota_size = u64::from(settings.quota_gib) * 1024 * 1024 * 1024;
         options.shutdown_timeout = Duration::from_secs(settings.timeout);
-        let (backend, status) = match Backend::new(options) {
+        let (backend, status) = match Backend::new(options.clone()) {
             Ok(backend) => (Some(backend), String::new()),
             Err(error) => (None, error),
         };
@@ -151,24 +153,28 @@ impl MonitorApp {
             snapshot: Snapshot::default(),
             selected: None,
             settings,
+            options,
             settings_open: false,
             create_open: false,
             config_open: false,
             launch_open: false,
             upload_open: false,
             draft: VmConfig::default(),
+            draft_generation: 0,
+            folder_picker: FolderPicker::new(),
             confirm: None,
+            name_action: None,
             status,
             filter: String::new(),
             selected_event: None,
             selected_run: None,
+            archive_selected: false,
+            history_generation: 0,
             run_filter: RunFilter::All,
             terminals: BTreeMap::new(),
             archive: None,
             pending_archive: None,
-            data_root,
             history: Vec::new(),
-            history_path: String::new(),
             archive_generation: 0,
             archive_page: Vec::new(),
             archive_offset: 0,
@@ -177,7 +183,11 @@ impl MonitorApp {
             archive_pending: false,
             archive_error: None,
             inspector: Inspector::default(),
-            tab: Workspace::Details,
+            layout: cc
+                .storage
+                .and_then(|storage| eframe::get_value(storage, "workspace_layout"))
+                .unwrap_or_default(),
+            focus_panel: None,
             activity: VecDeque::new(),
             exec,
             args: String::new(),
@@ -190,6 +200,8 @@ impl MonitorApp {
             started: Instant::now(),
             smoke,
             closing: false,
+            #[cfg(test)]
+            submitted: Vec::new(),
         };
         match ArchiveWorker::new() {
             Ok(worker) => {
@@ -198,6 +210,7 @@ impl MonitorApp {
             }
             Err(error) => app.status = format!("Archive worker: {error}"),
         }
+        app.layout.validate();
         if !app.status.is_empty() {
             app.log("ERROR", app.status.clone());
         }
@@ -215,6 +228,10 @@ impl MonitorApp {
             self.status = error.clone();
             self.log("ERROR", error);
             return;
+        }
+        #[cfg(test)]
+        if self.submitted.len() < 1024 {
+            self.submitted.push(command.clone());
         }
         let mut failure = None;
         if let Some(backend) = &self.backend {
@@ -237,6 +254,22 @@ impl MonitorApp {
     }
 
     fn drain(&mut self) {
+        if let Some((target, result)) = self.folder_picker.poll() {
+            match result {
+                Ok(Some(path)) if target.generation == self.draft_generation => {
+                    if target.disk {
+                        self.draft.disk_root = Some(path);
+                    } else {
+                        self.draft.recording_root = Some(path);
+                    }
+                }
+                Err(error) => {
+                    self.status = format!("Host folder: {error}");
+                    self.log("ERROR", self.status.clone());
+                }
+                _ => {}
+            }
+        }
         let mut activity = Vec::new();
         let was_offline = self.offline_run().is_some();
         if let Some(backend) = &self.backend {
@@ -264,10 +297,10 @@ impl MonitorApp {
                             }
                         }
                         let new_run = snapshot.runs.iter().any(|run| {
-                            run.state != RunState::Finalized
+                            run_in_live_session(&snapshot, run)
                                 && !self.terminals.contains_key(&run.id)
                         });
-                        sync_runs(&mut self.terminals, &snapshot.runs);
+                        sync_runs(&mut self.terminals, &snapshot);
                         if new_run {
                             self.pending_launch = None;
                         }
@@ -306,7 +339,17 @@ impl MonitorApp {
                             "INFO",
                             format!("Started {} (PID {})", run.request.path, run.pid),
                         ));
-                        sync_runs(&mut self.terminals, &[run]);
+                        if let Some(current) = self
+                            .snapshot
+                            .runs
+                            .iter_mut()
+                            .find(|current| current.id == run.id)
+                        {
+                            *current = run;
+                        } else {
+                            self.snapshot.runs.push(run);
+                        }
+                        sync_runs(&mut self.terminals, &self.snapshot);
                     }
                     Some(Notification::Terminal {
                         run_id,
@@ -342,6 +385,7 @@ impl MonitorApp {
         }
         if self.selected.is_none() {
             self.selected = self.snapshot.vms.first().map(|vm| vm.id.clone());
+            self.refresh_history();
         }
         for (level, message) in activity {
             self.log(level, message);
@@ -359,13 +403,14 @@ impl MonitorApp {
         if self.pending_launch.is_some() {
             return Err("A program launch is still pending".into());
         }
-        if available_terminal_slots(&self.terminals) == 0 {
+        if available_terminal_slots(&self.terminals, &self.snapshot) == 0 {
             return Err(terminal_capacity_message());
         }
         Ok(())
     }
 
     fn new_image(&mut self) {
+        self.draft_generation = self.draft_generation.wrapping_add(1);
         self.draft = VmConfig::default();
         self.draft.name = "New VM".into();
         self.create_open = true;
@@ -378,6 +423,7 @@ impl MonitorApp {
     }
 
     fn configure_vm(&mut self) {
+        self.draft_generation = self.draft_generation.wrapping_add(1);
         if let Some(vm) = self
             .snapshot
             .vms
@@ -400,12 +446,18 @@ impl MonitorApp {
     fn offline_run(&self) -> Option<&RunSummary> {
         let id = self.selected_run.as_ref()?;
         let run = self.run(id)?;
-        (!self.snapshot.runs.iter().any(|live| &live.id == id) || run.state == RunState::Finalized)
-            .then_some(run)
+        (self.archive_selected || !run_in_live_session(&self.snapshot, run)).then_some(run)
     }
 
     fn refresh_history(&mut self) {
-        self.queue_archive(Request::List(self.data_root.clone()));
+        if let Some(vm_id) = self.selected.clone() {
+            self.history_generation = self.history_generation.wrapping_add(1);
+            self.queue_archive(Request::ListVm {
+                options: self.options.clone(),
+                vm_id,
+                generation: self.history_generation,
+            });
+        }
     }
 
     fn queue_archive(&mut self, request: Request) {
@@ -452,6 +504,7 @@ impl MonitorApp {
     }
 
     fn select_run(&mut self, id: Option<String>) {
+        self.archive_selected = false;
         self.selected_run = id;
         self.selected_event = None;
         self.inspector.clear();
@@ -488,17 +541,12 @@ impl MonitorApp {
     }
 
     fn reopen(&mut self, run: RunSummary) {
-        let live = self
-            .snapshot
-            .runs
-            .iter()
-            .any(|live| live.id == run.id && live.state != RunState::Finalized);
+        let live = run_in_live_session(&self.snapshot, &run);
         let reserved = usize::from(self.pending_launch.is_some());
-        let consumes_slot = self
-            .terminals
-            .get(&run.id)
-            .is_none_or(|terminal| !terminal.open && terminal.run.state == RunState::Finalized);
-        if consumes_slot && available_terminal_slots(&self.terminals) <= reserved {
+        let consumes_slot = self.terminals.get(&run.id).is_none_or(|terminal| {
+            !terminal.open && !run_in_live_session(&self.snapshot, &terminal.run)
+        });
+        if consumes_slot && available_terminal_slots(&self.terminals, &self.snapshot) <= reserved {
             self.status = terminal_capacity_message();
             return;
         }
@@ -517,7 +565,9 @@ impl MonitorApp {
             let reclaim = self
                 .terminals
                 .iter()
-                .find(|(_, terminal)| !terminal.open && terminal.run.state == RunState::Finalized)
+                .find(|(_, terminal)| {
+                    !terminal.open && !run_in_live_session(&self.snapshot, &terminal.run)
+                })
                 .map(|(id, _)| id.clone());
             if let Some(id) = reclaim {
                 self.terminals.remove(&id);
@@ -536,18 +586,11 @@ impl MonitorApp {
         self.terminals.insert(run.id.clone(), terminal);
     }
 
-    fn run_list(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.strong("Programs");
-            if icon(
-                ui,
-                egui_phosphor::regular::ARROW_CLOCKWISE,
-                "Refresh retained runs",
-                true,
-            ) {
-                self.refresh_history();
-            }
-        });
+    fn run_history(&mut self, ui: &mut egui::Ui) {
+        let Some(vm_id) = self.selected.clone() else {
+            ui.colored_label(theme::MUTED, "No VM selected");
+            return;
+        };
         ui.horizontal_wrapped(|ui| {
             for (filter, label) in [
                 (RunFilter::All, "All"),
@@ -556,151 +599,225 @@ impl MonitorApp {
             ] {
                 ui.selectable_value(&mut self.run_filter, filter, label);
             }
-        });
-        if self.run_filter != RunFilter::Past
-            && ui
-                .selectable_label(self.selected_run.is_none(), "All live runs")
+            if icon(
+                ui,
+                egui_phosphor::regular::ARROW_CLOCKWISE,
+                "Refresh Run History",
+                true,
+            ) {
+                self.refresh_history();
+            }
+            if ui
+                .selectable_label(self.selected_run.is_none(), "All live traces")
                 .clicked()
-        {
-            self.select_run(None);
-        }
-        let mut runs = self.snapshot.runs.clone();
+            {
+                self.select_run(None);
+            }
+        });
+        let mut runs: Vec<_> = self
+            .snapshot
+            .runs
+            .iter()
+            .filter(|run| run.vm_id == vm_id)
+            .cloned()
+            .collect();
         runs.extend(
             self.history
                 .iter()
-                .filter(|run| !self.snapshot.runs.iter().any(|live| live.id == run.id))
-                .cloned(),
+                .filter(|run| run.vm_id == vm_id && !runs.iter().any(|live| live.id == run.id))
+                .cloned()
+                .collect::<Vec<_>>(),
         );
         runs.retain(|run| match self.run_filter {
             RunFilter::All => true,
-            RunFilter::Live => self
-                .snapshot
-                .runs
-                .iter()
-                .any(|live| live.id == run.id && live.state != RunState::Finalized),
-            RunFilter::Past => !self
-                .snapshot
-                .runs
-                .iter()
-                .any(|live| live.id == run.id && live.state != RunState::Finalized),
+            RunFilter::Live => self.live_history_run(run),
+            RunFilter::Past => !self.live_history_run(run),
         });
-        egui::ScrollArea::vertical()
-            .id_salt("program_runs")
-            .max_height((ui.available_height() - 92.0).max(40.0))
-            .auto_shrink([false, true])
-            .show(ui, |ui| {
-                if runs.is_empty() {
-                    ui.colored_label(theme::MUTED, "No runs");
-                }
-                for run in runs {
-                    let live = self
-                        .snapshot
-                        .runs
-                        .iter()
-                        .any(|live| live.id == run.id && live.state != RunState::Finalized);
-                    ui.push_id(&run.id, |ui| {
-                        let label = format!("{} / {}", run.pid, run.request.path);
-                        if ui
-                            .add_sized(
-                                [ui.available_width(), self.settings.font_size + 12.0],
-                                egui::Button::new(label)
-                                    .frame(false)
-                                    .selected(self.selected_run.as_ref() == Some(&run.id))
-                                    .truncate(),
-                            )
-                            .on_hover_text(format!(
-                                "{}\nRun {}\nRoot task {}\n{:?}",
-                                run.request.path, run.id, run.root_task_cookie, run.state
-                            ))
-                            .clicked()
-                        {
-                            self.select_run(Some(run.id.clone()));
+        let height = (ui.available_height() * 0.58 - 30.0).max(50.0);
+        let mut inspect = None;
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), height + 28.0),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                TableBuilder::new(ui)
+                    .id_salt("run_history")
+                    .sense(egui::Sense::click())
+                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                    .column(Column::remainder().at_least(120.0))
+                    .column(Column::initial(180.0).range(90.0..=400.0))
+                    .column(Column::initial(110.0).range(70.0..=220.0))
+                    .column(Column::initial(110.0).range(70.0..=220.0))
+                    .column(Column::exact(72.0))
+                    .resizable(true)
+                    .striped(true)
+                    .max_scroll_height(height)
+                    .min_scrolled_height(0.0)
+                    .header(28.0, |mut header| {
+                        for name in ["Executable", "Arguments", "Tree status", "Root exit", ""] {
+                            header.col(|ui| {
+                                ui.strong(name);
+                            });
                         }
-                        ui.horizontal(|ui| {
-                            if icon(
-                                ui,
-                                egui_phosphor::regular::TERMINAL_WINDOW,
-                                "Reopen terminal",
-                                true,
-                            ) {
-                                self.reopen(run.clone());
-                            }
-                            if icon(
-                                ui,
-                                egui_phosphor::regular::STOP,
-                                "Stop this run and tracked descendants",
-                                live && run.state != RunState::StopRequested && !self.closing,
-                            ) {
-                                self.send(Command::StopRun {
-                                    run_id: run.id.clone(),
-                                });
-                            }
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(format!("{:?}", run.state))
-                                        .small()
-                                        .color(theme::MUTED),
+                    })
+                    .body(|body| {
+                        body.rows(self.settings.font_size + 16.0, runs.len(), |mut row| {
+                            let run = &runs[row.index()];
+                            row.set_selected(self.selected_run.as_ref() == Some(&run.id));
+                            row.col(|ui| {
+                                ui.add(
+                                    egui::Label::new(&run.request.path)
+                                        .selectable(false)
+                                        .sense(egui::Sense::hover())
+                                        .truncate(),
                                 )
-                                .truncate(),
-                            )
-                            .on_hover_text(
-                                if run.terminal_eof && live {
-                                    "PTY closed; descendants may still run"
-                                } else {
-                                    ""
-                                },
-                            );
+                                .on_hover_text(&run.request.path);
+                            });
+                            row.col(|ui| {
+                                let args = run.request.args.join(" ");
+                                ui.add(
+                                    egui::Label::new(&args)
+                                        .selectable(false)
+                                        .sense(egui::Sense::hover())
+                                        .truncate(),
+                                )
+                                .on_hover_text(run.request.args.join("\n"));
+                            });
+                            row.col(|ui| {
+                                ui.add(
+                                    egui::Label::new(run_status(run))
+                                        .selectable(false)
+                                        .sense(egui::Sense::hover()),
+                                )
+                                .on_hover_text(execution_detail(run));
+                            });
+                            row.col(|ui| {
+                                ui.add(
+                                    egui::Label::new(root_exit(run))
+                                        .selectable(false)
+                                        .sense(egui::Sense::hover()),
+                                )
+                                .on_hover_text(format!(
+                                    "Wait status: {:?}",
+                                    run.execution
+                                        .as_ref()
+                                        .and_then(|status| status.root_wait_status)
+                                ));
+                            });
+                            row.col(|ui| {
+                                if icon(
+                                    ui,
+                                    egui_phosphor::regular::TERMINAL_WINDOW,
+                                    "Open terminal",
+                                    true,
+                                ) {
+                                    self.reopen(run.clone());
+                                }
+                                if icon(
+                                    ui,
+                                    egui_phosphor::regular::STOP,
+                                    "Stop run and descendants",
+                                    self.snapshot.runs.iter().any(|live| live.id == run.id)
+                                        && matches!(
+                                            run.state,
+                                            RunState::Running | RunState::TerminalClosed
+                                        )
+                                        && !self.closing,
+                                ) {
+                                    self.send(Command::StopRun {
+                                        run_id: run.id.clone(),
+                                    });
+                                }
+                            });
+                            let response = row.response();
+                            if response.clicked() || response.double_clicked() {
+                                inspect = Some((run.id.clone(), response.double_clicked()));
+                            }
                         });
-                        if let Some(error) = &run.recording_error {
-                            ui.add(
-                                egui::Label::new(RichText::new(error).small().color(theme::WARN))
-                                    .truncate(),
-                            )
-                            .on_hover_text(error);
-                        }
                     });
-                }
-            });
-        ui.separator();
-        ui.add(
-            egui::TextEdit::singleline(&mut self.history_path)
-                .hint_text("Archive directory")
-                .desired_width(ui.available_width()),
+            },
         );
-        if ui.button("Open archive").clicked() && !self.history_path.trim().is_empty() {
-            let directory = PathBuf::from(self.history_path.trim());
-            // A synthetic view identity keeps direct-path archives independent of the live VM.
-            let id = format!("archive:{}", directory.display());
-            if !self.history.iter().any(|run| run.id == id) {
-                if self.history.len() >= 1024 {
-                    self.history.remove(0);
-                }
-                self.history.push(RunSummary {
-                    id: id.clone(),
-                    vm_id: String::new(),
-                    boot_id: String::new(),
-                    session_id: 0,
-                    root_task_cookie: 0,
-                    pid: 0,
-                    request: ExecRequest {
-                        path: directory
-                            .file_name()
-                            .map(|name| name.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| "Archive".into()),
-                        ..ExecRequest::default()
-                    },
-                    directory,
-                    terminal_eof: true,
-                    state: RunState::Finalized,
-                    recording_error: None,
-                });
+        if let Some((id, open)) = inspect {
+            if open {
+                self.select_archive_run(id);
+            } else {
+                self.select_run(Some(id));
             }
-            self.select_run(Some(id));
         }
+        ui.separator();
+        if let Some(run) = self
+            .selected_run
+            .as_deref()
+            .and_then(|id| runs.iter().find(|run| run.id == id))
+        {
+            egui::ScrollArea::both()
+                .id_salt("launch_metadata")
+                .show(ui, |ui| {
+                    egui::Grid::new("run_metadata")
+                        .num_columns(2)
+                        .show(ui, |ui| {
+                            for (label, value) in [
+                                ("Executable", run.request.path.clone()),
+                                ("Arguments", format!("{:?}", run.request.args)),
+                                ("Working directory", run.request.cwd.clone()),
+                                ("Environment", run.request.env.join("\n")),
+                                (
+                                    "UID / GID",
+                                    format!("{} / {}", run.request.uid, run.request.gid),
+                                ),
+                                ("Run", run.id.clone()),
+                                ("Boot", run.boot_id.clone()),
+                                (
+                                    "Session / root task / PID",
+                                    format!(
+                                        "{} / {} / {}",
+                                        run.session_id, run.root_task_cookie, run.pid
+                                    ),
+                                ),
+                                ("Tree", execution_detail(run)),
+                                ("Root exit", root_exit(run)),
+                                ("Recording", run.directory.display().to_string()),
+                            ] {
+                                ui.label(label);
+                                ui.add(egui::Label::new(value).selectable(true));
+                                ui.end_row();
+                            }
+                        });
+                });
+        } else if runs.is_empty() {
+            ui.colored_label(theme::MUTED, "No retained runs for this VM");
+        }
+    }
+
+    fn focus_trace(&mut self) {
+        self.focus_panel = Some(Panel::Trace);
+    }
+
+    fn select_archive_run(&mut self, id: String) {
+        self.select_run(Some(id));
+        self.archive_selected = true;
+        self.request_page(0);
+        self.focus_trace();
     }
 
     fn handle_archive_answer(&mut self, answer: Answer) {
         match answer {
+            Answer::ListVm {
+                vm_id,
+                generation,
+                result,
+            } => {
+                if self.selected.as_ref() != Some(&vm_id) || generation != self.history_generation {
+                    return;
+                }
+                match result {
+                    Ok(runs) => self.history = runs,
+                    Err(error) => {
+                        self.status = format!("History: {error}");
+                        self.log("ERROR", self.status.clone());
+                    }
+                }
+            }
+            #[cfg(test)]
             Answer::List(result) => match result {
                 Ok(mut runs) => {
                     runs.extend(
@@ -839,11 +956,7 @@ impl MonitorApp {
                 if terminal.dirty
                     && terminal.snapshot_request.is_none()
                     && terminal.snapshot_error.is_none()
-                    && self
-                        .snapshot
-                        .runs
-                        .iter()
-                        .any(|run| run.id == terminal.run.id && run.state != RunState::Finalized)
+                    && run_in_live_session(&self.snapshot, &terminal.run)
                 {
                     match backend.send(Command::TerminalSnapshot {
                         run_id: terminal.run.id.clone(),
@@ -859,65 +972,6 @@ impl MonitorApp {
                     }
                 }
             }
-        }
-    }
-
-    fn terminal_windows(&mut self, ctx: &egui::Context) {
-        let mut commands = Vec::new();
-        for (id, terminal) in &mut self.terminals {
-            if !terminal.open {
-                continue;
-            }
-            let live = self
-                .snapshot
-                .runs
-                .iter()
-                .any(|run| &run.id == id && run.state != RunState::Finalized);
-            let interactive = live && terminal.interactive() && !self.closing;
-            let state = if terminal.snapshot_error.is_some() {
-                "resync failed"
-            } else if terminal.dirty {
-                "resync pending"
-            } else if terminal
-                .replay_error
-                .as_ref()
-                .is_some_and(|error| error.starts_with("Final terminal screen unavailable"))
-            {
-                "history, snapshot unavailable"
-            } else if terminal.replay_error.is_some() {
-                "history error"
-            } else if terminal.replay_offset.is_some() || terminal.replay_pending {
-                "loading history"
-            } else if !live {
-                "history, read only"
-            } else if terminal.run.terminal_eof {
-                "PTY closed"
-            } else {
-                "live"
-            };
-            let title = format!(
-                "{} / PID {} / {} [{}]",
-                terminal.run.request.path, terminal.run.pid, id, state
-            );
-            ctx.show_viewport_immediate(
-                egui::ViewportId::from_hash_of(("program-terminal", id)),
-                egui::ViewportBuilder::default()
-                    .with_title(title)
-                    .with_inner_size([820.0, 520.0])
-                    .with_min_inner_size([320.0, 180.0]),
-                |ctx, class| {
-                    commands.extend(show_terminal_viewport(
-                        ctx,
-                        class,
-                        terminal,
-                        live,
-                        interactive,
-                    ));
-                },
-            );
-        }
-        for command in commands {
-            self.send(command);
         }
     }
 
@@ -1001,14 +1055,21 @@ impl MonitorApp {
                         }
                     });
                     ui.menu_button("View", |ui| {
-                        for (view, label) in [
-                            (Workspace::Details, "Details"),
-                            (Workspace::Activity, "Activity"),
+                        for view in [
+                            Panel::Trace,
+                            Panel::RunHistory,
+                            Panel::Details,
+                            Panel::Activity,
                         ] {
-                            if ui.button(label).clicked() {
-                                self.tab = view;
+                            if ui.button(view.title()).clicked() {
+                                self.focus_panel = Some(view);
                                 ui.close_menu();
                             }
+                        }
+                        ui.separator();
+                        if ui.button("Reset layout").clicked() {
+                            self.layout = WorkspaceLayout::default();
+                            ui.close_menu();
                         }
                     });
                     ui.menu_button("Tools", |ui| {
@@ -1123,6 +1184,8 @@ impl MonitorApp {
     }
 
     fn sidebar(&mut self, ctx: &egui::Context) {
+        let mut selected_vm = None;
+        let mut action = None;
         egui::SidePanel::left("vms")
             .default_width(210.0)
             .min_width(190.0)
@@ -1157,7 +1220,7 @@ impl MonitorApp {
                 ui.separator();
                 egui::ScrollArea::vertical()
                     .id_salt("vm_list")
-                    .max_height((ui.available_height() * 0.27).max(60.0))
+                    .auto_shrink([false, false])
                     .show(ui, |ui| {
                         if self.snapshot.vms.is_empty() {
                             ui.label(RichText::new("No saved VMs").color(theme::MUTED));
@@ -1173,7 +1236,7 @@ impl MonitorApp {
                                 },
                                 vm.name
                             );
-                            if ui
+                            let response = ui
                                 .add_sized(
                                     [ui.available_width(), self.settings.font_size + 14.0],
                                     egui::Button::new(RichText::new(label))
@@ -1188,16 +1251,72 @@ impl MonitorApp {
                                     vm.ram_mib,
                                     vm.disk_gib,
                                     if vm.nat { "NAT" } else { "disconnected" }
-                                ))
-                                .clicked()
-                            {
-                                self.selected = Some(vm.id.clone());
+                                ));
+                            if response.clicked() {
+                                selected_vm = Some(vm.id.clone());
                             }
+                            response.context_menu(|ui| {
+                                let stopped = self.snapshot.active_vm.as_ref() != Some(&vm.id)
+                                    && !self.closing;
+                                for (label, enabled) in [
+                                    ("Rename", !self.closing),
+                                    ("Open Directory", true),
+                                    ("Delete", stopped),
+                                    ("Duplicate", stopped),
+                                    ("Settings", stopped),
+                                ] {
+                                    if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+                                        action = Some((vm.clone(), label));
+                                        ui.close_menu();
+                                    }
+                                }
+                            });
                         }
                     });
-                ui.separator();
-                self.run_list(ui);
             });
+        if let Some(vm_id) = selected_vm {
+            if self.selected.as_ref() != Some(&vm_id) {
+                self.selected = Some(vm_id);
+                self.history.clear();
+                self.select_run(None);
+                self.refresh_history();
+            }
+        }
+        if let Some((vm, action)) = action {
+            match action {
+                "Rename" => self.name_action = Some((vm.id, false, vm.name)),
+                "Duplicate" => self.name_action = Some((vm.id, true, format!("{} copy", vm.name))),
+                "Delete" => self.confirm = Some(Confirm::Delete(vm.id)),
+                "Settings" => {
+                    self.draft_generation = self.draft_generation.wrapping_add(1);
+                    self.draft = vm;
+                    self.config_open = true;
+                }
+                "Open Directory" => {
+                    if let Some(location) = self
+                        .snapshot
+                        .vm_locations
+                        .iter()
+                        .find(|location| location.vm_id == vm.id)
+                    {
+                        match std::process::Command::new("xdg-open")
+                            .arg(&location.disk_directory)
+                            .spawn()
+                        {
+                            Ok(mut child) => {
+                                std::thread::spawn(move || {
+                                    let _ = child.wait();
+                                });
+                            }
+                            Err(error) => self.status = format!("Open Directory: {error}"),
+                        }
+                    } else {
+                        self.status = "VM directory unavailable".into();
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     fn health(&mut self, ctx: &egui::Context) {
@@ -1262,32 +1381,6 @@ impl MonitorApp {
             level,
             message,
         });
-    }
-
-    fn bottom_panel(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::bottom("inspection")
-            .default_height(260.0)
-            .min_height(130.0)
-            .max_height((ctx.screen_rect().height() * 0.6).max(130.0))
-            .resizable(true)
-            .frame(theme::frame(theme::BG))
-            .show(ctx, |ui| {
-                ui.set_min_height(ui.max_rect().height());
-                ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
-                ui.horizontal(|ui| {
-                    for (target, label) in [
-                        (Workspace::Details, "Details"),
-                        (Workspace::Activity, "Activity"),
-                    ] {
-                        workspace_tab(ui, &mut self.tab, target, label, true);
-                    }
-                });
-                ui.separator();
-                match self.tab {
-                    Workspace::Details => self.details(ui),
-                    Workspace::Activity => self.activity(ui),
-                }
-            });
     }
 
     fn activity(&mut self, ui: &mut egui::Ui) {
@@ -1442,6 +1535,12 @@ impl MonitorApp {
         if self.offline_run().is_some() {
             return self.archive_page.clone();
         }
+        if self.selected.is_some()
+            && self.snapshot.active_vm.is_some()
+            && self.selected != self.snapshot.active_vm
+        {
+            return Vec::new();
+        }
         let events: Vec<_> = self
             .snapshot
             .events
@@ -1458,6 +1557,14 @@ impl MonitorApp {
             .cloned()
             .collect();
         pair_events(&events)
+    }
+
+    fn live_history_run(&self, run: &RunSummary) -> bool {
+        self.snapshot.runs.iter().any(|live| live.id == run.id)
+            && matches!(
+                run.state,
+                RunState::Running | RunState::StopRequested | RunState::TerminalClosed
+            )
     }
 
     fn events(&mut self, ui: &mut egui::Ui) {
@@ -1514,7 +1621,7 @@ impl MonitorApp {
             .invocations()
             .into_iter()
             .filter(|invocation| {
-                let Some(event) = invocation.entry.as_ref().or(invocation.exit.as_ref()) else {
+                let Some(event) = trace::representative(invocation) else {
                     return false;
                 };
                 filter.is_empty()
@@ -1578,11 +1685,8 @@ impl MonitorApp {
                     .body(|body| {
                         body.rows(height, invocations.len(), |mut row| {
                             let invocation = &invocations[row.index()];
-                            let event = invocation
-                                .entry
-                                .as_ref()
-                                .or(invocation.exit.as_ref())
-                                .expect("filtered phase");
+                            let event =
+                                trace::representative(invocation).expect("filtered observation");
                             let key = trace::key(invocation);
                             row.set_selected(self.selected_event == Some(key));
                             let cpu = match (&invocation.entry, &invocation.exit) {
@@ -1663,6 +1767,7 @@ impl MonitorApp {
             .entry
             .iter()
             .chain(invocation.exit.iter())
+            .chain(invocation.async_events.iter())
             .map(|event| event.root_task_cookie)
             .find(|root| *root != 0)
             .unwrap_or(0);
@@ -1677,6 +1782,26 @@ impl MonitorApp {
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
+        if let Some((vm_id, duplicate, name)) = &mut self.name_action {
+            let mut open = true;
+            let mut save = false;
+            egui::Window::new(if *duplicate { "Duplicate VM" } else { "Rename VM" }).collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
+                ui.add(egui::TextEdit::singleline(name).desired_width(320.0));
+                if *duplicate { ui.label("Copies the current disk with a new VM identity. Run history remains with the source VM."); }
+                save = ui.add_enabled(!name.trim().is_empty() && (!*duplicate || self.snapshot.active_vm.as_ref() != Some(vm_id)), egui::Button::new(if *duplicate { "Duplicate" } else { "Rename" })).clicked();
+            });
+            if save {
+                if let Some((vm_id, duplicate, name)) = self.name_action.take() {
+                    self.send(if duplicate {
+                        Command::Duplicate { vm_id, name }
+                    } else {
+                        Command::Rename { vm_id, name }
+                    });
+                }
+            } else if !open {
+                self.name_action = None;
+            }
+        }
         if self.create_open || self.config_open {
             let creating = self.create_open;
             let mut open = true;
@@ -1734,15 +1859,23 @@ impl MonitorApp {
                                     ui.label(self.draft.disk_gib.to_string());
                                 }
                                 ui.end_row();
-                                if creating {
-                                    ui.label("Base directory");
-                                    ui.add(
-                                        egui::TextEdit::singleline(&mut self.settings.bundle)
-                                            .desired_width(280.0),
-                                    );
-                                    ui.end_row();
-                                }
+                                ui.label("Installed base");
+                                base_selector(ui, &self.snapshot, &mut self.draft.base_identity, "vm_base");
+                                ui.end_row();
+                                ui.label("Disk parent");
+                                ui.add_enabled_ui(creating, |ui| { directory_input(ui, &mut self.draft.disk_root, "Default disk parent", &mut self.folder_picker, FolderTarget { generation: self.draft_generation, disk: true }, &mut self.status); });
+                                ui.end_row();
+                                ui.label("Recording parent");
+                                directory_input(ui, &mut self.draft.recording_root, "Default recording parent", &mut self.folder_picker, FolderTarget { generation: self.draft_generation, disk: false }, &mut self.status);
+                                ui.end_row();
                             });
+                        if !creating {
+                            if let Some(location) = self.snapshot.vm_locations.iter().find(|location| location.vm_id == self.draft.id) {
+                                ui.add(egui::Label::new(format!("Disk: {}", location.disk_directory.display())).truncate()).on_hover_text(location.disk_directory.display().to_string());
+                                ui.add(egui::Label::new(format!("Recordings: {}", location.recording_directory.display())).truncate()).on_hover_text(location.recording_directory.display().to_string());
+                            }
+                            ui.label("Recording parent changes apply to future recordings. Earlier recordings are retained.");
+                        }
                         if ui.checkbox(&mut self.draft.nat, "NAT network").changed()
                             && self.draft.nat
                         {
@@ -1875,11 +2008,22 @@ impl MonitorApp {
                         });
                         ui.separator();
                         ui.add_enabled_ui(self.snapshot.active_vm.is_none(), |ui| {
-                            ui.label("Base artifact directory");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.settings.bundle)
-                                    .desired_width(400.0),
-                            );
+                            ui.label("Installed base");
+                            let mut base = self
+                                .snapshot
+                                .bases
+                                .iter()
+                                .find(|base| {
+                                    base.directory == std::path::Path::new(&self.settings.bundle)
+                                })
+                                .map(|base| base.id.clone());
+                            base_selector(ui, &self.snapshot, &mut base, "settings_base");
+                            if let Some(base) = base.and_then(|id| {
+                                self.snapshot.bases.iter().find(|base| base.id == id)
+                            }) {
+                                self.settings.bundle =
+                                    base.directory.to_string_lossy().into_owned();
+                            }
                             numeric(
                                 ui,
                                 "Recording quota (GiB)",
@@ -1916,7 +2060,7 @@ impl MonitorApp {
                 Confirm::Reset(_) => {
                     "Reset this VM's disk to the base image? All VM disk changes will be lost."
                 }
-                Confirm::Delete(_) => "Delete this VM and its disk? All VM disk data will be lost.",
+                Confirm::Delete(_) => "Delete this VM configuration and disk? Disk changes will be lost. Retained run recordings and terminal history are preserved.",
                 Confirm::Upload { .. } => "Overwrite the chosen guest path with this host file?",
                 Confirm::Nat { .. } => {
                     "Enable NAT? The guest can connect to the host network and Internet."
@@ -1999,21 +2143,97 @@ impl MonitorApp {
         self.toolbar(ctx);
         self.health(ctx);
         self.sidebar(ctx);
-        self.bottom_panel(ctx);
-        egui::CentralPanel::default()
-            .frame(
-                egui::Frame::new()
-                    .fill(theme::BG)
-                    .inner_margin(egui::Margin::same(8)),
-            )
-            .show(ctx, |ui| {
-                self.events(ui);
-            });
+        let mut layout = std::mem::take(&mut self.layout);
+        if let Some(panel) = self.focus_panel.take() {
+            layout.focus(panel);
+        }
+        layout.show(self, ctx);
+        self.layout = layout;
         self.dialogs(ctx);
-        self.terminal_windows(ctx);
+    }
+
+    pub(crate) fn terminal_views(&self) -> Vec<(String, bool)> {
+        self.terminals
+            .iter()
+            .map(|(id, terminal)| (id.clone(), terminal.open))
+            .collect()
+    }
+
+    pub(crate) fn close_terminal_view(&mut self, id: &str) {
+        if let Some(terminal) = self.terminals.get_mut(id) {
+            terminal.close_view();
+        }
+    }
+
+    pub(crate) fn panel_title(&self, panel: &Panel) -> String {
+        match panel {
+            Panel::Terminal(id) => self
+                .terminals
+                .get(id)
+                .map(|terminal| format!("{} / PID {}", terminal.run.request.path, terminal.run.pid))
+                .unwrap_or_else(|| "Terminal".into()),
+            _ => panel.title().into(),
+        }
+    }
+
+    pub(crate) fn show_panel(&mut self, ui: &mut egui::Ui, panel: &Panel) {
+        ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+        match panel {
+            Panel::Trace => self.events(ui),
+            Panel::RunHistory => self.run_history(ui),
+            Panel::Details => self.details(ui),
+            Panel::Activity => self.activity(ui),
+            Panel::Terminal(id) => {
+                let live = self
+                    .terminals
+                    .get(id)
+                    .is_some_and(|terminal| run_in_live_session(&self.snapshot, &terminal.run));
+                let mut commands = Vec::new();
+                if let Some(terminal) = self.terminals.get_mut(id) {
+                    ui.horizontal(|ui| {
+                        ui.label(run_status(&terminal.run));
+                        ui.label(format!("Root: {}", root_exit(&terminal.run)));
+                        if let Some(error) = terminal
+                            .snapshot_error
+                            .as_ref()
+                            .or(terminal.replay_error.as_ref())
+                        {
+                            ui.colored_label(theme::WARN, error);
+                        }
+                    });
+                    let interactive = live && terminal.interactive() && !self.closing;
+                    let (data, resize) = if live {
+                        terminal.terminal.show(ui, interactive)
+                    } else {
+                        egui::ScrollArea::both()
+                            .show(ui, |ui| terminal.terminal.show_grid(ui, false, false))
+                            .inner
+                    };
+                    if !data.is_empty() {
+                        commands.push(Command::TerminalInput {
+                            run_id: id.clone(),
+                            data,
+                        });
+                    }
+                    if interactive {
+                        if let Some((rows, cols)) = resize {
+                            commands.push(Command::TerminalResize {
+                                run_id: id.clone(),
+                                rows,
+                                cols,
+                            });
+                        }
+                    }
+                }
+                for command in commands {
+                    self.send(command);
+                }
+            }
+        }
     }
 
     fn update_options(&mut self) {
+        self.options.bundle_dir = PathBuf::from(&self.settings.bundle);
         self.send(Command::UpdateOptions {
             bundle_dir: PathBuf::from(&self.settings.bundle),
             capture_quota_size: u64::from(self.settings.quota_gib) * 1073741824,
@@ -2048,6 +2268,7 @@ impl eframe::App for MonitorApp {
     }
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, "settings", &self.settings);
+        eframe::set_value(storage, "workspace_layout", &self.layout);
     }
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         if let Some(backend) = &mut self.backend {
@@ -2058,6 +2279,104 @@ impl eframe::App for MonitorApp {
     }
 }
 
+fn run_status(run: &RunSummary) -> &'static str {
+    match run.state {
+        RunState::Unknown => "Unknown",
+        RunState::Running => "Running",
+        RunState::StopRequested => "Stop requested",
+        RunState::Finished => "Finished",
+        RunState::Stopped => "Stopped",
+        RunState::TerminalClosed => "PTY closed",
+        RunState::Finalized => "Recording ended",
+    }
+}
+
+fn root_exit(run: &RunSummary) -> String {
+    match run
+        .execution
+        .as_ref()
+        .and_then(|status| status.root_exit.as_ref())
+    {
+        Some(WaitStatus::Exited { code }) => format!("Exit {code}"),
+        Some(WaitStatus::Signaled {
+            signal,
+            core_dumped,
+        }) => format!(
+            "Signal {signal}{}",
+            if *core_dumped { " (core)" } else { "" }
+        ),
+        None => "Unknown".into(),
+    }
+}
+
+fn execution_detail(run: &RunSummary) -> String {
+    match &run.execution {
+        Some(status) => format!("{}; {} live tasks; {} pending async; {} total tasks; {} async losses; flags {:#x}; generation {}", run_status(run), status.live_task_count, status.pending_async_count, status.total_task_count, status.async_loss_count, status.flags, status.generation),
+        None => format!("{}; full-tree execution evidence unavailable", run_status(run)),
+    }
+}
+
+fn base_selector(
+    ui: &mut egui::Ui,
+    snapshot: &Snapshot,
+    identity: &mut Option<String>,
+    salt: &str,
+) {
+    let label = identity
+        .as_ref()
+        .and_then(|id| snapshot.bases.iter().find(|base| &base.id == id))
+        .map_or("Linux 6.12.94 (unavailable)", |base| base.label.as_str());
+    egui::ComboBox::from_id_salt(salt)
+        .selected_text(label)
+        .width(260.0)
+        .show_ui(ui, |ui| {
+            for base in &snapshot.bases {
+                ui.selectable_value(identity, Some(base.id.clone()), &base.label)
+                    .on_hover_text(base.directory.display().to_string());
+            }
+        });
+    if identity.is_none() {
+        *identity = snapshot.bases.first().map(|base| base.id.clone());
+    }
+}
+
+fn directory_input(
+    ui: &mut egui::Ui,
+    path: &mut Option<PathBuf>,
+    hint: &str,
+    picker: &mut FolderPicker,
+    target: FolderTarget,
+    status: &mut String,
+) {
+    let mut text = path
+        .as_ref()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    ui.horizontal(|ui| {
+        if ui
+            .add(
+                egui::TextEdit::singleline(&mut text)
+                    .hint_text(hint)
+                    .desired_width(235.0),
+            )
+            .changed()
+        {
+            *path = (!text.trim().is_empty()).then(|| PathBuf::from(&text));
+        }
+        if icon(
+            ui,
+            egui_phosphor::regular::FOLDER_OPEN,
+            "Choose host folder",
+            picker.available(),
+        ) {
+            if let Err(error) = picker.choose(target) {
+                *status = format!("Host folder: {error}");
+            }
+        }
+    });
+}
+
+#[cfg(test)]
 fn show_terminal_viewport(
     ctx: &egui::Context,
     class: egui::ViewportClass,
@@ -2124,10 +2443,23 @@ fn terminal_capacity_message() -> String {
     format!("Terminal view limit reached ({TERMINAL_VIEW_LIMIT}); close a history window")
 }
 
-fn available_terminal_slots(terminals: &BTreeMap<String, RunTerminal>) -> usize {
+fn run_in_live_session(snapshot: &Snapshot, run: &RunSummary) -> bool {
+    // Tree completion does not end the VM boot's terminal/capture ownership.
+    matches!(snapshot.state, VmState::Running | VmState::Stopping)
+        && snapshot.active_vm.as_ref() == Some(&run.vm_id)
+        && !run.boot_id.is_empty()
+        && snapshot.runs.iter().any(|current| {
+            current.id == run.id && current.vm_id == run.vm_id && current.boot_id == run.boot_id
+        })
+}
+
+fn available_terminal_slots(
+    terminals: &BTreeMap<String, RunTerminal>,
+    snapshot: &Snapshot,
+) -> usize {
     let reclaimable = terminals
         .values()
-        .filter(|terminal| !terminal.open && terminal.run.state == RunState::Finalized)
+        .filter(|terminal| !terminal.open && !run_in_live_session(snapshot, &terminal.run))
         .count();
     TERMINAL_VIEW_LIMIT.saturating_sub(terminals.len().saturating_sub(reclaimable))
 }
@@ -2139,19 +2471,16 @@ fn resolve_launch_result(pending: &mut Option<u64>, id: u64, success: bool) {
     }
 }
 
-fn sync_runs(terminals: &mut BTreeMap<String, RunTerminal>, runs: &[RunSummary]) {
-    for run in runs {
+fn sync_runs(terminals: &mut BTreeMap<String, RunTerminal>, snapshot: &Snapshot) {
+    for run in &snapshot.runs {
         if let Some(terminal) = terminals.get_mut(&run.id) {
             terminal.run = run.clone();
-            if run.state == RunState::Finalized && terminal.dirty {
-                terminal.begin_replay();
-            }
-        } else if run.state != RunState::Finalized {
+        } else if run_in_live_session(snapshot, run) {
             if terminals.len() >= TERMINAL_VIEW_LIMIT {
                 let reclaim = terminals
                     .iter()
                     .find(|(_, terminal)| {
-                        !terminal.open && terminal.run.state == RunState::Finalized
+                        !terminal.open && !run_in_live_session(snapshot, &terminal.run)
                     })
                     .map(|(id, _)| id.clone());
                 if let Some(id) = reclaim {
@@ -2163,6 +2492,11 @@ fn sync_runs(terminals: &mut BTreeMap<String, RunTerminal>, runs: &[RunSummary])
                 terminal.dirty = true;
                 terminals.insert(run.id.clone(), terminal);
             }
+        }
+    }
+    for terminal in terminals.values_mut() {
+        if terminal.dirty && !run_in_live_session(snapshot, &terminal.run) {
+            terminal.begin_replay();
         }
     }
 }
@@ -2181,30 +2515,6 @@ fn icon(ui: &mut egui::Ui, icon: &str, tooltip: &str, enabled: bool) -> bool {
     .clicked()
 }
 
-fn workspace_tab(
-    ui: &mut egui::Ui,
-    view: &mut Workspace,
-    target: Workspace,
-    label: &str,
-    enabled: bool,
-) {
-    let response = ui.add_enabled(
-        enabled,
-        egui::Button::new(label)
-            .frame(false)
-            .selected(*view == target)
-            .min_size(egui::vec2(60.0, ui.spacing().interact_size.y)),
-    );
-    if *view == target {
-        ui.painter().line_segment(
-            [response.rect.left_top(), response.rect.right_top()],
-            egui::Stroke::new(2.0_f32, theme::BLUE),
-        );
-    }
-    if response.clicked() {
-        *view = target;
-    }
-}
 fn scroll_dialog(ui: &mut egui::Ui, ctx: &egui::Context, content: impl FnOnce(&mut egui::Ui)) {
     let height = (ctx.screen_rect().height() - 110.0).max(150.0);
     // Measure against the viewport even when restored window geometry is short.
@@ -2238,6 +2548,7 @@ mod tests {
             snapshot: Snapshot::default(),
             selected: None,
             settings: Settings::default(),
+            options: BackendOptions::default(),
             settings_open: false,
             create_open: false,
             config_open: false,
@@ -2245,17 +2556,20 @@ mod tests {
             upload_open: false,
             draft: VmConfig::default(),
             confirm: None,
+            draft_generation: 0,
+            folder_picker: FolderPicker::new(),
             status: String::new(),
+            name_action: None,
             filter: String::new(),
             selected_event: None,
             selected_run: None,
+            archive_selected: false,
+            history_generation: 0,
             run_filter: RunFilter::All,
             terminals: BTreeMap::new(),
             archive: None,
             pending_archive: None,
-            data_root: PathBuf::new(),
             history: Vec::new(),
-            history_path: String::new(),
             archive_generation: 0,
             archive_page: Vec::new(),
             archive_offset: 0,
@@ -2264,7 +2578,8 @@ mod tests {
             archive_pending: false,
             archive_error: None,
             inspector: Inspector::default(),
-            tab: Workspace::Details,
+            layout: WorkspaceLayout::default(),
+            focus_panel: None,
             activity: VecDeque::new(),
             env: exec.env.join("\n"),
             exec,
@@ -2277,6 +2592,7 @@ mod tests {
             started: Instant::now(),
             smoke: None,
             closing: false,
+            submitted: Vec::new(),
         }
     }
 
@@ -2314,6 +2630,7 @@ mod tests {
             terminal_eof: false,
             state: RunState::Running,
             recording_error: None,
+            execution: None,
         }
     }
 
@@ -2418,7 +2735,7 @@ mod tests {
             app.terminals
                 .insert(history.id.clone(), RunTerminal::new(history));
         }
-        assert_eq!(available_terminal_slots(&app.terminals), 0);
+        assert_eq!(available_terminal_slots(&app.terminals, &app.snapshot), 0);
         app.send(Command::Execute(ExecRequest::default()));
         assert!(app.status.contains("close a history window"));
         assert!(app.pending_launch.is_none());
@@ -2447,7 +2764,10 @@ mod tests {
         app.reopen(extra);
         assert_eq!(app.terminals.len(), TERMINAL_VIEW_LIMIT - 1);
         let launched = run("launched");
-        sync_runs(&mut app.terminals, &[launched]);
+        app.snapshot.active_vm = Some("vm".into());
+        app.snapshot.state = VmState::Running;
+        app.snapshot.runs = vec![launched];
+        sync_runs(&mut app.terminals, &app.snapshot);
         assert!(app.terminals["launched"].open);
         assert_eq!(app.terminals.len(), TERMINAL_VIEW_LIMIT);
     }
@@ -2467,7 +2787,10 @@ mod tests {
         app.pending_launch = Some(77);
         app.reopen(closed.clone());
         assert!(!app.terminals[&closed.id].open);
-        sync_runs(&mut app.terminals, &[run("launched")]);
+        app.snapshot.active_vm = Some("vm".into());
+        app.snapshot.state = VmState::Running;
+        app.snapshot.runs = vec![run("launched")];
+        sync_runs(&mut app.terminals, &app.snapshot);
         assert!(app.terminals["launched"].open);
         assert!(!app.terminals.contains_key(&closed.id));
         assert_eq!(app.terminals.len(), TERMINAL_VIEW_LIMIT);
@@ -2536,9 +2859,403 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires explicit X11 native automation; exits after 120 seconds"]
+    fn native_workspace_fixture() {
+        use std::sync::{Arc, Mutex};
+        use winit::platform::x11::EventLoopBuilderExtX11;
+
+        struct Fixture(PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                std::fs::remove_dir_all(&self.0).expect("remove QA fixture");
+            }
+        }
+        #[derive(Default)]
+        struct Evidence {
+            first: Vec<u8>,
+            second: Vec<u8>,
+            archive_selected: bool,
+            first_preserved: bool,
+            second_preserved: bool,
+        }
+        struct QaApp {
+            app: MonitorApp,
+            deadline: Instant,
+            evidence: Arc<Mutex<Evidence>>,
+        }
+        impl eframe::App for QaApp {
+            fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+                let close = ctx.input(|input| input.viewport().close_requested())
+                    || Instant::now() >= self.deadline;
+                if close {
+                    let mut evidence = self.evidence.lock().expect("QA evidence");
+                    *evidence = Evidence::default();
+                    for command in &self.app.submitted {
+                        if let Command::TerminalInput { run_id, data } = command {
+                            match run_id.as_str() {
+                                "terminal-a" => evidence.first.extend(data),
+                                "terminal-b" => evidence.second.extend(data),
+                                _ => {}
+                            }
+                        }
+                    }
+                    evidence.archive_selected = self.app.archive_selected
+                        && self.app.selected_run.as_deref() == Some("saved-run")
+                        && !self.app.archive_page.is_empty()
+                        && self.app.snapshot.events.len() == 1;
+                    evidence.first_preserved = self.app.terminals["terminal-a"]
+                        .terminal
+                        .contents()
+                        .contains("TERMINAL A RETAINED");
+                    evidence.second_preserved = self.app.terminals["terminal-b"]
+                        .terminal
+                        .contents()
+                        .contains("TERMINAL B RETAINED");
+                    self.app.snapshot.active_vm = None;
+                    self.app.snapshot.state = VmState::Stopped;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                eframe::App::update(&mut self.app, ctx, frame);
+            }
+        }
+        let fixture = Fixture(std::env::temp_dir().join(format!(
+                "antinomie-native-qa-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("clock")
+                    .as_nanos()
+            )));
+        std::fs::create_dir_all(&fixture.0).expect("QA directory");
+        let mut first = run("terminal-a");
+        first.request.path = "/bin/terminal-a".into();
+        first.directory = fixture.0.clone();
+        first.execution = Some(antinomie_monitor_core::RunExecution {
+            generation: 1,
+            live_task_count: 2,
+            pending_async_count: 1,
+            flags: 1,
+            root_wait_status: Some(7 << 8),
+            root_exit: Some(WaitStatus::Exited { code: 7 }),
+            async_loss_count: 0,
+            total_task_count: 3,
+        });
+        let mut second = run("terminal-b");
+        second.request.path = "/bin/terminal-b".into();
+        second.pid = 43;
+        second.root_task_cookie = 8;
+        second.directory = fixture.0.clone();
+        let mut saved = run("saved-run");
+        saved.request.path = "/usr/bin/saved-program".into();
+        saved.request.args = vec!["--output".into(), "/tmp/path with spaces".into()];
+        saved.request.env.push("QA=value with spaces".into());
+        saved.root_task_cookie = 9;
+        saved.state = RunState::Finished;
+        saved.terminal_eof = true;
+        saved.directory = fixture.0.clone();
+        saved.boot_id = "previous-boot".into();
+        saved.execution = Some(antinomie_monitor_core::RunExecution {
+            generation: 1,
+            live_task_count: 0,
+            pending_async_count: 0,
+            flags: 7,
+            root_wait_status: Some(0),
+            root_exit: Some(WaitStatus::Exited { code: 0 }),
+            async_loss_count: 0,
+            total_task_count: 1,
+        });
+        let mut entry = event(1, 0);
+        entry.root_task_cookie = 9;
+        entry.syscall_nr = 257;
+        entry.syscall_name = "openat".into();
+        entry.args = Some([u64::MAX - 99, 0x1000, 0x80002 | (1 << 60), 0, 0, 0]);
+        entry.fields.push(antinomie_monitor_core::FieldSummary {
+            object_id: 1,
+            key: "path".into(),
+            layout: "char[]".into(),
+            logical_len: Some(20),
+            captured_len: 20,
+            status: Some(0),
+            capture_error: 0,
+            complete: true,
+            preview: b"/tmp/native-fixture\0".to_vec(),
+            raw_path: None,
+            ranges: vec![(0, 20)],
+        });
+        let mut exit = entry.clone();
+        exit.phase = 2;
+        exit.args = None;
+        exit.result = Some(3);
+        std::fs::write(
+            fixture.0.join("manifest.json"),
+            serde_json::to_vec(
+                &serde_json::json!({"run":saved,"terminal_rows":4,"terminal_cols":40}),
+            )
+            .expect("manifest"),
+        )
+        .expect("write manifest");
+        std::fs::write(
+            fixture.0.join("events.json"),
+            serde_json::to_vec(&vec![entry.clone(), exit.clone()]).expect("events"),
+        )
+        .expect("write events");
+        let mut raw = Vec::new();
+        for event in [entry, exit] {
+            for fragment in [1, 5] {
+                let mut body = vec![0; if fragment == 1 { 120 } else { 32 }];
+                if fragment == 1 {
+                    if let Some(args) = event.args {
+                        for (index, value) in args.iter().enumerate() {
+                            body[index * 8..index * 8 + 8].copy_from_slice(&value.to_le_bytes());
+                        }
+                        body[48] = 4;
+                    }
+                    if let Some(result) = event.result {
+                        body[49] = 1;
+                        body[56..64].copy_from_slice(&result.to_le_bytes());
+                    }
+                }
+                let mut packet = vec![0; 136];
+                packet[..4].copy_from_slice(b"ANTT");
+                packet[4..6].copy_from_slice(&1u16.to_le_bytes());
+                packet[6..8].copy_from_slice(&1u16.to_le_bytes());
+                packet[8..10].copy_from_slice(&136u16.to_le_bytes());
+                packet[10..12].copy_from_slice(&1u16.to_le_bytes());
+                packet[12..16].copy_from_slice(&(136u32 + body.len() as u32).to_le_bytes());
+                packet[20..24].copy_from_slice(&1u32.to_le_bytes());
+                packet[24..32].copy_from_slice(&event.stream_id.to_le_bytes());
+                packet[32..40].copy_from_slice(&event.task_cookie.to_le_bytes());
+                packet[40..48].copy_from_slice(&event.call_id.to_le_bytes());
+                packet[48..56]
+                    .copy_from_slice(&(event.event_seq + u64::from(event.phase)).to_le_bytes());
+                packet[56..64].copy_from_slice(&(raw.len() as u64).to_le_bytes());
+                packet[64..72].copy_from_slice(&event.timestamp_ns.to_le_bytes());
+                packet[76..80].copy_from_slice(&event.tid.to_le_bytes());
+                packet[88..96].copy_from_slice(&event.syscall_nr.to_le_bytes());
+                packet[96..98].copy_from_slice(&1u16.to_le_bytes());
+                packet[98] = event.phase;
+                packet[99] = fragment;
+                packet[120..124].copy_from_slice(&(body.len() as u32).to_le_bytes());
+                packet[128..136].copy_from_slice(&event.root_task_cookie.to_le_bytes());
+                packet.extend(body);
+                raw.extend((packet.len() as u32).to_le_bytes());
+                raw.extend(packet);
+            }
+        }
+        std::fs::write(fixture.0.join("telemetry.raw"), raw).expect("write raw recording");
+        let output = b"SAVED TERMINAL HISTORY\r\n";
+        let mut journal = vec![1];
+        journal.extend((output.len() as u32).to_le_bytes());
+        journal.extend(output);
+        std::fs::write(fixture.0.join("terminal.journal"), journal).expect("write journal");
+        std::fs::write(fixture.0.join("terminal-screen.ansi"), output).expect("write screen");
+        let evidence = Arc::new(Mutex::new(Evidence::default()));
+        let finish = Arc::clone(&evidence);
+        eframe::run_native(
+            "Antinomie Native QA",
+            eframe::NativeOptions {
+                viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 820.0]),
+                persist_window: false,
+                event_loop_builder: Some(Box::new(|builder| {
+                    builder.with_any_thread(true);
+                })),
+                ..Default::default()
+            },
+            Box::new(move |cc| {
+                theme::install(&cc.egui_ctx);
+                let mut app = app();
+                app.selected = Some("vm".into());
+                app.snapshot.active_vm = Some("vm".into());
+                app.snapshot.state = VmState::Running;
+                app.snapshot.vms = vec![
+                    VmConfig {
+                        id: "vm".into(),
+                        name: "Native workspace QA".into(),
+                        ..VmConfig::default()
+                    },
+                    VmConfig {
+                        id: "other-vm".into(),
+                        name: "Other VM".into(),
+                        ..VmConfig::default()
+                    },
+                ];
+                app.snapshot.runs = vec![first.clone(), second.clone()];
+                app.snapshot.events = vec![event(1, 0)];
+                app.history = vec![saved];
+                let mut a = RunTerminal::new(first);
+                a.terminal.process(b"TERMINAL A RETAINED\r\n$ ");
+                app.terminals.insert(a.run.id.clone(), a);
+                let mut b = RunTerminal::new(second);
+                b.terminal.process(b"TERMINAL B RETAINED\r\n$ ");
+                app.terminals.insert(b.run.id.clone(), b);
+                app.archive = Some(ArchiveWorker::new().expect("archive worker"));
+                Ok(Box::new(QaApp {
+                    app,
+                    deadline: Instant::now() + Duration::from_secs(120),
+                    evidence: finish,
+                }))
+            }),
+        )
+        .expect("native QA window");
+        let evidence = evidence.lock().expect("QA evidence");
+        assert_eq!(
+            evidence.first, b"qa-a\r",
+            "input must have one terminal-a owner"
+        );
+        assert_eq!(
+            evidence.second, b"qa-b\r",
+            "input must have one terminal-b owner"
+        );
+        assert!(
+            evidence.archive_selected,
+            "double-click saved history while live snapshot remains"
+        );
+        assert!(
+            evidence.first_preserved && evidence.second_preserved,
+            "panel moves and close/reopen preserve terminal parsers"
+        );
+    }
+
+    #[test]
+    fn history_answers_from_another_vm_cannot_replace_selected_vm() {
+        let mut app = app();
+        app.selected = Some("selected".into());
+        let mut current = run("current");
+        current.vm_id = "selected".into();
+        app.history = vec![current];
+        app.handle_archive_answer(Answer::ListVm {
+            vm_id: "other".into(),
+            generation: app.history_generation,
+            result: Ok(vec![run("stale")]),
+        });
+        assert_eq!(app.history[0].id, "current");
+        app.refresh_history();
+        assert!(
+            matches!(&app.pending_archive, Some(Request::ListVm { vm_id, .. }) if vm_id == "selected")
+        );
+        let old_generation = app.history_generation;
+        app.refresh_history();
+        app.handle_archive_answer(Answer::ListVm {
+            vm_id: "selected".into(),
+            generation: old_generation,
+            result: Ok(vec![run("outdated-roots")]),
+        });
+        assert_eq!(app.history[0].id, "current");
+    }
+
+    #[test]
+    fn selected_vm_hides_another_vms_live_trace_and_finished_runs_are_past() {
+        let mut app = app();
+        app.selected = Some("other-vm".into());
+        app.snapshot.active_vm = Some("vm".into());
+        app.snapshot.events = vec![event(1, 0)];
+        app.snapshot.runs = vec![run("current")];
+        assert!(app.invocations().is_empty());
+        app.selected = Some("vm".into());
+        assert_eq!(app.invocations().len(), 1);
+        assert!(app.live_history_run(&app.snapshot.runs[0]));
+        app.snapshot.runs[0].state = RunState::Finished;
+        assert!(!app.live_history_run(&app.snapshot.runs[0]));
+    }
+
+    #[test]
+    fn async_only_row_keeps_missing_phases_and_renders_observation_loss() {
+        let mut observed = event(3, 2);
+        observed.args = None;
+        observed.result = Some(-61);
+        observed.fields = vec![antinomie_monitor_core::FieldSummary {
+            object_id: 1,
+            key: "async.stage".into(),
+            layout: "u64".into(),
+            logical_len: Some(8),
+            captured_len: 8,
+            status: Some(0),
+            capture_error: 0,
+            complete: true,
+            preview: 6u64.to_le_bytes().to_vec(),
+            raw_path: None,
+            ranges: vec![(0, 8)],
+        }];
+        let mut row = InvocationSummary {
+            stream_id: observed.stream_id,
+            task_cookie: observed.task_cookie,
+            call_id: observed.call_id,
+            entry: None,
+            exit: None,
+            async_events: vec![observed.clone()],
+        };
+        assert_eq!(trace::representative(&row).unwrap().tid, 42);
+        assert!(trace::info(&row)
+            .contains("missing Entry; missing Exit; Async: Observation unavailable"));
+        assert!(!trace::info(&row).contains("Canceled"));
+        row.async_events[0].fields[0].preview = 99u64.to_le_bytes().to_vec();
+        assert!(trace::info(&row).contains("Unknown stage 99"));
+        row.async_events[0] = observed;
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut inspector = trace::Inspector::default();
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                inspector.show(ui, Some(&row), false);
+            });
+        });
+        assert!(texts(&output).iter().any(|(label, _)| label == "Async (1)"));
+        assert!(row.entry.is_none() && row.exit.is_none());
+        inspector.selection = Some(trace::Selection::AsyncCaptured {
+            event_seq: 3,
+            object_id: 1,
+        });
+        assert_eq!(inspector.field(&row).unwrap().key, "async.stage");
+    }
+
+    #[test]
+    fn saved_trace_selection_never_replaces_live_collector_or_terminal() {
+        let mut app = app();
+        let live = run("live");
+        app.snapshot.active_vm = Some("vm".into());
+        app.snapshot.state = VmState::Running;
+        app.snapshot.runs = vec![live.clone()];
+        app.snapshot.events = vec![event(1, 0)];
+        sync_runs(&mut app.terminals, &app.snapshot);
+        app.select_archive_run("live".into());
+        assert!(app.offline_run().is_some());
+        assert!(matches!(
+            &app.pending_archive,
+            Some(Request::Invocations { .. })
+        ));
+        assert_eq!(app.snapshot.events.len(), 1);
+        assert_eq!(app.snapshot.runs[0].state, RunState::Running);
+        assert!(app.terminals["live"].open && app.terminals["live"].interactive());
+    }
+
+    #[test]
+    fn root_exit_is_independent_of_full_tree_completion_and_legacy_state() {
+        let mut run = run("descendants");
+        run.execution = Some(antinomie_monitor_core::RunExecution {
+            generation: 2,
+            live_task_count: 3,
+            pending_async_count: 1,
+            flags: 1,
+            root_wait_status: Some(7 << 8),
+            root_exit: Some(WaitStatus::Exited { code: 7 }),
+            async_loss_count: 0,
+            total_task_count: 4,
+        });
+        assert_eq!(run_status(&run), "Running");
+        assert_eq!(root_exit(&run), "Exit 7");
+        assert!(execution_detail(&run).contains("3 live tasks; 1 pending async"));
+        run.execution = None;
+        run.state = RunState::Finalized;
+        assert_eq!(root_exit(&run), "Unknown");
+        assert_eq!(run_status(&run), "Recording ended");
+    }
+
+    #[test]
     fn finalized_dirty_run_and_reopen_replay_archive_with_fresh_generation() {
         let mut app = app();
         let mut finished = run("finished");
+        app.snapshot.active_vm = Some("vm".into());
+        app.snapshot.state = VmState::Running;
         app.snapshot.runs.push(finished.clone());
         app.reopen(finished.clone());
         app.terminals
@@ -2546,7 +3263,10 @@ mod tests {
             .unwrap()
             .output(3, b"missing tail", false);
         finished.state = RunState::Finalized;
-        sync_runs(&mut app.terminals, &[finished.clone()]);
+        app.snapshot.active_vm = None;
+        app.snapshot.state = VmState::Stopped;
+        app.snapshot.runs = vec![finished.clone()];
+        sync_runs(&mut app.terminals, &app.snapshot);
         let terminal = &app.terminals["finished"];
         assert!(!terminal.dirty);
         assert_eq!(terminal.replay_offset, Some(0));
@@ -2574,15 +3294,139 @@ mod tests {
     }
 
     #[test]
+    fn past_boot_finished_and_stopped_terminals_reclaim_closed_slots() {
+        for state in [RunState::Finished, RunState::Stopped] {
+            let mut app = app();
+            for index in 0..TERMINAL_VIEW_LIMIT {
+                let mut past = run(&format!("past-{index}"));
+                past.state = state.clone();
+                past.boot_id = "previous-boot".into();
+                app.terminals
+                    .insert(past.id.clone(), RunTerminal::new(past));
+            }
+            let closed = app.terminals["past-0"].run.clone();
+            app.terminals.get_mut(&closed.id).unwrap().close_view();
+            app.snapshot.active_vm = Some("vm".into());
+            app.snapshot.state = VmState::Running;
+            app.snapshot.runs = vec![run("new-launch")];
+            assert_eq!(available_terminal_slots(&app.terminals, &app.snapshot), 1);
+            assert!(app.launch_admission().is_ok());
+            app.pending_launch = Some(77);
+            app.reopen(closed.clone());
+            assert!(!app.terminals[&closed.id].open);
+            sync_runs(&mut app.terminals, &app.snapshot);
+            assert!(!app.terminals.contains_key(&closed.id));
+            assert!(app.terminals["new-launch"].open);
+            assert_eq!(app.terminals.len(), TERMINAL_VIEW_LIMIT);
+        }
+    }
+
+    #[test]
+    fn ended_boot_finished_and_stopped_runs_reopen_from_archive() {
+        for state in [RunState::Finished, RunState::Stopped] {
+            let mut app = app();
+            let mut past = run("past");
+            past.state = state;
+            app.snapshot.runs = vec![past.clone()];
+            let mut terminal = RunTerminal::new(past.clone());
+            terminal.terminal.process(b"outdated screen");
+            terminal.dirty = true;
+            terminal.close_view();
+            app.terminals.insert(past.id.clone(), terminal);
+            sync_runs(&mut app.terminals, &app.snapshot);
+            let previous_generation = app.terminals["past"].generation;
+            app.reopen(past);
+            let terminal = &app.terminals["past"];
+            assert!(terminal.open && !terminal.dirty);
+            assert_eq!(terminal.replay_offset, Some(0));
+            assert!(terminal.generation > previous_generation);
+            assert!(!terminal.terminal.contents().contains("outdated screen"));
+            app.select_run(Some("past".into()));
+            assert!(app.offline_run().is_some());
+            assert!(matches!(
+                app.pending_archive,
+                Some(Request::Invocations { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn current_boot_finished_and_stopped_terminals_preserve_live_session_state() {
+        for state in [RunState::Finished, RunState::Stopped] {
+            let mut app = app();
+            let mut current = run("current");
+            current.state = state;
+            app.snapshot.active_vm = Some("vm".into());
+            app.snapshot.state = VmState::Running;
+            app.snapshot.runs = vec![current.clone()];
+            app.reopen(current.clone());
+            app.terminals
+                .get_mut("current")
+                .unwrap()
+                .terminal
+                .process(b"retained current screen");
+            app.terminals.get_mut("current").unwrap().close_view();
+            for index in 1..TERMINAL_VIEW_LIMIT {
+                let past = run(&format!("open-history-{index}"));
+                app.terminals
+                    .insert(past.id.clone(), RunTerminal::new(past));
+            }
+            assert_eq!(available_terminal_slots(&app.terminals, &app.snapshot), 0);
+            assert!(app.launch_admission().is_err());
+            let generation = app.terminals["current"].generation;
+            app.pending_launch = Some(77);
+            app.reopen(current);
+            sync_runs(&mut app.terminals, &app.snapshot);
+            let terminal = &app.terminals["current"];
+            assert!(terminal.open && terminal.dirty);
+            assert_eq!(terminal.generation, generation);
+            assert!(terminal.replay_offset.is_none());
+            assert!(terminal
+                .terminal
+                .contents()
+                .contains("retained current screen"));
+            app.select_run(Some("current".into()));
+            assert!(app.offline_run().is_none());
+        }
+    }
+
+    #[test]
+    fn live_terminal_ownership_requires_matching_vm_boot_and_attached_session() {
+        let current = run("current");
+        let mut snapshot = Snapshot {
+            active_vm: Some("vm".into()),
+            state: VmState::Running,
+            runs: vec![current.clone()],
+            ..Snapshot::default()
+        };
+        assert!(run_in_live_session(&snapshot, &current));
+        let mut past = current.clone();
+        past.boot_id = "previous-boot".into();
+        assert!(!run_in_live_session(&snapshot, &past));
+        past = current.clone();
+        past.vm_id = "other-vm".into();
+        assert!(!run_in_live_session(&snapshot, &past));
+        snapshot.state = VmState::Starting;
+        assert!(!run_in_live_session(&snapshot, &current));
+        snapshot.state = VmState::Stopping;
+        assert!(run_in_live_session(&snapshot, &current));
+        snapshot.active_vm = None;
+        assert!(!run_in_live_session(&snapshot, &current));
+    }
+
+    #[test]
     fn snapshot_recovers_missing_launch_notification_and_preserves_closed_views() {
         let mut app = app();
         let run = run("missed");
-        sync_runs(&mut app.terminals, std::slice::from_ref(&run));
+        app.snapshot.active_vm = Some("vm".into());
+        app.snapshot.state = VmState::Running;
+        app.snapshot.runs = vec![run];
+        sync_runs(&mut app.terminals, &app.snapshot);
         assert!(app.terminals["missed"].open && app.terminals["missed"].dirty);
         let terminal = app.terminals.get_mut("missed").unwrap();
         terminal.output(1, b"kept", false);
         terminal.close_view();
-        sync_runs(&mut app.terminals, &[run]);
+        sync_runs(&mut app.terminals, &app.snapshot);
         assert!(!app.terminals["missed"].open);
         assert_eq!(app.terminals["missed"].terminal.contents(), "kept");
         assert_eq!(app.terminals.len(), 1);
@@ -2652,6 +3496,8 @@ mod tests {
     #[test]
     fn history_selection_keeps_live_snapshot_and_stale_answers_are_ignored() {
         let mut app = app();
+        app.snapshot.active_vm = Some("vm".into());
+        app.snapshot.state = VmState::Running;
         app.snapshot.events = vec![event(1, 0)];
         app.snapshot.runs.push(run("live"));
         let mut old = run("past");
@@ -2857,6 +3703,71 @@ mod tests {
                 "click on {label} must select its row"
             );
         }
+    }
+
+    #[test]
+    fn double_click_history_text_opens_archive_and_metadata_stays_in_panel() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut app = app();
+        app.selected = Some("vm".into());
+        let mut saved = run("saved");
+        saved.state = RunState::Finished;
+        saved.request.path = "/usr/bin/history-row".into();
+        saved.request.env = vec!["LONG=value with spaces".into()];
+        app.history = vec![saved];
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 500.0));
+        let draw = |app: &mut MonitorApp, events: Vec<egui::Event>, time: f64| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    time: Some(time),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| app.run_history(ui));
+                },
+            )
+        };
+        for index in 0..3 {
+            let _ = draw(&mut app, vec![], f64::from(index) * 0.01);
+        }
+        let output = draw(&mut app, vec![], 0.03);
+        let pos = texts(&output)
+            .into_iter()
+            .find(|(label, _)| label == "/usr/bin/history-row")
+            .expect("history row text")
+            .1
+            .center();
+        let mut time = 0.04;
+        let mut output = output;
+        for pressed in [true, false, true, false] {
+            output = draw(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                time,
+            );
+            time += 0.05;
+        }
+        assert!(app.archive_selected && app.selected_run.as_deref() == Some("saved"));
+        assert!(matches!(
+            app.pending_archive,
+            Some(Request::Invocations { .. })
+        ));
+        let metadata = texts(&output)
+            .into_iter()
+            .find(|(label, _)| label == "Working directory")
+            .expect("metadata visible below history rows");
+        assert!(metadata.1.bottom() < screen.bottom());
     }
 
     #[test]

@@ -1,10 +1,20 @@
 //! Paired invocation presentation and inspectors for actually captured content.
 use crate::theme;
-use antinomie_monitor_core::{FieldSummary, InvocationSummary};
+use antinomie_monitor_core::{syscalls, FieldSummary, InvocationSummary};
 use eframe::egui::{self, RichText};
 use std::collections::BTreeMap;
 
 pub(crate) type InvocationKey = (u64, u64, u64);
+
+pub(crate) fn representative(
+    invocation: &InvocationSummary,
+) -> Option<&antinomie_monitor_core::EventSummary> {
+    invocation
+        .entry
+        .as_ref()
+        .or(invocation.exit.as_ref())
+        .or(invocation.async_events.first())
+}
 
 pub(crate) fn key(invocation: &InvocationSummary) -> InvocationKey {
     (
@@ -19,6 +29,7 @@ pub(crate) enum Selection {
     Argument { phase: u8, index: usize, value: u64 },
     Return(i64),
     Captured { phase: u8, object_id: u32 },
+    AsyncCaptured { event_seq: u64, object_id: u32 },
 }
 
 #[derive(Default)]
@@ -70,6 +81,19 @@ impl Inspector {
     }
 
     pub(crate) fn field<'a>(&self, invocation: &'a InvocationSummary) -> Option<&'a FieldSummary> {
+        if let Some(Selection::AsyncCaptured {
+            event_seq,
+            object_id,
+        }) = &self.selection
+        {
+            return invocation
+                .async_events
+                .iter()
+                .find(|event| event.event_seq == *event_seq)?
+                .fields
+                .iter()
+                .find(|field| field.object_id == *object_id);
+        }
         let Selection::Captured { phase, object_id } = self.selection.as_ref()? else {
             return None;
         };
@@ -143,7 +167,12 @@ impl Inspector {
                                         ui.colored_label(theme::MUTED, "Saved Entry arguments");
                                     }
                                     if let Some(args) = args {
-                                        for (index, value) in args.into_iter().enumerate() {
+                                        let arg_count = syscalls::syscall(event.syscall_nr)
+                                            .and_then(|info| info.arg_count)
+                                            .map_or(6, usize::from);
+                                        for (index, value) in
+                                            args.into_iter().enumerate().take(arg_count)
+                                        {
                                             let selected = self.selection
                                                 == Some(Selection::Argument {
                                                     phase,
@@ -157,6 +186,7 @@ impl Inspector {
                                             .id_salt((key(invocation), phase, index))
                                             .default_open(false)
                                             .show(ui, |ui| {
+                                                show_flags(ui, event.syscall_nr, index, value);
                                                 if ui
                                                     .selectable_label(selected, "Numeric value")
                                                     .clicked()
@@ -199,6 +229,70 @@ impl Inspector {
                                     }
                                 });
                         }
+                        egui::CollapsingHeader::new(format!(
+                            "Async ({})",
+                            invocation.async_events.len()
+                        ))
+                        .id_salt((key(invocation), "async"))
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            if invocation.async_events.is_empty() {
+                                ui.colored_label(theme::MUTED, "No correlated async observations");
+                            }
+                            for event in &invocation.async_events {
+                                egui::CollapsingHeader::new(format!(
+                                    "{} / {} / TID {} / CPU {}",
+                                    async_stage(event),
+                                    event.event_seq,
+                                    event.tid,
+                                    event.cpu
+                                ))
+                                .id_salt(event.event_seq)
+                                .show(ui, |ui| {
+                                    for issue in &event.issues {
+                                        ui.colored_label(theme::WARN, issue);
+                                    }
+                                    if let Some(result) = async_scalar(event, "async.result")
+                                        .map(|value| value as i64)
+                                        .or(event.result)
+                                    {
+                                        let label = match async_scalar(event, "async.stage") {
+                                            Some(6) => "Observation error",
+                                            Some(4 | 5) => "Operation result",
+                                            Some(3) => "Submission rejection",
+                                            _ => "Reported value",
+                                        };
+                                        ui.label(format!("{label}: {result}"));
+                                    }
+                                    for field in &event.fields {
+                                        if ui
+                                            .selectable_label(
+                                                self.selection
+                                                    == Some(Selection::AsyncCaptured {
+                                                        event_seq: event.event_seq,
+                                                        object_id: field.object_id,
+                                                    }),
+                                                format!(
+                                                    "{} / Captured bytes ({} bytes)",
+                                                    field.key, field.captured_len
+                                                ),
+                                            )
+                                            .clicked()
+                                        {
+                                            self.clear();
+                                            self.selection = Some(Selection::AsyncCaptured {
+                                                event_seq: event.event_seq,
+                                                object_id: field.object_id,
+                                            });
+                                            self.data = covered_preview(field).to_vec();
+                                            self.data_offset = 0;
+                                            self.byte_index = 0;
+                                            self.numeric_width = 1;
+                                        }
+                                    }
+                                });
+                            }
+                        });
                     });
             });
         let mut read = None;
@@ -209,22 +303,27 @@ impl Inspector {
                     .id_salt("value_inspector")
                     .auto_shrink([false, false])
                     .show(ui, |ui| match self.selection.as_ref() {
-                        Some(Selection::Argument { value, .. }) => {
+                        Some(Selection::Argument { value, index, .. }) => {
                             ui.strong("Numeric value");
+                            if let Some(event) =
+                                invocation.entry.as_ref().or(invocation.exit.as_ref())
+                            {
+                                show_flags(ui, event.syscall_nr, *index, *value);
+                            }
                             numeric(ui, *value, 8);
                         }
                         Some(Selection::Return(value)) => {
                             ui.strong("Return value");
                             numeric(ui, *value as u64, 8);
                         }
-                        Some(Selection::Captured { .. }) => {
+                        Some(Selection::Captured { .. } | Selection::AsyncCaptured { .. }) => {
                             let Some(field) = self.field(invocation) else {
                                 ui.label("Captured field unavailable");
                                 return;
                             };
                             ui.strong(&field.key);
                             ui.label(format!(
-                                "{} / {} captured",
+                                "Captured bytes ({} bytes); logical length {} bytes",
                                 field.captured_len,
                                 field
                                     .logical_len
@@ -388,14 +487,14 @@ fn field_tree(
                                                 phase,
                                                 object_id: field.object_id,
                                             }),
-                                        "Captured bytes",
+                                        format!("Captured bytes ({} bytes)", field.captured_len),
                                     )
                                     .clicked()
                                 {
                                     inspector.select_field(phase, field);
                                 }
                                 ui.label(format!(
-                                    "{} captured; {}",
+                                    "{} bytes captured; {}",
                                     field.captured_len,
                                     if field.complete {
                                         "complete"
@@ -418,6 +517,9 @@ fn field_tree(
 }
 
 pub(crate) fn argument_name(nr: u64, index: usize) -> &'static str {
+    if let Some(argument) = syscalls::syscall(nr).and_then(|info| info.arguments.get(index)) {
+        return &argument.name;
+    }
     const GENERIC: [&str; 6] = ["first", "second", "third", "fourth", "fifth", "sixth"];
     let names: &[&str] = match nr {
         0 | 1 => &["fd", "buf", "count"],
@@ -446,6 +548,37 @@ pub(crate) fn argument_name(nr: u64, index: usize) -> &'static str {
         _ => &[],
     };
     names.get(index).copied().unwrap_or(GENERIC[index.min(5)])
+}
+
+fn show_flags(ui: &mut egui::Ui, number: u64, index: usize, value: u64) {
+    if let Some(flags) = syscalls::argument_flags(number, index, value) {
+        ui.label(format!("{} (raw {value:#x})", flags.names.join(" | ")));
+        if flags.unknown_bits != 0 {
+            ui.colored_label(
+                theme::WARN,
+                format!("Unknown bits: {:#x}", flags.unknown_bits),
+            );
+        }
+    }
+}
+
+fn async_scalar(event: &antinomie_monitor_core::EventSummary, key: &str) -> Option<u64> {
+    let field = event.fields.iter().find(|field| field.key == key)?;
+    let data: [u8; 8] = covered_preview(field).get(..8)?.try_into().ok()?;
+    Some(u64::from_le_bytes(data))
+}
+
+fn async_stage(event: &antinomie_monitor_core::EventSummary) -> String {
+    match async_scalar(event, "async.stage") {
+        Some(1) => "Submission".into(),
+        Some(2) => "Accepted".into(),
+        Some(3) => "Rejected".into(),
+        Some(4) => "Completion".into(),
+        Some(5) => "Canceled".into(),
+        Some(6) => "Observation unavailable".into(),
+        Some(stage) => format!("Unknown stage {stage}"),
+        None => "Unknown stage".into(),
+    }
 }
 
 pub(crate) fn field_argument(nr: u64, key: &str) -> Option<usize> {
@@ -566,7 +699,7 @@ pub(crate) fn preview(field: &FieldSummary) -> String {
 }
 
 pub(crate) fn info(invocation: &InvocationSummary) -> String {
-    let Some(event) = invocation.entry.as_ref().or(invocation.exit.as_ref()) else {
+    let Some(event) = representative(invocation) else {
         return "Missing phases".into();
     };
     let args = invocation.entry.as_ref().and_then(|event| event.args);
@@ -621,6 +754,18 @@ pub(crate) fn info(invocation: &InvocationSummary) -> String {
     if invocation.exit.is_none() {
         content.push_str("; missing Exit");
     }
+    if !invocation.async_events.is_empty() {
+        content.push_str("; Async: ");
+        content.push_str(
+            &invocation
+                .async_events
+                .iter()
+                .take(3)
+                .map(async_stage)
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+    }
     for event in invocation.entry.iter().chain(invocation.exit.iter()) {
         if !event.complete || !event.issues.is_empty() {
             content.push_str(&format!(
@@ -632,7 +777,7 @@ pub(crate) fn info(invocation: &InvocationSummary) -> String {
             }
         }
     }
-    content
+    content.trim_start_matches("; ").to_owned()
 }
 
 pub(crate) fn numeric_formats(value: u64, width: usize) -> Vec<(&'static str, String)> {

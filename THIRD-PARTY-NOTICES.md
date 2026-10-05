@@ -35,6 +35,11 @@ their notices does not authorize removal of those requirements.
 
 ## Other components and release gate
 
+The native workspace uses `egui_dock 0.16.0` under MIT. Its unmodified crate
+notice is retained in [egui-dock-MIT.txt](LICENSES/third-party/egui-dock-MIT.txt).
+The adapter for separate operating-system viewports is original project code;
+the library's ordinary floating windows alone are not native windows.
+
 The recording browser uses `rusqlite 0.40.2` and `libsqlite3-sys 0.38.2`;
 their identical MIT copyright/permission text is retained in
 [rusqlite-MIT.txt](LICENSES/third-party/rusqlite-MIT.txt), copied from both

@@ -33,6 +33,49 @@ on 2026-10-01. Core workers/review use gpt-6.1-sol; bounded support may use Luna
 
 ## Ownership
 
+### Accepted ANT-T0009 Update
+
+The user approved these changes on 2026-10-06. The task record is
+`Agents/Tasks/ANT-T0009 - Full Native Syscalls and Dockable Workspace.md` in
+the documentation checkout. Earlier 30-syscall requirements remain historical,
+not the completion target for this update.
+
+- Cover all 375 named native `common`/`64` syscall slots in Linux 6.12.94.
+  Use the pinned syscall table and checked argument/schema inventory; exclude
+  x32/i386 from native decoding. Empty/ni entry points and disabled features
+  remain explicit. Raw metadata expansion alone is not full pointer decoding.
+- Capture asynchronous submissions/completions, including native io_uring/AIO
+  observation. Use request and originating-run identities, bounded staging,
+  explicit losses and safe callback lifetimes. V7 remains task-context-only
+  and unchanged. Unknown multiplexed/device variants retain raw arguments and
+  explicit Unsupported decoder status; do not guess pointer extents.
+- Add kernel-owned queryable full-tree run status; root wait status is separate
+  from surviving descendants and pending async work. Stop acknowledgement still
+  means signal requests, not termination. Legacy/unknown state is not Finished.
+- VM-scoped Run History replaces the sidebar program list. It displays launch
+  path/name, argv, cwd, environment, UID/GID/stable identity and truthful status.
+  Double-click selects that run's syscall archive independently of collection.
+- Independently chosen disk and recording locations; durable per-VM paths and
+  preserved existing data. Folder changes never silently move active files.
+- Installed-base dropdown initially labelled Linux 6.12.94; ordinary startup
+  must work without disposable build inputs after a verified base import.
+- Display captured lengths with units, e.g. Captured bytes (52 bytes). Decode
+  argument flags with named masks/enums/composites, raw values and unknown bits.
+- VM context actions: Rename, Open Directory, Delete, Duplicate and Settings.
+  Duplication requires a stopped source, copies its current disk independently
+  with a new identity and omits history. Destructive actions are confirmed.
+- Syscall Trace, Run History, Details, Activity and program terminals can detach
+  into native windows and dock/merge back. VM list stays fixed; panel movement
+  cannot duplicate transport/readers or terminate programs.
+- Static syscall exercise ELF and host verifier: safe/reversible disposable
+  resources, bounded children/timeouts/cleanup, explicit PASS/FAIL/SKIP and
+  incomplete-capture outcomes. Do not execute irreversible guest/host changes.
+
+Implementation is split into checked contracts and family slices, with bounded
+kernel/core/UI ownership and an independent review gate. Do not claim the whole
+task delivered while native content/async cases remain unimplemented. Existing
+archives and per-VM disks are compatibility inputs, not disposable fixtures.
+
 ### Accepted ANT-T0008 Update
 
 The user approved these changes on 2026-10-05:
