@@ -63,7 +63,7 @@ fn wait_command(
         while let Some(notification) = backend.try_recv() {
             match notification {
                 Notification::Snapshot(s) => *snapshot = s,
-                Notification::Terminal(data) => terminal.extend(data),
+                Notification::Terminal { data, .. } => terminal.extend(data),
                 Notification::CommandResult {
                     id: reply,
                     success,
@@ -92,13 +92,17 @@ fn terminal_until(
         if terminal.windows(marker.len()).any(|w| w == marker) {
             return Ok(());
         }
-        backend.send(Command::TerminalRead)?;
+        if let Some(run) = snapshot.runs.last() {
+            backend.send(Command::TerminalRead {
+                run_id: run.id.clone(),
+            })?;
+        }
         let until = Instant::now() + Duration::from_millis(100);
         while Instant::now() < until {
             while let Some(n) = backend.try_recv() {
                 match n {
                     Notification::Snapshot(s) => *snapshot = s,
-                    Notification::Terminal(data) => terminal.extend(data),
+                    Notification::Terminal { data, .. } => terminal.extend(data),
                     Notification::CommandResult {
                         success: false,
                         message,
@@ -220,7 +224,10 @@ fn run() -> Result<(), String> {
     }))?;
     wait_command(&backend, id, &mut snapshot, &mut terminal, 20)?;
     terminal_until(&backend, b"READY", &mut snapshot, &mut terminal)?;
-    let id = backend.send(Command::TerminalInput(b"ping\n".to_vec()))?;
+    let id = backend.send(Command::TerminalInput {
+        run_id: snapshot.runs.last().ok_or("run missing")?.id.clone(),
+        data: b"ping\n".to_vec(),
+    })?;
     wait_command(&backend, id, &mut snapshot, &mut terminal, 20)?;
     terminal_until(&backend, b"PASS", &mut snapshot, &mut terminal)?;
     let id = backend.send(Command::RecorderStats)?;
@@ -236,10 +243,7 @@ fn run() -> Result<(), String> {
     if snapshot.state != VmState::Stopped {
         return Err("VM did not stop".into());
     }
-    let directory = snapshot
-        .capture_dir
-        .as_ref()
-        .ok_or("capture directory missing")?;
+    let directory = &snapshot.runs.last().ok_or("run capture missing")?.directory;
     let recording = open_recording(directory).map_err(|e| e.to_string())?;
     if recording.events.is_empty() {
         return Err("probe produced no syscall events".into());

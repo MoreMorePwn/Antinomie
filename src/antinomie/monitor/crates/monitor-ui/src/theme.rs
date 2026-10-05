@@ -68,6 +68,28 @@ pub fn install(ctx: &egui::Context) {
     ctx.set_style(style);
 }
 
+pub(crate) fn text_size(ctx: &egui::Context, size: f32) {
+    let size = size.clamp(12.0, 24.0);
+    ctx.style_mut(|style| {
+        for text_style in [TextStyle::Body, TextStyle::Button] {
+            style
+                .text_styles
+                .insert(text_style, FontId::proportional(size));
+        }
+        style.text_styles.insert(
+            TextStyle::Small,
+            FontId::proportional((size - 2.0).max(12.0)),
+        );
+        style
+            .text_styles
+            .insert(TextStyle::Heading, FontId::proportional(size + 4.0));
+        style
+            .text_styles
+            .insert(TextStyle::Monospace, FontId::monospace(size));
+        style.spacing.interact_size.y = size + 12.0;
+    });
+}
+
 pub fn frame(fill: Color32) -> egui::Frame {
     egui::Frame::new()
         .fill(fill)

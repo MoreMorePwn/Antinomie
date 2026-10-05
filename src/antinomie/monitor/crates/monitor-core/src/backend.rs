@@ -2,11 +2,13 @@ use crate::{
     api::*,
     control,
     parser::{Assembler, u32_at, u64_at},
+    run::ProgramRun,
     storage::{self, Bundle, RawCapture},
     transport::Transport,
     vm::VmProcess,
 };
 use std::{
+    collections::{BTreeMap, VecDeque},
     fs::{self, File},
     io::Read,
     sync::{
@@ -30,6 +32,7 @@ pub struct Backend {
 }
 impl Backend {
     pub fn new(mut options: BackendOptions) -> Result<Self, String> {
+        storage::migrate_default_data(&options)?;
         storage::private_dir(&options.data_dir).map_err(|e| e.to_string())?;
         options.data_dir = fs::canonicalize(&options.data_dir).map_err(|e| e.to_string())?;
         let vms = storage::load_vms(&options)?;
@@ -80,7 +83,7 @@ impl Backend {
         if matches!(command, Command::Close) {
             self.closing.store(true, Ordering::Relaxed);
         }
-        if let Command::TerminalInput(ref data) = command
+        if let Command::TerminalInput { ref data, .. } = command
             && data.len() > 1024 * 1024
         {
             return Err("terminal input exceeds bounded command size".into());
@@ -127,10 +130,54 @@ struct Session {
     assembler: Assembler,
     vm: VmConfig,
     bundle: Bundle,
-    terminal: Option<(u64, u32)>,
-    terminal_eof: bool,
+    disk_bundle: Bundle,
+    runs: BTreeMap<u64, ProgramRun>,
+    boot_id: String,
+    pending: VecDeque<Vec<u8>>,
+    pending_len: usize,
+    pending_overflow: bool,
+    terminal_cursor: usize,
+    persisted_packets: u64,
 }
 impl Session {
+    fn stored_len(&self) -> u64 {
+        self.capture
+            .bytes
+            .saturating_add(self.assembler.stored_len())
+            .saturating_add(self.runs.values().map(ProgramRun::stored_len).sum::<u64>())
+    }
+    fn available(&self) -> u64 {
+        self.capture.quota().saturating_sub(self.stored_len())
+    }
+    fn stop_saving(&mut self, error: String) {
+        stop_capture_saving(
+            &mut self.capture,
+            &mut self.assembler,
+            &mut self.runs,
+            error,
+        );
+    }
+    fn run_cookie(&self, id: &str) -> Result<u64, String> {
+        self.runs
+            .iter()
+            .find(|(_, run)| run.summary.id == id)
+            .map(|(cookie, _)| *cookie)
+            .ok_or_else(|| "unknown run in this VM boot".into())
+    }
+    fn update_runs(&self, snapshot: &mut Snapshot) {
+        snapshot.runs = self.runs.values().map(|run| run.summary.clone()).collect();
+    }
+    fn history(&self) -> Vec<EventSummary> {
+        let mut events = self.assembler.history();
+        for run in self.runs.values() {
+            events.extend(run.assembler.history());
+        }
+        events.sort_by_key(|event| event.timestamp_ns);
+        if events.len() > 2048 {
+            events.drain(..events.len() - 2048);
+        }
+        events
+    }
     fn pump(
         &mut self,
         snapshot: &mut Snapshot,
@@ -139,23 +186,82 @@ impl Session {
         self.transport.poll(0)?;
         // A bounded batch returns control to command handling even under continuous telemetry.
         for _ in 0..256 {
-            let Some(packet) = self.transport.read()? else {
+            let Some(packet) = self.transport.read()?.map(<[u8]>::to_vec) else {
                 break;
             };
             snapshot.health.received_packets = snapshot.health.received_packets.saturating_add(1);
-            if !self
-                .capture
-                .append_with_reserved(packet, self.assembler.stored_len())
-            {
+            let root = crate::parser::parse_packet(&packet)
+                .map(|(header, _)| header.root_task_cookie)
+                .unwrap_or(0);
+            let reserved = self.stored_len();
+            let saved =
+                if let Some(run) = self.runs.get_mut(&root) {
+                    let saved = run
+                        .capture
+                        .append_with_reserved(&packet, reserved.saturating_sub(run.capture.bytes));
+                    if !saved {
+                        run.storage_error(
+                            run.capture
+                                .error
+                                .clone()
+                                .unwrap_or_else(|| "raw saving stopped".into()),
+                        );
+                    }
+                    run.assembler
+                        .set_storage_limit(run.assembler.stored_len().saturating_add(
+                            self.capture.quota().saturating_sub(
+                                reserved + if saved { packet.len() as u64 + 4 } else { 0 },
+                            ),
+                        ));
+                    if let Err(error) = run.assembler.ingest(&packet) {
+                        snapshot.health.parser_errors += 1;
+                        snapshot.last_error = Some(error.to_string());
+                    }
+                    saved
+                } else {
+                    let saved = self
+                        .capture
+                        .append_with_reserved(&packet, reserved.saturating_sub(self.capture.bytes));
+                    if !saved {
+                        self.assembler.stop_saving();
+                    }
+                    self.assembler
+                        .set_storage_limit(self.assembler.stored_len().saturating_add(
+                            self.capture.quota().saturating_sub(
+                                reserved + if saved { packet.len() as u64 + 4 } else { 0 },
+                            ),
+                        ));
+                    if let Err(error) = self.assembler.ingest(&packet) {
+                        snapshot.health.parser_errors += 1;
+                        snapshot.last_error = Some(error.to_string());
+                    }
+                    if root != 0 {
+                        while self.pending_len + packet.len() > 16 * 1024 * 1024 {
+                            if let Some(old) = self.pending.pop_front() {
+                                self.pending_len -= old.len();
+                                self.pending_overflow = true;
+                            } else {
+                                break;
+                            }
+                        }
+                        self.pending.push_back(packet.to_vec());
+                        self.pending_len += packet.len();
+                    }
+                    saved
+                };
+            propagate_object_saving_failure(&mut self.capture, &mut self.assembler, &mut self.runs);
+            if !saved {
+                let error = self
+                    .capture
+                    .error
+                    .clone()
+                    .or_else(|| self.runs.values().find_map(|run| run.capture.error.clone()))
+                    .unwrap_or_else(|| "capture saving stopped".into());
+                self.stop_saving(error);
                 snapshot.health.storage_dropped_packets =
                     snapshot.health.storage_dropped_packets.saturating_add(1);
-                self.assembler.stop_saving();
-            }
-            self.assembler
-                .set_storage_limit(self.capture.quota().saturating_sub(self.capture.bytes));
-            if let Err(err) = self.assembler.ingest(packet) {
-                snapshot.health.parser_errors += 1;
-                snapshot.last_error = Some(format!("telemetry parser: {err}"));
+            } else {
+                self.persisted_packets = self.persisted_packets.saturating_add(1);
             }
         }
         let stats = self.transport.stats()?;
@@ -164,13 +270,19 @@ impl Session {
         snapshot.health.bad_commands = stats.bad_commands;
         snapshot.health.reply_stalls = stats.reply_stalls;
         snapshot.health.transport_health = stats.health;
-        snapshot.health.persisted_packets = self.capture.packets;
-        snapshot.health.persisted_len = self
-            .capture
-            .bytes
-            .saturating_add(self.assembler.stored_len());
-        snapshot.health.persistence_error = self.capture.error.clone();
-        snapshot.health.parser_evicted_count = self.assembler.evicted_count;
+        snapshot.health.persisted_packets = self.persisted_packets;
+        refresh_storage_health(
+            &mut snapshot.health,
+            &self.capture,
+            self.assembler.stored_len(),
+            &self.runs,
+        );
+        snapshot.health.parser_evicted_count = self.assembler.evicted_count
+            + self
+                .runs
+                .values()
+                .map(|run| run.assembler.evicted_count)
+                .sum::<u64>();
         let _ = sender;
         Ok(())
     }
@@ -223,13 +335,19 @@ impl Session {
             self.transport.poll(poll_timeout)?;
         }
     }
-    fn terminal_session(&self) -> Result<u64, String> {
-        self.terminal
-            .map(|(id, _)| id)
-            .ok_or_else(|| "no launched terminal session".into())
-    }
     fn finalize(&mut self, state: &str, snapshot: &mut Snapshot) -> Result<(), String> {
-        snapshot.events = self.assembler.history();
+        let cookies: Vec<_> = self.runs.keys().copied().collect();
+        for cookie in cookies {
+            let available = self.available();
+            if let Some(run) = self.runs.get_mut(&cookie)
+                && let Err(error) = run.finalize(available, state, &snapshot.health)
+            {
+                run.storage_error(error.clone());
+                snapshot.last_error = Some(error);
+            }
+        }
+        self.update_runs(snapshot);
+        snapshot.events = self.history();
         for event in &mut snapshot.events {
             if !event.complete {
                 event
@@ -246,10 +364,83 @@ impl Session {
                 .error
                 .get_or_insert_with(|| format!("event summaries persistence failed: {e}"));
         }
+        refresh_storage_health(
+            &mut snapshot.health,
+            &self.capture,
+            self.assembler.stored_len(),
+            &self.runs,
+        );
         self.capture.final_health = Some(snapshot.health.clone());
-        let manifest = self.capture.manifest(&self.vm, &self.bundle, state);
-        snapshot.health.persistence_error = self.capture.error.clone();
+        let manifest = self
+            .capture
+            .manifest(&self.vm, &self.bundle, &self.disk_bundle, state);
+        refresh_storage_health(
+            &mut snapshot.health,
+            &self.capture,
+            self.assembler.stored_len(),
+            &self.runs,
+        );
         summaries.and(manifest)
+    }
+    fn read_terminal(
+        &mut self,
+        run_id: &str,
+        snapshot: &mut Snapshot,
+        sender: &SyncSender<Notification>,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let cookie = self.run_cookie(run_id)?;
+        let run = self.runs.get(&cookie).ok_or("unknown run")?;
+        if run.summary.terminal_eof {
+            return Ok(());
+        }
+        let mut args = control::with_session(run.summary.session_id);
+        args.extend(4096u32.to_le_bytes());
+        args.extend(0u32.to_le_bytes());
+        let reply = self.request(control::READ, &args, snapshot, sender, timeout)?;
+        let flags = u32_at(&reply, 0).map_err(|e| e.to_string())?;
+        let count = u32_at(&reply, 4).map_err(|e| e.to_string())? as usize;
+        if reply.len() != 8 + count || count > 4096 || flags & !1 != 0 {
+            return Err("invalid terminal read reply".into());
+        }
+        let available = self.available();
+        let run = self.runs.get_mut(&cookie).ok_or("unknown run")?;
+        let mut persistence_error = None;
+        if count > 0
+            && let Err(error) = run.output(&reply[8..], available)
+        {
+            persistence_error = Some(error);
+        }
+        let available = available.saturating_sub(if count > 0 { count as u64 * 2 + 5 } else { 0 });
+        let eof = flags & 1 != 0;
+        if eof && count == 0 {
+            run.sequence = run.sequence.saturating_add(1);
+        }
+        if eof
+            && let Err(error) = run
+                .eof(available)
+                .and_then(|_| run.save_screen(available.saturating_sub(5)))
+        {
+            persistence_error = Some(error);
+        }
+        let sequence = run.sequence;
+        if let Some(error) = persistence_error {
+            self.stop_saving(error.clone());
+            snapshot.health.persistence_error = Some(error);
+        }
+        if (count > 0 || eof)
+            && sender
+                .try_send(Notification::Terminal {
+                    run_id: run_id.into(),
+                    sequence,
+                    data: reply[8..].to_vec(),
+                    eof,
+                })
+                .is_err()
+        {
+            snapshot.health.ui_dropped = snapshot.health.ui_dropped.saturating_add(1);
+        }
+        Ok(())
     }
 }
 
@@ -272,7 +463,8 @@ impl Worker {
     }
     fn publish(&mut self) {
         if let Some(session) = &self.session {
-            self.snapshot.events = session.assembler.history();
+            self.snapshot.events = session.history();
+            session.update_runs(&mut self.snapshot);
         }
         if let Ok(mut latest) = self.latest_snapshot.lock() {
             *latest = Some(self.snapshot.clone());
@@ -294,7 +486,7 @@ impl Worker {
                 Ok((id, command)) => {
                     let quiet = matches!(
                         command,
-                        Command::TerminalRead | Command::TerminalResize { .. }
+                        Command::TerminalRead { .. } | Command::TerminalResize { .. }
                     );
                     let result = self.command(command);
                     let success = result.is_ok();
@@ -351,6 +543,26 @@ impl Worker {
                 self.snapshot.state = VmState::Stopped;
                 self.publish();
             }
+            let automatic_read = self.session.as_mut().and_then(|session| {
+                let active: Vec<_> = session
+                    .runs
+                    .values()
+                    .filter(|run| !run.summary.terminal_eof)
+                    .map(|run| run.summary.id.clone())
+                    .collect();
+                if active.is_empty() {
+                    None
+                } else {
+                    let id = active[session.terminal_cursor % active.len()].clone();
+                    session.terminal_cursor = session.terminal_cursor.wrapping_add(1);
+                    Some(id)
+                }
+            });
+            if let Some(run_id) = automatic_read
+                && let Err(error) = self.guest_command(Command::TerminalRead { run_id })
+            {
+                self.snapshot.last_error = Some(error);
+            }
             if self.last_publish.elapsed() >= Duration::from_millis(250) {
                 self.publish();
             }
@@ -367,7 +579,7 @@ impl Worker {
         match command {
             Command::Create(mut vm) => {
                 if vm.id.is_empty() {
-                    vm.id = storage::unique_id();
+                    vm.id = storage::vm_id(&vm.name);
                 }
                 storage::validate_vm(&vm)?;
                 let dir = storage::vm_dir(&self.options, &vm.id)?;
@@ -482,22 +694,10 @@ impl Worker {
                 self.options.shutdown_timeout = Duration::from_secs(shutdown_timeout_secs);
                 Ok("settings updated".into())
             }
-            Command::OpenRecording { directory } => {
-                if self.session.is_some() {
-                    return Err("stop VM before opening a saved recording".into());
-                }
-                let recording =
-                    crate::recording::open_recording(&directory).map_err(|e| e.to_string())?;
-                self.snapshot.events = recording.events;
-                self.snapshot.capture_dir = Some(recording.directory);
-                self.snapshot.health = recording
-                    .manifest
-                    .get("health")
-                    .cloned()
-                    .and_then(|h| serde_json::from_value(h).ok())
-                    .unwrap_or_default();
-                Ok("recording opened".into())
-            }
+            Command::OpenRecording { directory } => Err(format!(
+                "open {} with the independent recording reader",
+                directory.display()
+            )),
             Command::Start { vm_id } => self.start(&vm_id),
             Command::Stop => {
                 self.stop()?;
@@ -524,11 +724,15 @@ impl Worker {
             .clone();
         storage::validate_vm(&vm)?;
         let dir = storage::vm_dir(&self.options, id)?;
-        let bundle: Bundle = serde_json::from_reader(
+        let disk_bundle: Bundle = serde_json::from_reader(
             File::open(dir.join("bundle.json")).map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?;
-        bundle.verify_installed()?;
+        disk_bundle.verify_installed()?;
+        let bundle = Bundle::load(&self.options.bundle_dir)?.install(&self.options)?;
+        if !bundle.kernel_version.is_empty() && !bundle.kernel_version.starts_with("6.12.94") {
+            return Err("boot bundle must use the approved Linux 6.12.94 baseline".into());
+        }
         self.snapshot.state = VmState::Starting;
         self.snapshot.active_vm = Some(id.into());
         self.snapshot.health = Health::default();
@@ -538,14 +742,11 @@ impl Worker {
         let result = (|| -> Result<Session, String> {
             let process = VmProcess::launch(&self.options, &vm, &bundle)?;
             self.snapshot.serial_log = Some(process.runtime_dir.join("serial.log"));
-            let capture_dir = self
-                .options
-                .data_dir
-                .join("captures")
-                .join(storage::unique_id());
+            let boot_id = storage::unique_id();
+            let capture_dir = dir.join("boots").join(&boot_id).join("unassigned");
             let mut capture =
                 RawCapture::new(capture_dir.clone(), self.options.capture_quota_size)?;
-            capture.manifest(&vm, &bundle, "starting")?;
+            capture.manifest(&vm, &bundle, &disk_bundle, "starting")?;
             self.snapshot.capture_dir = Some(capture_dir.clone());
             let assembler =
                 Assembler::new(capture_dir.join("objects"), self.options.capture_quota_size)
@@ -554,11 +755,11 @@ impl Worker {
                 match Transport::open(&process.ram_path, process.ram_size, process.bootstrap) {
                     Ok(t) => t,
                     Err(e) => {
-                        capture.manifest(&vm, &bundle, "start-failed")?;
+                        capture.manifest(&vm, &bundle, &disk_bundle, "start-failed")?;
                         return Err(e);
                     }
                 };
-            capture.manifest(&vm, &bundle, "running")?;
+            capture.manifest(&vm, &bundle, &disk_bundle, "running")?;
             Ok(Session {
                 transport,
                 process,
@@ -566,8 +767,14 @@ impl Worker {
                 assembler,
                 vm,
                 bundle,
-                terminal: None,
-                terminal_eof: false,
+                disk_bundle,
+                runs: BTreeMap::new(),
+                boot_id,
+                pending: VecDeque::new(),
+                pending_len: 0,
+                pending_overflow: false,
+                terminal_cursor: 0,
+                persisted_packets: 0,
             })
         })();
         match result {
@@ -593,6 +800,23 @@ impl Worker {
         self.publish();
         let deadline = Instant::now() + self.options.shutdown_timeout;
         let mut issues = Vec::new();
+        let terminal_ids: Vec<_> = session
+            .runs
+            .values()
+            .filter(|run| !run.summary.terminal_eof)
+            .map(|run| run.summary.id.clone())
+            .collect();
+        for run_id in &terminal_ids {
+            let budget = remaining_request_budget(deadline, Duration::from_millis(100));
+            if budget.is_zero() {
+                break;
+            }
+            if let Err(error) =
+                session.read_terminal(run_id, &mut self.snapshot, &self.sender, budget)
+            {
+                issues.push(format!("final terminal drain: {error}"));
+            }
+        }
         match session.request(
             control::STATS,
             &control::header(0),
@@ -650,8 +874,20 @@ impl Worker {
             {
                 issues.push(e);
             }
+            if !terminal_ids.is_empty() {
+                let run_id = &terminal_ids[session.terminal_cursor % terminal_ids.len()];
+                session.terminal_cursor = session.terminal_cursor.wrapping_add(1);
+                let budget = remaining_request_budget(deadline, Duration::from_millis(50));
+                if !budget.is_zero()
+                    && let Err(error) =
+                        session.read_terminal(run_id, &mut self.snapshot, &self.sender, budget)
+                    && issues.last() != Some(&error)
+                {
+                    issues.push(error);
+                }
+            }
             if self.last_publish.elapsed() >= Duration::from_millis(250) {
-                self.snapshot.events = session.assembler.history();
+                self.snapshot.events = session.history();
                 self.publish();
             }
             if Instant::now() >= deadline {
@@ -696,21 +932,109 @@ impl Worker {
         let timeout = Duration::from_secs(10);
         match command {
             Command::Execute(request) => {
+                if session.runs.len() >= 64 {
+                    return Err("this VM boot reached the 64-run limit; restart the VM before another launch".into());
+                }
                 let args = control::execute(&request)?;
+                let run_id = storage::unique_id();
+                let directory = storage::vm_dir(&self.options, &session.vm.id)?
+                    .join("runs")
+                    .join(&run_id);
+                let summary = RunSummary {
+                    id: run_id,
+                    vm_id: session.vm.id.clone(),
+                    boot_id: session.boot_id.clone(),
+                    session_id: 0,
+                    root_task_cookie: 0,
+                    pid: 0,
+                    request,
+                    directory,
+                    terminal_eof: false,
+                    state: RunState::Running,
+                    recording_error: Some("execution has not been acknowledged".into()),
+                };
+                let mut run = ProgramRun::new(summary, session.capture.quota())?;
+                run.summary.recording_error = None;
+                run.boot_bundle_identity = session.bundle.base_identity.clone();
+                run.disk_base_identity = session.disk_bundle.base_identity.clone();
                 let reply = session.request(
                     control::EXEC,
                     &args,
                     &mut self.snapshot,
                     &self.sender,
                     timeout,
-                )?;
+                );
+                let reply = match reply {
+                    Ok(reply) => reply,
+                    Err(error) => {
+                        run.storage_error(format!("execution acknowledgement failed: {error}; launch outcome may be unknown"));
+                        let _ = run.persist_summary();
+                        return Err(error);
+                    }
+                };
                 if reply.len() != 24 || u32_at(&reply, 20).map_err(|e| e.to_string())? != 0 {
                     return Err("invalid execution reply".into());
                 }
                 let id = u64_at(&reply, 0).map_err(|e| e.to_string())?;
+                let cookie = u64_at(&reply, 8).map_err(|e| e.to_string())?;
                 let pid = u32_at(&reply, 16).map_err(|e| e.to_string())?;
-                session.terminal = Some((id, pid));
-                session.terminal_eof = false;
+                if cookie == 0 || session.runs.contains_key(&cookie) {
+                    return Err(
+                        "invalid or reused execution root identity; launch outcome unknown".into(),
+                    );
+                }
+                run.summary.session_id = id;
+                run.summary.root_task_cookie = cookie;
+                run.summary.pid = pid;
+                if let Some(error) = session.capture.error.clone() {
+                    run.capture.error = Some(error.clone());
+                    run.storage_error(error);
+                }
+                let mut remaining = VecDeque::new();
+                while let Some(packet) = session.pending.pop_front() {
+                    let root = crate::parser::parse_packet(&packet)
+                        .map(|(h, _)| h.root_task_cookie)
+                        .unwrap_or(0);
+                    if root == cookie {
+                        session.pending_len -= packet.len();
+                        let reserved = session.stored_len() + run.stored_len() - run.capture.bytes;
+                        if !run.capture.append_with_reserved(&packet, reserved) {
+                            let error = run
+                                .capture
+                                .error
+                                .clone()
+                                .unwrap_or_else(|| "pending raw saving failed".into());
+                            run.storage_error(error.clone());
+                            session.stop_saving(error);
+                        }
+                        run.assembler.set_storage_limit(
+                            run.assembler.stored_len().saturating_add(
+                                session.available().saturating_sub(run.stored_len()),
+                            ),
+                        );
+                        if let Err(error) = run.assembler.ingest(&packet) {
+                            self.snapshot.last_error = Some(error.to_string());
+                        }
+                        if let Some(error) = run.assembler.saving_error().map(str::to_owned) {
+                            run.capture.error.get_or_insert(error.clone());
+                            run.storage_error(error.clone());
+                            session.stop_saving(error);
+                        }
+                    } else {
+                        remaining.push_back(packet);
+                    }
+                }
+                session.pending = remaining;
+                if session.pending_overflow {
+                    run.summary.recording_error.get_or_insert("pre-reply assignment buffer exceeded limit; earlier packets remain in boot unassigned raw archive".into());
+                }
+                if let Err(error) = run.persist_summary() {
+                    run.storage_error(format!("run metadata persistence failed: {error}"));
+                }
+                let summary = run.summary.clone();
+                session.runs.insert(cookie, run);
+                session.update_runs(&mut self.snapshot);
+                self.emit(Notification::RunStarted(summary));
                 Ok(format!("launched pid {pid}, terminal session {id}"))
             }
             Command::Upload {
@@ -800,8 +1124,13 @@ impl Worker {
                 }
                 Ok(format!("uploaded {total} bytes to {destination}"))
             }
-            Command::TerminalInput(data) => {
-                let terminal = session.terminal_session()?;
+            Command::TerminalInput { run_id, data } => {
+                let cookie = session.run_cookie(&run_id)?;
+                let run = session.runs.get(&cookie).ok_or("unknown run")?;
+                if run.summary.terminal_eof {
+                    return Err("terminal is closed".into());
+                }
+                let terminal = run.summary.session_id;
                 let chunk_size = session.transport.command_limit.saturating_sub(16);
                 if chunk_size == 0 {
                     return Err("no terminal payload capacity".into());
@@ -831,37 +1160,25 @@ impl Worker {
                 }
                 Ok(format!("terminal input accepted {written} bytes"))
             }
-            Command::TerminalRead => {
-                if session.terminal_eof || session.terminal.is_none() {
-                    return Ok(String::new());
-                }
-                let mut args = control::with_session(session.terminal_session()?);
-                args.extend(4096u32.to_le_bytes());
-                args.extend(0u32.to_le_bytes());
-                let reply = session.request(
-                    control::READ,
-                    &args,
+            Command::TerminalRead { run_id } => {
+                session.read_terminal(
+                    &run_id,
                     &mut self.snapshot,
                     &self.sender,
-                    timeout,
+                    Duration::from_millis(500),
                 )?;
-                let flags = u32_at(&reply, 0).map_err(|e| e.to_string())?;
-                let count = u32_at(&reply, 4).map_err(|e| e.to_string())? as usize;
-                if reply.len() != 8 + count || count > 4096 || flags & !1 != 0 {
-                    return Err("invalid terminal read reply".into());
-                }
-                session.terminal_eof = flags & 1 != 0;
-                if count > 0 {
-                    let terminal = reply[8..].to_vec();
-                    self.emit(Notification::Terminal(terminal));
-                }
                 Ok(String::new())
             }
-            Command::TerminalResize { rows, cols } => {
-                if rows == 0 || cols == 0 {
-                    return Err("terminal dimensions must be positive".into());
+            Command::TerminalResize { run_id, rows, cols } => {
+                if rows == 0 || cols == 0 || rows > 256 || cols > 256 {
+                    return Err("terminal dimensions must be 1..256".into());
                 }
-                let mut args = control::with_session(session.terminal_session()?);
+                let cookie = session.run_cookie(&run_id)?;
+                let run = session.runs.get(&cookie).ok_or("unknown run")?;
+                if run.summary.terminal_eof {
+                    return Err("terminal is closed".into());
+                }
+                let mut args = control::with_session(run.summary.session_id);
                 args.extend(rows.to_le_bytes());
                 args.extend(cols.to_le_bytes());
                 args.extend([0; 4]);
@@ -872,18 +1189,30 @@ impl Worker {
                     &self.sender,
                     timeout,
                 )?;
+                let available = session.available();
+                let run = session.runs.get_mut(&cookie).ok_or("unknown run")?;
+                run.resize(rows, cols, available)?;
+                let notification = run.screen_notification();
+                self.emit(notification);
                 Ok("terminal resized".into())
             }
-            Command::Signal { pid, signal } => {
+            Command::TerminalSnapshot { run_id } => {
+                let cookie = session.run_cookie(&run_id)?;
+                let notification = session
+                    .runs
+                    .get(&cookie)
+                    .ok_or("unknown run")?
+                    .screen_notification();
+                self.emit(notification);
+                Ok(String::new())
+            }
+            Command::Signal { run_id, signal } => {
                 if !(1..=64).contains(&signal) {
                     return Err("signal must be 1..64".into());
                 }
-                let (id, current_pid) = session.terminal.ok_or("no launched process")?;
-                if pid != 0 && pid != current_pid {
-                    return Err(
-                        "signal target differs from the current launch process group".into(),
-                    );
-                }
+                let cookie = session.run_cookie(&run_id)?;
+                let run = session.runs.get(&cookie).ok_or("unknown run")?;
+                let (id, current_pid) = (run.summary.session_id, run.summary.pid);
                 let mut args = control::with_session(id);
                 args.extend(signal.to_le_bytes());
                 args.extend(0u32.to_le_bytes());
@@ -897,6 +1226,20 @@ impl Worker {
                 Ok(format!(
                     "signal {signal} sent to process group {current_pid}"
                 ))
+            }
+            Command::StopRun { run_id } => {
+                let cookie = session.run_cookie(&run_id)?;
+                let mut args = control::header(0);
+                args.extend(cookie.to_le_bytes());
+                let reply =
+                    session.request(0x1015, &args, &mut self.snapshot, &self.sender, timeout)?;
+                if !reply.is_empty() {
+                    return Err("invalid stop-run acknowledgement".into());
+                }
+                let run = session.runs.get_mut(&cookie).ok_or("unknown run")?;
+                run.summary.state = RunState::StopRequested;
+                run.persist_summary()?;
+                Ok("termination signals issued; descendant completion is not yet proven".into())
             }
             Command::RecorderStats => {
                 let reply = session.request(
@@ -927,6 +1270,50 @@ impl Worker {
     }
 }
 
+fn stop_capture_saving(
+    capture: &mut RawCapture,
+    assembler: &mut Assembler,
+    runs: &mut BTreeMap<u64, ProgramRun>,
+    error: String,
+) {
+    capture.error.get_or_insert(error.clone());
+    assembler.stop_saving();
+    for run in runs.values_mut() {
+        run.capture.error.get_or_insert(error.clone());
+        run.storage_error(error.clone());
+    }
+}
+
+fn propagate_object_saving_failure(
+    capture: &mut RawCapture,
+    assembler: &mut Assembler,
+    runs: &mut BTreeMap<u64, ProgramRun>,
+) {
+    let error = assembler.saving_error().map(str::to_owned).or_else(|| {
+        runs.values()
+            .find_map(|run| run.assembler.saving_error().map(str::to_owned))
+    });
+    if let Some(error) = error {
+        stop_capture_saving(capture, assembler, runs, error);
+    }
+}
+
+fn refresh_storage_health(
+    health: &mut Health,
+    capture: &RawCapture,
+    object_len: u64,
+    runs: &BTreeMap<u64, ProgramRun>,
+) {
+    health.persisted_len = capture
+        .bytes
+        .saturating_add(object_len)
+        .saturating_add(runs.values().map(ProgramRun::stored_len).sum::<u64>());
+    health.persistence_error = capture.error.clone().or_else(|| {
+        runs.values()
+            .find_map(|run| run.summary.recording_error.clone())
+    });
+}
+
 fn decode_stats(reply: &[u8]) -> Result<[u64; 10], String> {
     if reply.len() != 80 {
         return Err("invalid recorder stats length".into());
@@ -947,6 +1334,241 @@ fn remaining_request_budget(deadline: Instant, maximum: Duration) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pending_raw_copy_quota_failure_stops_existing_and_acknowledged_runs() {
+        let root =
+            std::env::temp_dir().join(format!("ant-pending-copy-quota-{}", storage::unique_id()));
+        let mut capture = RawCapture::new(root.join("unassigned"), 1024).unwrap();
+        let mut assembler = Assembler::new(capture.directory.join("objects"), 1024).unwrap();
+        let create = |cookie: u64| {
+            ProgramRun::new(
+                RunSummary {
+                    id: cookie.to_string(),
+                    vm_id: "vm".into(),
+                    boot_id: "boot".into(),
+                    session_id: cookie,
+                    root_task_cookie: cookie,
+                    pid: cookie as u32,
+                    request: ExecRequest::default(),
+                    directory: root.join(cookie.to_string()),
+                    terminal_eof: false,
+                    state: RunState::Running,
+                    recording_error: None,
+                },
+                1024,
+            )
+            .unwrap()
+        };
+        let mut runs = BTreeMap::from([(1, create(1))]);
+        let mut pending = create(2);
+        assert!(capture.append(&[0; 696]));
+        let packet = [1; 236];
+        assert!(capture.append(&packet));
+        let retained = fs::read(capture.directory.join("telemetry.raw")).unwrap();
+        assert!(!pending.capture.append_with_reserved(&packet, capture.bytes));
+        let error = pending.capture.error.clone().unwrap();
+        pending.storage_error(error.clone());
+        stop_capture_saving(&mut capture, &mut assembler, &mut runs, error.clone());
+        assert!(pending.assembler.saving_error().is_none());
+        runs.insert(2, pending);
+        for run in runs.values_mut() {
+            assert!(run.output(b"still live", 84).is_err());
+            assert_eq!(run.summary.recording_error.as_deref(), Some(error.as_str()));
+            assert_eq!(run.capture.bytes, 0);
+        }
+        assert!(!capture.append(b"later"));
+        assert_eq!(
+            fs::read(capture.directory.join("telemetry.raw")).unwrap(),
+            retained
+        );
+        let mut health = Health::default();
+        refresh_storage_health(&mut health, &capture, assembler.stored_len(), &runs);
+        assert_eq!(health.persisted_len, 940);
+        assert_eq!(health.persistence_error.as_deref(), Some(error.as_str()));
+        drop(runs);
+        drop(capture);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn object_saving_failure_preserves_raw_and_globally_denies_terminal_saving() {
+        for run_owned in [false, true] {
+            for io_failure in [false, true] {
+                let root = std::env::temp_dir()
+                    .join(format!("ant-global-object-saving-{}", storage::unique_id()));
+                let mut capture = RawCapture::new(root.join("unassigned"), 1024).unwrap();
+                let mut assembler =
+                    Assembler::new(capture.directory.join("objects"), 1024).unwrap();
+                let mut runs = BTreeMap::new();
+                for cookie in 1..=2 {
+                    let run = ProgramRun::new(
+                        RunSummary {
+                            id: cookie.to_string(),
+                            vm_id: "vm".into(),
+                            boot_id: "boot".into(),
+                            session_id: cookie,
+                            root_task_cookie: cookie,
+                            pid: cookie as u32,
+                            request: ExecRequest::default(),
+                            directory: root.join(cookie.to_string()),
+                            terminal_eof: false,
+                            state: RunState::Running,
+                            recording_error: None,
+                        },
+                        1024,
+                    )
+                    .unwrap();
+                    runs.insert(cookie, run);
+                }
+                assert!(capture.append_with_reserved(&[0; 696], 0));
+                let mut packet = vec![0; 236];
+                packet[..4].copy_from_slice(b"ANTT");
+                packet[4..6].copy_from_slice(&1u16.to_le_bytes());
+                packet[6..8].copy_from_slice(&1u16.to_le_bytes());
+                packet[8..10].copy_from_slice(&136u16.to_le_bytes());
+                packet[10..12].copy_from_slice(&1u16.to_le_bytes());
+                packet[12..16].copy_from_slice(&236u32.to_le_bytes());
+                packet[20..24].copy_from_slice(&1u32.to_le_bytes());
+                packet[96..98].copy_from_slice(&1u16.to_le_bytes());
+                packet[98] = 1;
+                packet[99] = 3;
+                packet[100..104].copy_from_slice(&1u32.to_le_bytes());
+                packet[112..120].copy_from_slice(&u64::MAX.to_le_bytes());
+                packet[120..124].copy_from_slice(&100u32.to_le_bytes());
+                packet[128..136].copy_from_slice(&(if run_owned { 1u64 } else { 0 }).to_le_bytes());
+                let target = if run_owned {
+                    let run = runs.get_mut(&1).unwrap();
+                    assert!(run.capture.append_with_reserved(&packet, 700));
+                    &mut run.assembler
+                } else {
+                    assert!(capture.append_with_reserved(&packet, 0));
+                    &mut assembler
+                };
+                target.set_storage_limit(if io_failure { 1024 } else { 84 });
+                if io_failure {
+                    let directory = if run_owned {
+                        root.join("1")
+                    } else {
+                        capture.directory.clone()
+                    };
+                    fs::create_dir(directory.join("objects/0-0-0-1-0-1.raw")).unwrap();
+                }
+                let event = target.ingest(&packet).unwrap().unwrap();
+                assert!(event.fields[0].ranges.is_empty());
+                propagate_object_saving_failure(&mut capture, &mut assembler, &mut runs);
+                let error = capture.error.clone().unwrap();
+                assert!(error.contains(if io_failure { "persistence" } else { "quota" }));
+                let mut health = Health::default();
+                refresh_storage_health(&mut health, &capture, assembler.stored_len(), &runs);
+                assert_eq!(health.persisted_len, 940);
+                assert_eq!(health.persistence_error.as_deref(), Some(error.as_str()));
+                for run in runs.values_mut() {
+                    assert_eq!(run.summary.recording_error.as_deref(), Some(error.as_str()));
+                    assert!(run.output(b"ten bytes!", 84).is_err());
+                    assert_eq!(
+                        fs::metadata(run.summary.directory.join("terminal.journal"))
+                            .unwrap()
+                            .len(),
+                        0
+                    );
+                    run.finalize(84, "stopped", &health).unwrap_err();
+                    let manifest: serde_json::Value = serde_json::from_reader(
+                        File::open(run.summary.directory.join("manifest.json")).unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(manifest["persistence_error"], error);
+                    assert_eq!(manifest["health"]["persistence_error"], error);
+                }
+                assert!(!capture.append_with_reserved(b"later", 0));
+                assert_eq!(
+                    capture.bytes + runs.values().map(|run| run.capture.bytes).sum::<u64>(),
+                    940
+                );
+                assert_eq!(
+                    fs::metadata(capture.directory.join("telemetry.raw"))
+                        .unwrap()
+                        .len(),
+                    capture.bytes
+                );
+                drop(runs);
+                drop(capture);
+                fs::remove_dir_all(root).unwrap();
+            }
+        }
+    }
+    #[test]
+    fn final_health_counts_screen_and_keeps_errors_scoped_to_run() {
+        let root = std::env::temp_dir().join(format!("ant-final-health-{}", storage::unique_id()));
+        let capture = RawCapture::new(root.join("unassigned"), 65536).unwrap();
+        let create = |id: &str, cookie: u64| {
+            ProgramRun::new(
+                RunSummary {
+                    id: id.into(),
+                    vm_id: "vm".into(),
+                    boot_id: "boot".into(),
+                    session_id: cookie,
+                    root_task_cookie: cookie,
+                    pid: cookie as u32,
+                    request: ExecRequest::default(),
+                    directory: root.join(id),
+                    terminal_eof: false,
+                    state: RunState::Running,
+                    recording_error: None,
+                },
+                65536,
+            )
+            .unwrap()
+        };
+        let mut healthy = create("healthy", 1);
+        healthy.output(b"retained", 65536).unwrap();
+        let before = healthy.stored_len();
+        healthy
+            .finalize(65536, "clean", &Health::default())
+            .unwrap();
+        let screen_len = fs::metadata(healthy.summary.directory.join("terminal-screen.ansi"))
+            .unwrap()
+            .len();
+        assert_eq!(healthy.stored_len(), before + screen_len);
+        let mut failed = create("failed", 2);
+        failed.storage_error("only this run failed");
+        let mut runs = BTreeMap::from([(1, healthy), (2, failed)]);
+        let mut health = Health {
+            persisted_len: before,
+            ..Health::default()
+        };
+        refresh_storage_health(&mut health, &capture, 0, &runs);
+        assert_eq!(health.persisted_len, before + screen_len);
+        assert_eq!(
+            health.persistence_error.as_deref(),
+            Some("only this run failed")
+        );
+        assert!(runs.get(&1).unwrap().summary.recording_error.is_none());
+        let mut capture = capture;
+        capture.final_health = Some(health.clone());
+        let bundle = Bundle {
+            kernel: "kernel".into(),
+            base_disk: "base".into(),
+            initrd: None,
+            kernel_append: String::new(),
+            kernel_version: String::new(),
+            schema_id: 1,
+            base_identity: None,
+        };
+        capture
+            .manifest(&VmConfig::default(), &bundle, &bundle, "clean")
+            .unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_reader(File::open(capture.directory.join("manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["health"]["persisted_len"], before + screen_len);
+        assert_eq!(
+            manifest["health"]["persistence_error"],
+            "only this run failed"
+        );
+        assert!(manifest["persistence_error"].is_null());
+        runs.clear();
+        drop(capture);
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn backend_close_joins_owner_without_a_vm() {
         let data_dir = std::env::temp_dir().join(format!("ant-backend-{}", storage::unique_id()));

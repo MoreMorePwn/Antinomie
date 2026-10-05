@@ -17,6 +17,8 @@ Use an ext4 workspace. Required tools include Rust/Cargo, a C compiler, the
 kernel build dependencies listed in CONTRIBUTING.md, QEMU with its GTK display
 backend, qemu-img, BusyBox, cpio, gzip, e2fsprogs, and Python 3.10 or later.
 Native GUI development also needs the host's X11/Wayland/OpenGL libraries.
+The archive browser needs SQLite 3.34.1 or later at runtime and its development
+headers/pkg-config when building; the release executable links system SQLite.
 KVM requires access to `/dev/kvm`; WSLg or an X11 server provides the desktop.
 TCG is available with `--tcg`, but has not been performance-qualified.
 
@@ -51,11 +53,22 @@ Generated executables are ignored build products, not tracked source or a
 public distribution. Redistribution must retain required notices and undergo
 the dependency/license review described in the root licensing documents.
 
-The initial VM list is empty. VM data defaults to
-`$XDG_DATA_HOME/antinomie`, or `~/.local/share/antinomie`. An imported immutable
-base lives under `bases/<content-hash>/`; saved VM overlays are under `vms/`.
+The initial VM list is empty. Retained data defaults to `~/antinomie`.
+Each VM lives in `<sanitized-name>_<random-identifier>/`, with its configuration,
+disk overlay, per-boot records and separate `runs/` directories. Imported immutable
+bases live under `bases/<content-hash>/`. `--data-dir` selects an explicit root.
+On default startup, legacy `$XDG_DATA_HOME/antinomie` or
+`~/.local/share/antinomie` data is copied, verified, path-adjusted and published
+at the new location. Migration refuses active old monitor/VM processes and
+nonempty conflicting destinations. The original data is retained as a backup;
+do not resume using both roots as independent copies of the same VM.
 The build directory can be removed without breaking those installed bases.
 Do not remove application data to clean build products.
+
+On boot the currently selected bundle supplies the patched kernel/initrd;
+the existing disk overlay and original disk backing base remain unchanged.
+Recordings distinguish boot-bundle and disk-base identities. Reset still uses
+the VM's original disk base, not the current boot bundle's root filesystem.
 
 The current QEMU memory profile supports 1..64 CPUs, 256..3072 MiB RAM, and
 1..2048 GiB virtual storage. Flat RAM stays below the PCI hole. The backend
@@ -83,21 +96,29 @@ restart display/WSL services while a VM or another application is active.
 
 ## Ownership and APIs
 
-The native workspace uses one saved-VM list, a filtered syscall table, and a
-resizable lower pane with Details, Terminal and Activity tabs. Configuration,
+The native workspace uses one saved-VM list, a filtered paired syscall table,
+and a resizable lower pane with Details and Activity tabs. Configuration,
 launch, upload and recording settings open in bounded dialogs. Toolbar icons
 have tooltips; menus expose the same implemented commands. There are no
 placeholder process/rules/build views or duplicate image/run catalogs.
 
-Main text, buttons, monospace details and terminal text use a fixed 16-point
-style; secondary text uses 14 points and headings 20. Terminal cell metrics
-follow its font so displayed rows/columns and guest resize requests agree.
+Each program opens its own native interactive terminal window. Concurrent
+programs have independent terminal IDs, input, resize, recording and Stop
+actions. Closing a terminal window leaves the program running; reopen it from
+the run selector. Closing the main application still shuts down its VM.
+Core drains and saves terminals independently of UI/window visibility.
 
-Selecting an event row reveals its full return value, correlation identity,
-capture status and byte previews. Long table values are clipped with full
-hover text. Loss counters and recording failures stay visible on every tab.
-Terminal input is disabled while forms or confirmations are open, and guest
-terminal polling continues independently of the selected inspection tab.
+Text size is persisted in Settings, from 12 to 24 points (default 16).
+Terminal cell metrics follow its font so displayed rows/columns and guest resize
+requests agree. Tables show Time, Sequence, TID, CPU, Syscall (number), Return
+and Info. Entry/Exit correlate by stream/task/call identity, never by CPU/PID.
+Missing phases remain visible. Expand Entry/Exit and their arguments/captured
+objects in Details; the split inspector shows captured hex/ASCII and numeric
+interpretations. Float values are bit reinterpretations, not proof of the
+argument's semantic type. Sparse holes are not manufactured bytes.
+Loss counters and recording failures remain visible. A run selector reopens
+past recordings without replacing live collection; offline reads use a bounded
+worker. Terminal output sequence gaps trigger a core-owned screen snapshot.
 
 | Module | Responsibility |
 |---|---|
@@ -107,6 +128,7 @@ terminal polling continues independently of the selected inspection tab.
 | `control.rs` | Versioned command encoding and guest response validation |
 | `parser.rs` | Checked ANTT envelopes, correlation, fragments, gaps and bounded previews |
 | `storage.rs`, `recording.rs` | Durable base import, overlays, recordings and offline range reads |
+| `run.rs` | Per-program metadata, transcript/journal and headless terminal-screen persistence |
 | `vm.rs` | Argument-vector QEMU launch, QMP force-stop and process ownership |
 | `crates/monitor-ui/src/` | Native VM list, settings, event table and VT terminal |
 | `protocol/guest-profile.json` | Exact syscall set, UAPI layouts, capture rules and known gaps |
@@ -129,7 +151,17 @@ exact application packet. Object files store captured field ranges; a sparse
 hole is never presented as captured content. Manifests include final transport,
 parser and recorder health, and clean/forced/unexpected termination state.
 
-The configured quota covers raw packets plus assembled payloads together.
+Each launch has independent raw telemetry, objects, `run.json`, terminal output
+in `terminal-transcript.raw`, output/resize/EOF in `terminal.journal`, and a final
+`terminal-screen.ansi` screen with saved grid metadata. Terminal EOF does not
+prove detached descendants exited: recording stays active until VM stop.
+Stop requests SIGTERM for tracked tasks in the selected launch tree; programs
+can ignore it and concurrent forks can escape that signaling pass. The host
+currently allows 64 total launches per VM boot; restart the VM to begin another
+batch. Historical terminal views are read-only.
+
+The configured quota covers raw packets, assembled payloads and terminal payloads
+together across the VM boot's runs.
 Bounded event indexes/manifests, installed bases and VM disks are separate;
 this is not a hard filesystem-wide disk cap. On quota/I/O failure the backend
 stops saving payloads, preserves prior data, and continues draining telemetry.
@@ -144,6 +176,11 @@ limits, with faults and losses explicit. Unknown ioctls and compat ABIs are
 marked unsupported; the profile lists all limitations. Coverage is the selected
 30 native syscall families, not the full syscall catalog or a measured malware
 frequency ranking. No snapshot restoration/reconnection is supported.
+
+ANTT 1.1 extends the application header to 136 bytes with an inherited launch
+root task cookie at offset 128. V7 is unchanged. Legacy 1.0 packets remain
+readable but cannot be reliably assigned to program runs after lifecycle loss;
+old VM-wide recordings are explicitly labelled legacy recordings.
 
 ## Checks
 
@@ -160,8 +197,22 @@ cargo run --manifest-path src/antinomie/monitor/Cargo.toml \
   "$PWD/work/monitor-backend-test" "$PWD/work/monitor-probe"
 ```
 
-The headless example also accepts `--recording CAPTURE_DIR` to reopen a finalized
-capture. Offline reopening is currently an API/example operation, not a UI view.
+The headless example also accepts `--recording CAPTURE_DIR`. Full saved-history
+pages and terminal replay are available through the recording API and native UI,
+not limited to the bounded live event summary. A rebuildable SQLite cache lives
+outside recordings under `$XDG_CACHE_HOME/antinomie/browse` (or `~/.cache`), not
+inside VM disk/payload quota accounting. Index construction and cancellation
+run on the archive reader, not the transport owner or rendering thread.
+
+The concurrent-run integration fixture uses an isolated new data directory:
+
+```bash
+cargo run --manifest-path src/antinomie/monitor/Cargo.toml \
+  -p antinomie-monitor-ui --example run-history-check -- \
+  "$PWD/work/debian-6.12.94-1-trixie/images/monitor-base" \
+  "$PWD/work/run-history-test"
+```
+
 Test outputs are disposable under `work/`; production application data is not.
 Set `ANTINOMIE_TEST_QUOTA_SIZE=1024` for the headless quota-cutoff scenario; use
 a fresh, short data path so its QMP Unix socket fits the system path limit.

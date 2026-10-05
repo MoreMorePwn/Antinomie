@@ -43,7 +43,7 @@ impl VmProcess {
         vm: &VmConfig,
         bundle: &Bundle,
     ) -> Result<Self, String> {
-        let runtime_dir = options.data_dir.join("runtime").join(unique_id());
+        let runtime_dir = vm_dir(options, &vm.id)?.join("runtime").join(unique_id());
         private_dir(&runtime_dir).map_err(|e| e.to_string())?;
         let mut cleanup = UnstartedRuntime {
             path: runtime_dir.clone(),
@@ -65,9 +65,16 @@ impl VmProcess {
             .open(&ram_path)
             .map_err(|e| e.to_string())?;
         ram.set_len(ram_size).map_err(|e| e.to_string())?;
-        let qmp_path = runtime_dir.join("qmp.sock");
+        let mut qmp_path = runtime_dir.join("qmp.sock");
+        let mut socket_cleanup = None;
         if qmp_path.as_os_str().len() > 100 {
-            return Err("VM runtime path too long for Unix QMP socket".into());
+            let socket_dir = std::env::temp_dir().join(format!("ant-{}", unique_id()));
+            private_dir(&socket_dir).map_err(|e| e.to_string())?;
+            qmp_path = socket_dir.join("qmp.sock");
+            socket_cleanup = Some(UnstartedRuntime {
+                path: socket_dir,
+                started: false,
+            });
         }
         let serial = File::create(runtime_dir.join("serial.log")).map_err(|e| e.to_string())?;
         let stderr = File::create(runtime_dir.join("qemu.log")).map_err(|e| e.to_string())?;
@@ -116,6 +123,9 @@ impl VmProcess {
         }
         let child = cmd.spawn().map_err(|e| format!("QEMU launch: {e}"))?;
         cleanup.started = true;
+        if let Some(cleanup) = socket_cleanup.as_mut() {
+            cleanup.started = true;
+        }
         Ok(Self {
             child,
             ram_path,
@@ -150,6 +160,11 @@ impl Drop for VmProcess {
         let _ = self.force_stop();
         let _ = std::fs::remove_file(&self.ram_path);
         let _ = std::fs::remove_file(&self.qmp_path);
+        if self.qmp_path.parent() != Some(self.runtime_dir.as_path())
+            && let Some(parent) = self.qmp_path.parent()
+        {
+            let _ = std::fs::remove_dir(parent);
+        }
     }
 }
 #[cfg(test)]

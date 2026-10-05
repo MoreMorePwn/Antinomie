@@ -1,6 +1,7 @@
 use crate::api::{BackendOptions, Health, VmConfig};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::{
     fs::{self, File, OpenOptions},
@@ -11,6 +12,13 @@ use std::{
 };
 
 pub(crate) fn unique_id() -> String {
+    let mut random = [0u8; 16];
+    if File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(&mut random))
+        .is_ok()
+    {
+        return random.iter().map(|byte| format!("{byte:02x}")).collect();
+    }
     format!(
         "{}-{}",
         std::process::id(),
@@ -20,9 +28,44 @@ pub(crate) fn unique_id() -> String {
             .as_nanos()
     )
 }
+pub(crate) fn vm_id(name: &str) -> String {
+    let slug: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .take(32)
+        .collect();
+    format!(
+        "{}_{}",
+        if slug.trim_matches('_').is_empty() {
+            "vm"
+        } else {
+            slug.trim_matches('_')
+        },
+        unique_id()
+    )
+}
 pub(crate) fn private_dir(path: &Path) -> io::Result<()> {
     fs::create_dir_all(path)?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+}
+fn sha256_file(path: &Path) -> Result<[u8; 32], String> {
+    let mut file = File::open(path).map_err(|e| e.to_string())?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 65536];
+    loop {
+        let used = file.read(&mut buffer).map_err(|e| e.to_string())?;
+        if used == 0 {
+            break;
+        }
+        digest.update(&buffer[..used]);
+    }
+    Ok(digest.finalize().into())
 }
 pub(crate) fn atomic_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let temporary = path.with_extension(format!("tmp-{}", unique_id()));
@@ -221,13 +264,31 @@ pub(crate) fn vm_dir(options: &BackendOptions, id: &str) -> Result<PathBuf, Stri
     {
         return Err("invalid VM id".into());
     }
-    Ok(options.data_dir.join("vms").join(id))
+    let direct = options.data_dir.join(id);
+    if direct.exists() {
+        return Ok(direct);
+    }
+    if let Ok(entries) = fs::read_dir(&options.data_dir) {
+        for entry in entries.flatten() {
+            let config = entry.path().join("config.json");
+            if let Ok(file) = File::open(config)
+                && let Ok(vm) = serde_json::from_reader::<_, VmConfig>(file)
+                && vm.id == id
+            {
+                return Ok(entry.path());
+            }
+        }
+    }
+    let legacy = options.data_dir.join("vms").join(id);
+    if legacy.exists() {
+        return Ok(legacy);
+    }
+    Ok(direct)
 }
 pub(crate) fn load_vms(options: &BackendOptions) -> Result<Vec<VmConfig>, String> {
-    let dir = options.data_dir.join("vms");
-    private_dir(&dir).map_err(|e| e.to_string())?;
+    let dir = &options.data_dir;
     let mut vms = Vec::new();
-    for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
+    for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         if !entry.file_type().map_err(|e| e.to_string())?.is_dir() {
             continue;
@@ -243,6 +304,257 @@ pub(crate) fn load_vms(options: &BackendOptions) -> Result<Vec<VmConfig>, String
     }
     vms.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(vms)
+}
+
+/// Copy, validate, and atomically publish legacy data. The source is retained.
+pub(crate) fn migrate_default_data(options: &BackendOptions) -> Result<(), String> {
+    if options.data_dir != BackendOptions::default().data_dir {
+        return Ok(());
+    }
+    let source = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share")
+        })
+        .join("antinomie");
+    migrate_data(&source, &options.data_dir)
+}
+pub fn migrate_data(source: &Path, destination: &Path) -> Result<(), String> {
+    if !destination.is_absolute() {
+        return Err("migration destination must be absolute".into());
+    }
+    if !source.exists() || destination.join("migration.json").exists() {
+        return Ok(());
+    }
+    let source = fs::canonicalize(source).map_err(|e| e.to_string())?;
+    for entry in fs::read_dir("/proc").map_err(|e| e.to_string())?.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|s| s.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if pid == std::process::id() {
+            continue;
+        }
+        if let Ok(command) = fs::read(entry.path().join("cmdline")) {
+            let arguments: Vec<_> = command
+                .split(|byte| *byte == 0)
+                .filter(|arg| !arg.is_empty())
+                .collect();
+            let executable = arguments
+                .first()
+                .map(|arg| {
+                    Path::new(std::ffi::OsStr::from_bytes(arg))
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .unwrap_or_default();
+            let references_source = arguments.iter().any(|arg| {
+                String::from_utf8_lossy(arg).contains(source.to_string_lossy().as_ref())
+            });
+            if executable == "antinomie-monitor"
+                || (executable.starts_with("qemu-system-") && references_source)
+            {
+                return Err("legacy data migration deferred: close the existing Antinomie app and its QEMU VM before starting the new app".into());
+            }
+        }
+    }
+    if destination.exists()
+        && fs::read_dir(destination)
+            .map_err(|e| e.to_string())?
+            .next()
+            .is_some()
+    {
+        return Err("legacy migration destination is not empty; source retained, migration needs an explicit destination".into());
+    }
+    let parent = destination
+        .parent()
+        .ok_or("migration destination has no parent")?;
+    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let parent_canonical = fs::canonicalize(parent).map_err(|e| e.to_string())?;
+    let destination_canonical = parent_canonical.join(
+        destination
+            .file_name()
+            .ok_or("migration destination has no name")?,
+    );
+    if parent_canonical.starts_with(&source) || source.starts_with(&destination_canonical) {
+        return Err("migration source and destination overlap; source retained".into());
+    }
+    let staging = parent.join(format!(".antinomie-migrate-{}", unique_id()));
+    private_dir(&staging).map_err(|e| e.to_string())?;
+    fn copy_verified(source: &Path, destination: &Path) -> Result<(), String> {
+        for entry in fs::read_dir(source).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let target = destination.join(entry.file_name());
+            let kind = entry.file_type().map_err(|e| e.to_string())?;
+            if kind.is_dir() {
+                private_dir(&target).map_err(|e| e.to_string())?;
+                copy_verified(&entry.path(), &target)?;
+            } else if kind.is_file() {
+                fs::copy(entry.path(), &target).map_err(|e| e.to_string())?;
+                fs::set_permissions(
+                    &target,
+                    fs::Permissions::from_mode(
+                        fs::metadata(entry.path())
+                            .map_err(|e| e.to_string())?
+                            .permissions()
+                            .mode()
+                            & 0o777,
+                    ),
+                )
+                .map_err(|e| e.to_string())?;
+                if sha256_file(&entry.path())? != sha256_file(&target)? {
+                    return Err("migration copy validation failed".into());
+                }
+                File::open(&target)
+                    .and_then(|file| file.sync_all())
+                    .map_err(|e| e.to_string())?;
+            } else {
+                return Err(format!(
+                    "migration source contains unsupported live/special file {}; source retained",
+                    entry.path().display()
+                ));
+            }
+        }
+        Ok(())
+    }
+    let result = (|| {
+        copy_verified(&source, &staging)?;
+        let vms = staging.join("vms");
+        if vms.exists() {
+            for entry in fs::read_dir(&vms).map_err(|e| e.to_string())? {
+                let entry = entry.map_err(|e| e.to_string())?;
+                let config = entry.path().join("config.json");
+                if config.is_file() {
+                    let vm: VmConfig =
+                        serde_json::from_reader(File::open(config).map_err(|e| e.to_string())?)
+                            .map_err(|e| e.to_string())?;
+                    validate_vm(&vm)?;
+                    let slug = vm_id(&vm.name)
+                        .split('_')
+                        .next()
+                        .unwrap_or("vm")
+                        .to_string();
+                    fs::rename(entry.path(), staging.join(format!("{slug}_{}", vm.id)))
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+            fs::remove_dir(&vms).map_err(|e| e.to_string())?;
+        }
+        fn rewrite_json_paths(value: &mut serde_json::Value, source: &Path, destination: &Path) {
+            match value {
+                serde_json::Value::Object(object) => {
+                    for (key, value) in object {
+                        if [
+                            "kernel",
+                            "base_disk",
+                            "initrd",
+                            "raw_path",
+                            "directory",
+                            "capture_dir",
+                            "serial_log",
+                        ]
+                        .contains(&key.as_str())
+                        {
+                            if let Some(text) = value.as_str()
+                                && let Ok(relative) = Path::new(text).strip_prefix(source)
+                            {
+                                *value = serde_json::Value::String(
+                                    destination.join(relative).to_string_lossy().into_owned(),
+                                );
+                            }
+                        } else {
+                            rewrite_json_paths(value, source, destination);
+                        }
+                    }
+                }
+                serde_json::Value::Array(values) => {
+                    for value in values {
+                        rewrite_json_paths(value, source, destination);
+                    }
+                }
+                _ => {}
+            }
+        }
+        fn rewrite_tree(root: &Path, source: &Path, destination: &Path) -> Result<(), String> {
+            for entry in fs::read_dir(root).map_err(|e| e.to_string())? {
+                let entry = entry.map_err(|e| e.to_string())?;
+                let path = entry.path();
+                if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+                    rewrite_tree(&path, source, destination)?;
+                } else if path.extension().is_some_and(|ext| ext == "json")
+                    && ["bundle.json", "manifest.json", "events.json", "run.json"]
+                        .contains(&entry.file_name().to_string_lossy().as_ref())
+                {
+                    if fs::metadata(&path).map_err(|e| e.to_string())?.len() > 64 * 1024 * 1024 {
+                        return Err(
+                            "migration JSON exceeds bounded 64 MiB reader; source retained".into(),
+                        );
+                    }
+                    let mut value: serde_json::Value =
+                        serde_json::from_reader(File::open(&path).map_err(|e| e.to_string())?)
+                            .map_err(|e| format!("migration JSON {}: {e}", path.display()))?;
+                    rewrite_json_paths(&mut value, source, destination);
+                    atomic_json(&path, &value)?;
+                }
+            }
+            Ok(())
+        }
+        rewrite_tree(&staging, &source, destination)?;
+        for entry in fs::read_dir(&staging).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let disk = entry.path().join("disk.qcow2");
+            let bundle = entry.path().join("bundle.json");
+            if disk.is_file() && bundle.is_file() {
+                let bundle: Bundle =
+                    serde_json::from_reader(File::open(bundle).map_err(|e| e.to_string())?)
+                        .map_err(|e| e.to_string())?;
+                let relative = bundle
+                    .base_disk
+                    .strip_prefix(destination)
+                    .map_err(|_| "migration overlay backing is outside verified data root")?;
+                let verified_base = staging.join(relative);
+                if !verified_base.is_file() {
+                    return Err("migration verified backing base is missing".into());
+                }
+                let result = Command::new("qemu-img")
+                    .args(["rebase", "-u", "-f", "qcow2", "-F", "qcow2", "-b"])
+                    .arg(&bundle.base_disk)
+                    .arg(&disk)
+                    .output()
+                    .map_err(|e| e.to_string())?;
+                if !result.status.success() {
+                    return Err(format!(
+                        "migration overlay rebase: {}",
+                        String::from_utf8_lossy(&result.stderr)
+                    ));
+                }
+                File::open(&disk)
+                    .and_then(|file| file.sync_all())
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        atomic_json(
+            &staging.join("migration.json"),
+            &serde_json::json!({"source":source,"validated":true,"source_retained":true}),
+        )?;
+        if destination.exists() {
+            fs::remove_dir(destination).map_err(|e| e.to_string())?;
+        }
+        fs::rename(&staging, destination).map_err(|e| e.to_string())?;
+        File::open(parent)
+            .and_then(|file| file.sync_all())
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(staging);
+    }
+    result
 }
 pub(crate) fn create_overlay(
     options: &BackendOptions,
@@ -277,6 +589,7 @@ struct CaptureManifest<'a> {
     format: &'static str,
     vm: &'a VmConfig,
     bundle: &'a Bundle,
+    disk_bundle: &'a Bundle,
     packets: u64,
     bytes: u64,
     persistence_error: &'a Option<String>,
@@ -293,6 +606,13 @@ pub struct RawCapture {
     pub final_health: Option<Health>,
 }
 impl RawCapture {
+    pub(crate) fn sync(&mut self) -> Result<(), String> {
+        self.file.sync_all().map_err(|error| {
+            let message = format!("raw capture sync failed: {error}");
+            self.error.get_or_insert(message.clone());
+            message
+        })
+    }
     pub(crate) fn quota(&self) -> u64 {
         self.quota
     }
@@ -360,6 +680,7 @@ impl RawCapture {
         &mut self,
         vm: &VmConfig,
         bundle: &Bundle,
+        disk_bundle: &Bundle,
         state: &str,
     ) -> Result<(), String> {
         if let Err(e) = self.file.sync_all() {
@@ -367,7 +688,10 @@ impl RawCapture {
                 .get_or_insert_with(|| format!("capture sync failed: {e}"));
         }
         if let Some(health) = &mut self.final_health {
-            health.persistence_error = self.error.clone();
+            health.persistence_error = self
+                .error
+                .clone()
+                .or_else(|| health.persistence_error.clone());
         }
         atomic_json(
             &self.directory.join("manifest.json"),
@@ -375,6 +699,7 @@ impl RawCapture {
                 format: "ANTT1 length-prefixed raw LE32",
                 vm,
                 bundle,
+                disk_bundle,
                 packets: self.packets,
                 bytes: self.bytes,
                 persistence_error: &self.error,
@@ -388,6 +713,155 @@ impl RawCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn migration_preserves_disk_bytes_relocates_fields_and_parent_mode() {
+        let parent = std::env::temp_dir().join(format!("ant-migration-{}", unique_id()));
+        fs::create_dir(&parent).unwrap();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o750)).unwrap();
+        let source = parent.join("legacy");
+        let destination = parent.join("new");
+        private_dir(&source).unwrap();
+        let base = source.join("bases/original");
+        private_dir(&base).unwrap();
+        fs::write(base.join("kernel"), b"kernel").unwrap();
+        assert!(
+            Command::new("qemu-img")
+                .args(["create", "-f", "qcow2"])
+                .arg(base.join("base.qcow2"))
+                .arg("1M")
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        let mut bundle = Bundle {
+            kernel: base.join("kernel"),
+            base_disk: base.join("base.qcow2"),
+            initrd: None,
+            kernel_append: String::new(),
+            kernel_version: "6.12.94".into(),
+            schema_id: 1,
+            base_identity: None,
+        };
+        bundle.base_identity = Some(bundle.identity().unwrap());
+        let vm = source.join("vms/old-id");
+        private_dir(&vm).unwrap();
+        atomic_json(
+            &vm.join("config.json"),
+            &VmConfig {
+                id: "old-id".into(),
+                name: "Old VM".into(),
+                ..VmConfig::default()
+            },
+        )
+        .unwrap();
+        atomic_json(&vm.join("bundle.json"), &bundle).unwrap();
+        assert!(
+            Command::new("qemu-img")
+                .args(["create", "-f", "qcow2", "-F", "qcow2", "-b"])
+                .arg(&bundle.base_disk)
+                .arg(vm.join("disk.qcow2"))
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        let capture = source.join("captures/old-capture");
+        private_dir(&capture.join("objects")).unwrap();
+        fs::write(capture.join("objects/field.raw"), b"saved").unwrap();
+        atomic_json(
+            &capture.join("events.json"),
+            &Vec::<crate::api::EventSummary>::new(),
+        )
+        .unwrap();
+        atomic_json(
+            &capture.join("manifest.json"),
+            &serde_json::json!({"bundle":bundle,"raw_path":capture.join("objects/field.raw")}),
+        )
+        .unwrap();
+        let monitor = parent.join("antinomie-monitor");
+        std::os::unix::fs::symlink("/bin/sleep", &monitor).unwrap();
+        let mut child = Command::new(&monitor).arg("60").spawn().unwrap();
+        assert!(
+            migrate_data(&source, &destination)
+                .unwrap_err()
+                .contains("deferred")
+        );
+        child.kill().unwrap();
+        child.wait().unwrap();
+        migrate_data(&source, &destination).unwrap();
+        assert_eq!(
+            fs::metadata(&parent).unwrap().permissions().mode() & 0o777,
+            0o750
+        );
+        let options = BackendOptions {
+            data_dir: destination.clone(),
+            ..BackendOptions::default()
+        };
+        let migrated_vm = vm_dir(&options, "old-id").unwrap();
+        let migrated: Bundle =
+            serde_json::from_reader(File::open(migrated_vm.join("bundle.json")).unwrap()).unwrap();
+        migrated.verify_installed().unwrap();
+        assert!(migrated.base_disk.starts_with(&destination));
+        assert!(
+            Command::new("qemu-img")
+                .arg("compare")
+                .arg(vm.join("disk.qcow2"))
+                .arg(migrated_vm.join("disk.qcow2"))
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        let hidden = parent.join("legacy-hidden");
+        fs::rename(&source, &hidden).unwrap();
+        migrated.verify_installed().unwrap();
+        let field = crate::api::FieldSummary {
+            object_id: 1,
+            key: String::new(),
+            layout: String::new(),
+            logical_len: Some(5),
+            captured_len: 5,
+            status: Some(0),
+            capture_error: 0,
+            complete: true,
+            preview: vec![],
+            raw_path: Some(source.join("captures/old-capture/objects/field.raw")),
+            ranges: vec![(0, 5)],
+        };
+        assert_eq!(
+            crate::recording::read_captured_range(
+                &destination.join("captures/old-capture"),
+                &field,
+                0,
+                5
+            )
+            .unwrap(),
+            b"saved"
+        );
+        assert!(hidden.exists());
+        assert!(
+            migrate_data(&hidden, &hidden.join("nested"))
+                .unwrap_err()
+                .contains("overlap")
+        );
+        let conflict = parent.join("conflict");
+        private_dir(&conflict).unwrap();
+        fs::write(conflict.join("keep"), b"untouched").unwrap();
+        assert!(
+            migrate_data(&hidden, &conflict)
+                .unwrap_err()
+                .contains("not empty")
+        );
+        assert_eq!(fs::read(conflict.join("keep")).unwrap(), b"untouched");
+        let bad = parent.join("bad-source");
+        private_dir(&bad).unwrap();
+        fs::write(bad.join("manifest.json"), b"{broken").unwrap();
+        assert!(migrate_data(&bad, &parent.join("bad-target")).is_err());
+        assert!(bad.join("manifest.json").exists());
+        assert!(!parent.join("bad-target").exists());
+        fs::remove_dir_all(parent).unwrap();
+    }
     #[test]
     fn validates_paths_and_memory_boundaries() {
         let mut vm = VmConfig {

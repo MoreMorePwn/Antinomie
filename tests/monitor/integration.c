@@ -18,6 +18,7 @@ static uint64_t packets, entries, exits, fields, copy_faults, content_matches, o
 static void put16(uint8_t *p, uint16_t v) { p[0] = v; p[1] = v >> 8; }
 static void put32(uint8_t *p, uint32_t v) { for (int i=0; i<4; i++) p[i] = v >> (i*8); }
 static void put64(uint8_t *p, uint64_t v) { for (int i=0; i<8; i++) p[i] = v >> (i*8); }
+static uint16_t get16(const uint8_t *p) { return p[0] | (uint16_t)p[1] << 8; }
 static uint32_t get32(const uint8_t *p) { uint32_t v=0; for(int i=0;i<4;i++) v |= (uint32_t)p[i] << (i*8); return v; }
 static uint64_t get64(const uint8_t *p) { uint64_t v=0; for(int i=0;i<8;i++) v |= (uint64_t)p[i] << (i*8); return v; }
 static void header(uint8_t *p, uint32_t flags) { memset(p,0,8); put16(p,1); put16(p+2,8); put32(p+4,flags); }
@@ -28,15 +29,19 @@ static void drain(void)
     size_t len;
     int error;
     while (!(error=ant_read(client,telemetry,sizeof(telemetry),&len))) {
+        size_t body_offset;
         packets++;
-        if (len < 128 || memcmp(telemetry,"ANTT",4) || get32(telemetry+12)!=len) {
+        if (len < 136 || memcmp(telemetry,"ANTT",4) || get32(telemetry+12)!=len ||
+            get16(telemetry+4)!=1 || get16(telemetry+6)!=1 ||
+            get16(telemetry+8)!=136 || !get64(telemetry+128)) {
             fprintf(stderr,"bad telemetry framing\n"); exit(30);
         }
+        body_offset=get16(telemetry+8);
         if (telemetry[99] == 1) { if(telemetry[98]==1) entries++; if(telemetry[98]==2) exits++; }
         if (telemetry[99] == 2) fields++;
-        if (telemetry[99] == 3 && len >= 152 && !memcmp(telemetry+128,"ANTINOMIE-POINTER-CONTENT",24)) content_matches++;
-        if (telemetry[99] == 3 && len >= 140 && !memcmp(telemetry+128,"PROBE-ORPHAN",12)) orphan_matches++;
-        if (telemetry[99] == 4 && len == 160 && get32(telemetry+144)==1) copy_faults++;
+        if (telemetry[99] == 3 && len >= body_offset+24 && !memcmp(telemetry+body_offset,"ANTINOMIE-POINTER-CONTENT",24)) content_matches++;
+        if (telemetry[99] == 3 && len >= body_offset+12 && !memcmp(telemetry+body_offset,"PROBE-ORPHAN",12)) orphan_matches++;
+        if (telemetry[99] == 4 && len == body_offset+32 && get32(telemetry+body_offset+16)==1) copy_faults++;
     }
     if(error!=-EAGAIN) { fprintf(stderr,"telemetry read %d\n",error); exit(31); }
 }
@@ -132,6 +137,12 @@ int main(int argc,char **argv)
     printf("transport dropped=%"PRIu64" attempted=%"PRIu64"\n",stats.dropped,stats.attempted);
     printf("%s",output);
     if(!strstr(output,"PROBE UID=1000 GID=1000 ENV=verified") || !strstr(output,"PROBE-DESCENDANT") || !strstr(output,"PROBE-ORPHAN") || !strstr(output,"PROBE INPUT=ping") || !strstr(output,"PROBE PASS") || !entries || !exits || !content_matches || !copy_faults || !orphan_matches || get64(response+8)<4) return 26;
+    header(args,0);
+    if(command(ANTC_STOP_RUN,args,8)!=-EINVAL) return 27;
+    put64(args+8,0);
+    if(command(ANTC_STOP_RUN,args,16)!=-EINVAL) return 28;
+    put64(args+8,UINT64_MAX);
+    if(command(ANTC_STOP_RUN,args,16)!=-ESRCH) return 29;
     header(args,0); checked(ANTC_SHUTDOWN,args,8); ant_close(client);
     puts("INTEGRATION PASS"); return 0;
 }

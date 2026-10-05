@@ -20,6 +20,7 @@
 #define ANTC_TERMINAL_READ 0x1012
 #define ANTC_TERMINAL_RESIZE 0x1013
 #define ANTC_SIGNAL 0x1014
+#define ANTC_STOP_RUN 0x1015
 #define ANTC_STATS 0x1020
 #define ANTC_SHUTDOWN 0x1030
 #define ANTC_UPLOAD_OVERWRITE 1
@@ -52,6 +53,11 @@
  * u16 pixel_width at 20, u16 pixel_height at 22. Empty success reply.
  * SIGNAL: header, u64 session_id at 8, u32 signal at 16,
  * u32 reserved=0 at 20. Signals launch process group. Empty success reply.
+ * STOP_RUN: header flags=0, nonzero u64 root_task_cookie at 8 (16 bytes).
+ * Requests SIGTERM for each traced task with this inherited launch cookie,
+ * including descendants after root exit or PTY/session reaping. Empty reply.
+ * Status 0 means signal requests issued, not proven tree termination; -ESRCH
+ * means no signalable matching task. Concurrent forks may escape this pass.
  *
  * STATS: header only. Reply: ten u64 counters in order: stream_id,
  * tasks_created, tasks_live, calls_entered, events_attempted,

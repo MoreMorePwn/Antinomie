@@ -33,6 +33,50 @@ on 2026-10-01. Core workers/review use gpt-6.1-sol; bounded support may use Luna
 
 ## Ownership
 
+### Accepted ANT-T0008 Update
+
+The user approved these changes on 2026-10-05:
+
+- Each launched program opens a native terminal-only window. Concurrent runs
+  are supported within the single running VM. Closing that window leaves the
+  program running; it can be reopened and explicitly stopped.
+- Main trace pairs entry/exit by stream/task/call identity and shows Time,
+  Sequence, TID, CPU, Syscall (number), Return and Info. Missing phases remain
+  explicit. Entry/Exit argument trees and captured-object expansion feed a
+  separate hexdump/numeric inspector. Never infer uncaptured pointer content.
+- Text size is configurable and persisted. Terminal grid uses the same font.
+- Default retained data root is `~/antinomie`; VM directories are sanitized
+  names plus random identifiers. Existing user VM data/archives are migrated
+  by validated publication, never by moving an active VM's backing files.
+  User also approved booting migrated VMs with the newly patched kernel;
+  existing disk overlays/backing bases and explicit reset-to-base behavior
+  remain intact. Record boot bundle and disk base identities separately.
+- Each launch retains separate telemetry, launch metadata, terminal output,
+  resize history and a final terminal-screen snapshot. This is NOT a QEMU RAM
+  snapshot; V7 restore/reconnect remains unsupported. Offline paging must not
+  replace active collection or allocate the entire history.
+- Application telemetry extends major 1 with minor 1 and a 136-byte header:
+  original offsets 0..127 unchanged, root task cookie u64 at offset 128,
+  inherited independently of successful lifecycle transmission. Host also
+  reads legacy minor 0 / 128-byte headers with explicitly unknown ownership.
+- STOP_RUN opcode `0x1015`: version header (8 bytes), root task cookie u64 at
+  offset 8, total 16 bytes. Signals matching tracked tasks with SIGTERM;
+  success means signals issued, not atomic full-tree termination. No matching
+  tasks returns `-ESRCH`. Existing SIGNAL semantics remain separate.
+- PTY EOF/root exit alone do not prove detached descendants finished. Per-run
+  recording remains active until VM stop, with that distinction visible.
+- Cleanup removes old generated test VM disks/captures only after migration
+  validation; kernel author/source trees, build inputs and executable remain.
+
+Core/UI workers freeze public run-addressed types before dependent rendering.
+Core owns archive validation/paging and headless terminal persistence; UI uses
+owned API values and performs offline disk reads outside the rendering thread.
+Existing `vt100 0.15` may be used by core without adding a new external package.
+`rusqlite 0.40.2` is approved for bounded disk-backed archive indexing; SQLite
+is linked from the system and required upstream notices are retained.
+Run/session maps, previews, pages and queues remain bounded; new recording
+payloads count against the recording quota and preserve explicit failures.
+
 - Guest worker: kernel author tree work/debian-6.12.94-1-trixie/core, new guest
   protocol header src/antinomie/monitor/protocol/control.h, guest source manifest.
 - Host worker: src/antinomie/monitor/crates/monitor-core only, public backend API.

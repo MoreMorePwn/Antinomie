@@ -1,8 +1,10 @@
 pub mod api;
+mod archive_io;
 mod backend;
 mod control;
 pub mod parser;
 pub mod recording;
+mod run;
 pub mod storage;
 mod transport;
 mod vm;

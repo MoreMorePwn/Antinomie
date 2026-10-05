@@ -4,3 +4,4 @@
 # One entry per patch, in application order. Do not edit by hand.
 0001-antinomie-add-kernel-control-and-scoped-syscall-telemetry-over-v7.patch
 0002-antinomie-license-original-shared-transport-headers-under-mit.patch
+0003-antinomie-tag-launched-run-lineage-and-request-tree-stop.patch

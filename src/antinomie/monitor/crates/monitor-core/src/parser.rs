@@ -1,6 +1,7 @@
 //! Checked ANTT application protocol parsing and bounded, disk-backed assembly.
 use crate::{
     api::{EventSummary, FieldSummary},
+    archive_io,
     storage::private_dir,
 };
 use sha2::{Digest, Sha256};
@@ -70,6 +71,7 @@ pub(crate) fn u64_at(b: &[u8], o: usize) -> Result<u64> {
 
 #[derive(Clone, Debug)]
 pub struct Header {
+    pub root_task_cookie: u64,
     pub record_type: u16,
     pub flags: u32,
     pub schema_id: u32,
@@ -99,12 +101,17 @@ pub fn parse_packet(packet: &[u8]) -> Result<(Header, &[u8])> {
     if &packet[..4] != b"ANTT" {
         return Err(error("invalid ANTT magic"));
     }
-    if u16_at(packet, 4)? != 1 || u16_at(packet, 6)? != 0 {
+    let minor = u16_at(packet, 6)?;
+    if u16_at(packet, 4)? != 1 || minor > 1 {
         return Err(error("unsupported ANTT version"));
     }
-    if u16_at(packet, 8)? != 128
+    let header_size = if minor == 0 { 128 } else { 136 };
+    if packet.len() < header_size {
+        return Err(error("truncated ANTT extended header"));
+    }
+    if usize::from(u16_at(packet, 8)?) != header_size
         || u32_at(packet, 12)? as usize != packet.len()
-        || u32_at(packet, 120)? as usize != packet.len() - 128
+        || u32_at(packet, 120)? as usize != packet.len() - header_size
     {
         return Err(error("inconsistent ANTT lengths"));
     }
@@ -112,6 +119,7 @@ pub fn parse_packet(packet: &[u8]) -> Result<(Header, &[u8])> {
         return Err(error("nonzero ANTT reserved word"));
     }
     let h = Header {
+        root_task_cookie: if minor == 1 { u64_at(packet, 128)? } else { 0 },
         record_type: u16_at(packet, 10)?,
         flags: u32_at(packet, 16)?,
         schema_id: u32_at(packet, 20)?,
@@ -131,7 +139,7 @@ pub fn parse_packet(packet: &[u8]) -> Result<(Header, &[u8])> {
         object_offset: u64_at(packet, 104)?,
         object_total: u64_at(packet, 112)?,
     };
-    let b = &packet[128..];
+    let b = &packet[header_size..];
     match h.record_type {
         1 => {
             if !(1..=3).contains(&h.phase) || !(1..=5).contains(&h.fragment) {
@@ -283,6 +291,7 @@ impl Event {
     fn new(h: &Header) -> Self {
         Self {
             summary: EventSummary {
+                root_task_cookie: h.root_task_cookie,
                 stream_id: h.stream_id,
                 task_cookie: h.task_cookie,
                 call_id: h.call_id,
@@ -373,6 +382,8 @@ pub struct Assembler {
     pub evicted_count: u64,
     pub malformed_count: u64,
     enabled: bool,
+    read_only: bool,
+    saving_error: Option<String>,
     packet_count: usize,
     field_count: usize,
     chunk_count: usize,
@@ -381,7 +392,10 @@ pub struct Assembler {
 impl Assembler {
     pub fn new(directory: PathBuf, quota: u64) -> Result<Self> {
         private_dir(&directory).map_err(|e| error(e.to_string()))?;
-        Ok(Self {
+        Ok(Self::empty(directory, quota, false))
+    }
+    fn empty(directory: PathBuf, quota: u64, read_only: bool) -> Self {
+        Self {
             directory,
             quota,
             stored_len: 0,
@@ -390,14 +404,34 @@ impl Assembler {
             evicted_count: 0,
             malformed_count: 0,
             enabled: true,
+            read_only,
+            saving_error: None,
             packet_count: 0,
             field_count: 0,
             chunk_count: 0,
             evicted: VecDeque::new(),
-        })
+        }
     }
     pub fn stop_saving(&mut self) {
         self.enabled = false;
+    }
+    pub(crate) fn saving_error(&self) -> Option<&str> {
+        self.saving_error.as_deref()
+    }
+    pub(crate) fn open_archive(directory: PathBuf) -> Result<Self> {
+        if directory.exists() {
+            let root = std::fs::canonicalize(
+                directory
+                    .parent()
+                    .ok_or_else(|| error("archive objects have no parent"))?,
+            )
+            .map_err(|e| error(e.to_string()))?;
+            let objects = std::fs::canonicalize(&directory).map_err(|e| error(e.to_string()))?;
+            if !objects.starts_with(root) {
+                return Err(error("objects directory escapes recording"));
+            }
+        }
+        Ok(Self::empty(directory, u64::MAX, true))
     }
     pub fn stored_len(&self) -> u64 {
         self.stored_len
@@ -473,6 +507,9 @@ impl Assembler {
         }
         if e.summary.syscall_nr != h.syscall_nr {
             e.issues.push("conflicting syscall identity".into());
+        }
+        if e.summary.root_task_cookie != h.root_task_cookie {
+            e.issues.push("conflicting root task identity".into());
         }
         if h.flags & !0x1f != 0 {
             e.issues
@@ -576,12 +613,23 @@ impl Assembler {
                         {
                             if offset == h.object_offset && *len == b.len() as u64 {
                                 let mut previous = vec![0; b.len()];
-                                File::open(path)
-                                    .and_then(|mut file| {
-                                        file.seek(SeekFrom::Start(offset))
-                                            .and_then(|_| file.read_exact(&mut previous))
-                                    })
-                                    .map_err(|e| error(e.to_string()))?;
+                                let result = (if self.read_only {
+                                    archive_io::open_regular(&self.directory, path)
+                                } else {
+                                    File::open(path)
+                                })
+                                .and_then(|mut file| {
+                                    file.seek(SeekFrom::Start(offset))
+                                        .and_then(|_| file.read_exact(&mut previous))
+                                });
+                                if let Err(err) = result {
+                                    let message = format!("host object persistence: {err}");
+                                    if !self.read_only {
+                                        self.saving_error.get_or_insert(message.clone());
+                                        self.enabled = false;
+                                    }
+                                    return Err(error(message));
+                                }
                                 if previous != b {
                                     f.issues.push("conflicting duplicate chunk".into());
                                 }
@@ -598,12 +646,19 @@ impl Assembler {
                             f.issues.push("host chunk state limit".into());
                             return Ok(Some(e.summary()));
                         }
-                        if !self.enabled
-                            || chunk_end > self.quota
+                        if !self.enabled {
+                            f.issues.push("host object saving stopped".into());
+                            return Ok(Some(e.summary()));
+                        }
+                        if chunk_end > self.quota
                             || self.stored_len.saturating_add(b.len() as u64) > self.quota
                         {
-                            f.issues
-                                .push("host object storage unavailable or quota exhausted".into());
+                            let message = "host object quota exhausted; saving stopped".to_string();
+                            if !self.read_only {
+                                self.saving_error.get_or_insert(message.clone());
+                                self.enabled = false;
+                            }
+                            f.issues.push(message);
                             return Ok(Some(e.summary()));
                         }
                         let path = self.directory.join(format!(
@@ -615,19 +670,39 @@ impl Assembler {
                             h.event_seq,
                             h.object_id
                         ));
-                        let result = OpenOptions::new()
-                            .read(true)
-                            .write(true)
-                            .create(true)
-                            .truncate(false)
-                            .mode(0o600)
-                            .open(&path)
-                            .and_then(|mut file| {
-                                file.seek(SeekFrom::Start(h.object_offset))
-                                    .and_then(|_| file.write_all(b))
-                            });
+                        let result = if self.read_only {
+                            archive_io::open_regular(&self.directory, &path).and_then(|mut file| {
+                                let mut previous = vec![0; b.len()];
+                                file.seek(SeekFrom::Start(h.object_offset))?;
+                                file.read_exact(&mut previous)?;
+                                if previous == b {
+                                    Ok(())
+                                } else {
+                                    Err(std::io::Error::other(
+                                        "archived field differs from raw packet",
+                                    ))
+                                }
+                            })
+                        } else {
+                            OpenOptions::new()
+                                .read(true)
+                                .write(true)
+                                .create(true)
+                                .truncate(false)
+                                .mode(0o600)
+                                .open(&path)
+                                .and_then(|mut file| {
+                                    file.seek(SeekFrom::Start(h.object_offset))
+                                        .and_then(|_| file.write_all(b))
+                                })
+                        };
                         if let Err(err) = result {
-                            f.issues.push(format!("host object persistence: {err}"));
+                            let message = format!("host object persistence: {err}");
+                            if !self.read_only {
+                                self.saving_error.get_or_insert(message.clone());
+                                self.enabled = false;
+                            }
+                            f.issues.push(message);
                             return Ok(Some(e.summary()));
                         }
                         self.stored_len += b.len() as u64;
@@ -727,6 +802,69 @@ mod tests {
         }
     }
     #[test]
+    fn extended_headers_keep_inherited_root_and_legacy_root_unknown() {
+        let legacy = packet(1, 0, 0, &[0; 120], 1);
+        assert_eq!(parse_packet(&legacy).unwrap().0.root_task_cookie, 0);
+        let mut extended = legacy[..128].to_vec();
+        extended.extend(77u64.to_le_bytes());
+        extended.extend(&legacy[128..]);
+        extended[6..8].copy_from_slice(&1u16.to_le_bytes());
+        extended[8..10].copy_from_slice(&136u16.to_le_bytes());
+        let size = extended.len() as u32;
+        extended[12..16].copy_from_slice(&size.to_le_bytes());
+        assert_eq!(parse_packet(&extended).unwrap().0.root_task_cookie, 77);
+        for size in 128..136 {
+            assert!(parse_packet(&extended[..size]).is_err());
+        }
+        extended[8..10].copy_from_slice(&128u16.to_le_bytes());
+        assert!(parse_packet(&extended).is_err());
+    }
+    #[test]
+    fn archived_object_symlink_and_fifo_never_become_captured_ranges() {
+        let root =
+            std::env::temp_dir().join(format!("ant-object-reader-{}", crate::storage::unique_id()));
+        let objects = root.join("objects");
+        private_dir(&objects).unwrap();
+        let external = root.parent().unwrap().join(format!(
+            "ant-object-external-{}",
+            crate::storage::unique_id()
+        ));
+        std::fs::write(&external, b"abc").unwrap();
+        let member = objects.join("0-0-0-1-0-1.raw");
+        std::os::unix::fs::symlink(&external, &member).unwrap();
+        let mut assembler = Assembler::open_archive(objects.clone()).unwrap();
+        let event = assembler
+            .ingest(&packet(3, 1, 0, b"abc", 1))
+            .unwrap()
+            .unwrap();
+        assert!(event.fields[0].ranges.is_empty());
+        assert!(event.issues.iter().any(|issue| issue.contains("escapes")));
+        assert!(assembler.saving_error().is_none());
+        std::fs::remove_file(&member).unwrap();
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&member)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let mut assembler = Assembler::open_archive(objects).unwrap();
+        let event = assembler
+            .ingest(&packet(3, 1, 0, b"abc", 1))
+            .unwrap()
+            .unwrap();
+        assert!(event.fields[0].ranges.is_empty());
+        assert!(assembler.saving_error().is_none());
+        assert!(
+            event
+                .issues
+                .iter()
+                .any(|issue| issue.contains("regular file"))
+        );
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_file(external).unwrap();
+    }
+    #[test]
     fn reassembles_reordered_fragments_without_claiming_gaps_complete() {
         let path = std::env::temp_dir().join(format!("ant-parser-{}", crate::storage::unique_id()));
         let mut a = Assembler::new(path.clone(), 1024).unwrap();
@@ -767,7 +905,40 @@ mod tests {
         let s = a.ingest(&packet(4, 1, 0, &terminal, 1)).unwrap().unwrap();
         assert!(!s.complete);
         assert_eq!(s.fields[0].status, Some(1));
+        assert!(a.saving_error().is_none());
         std::fs::remove_dir_all(path).unwrap();
+    }
+    #[test]
+    fn object_quota_and_io_failures_stop_saving_without_inventing_ranges() {
+        for io_failure in [false, true] {
+            let path = std::env::temp_dir()
+                .join(format!("ant-object-saving-{}", crate::storage::unique_id()));
+            let mut assembler = Assembler::new(path.clone(), 1024).unwrap();
+            assembler.ingest(&packet(3, 1, 0, b"saved", 1)).unwrap();
+            let retained_path = assembler.history()[0].fields[0].raw_path.clone().unwrap();
+            if io_failure {
+                std::fs::create_dir(path.join("0-0-0-1-0-2.raw")).unwrap();
+            } else {
+                assembler.set_storage_limit(6);
+            }
+            let event = assembler
+                .ingest(&packet(3, 2, 0, b"not saved", 2))
+                .unwrap()
+                .unwrap();
+            assert!(event.fields[1].ranges.is_empty());
+            let failure = assembler.saving_error().unwrap().to_owned();
+            assert!(failure.contains(if io_failure { "persistence" } else { "quota" }));
+            assembler.set_storage_limit(1024);
+            let event = assembler
+                .ingest(&packet(3, 3, 0, b"later", 3))
+                .unwrap()
+                .unwrap();
+            assert!(event.fields[2].ranges.is_empty());
+            assert_eq!(assembler.saving_error(), Some(failure.as_str()));
+            assert_eq!(assembler.stored_len(), 5);
+            assert_eq!(std::fs::read(retained_path).unwrap(), b"saved");
+            std::fs::remove_dir_all(path).unwrap();
+        }
     }
     #[test]
     fn streams_ten_mebibytes_and_keeps_only_bounded_previews() {

@@ -16,6 +16,11 @@ impl Default for Terminal {
 }
 
 impl Terminal {
+    #[cfg(test)]
+    pub(crate) fn contents(&self) -> String {
+        self.parser.screen().contents()
+    }
+
     pub fn process(&mut self, bytes: &[u8]) {
         self.parser.process(bytes);
     }
@@ -24,7 +29,28 @@ impl Terminal {
         self.size = (0, 0);
     }
 
+    pub(crate) fn replay_resize(&mut self, rows: u16, cols: u16) {
+        self.parser.set_size(rows.clamp(1, 80), cols.clamp(1, 240));
+        self.size = (0, 0);
+    }
+
+    pub(crate) fn replace_screen(&mut self, rows: u16, cols: u16, data: &[u8]) {
+        let size = (rows.clamp(1, 80), cols.clamp(1, 240));
+        self.parser = vt100::Parser::new(size.0, size.1, 2000);
+        self.parser.process(data);
+        self.size = size;
+    }
+
     pub fn show(&mut self, ui: &mut egui::Ui, enabled: bool) -> (Vec<u8>, Option<(u16, u16)>) {
+        self.show_grid(ui, enabled, true)
+    }
+
+    pub(crate) fn show_grid(
+        &mut self,
+        ui: &mut egui::Ui,
+        enabled: bool,
+        resize_parser: bool,
+    ) -> (Vec<u8>, Option<(u16, u16)>) {
         let font = TextStyle::Monospace.resolve(ui.style());
         let cell =
             ui.fonts(|fonts| egui::vec2(fonts.glyph_width(&font, 'M'), fonts.row_height(&font)));
@@ -32,9 +58,14 @@ impl Terminal {
         if available.x < cell.x || available.y < cell.y {
             return (Vec::new(), None);
         }
-        let cols = (available.x / cell.x).floor().clamp(1.0, 240.0) as u16;
-        let rows = (available.y / cell.y).floor().clamp(1.0, 80.0) as u16;
-        let resize = if self.size != (rows, cols) {
+        let mut cols = (available.x / cell.x).floor().clamp(1.0, 240.0) as u16;
+        let mut rows = (available.y / cell.y).floor().clamp(1.0, 80.0) as u16;
+        if !resize_parser {
+            let size = self.parser.screen().size();
+            rows = size.0;
+            cols = size.1;
+        }
+        let resize = if resize_parser && self.size != (rows, cols) {
             self.size = (rows, cols);
             self.parser.set_size(rows, cols);
             Some(self.size)
@@ -48,7 +79,7 @@ impl Terminal {
         if response.clicked() {
             response.request_focus();
         }
-        if response.hovered() {
+        if resize_parser && response.hovered() {
             let scroll = ui.input(|state| state.raw_scroll_delta.y);
             if scroll != 0.0 {
                 let old = self.parser.screen().scrollback();
@@ -109,7 +140,7 @@ impl Terminal {
                 }
             }
         }
-        if response.has_focus() && !screen.hide_cursor() {
+        if enabled && response.has_focus() && !screen.hide_cursor() {
             let (row, col) = screen.cursor_position();
             let pos = rect.min + egui::vec2(f32::from(col) * cell.x, f32::from(row) * cell.y);
             painter.rect_stroke(
@@ -120,9 +151,15 @@ impl Terminal {
             );
         }
         let mut input = Vec::new();
-        if enabled && response.has_focus() {
+        let closing = ui.input(|state| state.viewport().close_requested());
+        let queued_focus = closing && ui.memory(|memory| memory.has_focus(response.id));
+        if enabled && (response.has_focus() || queued_focus) {
             ui.input(|state| {
                 for event in &state.events {
+                    // Viewport Close is untimestamped; focus-loss events delimit ordered input.
+                    if closing && matches!(event, egui::Event::WindowFocused(false)) {
+                        break;
+                    }
                     match event {
                         egui::Event::Text(text) | egui::Event::Paste(text) => {
                             input.extend_from_slice(text.as_bytes())
@@ -231,6 +268,38 @@ fn color(value: vt100::Color, default: Color32) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn historical_grid_survives_small_viewports_and_large_fonts() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        theme::text_size(&ctx, 24.0);
+        let mut terminal = Terminal::default();
+        terminal.replay_resize(4, 12);
+        terminal.process(b"123456789012X");
+        let original = terminal.contents();
+        for pane in [egui::vec2(160.0, 80.0), egui::vec2(800.0, 600.0)] {
+            let mut resize = None;
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, pane)),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        egui::ScrollArea::both().show(ui, |ui| {
+                            resize = terminal.show_grid(ui, false, false).1;
+                        });
+                    });
+                },
+            );
+            assert!(resize.is_none());
+            assert_eq!(terminal.parser.screen().size(), (4, 12));
+            assert_eq!(terminal.contents(), original);
+        }
+        terminal.process(b"Y");
+        assert!(terminal.contents().contains("XY"));
+    }
 
     #[test]
     fn vt100_parser_keeps_terminal_state_and_ansi_colors() {
