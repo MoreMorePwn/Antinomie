@@ -4,6 +4,12 @@ V7 transport code lives here. The initial monitor and application commands live
 in `../monitor/`, with integration probes in `tests/monitor/` at the repository
 root. Historical transport-only benchmarks remain in the original project vault.
 
+Host implementation/API and original shared headers (`abi.h`, `queue.h`,
+`bootstrap_layout.h`) are MIT licensed, copyright 2026 MikiMiku (MoreMorePwn).
+Kernel-only `guest.c`, `bootstrap.c` and `guest_api.h` remain GPL-2.0-only.
+See the root [licensing scope](../../../LICENSING.md); licensing changes do
+not change the ABI or executable logic.
+
 - `guest_api.h`: kernel feature interface, included as `<linux/antinomie.h>`.
 - `host_api.h`: opaque host client interface; compile/link `host.c` (the Rust
   monitor build creates its own `ant_host` static library).

@@ -31,6 +31,14 @@ The initial native monitoring application, kernel-only controls and BusyBox
 guest workflow are documented in [Native Monitor](src/antinomie/monitor/README.md).
 Shared agent conventions are in [AGENTS.md](AGENTS.md).
 
+## License
+
+Original independently licensable Antinomie host/tooling code is
+[MIT licensed](LICENSE), copyright 2026 MikiMiku (MoreMorePwn).
+Kernel-derived and imported material retain their existing terms. See
+[licensing scope](LICENSING.md) and [third-party notices](THIRD-PARTY-NOTICES.md)
+before redistribution; the whole kernel or guest image is not MIT licensed.
+
 ## Layout
 
 ```

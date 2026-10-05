@@ -70,6 +70,16 @@ contract changes instead of independently redesigning a neighboring module.
 - Full kernel source trees and VM images stay outside tracked source files.
 - User-created persistent VM data never lives in disposable work/ build trees.
 
+## Licensing and provenance
+
+Read LICENSING.md, THIRD-PARTY-NOTICES.md and the guide's
+`Licensing and Provenance.md` before importing code/assets or preparing a release.
+Original eligible host/tooling code defaults to MIT with the project identity
+`MikiMiku (MoreMorePwn)`; preserve kernel and upstream/file-specific terms.
+Do not commit unnecessary third-party branding, reference mockups or research
+artifacts to this product repository. Required notices and honest technical
+provenance are mandatory exceptions; never remove or disguise them.
+
 ## Documentation
 
 Public arguments, return values and declaration purposes use tables. Walkthrough

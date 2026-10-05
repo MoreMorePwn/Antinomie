@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: MIT */
+/* Copyright (c) 2026 MikiMiku (MoreMorePwn) */
 #ifndef ANTINOMIE_TRANSPORT_ABI_H
 #define ANTINOMIE_TRANSPORT_ABI_H
 #include <linux/types.h>

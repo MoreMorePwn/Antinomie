@@ -4,6 +4,13 @@ Initial native Rust/egui application, C V7 transport and kernel-only guest
 controls. The guest is Linux 6.12.94 with the project's Debian source baseline
 and Antinomie patch, plus a minimal BusyBox root filesystem, not Debian userspace.
 
+## License
+
+Original monitor code and the host/shared transport are MIT licensed, copyright
+2026 MikiMiku (MoreMorePwn). Kernel implementation and third-party components
+retain their terms. See the root [licensing scope](../../../LICENSING.md) and
+[required notices](../../../THIRD-PARTY-NOTICES.md); guest images are not wholly MIT.
+
 ## Build and run
 
 Use an ext4 workspace. Required tools include Rust/Cargo, a C compiler, the

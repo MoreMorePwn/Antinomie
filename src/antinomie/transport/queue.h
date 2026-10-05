@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: MIT */
+/* Copyright (c) 2026 MikiMiku (MoreMorePwn) */
 #ifndef ANTINOMIE_QUEUE_H
 #define ANTINOMIE_QUEUE_H
 #include "abi.h"

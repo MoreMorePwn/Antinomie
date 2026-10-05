@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: MIT */
+/* Copyright (c) 2026 MikiMiku (MoreMorePwn) */
 #ifndef ANTINOMIE_HOST_API_H
 #define ANTINOMIE_HOST_API_H
 #include <stddef.h>
