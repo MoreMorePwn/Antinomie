@@ -49,19 +49,22 @@ pub fn install(ctx: &egui::Context) {
     style.visuals.widgets.active.weak_bg_fill = PRIMARY;
     style.spacing.item_spacing = egui::vec2(8.0, 5.0);
     style.spacing.button_padding = egui::vec2(8.0, 4.0);
-    style.spacing.interact_size.y = 24.0;
+    style.spacing.interact_size.y = 28.0;
     style
         .text_styles
-        .insert(TextStyle::Body, FontId::proportional(12.0));
+        .insert(TextStyle::Body, FontId::proportional(16.0));
     style
         .text_styles
-        .insert(TextStyle::Button, FontId::proportional(12.0));
+        .insert(TextStyle::Button, FontId::proportional(16.0));
     style
         .text_styles
-        .insert(TextStyle::Small, FontId::proportional(11.0));
+        .insert(TextStyle::Small, FontId::proportional(14.0));
     style
         .text_styles
-        .insert(TextStyle::Heading, FontId::proportional(18.0));
+        .insert(TextStyle::Heading, FontId::proportional(20.0));
+    style
+        .text_styles
+        .insert(TextStyle::Monospace, FontId::monospace(16.0));
     ctx.set_style(style);
 }
 
@@ -87,6 +90,14 @@ mod tests {
         assert_eq!(style.visuals.extreme_bg_color, BG);
         assert_eq!(style.visuals.override_text_color, Some(TEXT));
         assert_eq!(style.visuals.selection.stroke.color, BLUE);
-        assert_eq!(style.text_styles[&TextStyle::Body].size, 12.0);
+        for (text_style, size) in [
+            (TextStyle::Body, 16.0),
+            (TextStyle::Button, 16.0),
+            (TextStyle::Monospace, 16.0),
+            (TextStyle::Small, 14.0),
+            (TextStyle::Heading, 20.0),
+        ] {
+            assert_eq!(style.text_styles[&text_style].size, size);
+        }
     }
 }

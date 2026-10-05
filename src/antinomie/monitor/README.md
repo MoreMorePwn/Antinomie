@@ -89,6 +89,10 @@ launch, upload and recording settings open in bounded dialogs. Toolbar icons
 have tooltips; menus expose the same implemented commands. There are no
 placeholder process/rules/build views or duplicate image/run catalogs.
 
+Main text, buttons, monospace details and terminal text use a fixed 16-point
+style; secondary text uses 14 points and headings 20. Terminal cell metrics
+follow its font so displayed rows/columns and guest resize requests agree.
+
 Selecting an event row reveals its full return value, correlation identity,
 capture status and byte previews. Long table values are clipped with full
 hover text. Loss counters and recording failures stay visible on every tab.

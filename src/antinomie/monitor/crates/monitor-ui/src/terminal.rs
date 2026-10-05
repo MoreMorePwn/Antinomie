@@ -1,5 +1,5 @@
 use crate::theme;
-use eframe::egui::{self, Color32, FontId, Key, Sense};
+use eframe::egui::{self, Color32, Key, Sense, TextStyle};
 
 pub struct Terminal {
     parser: vt100::Parser,
@@ -25,10 +25,15 @@ impl Terminal {
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, enabled: bool) -> (Vec<u8>, Option<(u16, u16)>) {
-        let cell = egui::vec2(8.0, 17.0);
+        let font = TextStyle::Monospace.resolve(ui.style());
+        let cell =
+            ui.fonts(|fonts| egui::vec2(fonts.glyph_width(&font, 'M'), fonts.row_height(&font)));
         let available = ui.available_size();
-        let cols = (available.x / cell.x).floor().clamp(20.0, 240.0) as u16;
-        let rows = (available.y / cell.y).floor().clamp(4.0, 80.0) as u16;
+        if available.x < cell.x || available.y < cell.y {
+            return (Vec::new(), None);
+        }
+        let cols = (available.x / cell.x).floor().clamp(1.0, 240.0) as u16;
+        let rows = (available.y / cell.y).floor().clamp(1.0, 80.0) as u16;
         let resize = if self.size != (rows, cols) {
             self.size = (rows, cols);
             self.parser.set_size(rows, cols);
@@ -64,24 +69,41 @@ impl Terminal {
                     continue;
                 };
                 let pos = rect.min + egui::vec2(f32::from(col) * cell.x, f32::from(row) * cell.y);
-                let mut fg = color(content.fgcolor(), theme::TEXT);
-                let mut bg = color(content.bgcolor(), theme::TERMINAL);
-                if content.inverse() {
-                    std::mem::swap(&mut fg, &mut bg);
-                }
+                let bg = if content.inverse() {
+                    color(content.fgcolor(), theme::TEXT)
+                } else {
+                    color(content.bgcolor(), theme::TERMINAL)
+                };
                 painter.rect_filled(egui::Rect::from_min_size(pos, cell), 0.0, bg);
+            }
+        }
+        // Paint every background first so wide glyphs survive their continuation cell.
+        for row in 0..rows {
+            for col in 0..cols {
+                let Some(content) = screen.cell(row, col) else {
+                    continue;
+                };
+                let pos = rect.min + egui::vec2(f32::from(col) * cell.x, f32::from(row) * cell.y);
+                let fg = if content.inverse() {
+                    color(content.bgcolor(), theme::TERMINAL)
+                } else {
+                    color(content.fgcolor(), theme::TEXT)
+                };
                 if !content.is_wide_continuation() {
                     painter.text(
                         pos,
                         egui::Align2::LEFT_TOP,
                         content.contents(),
-                        FontId::monospace(13.0),
+                        font.clone(),
                         fg,
                     );
                 }
                 if content.underline() {
                     painter.line_segment(
-                        [pos + egui::vec2(0.0, 15.0), pos + egui::vec2(8.0, 15.0)],
+                        [
+                            pos + egui::vec2(0.0, cell.y - 1.0),
+                            pos + egui::vec2(cell.x, cell.y - 1.0),
+                        ],
                         egui::Stroke::new(1.0_f32, fg),
                     );
                 }
@@ -235,5 +257,104 @@ mod tests {
             color(vt100::Color::Idx(255), theme::TEXT),
             Color32::from_rgb(238, 238, 238)
         );
+    }
+
+    #[test]
+    fn terminal_grid_fits_its_pane_and_tracks_the_shared_font() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut terminal = Terminal::default();
+        terminal.process(b"\x1b[4mAB\x1b[0m\r\nCD");
+        let mut previous_size: Option<(u16, u16)> = None;
+        for (font_size, pane) in [
+            (16.0, egui::vec2(540.0, 150.0)),
+            (20.0, egui::vec2(540.0, 150.0)),
+            (16.0, egui::vec2(540.0, 64.0)),
+        ] {
+            ctx.style_mut(|style| {
+                style
+                    .text_styles
+                    .insert(TextStyle::Monospace, egui::FontId::monospace(font_size));
+            });
+            let mut resize = None;
+            let mut cell = egui::Vec2::ZERO;
+            let mut allocation = egui::Rect::NOTHING;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, pane)),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::NONE)
+                        .show(ctx, |ui| {
+                            let font = TextStyle::Monospace.resolve(ui.style());
+                            cell = ui.fonts(|fonts| {
+                                egui::vec2(fonts.glyph_width(&font, 'M'), fonts.row_height(&font))
+                            });
+                            let focus = ui.next_auto_id();
+                            ui.memory_mut(|memory| memory.request_focus(focus));
+                            resize = terminal.show(ui, true).1;
+                            allocation = ui.min_rect();
+                        });
+                },
+            );
+            let size = resize.expect("changing font or pane must resize the terminal");
+            assert_eq!(terminal.parser.screen().size(), size);
+            assert_eq!(size.0, (pane.y / cell.y).floor() as u16);
+            assert_eq!(size.1, (pane.x / cell.x).floor() as u16);
+            assert!(allocation.right() <= pane.x && allocation.bottom() <= pane.y);
+            if font_size == 20.0 {
+                let previous = previous_size.unwrap();
+                assert!(size.0 < previous.0 && size.1 < previous.1);
+            }
+            previous_size = Some(size);
+            let glyphs: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text)
+                        if ["A", "B", "C", "D"].contains(&text.galley.text()) =>
+                    {
+                        Some(text)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(glyphs.len(), 4);
+            assert!(
+                glyphs[0].visual_bounding_rect().right() <= glyphs[1].visual_bounding_rect().left()
+            );
+            assert!(
+                glyphs[0].visual_bounding_rect().bottom() <= glyphs[2].visual_bounding_rect().top()
+            );
+            assert!(glyphs
+                .iter()
+                .all(|text| text.galley.job.sections[0].format.font_id.size == font_size));
+            let underline = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::LineSegment { points, .. } => Some(points),
+                    _ => None,
+                })
+                .expect("underlined terminal content must render an underline");
+            assert!((underline[1].x - underline[0].x - cell.x).abs() < 0.01);
+            assert!((underline[0].y - glyphs[0].pos.y - cell.y + 1.0).abs() < 0.01);
+            let cursor = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(rect) if rect.stroke.color == Color32::WHITE => {
+                        Some(rect.rect)
+                    }
+                    _ => None,
+                })
+                .expect("focused terminal must render its cursor");
+            assert!((cursor.width() - cell.x).abs() < 0.01);
+            assert!((cursor.height() - cell.y).abs() < 0.01);
+            assert!((cursor.left() - 2.0 * cell.x).abs() < 0.01);
+            assert!((cursor.top() - cell.y).abs() < 0.01);
+        }
     }
 }

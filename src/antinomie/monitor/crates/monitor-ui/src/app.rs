@@ -282,7 +282,7 @@ impl MonitorApp {
         let stopped = self.snapshot.active_vm.is_none();
         let selected = self.selected.is_some() && stopped;
         egui::TopBottomPanel::top("menus")
-            .exact_height(28.0)
+            .exact_height(32.0)
             .frame(theme::frame(theme::PANEL))
             .show(ctx, |ui| {
                 egui::menu::bar(ui, |ui| {
@@ -402,7 +402,7 @@ impl MonitorApp {
 
     fn toolbar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("toolbar")
-            .exact_height(34.0)
+            .exact_height(38.0)
             .frame(theme::frame(theme::PANEL))
             .show(ctx, |ui| {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -500,8 +500,8 @@ impl MonitorApp {
 
     fn sidebar(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("vms")
-            .default_width(190.0)
-            .min_width(150.0)
+            .default_width(210.0)
+            .min_width(190.0)
             .max_width(300.0)
             .resizable(true)
             .frame(
@@ -543,7 +543,7 @@ impl MonitorApp {
                             );
                             if ui
                                 .add_sized(
-                                    [ui.available_width(), 24.0],
+                                    [ui.available_width(), 30.0],
                                     egui::Button::new(RichText::new(label))
                                         .frame(false)
                                         .selected(self.selected.as_ref() == Some(&vm.id))
@@ -682,17 +682,17 @@ impl MonitorApp {
             ui.label(RichText::new("No activity").color(theme::MUTED));
             return;
         }
-        let height = (ui.available_height() - 22.0).max(0.0);
+        let height = (ui.available_height() - 30.0).max(0.0);
         TableBuilder::new(ui)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::exact(68.0))
-            .column(Column::exact(50.0))
+            .column(Column::exact(84.0))
+            .column(Column::exact(60.0))
             .column(Column::remainder())
             .min_scrolled_height(0.0)
             .max_scroll_height(height)
             .auto_shrink([false, false])
             .stick_to_bottom(true)
-            .header(22.0, |mut header| {
+            .header(30.0, |mut header| {
                 for text in ["Time", "Level", "Message"] {
                     header.col(|ui| {
                         ui.label(RichText::new(text).color(theme::MUTED));
@@ -700,7 +700,7 @@ impl MonitorApp {
                 }
             })
             .body(|body| {
-                body.rows(22.0, self.activity.len(), |mut row| {
+                body.rows(30.0, self.activity.len(), |mut row| {
                     let activity = &self.activity[row.index()];
                     row.col(|ui| {
                         ui.monospace(&activity.time).on_hover_text("UTC");
@@ -890,9 +890,9 @@ impl MonitorApp {
             })
             .map(|(index, _)| index)
             .collect();
-        let table_height = (ui.available_height() - 25.0).max(0.0);
+        let table_height = (ui.available_height() - 30.0).max(0.0);
         ui.allocate_ui(
-            egui::vec2(ui.available_width(), table_height + 25.0),
+            egui::vec2(ui.available_width(), table_height + 30.0),
             |ui| {
                 ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
                 ui.style_mut().interaction.selectable_labels = false;
@@ -904,13 +904,13 @@ impl MonitorApp {
                     .max_scroll_height(table_height)
                     .min_scrolled_height(0.0)
                     .auto_shrink([false, false])
-                    .column(Column::initial(66.0).at_least(40.0).clip(true))
-                    .column(Column::initial(48.0).at_least(35.0).clip(true))
-                    .column(Column::initial(115.0).at_least(70.0).clip(true))
-                    .column(Column::initial(34.0).at_least(28.0).clip(true))
-                    .column(Column::initial(70.0).at_least(40.0).clip(true))
+                    .column(Column::initial(84.0).at_least(76.0).clip(true))
+                    .column(Column::initial(54.0).at_least(40.0).clip(true))
+                    .column(Column::initial(110.0).at_least(70.0).clip(true))
+                    .column(Column::initial(40.0).at_least(36.0).clip(true))
+                    .column(Column::initial(86.0).at_least(60.0).clip(true))
                     .column(Column::remainder().clip(true))
-                    .header(25.0, |mut header| {
+                    .header(30.0, |mut header| {
                         for label in ["Sequence", "TID", "Syscall", "CPU", "Return", "Capture"] {
                             header.col(|ui| {
                                 ui.strong(label);
@@ -918,7 +918,7 @@ impl MonitorApp {
                         }
                     })
                     .body(|body| {
-                        body.rows(24.0, indices.len(), |mut row| {
+                        body.rows(30.0, indices.len(), |mut row| {
                             let event = &self.snapshot.events[indices[row.index()]];
                             let key = (
                                 event.stream_id,
@@ -1081,9 +1081,9 @@ impl MonitorApp {
             .id(egui::Id::new("vm_configuration"))
             .collapsible(false)
             .resizable(false)
-            .default_width(420.0)
+            .default_width(460.0)
             .default_height(0.0)
-            .max_width(460.0)
+            .max_width(500.0)
             .max_height((ctx.screen_rect().height() - 90.0).max(200.0))
             .open(&mut open)
             .show(ctx, |ui| {
@@ -1206,9 +1206,9 @@ impl MonitorApp {
                 .open(&mut open)
                 .collapsible(false)
                 .resizable(false)
-                .default_width(440.0)
+                .default_width(500.0)
                 .default_height(0.0)
-                .max_width(480.0)
+                .max_width(540.0)
                 .max_height((ctx.screen_rect().height() - 90.0).max(200.0))
                 .show(ctx, |ui| {
                     scroll_dialog(ui, ctx, |ui| {
@@ -1442,7 +1442,7 @@ fn icon(ui: &mut egui::Ui, icon: &str, tooltip: &str, enabled: bool) -> bool {
         enabled,
         egui::Button::new(RichText::new(icon).size(16.0))
             .frame(false)
-            .min_size(egui::vec2(26.0, 24.0)),
+            .min_size(egui::vec2(28.0, 28.0)),
     )
     .on_hover_text(tooltip)
     .clicked()
@@ -1579,6 +1579,7 @@ mod tests {
                 app.snapshot.health.dropped = 3;
                 app.snapshot.health.persistence_error = Some("disk full".into());
                 app.log("ERROR", "disk full".into());
+                app.log("INFO", "statistics refreshed".into());
                 let _ = render(&mut app, &ctx, size);
                 let output = render(&mut app, &ctx, size);
                 let texts = texts(&output);
@@ -1592,6 +1593,36 @@ mod tests {
                 assert!(rect("Capture").bottom() < rect("Details").top());
                 assert!(rect("Details").bottom() < rect("Transport loss: 3").top());
                 assert!(rect("Saving stopped: disk full").bottom() <= size.y);
+                for label in [
+                    "File",
+                    "VM",
+                    "Run",
+                    "View",
+                    "Tools",
+                    "Virtual machines",
+                    "Syscalls",
+                    "Sequence",
+                    "TID",
+                    "Syscall",
+                    "CPU",
+                    "Return",
+                    "Capture",
+                    "Details",
+                    "Terminal",
+                    "Activity",
+                ] {
+                    assert!(
+                        egui::Rect::from_min_size(egui::Pos2::ZERO, size)
+                            .contains_rect(rect(label)),
+                        "{label} outside viewport"
+                    );
+                }
+                if tab == Workspace::Activity {
+                    assert!(rect("Time").right() < rect("Level").left());
+                    assert!(rect("Level").right() < rect("Message").left());
+                    assert!(rect("ERROR").right() < rect("disk full").left());
+                    assert!(rect("INFO").right() < rect("statistics refreshed").left());
+                }
                 assert!(!texts.iter().any(|(text, _)| [
                     "Processes",
                     "Rules",
@@ -1735,7 +1766,12 @@ mod tests {
                 ],
             ),
         ] {
-            for restored in [false, true] {
+            for (restored, size) in [
+                (false, egui::vec2(800.0, 600.0)),
+                (true, egui::vec2(800.0, 600.0)),
+                (false, egui::vec2(1280.0, 820.0)),
+                (true, egui::vec2(1280.0, 820.0)),
+            ] {
                 let mut ctx = egui::Context::default();
                 theme::install(&ctx);
                 if restored {
@@ -1762,6 +1798,10 @@ mod tests {
                     ctx.memory_mut(|restored_memory| *restored_memory = memory);
                 }
                 let mut app = app();
+                app.exec.uid = u32::MAX;
+                app.exec.gid = u32::MAX;
+                app.settings.quota_gib = 4096;
+                app.settings.timeout = 120;
                 match kind {
                     "create" => app.new_image(),
                     "config" => {
@@ -1776,18 +1816,21 @@ mod tests {
                     "upload" => app.upload_open = true,
                     _ => app.settings_open = true,
                 }
+                app.draft.cpus = 64;
+                app.draft.ram_mib = 3072;
+                app.draft.disk_gib = 2048;
                 for _ in 0..3 {
-                    let _ = render(&mut app, &ctx, egui::vec2(800.0, 600.0));
+                    let _ = render(&mut app, &ctx, size);
                 }
-                let output = render(&mut app, &ctx, egui::vec2(800.0, 600.0));
+                let output = render(&mut app, &ctx, size);
                 let rect = ctx
                     .memory(|memory| memory.area_rect(egui::Id::new(dialog)))
                     .unwrap();
                 assert!(
                     rect.left() >= 0.0
                         && rect.top() >= 0.0
-                        && rect.right() <= 800.0
-                        && rect.bottom() <= 600.0,
+                        && rect.right() <= size.x
+                        && rect.bottom() <= size.y,
                     "{kind}, restored={restored}: {rect:?}"
                 );
                 assert!(
@@ -1802,6 +1845,18 @@ mod tests {
                         rect.contains_rect(*label_rect),
                         "{kind}, restored={restored}: {label} outside dialog"
                     );
+                }
+                if kind == "launch" {
+                    let identities: Vec<_> = visible
+                        .iter()
+                        .filter(|(text, _)| text == &u32::MAX.to_string())
+                        .map(|(_, rect)| *rect)
+                        .collect();
+                    assert_eq!(identities.len(), 2, "UID and GID must both fit");
+                    assert!(identities
+                        .iter()
+                        .all(|identity| rect.contains_rect(*identity)));
+                    assert!(!identities[0].intersects(identities[1]));
                 }
             }
         }
