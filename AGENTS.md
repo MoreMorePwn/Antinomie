@@ -1,5 +1,21 @@
 # Antinomie engineering conventions
 
+The enduring project guide is the documentation checkout's `Agents/README.md`.
+Current local path:
+`$ANTINOMIE_GUIDE_DIR/README.md`.
+On another machine use `$ANTINOMIE_GUIDE_DIR/README.md` if configured, or locate
+the existing documentation checkout; do not duplicate policy or auto-clone it.
+Read the index and applicable workflow/delegation/engineering/skills chapters
+before writing. Report missing guidance before risky changes. Higher-priority
+instructions and explicit user scope prevail over the project guide.
+
+Selected work is tracked in the docs `Kanban.md` and `Agents/Tasks/` with scope,
+owned paths, baseline/contracts, acceptance checks, budget and checkpoints.
+Use bounded subagents when useful and permitted; dependent coding needs an
+accepted shared contract, disjoint ownership and coordinator review/integration.
+Do not implement a new version/redesign or unrelated fix without user approval;
+record proposed changes in Backlog. Reread guidance explicitly after updates.
+
 Read MONITOR-IMPLEMENTATION.md and CONTRIBUTING.md before changing code.
 The implementation brief records accepted scope; ask the coordinator about
 contract changes instead of independently redesigning a neighboring module.
@@ -35,8 +51,9 @@ contract changes instead of independently redesigning a neighboring module.
   relevant rules only (API, ownership, errors, unsafe, concurrency, tests).
 - UI worker also: the `frontend-design` skill. Apply native
   operational-tool design; web hero guidance is irrelevant to this application.
-- Boundary reviewers: the `security-threat-model` skill
-  when installed. Keep review grounded in actual implemented boundaries.
+- Explicit threat-model requests: the `security-threat-model` skill.
+  Do not invoke for generic code review/design; keep models grounded in actual
+  implemented boundaries. Ordinary boundary review still follows project rules.
 - Kernel worker: the `antinomie-kernel` skill plus pinned
   kernel headers/source and CONTRIBUTING.md; Rust rules do not replace Linux
   locking/lifecycle APIs.
