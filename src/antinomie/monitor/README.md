@@ -26,8 +26,30 @@ From `~/src/antinomie`:
 scripts/bootstrap.sh
 scripts/build-monitor-kernel.sh
 scripts/build-monitor-image.py --kernel work/monitor-build/arch/x86/boot/bzImage
+scripts/build-monitor-host.sh
 scripts/run-monitor.sh
 ```
+
+`build-monitor-host.sh` builds the locked release application and publishes it
+at `work/monitor-host/antinomie-monitor`. Rebuild after changing host source.
+`run-monitor.sh` executes that binary directly; it does not invoke Cargo or
+silently build a missing executable. The launcher sets the repository's default
+guest bundle path and forwards all application arguments unchanged.
+
+The ELF can also run directly from any directory, without Rust/Cargo installed:
+
+```bash
+~/src/antinomie/work/monitor-host/antinomie-monitor \
+  --bundle ~/src/antinomie/work/debian-6.12.94-1-trixie/images/monitor-base
+```
+
+This is a native dynamically linked Linux executable, not a static all-in-one
+image. Runtime still needs compatible system libraries, X11/Wayland/OpenGL,
+`qemu-system-x86_64`, `qemu-img`, and guest base artifacts. Without `--bundle`,
+the existing saved setting or `ANTINOMIE_BUNDLE`/`images` default applies.
+Generated executables are ignored build products, not tracked source or a
+public distribution. Redistribution must retain required notices and undergo
+the dependency/license review described in the root licensing documents.
 
 The initial VM list is empty. VM data defaults to
 `$XDG_DATA_HOME/antinomie`, or `~/.local/share/antinomie`. An imported immutable
