@@ -8,7 +8,9 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import struct
 import tempfile
+import zlib
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_OUT = REPO / "work/debian-6.12.94-1-trixie/images/monitor-base"
@@ -24,6 +26,74 @@ def checksum(path):
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def bundle_identity(manifest, hashes):
+    """Match storage.rs content identity; absent extensions preserve legacy bytes."""
+    compact = lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
+    digest = hashlib.sha256(compact([manifest.get("kernel_append", ""),
+        manifest.get("kernel_version", ""), manifest.get("schema_id", 0)]))
+    guest = manifest.get("guest")
+    if guest is not None:
+        digest.update(b"antinomie-guest-profile-v1")
+        digest.update(compact({key: guest[key] for key in
+            ("id", "label", "min_ram_mib", "min_disk_gib", "requires_credentials", "graphical")}))
+    if manifest.get("fixed_display", False):
+        digest.update(b"antinomie-fixed-display-v1")
+    provenance = manifest.get("build_provenance")
+    if provenance is not None:
+        digest.update(b"antinomie-build-provenance-v1")
+        digest.update(compact({key: provenance[key] for key in
+            ("parent_identity", "kernel_sha256", "base_disk_sha256", "initrd_sha256", "kernel_config_sha256")}))
+    for key in ("kernel", "base_disk", "initrd"):
+        digest.update(b"\x01" + bytes.fromhex(hashes[key]) if key in hashes else b"\x00")
+    return digest.hexdigest()
+
+
+def gunzip_bounded(data, limit):
+    decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    result = decoder.decompress(data, limit + 1)
+    if len(result) > limit or not decoder.eof:
+        raise RuntimeError("kernel/config gzip is incomplete or exceeds its size limit")
+    return result, decoder.unused_data
+
+
+def embedded_config(kernel):
+    """Read IKCONFIG from the pinned gzip-compressed x86 bzImage format."""
+    with kernel.open("rb") as source:
+        data = source.read((64 << 20) + 1)
+    if len(data) > 64 << 20 or len(data) < 0x250 or data[0x202:0x206] != b"HdrS":
+        raise RuntimeError("unsupported or oversized x86 bzImage")
+    offset, length = struct.unpack_from("<II", data, 0x248)
+    begin = ((data[0x1f1] or 4) + 1) * 512 + offset
+    if length == 0 or begin + length > len(data):
+        raise RuntimeError("invalid bzImage compressed payload extent")
+    try:
+        payload, _ = gunzip_bounded(data[begin:begin + length], 256 << 20)
+        marker = b"IKCFG_ST\x1f\x8b\x08"
+        start = payload.find(marker)
+        if start < 0:
+            raise RuntimeError("fixed display requires embedded CONFIG_IKCONFIG=y")
+        config, rest = gunzip_bounded(payload[start + 8:], 2 << 20)
+        if not rest.startswith(b"IKCFG_ED"):
+            raise RuntimeError("invalid embedded kernel configuration trailer")
+        return config
+    except zlib.error as error:
+        raise RuntimeError("fixed display requires the pinned gzip bzImage compression") from error
+
+
+def fixed_display_config(config, kernel=None):
+    """Validate the matching build configuration supplied by the image builder."""
+    if config is None:
+        return False
+    if kernel is None or config.read_bytes() != embedded_config(kernel):
+        raise RuntimeError("supplied config does not match the kernel's embedded IKCONFIG")
+    values = dict(line.split("=", 1) for line in config.read_text().splitlines()
+                  if line.startswith("CONFIG_") and "=" in line)
+    for name in ("DRM", "DRM_BOCHS", "DRM_FBDEV_EMULATION", "FRAMEBUFFER_CONSOLE"):
+        if values.get("CONFIG_" + name) != "y":
+            raise RuntimeError(f"fixed display requires CONFIG_{name}=y in matching kernel config")
+    return True
 
 
 def install_binary(source, root, destination=None):
@@ -113,9 +183,12 @@ exec switch_root /newroot /sbin/init
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kernel", type=Path, required=True)
+    parser.add_argument("--kernel-config", type=Path,
+                        help="matching kernel .config; validates built-in fixed-display support")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--base-size-mib", type=int, default=256)
     args = parser.parse_args()
+    fixed_display = fixed_display_config(args.kernel_config, args.kernel)
     if not args.kernel.is_file() or args.base_size_mib < 128:
         parser.error("existing kernel and base size of at least 128 MiB required")
     args.output.mkdir(parents=True, exist_ok=True)
@@ -153,6 +226,16 @@ def main():
                 "kernel_append": "console=tty0 console=ttyS0 panic=-1",
                 "sha256": {name: checksum(args.output / name)
                            for name in ("kernel", "initrd.gz", "base.qcow2")}}
+    if fixed_display:
+        manifest["fixed_display"] = True
+        shutil.copy2(args.kernel_config, args.output / "kernel.config")
+        fixed_display_config(args.output / "kernel.config", args.output / "kernel")
+        manifest["kernel_config_sha256"] = checksum(args.output / "kernel.config")
+        manifest["build_provenance"] = {"parent_identity": None,
+            "kernel_sha256": manifest["sha256"]["kernel"],
+            "base_disk_sha256": manifest["sha256"]["base.qcow2"],
+            "initrd_sha256": manifest["sha256"]["initrd.gz"],
+            "kernel_config_sha256": manifest["kernel_config_sha256"]}
     (args.output / "bundle.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(args.output)
 

@@ -2,6 +2,7 @@ pub mod api;
 mod archive_io;
 mod backend;
 mod control;
+mod display;
 mod execution;
 mod guest_account;
 mod locations;

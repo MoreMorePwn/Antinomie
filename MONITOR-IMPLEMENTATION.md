@@ -33,6 +33,22 @@ on 2026-10-01. Core workers/review use gpt-6.1-sol; bounded support may use Luna
 
 ## Ownership
 
+### Accepted ANT-T0012 Update
+
+User authorized saved per-VM guest/window resolution, fullscreen, fit-to-window,
+KVM/TCG acceleration and bounded CPU-model choices in New VM/settings. Typed
+serde-default launch configuration preserves legacy defaults. Settings apply on
+next boot only; global force-TCG/headless overrides retain precedence. Host CPU
+requires effective KVM. User approved retaining fixed guest pixels while scaling
+the QEMU window. Presets use standard VGA static EDID, built-in Linux Bochs DRM
+and video=Virtual-1 mode selection. Fixed/fitted/windowed GTK launches use a
+bounded owned-window X11/XWayland initial-size operation; fullscreen/headless
+paths need none. Existing x11rb/rustix packages provide safe display operations.
+New immutable bundles declare fixed_display capability; legacy hashes and user
+disks stay intact. No kernel/transport revision, guest helper or free-form QEMU
+arguments. Detailed revision 3 contract is ANT-T0012 in the documentation task
+directory.
+
 ### Accepted ANT-T0010 Update
 
 The user authorized full Debian userspace on 2026-10-06, selected Xfce and

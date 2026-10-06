@@ -7,9 +7,9 @@ use crate::{
     workspace::{Panel, WorkspaceLayout},
 };
 use antinomie_monitor_core::{
-    pair_events, Backend, BackendOptions, Command, ExecRequest, GuestCredentials,
-    InvocationSummary, Notification, RunState, RunSummary, Snapshot, TerminalRecord, VmConfig,
-    VmState, WaitStatus,
+    pair_events, Backend, BackendOptions, BaseSummary, Command, DisplayResolution, ExecRequest,
+    GuestCredentials, InvocationSummary, Notification, RunState, RunSummary, Snapshot,
+    TerminalRecord, VmAcceleration, VmConfig, VmCpuModel, VmLaunchOptions, VmState, WaitStatus,
 };
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
@@ -448,12 +448,8 @@ impl MonitorApp {
         self.draft_generation = self.draft_generation.wrapping_add(1);
         self.draft = VmConfig::default();
         self.draft.name = "New VM".into();
-        self.draft.base_identity = self
-            .snapshot
-            .bases
-            .iter()
-            .find(|base| base.directory == std::path::Path::new(&self.settings.bundle))
-            .map(|base| base.id.clone());
+        self.draft.base_identity =
+            preferred_new_base(&self.snapshot, &self.settings.bundle).map(|base| base.id.clone());
         self.credentials.reset();
         self.create_open = true;
     }
@@ -490,10 +486,50 @@ impl MonitorApp {
         if self.draft.name.trim().is_empty() {
             return Some("Enter a VM name".into());
         }
+        if let Err(error) = self.draft.launch.validate_for(&self.options) {
+            return Some(error);
+        }
+        if let Some(error) = self.fixed_display_error(&self.draft) {
+            return Some(error);
+        }
         if requires_credentials {
             return self.credentials.credentials().err();
         }
         None
+    }
+
+    fn save_validation_error(&self, vm: &VmConfig) -> Option<String> {
+        if self.snapshot.active_vm.as_ref() == Some(&vm.id) {
+            return Some("Stop this VM before saving its configuration".into());
+        }
+        if !self.snapshot.vms.iter().any(|saved| saved.id == vm.id) {
+            return Some("This VM is no longer available".into());
+        }
+        if vm.name.trim().is_empty() {
+            return Some("Enter a VM name".into());
+        }
+        vm.launch
+            .validate_for(&self.options)
+            .err()
+            .or_else(|| self.fixed_display_error(vm))
+    }
+
+    fn fixed_display_error(&self, vm: &VmConfig) -> Option<String> {
+        if vm.launch.resolution.dimensions().is_some()
+            && !selected_base(&self.snapshot, vm.base_identity.as_deref())
+                .is_some_and(|base| base.fixed_display)
+        {
+            return Some("This base does not support fixed resolutions. Select a refreshed base or choose Auto.".into());
+        }
+        None
+    }
+
+    fn save_vm(&mut self, vm: VmConfig) -> Result<(), String> {
+        if let Some(error) = self.save_validation_error(&vm) {
+            return Err(error);
+        }
+        self.send(Command::Save(vm));
+        Ok(())
     }
 
     fn new_run(&mut self) {
@@ -1945,7 +1981,7 @@ impl MonitorApp {
             let mut delete = false;
             let mut nat = false;
             let mut credentials_required = false;
-            let mut creation_error = None;
+            let mut form_error = None;
             egui::Window::new(if creating {
                 "New VM"
             } else {
@@ -2017,6 +2053,7 @@ impl MonitorApp {
                                     ui.label(self.draft.disk_gib.to_string());
                                 }
                                 ui.end_row();
+                                launch_options(ui, &mut self.draft.launch);
                                 ui.label("Disk parent");
                                 ui.add_enabled_ui(creating, |ui| { directory_input(ui, &mut self.draft.disk_root, &disk_default, &mut self.folder_picker, FolderTarget { generation: self.draft_generation, kind: FolderKind::Disk }, &mut self.status); });
                                 ui.end_row();
@@ -2057,12 +2094,14 @@ impl MonitorApp {
                         }
                         ui.separator();
                         if creating {
-                            creation_error = self.create_validation_error(credentials_required);
+                            form_error = self.create_validation_error(credentials_required);
+                        } else {
+                            form_error = self.save_validation_error(&self.draft);
                         }
                         ui.horizontal(|ui| {
                             save = ui
                                 .add_enabled(
-                                    !self.draft.name.trim().is_empty() && creation_error.is_none(),
+                                    form_error.is_none(),
                                     egui::Button::new(if creating {
                                         "Create VM"
                                     } else {
@@ -2087,13 +2126,15 @@ impl MonitorApp {
                             }
                         });
                     });
-                    if creating {
-                        if !editable {
-                            creation_error = self.create_validation_error(credentials_required);
-                        }
-                        if let Some(error) = &creation_error {
-                            ui.add(egui::Label::new(egui::RichText::new(error).color(theme::WARN)).wrap());
-                        }
+                    if !editable {
+                        form_error = if creating {
+                            self.create_validation_error(credentials_required)
+                        } else {
+                            self.save_validation_error(&self.draft)
+                        };
+                    }
+                    if let Some(error) = &form_error {
+                        ui.add(egui::Label::new(egui::RichText::new(error).color(theme::WARN)).wrap());
                     }
                 });
             });
@@ -2121,7 +2162,10 @@ impl MonitorApp {
                         return;
                     }
                 } else {
-                    self.send(Command::Save(self.draft.clone()));
+                    if let Err(error) = self.save_vm(self.draft.clone()) {
+                        self.status = error;
+                        return;
+                    }
                 }
                 self.create_open = false;
                 self.config_open = false;
@@ -2198,6 +2242,9 @@ impl MonitorApp {
                                 .iter()
                                 .find(|base| {
                                     base.directory == std::path::Path::new(&self.settings.bundle)
+                                })
+                                .or_else(|| {
+                                    preferred_new_base(&self.snapshot, &self.settings.bundle)
                                 })
                                 .map(|base| base.id.clone());
                             base_selector(ui, &self.snapshot, &mut base, "settings_base");
@@ -2311,7 +2358,9 @@ impl MonitorApp {
                                 self.draft.nat = true;
                             }
                             if !creating {
-                                self.send(Command::Save(vm));
+                                if let Err(error) = self.save_vm(vm) {
+                                    self.status = error;
+                                }
                             }
                         }
                     }
@@ -2519,22 +2568,109 @@ fn base_selector(
     identity: &mut Option<String>,
     salt: &str,
 ) {
-    let label = identity
-        .as_ref()
-        .and_then(|id| snapshot.bases.iter().find(|base| &base.id == id))
-        .map_or("Linux 6.12.94 (unavailable)", |base| base.label.as_str());
+    let label = if identity.is_none() {
+        match selected_base(snapshot, None) {
+            Some(base) if !base.fixed_display => "Application default (legacy)".into(),
+            _ => "Application default".into(),
+        }
+    } else {
+        selected_base(snapshot, identity.as_deref())
+            .map(base_choice_label)
+            .unwrap_or_else(|| "Linux 6.12.94 (unavailable)".into())
+    };
     egui::ComboBox::from_id_salt(salt)
         .selected_text(label)
         .width(260.0)
         .show_ui(ui, |ui| {
             for base in &snapshot.bases {
-                ui.selectable_value(identity, Some(base.id.clone()), &base.label)
+                ui.selectable_value(identity, Some(base.id.clone()), base_choice_label(base))
                     .on_hover_text(base.directory.display().to_string());
             }
         });
-    if identity.is_none() {
-        *identity = snapshot.bases.first().map(|base| base.id.clone());
+}
+
+fn base_choice_label(base: &BaseSummary) -> String {
+    if base.fixed_display {
+        base.label.clone()
+    } else {
+        format!("{} (legacy)", base.label)
     }
+}
+
+fn selected_base<'a>(snapshot: &'a Snapshot, identity: Option<&str>) -> Option<&'a BaseSummary> {
+    if let Some(identity) = identity {
+        return snapshot.bases.iter().find(|base| base.id == identity);
+    }
+    snapshot
+        .bases
+        .iter()
+        .find(|base| base.guest.is_none())
+        .or_else(|| snapshot.bases.first())
+}
+
+fn preferred_new_base<'a>(snapshot: &'a Snapshot, directory: &str) -> Option<&'a BaseSummary> {
+    let configured = snapshot
+        .bases
+        .iter()
+        .find(|base| base.directory == std::path::Path::new(directory))
+        .or_else(|| selected_base(snapshot, None));
+    if let Some(configured) = configured {
+        return Some(configured)
+            .filter(|base| base.fixed_display)
+            .or_else(|| {
+                snapshot.bases.iter().find(|base| {
+                    base.fixed_display
+                        && base.guest.as_ref().map(|guest| &guest.id)
+                            == configured.guest.as_ref().map(|guest| &guest.id)
+                })
+            })
+            .or(Some(configured));
+    }
+    snapshot
+        .bases
+        .iter()
+        .find(|base| base.fixed_display)
+        .or_else(|| snapshot.bases.first())
+}
+
+fn launch_options(ui: &mut egui::Ui, launch: &mut VmLaunchOptions) {
+    ui.label("Resolution");
+    egui::ComboBox::from_id_salt("vm_resolution")
+        .selected_text(launch.resolution.label())
+        .width(260.0)
+        .height(320.0)
+        .show_ui(ui, |ui| {
+            for &resolution in DisplayResolution::ALL {
+                ui.selectable_value(&mut launch.resolution, resolution, resolution.label());
+            }
+        });
+    ui.end_row();
+    ui.label("Window");
+    ui.checkbox(&mut launch.fullscreen, "Fullscreen");
+    ui.end_row();
+    ui.label("");
+    ui.checkbox(&mut launch.fit_to_window, "Fit to window");
+    ui.end_row();
+    ui.label("Acceleration");
+    egui::ComboBox::from_id_salt("vm_acceleration")
+        .selected_text(launch.acceleration.label())
+        .width(260.0)
+        .show_ui(ui, |ui| {
+            for &acceleration in VmAcceleration::ALL {
+                ui.selectable_value(&mut launch.acceleration, acceleration, acceleration.label());
+            }
+        });
+    ui.end_row();
+    ui.label("CPU model");
+    egui::ComboBox::from_id_salt("vm_cpu_model")
+        .selected_text(launch.cpu_model.label())
+        .width(260.0)
+        .show_ui(ui, |ui| {
+            for &cpu_model in VmCpuModel::ALL {
+                ui.selectable_value(&mut launch.cpu_model, cpu_model, cpu_model.label());
+            }
+        });
+    ui.end_row();
 }
 
 fn password_input(ui: &mut egui::Ui, text: &mut String, salt: &str) {
@@ -2878,6 +3014,307 @@ mod tests {
         texts
     }
 
+    fn click_label(app: &mut MonitorApp, ctx: &egui::Context, size: egui::Vec2, label: &str) {
+        for _ in 0..3 {
+            render(app, ctx, size);
+        }
+        let output = render(app, ctx, size);
+        let visible = texts(&output);
+        let pos = visible
+            .iter()
+            .find(|(text, _)| text == label)
+            .unwrap_or_else(|| panic!("missing or clipped {label}: {visible:?}"))
+            .1
+            .center();
+        for pressed in [true, false] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events: vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ctx| app.draw(ctx),
+            );
+        }
+    }
+
+    #[test]
+    fn launch_controls_edit_create_and_save_owned_configurations() {
+        let mut app = app();
+        app.snapshot.bases.push(test_base("capable", true));
+        app.new_image();
+        app.draft.disk_root = Some("/disks".into());
+        app.draft.recording_root = Some("/recordings".into());
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 900.0);
+        for label in [
+            "Auto",
+            "1920 x 1080",
+            "Fullscreen",
+            "Fit to window",
+            "Default",
+            "TCG",
+            "Default",
+            "max",
+            "Create VM",
+        ] {
+            click_label(&mut app, &ctx, size, label);
+        }
+        let mut created = app
+            .submitted
+            .iter()
+            .find_map(|command| match command {
+                Command::Create(vm) => Some(vm.clone()),
+                _ => None,
+            })
+            .expect("create command");
+        assert_eq!(
+            created.launch,
+            VmLaunchOptions {
+                resolution: DisplayResolution::R1920x1080,
+                fullscreen: true,
+                fit_to_window: true,
+                acceleration: VmAcceleration::Tcg,
+                cpu_model: VmCpuModel::Max,
+            }
+        );
+        assert_eq!(created.disk_root, Some(PathBuf::from("/disks")));
+        assert_eq!(created.recording_root, Some(PathBuf::from("/recordings")));
+        assert!(!app.create_open);
+        created.id = "created".into();
+        app.selected = Some(created.id.clone());
+        app.snapshot.vms.push(created.clone());
+        app.configure_vm();
+        assert_eq!(app.draft.launch, created.launch);
+        for label in [
+            "1920 x 1080",
+            "1280 x 800",
+            "max",
+            "qemu64",
+            "Save configuration",
+        ] {
+            click_label(&mut app, &ctx, size, label);
+        }
+        let saved = app
+            .submitted
+            .iter()
+            .find_map(|command| match command {
+                Command::Save(vm) => Some(vm),
+                _ => None,
+            })
+            .expect("save command");
+        assert_eq!(saved.launch.resolution, DisplayResolution::R1280x800);
+        assert_eq!(saved.launch.cpu_model, VmCpuModel::Qemu64);
+        assert!(saved.launch.fullscreen && saved.launch.fit_to_window);
+        assert_eq!(saved.launch.acceleration, VmAcceleration::Tcg);
+        assert_eq!(saved.disk_root, created.disk_root);
+        assert_eq!(saved.recording_root, created.recording_root);
+        assert!(!app.config_open);
+    }
+
+    #[test]
+    fn invalid_launch_options_explain_create_and_save_rejection() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 900.0);
+        for (acceleration, force_tcg) in [
+            (VmAcceleration::Tcg, false),
+            (VmAcceleration::Default, true),
+            (VmAcceleration::Kvm, true),
+        ] {
+            let mut app = app();
+            app.new_image();
+            app.options.force_tcg = force_tcg;
+            app.draft.launch.cpu_model = VmCpuModel::Host;
+            app.draft.launch.acceleration = acceleration;
+            app.credentials.password = "private-test-secret".into();
+            let error = app.create_vm().unwrap_err();
+            assert!(error.contains("requires KVM"));
+            assert!(!error.contains(&app.credentials.password));
+            for _ in 0..3 {
+                render(&mut app, &ctx, size);
+            }
+            let output = render(&mut app, &ctx, size);
+            assert!(texts(&output).iter().any(|(text, _)| text == &error));
+            click_label(&mut app, &ctx, size, "Create VM");
+            assert!(app.submitted.is_empty());
+            assert!(app.create_open);
+
+            app.create_open = false;
+            app.draft.id = "saved".into();
+            app.snapshot.vms.push(app.draft.clone());
+            app.config_open = true;
+            assert_eq!(app.save_vm(app.draft.clone()).unwrap_err(), error);
+            for _ in 0..3 {
+                render(&mut app, &ctx, size);
+            }
+            let output = render(&mut app, &ctx, size);
+            assert!(texts(&output).iter().any(|(text, _)| text == &error));
+            click_label(&mut app, &ctx, size, "Save configuration");
+            assert!(app.submitted.is_empty());
+            assert!(app.config_open);
+        }
+    }
+
+    #[test]
+    fn launch_settings_save_requires_a_stopped_existing_vm() {
+        let mut app = app();
+        app.draft.id = "vm".into();
+        app.snapshot.vms.push(app.draft.clone());
+        app.snapshot.active_vm = Some("vm".into());
+        app.config_open = true;
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        theme::text_size(&ctx, 24.0);
+        let size = egui::vec2(1280.0, 900.0);
+        click_label(&mut app, &ctx, size, "Fullscreen");
+        click_label(&mut app, &ctx, size, "Save configuration");
+        assert!(!app.draft.launch.fullscreen);
+        assert!(app
+            .save_vm(app.draft.clone())
+            .unwrap_err()
+            .contains("Stop this VM"));
+        assert!(app.submitted.is_empty());
+        app.snapshot.active_vm = None;
+        app.snapshot.vms.clear();
+        assert!(app
+            .save_vm(app.draft.clone())
+            .unwrap_err()
+            .contains("no longer available"));
+        assert!(app.submitted.is_empty());
+    }
+
+    fn test_base(id: &str, fixed_display: bool) -> BaseSummary {
+        BaseSummary {
+            id: id.into(),
+            label: "Linux 6.12.94".into(),
+            directory: PathBuf::from(format!("/bases/{id}")),
+            guest: None,
+            min_ram_mib: 256,
+            min_disk_gib: 1,
+            fixed_display,
+        }
+    }
+
+    #[test]
+    fn fixed_resolution_requires_a_capable_base_for_create_and_save() {
+        let mut app = app();
+        app.snapshot.bases = vec![test_base("legacy", false), test_base("capable", true)];
+        app.new_image();
+        app.draft.base_identity = Some("legacy".into());
+        app.draft.launch.resolution = DisplayResolution::R1280x720;
+        let error = app.create_vm().unwrap_err();
+        assert!(error.contains("Select a refreshed base or choose Auto"));
+        assert!(app.submitted.is_empty());
+        app.draft.id = "vm".into();
+        app.snapshot.vms.push(app.draft.clone());
+        assert_eq!(app.save_vm(app.draft.clone()).unwrap_err(), error);
+        assert!(app.submitted.is_empty());
+
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        for _ in 0..3 {
+            render(&mut app, &ctx, egui::vec2(1280.0, 900.0));
+        }
+        let output = render(&mut app, &ctx, egui::vec2(1280.0, 900.0));
+        assert!(texts(&output).iter().any(|(text, _)| text == &error));
+
+        app.draft.base_identity = Some("missing".into());
+        assert_eq!(app.create_vm().unwrap_err(), error);
+        app.draft.base_identity = Some("capable".into());
+        assert!(app.create_validation_error(false).is_none());
+        assert!(app.save_validation_error(&app.draft).is_none());
+        app.draft.base_identity = Some("legacy".into());
+        app.draft.launch.resolution = DisplayResolution::Auto;
+        assert!(app.create_validation_error(false).is_none());
+        assert!(app.save_validation_error(&app.draft).is_none());
+    }
+
+    #[test]
+    fn new_vm_prefers_capable_bases_and_existing_defaults_remain_implicit() {
+        let mut app = app();
+        app.snapshot.bases = vec![test_base("legacy", false), test_base("capable", true)];
+        app.settings.bundle = "/bases/legacy".into();
+        app.new_image();
+        assert_eq!(app.draft.base_identity.as_deref(), Some("capable"));
+        let legacy = VmConfig {
+            id: "legacy-vm".into(),
+            ..VmConfig::default()
+        };
+        app.create_open = false;
+        app.selected = Some(legacy.id.clone());
+        app.snapshot.vms.push(legacy.clone());
+        app.configure_vm();
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        for _ in 0..3 {
+            render(&mut app, &ctx, egui::vec2(1280.0, 900.0));
+        }
+        assert!(app.draft.base_identity.is_none());
+        assert_eq!(app.snapshot.vms[0], legacy);
+        assert!(app.save_validation_error(&app.draft).is_none());
+        app.draft.launch.resolution = DisplayResolution::R1280x720;
+        assert!(app.fixed_display_error(&app.draft).is_some());
+        app.snapshot.bases[0].fixed_display = true;
+        assert!(app.fixed_display_error(&app.draft).is_none());
+
+        app.settings.bundle = "/bases/capable".into();
+        app.new_image();
+        assert_eq!(app.draft.base_identity.as_deref(), Some("capable"));
+        app.snapshot.bases[0].fixed_display = false;
+        app.snapshot.bases[1].fixed_display = false;
+        app.settings.bundle = "/bases/legacy".into();
+        app.new_image();
+        assert_eq!(app.draft.base_identity.as_deref(), Some("legacy"));
+        assert_eq!(
+            base_choice_label(&app.snapshot.bases[0]),
+            "Linux 6.12.94 (legacy)"
+        );
+        app.snapshot.bases[1].fixed_display = true;
+        assert_eq!(base_choice_label(&app.snapshot.bases[1]), "Linux 6.12.94");
+    }
+
+    #[test]
+    fn default_base_selection_preserves_guest_profile_and_backend_fallback() {
+        let mut app = app();
+        let mut custom = test_base("custom", false);
+        custom.guest = Some(antinomie_monitor_core::GuestProfile {
+            id: "custom".into(),
+            label: "Custom guest".into(),
+            min_ram_mib: 256,
+            min_disk_gib: 1,
+            requires_credentials: false,
+            graphical: false,
+        });
+        app.snapshot.bases = vec![custom.clone(), test_base("busybox", true)];
+        app.settings.bundle = "/bases/custom".into();
+        app.new_image();
+        assert_eq!(app.draft.base_identity.as_deref(), Some("custom"));
+        assert_eq!(selected_base(&app.snapshot, None).unwrap().id, "busybox");
+        assert_eq!(
+            preferred_new_base(&app.snapshot, "/missing-source")
+                .unwrap()
+                .id,
+            "busybox"
+        );
+
+        custom.id = "refreshed-custom".into();
+        custom.directory = "/bases/refreshed-custom".into();
+        custom.fixed_display = true;
+        app.snapshot.bases.push(custom);
+        app.new_image();
+        assert_eq!(app.draft.base_identity.as_deref(), Some("refreshed-custom"));
+    }
+
     #[test]
     fn password_widget_does_not_retain_undo_history() {
         let ctx = egui::Context::default();
@@ -3131,6 +3568,7 @@ mod tests {
                 directory: "/bases/debian".into(),
                 min_ram_mib: 2048,
                 min_disk_gib: 8,
+                fixed_display: true,
                 guest: Some(antinomie_monitor_core::GuestProfile {
                     id: "debian-xfce".into(),
                     label: "Debian 13 (Xfce)".into(),
@@ -3142,6 +3580,7 @@ mod tests {
             });
         app.new_image();
         app.draft.base_identity = Some("debian".into());
+        app.draft.launch.resolution = DisplayResolution::R1600x900;
         assert!(app.create_vm().is_err());
         app.credentials.password = "test-password-only".into();
         app.credentials.confirmation = "wrong-password".into();
@@ -3182,7 +3621,7 @@ mod tests {
         assert!(app
             .submitted
             .iter()
-            .any(|command| matches!(command, Command::CreateWithCredentials { .. })));
+            .any(|command| matches!(command, Command::CreateWithCredentials { vm, .. } if vm.launch.resolution == DisplayResolution::R1600x900)));
         assert!(app.credentials.password.is_empty());
         assert!(app.credentials.confirmation.is_empty());
         assert!(!format!("{:?}", app.submitted).contains("test-password-only"));
@@ -3205,6 +3644,7 @@ mod tests {
                 directory: "/bases/debian".into(),
                 min_ram_mib: 2048,
                 min_disk_gib: 8,
+                fixed_display: true,
                 guest: Some(antinomie_monitor_core::GuestProfile {
                     id: "debian-xfce".into(),
                     label: "Debian 13 (Xfce)".into(),
@@ -3228,12 +3668,36 @@ mod tests {
         assert_eq!(app.draft.ram_mib, 2048);
         assert_eq!(app.draft.disk_gib, 8);
         let visible = texts(&output);
-        for label in ["Username", "Password", "Confirm password", "Create VM"] {
+        for label in [
+            "Resolution",
+            "Fullscreen",
+            "Fit to window",
+            "Acceleration",
+            "CPU model",
+            "Username",
+            "Password",
+            "Confirm password",
+            "Create VM",
+        ] {
             assert!(
                 visible.iter().any(|(text, _)| text == label),
                 "missing or clipped {label}"
             );
         }
+        let fit = visible
+            .iter()
+            .find(|(text, _)| text == "Fit to window")
+            .unwrap()
+            .1;
+        let acceleration = visible
+            .iter()
+            .find(|(text, _)| text == "Acceleration")
+            .unwrap()
+            .1;
+        assert!(
+            fit.bottom() < acceleration.top(),
+            "fit checkbox overlaps acceleration row"
+        );
         assert!(
             visible
                 .iter()
@@ -3279,6 +3743,7 @@ mod tests {
                         directory: "/bases/debian".into(),
                         min_ram_mib: 2048,
                         min_disk_gib: 8,
+                        fixed_display: true,
                         guest: Some(antinomie_monitor_core::GuestProfile {
                             id: "debian-xfce".into(),
                             label: "Debian 13 (Xfce)".into(),

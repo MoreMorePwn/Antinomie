@@ -50,6 +50,14 @@ inventory the actual library shipped and the crates' transitive dependencies.
 The core also uses the already locked `vt100 0.15.2` for terminal persistence;
 moving a dependency to core does not change its upstream terms.
 
+The launch module directly uses already-locked `x11rb 0.13.2` and `rustix 1.1.5`
+for bounded X11/XWayland window sizing and deadline-aware polling. MIT options
+are selected; original notices are retained in
+[x11rb-MIT.txt](LICENSES/third-party/x11rb-MIT.txt),
+[rustix-MIT.txt](LICENSES/third-party/rustix-MIT.txt) and
+[rustix-COPYRIGHT.txt](LICENSES/third-party/rustix-COPYRIGHT.txt), copied from
+the locked crate distributions. This does not complete the transitive audit.
+
 Rust crates, linked system libraries and external tools retain their own terms.
 Use the locked Cargo metadata and actual packaged artifacts, not just the
 application manifest, to inventory a release. The source workspace's MIT

@@ -279,7 +279,7 @@ def make_initrd(output, staging, provenance):
     output.write_bytes(gzip.stdout)
 
 
-def assemble_bundle(kernel, output, staging, template_entry, cache):
+def assemble_bundle(kernel, output, staging, template_entry, cache, kernel_config=None):
     if output.exists():
         raise RuntimeError("output already exists; choose a new unpublished bundle path")
     helpers = monitor_helpers()
@@ -316,15 +316,25 @@ def assemble_bundle(kernel, output, staging, template_entry, cache):
     manifest = {"format": 1, "kernel_version": "6.12.94", "schema_id": 1,
                 "kernel": "kernel", "initrd": "initrd.gz", "base_disk": "base.qcow2",
                 "kernel_append": APPEND, "guest": PROFILE, "sha256": hashes}
+    if helpers.fixed_display_config(kernel_config, bundle / "kernel"):
+        manifest["fixed_display"] = True
+        shutil.copy2(kernel_config, provenance / "kernel.config")
+        helpers.fixed_display_config(provenance / "kernel.config", bundle / "kernel")
+        manifest["kernel_config_sha256"] = helpers.checksum(provenance / "kernel.config")
+        manifest["build_provenance"] = {"parent_identity": None,
+            "kernel_sha256": hashes["kernel"], "base_disk_sha256": hashes["base.qcow2"],
+            "initrd_sha256": hashes["initrd.gz"],
+            "kernel_config_sha256": manifest["kernel_config_sha256"]}
     (bundle / "bundle.json").write_text(json.dumps(manifest, indent=2) + "\n")
     # Publish only a completed bundle, never overwrite an existing base.
     bundle.rename(output)
 
 
-def build(kernel, output):
+def build(kernel, output, kernel_config=None):
     if output.exists():
         raise RuntimeError("output already exists; choose a new unpublished bundle path")
     kernel_release(kernel)
+    monitor_helpers().fixed_display_config(kernel_config, kernel)
     output.parent.mkdir(parents=True, exist_ok=True)
     env = appliance_environment()
     with tempfile.TemporaryDirectory(prefix="debian-image-", dir=output.parent) as name:
@@ -361,12 +371,14 @@ def build(kernel, output):
         with builder_log.open("w") as log:
             subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
         shutil.copy2(builder_log, provenance / "builder.log")
-        assemble_bundle(kernel, output, staging, entries[0], cache)
+        assemble_bundle(kernel, output, staging, entries[0], cache, kernel_config)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kernel", type=Path, required=True)
+    parser.add_argument("--kernel-config", type=Path,
+                        help="matching kernel .config; validates built-in fixed-display support")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args()
     if not args.kernel.is_file():
@@ -375,7 +387,7 @@ def main():
         if shutil.which(tool) is None:
             parser.error("required installed tool missing: " + tool)
     try:
-        build(args.kernel, args.output)
+        build(args.kernel, args.output, args.kernel_config)
     except (RuntimeError, subprocess.CalledProcessError) as error:
         parser.exit(1, "Debian image build failed: " + str(error) + "\n")
     print(args.output)

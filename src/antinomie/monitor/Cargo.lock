@@ -138,10 +138,12 @@ version = "0.1.0"
 dependencies = [
  "cc",
  "rusqlite",
+ "rustix 1.1.5",
  "serde",
  "serde_json",
  "sha2",
  "vt100",
+ "x11rb",
 ]
 
 [[package]]

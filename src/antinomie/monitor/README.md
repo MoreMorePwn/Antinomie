@@ -114,6 +114,49 @@ chooses an aligned bootstrap GPA from the configured RAM size and passes the
 same value to the guest and V7 API. Larger/non-flat RAM layouts require a
 different validated memory profile, not guessed GPA-to-file arithmetic.
 
+## VM launch settings
+
+New VM and VM settings save display and CPU options separately for each VM.
+Changes apply on the next boot; stop the VM before saving settings.
+
+| Setting | Behavior |
+|---|---|
+| Resolution | Auto preserves the base's default. Fixed 800x600 through 2560x1440 presets require a fixed-display-capable base and use standard VGA static EDID plus the kernel Bochs driver. Guest users can deliberately change the mode later. |
+| Fullscreen | Starts QEMU's separate display fullscreen. |
+| Fit to window | Scales guest pixels to the display-window size; not a live guest-resolution command. |
+| Acceleration | Default uses KVM unless the application is launched with `--tcg`; KVM/TCG can be selected per VM. Global `--tcg` always forces TCG. No silent fallback when KVM is unavailable. |
+| CPU model | Default keeps QEMU's default; qemu64, host and max are available. Host requires effective KVM and is rejected with TCG, including the global override. |
+
+Headless mode suppresses the GTK window, fullscreen and scaling, but keeps the
+configured guest display device/mode. Legacy configurations missing these fields
+preserve their previous defaults. No disk or guest credentials are rewritten by
+changing launch settings.
+
+Fixed, fitted, windowed launches use X11/XWayland for a bounded initial window
+size, clamped to the host screen. Only that QEMU child is forced to X11 and starts
+without its menubar/tabs, so drawable dimensions are unambiguous. Fullscreen or
+resizing scales pixels; it does not change the fixed guest resolution. A local
+`DISPLAY` is required for this path; no silent Wayland geometry fallback.
+
+To refresh a local base without rebuilding its root filesystem:
+
+```bash
+python3 scripts/refresh-monitor-bundle.py --source OLD_BUNDLE \
+  --kernel work/monitor-build/arch/x86/boot/bzImage \
+  --kernel-config work/monitor-build/.config --output NEW_BUNDLE
+scripts/run-monitor.sh --install-base NEW_BUNDLE
+```
+
+Use the configuration matching that kernel build. Refresh publishes a new bundle,
+preserves disk/initrd bytes and records parent/artifact/config hashes. It never
+overwrites an installed base or selects a new boot kernel for existing VMs.
+The supplied configuration must exactly match embedded IKCONFIG in the bzImage;
+missing or unsupported embedded configuration fails closed. Provenance remains
+in the installed manifest, but is not a publisher signature.
+Select the compatible boot base in VM settings; the original disk/reset base
+and guest credentials remain pinned. Fresh image builders accept the same
+optional `--kernel-config`; absence means fixed-display capability is unknown.
+
 ## Display troubleshooting
 
 If WSLg reports `Io error: Broken pipe` and `WinitEventLoop(ExitFailure(1))`,

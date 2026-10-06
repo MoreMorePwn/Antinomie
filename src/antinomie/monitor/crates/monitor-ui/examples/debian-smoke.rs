@@ -2,7 +2,7 @@
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 use antinomie_monitor_core::{
     recording::open_recording, Backend, BackendOptions, Command, ExecRequest, GuestCredentials,
-    Notification, RunSummary, Snapshot, VmConfig,
+    Notification, RunSummary, Snapshot, VmConfig, VmLaunchOptions,
 };
 use serde_json::{json, Value};
 use std::{
@@ -230,11 +230,20 @@ impl Qmp {
     }
 
     fn keys(&mut self, keys: &[&str]) -> Result<(), String> {
-        self.execute(
-            "send-key",
-            json!({"keys": keys.iter().map(|key| json!({"type": "qcode", "data": key})).collect::<Vec<_>>(), "hold-time": 40}),
-        )?;
-        thread::sleep(Duration::from_millis(80));
+        for down in [true, false] {
+            let ordered: Vec<_> = if down {
+                keys.to_vec()
+            } else {
+                keys.iter().rev().copied().collect()
+            };
+            self.execute(
+                "input-send-event",
+                json!({"events": ordered.iter().map(|key|
+                json!({"type":"key", "data":{"down":down, "key":{"type":"qcode", "data":key}}}))
+                .collect::<Vec<_>>()}),
+            )?;
+            thread::sleep(Duration::from_millis(200));
+        }
         Ok(())
     }
 
@@ -268,6 +277,30 @@ impl Qmp {
     }
 }
 
+fn check_resolution(path: &Path, launch: &VmLaunchOptions) -> Result<(), String> {
+    let Some((width, height)) = launch.resolution.dimensions() else {
+        return Ok(());
+    };
+    let mut header = [0; 24];
+    File::open(path)
+        .and_then(|mut file| file.read_exact(&mut header))
+        .map_err(|e| e.to_string())?;
+    if &header[..8] != b"\x89PNG\r\n\x1a\n" || &header[12..16] != b"IHDR" {
+        return Err("QMP screenshot has no PNG IHDR".into());
+    }
+    let actual = (
+        u32::from_be_bytes(header[16..20].try_into().map_err(|e| format!("{e}"))?),
+        u32::from_be_bytes(header[20..24].try_into().map_err(|e| format!("{e}"))?),
+    );
+    if actual != (u32::from(width), u32::from(height)) {
+        return Err(format!(
+            "expected {width}x{height} guest display, got {actual:?}"
+        ));
+    }
+    println!("DISPLAY_MODE_PASS {width}x{height} {}", path.display());
+    Ok(())
+}
+
 fn run() -> Result<(), String> {
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
     if arguments.len() != 2 {
@@ -277,6 +310,12 @@ fn run() -> Result<(), String> {
     if root.exists() {
         return Err("test data directory must not already exist".into());
     }
+    let launch: VmLaunchOptions = std::env::var("ANTINOMIE_QA_LAUNCH")
+        .ok()
+        .map(|value| serde_json::from_str(&value).map_err(|e| e.to_string()))
+        .transpose()?
+        .unwrap_or_default();
+    launch.validate()?;
     let mut random = [0; 16];
     File::open("/dev/urandom")
         .and_then(|mut source| source.read_exact(&mut random))
@@ -291,6 +330,7 @@ fn run() -> Result<(), String> {
             data_dir: root.clone(),
             bundle_dir: PathBuf::from(&arguments[0]),
             headless: std::env::var_os("ANTINOMIE_QA_SHOW_GUI").is_none(),
+            force_tcg: std::env::var_os("ANTINOMIE_FORCE_TCG").is_some(),
             shutdown_timeout: Duration::from_secs(60),
             ..BackendOptions::default()
         })?,
@@ -305,6 +345,7 @@ fn run() -> Result<(), String> {
             cpus: 4,
             ram_mib: 2048,
             disk_gib: 8,
+            launch: launch.clone(),
             ..VmConfig::default()
         },
         credentials,
@@ -317,6 +358,9 @@ fn run() -> Result<(), String> {
         .ok_or("created VM missing")?
         .id
         .clone();
+    if test.snapshot.vms[0].launch != launch {
+        return Err("created VM launch settings differ".into());
+    }
     test.command(Command::Start {
         vm_id: vm_id.clone(),
     })?;
@@ -331,6 +375,7 @@ fn run() -> Result<(), String> {
     let mut qmp = Qmp::connect(&owned_qmp(&serial)?)?;
     thread::sleep(Duration::from_secs(3));
     qmp.screenshot(&root.join("greeter.png"))?;
+    check_resolution(&root.join("greeter.png"), &launch)?;
     println!("GREETER_READY {}", root.join("greeter.png").display());
     std::io::stdout().flush().map_err(|e| e.to_string())?;
     let mut enter_username = true;
@@ -346,21 +391,42 @@ fn run() -> Result<(), String> {
         qmp.key("tab")?;
     }
     qmp.password(&password)?;
+    thread::sleep(Duration::from_secs(3));
+    qmp.screenshot(&root.join("post-login.png"))?;
     let desktop = test.launch("set -e; for n in {1..60}; do if pgrep -u 1000 -x xfce4-session >/dev/null; then echo DESKTOP-PASS; exit; fi; sleep 1; done; exit 8", 1000)?;
     test.marker(&desktop, b"DESKTOP-PASS")?;
     thread::sleep(Duration::from_secs(3));
     qmp.screenshot(&root.join("desktop.png"))?;
+    check_resolution(&root.join("desktop.png"), &launch)?;
     println!("DESKTOP_READY {}", root.join("desktop.png").display());
     std::io::stdout().flush().map_err(|e| e.to_string())?;
     if std::env::var_os("ANTINOMIE_QA_LOGIN_BARRIER").is_some() {
-        let mut response = String::new();
-        std::io::stdin()
-            .read_line(&mut response)
-            .map_err(|e| e.to_string())?;
-        if response.trim() == "enter" {
-            qmp.key("ret")?;
-            thread::sleep(Duration::from_secs(2));
+        let mut check_count = 0;
+        loop {
+            let mut response = String::new();
+            std::io::stdin()
+                .read_line(&mut response)
+                .map_err(|e| e.to_string())?;
+            if response.trim() == "check" {
+                check_count += 1;
+                let image = root.join(format!("display-check-{check_count}.png"));
+                qmp.screenshot(&image)?;
+                check_resolution(&image, &launch)?;
+                std::io::stdout().flush().map_err(|e| e.to_string())?;
+            } else {
+                if response.trim() == "enter" {
+                    qmp.key("ret")?;
+                    thread::sleep(Duration::from_secs(2));
+                }
+                break;
+            }
         }
+    }
+    if std::env::var_os("ANTINOMIE_QA_DISPLAY_ONLY").is_some() {
+        test.command(Command::Stop)?;
+        test.backend.shutdown()?;
+        println!("PASS: configured four-core guest greeter and Xfce desktop modes");
+        return Ok(());
     }
     qmp.keys(&["ctrl", "alt", "t"])?;
     thread::sleep(Duration::from_secs(4));
@@ -415,6 +481,9 @@ fn run() -> Result<(), String> {
         .ok_or("duplicate missing")?
         .id
         .clone();
+    if test.snapshot.vms.iter().any(|vm| vm.launch != launch) {
+        return Err("duplicate did not preserve launch settings".into());
+    }
     test.command(Command::Start { vm_id: copy_id })?;
     test.wait_pid1()?;
     let copied = test.launch("set -e; test $(id -un) = qauser; grep -Fx DEBIAN-PERSISTENT /home/qauser/monitor-test; echo DUPLICATE-PASS", 1000)?;

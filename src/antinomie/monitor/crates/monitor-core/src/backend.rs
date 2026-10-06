@@ -679,6 +679,7 @@ impl Worker {
             }
             Command::Save(mut vm) => {
                 storage::validate_vm(&vm)?;
+                vm.launch.validate_for(&self.options)?;
                 self.ensure_stopped(&vm.id)?;
                 let current = self
                     .snapshot
@@ -686,12 +687,13 @@ impl Worker {
                     .iter()
                     .find(|v| v.id == vm.id)
                     .ok_or("unknown VM")?;
+                let boot_bundle =
+                    crate::locations::boot_bundle(&self.options, vm.base_identity.as_deref())?;
+                storage::validate_boot_display(&vm, &boot_bundle)?;
                 let location =
                     crate::locations::future_recordings(&self.options, current, &mut vm)?;
                 let dir = storage::vm_dir(&self.options, &vm.id)?;
                 let disk_bundle: Bundle = storage::read_json(&dir.join("bundle.json"))?;
-                let boot_bundle =
-                    crate::locations::boot_bundle(&self.options, vm.base_identity.as_deref())?;
                 storage::validate_guest_transition(&disk_bundle, &boot_bundle)?;
                 storage::validate_vm_bundle(&self.options, &vm, &disk_bundle)?;
                 storage::validate_vm_bundle(&self.options, &vm, &boot_bundle)?;
@@ -757,6 +759,14 @@ impl Worker {
                     .find(|vm| vm.id == vm_id)
                     .ok_or("unknown VM")?
                     .clone();
+                source.launch.validate_for(&self.options)?;
+                if source.launch.resolution.dimensions().is_some() {
+                    let boot = crate::locations::boot_bundle(
+                        &self.options,
+                        source.base_identity.as_deref(),
+                    )?;
+                    storage::validate_boot_display(&source, &boot)?;
+                }
                 let result = storage::duplicate_vm(&self.options, &source, name);
                 if result.is_err() {
                     self.snapshot.vms = storage::load_vms(&self.options)?;
@@ -849,10 +859,12 @@ impl Worker {
             vm.id = storage::vm_id(&vm.name);
         }
         storage::validate_vm(&vm)?;
+        vm.launch.validate_for(&self.options)?;
         if self.snapshot.vms.iter().any(|current| current.id == vm.id) {
             return Err("VM identity already exists".into());
         }
         let bundle = crate::locations::boot_bundle(&self.options, vm.base_identity.as_deref())?;
+        storage::validate_boot_display(&vm, &bundle)?;
         storage::validate_vm_bundle(&self.options, &vm, &bundle)?;
         let requires_credentials = bundle
             .guest
@@ -909,6 +921,9 @@ impl Worker {
             .ok_or("unknown VM")?
             .clone();
         storage::validate_vm(&vm)?;
+        vm.launch.validate_for(&self.options)?;
+        let bundle = crate::locations::boot_bundle(&self.options, vm.base_identity.as_deref())?;
+        storage::validate_boot_display(&vm, &bundle)?;
         let dir = storage::vm_dir(&self.options, id)?;
         let disk_bundle: Bundle = storage::read_json(&dir.join("bundle.json"))?;
         disk_bundle.verify_installed()?;
@@ -917,7 +932,6 @@ impl Worker {
             &dir.join("disk.qcow2"),
             Some(&disk_bundle.base_disk),
         )?;
-        let bundle = crate::locations::boot_bundle(&self.options, vm.base_identity.as_deref())?;
         storage::validate_guest_transition(&disk_bundle, &bundle)?;
         storage::validate_vm_bundle(&self.options, &vm, &disk_bundle)?;
         storage::validate_vm_bundle(&self.options, &vm, &bundle)?;
@@ -1542,6 +1556,180 @@ fn remaining_request_budget(deadline: Instant, maximum: Duration) -> Duration {
 mod tests {
     use super::*;
     #[test]
+    fn invalid_launch_settings_are_rejected_before_lifecycle_io() {
+        let root =
+            std::env::temp_dir().join(format!("ant-launch-invalid-{}", storage::unique_id()));
+        let vm = VmConfig {
+            id: "invalid-launch".into(),
+            launch: VmLaunchOptions {
+                acceleration: VmAcceleration::Kvm,
+                cpu_model: VmCpuModel::Host,
+                ..VmLaunchOptions::default()
+            },
+            ..VmConfig::default()
+        };
+        let (_commands, receiver) = mpsc::sync_channel(1);
+        let (sender, _notifications) = mpsc::sync_channel(1);
+        let mut worker = Worker {
+            options: BackendOptions {
+                data_dir: root.clone(),
+                force_tcg: true,
+                ..BackendOptions::default()
+            },
+            snapshot: Snapshot {
+                vms: vec![vm.clone()],
+                ..Snapshot::default()
+            },
+            receiver,
+            sender,
+            closing: Arc::new(AtomicBool::new(false)),
+            stopping: Arc::new(AtomicBool::new(false)),
+            session: None,
+            last_publish: Instant::now(),
+            latest_snapshot: Arc::new(Mutex::new(None)),
+        };
+        for command in [
+            Command::Create(VmConfig {
+                id: "new-launch".into(),
+                ..vm.clone()
+            }),
+            Command::Save(vm.clone()),
+            Command::Start {
+                vm_id: vm.id.clone(),
+            },
+            Command::Duplicate {
+                vm_id: vm.id.clone(),
+                name: "Copy".into(),
+            },
+        ] {
+            assert!(
+                worker
+                    .command(command)
+                    .unwrap_err()
+                    .contains("requires KVM")
+            );
+            assert_eq!(worker.snapshot.vms, vec![vm.clone()]);
+            assert!(worker.snapshot.active_vm.is_none());
+            assert!(!root.exists());
+        }
+        let mut explicit_tcg = vm.clone();
+        explicit_tcg.launch.acceleration = VmAcceleration::Tcg;
+        worker.options.force_tcg = false;
+        assert!(
+            worker
+                .command(Command::Save(explicit_tcg))
+                .unwrap_err()
+                .contains("requires KVM")
+        );
+    }
+
+    #[test]
+    fn fixed_display_guards_selected_boot_without_changing_pinned_disk() {
+        let root =
+            std::env::temp_dir().join(format!("ant-fixed-capability-{}", storage::unique_id()));
+        let source = root.join("source");
+        storage::private_dir(&source).unwrap();
+        fs::write(source.join("kernel"), b"fixture kernel").unwrap();
+        assert!(
+            std::process::Command::new("qemu-img")
+                .args(["create", "-f", "qcow2"])
+                .arg(source.join("base.qcow2"))
+                .arg("1M")
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        let options = BackendOptions {
+            data_dir: root.join("data"),
+            headless: true,
+            ..BackendOptions::default()
+        };
+        let legacy: Bundle = serde_json::from_value(serde_json::json!({
+            "kernel": source.join("kernel"), "base_disk": source.join("base.qcow2"),
+            "kernel_version": "6.12.94", "initrd": null
+        }))
+        .unwrap();
+        let legacy = legacy.install(&options).unwrap();
+        let (_commands, receiver) = mpsc::sync_channel(1);
+        let (sender, _notifications) = mpsc::sync_channel(1);
+        let mut worker = Worker {
+            options,
+            snapshot: Snapshot::default(),
+            receiver,
+            sender,
+            closing: Arc::new(AtomicBool::new(false)),
+            stopping: Arc::new(AtomicBool::new(false)),
+            session: None,
+            last_publish: Instant::now(),
+            latest_snapshot: Arc::new(Mutex::new(None)),
+        };
+        worker
+            .command(Command::Create(VmConfig {
+                id: "old-disk".into(),
+                ..VmConfig::default()
+            }))
+            .unwrap();
+        let mut vm = worker.snapshot.vms[0].clone();
+        vm.launch.resolution = crate::DisplayResolution::R1280x720;
+        let directory = storage::vm_dir(&worker.options, &vm.id).unwrap();
+        storage::atomic_json(&directory.join("config.json"), &vm).unwrap();
+        worker.snapshot.vms[0] = vm.clone();
+        let config = fs::read(directory.join("config.json")).unwrap();
+        let disk = fs::read(directory.join("disk.qcow2")).unwrap();
+        for command in [
+            Command::Create(VmConfig {
+                id: "rejected-fixed".into(),
+                ..vm.clone()
+            }),
+            Command::Save(vm.clone()),
+            Command::Start {
+                vm_id: vm.id.clone(),
+            },
+            Command::Duplicate {
+                vm_id: vm.id.clone(),
+                name: "Rejected duplicate".into(),
+            },
+        ] {
+            assert!(
+                worker
+                    .command(command)
+                    .unwrap_err()
+                    .contains("does not support fixed display")
+            );
+            assert_eq!(worker.snapshot.vms, vec![vm.clone()]);
+            assert!(worker.snapshot.active_vm.is_none());
+            assert!(worker.session.is_none());
+            assert_eq!(fs::read(directory.join("config.json")).unwrap(), config);
+            assert_eq!(fs::read(directory.join("disk.qcow2")).unwrap(), disk);
+        }
+        let mut capable = legacy.clone();
+        capable.fixed_display = true;
+        let capable = capable.install(&worker.options).unwrap();
+        assert_ne!(capable.base_identity, legacy.base_identity);
+        vm.base_identity = capable.base_identity;
+        worker.command(Command::Save(vm.clone())).unwrap();
+        let pinned: Bundle = storage::read_json(&directory.join("bundle.json")).unwrap();
+        assert_eq!(pinned.base_identity, legacy.base_identity);
+        assert!(!pinned.fixed_display);
+        assert_eq!(fs::read(directory.join("disk.qcow2")).unwrap(), disk);
+        worker
+            .command(Command::Duplicate {
+                vm_id: vm.id.clone(),
+                name: "Compatible copy".into(),
+            })
+            .unwrap();
+        assert!(
+            worker
+                .snapshot
+                .vms
+                .iter()
+                .all(|item| item.launch == vm.launch && item.base_identity == vm.base_identity)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn base_import_and_failed_credential_creation_preserve_published_state() {
         let root =
             std::env::temp_dir().join(format!("ant-credential-create-{}", storage::unique_id()));
@@ -1593,6 +1781,8 @@ mod tests {
                     requires_credentials: true,
                     graphical: true,
                 }),
+                fixed_display: false,
+                build_provenance: None,
             };
             storage::atomic_json(&source.join("bundle.json"), &bundle).unwrap();
             worker
@@ -1961,6 +2151,8 @@ mod tests {
             schema_id: 1,
             base_identity: None,
             guest: None,
+            fixed_display: false,
+            build_provenance: None,
         };
         capture
             .manifest(&VmConfig::default(), &bundle, &bundle, "clean")

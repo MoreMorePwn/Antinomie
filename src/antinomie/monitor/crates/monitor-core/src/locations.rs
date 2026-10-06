@@ -287,6 +287,7 @@ pub(crate) fn installed_bases(options: &BackendOptions) -> Result<Vec<BaseSummar
             min_ram_mib: bundle.guest.as_ref().map_or(256, |guest| guest.min_ram_mib),
             min_disk_gib: bundle.guest.as_ref().map_or(1, |guest| guest.min_disk_gib),
             guest: bundle.guest,
+            fixed_display: bundle.fixed_display,
         });
         if bases.len() > 128 {
             return Err("installed base catalog exceeds limit".into());
@@ -365,6 +366,8 @@ mod tests {
                 schema_id: 1,
                 base_identity: None,
                 guest: None,
+                fixed_display: true,
+                build_provenance: None,
             }
             .install(&options)
             .unwrap();
@@ -414,6 +417,76 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
         }
+    }
+
+    #[test]
+    fn launch_settings_survive_create_save_backend_restart_and_duplicate() {
+        use crate::{DisplayResolution, Notification, VmAcceleration, VmCpuModel, VmLaunchOptions};
+
+        fn command(backend: &crate::Backend, command: crate::Command) {
+            let id = backend.send(command).unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while std::time::Instant::now() < deadline {
+                if let Some(Notification::CommandResult {
+                    id: result,
+                    success,
+                    message,
+                }) = backend.try_recv()
+                    && result == id
+                {
+                    assert!(success, "{message}");
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            panic!("VM command timed out");
+        }
+
+        let fixture = Fixture::new();
+        let mut backend = crate::Backend::new(fixture.options.clone()).unwrap();
+        let mut vm = VmConfig {
+            id: "launch-source".into(),
+            launch: VmLaunchOptions {
+                resolution: DisplayResolution::R1280x720,
+                fullscreen: true,
+                fit_to_window: true,
+                acceleration: VmAcceleration::Tcg,
+                cpu_model: VmCpuModel::Max,
+            },
+            ..VmConfig::default()
+        };
+        command(&backend, crate::Command::Create(vm.clone()));
+        vm = storage::load_vms(&fixture.options).unwrap().remove(0);
+        assert_eq!(vm.launch.resolution, DisplayResolution::R1280x720);
+        assert!(vm.launch.fullscreen && vm.launch.fit_to_window);
+        vm.launch.resolution = DisplayResolution::R1920x1080;
+        vm.launch.cpu_model = VmCpuModel::Qemu64;
+        command(&backend, crate::Command::Save(vm.clone()));
+        backend.shutdown().unwrap();
+
+        let mut restarted = crate::Backend::new(fixture.options.clone()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut loaded = false;
+        while std::time::Instant::now() < deadline {
+            if let Some(Notification::Snapshot(snapshot)) = restarted.try_recv() {
+                assert_eq!(snapshot.vms[0].launch, vm.launch);
+                loaded = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(loaded, "restart snapshot timed out");
+        command(
+            &restarted,
+            crate::Command::Duplicate {
+                vm_id: vm.id.clone(),
+                name: "Launch copy".into(),
+            },
+        );
+        let copies = storage::load_vms(&fixture.options).unwrap();
+        assert_eq!(copies.len(), 2);
+        assert!(copies.iter().all(|copy| copy.launch == vm.launch));
+        restarted.shutdown().unwrap();
     }
 
     #[test]

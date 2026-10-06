@@ -118,6 +118,137 @@ mod guest_tests {
     }
 }
 
+/// Fixed guest scanout presets; Auto preserves the base's display behavior.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DisplayResolution {
+    #[default]
+    Auto,
+    R800x600,
+    R1024x768,
+    R1280x720,
+    R1280x800,
+    R1600x900,
+    R1920x1080,
+    R2560x1440,
+}
+impl DisplayResolution {
+    pub const ALL: &'static [Self] = &[
+        Self::Auto,
+        Self::R800x600,
+        Self::R1024x768,
+        Self::R1280x720,
+        Self::R1280x800,
+        Self::R1600x900,
+        Self::R1920x1080,
+        Self::R2560x1440,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::R800x600 => "800 x 600",
+            Self::R1024x768 => "1024 x 768",
+            Self::R1280x720 => "1280 x 720",
+            Self::R1280x800 => "1280 x 800",
+            Self::R1600x900 => "1600 x 900",
+            Self::R1920x1080 => "1920 x 1080",
+            Self::R2560x1440 => "2560 x 1440",
+        }
+    }
+
+    /// Width and height in pixels, or None for the base's default mode.
+    pub fn dimensions(self) -> Option<(u16, u16)> {
+        match self {
+            Self::Auto => None,
+            Self::R800x600 => Some((800, 600)),
+            Self::R1024x768 => Some((1024, 768)),
+            Self::R1280x720 => Some((1280, 720)),
+            Self::R1280x800 => Some((1280, 800)),
+            Self::R1600x900 => Some((1600, 900)),
+            Self::R1920x1080 => Some((1920, 1080)),
+            Self::R2560x1440 => Some((2560, 1440)),
+        }
+    }
+}
+
+/// Per-VM accelerator preference; the application's force_tcg override wins.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VmAcceleration {
+    #[default]
+    Default,
+    Kvm,
+    Tcg,
+}
+impl VmAcceleration {
+    pub const ALL: &'static [Self] = &[Self::Default, Self::Kvm, Self::Tcg];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Default => "Default",
+            Self::Kvm => "KVM",
+            Self::Tcg => "TCG",
+        }
+    }
+}
+
+/// Bounded QEMU CPU models; Default leaves QEMU's model selection unchanged.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VmCpuModel {
+    #[default]
+    Default,
+    Qemu64,
+    Host,
+    Max,
+}
+impl VmCpuModel {
+    pub const ALL: &'static [Self] = &[Self::Default, Self::Qemu64, Self::Host, Self::Max];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Default => "Default",
+            Self::Qemu64 => "qemu64",
+            Self::Host => "host",
+            Self::Max => "max",
+        }
+    }
+}
+
+/// Launch preferences applied on the next boot, never to a running VM.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct VmLaunchOptions {
+    #[serde(default)]
+    pub resolution: DisplayResolution,
+    #[serde(default)]
+    pub fullscreen: bool,
+    #[serde(default)]
+    pub fit_to_window: bool,
+    #[serde(default)]
+    pub acceleration: VmAcceleration,
+    #[serde(default)]
+    pub cpu_model: VmCpuModel,
+}
+impl VmLaunchOptions {
+    /// Reject CPU models incompatible with the explicit accelerator preference.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.cpu_model == VmCpuModel::Host && self.acceleration == VmAcceleration::Tcg {
+            return Err("host CPU model requires KVM acceleration".into());
+        }
+        Ok(())
+    }
+
+    /// Also account for application overrides when checking accelerator support.
+    pub fn validate_for(&self, options: &BackendOptions) -> Result<(), String> {
+        self.validate()?;
+        if self.cpu_model == VmCpuModel::Host && options.force_tcg {
+            return Err("host CPU model requires KVM; force_tcg is enabled".into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct VmConfig {
     pub id: String,
@@ -135,6 +266,8 @@ pub struct VmConfig {
     /// Installed immutable boot bundle identity; existing disk backings stay pinned.
     #[serde(default)]
     pub base_identity: Option<String>,
+    #[serde(default)]
+    pub launch: VmLaunchOptions,
 }
 impl Default for VmConfig {
     fn default() -> Self {
@@ -148,6 +281,7 @@ impl Default for VmConfig {
             disk_root: None,
             recording_root: None,
             base_identity: None,
+            launch: VmLaunchOptions::default(),
         }
     }
 }
@@ -239,6 +373,7 @@ pub struct BaseSummary {
     pub guest: Option<GuestProfile>,
     pub min_ram_mib: u32,
     pub min_disk_gib: u32,
+    pub fixed_display: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -609,6 +744,82 @@ mod tests {
         assert!(vm.disk_root.is_none());
         assert!(vm.recording_root.is_none());
         assert!(vm.base_identity.is_none());
+        assert_eq!(vm.launch, VmLaunchOptions::default());
+    }
+    #[test]
+    fn launch_fields_default_independently_and_round_trip_all_presets() {
+        assert_eq!(
+            serde_json::from_str::<VmLaunchOptions>("{}").unwrap(),
+            VmLaunchOptions::default()
+        );
+        assert_eq!(
+            serde_json::from_str::<VmLaunchOptions>(r#"{"fullscreen":true}"#).unwrap(),
+            VmLaunchOptions {
+                fullscreen: true,
+                ..VmLaunchOptions::default()
+            }
+        );
+        for &resolution in DisplayResolution::ALL {
+            for &acceleration in VmAcceleration::ALL {
+                for &cpu_model in VmCpuModel::ALL {
+                    for (fullscreen, fit_to_window) in
+                        [(false, false), (true, false), (false, true), (true, true)]
+                    {
+                        let vm = VmConfig {
+                            launch: VmLaunchOptions {
+                                resolution,
+                                acceleration,
+                                cpu_model,
+                                fullscreen,
+                                fit_to_window,
+                            },
+                            ..VmConfig::default()
+                        };
+                        let json = serde_json::to_string(&vm).unwrap();
+                        assert_eq!(serde_json::from_str::<VmConfig>(&json).unwrap(), vm);
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            serde_json::to_string(&DisplayResolution::R1920x1080).unwrap(),
+            r#""r1920x1080""#
+        );
+        assert_eq!(
+            serde_json::to_string(&VmAcceleration::Kvm).unwrap(),
+            r#""kvm""#
+        );
+        assert_eq!(
+            serde_json::to_string(&VmCpuModel::Qemu64).unwrap(),
+            r#""qemu64""#
+        );
+        assert!(serde_json::from_str::<VmLaunchOptions>(r#"{"cpu_model":"arbitrary"}"#).is_err());
+        assert!(serde_json::from_str::<VmLaunchOptions>(r#"{"resolution":"r9000x9000"}"#).is_err());
+    }
+
+    #[test]
+    fn host_cpu_model_requires_effective_kvm() {
+        for &acceleration in VmAcceleration::ALL {
+            for &cpu_model in VmCpuModel::ALL {
+                let launch = VmLaunchOptions {
+                    acceleration,
+                    cpu_model,
+                    ..VmLaunchOptions::default()
+                };
+                let valid = cpu_model != VmCpuModel::Host || acceleration != VmAcceleration::Tcg;
+                assert_eq!(launch.validate().is_ok(), valid);
+                for force_tcg in [false, true] {
+                    let options = BackendOptions {
+                        force_tcg,
+                        ..BackendOptions::default()
+                    };
+                    assert_eq!(
+                        launch.validate_for(&options).is_ok(),
+                        valid && !(cpu_model == VmCpuModel::Host && force_tcg)
+                    );
+                }
+            }
+        }
     }
     #[test]
     fn async_pairing_is_bounded_and_does_not_invent_unknown_parents() {

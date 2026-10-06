@@ -1,6 +1,6 @@
 use antinomie_monitor_core::{
-    Backend, BackendOptions, Command, ExecRequest, Notification, Snapshot, VmConfig, VmState,
-    recording::open_recording,
+    Backend, BackendOptions, Command, ExecRequest, Notification, Snapshot, VmConfig,
+    VmLaunchOptions, VmState, recording::open_recording,
 };
 use std::{
     fs::File,
@@ -159,11 +159,17 @@ fn run() -> Result<(), String> {
     })?;
     let mut snapshot = Snapshot::default();
     let mut terminal = Vec::new();
+    let launch: VmLaunchOptions = std::env::var("ANTINOMIE_QA_LAUNCH")
+        .ok()
+        .map(|value| serde_json::from_str(&value).map_err(|error| error.to_string()))
+        .transpose()?
+        .unwrap_or_default();
     let id = backend.send(Command::Create(VmConfig {
         name: "Backend smoke".into(),
         cpus: 4,
         ram_mib: 1024,
         disk_gib: 1,
+        launch,
         ..VmConfig::default()
     }))?;
     wait_command(&backend, id, &mut snapshot, &mut terminal, 30)?;

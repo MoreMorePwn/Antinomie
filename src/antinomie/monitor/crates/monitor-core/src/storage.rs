@@ -219,6 +219,38 @@ pub(crate) fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BundleBuildProvenance {
+    pub parent_identity: Option<String>,
+    pub kernel_sha256: String,
+    pub base_disk_sha256: String,
+    pub initrd_sha256: Option<String>,
+    pub kernel_config_sha256: String,
+}
+impl BundleBuildProvenance {
+    fn validate(&self) -> Result<(), String> {
+        for value in [
+            self.parent_identity.as_ref(),
+            Some(&self.kernel_sha256),
+            Some(&self.base_disk_sha256),
+            self.initrd_sha256.as_ref(),
+            Some(&self.kernel_config_sha256),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+            {
+                return Err("bundle provenance requires lowercase SHA256 values".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Bundle {
     pub kernel: PathBuf,
     pub base_disk: PathBuf,
@@ -233,6 +265,13 @@ pub struct Bundle {
     pub base_identity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guest: Option<GuestProfile>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fixed_display: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_provenance: Option<BundleBuildProvenance>,
+}
+fn is_false(value: &bool) -> bool {
+    !value
 }
 impl Bundle {
     pub fn load(dir: &Path) -> Result<Self, String> {
@@ -265,10 +304,31 @@ impl Bundle {
             digest.update(b"antinomie-guest-profile-v1");
             digest.update(serde_json::to_vec(guest).map_err(|e| e.to_string())?);
         }
-        for path in [
-            Some(&self.kernel),
-            Some(&self.base_disk),
-            self.initrd.as_ref(),
+        if self.fixed_display {
+            digest.update(b"antinomie-fixed-display-v1");
+        }
+        if let Some(provenance) = &self.build_provenance {
+            provenance.validate()?;
+            if provenance.initrd_sha256.is_some() != self.initrd.is_some() {
+                return Err("bundle provenance initrd presence mismatch".into());
+            }
+            digest.update(b"antinomie-build-provenance-v1");
+            digest.update(serde_json::to_vec(provenance).map_err(|e| e.to_string())?);
+        }
+        let provenance = self.build_provenance.as_ref();
+        for (path, expected) in [
+            (
+                Some(&self.kernel),
+                provenance.map(|p| p.kernel_sha256.as_str()),
+            ),
+            (
+                Some(&self.base_disk),
+                provenance.map(|p| p.base_disk_sha256.as_str()),
+            ),
+            (
+                self.initrd.as_ref(),
+                provenance.and_then(|p| p.initrd_sha256.as_deref()),
+            ),
         ] {
             if let Some(path) = path {
                 if !fs::symlink_metadata(path)
@@ -292,8 +352,12 @@ impl Bundle {
                     }
                     content.update(&chunk[..len]);
                 }
+                let checksum = content.finalize();
+                if expected.is_some_and(|expected| format!("{checksum:x}") != expected) {
+                    return Err("bundle artifact differs from build provenance".into());
+                }
                 digest.update([1]);
-                digest.update(content.finalize());
+                digest.update(checksum);
             } else {
                 digest.update([0]);
             }
@@ -334,6 +398,8 @@ impl Bundle {
                     schema_id: self.schema_id,
                     base_identity: Some(identity.clone()),
                     guest: self.guest.clone(),
+                    fixed_display: self.fixed_display,
+                    build_provenance: self.build_provenance.clone(),
                 };
                 if copied.identity()? != identity {
                     return Err("bundle changed during import; copies rejected".into());
@@ -364,6 +430,8 @@ impl Bundle {
             schema_id: self.schema_id,
             base_identity: Some(identity),
             guest: self.guest,
+            fixed_display: self.fixed_display,
+            build_provenance: self.build_provenance,
         };
         installed.verify_installed()?;
         atomic_json(&target.join("bundle.json"), &installed)?;
@@ -381,6 +449,7 @@ impl Bundle {
     }
 }
 pub(crate) fn validate_vm(vm: &VmConfig) -> Result<(), String> {
+    vm.launch.validate()?;
     if vm.id.is_empty()
         || vm.id.len() > 96
         || !vm
@@ -410,12 +479,19 @@ pub(crate) fn validate_guest_transition(disk: &Bundle, boot: &Bundle) -> Result<
     }
     Ok(())
 }
+pub(crate) fn validate_boot_display(vm: &VmConfig, bundle: &Bundle) -> Result<(), String> {
+    if vm.launch.resolution.dimensions().is_some() && !bundle.fixed_display {
+        return Err("selected boot bundle does not support fixed display resolutions; install and select a fixed-display-capable Linux 6.12.94 bundle, or choose Auto".into());
+    }
+    Ok(())
+}
 pub(crate) fn validate_vm_bundle(
     options: &BackendOptions,
     vm: &VmConfig,
     bundle: &Bundle,
 ) -> Result<(), String> {
     validate_vm(vm)?;
+    vm.launch.validate_for(options)?;
     if let Some(guest) = &bundle.guest {
         guest.validate()?;
         if vm.ram_mib < guest.min_ram_mib || vm.disk_gib < guest.min_disk_gib {
@@ -843,6 +919,12 @@ pub(crate) fn duplicate_vm(
     source: &VmConfig,
     name: String,
 ) -> Result<VmConfig, String> {
+    validate_vm(source)?;
+    source.launch.validate_for(options)?;
+    if source.launch.resolution.dimensions().is_some() {
+        let boot = crate::locations::boot_bundle(options, source.base_identity.as_deref())?;
+        validate_boot_display(source, &boot)?;
+    }
     let source_dir = vm_dir(options, &source.id)?;
     let source_disk = source_dir.join("disk.qcow2");
     if !fs::symlink_metadata(&source_disk)
@@ -1035,6 +1117,8 @@ pub(crate) fn save_vm_config(
     next: &VmConfig,
     location: &crate::api::VmLocations,
 ) -> Result<(), PublicationError> {
+    validate_vm(next)?;
+    next.launch.validate_for(options)?;
     let path = directory.join("config.json");
     let config_warning = match atomic_json_checked(&path, next) {
         Ok(()) => None,
@@ -1220,6 +1304,8 @@ mod tests {
                 requires_credentials: true,
                 graphical: true,
             }),
+            fixed_display: false,
+            build_provenance: None,
         }
         .install(&options)
         .unwrap();
@@ -1234,6 +1320,15 @@ mod tests {
     fn legacy_identity_is_exact_and_guest_metadata_changes_identity() {
         let (root, _, mut bundle, _) = guest_fixture();
         let guest_identity = bundle.identity().unwrap();
+        let serialized = serde_json::to_value(&bundle).unwrap();
+        assert!(serialized.get("fixed_display").is_none());
+        assert!(serialized.get("build_provenance").is_none());
+        let decoded: Bundle = serde_json::from_value(serialized).unwrap();
+        assert!(!decoded.fixed_display);
+        assert!(decoded.build_provenance.is_none());
+        bundle.fixed_display = true;
+        assert_ne!(bundle.identity().unwrap(), guest_identity);
+        bundle.fixed_display = false;
         bundle.guest = None;
         let mut expected = Sha256::new();
         expected.update(
@@ -1406,6 +1501,8 @@ mod tests {
             schema_id: 1,
             base_identity: None,
             guest: None,
+            fixed_display: false,
+            build_provenance: None,
         };
         bundle.base_identity = Some(bundle.identity().unwrap());
         let vm = source.join("vms/old-id");
@@ -1570,6 +1667,13 @@ mod tests {
         private_dir(&source).unwrap();
         fs::write(source.join("kernel"), b"kernel").unwrap();
         fs::write(source.join("base.qcow2"), b"disk").unwrap();
+        let provenance = BundleBuildProvenance {
+            parent_identity: Some("a".repeat(64)),
+            kernel_sha256: format!("{:x}", Sha256::digest(b"kernel")),
+            base_disk_sha256: format!("{:x}", Sha256::digest(b"disk")),
+            initrd_sha256: None,
+            kernel_config_sha256: "b".repeat(64),
+        };
         let bundle = Bundle {
             kernel: source.join("kernel"),
             base_disk: source.join("base.qcow2"),
@@ -1579,6 +1683,8 @@ mod tests {
             schema_id: 1,
             base_identity: None,
             guest: None,
+            fixed_display: false,
+            build_provenance: Some(provenance),
         };
         let options = BackendOptions {
             data_dir: directory.join("data"),
@@ -1587,6 +1693,26 @@ mod tests {
         let installed = bundle.install(&options).unwrap();
         fs::remove_dir_all(source).unwrap();
         installed.verify_installed().unwrap();
+        let loaded = Bundle::load(installed.kernel.parent().unwrap()).unwrap();
+        assert_eq!(
+            loaded.build_provenance.unwrap().kernel_config_sha256,
+            "b".repeat(64)
+        );
+        let mut corrupted = installed.clone();
+        corrupted.build_provenance.as_mut().unwrap().kernel_sha256 = "c".repeat(64);
+        assert!(
+            corrupted
+                .identity()
+                .unwrap_err()
+                .contains("differs from build provenance")
+        );
+        corrupted.build_provenance.as_mut().unwrap().kernel_sha256 = "invalid".into();
+        assert!(
+            corrupted
+                .identity()
+                .unwrap_err()
+                .contains("lowercase SHA256")
+        );
         assert_eq!(fs::read(installed.base_disk).unwrap(), b"disk");
         fs::remove_dir_all(directory).unwrap();
     }
