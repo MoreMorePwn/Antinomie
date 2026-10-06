@@ -3,6 +3,7 @@ mod archive_io;
 mod backend;
 mod control;
 mod execution;
+mod guest_account;
 mod locations;
 pub mod parser;
 pub mod recording;

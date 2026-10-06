@@ -116,6 +116,9 @@ impl VmProcess {
         if let Some(initrd) = &bundle.initrd {
             cmd.arg("-initrd").arg(initrd);
         }
+        if bundle.guest.as_ref().is_some_and(|guest| guest.graphical) {
+            cmd.args(["-vga", "virtio"]);
+        }
         if vm.nat {
             cmd.args(["-nic", "user,model=virtio-net-pci"]);
         } else {

@@ -1,14 +1,15 @@
 use crate::{
     archive::{Answer, ArchiveWorker, Request},
-    folders::{FolderPicker, Target as FolderTarget},
+    folders::{FolderPicker, Kind as FolderKind, Target as FolderTarget},
     runs::RunTerminal,
     theme,
     trace::{self, Inspector, InvocationKey},
     workspace::{Panel, WorkspaceLayout},
 };
 use antinomie_monitor_core::{
-    pair_events, Backend, BackendOptions, Command, ExecRequest, InvocationSummary, Notification,
-    RunState, RunSummary, Snapshot, TerminalRecord, VmConfig, VmState, WaitStatus,
+    pair_events, Backend, BackendOptions, Command, ExecRequest, GuestCredentials,
+    InvocationSummary, Notification, RunState, RunSummary, Snapshot, TerminalRecord, VmConfig,
+    VmState, WaitStatus,
 };
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
@@ -69,6 +70,29 @@ struct Activity {
 const ACTIVITY_LIMIT: usize = 256;
 const TERMINAL_VIEW_LIMIT: usize = 128;
 
+#[derive(Default)]
+struct CredentialForm {
+    username: String,
+    password: String,
+    confirmation: String,
+}
+
+impl CredentialForm {
+    fn reset(&mut self) {
+        *self = Self {
+            username: "analyst".into(),
+            ..Self::default()
+        };
+    }
+
+    fn credentials(&self) -> Result<GuestCredentials, String> {
+        if self.password != self.confirmation {
+            return Err("password confirmation does not match".into());
+        }
+        GuestCredentials::new(self.username.clone(), self.password.clone())
+    }
+}
+
 pub struct MonitorApp {
     backend: Option<Backend>,
     snapshot: Snapshot,
@@ -83,6 +107,9 @@ pub struct MonitorApp {
     draft: VmConfig,
     draft_generation: u64,
     folder_picker: FolderPicker,
+    credentials: CredentialForm,
+    import_open: bool,
+    import_directory: String,
     confirm: Option<Confirm>,
     name_action: Option<(String, bool, String)>,
     status: String,
@@ -162,6 +189,9 @@ impl MonitorApp {
             draft: VmConfig::default(),
             draft_generation: 0,
             folder_picker: FolderPicker::new(),
+            credentials: CredentialForm::default(),
+            import_open: false,
+            import_directory: String::new(),
             confirm: None,
             name_action: None,
             status,
@@ -256,13 +286,18 @@ impl MonitorApp {
     fn drain(&mut self) {
         if let Some((target, result)) = self.folder_picker.poll() {
             match result {
-                Ok(Some(path)) if target.generation == self.draft_generation => {
-                    if target.disk {
-                        self.draft.disk_root = Some(path);
-                    } else {
-                        self.draft.recording_root = Some(path);
+                Ok(Some(path)) => match target.kind {
+                    FolderKind::BaseImport => {
+                        self.import_directory = path.to_string_lossy().into_owned()
                     }
-                }
+                    FolderKind::Disk if target.generation == self.draft_generation => {
+                        self.draft.disk_root = Some(path)
+                    }
+                    FolderKind::Recording if target.generation == self.draft_generation => {
+                        self.draft.recording_root = Some(path)
+                    }
+                    _ => {}
+                },
                 Err(error) => {
                     self.status = format!("Host folder: {error}");
                     self.log("ERROR", self.status.clone());
@@ -413,7 +448,36 @@ impl MonitorApp {
         self.draft_generation = self.draft_generation.wrapping_add(1);
         self.draft = VmConfig::default();
         self.draft.name = "New VM".into();
+        self.draft.base_identity = self
+            .snapshot
+            .bases
+            .iter()
+            .find(|base| base.directory == std::path::Path::new(&self.settings.bundle))
+            .map(|base| base.id.clone());
+        self.credentials.reset();
         self.create_open = true;
+    }
+
+    fn create_vm(&mut self) -> Result<(), String> {
+        let requires_credentials = self
+            .snapshot
+            .bases
+            .iter()
+            .find(|base| Some(&base.id) == self.draft.base_identity.as_ref())
+            .and_then(|base| base.guest.as_ref())
+            .is_some_and(|guest| guest.requires_credentials);
+        let command = if requires_credentials {
+            Command::CreateWithCredentials {
+                vm: self.draft.clone(),
+                credentials: self.credentials.credentials()?,
+            }
+        } else {
+            Command::Create(self.draft.clone())
+        };
+        self.update_options();
+        self.send(command);
+        self.credentials.reset();
+        Ok(())
     }
 
     fn new_run(&mut self) {
@@ -423,6 +487,7 @@ impl MonitorApp {
     }
 
     fn configure_vm(&mut self) {
+        self.credentials.reset();
         self.draft_generation = self.draft_generation.wrapping_add(1);
         if let Some(vm) = self
             .snapshot
@@ -989,6 +1054,13 @@ impl MonitorApp {
                             .clicked()
                         {
                             self.new_image();
+                            ui.close_menu();
+                        }
+                        if ui
+                            .add_enabled(stopped, egui::Button::new("Import base..."))
+                            .clicked()
+                        {
+                            self.import_open = true;
                             ui.close_menu();
                         }
                         ui.separator();
@@ -1782,6 +1854,53 @@ impl MonitorApp {
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
+        if self.import_open {
+            let mut open = true;
+            let mut import = false;
+            egui::Window::new("Import base")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .default_width(420.0)
+                .show(ctx, |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.import_directory)
+                            .desired_width(360.0)
+                            .hint_text("Bundle directory"),
+                    );
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(
+                                self.folder_picker.available(),
+                                egui::Button::new(egui_phosphor::regular::FOLDER_OPEN),
+                            )
+                            .on_hover_text("Choose bundle directory")
+                            .clicked()
+                        {
+                            if let Err(error) = self.folder_picker.choose(FolderTarget {
+                                generation: 0,
+                                kind: FolderKind::BaseImport,
+                            }) {
+                                self.status = error;
+                            }
+                        }
+                        import = ui
+                            .add_enabled(
+                                self.snapshot.active_vm.is_none()
+                                    && !self.import_directory.trim().is_empty(),
+                                egui::Button::new("Import"),
+                            )
+                            .clicked();
+                    });
+                });
+            self.import_open = open;
+            if import {
+                self.send(Command::ImportBase {
+                    directory: PathBuf::from(&self.import_directory),
+                });
+                self.import_open = false;
+            }
+        }
         if let Some((vm_id, duplicate, name)) = &mut self.name_action {
             let mut open = true;
             let mut save = false;
@@ -1809,6 +1928,7 @@ impl MonitorApp {
             let mut reset = false;
             let mut delete = false;
             let mut nat = false;
+            let mut credentials_required = false;
             egui::Window::new(if creating {
                 "New VM"
             } else {
@@ -1835,6 +1955,19 @@ impl MonitorApp {
                             .num_columns(2)
                             .spacing([12.0, 6.0])
                             .show(ui, |ui| {
+                                let old_base = self.draft.base_identity.clone();
+                                ui.label("Installed base");
+                                base_selector(ui, &self.snapshot, &mut self.draft.base_identity, "vm_base");
+                                ui.end_row();
+                                if old_base != self.draft.base_identity {
+                                    self.credentials.reset();
+                                }
+                                let base = self.snapshot.bases.iter().find(|base| Some(&base.id) == self.draft.base_identity.as_ref());
+                                let min_ram = base.map_or(256, |base| base.min_ram_mib);
+                                let min_disk = base.map_or(1, |base| base.min_disk_gib);
+                                credentials_required = creating && base.and_then(|base| base.guest.as_ref()).is_some_and(|guest| guest.requires_credentials);
+                                self.draft.ram_mib = self.draft.ram_mib.max(min_ram);
+                                if creating { self.draft.disk_gib = self.draft.disk_gib.max(min_disk); }
                                 ui.label("Name");
                                 ui.add(
                                     egui::TextEdit::singleline(&mut self.draft.name)
@@ -1846,28 +1979,36 @@ impl MonitorApp {
                                 ui.end_row();
                                 ui.label("RAM (MiB)");
                                 ui.add(
-                                    egui::DragValue::new(&mut self.draft.ram_mib).range(256..=3072),
+                                    egui::DragValue::new(&mut self.draft.ram_mib).range(min_ram..=3072),
                                 );
                                 ui.end_row();
                                 ui.label("Disk (GiB)");
                                 if creating {
                                     ui.add(
                                         egui::DragValue::new(&mut self.draft.disk_gib)
-                                            .range(1..=2048),
+                                            .range(min_disk..=2048),
                                     );
                                 } else {
                                     ui.label(self.draft.disk_gib.to_string());
                                 }
                                 ui.end_row();
-                                ui.label("Installed base");
-                                base_selector(ui, &self.snapshot, &mut self.draft.base_identity, "vm_base");
-                                ui.end_row();
                                 ui.label("Disk parent");
-                                ui.add_enabled_ui(creating, |ui| { directory_input(ui, &mut self.draft.disk_root, "Default disk parent", &mut self.folder_picker, FolderTarget { generation: self.draft_generation, disk: true }, &mut self.status); });
+                                ui.add_enabled_ui(creating, |ui| { directory_input(ui, &mut self.draft.disk_root, "Default folder", &mut self.folder_picker, FolderTarget { generation: self.draft_generation, kind: FolderKind::Disk }, &mut self.status); });
                                 ui.end_row();
                                 ui.label("Recording parent");
-                                directory_input(ui, &mut self.draft.recording_root, "Default recording parent", &mut self.folder_picker, FolderTarget { generation: self.draft_generation, disk: false }, &mut self.status);
+                                directory_input(ui, &mut self.draft.recording_root, "Default folder", &mut self.folder_picker, FolderTarget { generation: self.draft_generation, kind: FolderKind::Recording }, &mut self.status);
                                 ui.end_row();
+                                if credentials_required {
+                                    ui.label("Username");
+                                    ui.add(egui::TextEdit::singleline(&mut self.credentials.username).char_limit(32).desired_width(280.0));
+                                    ui.end_row();
+                                    ui.label("Password");
+                                    password_input(ui, &mut self.credentials.password, "guest_password");
+                                    ui.end_row();
+                                    ui.label("Confirm password");
+                                    password_input(ui, &mut self.credentials.confirmation, "guest_confirmation");
+                                    ui.end_row();
+                                }
                             });
                         if !creating {
                             if let Some(location) = self.snapshot.vm_locations.iter().find(|location| location.vm_id == self.draft.id) {
@@ -1892,7 +2033,7 @@ impl MonitorApp {
                         ui.horizontal(|ui| {
                             save = ui
                                 .add_enabled(
-                                    !self.draft.name.trim().is_empty(),
+                                    !self.draft.name.trim().is_empty() && (!credentials_required || self.credentials.credentials().is_ok()),
                                     egui::Button::new(if creating {
                                         "Create VM"
                                     } else {
@@ -1921,6 +2062,9 @@ impl MonitorApp {
             });
             self.create_open = creating && open;
             self.config_open = !creating && open;
+            if !open {
+                self.credentials.reset();
+            }
             if nat {
                 self.confirm = Some(Confirm::Nat {
                     vm: self.draft.clone(),
@@ -1935,8 +2079,10 @@ impl MonitorApp {
             }
             if save {
                 if creating {
-                    self.update_options();
-                    self.send(Command::Create(self.draft.clone()));
+                    if let Err(error) = self.create_vm() {
+                        self.status = error;
+                        return;
+                    }
                 } else {
                     self.send(Command::Save(self.draft.clone()));
                 }
@@ -2060,7 +2206,9 @@ impl MonitorApp {
                 Confirm::Reset(_) => {
                     "Reset this VM's disk to the base image? All VM disk changes will be lost."
                 }
-                Confirm::Delete(_) => "Delete this VM configuration and disk? Disk changes will be lost. Retained run recordings and terminal history are preserved.",
+                Confirm::Delete(_) => {
+                    "Delete this VM configuration and disk? Disk changes will be lost. Retained run recordings and terminal history are preserved."
+                }
                 Confirm::Upload { .. } => "Overwrite the chosen guest path with this host file?",
                 Confirm::Nat { .. } => {
                     "Enable NAT? The guest can connect to the host network and Internet."
@@ -2311,8 +2459,20 @@ fn root_exit(run: &RunSummary) -> String {
 
 fn execution_detail(run: &RunSummary) -> String {
     match &run.execution {
-        Some(status) => format!("{}; {} live tasks; {} pending async; {} total tasks; {} async losses; flags {:#x}; generation {}", run_status(run), status.live_task_count, status.pending_async_count, status.total_task_count, status.async_loss_count, status.flags, status.generation),
-        None => format!("{}; full-tree execution evidence unavailable", run_status(run)),
+        Some(status) => format!(
+            "{}; {} live tasks; {} pending async; {} total tasks; {} async losses; flags {:#x}; generation {}",
+            run_status(run),
+            status.live_task_count,
+            status.pending_async_count,
+            status.total_task_count,
+            status.async_loss_count,
+            status.flags,
+            status.generation
+        ),
+        None => format!(
+            "{}; full-tree execution evidence unavailable",
+            run_status(run)
+        ),
     }
 }
 
@@ -2338,6 +2498,18 @@ fn base_selector(
     if identity.is_none() {
         *identity = snapshot.bases.first().map(|base| base.id.clone());
     }
+}
+
+fn password_input(ui: &mut egui::Ui, text: &mut String, salt: &str) {
+    let mut output = egui::TextEdit::singleline(text)
+        .id(egui::Id::new(salt))
+        .password(true)
+        .char_limit(128)
+        .desired_width(280.0)
+        .show(ui);
+    // Do not let reopening the form restore a prior secret through undo.
+    output.state.clear_undoer();
+    output.state.store(ui.ctx(), output.response.id);
 }
 
 fn directory_input(
@@ -2559,6 +2731,9 @@ mod tests {
             draft_generation: 0,
             folder_picker: FolderPicker::new(),
             status: String::new(),
+            credentials: CredentialForm::default(),
+            import_open: false,
+            import_directory: String::new(),
             name_action: None,
             filter: String::new(),
             selected_event: None,
@@ -2666,6 +2841,168 @@ mod tests {
             collect(&shape.shape, shape.clip_rect, &mut texts);
         }
         texts
+    }
+
+    #[test]
+    fn password_widget_does_not_retain_undo_history() {
+        let ctx = egui::Context::default();
+        let mut password = "first-private-password".to_owned();
+        for text in ["first-private-password", "second-private-password", ""] {
+            password.clear();
+            password.push_str(text);
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default()
+                    .show(ctx, |ui| password_input(ui, &mut password, "private_qa"));
+            });
+            let state =
+                egui::widgets::text_edit::TextEditState::load(&ctx, egui::Id::new("private_qa"))
+                    .unwrap();
+            assert!(state
+                .undoer()
+                .undo(&(Default::default(), String::new()))
+                .is_none());
+        }
+    }
+
+    #[test]
+    fn debian_credentials_are_transient_and_creation_uses_validated_api() {
+        let mut app = app();
+        app.snapshot
+            .bases
+            .push(antinomie_monitor_core::BaseSummary {
+                id: "debian".into(),
+                label: "Debian 13 (Xfce)".into(),
+                directory: "/bases/debian".into(),
+                min_ram_mib: 2048,
+                min_disk_gib: 8,
+                guest: Some(antinomie_monitor_core::GuestProfile {
+                    id: "debian-xfce".into(),
+                    label: "Debian 13 (Xfce)".into(),
+                    min_ram_mib: 2048,
+                    min_disk_gib: 8,
+                    requires_credentials: true,
+                    graphical: true,
+                }),
+            });
+        app.new_image();
+        app.draft.base_identity = Some("debian".into());
+        assert!(app.create_vm().is_err());
+        app.credentials.password = "test-password-only".into();
+        app.credentials.confirmation = "wrong-password".into();
+        assert!(app.create_vm().is_err());
+        app.credentials.confirmation = app.credentials.password.clone();
+        app.create_vm().unwrap();
+        assert!(app
+            .submitted
+            .iter()
+            .any(|command| matches!(command, Command::CreateWithCredentials { .. })));
+        assert!(app.credentials.password.is_empty());
+        assert!(app.credentials.confirmation.is_empty());
+        assert!(!format!("{:?}", app.submitted).contains("test-password-only"));
+        assert!(!serde_json::to_string(&app.settings)
+            .unwrap()
+            .contains("password"));
+        app.credentials.password = "discard-on-new-vm".into();
+        app.new_image();
+        assert!(app.credentials.password.is_empty());
+    }
+
+    #[test]
+    fn debian_new_vm_dialog_fits_large_text_and_enforces_profile_minima() {
+        let mut app = app();
+        app.snapshot
+            .bases
+            .push(antinomie_monitor_core::BaseSummary {
+                id: "debian".into(),
+                label: "Debian 13 (Xfce)".into(),
+                directory: "/bases/debian".into(),
+                min_ram_mib: 2048,
+                min_disk_gib: 8,
+                guest: Some(antinomie_monitor_core::GuestProfile {
+                    id: "debian-xfce".into(),
+                    label: "Debian 13 (Xfce)".into(),
+                    min_ram_mib: 2048,
+                    min_disk_gib: 8,
+                    requires_credentials: true,
+                    graphical: true,
+                }),
+            });
+        app.new_image();
+        app.draft.ram_mib = 256;
+        app.draft.disk_gib = 1;
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        app.settings.font_size = 24.0;
+        theme::text_size(&ctx, 24.0);
+        render(&mut app, &ctx, egui::vec2(1280.0, 900.0));
+        let output = render(&mut app, &ctx, egui::vec2(1280.0, 900.0));
+        assert_eq!(app.draft.ram_mib, 2048);
+        assert_eq!(app.draft.disk_gib, 8);
+        let visible = texts(&output);
+        for label in ["Username", "Password", "Confirm password", "Create VM"] {
+            assert!(
+                visible.iter().any(|(text, _)| text == label),
+                "missing or clipped {label}"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires X11 native rendering; exits after 20 seconds"]
+    fn native_debian_setup_fixture() {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        struct QaApp {
+            app: MonitorApp,
+            deadline: Instant,
+        }
+        impl eframe::App for QaApp {
+            fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+                if Instant::now() >= self.deadline {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                eframe::App::update(&mut self.app, ctx, frame);
+            }
+        }
+        eframe::run_native(
+            "Antinomie Debian Setup QA",
+            eframe::NativeOptions {
+                viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 900.0]),
+                persist_window: false,
+                event_loop_builder: Some(Box::new(|builder| {
+                    builder.with_any_thread(true);
+                })),
+                ..Default::default()
+            },
+            Box::new(|cc| {
+                theme::install(&cc.egui_ctx);
+                let mut app = app();
+                app.snapshot
+                    .bases
+                    .push(antinomie_monitor_core::BaseSummary {
+                        id: "debian".into(),
+                        label: "Debian 13 (Xfce)".into(),
+                        directory: "/bases/debian".into(),
+                        min_ram_mib: 2048,
+                        min_disk_gib: 8,
+                        guest: Some(antinomie_monitor_core::GuestProfile {
+                            id: "debian-xfce".into(),
+                            label: "Debian 13 (Xfce)".into(),
+                            min_ram_mib: 2048,
+                            min_disk_gib: 8,
+                            requires_credentials: true,
+                            graphical: true,
+                        }),
+                    });
+                app.new_image();
+                app.settings.font_size = 24.0;
+                theme::text_size(&cc.egui_ctx, 24.0);
+                Ok(Box::new(QaApp {
+                    app,
+                    deadline: Instant::now() + Duration::from_secs(20),
+                }))
+            }),
+        )
+        .unwrap();
     }
 
     #[test]

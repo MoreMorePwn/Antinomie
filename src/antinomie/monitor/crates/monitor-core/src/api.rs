@@ -1,6 +1,123 @@
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, time::Duration};
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GuestProfile {
+    pub id: String,
+    pub label: String,
+    pub min_ram_mib: u32,
+    pub min_disk_gib: u32,
+    pub requires_credentials: bool,
+    pub graphical: bool,
+}
+impl GuestProfile {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.id.is_empty()
+            || self.id.len() > 64
+            || !self
+                .id
+                .bytes()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+        {
+            return Err("invalid guest profile id".into());
+        }
+        if self.label.trim().is_empty()
+            || self.label.len() > 128
+            || self.label.chars().any(char::is_control)
+        {
+            return Err("invalid guest profile label".into());
+        }
+        if !(256..=3072).contains(&self.min_ram_mib) || !(1..=2048).contains(&self.min_disk_gib) {
+            return Err("guest profile resource minima exceed supported limits".into());
+        }
+        Ok(())
+    }
+}
+
+/// Transient login input. Passwords are deliberately excluded from serialization.
+#[derive(Clone)]
+pub struct GuestCredentials {
+    pub(crate) username: String,
+    pub(crate) password: String,
+}
+impl GuestCredentials {
+    pub fn new(username: String, password: String) -> Result<Self, String> {
+        validate_guest_username(&username)?;
+        if !(8..=128).contains(&password.len())
+            || password.bytes().any(|c| matches!(c, 0 | b'\r' | b'\n'))
+        {
+            return Err("password must be 8..128 UTF-8 bytes without NUL, CR or LF".into());
+        }
+        Ok(Self { username, password })
+    }
+}
+impl std::fmt::Debug for GuestCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GuestCredentials")
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .finish()
+    }
+}
+pub(crate) fn validate_guest_username(username: &str) -> Result<(), String> {
+    let mut bytes = username.bytes();
+    if username.len() > 32
+        || !bytes
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase() || c == b'_')
+        || !bytes.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_' || c == b'-')
+        || username == "root"
+    {
+        return Err("username must be a non-root Linux account name of 1..32 bytes".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod guest_tests {
+    use super::*;
+    #[test]
+    fn credentials_validate_and_redact_through_command_debug() {
+        let secret = "a-very-private-password";
+        let credentials = GuestCredentials::new("analyst".into(), secret.into()).unwrap();
+        let command = Command::CreateWithCredentials {
+            vm: VmConfig::default(),
+            credentials: credentials.clone(),
+        };
+        assert!(!format!("{command:?}").contains(secret));
+        for username in ["", "root", "Alice", "a:b", "-flag", "space name", "a\n"] {
+            assert!(GuestCredentials::new(username.into(), secret.into()).is_err());
+        }
+        for password in ["short", "eight\nchars", "eight\rchars", "eight\0chars"] {
+            assert!(GuestCredentials::new("analyst".into(), password.into()).is_err());
+        }
+        assert!(GuestCredentials::new("analyst".into(), "x".repeat(128)).is_ok());
+        assert!(GuestCredentials::new("analyst".into(), "x".repeat(129)).is_err());
+        assert!(GuestCredentials::new("analyst".into(), "é".repeat(64)).is_ok());
+        assert!(GuestCredentials::new("analyst".into(), "é".repeat(65)).is_err());
+    }
+    #[test]
+    fn profile_bounds_and_legacy_config() {
+        let mut profile = GuestProfile {
+            id: "debian-xfce".into(),
+            label: "Debian 13 (Xfce)".into(),
+            min_ram_mib: 2048,
+            min_disk_gib: 8,
+            requires_credentials: true,
+            graphical: true,
+        };
+        assert!(profile.validate().is_ok());
+        profile.min_ram_mib = 4096;
+        assert!(profile.validate().is_err());
+        let vm: VmConfig = serde_json::from_str(
+            r#"{"id":"legacy","name":"legacy","cpus":4,"ram_mib":2048,"disk_gib":8,"nat":false}"#,
+        )
+        .unwrap();
+        assert_eq!(vm.base_identity, None);
+        assert!(!serde_json::to_string(&vm).unwrap().contains("password"));
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct VmConfig {
     pub id: String,
@@ -119,6 +236,9 @@ pub struct BaseSummary {
     pub id: String,
     pub label: String,
     pub directory: PathBuf,
+    pub guest: Option<GuestProfile>,
+    pub min_ram_mib: u32,
+    pub min_disk_gib: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -190,6 +310,15 @@ impl Default for ExecRequest {
 #[derive(Clone, Debug)]
 pub enum Command {
     Create(VmConfig),
+    /// Hashing has a 15-second tool deadline; offline provisioning has 180 seconds.
+    /// Failure cleans unpublished state and never reports credential tool output.
+    CreateWithCredentials {
+        vm: VmConfig,
+        credentials: GuestCredentials,
+    },
+    ImportBase {
+        directory: PathBuf,
+    },
     Save(VmConfig),
     Rename {
         vm_id: String,

@@ -1,4 +1,4 @@
-use crate::api::{BackendOptions, Health, VmConfig};
+use crate::api::{BackendOptions, GuestProfile, Health, VmConfig};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::os::unix::ffi::OsStrExt;
@@ -231,11 +231,16 @@ pub struct Bundle {
     pub schema_id: u32,
     #[serde(default)]
     pub base_identity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest: Option<GuestProfile>,
 }
 impl Bundle {
     pub fn load(dir: &Path) -> Result<Self, String> {
         let root = fs::canonicalize(dir).map_err(|e| format!("bundle {}: {e}", dir.display()))?;
         let mut b: Self = read_json(&root.join("bundle.json"))?;
+        if let Some(guest) = &b.guest {
+            guest.validate()?;
+        }
         let resolve = |p: &Path| -> Result<PathBuf, String> {
             let path = fs::canonicalize(root.join(p))
                 .map_err(|e| format!("artifact {}: {e}", p.display()))?;
@@ -255,6 +260,11 @@ impl Bundle {
             serde_json::to_vec(&(&self.kernel_append, &self.kernel_version, self.schema_id))
                 .map_err(|e| e.to_string())?,
         );
+        if let Some(guest) = &self.guest {
+            guest.validate()?;
+            digest.update(b"antinomie-guest-profile-v1");
+            digest.update(serde_json::to_vec(guest).map_err(|e| e.to_string())?);
+        }
         for path in [
             Some(&self.kernel),
             Some(&self.base_disk),
@@ -323,6 +333,7 @@ impl Bundle {
                     kernel_version: self.kernel_version.clone(),
                     schema_id: self.schema_id,
                     base_identity: Some(identity.clone()),
+                    guest: self.guest.clone(),
                 };
                 if copied.identity()? != identity {
                     return Err("bundle changed during import; copies rejected".into());
@@ -352,6 +363,7 @@ impl Bundle {
             kernel_version: self.kernel_version,
             schema_id: self.schema_id,
             base_identity: Some(identity),
+            guest: self.guest,
         };
         installed.verify_installed()?;
         atomic_json(&target.join("bundle.json"), &installed)?;
@@ -389,6 +401,50 @@ pub(crate) fn validate_vm(vm: &VmConfig) -> Result<(), String> {
     }
     if !(1..=2048).contains(&vm.disk_gib) {
         return Err("disk capacity must be 1..2048 GiB".into());
+    }
+    Ok(())
+}
+pub(crate) fn validate_guest_transition(disk: &Bundle, boot: &Bundle) -> Result<(), String> {
+    if disk.guest.as_ref().map(|guest| &guest.id) != boot.guest.as_ref().map(|guest| &guest.id) {
+        return Err("changing guest OS requires creating a new VM; existing disk retained".into());
+    }
+    Ok(())
+}
+pub(crate) fn validate_vm_bundle(
+    options: &BackendOptions,
+    vm: &VmConfig,
+    bundle: &Bundle,
+) -> Result<(), String> {
+    validate_vm(vm)?;
+    if let Some(guest) = &bundle.guest {
+        guest.validate()?;
+        if vm.ram_mib < guest.min_ram_mib || vm.disk_gib < guest.min_disk_gib {
+            return Err(format!(
+                "guest requires at least {} MiB RAM and {} GiB disk",
+                guest.min_ram_mib, guest.min_disk_gib
+            ));
+        }
+    }
+    bundle.verify_installed()?;
+    let output = Command::new(&options.qemu_img)
+        .args(["info", "-f", "qcow2", "--output=json"])
+        .arg(&bundle.base_disk)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err("cannot inspect installed base disk size".into());
+    }
+    if output.stdout.len() > 1024 * 1024 {
+        return Err("base disk metadata exceeds limit".into());
+    }
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())?;
+    let size = metadata
+        .get("virtual-size")
+        .and_then(|v| v.as_u64())
+        .ok_or("base disk virtual size is missing")?;
+    if size > u64::from(vm.disk_gib) * 1024 * 1024 * 1024 {
+        return Err("VM disk capacity is smaller than installed base disk".into());
     }
     Ok(())
 }
@@ -735,6 +791,53 @@ pub(crate) fn create_overlay(
     atomic_json(&dir.join("bundle.json"), bundle)
 }
 
+pub(crate) fn reset_vm_disk(
+    options: &BackendOptions,
+    directory: &Path,
+    vm: &VmConfig,
+    bundle: &Bundle,
+) -> Result<(), String> {
+    validate_vm_bundle(options, vm, bundle)?;
+    validate_disk_chain(
+        options,
+        &directory.join("disk.qcow2"),
+        Some(&bundle.base_disk),
+    )?;
+    let account = if bundle
+        .guest
+        .as_ref()
+        .is_some_and(|guest| guest.requires_credentials)
+    {
+        Some(crate::guest_account::GuestAccount::load(directory)?)
+    } else {
+        None
+    };
+    let staging = directory.join(format!("reset-{}", unique_id()));
+    private_dir(&staging).map_err(|e| e.to_string())?;
+    let result = (|| -> Result<(), String> {
+        create_overlay(options, &staging, vm.disk_gib, bundle)?;
+        let disk = staging.join("disk.qcow2");
+        if let Some(account) = account {
+            account.provision(&disk)?;
+        }
+        File::open(&disk)
+            .and_then(|file| file.sync_all())
+            .map_err(|e| e.to_string())?;
+        fs::rename(&disk, directory.join("disk.qcow2")).map_err(|e| e.to_string())?;
+        File::open(directory)
+            .and_then(|file| file.sync_all())
+            .map_err(|e| format!("reset disk is published; directory durability is uncertain: {e}"))
+    })();
+    let cleanup = fs::remove_dir_all(&staging).map_err(|e| e.to_string());
+    match (result, cleanup) {
+        (Err(error), Err(cleanup)) => {
+            Err(format!("{error}; reset staging cleanup failed: {cleanup}"))
+        }
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), cleanup) => cleanup,
+    }
+}
+
 pub(crate) fn duplicate_vm(
     options: &BackendOptions,
     source: &VmConfig,
@@ -751,6 +854,15 @@ pub(crate) fn duplicate_vm(
     }
     let bundle: Bundle = read_json(&source_dir.join("bundle.json"))?;
     bundle.verify_installed()?;
+    let account = if bundle
+        .guest
+        .as_ref()
+        .is_some_and(|guest| guest.requires_credentials)
+    {
+        Some(crate::guest_account::GuestAccount::load(&source_dir)?)
+    } else {
+        None
+    };
     validate_disk_chain(options, &source_disk, Some(&bundle.base_disk))?;
     let mut vm = source.clone();
     vm.id = vm_id(&name);
@@ -780,6 +892,9 @@ pub(crate) fn duplicate_vm(
             .map_err(|e| e.to_string())?;
         fs::set_permissions(&disk, fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
         atomic_json(&location.disk_directory.join("bundle.json"), &bundle)?;
+        if let Some(account) = &account {
+            account.save(&location.disk_directory)?;
+        }
         atomic_json(&location.disk_directory.join("config.json"), &vm)?;
         sync_directory_parent(&location.disk_directory)?;
         crate::locations::publish(options, &location)?;
@@ -861,6 +976,19 @@ pub(crate) fn delete_vm(options: &BackendOptions, id: &str) -> Result<(), String
             return Err("VM deletion requires owned regular disk/configuration files".into());
         }
         paths.push(path);
+    }
+    let account = dir.join("guest-account.json");
+    if account.exists() || fs::symlink_metadata(&account).is_ok() {
+        crate::guest_account::GuestAccount::load(&dir)?;
+        paths.push(account);
+    } else if bundle
+        .guest
+        .as_ref()
+        .is_some_and(|guest| guest.requires_credentials)
+    {
+        return Err(
+            "guest account provisioning record is unavailable; existing files retained".into(),
+        );
     }
     let staging = dir.join(format!("delete-{}", unique_id()));
     fs::create_dir(&staging).map_err(|e| e.to_string())?;
@@ -1057,6 +1185,197 @@ impl RawCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn guest_fixture() -> (PathBuf, BackendOptions, Bundle, VmConfig) {
+        let root = std::env::temp_dir().join(format!("ant-guest-storage-{}", unique_id()));
+        let source = root.join("source");
+        private_dir(&source).unwrap();
+        fs::write(source.join("kernel"), b"kernel fixture").unwrap();
+        assert!(
+            Command::new("qemu-img")
+                .args(["create", "-f", "qcow2"])
+                .arg(source.join("base.qcow2"))
+                .arg("1G")
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        let options = BackendOptions {
+            data_dir: root.join("data"),
+            ..BackendOptions::default()
+        };
+        let bundle = Bundle {
+            kernel: source.join("kernel"),
+            base_disk: source.join("base.qcow2"),
+            initrd: None,
+            kernel_append: String::new(),
+            kernel_version: "6.12.94".into(),
+            schema_id: 1,
+            base_identity: None,
+            guest: Some(GuestProfile {
+                id: "debian-xfce".into(),
+                label: "Debian 13 (Xfce)".into(),
+                min_ram_mib: 2048,
+                min_disk_gib: 8,
+                requires_credentials: true,
+                graphical: true,
+            }),
+        }
+        .install(&options)
+        .unwrap();
+        let vm = VmConfig {
+            id: "guest".into(),
+            base_identity: bundle.base_identity.clone(),
+            ..VmConfig::default()
+        };
+        (root, options, bundle, vm)
+    }
+    #[test]
+    fn legacy_identity_is_exact_and_guest_metadata_changes_identity() {
+        let (root, _, mut bundle, _) = guest_fixture();
+        let guest_identity = bundle.identity().unwrap();
+        bundle.guest = None;
+        let mut expected = Sha256::new();
+        expected.update(
+            serde_json::to_vec(&(
+                &bundle.kernel_append,
+                &bundle.kernel_version,
+                bundle.schema_id,
+            ))
+            .unwrap(),
+        );
+        for path in [
+            Some(&bundle.kernel),
+            Some(&bundle.base_disk),
+            bundle.initrd.as_ref(),
+        ] {
+            if let Some(path) = path {
+                expected.update([1]);
+                expected.update(sha256_file(path).unwrap());
+            } else {
+                expected.update([0]);
+            }
+        }
+        assert_eq!(
+            bundle.identity().unwrap(),
+            format!("{:x}", expected.finalize())
+        );
+        assert_ne!(guest_identity, bundle.identity().unwrap());
+        let legacy: Bundle =
+            serde_json::from_str(r#"{"kernel":"kernel","base_disk":"base","initrd":null}"#)
+                .unwrap();
+        assert!(legacy.guest.is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn guest_resource_size_and_os_transition_guards() {
+        let (root, options, bundle, mut vm) = guest_fixture();
+        assert!(validate_vm_bundle(&options, &vm, &bundle).is_ok());
+        vm.ram_mib = 1024;
+        assert!(
+            validate_vm_bundle(&options, &vm, &bundle)
+                .unwrap_err()
+                .contains("2048")
+        );
+        vm.ram_mib = 2048;
+        vm.disk_gib = 4;
+        assert!(validate_vm_bundle(&options, &vm, &bundle).is_err());
+        let mut legacy = bundle.clone();
+        legacy.guest = None;
+        assert!(validate_guest_transition(&bundle, &legacy).is_err());
+        assert!(validate_guest_transition(&bundle, &bundle).is_ok());
+        let mut larger = bundle.clone();
+        larger.guest.as_mut().unwrap().min_disk_gib = 1;
+        larger.base_identity = None;
+        // Re-import after changing metadata and grow the source disk above VM capacity.
+        fs::set_permissions(&larger.base_disk, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(
+            Command::new("qemu-img")
+                .arg("resize")
+                .arg(&larger.base_disk)
+                .arg("2G")
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        let larger = larger.install(&options).unwrap();
+        vm.disk_gib = 1;
+        assert!(
+            validate_vm_bundle(&options, &vm, &larger)
+                .unwrap_err()
+                .contains("smaller")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn reset_failure_preserves_disk_and_duplicate_delete_preserve_account_contract() {
+        let (root, options, bundle, mut vm) = guest_fixture();
+        let location = crate::locations::prepare(&options, &mut vm).unwrap();
+        private_dir(&location.disk_directory).unwrap();
+        create_overlay(&options, &location.disk_directory, vm.disk_gib, &bundle).unwrap();
+        atomic_json(&location.disk_directory.join("config.json"), &vm).unwrap();
+        let account = crate::guest_account::GuestAccount::from_credentials(
+            crate::api::GuestCredentials::new("analyst".into(), "fixturepassword".into()).unwrap(),
+        )
+        .unwrap();
+        account.save(&location.disk_directory).unwrap();
+        crate::locations::publish(&options, &location).unwrap();
+        let old = fs::read(location.disk_directory.join("disk.qcow2")).unwrap();
+        let record = fs::read(location.disk_directory.join("guest-account.json")).unwrap();
+        fs::write(location.disk_directory.join("user-file"), b"retain").unwrap();
+        let account_path = location.disk_directory.join("guest-account.json");
+        let retained_account_path = location.disk_directory.join("retained-account.json");
+        fs::rename(&account_path, &retained_account_path).unwrap();
+        assert!(
+            reset_vm_disk(&options, &location.disk_directory, &vm, &bundle)
+                .unwrap_err()
+                .contains("unavailable")
+        );
+        assert_eq!(
+            old,
+            fs::read(location.disk_directory.join("disk.qcow2")).unwrap()
+        );
+        fs::rename(&retained_account_path, &account_path).unwrap();
+        crate::guest_account::fail_next_provision();
+        assert!(reset_vm_disk(&options, &location.disk_directory, &vm, &bundle).is_err());
+        assert_eq!(
+            old,
+            fs::read(location.disk_directory.join("disk.qcow2")).unwrap()
+        );
+        assert_eq!(
+            record,
+            fs::read(location.disk_directory.join("guest-account.json")).unwrap()
+        );
+        assert!(!fs::read_dir(&location.disk_directory).unwrap().any(|e| {
+            e.unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("reset-")
+        }));
+        let duplicate = duplicate_vm(&options, &vm, "Copy".into()).unwrap();
+        let duplicate_dir = vm_dir(&options, &duplicate.id).unwrap();
+        assert_eq!(
+            record,
+            fs::read(duplicate_dir.join("guest-account.json")).unwrap()
+        );
+        assert_eq!(
+            fs::metadata(duplicate_dir.join("guest-account.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        delete_vm(&options, &vm.id).unwrap();
+        assert!(!location.disk_directory.join("guest-account.json").exists());
+        assert_eq!(
+            fs::read(location.disk_directory.join("user-file")).unwrap(),
+            b"retain"
+        );
+        assert!(duplicate_dir.join("guest-account.json").is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn migration_preserves_disk_bytes_relocates_fields_and_parent_mode() {
         let parent = std::env::temp_dir().join(format!("ant-migration-{}", unique_id()));
@@ -1086,6 +1405,7 @@ mod tests {
             kernel_version: "6.12.94".into(),
             schema_id: 1,
             base_identity: None,
+            guest: None,
         };
         bundle.base_identity = Some(bundle.identity().unwrap());
         let vm = source.join("vms/old-id");
@@ -1258,6 +1578,7 @@ mod tests {
             kernel_version: "test".into(),
             schema_id: 1,
             base_identity: None,
+            guest: None,
         };
         let options = BackendOptions {
             data_dir: directory.join("data"),

@@ -2,7 +2,8 @@
 
 Initial native Rust/egui application, C V7 transport and kernel-only guest
 controls. The guest is Linux 6.12.94 with the project's Debian source baseline
-and Antinomie patch, plus a minimal BusyBox root filesystem, not Debian userspace.
+and Antinomie patch. Installed bases can contain either the minimal BusyBox
+root filesystem or Debian 13 amd64 with Xfce.
 
 ## License
 
@@ -64,6 +65,43 @@ nonempty conflicting destinations. The original data is retained as a backup;
 do not resume using both roots as independent copies of the same VM.
 The build directory can be removed without breaking those installed bases.
 Do not remove application data to clean build products.
+
+## Debian desktop base
+
+The Debian builder additionally requires `virt-builder`, `guestfish`,
+`virt-customize`, `openssl`, and a usable libguestfs appliance. It runs without
+host root, authenticates the template catalog and Debian apt repositories, and
+preserves package ownership, attributes and license files. Build-time Internet
+access does not enable networking in created VMs.
+
+```bash
+scripts/build-debian-image.py --kernel work/monitor-build/arch/x86/boot/bzImage
+work/monitor-host/antinomie-monitor --install-base work/debian-xfce-base
+scripts/run-monitor.sh
+```
+
+Alternatively use **File > Import base** with the completed bundle directory.
+In **New VM**, choose **Debian 13 (Xfce)**, then enter a username, password and
+confirmation. Minimum resources are 2048 MiB RAM and 8 GiB disk; the existing
+3072 MiB RAM ceiling still applies. Creation provisions the disk offline and
+can take longer than BusyBox creation. The account uses UID/GID 1000 and
+password-protected sudo. Root login, autologin and SSH are disabled. The desktop
+appears in QEMU's separate display window; program terminals stay in the monitor.
+
+Passwords accept 8..128 UTF-8 bytes without NUL/CR/LF. They are transient,
+redacted in Debug output and absent from VM configuration, UI settings and
+recording metadata. A private mode-0600 `guest-account.json` retains the username
+and salted password hash for reset and duplication. Protect this file as
+sensitive credential material. Reset reapplies the original account, not later
+guest password changes; duplicate inherits the current disk and original reset
+credentials. Recording remains full-content: credentials typed into a monitored
+program can be captured as ordinary syscall/terminal content.
+
+Changing an existing disk from BusyBox to Debian is rejected. Create a new VM;
+existing disks and recordings remain unchanged. Debian supplies dynamic-program
+libraries and shell interpreters, but uploaded programs can still need packages
+not installed in the base. Package versions and authenticated build provenance
+are retained in the generated bundle's `provenance/` directory and in the guest.
 
 On boot the currently selected bundle supplies the patched kernel/initrd;
 the existing disk overlay and original disk backing base remain unchanged.
@@ -128,6 +166,7 @@ worker. Terminal output sequence gaps trigger a core-owned screen snapshot.
 | `control.rs` | Versioned command encoding and guest response validation |
 | `parser.rs` | Checked ANTT envelopes, correlation, fragments, gaps and bounded previews |
 | `storage.rs`, `recording.rs` | Durable base import, overlays, recordings and offline range reads |
+| `guest_account.rs` | Private offline account provisioning and reset credential state |
 | `run.rs` | Per-program metadata, transcript/journal and headless terminal-screen persistence |
 | `vm.rs` | Argument-vector QEMU launch, QMP force-stop and process ownership |
 | `crates/monitor-ui/src/` | Native VM list, settings, event table and VT terminal |

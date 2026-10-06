@@ -61,3 +61,12 @@ publishing executables or guest images, review every distributed component,
 collect its applicable notices, and provide matching source or another valid
 license-compliant source arrangement when required. Do not label an entire
 guest image MIT or claim that this notice inventory completes that review.
+
+The optional Debian desktop pipeline uses external libguestfs tools and an
+authenticated Debian template/package repository. These tools are not copied
+into the monitor ELF. The generated guest retains `/usr/share/doc/*/copyright`,
+package/version inventory and template/build provenance; Debian packages,
+Xfce, Xorg, fonts and libraries retain their individual upstream terms. A local
+development image is not a license-cleared redistribution bundle. Distributing
+it requires the same component-specific notice/source review above, including
+the exact patched kernel build.

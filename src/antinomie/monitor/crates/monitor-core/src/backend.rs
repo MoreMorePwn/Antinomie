@@ -660,39 +660,22 @@ impl Worker {
     }
     fn command(&mut self, command: Command) -> Result<String, String> {
         match command {
-            Command::Create(mut vm) => {
-                if vm.id.is_empty() {
-                    vm.id = storage::vm_id(&vm.name);
+            Command::Create(vm) => self.create(vm, None),
+            Command::CreateWithCredentials { vm, credentials } => {
+                self.create(vm, Some(credentials))
+            }
+            Command::ImportBase { directory } => {
+                if self.session.is_some() || self.snapshot.active_vm.is_some() {
+                    return Err("stop VM before importing a base".into());
                 }
-                storage::validate_vm(&vm)?;
-                if self.snapshot.vms.iter().any(|current| current.id == vm.id) {
-                    return Err("VM identity already exists".into());
+                let bundle = Bundle::load(&directory)?;
+                if !bundle.kernel_version.starts_with("6.12.94") {
+                    return Err("boot bundle must use Linux 6.12.94".into());
                 }
-                let location = crate::locations::prepare(&self.options, &mut vm)?;
-                let dir = &location.disk_directory;
-                let bundle =
-                    crate::locations::boot_bundle(&self.options, vm.base_identity.as_deref())?;
-                vm.base_identity = bundle.base_identity.clone();
-                fs::create_dir(dir).map_err(|e| e.to_string())?;
-                storage::private_dir(dir).map_err(|e| e.to_string())?;
-                if let Err(e) = storage::create_overlay(&self.options, dir, vm.disk_gib, &bundle)
-                    .and_then(|_| storage::atomic_json(&dir.join("config.json"), &vm))
-                    .and_then(|_| storage::sync_directory_parent(dir))
-                {
-                    let _ = fs::remove_dir_all(dir);
-                    return Err(e);
-                }
-                let publication = crate::locations::publish(&self.options, &location);
-                if let Err(error) = &publication
-                    && !error.published
-                {
-                    let cleanup = fs::remove_dir_all(dir);
-                    return Err(format!("{error}; creation rollback {:?}", cleanup.err()));
-                }
-                self.snapshot.vms.push(vm);
+                storage::validate_disk_chain(&self.options, &bundle.base_disk, None)?;
+                bundle.install(&self.options)?;
                 self.refresh_locations()?;
-                publication?;
-                Ok("VM created".into())
+                Ok("base imported".into())
             }
             Command::Save(mut vm) => {
                 storage::validate_vm(&vm)?;
@@ -705,13 +688,16 @@ impl Worker {
                     .ok_or("unknown VM")?;
                 let location =
                     crate::locations::future_recordings(&self.options, current, &mut vm)?;
-                if let Some(identity) = &vm.base_identity {
-                    crate::locations::boot_bundle(&self.options, Some(identity))?;
-                }
+                let dir = storage::vm_dir(&self.options, &vm.id)?;
+                let disk_bundle: Bundle = storage::read_json(&dir.join("bundle.json"))?;
+                let boot_bundle =
+                    crate::locations::boot_bundle(&self.options, vm.base_identity.as_deref())?;
+                storage::validate_guest_transition(&disk_bundle, &boot_bundle)?;
+                storage::validate_vm_bundle(&self.options, &vm, &disk_bundle)?;
+                storage::validate_vm_bundle(&self.options, &vm, &boot_bundle)?;
                 if vm.disk_gib < current.disk_gib {
                     return Err("persistent VM disks cannot be shrunk".into());
                 }
-                let dir = storage::vm_dir(&self.options, &vm.id)?;
                 if vm.disk_gib != current.disk_gib {
                     let output = std::process::Command::new(&self.options.qemu_img)
                         .arg("resize")
@@ -812,16 +798,7 @@ impl Worker {
                     .ok_or("unknown VM")?;
                 let dir = storage::vm_dir(&self.options, &vm_id)?;
                 let bundle: Bundle = storage::read_json(&dir.join("bundle.json"))?;
-                let staging = dir.join(format!("reset-{}", storage::unique_id()));
-                storage::private_dir(&staging).map_err(|e| e.to_string())?;
-                let result = storage::create_overlay(&self.options, &staging, vm.disk_gib, &bundle)
-                    .and_then(|_| {
-                        fs::rename(staging.join("disk.qcow2"), dir.join("disk.qcow2"))
-                            .map_err(|e| e.to_string())
-                    });
-                let cleanup = fs::remove_dir_all(&staging).map_err(|e| e.to_string());
-                result?;
-                cleanup?;
+                storage::reset_vm_disk(&self.options, &dir, vm, &bundle)?;
                 Ok("VM reset to base".into())
             }
             Command::UpdateOptions {
@@ -860,6 +837,66 @@ impl Worker {
             other => self.guest_command(other),
         }
     }
+    fn create(
+        &mut self,
+        mut vm: VmConfig,
+        credentials: Option<GuestCredentials>,
+    ) -> Result<String, String> {
+        if self.session.is_some() || self.snapshot.active_vm.is_some() {
+            return Err("stop VM before creating another VM".into());
+        }
+        if vm.id.is_empty() {
+            vm.id = storage::vm_id(&vm.name);
+        }
+        storage::validate_vm(&vm)?;
+        if self.snapshot.vms.iter().any(|current| current.id == vm.id) {
+            return Err("VM identity already exists".into());
+        }
+        let bundle = crate::locations::boot_bundle(&self.options, vm.base_identity.as_deref())?;
+        storage::validate_vm_bundle(&self.options, &vm, &bundle)?;
+        let requires_credentials = bundle
+            .guest
+            .as_ref()
+            .is_some_and(|guest| guest.requires_credentials);
+        if requires_credentials != credentials.is_some() {
+            return Err(if requires_credentials {
+                "guest credentials are required"
+            } else {
+                "this base does not accept guest credentials"
+            }
+            .into());
+        }
+        vm.base_identity = bundle.base_identity.clone();
+        let location = crate::locations::prepare(&self.options, &mut vm)?;
+        let dir = &location.disk_directory;
+        fs::create_dir(dir).map_err(|e| e.to_string())?;
+        let result = (|| -> Result<(), String> {
+            storage::private_dir(dir).map_err(|e| e.to_string())?;
+            storage::create_overlay(&self.options, dir, vm.disk_gib, &bundle)?;
+            if let Some(credentials) = credentials {
+                let account = crate::guest_account::GuestAccount::from_credentials(credentials)?;
+                account.provision(&dir.join("disk.qcow2"))?;
+                account.save(dir)?;
+            }
+            storage::atomic_json(&dir.join("config.json"), &vm)?;
+            storage::sync_directory_parent(dir)
+        })();
+        if let Err(error) = result {
+            let cleanup = fs::remove_dir_all(dir);
+            return Err(format!("{error}; creation rollback {:?}", cleanup.err()));
+        }
+        let publication = crate::locations::publish(&self.options, &location);
+        if let Err(error) = &publication
+            && !error.published
+        {
+            let cleanup = fs::remove_dir_all(dir);
+            return Err(format!("{error}; creation rollback {:?}", cleanup.err()));
+        }
+        self.snapshot.vms.push(vm);
+        self.refresh_locations()?;
+        publication?;
+        Ok("VM created".into())
+    }
     fn start(&mut self, id: &str) -> Result<String, String> {
         if self.session.is_some() {
             return Err("only one VM may run at a time".into());
@@ -881,6 +918,16 @@ impl Worker {
             Some(&disk_bundle.base_disk),
         )?;
         let bundle = crate::locations::boot_bundle(&self.options, vm.base_identity.as_deref())?;
+        storage::validate_guest_transition(&disk_bundle, &bundle)?;
+        storage::validate_vm_bundle(&self.options, &vm, &disk_bundle)?;
+        storage::validate_vm_bundle(&self.options, &vm, &bundle)?;
+        if disk_bundle
+            .guest
+            .as_ref()
+            .is_some_and(|guest| guest.requires_credentials)
+        {
+            crate::guest_account::GuestAccount::load(&dir)?;
+        }
         if !bundle.kernel_version.is_empty() && !bundle.kernel_version.starts_with("6.12.94") {
             return Err("boot bundle must use the approved Linux 6.12.94 baseline".into());
         }
@@ -1495,6 +1542,111 @@ fn remaining_request_budget(deadline: Instant, maximum: Duration) -> Duration {
 mod tests {
     use super::*;
     #[test]
+    fn base_import_and_failed_credential_creation_preserve_published_state() {
+        let root =
+            std::env::temp_dir().join(format!("ant-credential-create-{}", storage::unique_id()));
+        let options = BackendOptions {
+            data_dir: root.join("data"),
+            ..BackendOptions::default()
+        };
+        storage::private_dir(&options.data_dir).unwrap();
+        let (_commands, receiver) = mpsc::sync_channel(1);
+        let (sender, _notifications) = mpsc::sync_channel(1);
+        let mut worker = Worker {
+            options,
+            snapshot: Snapshot::default(),
+            receiver,
+            sender,
+            closing: Arc::new(AtomicBool::new(false)),
+            stopping: Arc::new(AtomicBool::new(false)),
+            session: None,
+            last_publish: Instant::now(),
+            latest_snapshot: Arc::new(Mutex::new(None)),
+        };
+        for guest in [false, true] {
+            let source = root.join(if guest { "debian" } else { "busybox" });
+            storage::private_dir(&source).unwrap();
+            fs::write(source.join("kernel"), b"kernel fixture").unwrap();
+            assert!(
+                std::process::Command::new("qemu-img")
+                    .args(["create", "-f", "qcow2"])
+                    .arg(source.join("base.qcow2"))
+                    .arg("1M")
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+            let bundle = Bundle {
+                kernel: source.join("kernel"),
+                base_disk: source.join("base.qcow2"),
+                initrd: None,
+                kernel_append: String::new(),
+                kernel_version: "6.12.94".into(),
+                schema_id: 1,
+                base_identity: None,
+                guest: guest.then(|| GuestProfile {
+                    id: "debian-xfce".into(),
+                    label: "Debian 13 (Xfce)".into(),
+                    min_ram_mib: 2048,
+                    min_disk_gib: 8,
+                    requires_credentials: true,
+                    graphical: true,
+                }),
+            };
+            storage::atomic_json(&source.join("bundle.json"), &bundle).unwrap();
+            worker
+                .command(Command::ImportBase { directory: source })
+                .unwrap();
+        }
+        assert_eq!(worker.snapshot.bases.len(), 2);
+        assert!(
+            crate::locations::boot_bundle(&worker.options, None)
+                .unwrap()
+                .guest
+                .is_none()
+        );
+        let identity = worker
+            .snapshot
+            .bases
+            .iter()
+            .find(|base| base.guest.is_some())
+            .unwrap()
+            .id
+            .clone();
+        let vm = VmConfig {
+            id: "new-debian".into(),
+            base_identity: Some(identity),
+            ..VmConfig::default()
+        };
+        assert!(
+            worker
+                .command(Command::Create(vm.clone()))
+                .unwrap_err()
+                .contains("required")
+        );
+        crate::guest_account::fail_next_provision();
+        let secret = "private-creation-password";
+        let error = worker
+            .command(Command::CreateWithCredentials {
+                vm: vm.clone(),
+                credentials: GuestCredentials::new("analyst".into(), secret.into()).unwrap(),
+            })
+            .unwrap_err();
+        assert!(!error.contains(secret));
+        assert!(!worker.options.data_dir.join(&vm.id).exists());
+        assert!(worker.snapshot.vms.is_empty());
+        assert!(storage::load_vms(&worker.options).unwrap().is_empty());
+        assert_eq!(
+            crate::locations::installed_bases(&worker.options)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(root.join("debian/base.qcow2").is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn running_vm_duplicate_and_delete_guards_preserve_data() {
         let root = std::env::temp_dir().join(format!("ant-vm-guards-{}", storage::unique_id()));
         let options = BackendOptions {
@@ -1525,6 +1677,30 @@ mod tests {
             last_publish: Instant::now(),
             latest_snapshot: Arc::new(Mutex::new(None)),
         };
+        assert!(
+            worker
+                .command(Command::Create(VmConfig::default()))
+                .unwrap_err()
+                .contains("stop")
+        );
+        assert!(
+            worker
+                .command(Command::CreateWithCredentials {
+                    vm: VmConfig::default(),
+                    credentials: GuestCredentials::new("analyst".into(), "fixturepassword".into())
+                        .unwrap(),
+                })
+                .unwrap_err()
+                .contains("stop")
+        );
+        assert!(
+            worker
+                .command(Command::ImportBase {
+                    directory: root.join("missing-base"),
+                })
+                .unwrap_err()
+                .contains("stop")
+        );
         assert!(
             worker
                 .command(Command::Duplicate {
@@ -1784,6 +1960,7 @@ mod tests {
             kernel_version: String::new(),
             schema_id: 1,
             base_identity: None,
+            guest: None,
         };
         capture
             .manifest(&VmConfig::default(), &bundle, &bundle, "clean")

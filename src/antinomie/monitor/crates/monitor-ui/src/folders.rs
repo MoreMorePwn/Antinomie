@@ -6,9 +6,16 @@ use std::{
 };
 
 #[derive(Clone, Copy)]
+pub(crate) enum Kind {
+    Disk,
+    Recording,
+    BaseImport,
+}
+
+#[derive(Clone, Copy)]
 pub(crate) struct Target {
     pub(crate) generation: u64,
-    pub(crate) disk: bool,
+    pub(crate) kind: Kind,
 }
 
 pub(crate) struct FolderPicker {

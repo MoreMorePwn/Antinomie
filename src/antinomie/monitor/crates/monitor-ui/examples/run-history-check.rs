@@ -179,7 +179,26 @@ fn run() -> Result<(), String> {
         .id
         .clone();
     test.command(Command::Start { vm_id })?;
-    thread::sleep(Duration::from_secs(3));
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        test.receive()?;
+        if test
+            .snapshot
+            .serial_log
+            .as_ref()
+            .and_then(|path| std::fs::read(path).ok())
+            .is_some_and(|data| {
+                data.windows(b"BusyBox guest ready".len())
+                    .any(|part| part == b"BusyBox guest ready")
+            })
+        {
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err("BusyBox filesystem readiness deadline".into());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
     let first = test.launch("echo RUN-A; read line; echo INPUT-A:$line; sleep 30")?;
     let second = test.launch("echo RUN-B; read line; echo INPUT-B:$line; sleep 30")?;
     if first.root_task_cookie == second.root_task_cookie || first.session_id == second.session_id {

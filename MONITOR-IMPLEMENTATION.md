@@ -33,6 +33,32 @@ on 2026-10-01. Core workers/review use gpt-6.1-sol; bounded support may use Luna
 
 ## Ownership
 
+### Accepted ANT-T0010 Update
+
+The user authorized full Debian userspace on 2026-10-06, selected Xfce and
+requested per-VM credential creation with password-protected sudo. Add Debian13
+trixie amd64 alongside BusyBox; retain patched Linux6.12.94, V7, kernel-only
+monitoring controls, disconnected default and existing disk/archive identities.
+
+Optional bounded guest-profile bundle metadata distinguishes installed bases,
+declares resource minima and credential/display requirements. Legacy bundles
+without metadata preserve their old identity. Base import and creation stay
+backend-owned; UI only selects values and transient credentials.
+
+Debian New VM requires username/password/confirmation; create UID/GID1000 with
+local password login and sudo, root locked, SSH disabled, no autologin. Offline
+libguestfs provisioning precedes publication. Passwords must not be serialized
+in configuration/preferences/recordings, displayed in Debug, or passed in argv.
+A private0600 per-VM username/salted-hash provisioning record can support reset
+and duplicate; no plaintext retained. Reset reapplies original credentials and
+publishes replacement disk only after provisioning succeeds. Existing VMs are
+not automatically converted or modified.
+
+Image build uses authenticated Debian inputs and retains system account file
+ownership, package provenance and licenses. Full source task/API/check contract
+is `Agents/Tasks/ANT-T0010 - Debian Xfce VM Base.md` in the docs checkout. This
+does not complete ANT-T0009's remaining syscall/async semantics.
+
 ### Accepted ANT-T0009 Update
 
 The user approved these changes on 2026-10-06. The task record is

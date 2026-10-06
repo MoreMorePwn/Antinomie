@@ -279,8 +279,14 @@ pub(crate) fn installed_bases(options: &BackendOptions) -> Result<Vec<BaseSummar
         }
         bases.push(BaseSummary {
             id,
-            label: "Linux 6.12.94".into(),
+            label: bundle
+                .guest
+                .as_ref()
+                .map_or_else(|| "Linux 6.12.94".into(), |guest| guest.label.clone()),
             directory: entry.path(),
+            min_ram_mib: bundle.guest.as_ref().map_or(256, |guest| guest.min_ram_mib),
+            min_disk_gib: bundle.guest.as_ref().map_or(1, |guest| guest.min_disk_gib),
+            guest: bundle.guest,
         });
         if bases.len() > 128 {
             return Err("installed base catalog exceeds limit".into());
@@ -302,7 +308,10 @@ pub(crate) fn boot_bundle(
                 .find(|base| base.id == id)
                 .ok_or("selected installed base is unavailable")?,
         ),
-        None => bases.first(),
+        None => bases
+            .iter()
+            .find(|base| base.guest.is_none())
+            .or_else(|| bases.first()),
     };
     if let Some(base) = selected {
         return Bundle::load(&base.directory);
@@ -355,6 +364,7 @@ mod tests {
                 kernel_version: "6.12.94".into(),
                 schema_id: 1,
                 base_identity: None,
+                guest: None,
             }
             .install(&options)
             .unwrap();

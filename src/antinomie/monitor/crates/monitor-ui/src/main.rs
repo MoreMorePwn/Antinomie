@@ -7,9 +7,12 @@ mod theme;
 mod trace;
 mod workspace;
 
-use antinomie_monitor_core::BackendOptions;
+use antinomie_monitor_core::{Backend, BackendOptions, Command, Notification};
 use clap::Parser;
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 #[derive(Parser)]
 #[command(version, about = "Native Antinomie VM and syscall monitor")]
@@ -24,6 +27,9 @@ struct Arguments {
     tcg: bool,
     #[arg(long)]
     smoke_exit: bool,
+    /// Import a verified boot bundle into the durable base catalog without opening the UI.
+    #[arg(long)]
+    install_base: Option<PathBuf>,
 }
 
 fn hexadecimal(value: &str) -> Result<u64, String> {
@@ -42,6 +48,11 @@ fn main() -> eframe::Result<()> {
     }
     options.bootstrap_gpa = args.bootstrap_gpa;
     options.force_tcg = args.tcg;
+    if let Some(directory) = args.install_base {
+        return install_base(options, directory).map_err(|message| {
+            eframe::Error::AppCreation(Box::new(std::io::Error::other(message)))
+        });
+    }
     let smoke = args.smoke_exit.then_some(Duration::from_secs(3));
     eframe::run_native(
         "Antinomie Monitor",
@@ -60,4 +71,33 @@ fn main() -> eframe::Result<()> {
             )))
         }),
     )
+}
+
+fn install_base(options: BackendOptions, directory: PathBuf) -> Result<(), String> {
+    let mut backend = Backend::new(options)?;
+    let id = backend.send(Command::ImportBase { directory })?;
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let result = loop {
+        if let Some(Notification::CommandResult {
+            id: reply,
+            success,
+            message,
+        }) = backend.try_recv()
+        {
+            if reply == id {
+                break if success {
+                    println!("{message}");
+                    Ok(())
+                } else {
+                    Err(message)
+                };
+            }
+        }
+        if Instant::now() >= deadline {
+            break Err("base import timed out".into());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    backend.shutdown()?;
+    result
 }
