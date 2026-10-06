@@ -18,23 +18,23 @@ import tempfile
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_OUT = REPO / "work/debian-xfce-base"
 PROFILE = {"id": "debian-xfce", "label": "Debian 13 (Xfce)",
-           "min_ram_mib": 2048, "min_disk_gib": 8,
+           "min_ram_mib": 2048, "min_disk_gib": 16,
            "requires_credentials": True, "graphical": True}
 APPEND = "root=/dev/vda rw rootwait console=tty0 console=ttyS0 panic=-1"
 NETWORK_INTERFACES = """source /etc/network/interfaces.d/*
 
 auto lo
 iface lo inet loopback
-
-auto /e*=antinomie-wired
-iface antinomie-wired inet dhcp
 """
-PACKAGES = ("systemd-sysv", "xorg", "xfce4", "lightdm", "lightdm-gtk-greeter",
-            "sudo", "xfce4-terminal", "dbus-x11", "dbus-user-session",
-            "xserver-xorg-input-libinput", "ifupdown", "dhcpcd-base",
-            "iproute2", "iputils-ping", "procps", "psmisc", "less", "vim-tiny",
-            "curl", "wget", "ca-certificates", "file", "bash-completion",
-            "locales", "fonts-dejavu-core", "e2fsprogs")
+# task-xfce-desktop plus its recommends mirrors a Debian ISO Xfce install
+# (desktop-base, xfce4-goodies, power-manager, notifyd, locker, apps, fonts).
+# Guest integration packages stay excluded per the kernel-only control contract.
+PACKAGES = ("systemd-sysv", "task-xfce-desktop", "lightdm-gtk-greeter",
+            "sudo", "dbus-x11", "dbus-user-session", "network-manager",
+            "xserver-xorg-input-libinput", "iproute2", "iputils-ping",
+            "procps", "psmisc", "less", "vim-tiny", "curl", "wget",
+            "ca-certificates", "file", "bash-completion", "locales",
+            "fonts-dejavu-core", "e2fsprogs")
 
 
 def monitor_helpers():
@@ -88,12 +88,12 @@ printf 'nameserver 169.254.2.3\\n' > /etc/resolv.conf
 printf '#!/bin/sh\\nexit 101\\n' > /usr/sbin/policy-rc.d
 chmod 755 /usr/sbin/policy-rc.d
 apt-get -o APT::Get::AllowUnauthenticated=false -o Acquire::AllowInsecureRepositories=false -o APT::Update::Error-Mode=any -o Acquire::Retries=1 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
-apt-get -o APT::Get::AllowUnauthenticated=false -o Acquire::AllowInsecureRepositories=false -o Acquire::Retries=1 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -y --no-install-recommends install """ + " ".join(PACKAGES) + """
-remove=$(dpkg-query -W -f='${binary:Package} ${db:Status-Status}\\n' | awk '$2 == "installed" && ($1 ~ /^openssh-server(:|$)/ || $1 ~ /^qemu-guest-agent(:|$)/ || $1 ~ /^cloud-init/ || $1 ~ /^cloud-guest-utils(:|$)/ || $1 ~ /^linux-image-/) {print $1}')
+apt-get -o APT::Get::AllowUnauthenticated=false -o Acquire::AllowInsecureRepositories=false -o Acquire::Retries=1 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -y install """ + " ".join(PACKAGES) + """
+remove=$(dpkg-query -W -f='${binary:Package} ${db:Status-Status}\\n' | awk '$2 == "installed" && ($1 ~ /^openssh-server(:|$)/ || $1 ~ /^qemu-guest-agent(:|$)/ || $1 ~ /^spice-vdagent(:|$)/ || $1 ~ /^cloud-init/ || $1 ~ /^cloud-guest-utils(:|$)/ || $1 ~ /^linux-image-/) {print $1}')
 if [ -n "$remove" ]; then
     apt-get -o APT::Get::AllowUnauthenticated=false -y purge $remove
 fi
-for unit in ssh.service sshd.service ssh.socket qemu-guest-agent.service cloud-init-local.service cloud-init.service cloud-config.service cloud-final.service; do
+for unit in ssh.service sshd.service ssh.socket qemu-guest-agent.service spice-vdagentd.service cloud-init-local.service cloud-init.service cloud-config.service cloud-final.service; do
     systemctl mask "$unit"
 done
 for name in $(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd); do
@@ -124,7 +124,7 @@ apt-get clean
 
 def builder_command(source, customization, cache):
     return ["virt-builder", "debian-13", "--arch", "x86_64",
-            "--check-signature", "--format", "raw", "--size", "8G",
+            "--check-signature", "--format", "raw", "--size", "16G",
             "--output", str(source), "--cache", str(cache), "--memsize", "2048",
             "--smp", "4", "--network", "--root-password", "disabled",
             "--hostname", "antinomie", "--run", str(customization), "--no-logfile"]
@@ -185,7 +185,7 @@ def validate_root(guest, root):
 
 def convert_root(source, raw, provenance, log):
     with raw.open("xb") as target:
-        target.truncate(8 << 30)
+        target.truncate(16 << 30)
     with Guestfish([source, raw], log) as guest:
         roots = guest.command("inspect-os").splitlines()
         if len(roots) != 1:
@@ -193,8 +193,8 @@ def convert_root(source, raw, provenance, log):
         root = roots[0]
         validate_root(guest, root)
         source_size = int(guest.command("blockdev-getsize64", root))
-        if source_size > 8 << 30:
-            raise RuntimeError("template root exceeds the 8 GiB whole-disk layout")
+        if source_size > 16 << 30:
+            raise RuntimeError("template root exceeds the 16 GiB whole-disk layout")
         guest.command("mount-ro", root, "/")
         guest.command("download", "/var/lib/antinomie-image/packages.tsv",
                       str(provenance / "packages.tsv"))

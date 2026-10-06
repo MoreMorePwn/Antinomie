@@ -49,6 +49,22 @@ disks stay intact. No kernel/transport revision, guest helper or free-form QEMU
 arguments. Detailed revision 3 contract is ANT-T0012 in the documentation task
 directory.
 
+### Accepted ANT-T0015 Update
+
+User found the Debian Xfce guest did not resemble a VM installed from the Debian
+ISO; analysis showed a `virt-builder debian-13` cloud template plus a curated
+`--no-install-recommends` package list missing the desktop meta-package and its
+recommends. User chose the closest-to-ISO completeness level and to keep guest
+integration purged. Install `task-xfce-desktop` with recommendations, move
+networking to NetworkManager (dropping the custom `ifupdown`/`dhcpcd` setup),
+and grow the immutable base to a 16 GiB whole-disk layout with 16 GiB guest
+minimum. `openssh-server`, `qemu-guest-agent`, `spice-vdagent`, `cloud-init`,
+`cloud-guest-utils` and `linux-image-*` remain purged; root stays locked, no
+ordinary users exist in the base, `/dev/vda` remains the fstab root and the
+hostname stays `antinomie`. No kernel, transport or application change; existing
+bundles, VM disks and recordings are untouched. Task record is ANT-T0015 in the
+documentation task directory.
+
 ### Accepted ANT-T0014 Update
 
 User reported that after the absolute-pointer fix the guest showed two cursors

@@ -344,7 +344,7 @@ fn run() -> Result<(), String> {
             name: "Debian QA".into(),
             cpus: 4,
             ram_mib: 2048,
-            disk_gib: 8,
+            disk_gib: 16,
             launch: launch.clone(),
             ..VmConfig::default()
         },

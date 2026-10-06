@@ -82,7 +82,7 @@ scripts/run-monitor.sh
 
 Alternatively use **File > Import base** with the completed bundle directory.
 In **New VM**, choose **Debian 13 (Xfce)**, then enter a username, password and
-confirmation. Minimum resources are 2048 MiB RAM and 8 GiB disk; the existing
+confirmation. Minimum resources are 2048 MiB RAM and 16 GiB disk; the existing
 3072 MiB RAM ceiling still applies. Creation provisions the disk offline and
 can take longer than BusyBox creation. The account uses UID/GID 1000 and
 password-protected sudo. Root login, autologin and SSH are disabled. The desktop

@@ -31,7 +31,7 @@ class DebianImageTests(unittest.TestCase):
         self.assertNotIn("--no-check-signature", command)
         self.assertEqual(command[command.index("--root-password") + 1], "disabled")
         self.assertNotIn("--firstboot", command)
-        self.assertEqual(command[command.index("--size") + 1], "8G")
+        self.assertEqual(command[command.index("--size") + 1], "16G")
 
     def test_foreign_or_non_ext4_template_rejected(self):
         image.validate_root(FakeGuest(), "/dev/sda1")
@@ -79,19 +79,22 @@ class DebianImageTests(unittest.TestCase):
 
     def test_profile_contract(self):
         self.assertEqual(image.PROFILE, {"id": "debian-xfce", "label": "Debian 13 (Xfce)",
-            "min_ram_mib": 2048, "min_disk_gib": 8, "requires_credentials": True, "graphical": True})
+            "min_ram_mib": 2048, "min_disk_gib": 16, "requires_credentials": True, "graphical": True})
         self.assertEqual(image.APPEND, "root=/dev/vda rw rootwait console=tty0 console=ttyS0 panic=-1")
 
-    def test_customization_has_valid_shell_and_authenticated_minimal_apt(self):
+    def test_customization_has_valid_shell_and_authenticated_full_desktop_apt(self):
         script = image.customization_script()
         subprocess.run(["sh", "-n"], input=script, text=True, check=True)
-        self.assertIn("--no-install-recommends install", script)
+        self.assertNotIn("--no-install-recommends install", script)
+        self.assertIn(" -y install ", script)
         self.assertIn("APT::Update::Error-Mode=any", script)
         self.assertIn("Acquire::AllowInsecureRepositories=false", script)
         self.assertIn("APT::Get::AllowUnauthenticated=false", script)
         self.assertIn("dpkg --audit", script)
         self.assertIn("passwd -l root", script)
-        self.assertIn("auto /e*=antinomie-wired", script)
+        self.assertIn("auto lo", script)
+        self.assertIn("task-xfce-desktop", script)
+        self.assertIn("spice-vdagent", script)
 
 
 if __name__ == "__main__":
