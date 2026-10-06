@@ -85,6 +85,10 @@ fn apply_launch_settings(
             display.push_str(",show-menubar=off,show-tabs=off");
             command.env("GDK_BACKEND", "x11");
         }
+        // An absolute pointer keeps the GTK display from grabbing and
+        // recentering the host cursor. The guest kernel already binds
+        // CONFIG_VIRTIO_INPUT, so no additional controller is required.
+        command.args(["-device", "virtio-tablet-pci"]);
     }
     command.arg("-display").arg(display);
     Ok(())
@@ -311,6 +315,13 @@ mod tests {
             .map(|pair| pair[1].as_str())
     }
 
+    fn device_values(args: &[String]) -> Vec<&str> {
+        args.windows(2)
+            .filter(|pair| pair[0] == "-device")
+            .map(|pair| pair[1].as_str())
+            .collect()
+    }
+
     #[test]
     fn legacy_launch_preserves_default_accelerator_display_and_graphics() {
         for graphical in [false, true] {
@@ -337,7 +348,14 @@ mod tests {
                     );
                     assert_eq!(value(&args, "-cpu"), None);
                     assert_eq!(value(&args, "-vga"), graphical.then_some("virtio"));
-                    assert_eq!(value(&args, "-device"), None);
+                    assert_eq!(
+                        device_values(&args),
+                        if headless {
+                            vec![]
+                        } else {
+                            vec!["virtio-tablet-pci"]
+                        }
+                    );
                     assert_eq!(
                         value(&args, "-append"),
                         Some("root=/dev/vda console=ttyS0 antinomie_boot_gpa=0x40000000")
@@ -381,13 +399,11 @@ mod tests {
                             "gtk,zoom-to-fit=off"
                         })
                     );
-                    assert_eq!(args.iter().filter(|arg| *arg == "-device").count(), 1);
-                    assert_eq!(
-                        value(&args, "-device"),
-                        Some(
-                            format!("VGA,edid=on,xres={width},yres={height},vgamem_mb=64").as_str()
-                        )
-                    );
+                    let devices = device_values(&args);
+                    let vga = format!("VGA,edid=on,xres={width},yres={height},vgamem_mb=64");
+                    assert_eq!(devices.first().copied(), Some(vga.as_str()));
+                    assert_eq!(devices.len(), if headless { 1 } else { 2 });
+                    assert_eq!(devices.contains(&"virtio-tablet-pci"), !headless);
                     assert_eq!(value(&args, "-append"), Some(format!("root=/dev/vda console=ttyS0 antinomie_boot_gpa=0x40000000 video=Virtual-1:{width}x{height}").as_str()));
                 }
             }

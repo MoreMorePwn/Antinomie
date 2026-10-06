@@ -49,6 +49,19 @@ disks stay intact. No kernel/transport revision, guest helper or free-form QEMU
 arguments. Detailed revision 3 contract is ANT-T0012 in the documentation task
 directory.
 
+### Accepted ANT-T0013 Update
+
+User reported the guest mouse pointer stuck at the display center: clicks reached
+the guest but motion did not move the cursor. Cause is the QEMU GTK relative
+pointer grab; the launch attached only the emulated PS/2 mouse. User approved
+attaching an absolute pointing device to all non-headless launches. Use
+`-device virtio-tablet-pci` (a self-contained PCI device requiring no USB
+controller) so the host pointer is tracked directly and never grabbed. The
+existing guest kernel already binds `CONFIG_VIRTIO_INPUT`, so this is a
+launch-argument change only: no kernel, transport, bundle or user-disk change.
+Headless launches are unaffected. Task record is ANT-T0013 in the documentation
+task directory.
+
 ### Accepted ANT-T0010 Update
 
 The user authorized full Debian userspace on 2026-10-06, selected Xfce and
