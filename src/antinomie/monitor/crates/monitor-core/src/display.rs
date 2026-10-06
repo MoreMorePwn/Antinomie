@@ -398,7 +398,7 @@ mod tests {
                 "-vga",
                 "none",
                 "-device",
-                "VGA,edid=on,xres=2560,yres=1440,vgamem_mb=64",
+                "virtio-gpu-pci,edid=on,xres=2560,yres=1440",
                 "-display",
                 "gtk,zoom-to-fit=on,show-menubar=off,show-tabs=off",
                 "-monitor",

@@ -27,7 +27,7 @@ class RefreshTests(unittest.TestCase):
         self.kernel = self.root / "bzImage"
         self.config = self.root / "config"
         self.config.write_text("\n".join("CONFIG_" + name + "=y" for name in
-            ("DRM", "DRM_BOCHS", "DRM_FBDEV_EMULATION", "FRAMEBUFFER_CONSOLE")))
+            ("DRM", "DRM_VIRTIO_GPU", "DRM_VIRTIO_GPU_KMS", "DRM_FBDEV_EMULATION", "FRAMEBUFFER_CONSOLE")))
         self.write_kernel()
         for name in ("kernel", "disk", "initrd"):
             (self.source / name).write_bytes(name.encode())
@@ -70,7 +70,7 @@ class RefreshTests(unittest.TestCase):
             self.run_refresh()
 
     def test_rejects_unsupported_config(self):
-        self.config.write_text("CONFIG_DRM_BOCHS=m\n")
+        self.config.write_text("CONFIG_DRM_VIRTIO_GPU=m\n")
         self.write_kernel()
         with self.assertRaisesRegex(RuntimeError, "CONFIG_DRM"):
             self.run_refresh()
@@ -133,7 +133,7 @@ class RefreshTests(unittest.TestCase):
         def swapped(source, destination):
             result = copy(source, destination)
             if Path(destination).name == "kernel.config":
-                Path(destination).write_text("CONFIG_DRM_BOCHS=y\n")
+                Path(destination).write_text("CONFIG_DRM_VIRTIO_GPU=y\n")
             return result
         with patch.object(refresh.shutil, "copy2", side_effect=swapped):
             with self.assertRaisesRegex(RuntimeError, "does not match"):

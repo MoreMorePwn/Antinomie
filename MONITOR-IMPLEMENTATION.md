@@ -49,6 +49,22 @@ disks stay intact. No kernel/transport revision, guest helper or free-form QEMU
 arguments. Detailed revision 3 contract is ANT-T0012 in the documentation task
 directory.
 
+### Accepted ANT-T0014 Update
+
+User reported that after the absolute-pointer fix the guest showed two cursors
+(the guest's software cursor plus the host pointer). The fixed-resolution path
+used standard VGA (`-device VGA,edid=...`), which has no hardware cursor, so the
+guest X server painted its cursor into the framebuffer. User approved switching
+the fixed path to a hardware-cursor GPU. Use
+`-vga none -device virtio-gpu-pci,edid=on,xres=W,yres=H`. The connector is a
+`DRM_MODE_CONNECTOR_VIRTUAL` named `Virtual-1`, so `video=Virtual-1:WxH` is
+retained. This matches the Auto path's virtio-gpu device and gives a single,
+VMware-like pointer. Both virtio-gpu and Bochs DRM use the `Virtual-1` virtual
+connector, so existing fixed-display bundles whose kernels build
+`DRM_VIRTIO_GPU=y` remain compatible. Image/bundle capability checks now require
+`DRM_VIRTIO_GPU` and `DRM_VIRTIO_GPU_KMS`. No kernel, transport or user-disk
+change. Task record is ANT-T0014 in the documentation task directory.
+
 ### Accepted ANT-T0013 Update
 
 User reported the guest mouse pointer stuck at the display center: clicks reached

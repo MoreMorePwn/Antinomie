@@ -90,7 +90,7 @@ def fixed_display_config(config, kernel=None):
         raise RuntimeError("supplied config does not match the kernel's embedded IKCONFIG")
     values = dict(line.split("=", 1) for line in config.read_text().splitlines()
                   if line.startswith("CONFIG_") and "=" in line)
-    for name in ("DRM", "DRM_BOCHS", "DRM_FBDEV_EMULATION", "FRAMEBUFFER_CONSOLE"):
+    for name in ("DRM", "DRM_VIRTIO_GPU", "DRM_VIRTIO_GPU_KMS", "DRM_FBDEV_EMULATION", "FRAMEBUFFER_CONSOLE"):
         if values.get("CONFIG_" + name) != "y":
             raise RuntimeError(f"fixed display requires CONFIG_{name}=y in matching kernel config")
     return True

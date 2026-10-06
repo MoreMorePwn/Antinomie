@@ -57,16 +57,17 @@ fn apply_launch_settings(
     if let Some(cpu) = cpu {
         command.args(["-cpu", cpu]);
     }
-    let mut append = format!(
+    let append = format!(
         "{} antinomie_boot_gpa=0x{bootstrap:x}",
         bundle.kernel_append
     );
     if let Some((width, height)) = launch.resolution.dimensions() {
+        // virtio-gpu provides a hardware cursor, so the guest does not paint
+        // its own cursor into the framebuffer. The fixed mode comes from the
+        // EDID (connector Virtual-1); unlike stdvga, a `video=` override is
+        // rejected by the virtio-gpu DRM driver.
         command.args(["-vga", "none", "-device"]);
-        command.arg(format!(
-            "VGA,edid=on,xres={width},yres={height},vgamem_mb=64"
-        ));
-        append.push_str(&format!(" video=Virtual-1:{width}x{height}"));
+        command.arg(format!("virtio-gpu-pci,edid=on,xres={width},yres={height}"));
     } else if bundle.guest.as_ref().is_some_and(|guest| guest.graphical) {
         command.args(["-vga", "virtio"]);
     }
@@ -400,11 +401,14 @@ mod tests {
                         })
                     );
                     let devices = device_values(&args);
-                    let vga = format!("VGA,edid=on,xres={width},yres={height},vgamem_mb=64");
-                    assert_eq!(devices.first().copied(), Some(vga.as_str()));
+                    let gpu = format!("virtio-gpu-pci,edid=on,xres={width},yres={height}");
+                    assert_eq!(devices.first().copied(), Some(gpu.as_str()));
                     assert_eq!(devices.len(), if headless { 1 } else { 2 });
                     assert_eq!(devices.contains(&"virtio-tablet-pci"), !headless);
-                    assert_eq!(value(&args, "-append"), Some(format!("root=/dev/vda console=ttyS0 antinomie_boot_gpa=0x40000000 video=Virtual-1:{width}x{height}").as_str()));
+                    assert_eq!(
+                        value(&args, "-append"),
+                        Some("root=/dev/vda console=ttyS0 antinomie_boot_gpa=0x40000000")
+                    );
                 }
             }
         }
