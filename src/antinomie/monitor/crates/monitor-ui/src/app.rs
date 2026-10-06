@@ -466,6 +466,9 @@ impl MonitorApp {
             .find(|base| Some(&base.id) == self.draft.base_identity.as_ref())
             .and_then(|base| base.guest.as_ref())
             .is_some_and(|guest| guest.requires_credentials);
+        if let Some(error) = self.create_validation_error(requires_credentials) {
+            return Err(error);
+        }
         let command = if requires_credentials {
             Command::CreateWithCredentials {
                 vm: self.draft.clone(),
@@ -478,6 +481,19 @@ impl MonitorApp {
         self.send(command);
         self.credentials.reset();
         Ok(())
+    }
+
+    fn create_validation_error(&self, requires_credentials: bool) -> Option<String> {
+        if self.snapshot.active_vm.is_some() {
+            return Some("Stop the running VM before creating another VM".into());
+        }
+        if self.draft.name.trim().is_empty() {
+            return Some("Enter a VM name".into());
+        }
+        if requires_credentials {
+            return self.credentials.credentials().err();
+        }
+        None
     }
 
     fn new_run(&mut self) {
@@ -1929,6 +1945,7 @@ impl MonitorApp {
             let mut delete = false;
             let mut nat = false;
             let mut credentials_required = false;
+            let mut creation_error = None;
             egui::Window::new(if creating {
                 "New VM"
             } else {
@@ -1949,6 +1966,14 @@ impl MonitorApp {
                     } else {
                         self.snapshot.active_vm.as_ref() != Some(&self.draft.id)
                             && self.snapshot.vms.iter().any(|vm| vm.id == self.draft.id)
+                    };
+                    let disk_default = if creating {
+                        self.options.data_dir.clone()
+                    } else {
+                        self.snapshot.vm_locations.iter()
+                            .find(|location| location.vm_id == self.draft.id)
+                            .and_then(|location| location.disk_directory.parent())
+                            .unwrap_or(&self.options.data_dir).to_path_buf()
                     };
                     ui.add_enabled_ui(editable, |ui| {
                         egui::Grid::new("vm_config")
@@ -1993,10 +2018,11 @@ impl MonitorApp {
                                 }
                                 ui.end_row();
                                 ui.label("Disk parent");
-                                ui.add_enabled_ui(creating, |ui| { directory_input(ui, &mut self.draft.disk_root, "Default folder", &mut self.folder_picker, FolderTarget { generation: self.draft_generation, kind: FolderKind::Disk }, &mut self.status); });
+                                ui.add_enabled_ui(creating, |ui| { directory_input(ui, &mut self.draft.disk_root, &disk_default, &mut self.folder_picker, FolderTarget { generation: self.draft_generation, kind: FolderKind::Disk }, &mut self.status); });
                                 ui.end_row();
                                 ui.label("Recording parent");
-                                directory_input(ui, &mut self.draft.recording_root, "Default folder", &mut self.folder_picker, FolderTarget { generation: self.draft_generation, kind: FolderKind::Recording }, &mut self.status);
+                                let recording_default = if creating { self.draft.disk_root.as_ref().unwrap_or(&disk_default) } else { &disk_default }.clone();
+                                directory_input(ui, &mut self.draft.recording_root, &recording_default, &mut self.folder_picker, FolderTarget { generation: self.draft_generation, kind: FolderKind::Recording }, &mut self.status);
                                 ui.end_row();
                                 if credentials_required {
                                     ui.label("Username");
@@ -2030,10 +2056,13 @@ impl MonitorApp {
                             );
                         }
                         ui.separator();
+                        if creating {
+                            creation_error = self.create_validation_error(credentials_required);
+                        }
                         ui.horizontal(|ui| {
                             save = ui
                                 .add_enabled(
-                                    !self.draft.name.trim().is_empty() && (!credentials_required || self.credentials.credentials().is_ok()),
+                                    !self.draft.name.trim().is_empty() && creation_error.is_none(),
                                     egui::Button::new(if creating {
                                         "Create VM"
                                     } else {
@@ -2058,6 +2087,14 @@ impl MonitorApp {
                             }
                         });
                     });
+                    if creating {
+                        if !editable {
+                            creation_error = self.create_validation_error(credentials_required);
+                        }
+                        if let Some(error) = &creation_error {
+                            ui.add(egui::Label::new(egui::RichText::new(error).color(theme::WARN)).wrap());
+                        }
+                    }
                 });
             });
             self.create_open = creating && open;
@@ -2515,22 +2552,20 @@ fn password_input(ui: &mut egui::Ui, text: &mut String, salt: &str) {
 fn directory_input(
     ui: &mut egui::Ui,
     path: &mut Option<PathBuf>,
-    hint: &str,
+    default_parent: &std::path::Path,
     picker: &mut FolderPicker,
     target: FolderTarget,
     status: &mut String,
 ) {
     let mut text = path
-        .as_ref()
-        .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .as_deref()
+        .unwrap_or(default_parent)
+        .to_string_lossy()
+        .into_owned();
     ui.horizontal(|ui| {
         if ui
-            .add(
-                egui::TextEdit::singleline(&mut text)
-                    .hint_text(hint)
-                    .desired_width(235.0),
-            )
+            .add(egui::TextEdit::singleline(&mut text).desired_width(235.0))
+            .on_hover_text(text.clone())
             .changed()
         {
             *path = (!text.trim().is_empty()).then(|| PathBuf::from(&text));
@@ -2865,6 +2900,227 @@ mod tests {
     }
 
     #[test]
+    fn creation_guards_explain_rejection_without_submitting() {
+        let mut app = app();
+        app.new_image();
+        app.draft.name.clear();
+        assert_eq!(app.create_vm().unwrap_err(), "Enter a VM name");
+        assert!(app.submitted.is_empty());
+
+        app.draft.name = "New VM".into();
+        app.snapshot.active_vm = Some("running".into());
+        assert_eq!(
+            app.create_vm().unwrap_err(),
+            "Stop the running VM before creating another VM"
+        );
+        assert!(app.submitted.is_empty());
+        app.snapshot.active_vm = None;
+        assert!(app.create_validation_error(false).is_none());
+        assert!(app
+            .create_validation_error(true)
+            .unwrap()
+            .contains("8..128"));
+        app.credentials.password = "test-secret-only".into();
+        assert_eq!(
+            app.create_validation_error(true).unwrap(),
+            "password confirmation does not match"
+        );
+        app.credentials.confirmation = app.credentials.password.clone();
+        assert!(app.create_validation_error(true).is_none());
+        app.credentials.username = "root".into();
+        assert!(app
+            .create_validation_error(true)
+            .unwrap()
+            .contains("non-root"));
+        app.create_vm().unwrap();
+        assert!(app
+            .submitted
+            .iter()
+            .any(|command| matches!(command, Command::Create(_))));
+    }
+
+    #[test]
+    fn default_folder_paths_are_visible_without_changing_automatic_choices() {
+        let mut app = app();
+        app.options.data_dir = "/vm-data".into();
+        app.new_image();
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 900.0);
+        for _ in 0..3 {
+            render(&mut app, &ctx, size);
+        }
+        let output = render(&mut app, &ctx, size);
+        assert_eq!(
+            texts(&output)
+                .iter()
+                .filter(|(text, _)| text == "/vm-data")
+                .count(),
+            2
+        );
+        assert!(app.draft.disk_root.is_none());
+        assert!(app.draft.recording_root.is_none());
+
+        app.draft.disk_root = Some("/disks".into());
+        render(&mut app, &ctx, size);
+        let output = render(&mut app, &ctx, size);
+        assert_eq!(
+            texts(&output)
+                .iter()
+                .filter(|(text, _)| text == "/disks")
+                .count(),
+            2
+        );
+        assert!(app.draft.recording_root.is_none());
+
+        app.draft.recording_root = Some("/captures".into());
+        let output = render(&mut app, &ctx, size);
+        assert!(texts(&output).iter().any(|(text, _)| text == "/captures"));
+        assert_eq!(app.draft.disk_root, Some(PathBuf::from("/disks")));
+    }
+
+    #[test]
+    fn editing_and_clearing_folder_text_preserves_automatic_fallback() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut path = None;
+        let mut picker = FolderPicker::new();
+        let mut status = String::new();
+        let mut draw = |path: &mut Option<PathBuf>, events: Vec<egui::Event>| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(640.0, 480.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        directory_input(
+                            ui,
+                            path,
+                            std::path::Path::new("/automatic"),
+                            &mut picker,
+                            FolderTarget {
+                                generation: 0,
+                                kind: FolderKind::Disk,
+                            },
+                            &mut status,
+                        );
+                    });
+                },
+            )
+        };
+        draw(&mut path, vec![]);
+        let output = draw(&mut path, vec![]);
+        let pos = texts(&output)
+            .iter()
+            .find(|(text, _)| text == "/automatic")
+            .unwrap()
+            .1
+            .center();
+        for pressed in [true, false] {
+            draw(
+                &mut path,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        let select_all = || egui::Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                ctrl: true,
+                command: true,
+                ..Default::default()
+            },
+        };
+        draw(
+            &mut path,
+            vec![select_all(), egui::Event::Text("/chosen".into())],
+        );
+        assert_eq!(path, Some(PathBuf::from("/chosen")));
+
+        draw(
+            &mut path,
+            vec![
+                select_all(),
+                egui::Event::Key {
+                    key: egui::Key::Backspace,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        assert!(path.is_none());
+        let output = draw(&mut path, vec![]);
+        assert!(texts(&output).iter().any(|(text, _)| text == "/automatic"));
+        assert!(path.is_none());
+    }
+
+    #[test]
+    fn existing_vm_recording_default_uses_registered_disk_location() {
+        let mut app = app();
+        app.draft.id = "legacy".into();
+        app.snapshot.vms.push(app.draft.clone());
+        app.snapshot
+            .vm_locations
+            .push(antinomie_monitor_core::VmLocations {
+                vm_id: "legacy".into(),
+                disk_directory: "/legacy/vms/legacy".into(),
+                recording_directory: "/legacy/vms/legacy".into(),
+                recording_directories: vec!["/legacy/vms/legacy".into()],
+            });
+        app.config_open = true;
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 900.0);
+        for _ in 0..3 {
+            render(&mut app, &ctx, size);
+        }
+        let output = render(&mut app, &ctx, size);
+        assert_eq!(
+            texts(&output)
+                .iter()
+                .filter(|(text, _)| text == "/legacy/vms")
+                .count(),
+            2
+        );
+        assert!(app.draft.disk_root.is_none());
+        assert!(app.draft.recording_root.is_none());
+    }
+
+    #[test]
+    fn running_vm_creation_error_remains_visible_outside_disabled_form() {
+        let mut app = app();
+        app.new_image();
+        app.snapshot.active_vm = Some("running".into());
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 900.0);
+        for _ in 0..3 {
+            render(&mut app, &ctx, size);
+        }
+        let output = render(&mut app, &ctx, size);
+        assert!(texts(&output)
+            .iter()
+            .any(|(text, _)| text == "Stop the running VM before creating another VM"));
+    }
+
+    #[test]
     fn debian_credentials_are_transient_and_creation_uses_validated_api() {
         let mut app = app();
         app.snapshot
@@ -2891,7 +3147,38 @@ mod tests {
         app.credentials.confirmation = "wrong-password".into();
         assert!(app.create_vm().is_err());
         app.credentials.confirmation = app.credentials.password.clone();
-        app.create_vm().unwrap();
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 900.0);
+        for _ in 0..4 {
+            render(&mut app, &ctx, size);
+        }
+        let output = render(&mut app, &ctx, size);
+        let pos = texts(&output)
+            .iter()
+            .find(|(text, _)| text == "Create VM")
+            .unwrap()
+            .1
+            .center();
+        for pressed in [true, false] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events: vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ctx| app.draw(ctx),
+            );
+        }
+        assert!(!app.create_open);
         assert!(app
             .submitted
             .iter()
@@ -2934,7 +3221,9 @@ mod tests {
         theme::install(&ctx);
         app.settings.font_size = 24.0;
         theme::text_size(&ctx, 24.0);
-        render(&mut app, &ctx, egui::vec2(1280.0, 900.0));
+        for _ in 0..4 {
+            render(&mut app, &ctx, egui::vec2(1280.0, 900.0));
+        }
         let output = render(&mut app, &ctx, egui::vec2(1280.0, 900.0));
         assert_eq!(app.draft.ram_mib, 2048);
         assert_eq!(app.draft.disk_gib, 8);
@@ -2945,6 +3234,12 @@ mod tests {
                 "missing or clipped {label}"
             );
         }
+        assert!(
+            visible
+                .iter()
+                .any(|(text, _)| text.contains("password must be 8..128")),
+            "visible dialog text: {visible:?}"
+        );
     }
 
     #[test]
