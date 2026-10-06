@@ -57,17 +57,18 @@ fn apply_launch_settings(
     if let Some(cpu) = cpu {
         command.args(["-cpu", cpu]);
     }
-    let append = format!(
+    let mut append = format!(
         "{} antinomie_boot_gpa=0x{bootstrap:x}",
         bundle.kernel_append
     );
     if let Some((width, height)) = launch.resolution.dimensions() {
         // virtio-gpu provides a hardware cursor, so the guest does not paint
-        // its own cursor into the framebuffer. The fixed mode comes from the
-        // EDID (connector Virtual-1); unlike stdvga, a `video=` override is
-        // rejected by the virtio-gpu DRM driver.
+        // its own cursor into the framebuffer. The fixed mode is selected by
+        // video=Virtual-1:WxH; the virtio-gpu DRM logs a user-defined-mode
+        // notice but the mode applies (the EDID alone leaves 640x480).
         command.args(["-vga", "none", "-device"]);
         command.arg(format!("virtio-gpu-pci,edid=on,xres={width},yres={height}"));
+        append.push_str(&format!(" video=Virtual-1:{width}x{height}"));
     } else if bundle.guest.as_ref().is_some_and(|guest| guest.graphical) {
         command.args(["-vga", "virtio"]);
     }
@@ -407,7 +408,9 @@ mod tests {
                     assert_eq!(devices.contains(&"virtio-tablet-pci"), !headless);
                     assert_eq!(
                         value(&args, "-append"),
-                        Some("root=/dev/vda console=ttyS0 antinomie_boot_gpa=0x40000000")
+                        Some(
+                            format!("root=/dev/vda console=ttyS0 antinomie_boot_gpa=0x40000000 video=Virtual-1:{width}x{height}").as_str()
+                        )
                     );
                 }
             }
