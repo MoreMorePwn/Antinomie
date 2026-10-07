@@ -8,9 +8,10 @@
       "mount.unprivileged passes NULL data, so no data field is recorded",
       "mount.boundary_options places 'mode=0700' plus NUL padding in the last 16 bytes of a readable page followed by a PROT_NONE page",
       "quotactl cases use the missing block device '/dev/ant-missing'; quotaon names the missing quota file 'aquota.user'; xquotaon passes flags 1; xgetqstatv passes qs_version 1",
-      "quotactl_fd cases use a descriptor for the probe's /tmp directory (initramfs root), which has no quota operations (ENOSYS); setquota passes an if_dqblk with dqb_bhardlimit 1",
+      "quotactl_fd cases use a descriptor for /tmp, which is on the guest's ext4 root mounted without quotas: Q_GETFMT returns ESRCH and Q_SETQUOTA is refused for lacking CAP_SYS_ADMIN (EPERM); setquota passes an if_dqblk with dqb_bhardlimit 1 (correction while implementing: the first draft assumed an initramfs root and ENOSYS)",
       "kexec_load passes one segment {buf 'ANTINOMIE-KEXEC', bufsz 15, mem 0x1000000, memsz 4096} and is rejected for lacking CAP_SYS_BOOT; too_many passes 17 segments",
-      "rseq cases use glibc's registered area (thread pointer + __rseq_offset) with length 32 (ORIG_RSEQ_SIZE, the length glibc registers) and RSEQ_SIG 0x53053053; register_again and unregister_badsig run on the main thread; the dedicated rseq thread unregisters and immediately registers again"
+      "rseq cases use glibc's registered area (thread pointer + __rseq_offset) with length 32 (ORIG_RSEQ_SIZE, the length glibc registers) and RSEQ_SIG 0x53053053; register_again and unregister_badsig run on the main thread; the dedicated rseq thread unregisters and immediately registers again",
+      "child E reads its three mount strings once before the call: a freshly forked child has not mapped .rodata yet, and the recorder's no-fault copy cannot page it in (see the Backlog item on no-fault capture after fork)"
     ]
   },
   "cases": [
@@ -314,15 +315,15 @@
       ]
     },
     {
-      "label": "quotactl_fd.getfmt_tmpfs",
+      "label": "quotactl_fd.getfmt_no_quota",
       "syscall": "quotactl_fd",
-      "result": "errno:ENOSYS",
+      "result": "errno:ESRCH",
       "fields": []
     },
     {
       "label": "quotactl_fd.setquota_input",
       "syscall": "quotactl_fd",
-      "result": "errno:ENOSYS",
+      "result": "errno:EPERM",
       "fields": [
         {
           "phase": "entry",

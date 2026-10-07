@@ -319,7 +319,8 @@ The host decodes `flags` (`RSEQ_FLAG_UNREGISTER`); this group already exists.
   private `mnt` directory. This needs `CONFIG_USER_NS` (on since ANT-T0022). The
   mount disappears with the child's namespace.
 - `kexec_load` and the privileged `quotactl` paths run as UID 1000 and are
-  rejected (`EPERM`, `ENOENT` or `ENOSYS`). Their entry fields are still checked;
+  rejected (`EPERM`, `ENOENT` or `ESRCH`; the guest root is ext4 without quotas,
+  so `quotactl_fd` sees quota operations but no enabled quota). Their entry fields are still checked;
   quota output layouts have no runtime coverage, because no quota-enabled
   filesystem exists in the probe VM.
 - `rseq` unregistration and re-registration run on a dedicated pthread, which

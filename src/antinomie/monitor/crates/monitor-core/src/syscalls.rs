@@ -486,6 +486,21 @@ fn rules(group: &str) -> Vec<FlagRule> {
             }
             values
         }
+        "kexec" => {
+            let mut values = bits(&[
+                ("KEXEC_ON_CRASH", 0x1),
+                ("KEXEC_PRESERVE_CONTEXT", 0x2),
+                ("KEXEC_UPDATE_ELFCOREHDR", 0x4),
+                ("KEXEC_CRASH_HOTPLUG_SUPPORT", 0x8),
+            ]);
+            // The architecture occupies the high 16 bits as one enum value.
+            values.extend([
+                ("KEXEC_ARCH_DEFAULT", 0xffff_0000, 0),
+                ("KEXEC_ARCH_386", 0xffff_0000, 3 << 16),
+                ("KEXEC_ARCH_X86_64", 0xffff_0000, 62 << 16),
+            ]);
+            values
+        }
         "shmat" => bits(&[
             ("SHM_RDONLY", 0o10000),
             ("SHM_RND", 0o20000),
@@ -1058,6 +1073,39 @@ fn ptrace_options(value: u64) -> String {
     }
 }
 
+/// `QCMD(subcommand, type)` as used by quotactl and quotactl_fd.
+fn quota_command(cmd: u64) -> String {
+    const SUBCOMMANDS: &[(&str, u64)] = &[
+        ("Q_SYNC", 0x80_0001),
+        ("Q_QUOTAON", 0x80_0002),
+        ("Q_QUOTAOFF", 0x80_0003),
+        ("Q_GETFMT", 0x80_0004),
+        ("Q_GETINFO", 0x80_0005),
+        ("Q_SETINFO", 0x80_0006),
+        ("Q_GETQUOTA", 0x80_0007),
+        ("Q_SETQUOTA", 0x80_0008),
+        ("Q_GETNEXTQUOTA", 0x80_0009),
+        ("Q_XQUOTAON", 0x5801),
+        ("Q_XQUOTAOFF", 0x5802),
+        ("Q_XGETQUOTA", 0x5803),
+        ("Q_XSETQLIM", 0x5804),
+        ("Q_XGETQSTAT", 0x5805),
+        ("Q_XQUOTARM", 0x5806),
+        ("Q_XQUOTASYNC", 0x5807),
+        ("Q_XGETQSTATV", 0x5808),
+        ("Q_XGETNEXTQUOTA", 0x5809),
+    ];
+    let cmd = cmd as u32;
+    let subcommand = named(SUBCOMMANDS, u64::from(cmd >> 8), "subcommand");
+    let kind = match cmd & 0xff {
+        0 => "USRQUOTA".into(),
+        1 => "GRPQUOTA".into(),
+        2 => "PRJQUOTA".into(),
+        other => format!("Unknown type {other}"),
+    };
+    format!("{subcommand} / {kind}")
+}
+
 fn prctl_suboption(option: u64, value: u64) -> Option<String> {
     const PR_SET_MM: u64 = 35;
     const PR_SCHED_CORE: u64 = 62;
@@ -1107,6 +1155,8 @@ pub fn selector_name(number: u64, index: usize, args: &[u64; 6]) -> Option<Strin
         (157, 0) => Some(named(PRCTL_OPTIONS, args[0] as u32 as u64, "option")),
         (157, 1) => prctl_suboption(args[0] as u32 as u64, args[1]),
         (250, 0) => Some(named(KEYCTL_COMMANDS, args[0] as u32 as u64, "command")),
+        (179, 0) => Some(quota_command(args[0])),
+        (443, 1) => Some(quota_command(args[1])),
         (54 | 55, 1) => Some(
             lookup(SOCKET_LEVELS, args[1] as i32)
                 .map_or_else(|| format!("Unknown level {}", args[1] as i32), Into::into),
@@ -1271,6 +1321,17 @@ mod tests {
             selector_name(139, 0, &args(2, 0, 0)).as_deref(),
             Some("filesystem index to name")
         );
+        assert_eq!(
+            selector_name(179, 0, &args(0x80_0004 << 8, 0, 0)).as_deref(),
+            Some("Q_GETFMT / USRQUOTA")
+        );
+        assert_eq!(
+            selector_name(443, 1, &args(3, (0x5808 << 8) | 2, 0)).as_deref(),
+            Some("Q_XGETQSTATV / PRJQUOTA")
+        );
+        let kexec = argument_flags(246, 3, (62 << 16) | 1).unwrap();
+        assert_eq!(kexec.names, ["KEXEC_ARCH_X86_64", "KEXEC_ON_CRASH"]);
+        assert_eq!(kexec.unknown_bits, 0);
     }
 
     #[test]

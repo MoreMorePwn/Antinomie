@@ -5810,7 +5810,7 @@
           "name": "flags",
           "c_type": "unsigned long",
           "pointer": false,
-          "flags": "unknown"
+          "flags": "kexec"
         }
       ],
       "implemented": true,

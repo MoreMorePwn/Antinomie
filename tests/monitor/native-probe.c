@@ -6,7 +6,9 @@
 #include <linux/aio_abi.h>
 #include <linux/filter.h>
 #include <linux/futex.h>
+#include <linux/dqblk_xfs.h>
 #include <linux/io_uring.h>
+#include <linux/kexec.h>
 #include <linux/keyctl.h>
 #include <linux/openat2.h>
 #include <linux/prctl.h>
@@ -29,7 +31,10 @@
 #include <sys/eventfd.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/mount.h>
 #include <sys/ptrace.h>
+#include <sys/quota.h>
+#include <sys/rseq.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -55,7 +60,12 @@
 #define PR_SET_VMA_ANON_NAME 0
 #endif
 
+#ifndef SYS_quotactl_fd
+#define SYS_quotactl_fd 443
+#endif
+
 static const char marker[] = "ANTINOMIE-NATIVE-PAYLOAD";
+static char mount_options[4096] __attribute__((aligned(4096))) = "size=1m,mode=0700";
 static unsigned long ptrace_word = 0x414e54494e4f4d49UL;
 static unsigned failures;
 static unsigned case_count;
@@ -609,6 +619,89 @@ static void sysfs_cases(void)
     CASE("sysfs.unknown", sysfs, EINVAL, 9);
 }
 
+/* Slice 2C: mount, quota control, kexec_load and rseq. */
+static void *rseq_thread(void *unused)
+{
+    char *area = (char *)__builtin_thread_pointer() + __rseq_offset;
+
+    /* A thread shares the process's case and failure counters. */
+    (void)unused;
+    CALL("rseq.unregister", rseq, 0, area, 32, RSEQ_FLAG_UNREGISTER, RSEQ_SIG);
+    observe("arg0.rseq", area, 32);
+    report();
+    CASE("rseq.register", rseq, 0, area, 32, 0, RSEQ_SIG);
+    return NULL;
+}
+
+static void slice_2c_cases(void)
+{
+    char *area = (char *)__builtin_thread_pointer() + __rseq_offset;
+    struct kexec_segment segment = {"ANTINOMIE-KEXEC", 15, (void *)0x1000000, 4096};
+    struct kexec_segment segments[17] = {0};
+    struct fs_quota_statv statv = {.qs_version = FS_QSTATV_VERSION1};
+    struct dqblk quota = {.dqb_bhardlimit = 1};
+    unsigned int flags = 1, format;
+    pthread_t thread;
+    char *edge;
+    int directory;
+    pid_t child;
+
+    require(mkdir("mnt", 0700) == 0, "private mount point");
+    child = fork();
+    require(child >= 0, "mount namespace child");
+    if (!child) {
+        child_case_range(5);
+        require(unshare(CLONE_NEWUSER | CLONE_NEWNS) == 0, "private user and mount namespace");
+        /* A fresh child has not mapped .rodata yet and the recorder's no-fault
+         * copy cannot page it in; touch the strings so this case tests decoding.
+         */
+        for (const char *const *text = (const char *const[]){"ant-tmpfs", "mnt", "tmpfs", NULL};
+             *text; text++)
+            for (const volatile char *byte = *text; *byte; byte++)
+                ;
+        CASE("mount.userns_tmpfs", mount, 0, "ant-tmpfs", "mnt", "tmpfs", MS_NOSUID | MS_NODEV,
+             mount_options);
+        TEST(umount2, "mnt", 0);
+        _exit(failures ? 3 : 0);
+    }
+    wait_child(child, "mount namespace child exit");
+    CASE("mount.unprivileged", mount, EPERM, "none", "mnt", "tmpfs", 0, NULL);
+    edge = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    require(edge != MAP_FAILED && mprotect(edge + 4096, 4096, PROT_NONE) == 0, "edge page");
+    memcpy(edge + 4096 - 16, "mode=0700", 9);
+    CASE("mount.boundary_options", mount, EPERM, "none", "mnt", "tmpfs", 0, edge + 4096 - 16);
+    CASE("mount.unknown_fstype", mount, EPERM, "none", "mnt", "ant-missingfs", 0, NULL);
+    TEST(munmap, edge, 8192);
+    require(rmdir("mnt") == 0, "mount point cleanup");
+
+    CASE("quotactl.getfmt_missing_device", quotactl, ENOENT, QCMD(Q_GETFMT, USRQUOTA),
+         "/dev/ant-missing", 0, &format);
+    CASE("quotactl.quotaon_paths", quotactl, ENOENT, QCMD(Q_QUOTAON, USRQUOTA),
+         "/dev/ant-missing", QFMT_VFS_V1, "aquota.user");
+    CASE("quotactl.xquotaon_flags", quotactl, ENOENT, QCMD(Q_XQUOTAON, USRQUOTA),
+         "/dev/ant-missing", 0, &flags);
+    CASE("quotactl.xgetqstatv_version", quotactl, ENOENT, QCMD(Q_XGETQSTATV, USRQUOTA),
+         "/dev/ant-missing", 0, &statv);
+    directory = open("/tmp", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    require(directory >= 0, "quota directory");
+    CASE("quotactl_fd.getfmt_no_quota", quotactl_fd, ESRCH, directory, QCMD(Q_GETFMT, USRQUOTA),
+         0, &format);
+    CALL("quotactl_fd.setquota_input", quotactl_fd, EPERM, directory,
+         QCMD(Q_SETQUOTA, USRQUOTA), 0, &quota);
+    observe("arg3.dqblk", &quota, sizeof(quota));
+    report();
+    close(directory);
+
+    CASE("kexec_load.unprivileged", kexec_load, EPERM, 0, 1, &segment, 0);
+    CASE("kexec_load.too_many_segments", kexec_load, EPERM, 0, 17, segments, 0);
+
+    require(__rseq_size > 0, "glibc rseq registration");
+    CASE("rseq.register_again", rseq, EBUSY, area, 32, 0, RSEQ_SIG);
+    CASE("rseq.unregister_badsig", rseq, EPERM, area, 32, RSEQ_FLAG_UNREGISTER, 0xdead);
+    require(!pthread_create(&thread, NULL, rseq_thread, NULL) &&
+            !pthread_join(thread, NULL), "rseq thread");
+}
+
 /* Slice 2G: rows without an entry point in the pinned syscall_64.tbl. */
 static void unavailable_cases(void)
 {
@@ -906,7 +999,7 @@ int main(int argc, char **argv)
     require(original >= 0 && mkdtemp(directory) && chdir(directory) == 0,
             "isolated working directory");
     file_cases(); descriptor_cases(); sockopt_cases(); unavailable_cases();
-    prctl_cases(); ptrace_cases(); keyctl_cases(); sysfs_cases();
+    prctl_cases(); ptrace_cases(); keyctl_cases(); sysfs_cases(); slice_2c_cases();
     memory_and_process_cases(); aio_cases(); uring_cases();
     require(sched_getaffinity(0, sizeof(available), &available) == 0, "available CPUs");
     for (int cpu = 0; cpu < CPU_SETSIZE && count < 4; cpu++)

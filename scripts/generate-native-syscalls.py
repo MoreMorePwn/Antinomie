@@ -203,6 +203,7 @@ def flags_for(name, index, arg):
         ("map_shadow_stack", 2): "shadow_stack", ("listmount", 3): "listmount",
         ("lsm_get_self_attr", 3): "lsm_get",
         ("fanotify_init", 0): "fanotify_init", ("fanotify_mark", 1): "fanotify_mark",
+        ("kexec_load", 3): "kexec",
     }
     return groups.get((name, index), "unknown" if arg["name"] in ("flags", "flag") else None)
 

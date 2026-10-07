@@ -8,3 +8,4 @@
 0004-antinomie-checkpoint-native-capture-and-async-run-tracking.patch
 0005-antinomie-capture-socket-options-by-level-and-name.patch
 0006-antinomie-decode-prctl-ptrace-keyctl-and-sysfs-selectors.patch
+0007-antinomie-capture-mount-quotactl-kexec-load-and-rseq-arguments.patch
