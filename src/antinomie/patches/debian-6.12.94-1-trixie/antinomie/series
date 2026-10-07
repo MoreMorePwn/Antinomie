@@ -12,3 +12,4 @@
 0008-antinomie-capture-bpf-attributes-and-implicit-signal-and-uretprobe-frames.patch
 0009-antinomie-record-clone-writes-semctl-arrays-and-deferred-pointers.patch
 0010-antinomie-observe-async-requests-in-their-address-space-and-at-aio-reap.patch
+0011-antinomie-address-review-of-async-reap-and-operand-capture.patch
