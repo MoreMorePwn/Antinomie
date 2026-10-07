@@ -2,7 +2,8 @@
 use crate::{app::MonitorApp, theme};
 use eframe::egui::{self, Rect};
 use egui_dock::{
-    DockArea, DockState, NodeIndex, Surface, SurfaceIndex, TabDestination, TabInsert, TabViewer,
+    DockArea, DockState, NodeIndex, Surface, SurfaceIndex, TabDestination, TabIndex, TabInsert,
+    TabViewer,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -28,8 +29,15 @@ impl Panel {
     }
 }
 
+/// Bumped when the default arrangement changes, so a layout saved before the
+/// change is replaced by the new default once.
+const LAYOUT_VERSION: u32 = 1;
+
 #[derive(Serialize, Deserialize)]
 pub(crate) struct WorkspaceLayout {
+    /// Absent (0) in layouts saved before versioning.
+    #[serde(default)]
+    version: u32,
     dock: DockState<Panel>,
     geometry: BTreeMap<usize, Rect>,
     #[serde(skip)]
@@ -44,13 +52,17 @@ pub(crate) struct WorkspaceLayout {
 
 impl Default for WorkspaceLayout {
     fn default() -> Self {
-        let mut dock = DockState::new(vec![Panel::Trace, Panel::RunHistory]);
+        // Run History is the first (leftmost) tab, next to the trace; the trace
+        // stays the open tab so the startup view is unchanged.
+        let mut dock = DockState::new(vec![Panel::RunHistory, Panel::Trace]);
+        dock.set_active_tab((SurfaceIndex::main(), NodeIndex::root(), TabIndex(1)));
         dock.main_surface_mut().split_below(
             NodeIndex::root(),
             0.63,
             vec![Panel::Details, Panel::Activity],
         );
         Self {
+            version: LAYOUT_VERSION,
             dock,
             geometry: BTreeMap::new(),
             drag: None,
@@ -62,6 +74,13 @@ impl Default for WorkspaceLayout {
 }
 
 impl WorkspaceLayout {
+    /// The saved layout, unless it predates the current default arrangement.
+    pub(crate) fn restore(saved: Option<Self>) -> Self {
+        saved
+            .filter(|layout| layout.version >= LAYOUT_VERSION)
+            .unwrap_or_default()
+    }
+
     pub(crate) fn validate(&mut self) {
         let mut seen = Vec::new();
         self.dock.retain_tabs(|tab| {
@@ -353,6 +372,54 @@ impl TabViewer for Viewer<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn leaf_tabs(layout: &WorkspaceLayout, node: NodeIndex) -> Vec<Panel> {
+        layout.dock.main_surface()[node]
+            .tabs()
+            .map(<[Panel]>::to_vec)
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn default_layout_puts_run_history_first_with_the_trace_open() {
+        let layout = WorkspaceLayout::default();
+        let top = NodeIndex::root().left();
+        assert_eq!(leaf_tabs(&layout, top), [Panel::RunHistory, Panel::Trace]);
+        let egui_dock::Node::Leaf { tabs, active, .. } = &layout.dock.main_surface()[top] else {
+            panic!("top node must hold tabs");
+        };
+        assert_eq!(tabs[active.0], Panel::Trace);
+        assert_eq!(
+            leaf_tabs(&layout, NodeIndex::root().right()),
+            [Panel::Details, Panel::Activity]
+        );
+    }
+
+    #[test]
+    fn restore_replaces_a_layout_saved_before_versioning_once() {
+        // A pre-versioning layout: the old default with Run History as a tab.
+        let saved = WorkspaceLayout {
+            version: 0,
+            dock: DockState::new(vec![Panel::Trace, Panel::RunHistory]),
+            ..WorkspaceLayout::default()
+        };
+        let restored = WorkspaceLayout::restore(Some(saved));
+        assert_eq!(
+            leaf_tabs(&restored, NodeIndex::root().left()),
+            [Panel::RunHistory, Panel::Trace]
+        );
+        // A current-version layout the user rearranged is kept as saved.
+        let custom = WorkspaceLayout {
+            dock: DockState::new(vec![Panel::Trace, Panel::RunHistory]),
+            ..WorkspaceLayout::default()
+        };
+        let kept = WorkspaceLayout::restore(Some(custom));
+        assert_eq!(
+            leaf_tabs(&kept, NodeIndex::root()),
+            [Panel::Trace, Panel::RunHistory]
+        );
+        assert!(WorkspaceLayout::restore(None).version >= 1);
+    }
 
     #[test]
     fn detach_and_drag_merge_keep_each_logical_panel_once() {

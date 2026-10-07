@@ -101,6 +101,8 @@ pub struct MonitorApp {
     backend: Option<Backend>,
     snapshot: Snapshot,
     selected: Option<String>,
+    /// Base image highlighted in the sidebar; selection only, actions are on right-click.
+    selected_base: Option<String>,
     settings: Settings,
     options: BackendOptions,
     settings_open: bool,
@@ -187,6 +189,7 @@ impl MonitorApp {
             backend,
             snapshot: Snapshot::default(),
             selected: None,
+            selected_base: None,
             settings,
             options,
             settings_open: false,
@@ -223,10 +226,10 @@ impl MonitorApp {
             archive_pending: false,
             archive_error: None,
             inspector: Inspector::default(),
-            layout: cc
-                .storage
-                .and_then(|storage| eframe::get_value(storage, "workspace_layout"))
-                .unwrap_or_default(),
+            layout: WorkspaceLayout::restore(
+                cc.storage
+                    .and_then(|storage| eframe::get_value(storage, "workspace_layout")),
+            ),
             focus_panel: None,
             activity: VecDeque::new(),
             exec,
@@ -1354,6 +1357,7 @@ impl MonitorApp {
         let mut selected_vm = None;
         let mut action = None;
         let mut base_action: Option<(String, String)> = None;
+        let mut clicked_base: Option<String> = None;
         egui::SidePanel::left("vms")
             .default_width(210.0)
             .min_width(190.0)
@@ -1507,20 +1511,32 @@ impl MonitorApp {
                                 .map_or("Linux 6.12.94".to_string(), |guest| guest.id.clone());
                             let label =
                                 format!("{}  {}", egui_phosphor::regular::HARD_DRIVE, base.label);
+                            // min_size keeps the text on the sidebar's left alignment;
+                            // add_sized would centre it.
                             let response = ui
-                                .add_sized(
-                                    [ui.available_width(), self.settings.font_size + 14.0],
+                                .add(
                                     egui::Button::new(RichText::new(label))
                                         .frame(false)
+                                        .selected(
+                                            self.selected_base.as_deref() == Some(base.id.as_str()),
+                                        )
+                                        .min_size(egui::vec2(
+                                            ui.available_width(),
+                                            self.settings.font_size + 14.0,
+                                        ))
                                         .truncate(),
                                 )
                                 .on_hover_text(format!(
-                                    "{}\n{}\n{:.1} GiB on disk · guest {guest} · used by {} VM(s)",
+                                    "{}\n{}\n{:.1} GiB on disk · guest {guest} · used by {} VM(s)\n\
+                                     Right-click for actions",
                                     base.label,
                                     base.directory.display(),
                                     base.size_bytes as f64 / 1073741824.0,
                                     dependents
                                 ));
+                            if response.clicked() || response.secondary_clicked() {
+                                clicked_base = Some(base.id.clone());
+                            }
                             response.context_menu(|ui| {
                                 if ui.button("New VM from this base").clicked() {
                                     base_action = Some((base.id.clone(), "New VM".to_string()));
@@ -1545,6 +1561,9 @@ impl MonitorApp {
                         }
                     });
             });
+        if let Some(identity) = clicked_base {
+            self.selected_base = Some(identity);
+        }
         if let Some((identity, action)) = base_action {
             match action.as_str() {
                 "New VM" => self.new_image_from(identity),
@@ -3268,6 +3287,7 @@ mod tests {
             backend: None,
             snapshot: Snapshot::default(),
             selected: None,
+            selected_base: None,
             settings: Settings::default(),
             options: BackendOptions::default(),
             settings_open: false,
@@ -3584,6 +3604,60 @@ mod tests {
             fixed_display,
             size_bytes: 0,
         }
+    }
+
+    #[test]
+    fn base_rows_are_left_aligned_and_a_click_only_selects() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 820.0);
+        let mut app = app();
+        app.snapshot.bases = vec![test_base("first", true), test_base("second", true)];
+        for _ in 0..3 {
+            let _ = render(&mut app, &ctx, size);
+        }
+        let texts = texts(&render(&mut app, &ctx, size));
+        let rows: Vec<_> = texts
+            .iter()
+            .filter(|(text, _)| text.ends_with("Linux 6.12.94"))
+            .map(|(_, rect)| *rect)
+            .collect();
+        let title = texts
+            .iter()
+            .find(|(text, _)| text == "Base images")
+            .expect("base images title")
+            .1;
+        assert_eq!(rows.len(), 2);
+        // Left-aligned like the VM list, not centred in the sidebar.
+        assert!(
+            rows.iter().all(|row| row.left() < title.left()),
+            "{rows:?} {title:?}"
+        );
+        let target = rows[1].center();
+        let click = |pressed| egui::Event::PointerButton {
+            pos: target,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(target)],
+            vec![click(true)],
+            vec![click(false)],
+        ] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| app.draw(ctx),
+            );
+        }
+        assert_eq!(app.selected_base.as_deref(), Some("second"));
+        // Selecting a base starts nothing: no dialog, no command.
+        assert!(app.submitted.is_empty());
+        assert!(app.confirm.is_none());
     }
 
     #[test]
