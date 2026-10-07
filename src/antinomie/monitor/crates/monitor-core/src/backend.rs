@@ -1,6 +1,6 @@
 use crate::{
     api::*,
-    control,
+    control, distribution,
     parser::{Assembler, u32_at, u64_at},
     run::ProgramRun,
     storage::{self, Bundle, RawCapture},
@@ -68,6 +68,9 @@ impl Backend {
                     closing: worker_closing,
                     stopping: worker_stopping,
                     session: None,
+                    catalog: distribution::Catalog::default(),
+                    refresh: None,
+                    download: None,
                     last_publish: Instant::now(),
                     latest_snapshot: worker_snapshot,
                 }
@@ -514,8 +517,22 @@ struct Worker {
     closing: Arc<AtomicBool>,
     stopping: Arc<AtomicBool>,
     session: Option<Session>,
+    /// Last successful remote catalog (full entries for downloads).
+    catalog: distribution::Catalog,
+    /// In-flight catalog fetch.
+    refresh: Option<Receiver<Result<distribution::Catalog, String>>>,
+    /// In-flight base download.
+    download: Option<DownloadJob>,
     last_publish: Instant,
     latest_snapshot: Arc<Mutex<Option<Snapshot>>>,
+}
+
+struct DownloadJob {
+    identity: String,
+    label: String,
+    total: u64,
+    progress: Arc<Mutex<(u64, bool)>>,
+    done: Receiver<Result<(), String>>,
 }
 impl Worker {
     fn refresh_locations(&mut self) -> Result<(), String> {
@@ -542,6 +559,75 @@ impl Worker {
             *latest = Some(self.snapshot.clone());
         }
         self.last_publish = Instant::now();
+    }
+    fn poll_remote(&mut self) {
+        if let Some(receiver) = self.refresh.as_ref() {
+            match receiver.try_recv() {
+                Ok(result) => {
+                    self.refresh = None;
+                    self.snapshot.remote_refreshing = false;
+                    match result {
+                        Ok(catalog) => {
+                            self.snapshot.remote_bases =
+                                catalog.bases.iter().map(RemoteBase::from).collect();
+                            self.catalog = catalog;
+                            self.snapshot.remote_error = None;
+                        }
+                        Err(error) => self.snapshot.remote_error = Some(error),
+                    }
+                    self.publish();
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.refresh = None;
+                    self.snapshot.remote_refreshing = false;
+                    self.snapshot.remote_error = Some("catalog worker disconnected".into());
+                }
+            }
+        }
+        if let Some(job) = self.download.as_ref() {
+            let received = job.progress.lock().map(|guard| guard.0).unwrap_or(0);
+            if let Some(status) = self.snapshot.download.as_mut() {
+                status.received = received;
+            }
+        }
+        let finished = self.download.as_ref().and_then(|job| {
+            job.done.try_recv().ok().or_else(|| {
+                if matches!(job.done.try_recv(), Err(mpsc::TryRecvError::Disconnected)) {
+                    Some(Err("download worker disconnected".into()))
+                } else {
+                    None
+                }
+            })
+        });
+        if let Some(result) = finished {
+            let job = self.download.take().expect("download job present");
+            let error = result.err();
+            if let Some(error) = &error {
+                self.snapshot.last_error = Some(error.clone());
+            }
+            if let Err(error) = self.refresh_locations() {
+                self.snapshot.last_error = Some(error);
+            }
+            let received = if error.is_none() {
+                job.total
+            } else {
+                self.snapshot
+                    .download
+                    .as_ref()
+                    .map(|status| status.received)
+                    .unwrap_or(0)
+            };
+            self.snapshot.download = Some(DownloadStatus {
+                identity: job.identity,
+                label: job.label,
+                received,
+                total: job.total,
+                finished: true,
+                error,
+            });
+            self.publish();
+        }
     }
     fn run(mut self) {
         self.publish();
@@ -646,6 +732,7 @@ impl Worker {
             {
                 self.snapshot.last_error = Some(error);
             }
+            self.poll_remote();
             if self.last_publish.elapsed() >= Duration::from_millis(250) {
                 self.publish();
             }
@@ -676,6 +763,104 @@ impl Worker {
                 bundle.install(&self.options)?;
                 self.refresh_locations()?;
                 Ok("base imported".into())
+            }
+            Command::RefreshRemoteBases => {
+                if self.refresh.is_some() {
+                    return Err("base catalog refresh already in progress".into());
+                }
+                distribution::curl_version(&self.options.curl)?;
+                let curl = self.options.curl.clone();
+                let remote = self.options.remote_base.clone();
+                let (sender, receiver) = mpsc::channel();
+                thread::Builder::new()
+                    .name("antinomie-catalog".into())
+                    .spawn(move || {
+                        let _ = sender.send(distribution::fetch_catalog(&curl, &remote));
+                    })
+                    .map_err(|e| e.to_string())?;
+                self.refresh = Some(receiver);
+                self.snapshot.remote_refreshing = true;
+                self.snapshot.remote_error = None;
+                Ok("refreshing base catalog".into())
+            }
+            Command::DownloadBase { identity } => {
+                if self.download.is_some() {
+                    return Err("a base download is already in progress".into());
+                }
+                distribution::curl_version(&self.options.curl)?;
+                let base = self
+                    .catalog
+                    .bases
+                    .iter()
+                    .find(|base| base.identity == identity)
+                    .cloned()
+                    .ok_or("unknown base; refresh the catalog first")?;
+                if self
+                    .snapshot
+                    .bases
+                    .iter()
+                    .any(|installed| installed.id == identity)
+                {
+                    return Err("base is already installed".into());
+                }
+                let staging = self.options.data_dir.join("downloads").join(&base.identity);
+                fs::create_dir_all(&staging).map_err(|e| format!("{}: {e}", staging.display()))?;
+                let options = self.options.clone();
+                let curl = self.options.curl.clone();
+                let remote = self.options.remote_base.clone();
+                let total: u64 = base.files.iter().map(|file| file.size).sum();
+                let progress = Arc::new(Mutex::new((0u64, false)));
+                let worker_progress = progress.clone();
+                let (sender, receiver) = mpsc::channel();
+                let requested = base.clone();
+                let staging_thread = staging.clone();
+                thread::Builder::new()
+                    .name("antinomie-download".into())
+                    .spawn(move || {
+                        let cancel = AtomicBool::new(false);
+                        let result = distribution::download_base(
+                            &curl,
+                            &remote,
+                            &requested,
+                            &staging_thread,
+                            &cancel,
+                            |received, _| {
+                                if let Ok(mut guard) = worker_progress.lock() {
+                                    guard.0 = received;
+                                }
+                            },
+                        )
+                        .and_then(|bundle| {
+                            storage::validate_disk_chain(&options, &bundle.base_disk, None)?;
+                            bundle.install(&options)?;
+                            Ok(())
+                        });
+                        let ok = result.is_ok();
+                        if let Ok(mut guard) = worker_progress.lock() {
+                            guard.1 = true;
+                        }
+                        let _ = sender.send(result);
+                        if ok {
+                            let _ = fs::remove_dir_all(&staging_thread);
+                        }
+                    })
+                    .map_err(|e| e.to_string())?;
+                self.download = Some(DownloadJob {
+                    identity: base.identity.clone(),
+                    label: base.label.clone(),
+                    total,
+                    progress,
+                    done: receiver,
+                });
+                self.snapshot.download = Some(DownloadStatus {
+                    identity: base.identity,
+                    label: base.label,
+                    received: 0,
+                    total,
+                    finished: false,
+                    error: None,
+                });
+                Ok("base download started".into())
             }
             Command::Save(mut vm) => {
                 storage::validate_vm(&vm)?;
@@ -1585,6 +1770,9 @@ mod tests {
             closing: Arc::new(AtomicBool::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
             session: None,
+            catalog: distribution::Catalog::default(),
+            refresh: None,
+            download: None,
             last_publish: Instant::now(),
             latest_snapshot: Arc::new(Mutex::new(None)),
         };
@@ -1661,6 +1849,9 @@ mod tests {
             closing: Arc::new(AtomicBool::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
             session: None,
+            catalog: distribution::Catalog::default(),
+            refresh: None,
+            download: None,
             last_publish: Instant::now(),
             latest_snapshot: Arc::new(Mutex::new(None)),
         };
@@ -1748,6 +1939,9 @@ mod tests {
             closing: Arc::new(AtomicBool::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
             session: None,
+            catalog: distribution::Catalog::default(),
+            refresh: None,
+            download: None,
             last_publish: Instant::now(),
             latest_snapshot: Arc::new(Mutex::new(None)),
         };
@@ -1864,6 +2058,9 @@ mod tests {
             closing: Arc::new(AtomicBool::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
             session: None,
+            catalog: distribution::Catalog::default(),
+            refresh: None,
+            download: None,
             last_publish: Instant::now(),
             latest_snapshot: Arc::new(Mutex::new(None)),
         };

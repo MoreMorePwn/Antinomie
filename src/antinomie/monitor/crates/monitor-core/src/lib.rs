@@ -3,6 +3,7 @@ mod archive_io;
 mod backend;
 mod control;
 mod display;
+pub mod distribution;
 mod execution;
 mod guest_account;
 mod locations;

@@ -292,6 +292,10 @@ pub struct BackendOptions {
     pub bundle_dir: PathBuf,
     pub qemu: PathBuf,
     pub qemu_img: PathBuf,
+    /// External downloader used for the public base bucket (detect-and-alert).
+    pub curl: PathBuf,
+    /// Anonymous base bucket file endpoint (`.../resolve`).
+    pub remote_base: String,
     /// Shared quota for raw packets, assembled fields and terminal artifacts, in bytes.
     pub capture_quota_size: u64,
     pub shutdown_timeout: Duration,
@@ -309,6 +313,8 @@ impl Default for BackendOptions {
                 .unwrap_or_else(|| PathBuf::from("images")),
             qemu: "qemu-system-x86_64".into(),
             qemu_img: "qemu-img".into(),
+            curl: "curl".into(),
+            remote_base: crate::distribution::DEFAULT_REMOTE_BASE.to_string(),
             capture_quota_size: 4 * 1024 * 1024 * 1024,
             shutdown_timeout: Duration::from_secs(10),
             bootstrap_gpa: None,
@@ -374,6 +380,45 @@ pub struct BaseSummary {
     pub min_ram_mib: u32,
     pub min_disk_gib: u32,
     pub fixed_display: bool,
+}
+
+/// One base advertised by the remote catalog, flattened for the UI.
+#[derive(Clone, Debug, Default)]
+pub struct RemoteBase {
+    pub identity: String,
+    pub label: String,
+    pub kind: String,
+    pub kernel_version: String,
+    pub fixed_display: bool,
+    pub min_ram_mib: u32,
+    pub min_disk_gib: u32,
+    pub total_size: u64,
+}
+
+/// Progress of the single active remote base download.
+#[derive(Clone, Debug, Default)]
+pub struct DownloadStatus {
+    pub identity: String,
+    pub label: String,
+    pub received: u64,
+    pub total: u64,
+    pub finished: bool,
+    pub error: Option<String>,
+}
+
+impl From<&crate::distribution::CatalogBase> for RemoteBase {
+    fn from(base: &crate::distribution::CatalogBase) -> Self {
+        Self {
+            identity: base.identity.clone(),
+            label: base.label.clone(),
+            kind: base.kind.clone(),
+            kernel_version: base.kernel_version.clone(),
+            fixed_display: base.fixed_display,
+            min_ram_mib: base.min_ram_mib,
+            min_disk_gib: base.min_disk_gib,
+            total_size: base.total_size,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -453,6 +498,12 @@ pub enum Command {
     },
     ImportBase {
         directory: PathBuf,
+    },
+    /// Fetch the remote base catalog from the public bucket (`curl`).
+    RefreshRemoteBases,
+    /// Download, verify and install one advertised base.
+    DownloadBase {
+        identity: String,
     },
     Save(VmConfig),
     Rename {
@@ -550,6 +601,13 @@ pub enum VmState {
 pub struct Snapshot {
     pub vms: Vec<VmConfig>,
     pub bases: Vec<BaseSummary>,
+    /// Bases advertised by the remote catalog, if it has been fetched.
+    pub remote_bases: Vec<RemoteBase>,
+    /// Last remote catalog error (tool alert or fetch failure).
+    pub remote_error: Option<String>,
+    pub remote_refreshing: bool,
+    /// Progress of the single active remote download, if any.
+    pub download: Option<DownloadStatus>,
     pub vm_locations: Vec<VmLocations>,
     pub active_vm: Option<String>,
     pub state: VmState,

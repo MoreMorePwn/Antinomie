@@ -110,6 +110,8 @@ pub struct MonitorApp {
     credentials: CredentialForm,
     import_open: bool,
     import_directory: String,
+    download_open: bool,
+    build_open: bool,
     confirm: Option<Confirm>,
     name_action: Option<(String, bool, String)>,
     status: String,
@@ -192,6 +194,8 @@ impl MonitorApp {
             credentials: CredentialForm::default(),
             import_open: false,
             import_directory: String::new(),
+            download_open: false,
+            build_open: false,
             confirm: None,
             name_action: None,
             status,
@@ -1108,13 +1112,26 @@ impl MonitorApp {
                             self.new_image();
                             ui.close_menu();
                         }
-                        if ui
-                            .add_enabled(stopped, egui::Button::new("Import base..."))
-                            .clicked()
-                        {
-                            self.import_open = true;
-                            ui.close_menu();
-                        }
+                        ui.menu_button("Add base", |ui| {
+                            if ui
+                                .add_enabled(stopped, egui::Button::new("Import base…"))
+                                .clicked()
+                            {
+                                self.import_open = true;
+                                ui.close_menu();
+                            }
+                            if ui.button("Download base…").clicked() {
+                                self.download_open = true;
+                                if !self.snapshot.remote_refreshing {
+                                    self.send(Command::RefreshRemoteBases);
+                                }
+                                ui.close_menu();
+                            }
+                            if ui.button("Build base…").clicked() {
+                                self.build_open = true;
+                                ui.close_menu();
+                            }
+                        });
                         ui.separator();
                         if ui.button("Exit").clicked() {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1213,6 +1230,20 @@ impl MonitorApp {
                             ui.close_menu();
                         }
                     });
+                    if self.snapshot.bases.is_empty() {
+                        ui.separator();
+                        if ui
+                            .add(egui::Button::new(
+                                RichText::new("No base image — Add base").color(theme::WARN),
+                            ))
+                            .clicked()
+                        {
+                            self.download_open = true;
+                            if !self.snapshot.remote_refreshing {
+                                self.send(Command::RefreshRemoteBases);
+                            }
+                        }
+                    }
                 });
             });
     }
@@ -1953,6 +1984,135 @@ impl MonitorApp {
                 self.import_open = false;
             }
         }
+        if self.download_open {
+            let mut open = true;
+            let remote = self.snapshot.remote_bases.clone();
+            let installed: Vec<String> = self
+                .snapshot
+                .bases
+                .iter()
+                .map(|base| base.id.clone())
+                .collect();
+            let refreshing = self.snapshot.remote_refreshing;
+            let remote_error = self.snapshot.remote_error.clone();
+            let download = self.snapshot.download.clone();
+            let mut request: Option<String> = None;
+            let mut refresh = false;
+            egui::Window::new("Download base")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(true)
+                .default_width(560.0)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.button("Refresh catalog").clicked() {
+                            refresh = true;
+                        }
+                        if refreshing {
+                            ui.spinner();
+                            ui.label("Fetching catalog…");
+                        }
+                    });
+                    if let Some(error) = &remote_error {
+                        ui.colored_label(theme::ERROR, error);
+                    }
+                    if let Some(status) = &download {
+                        let fraction = if status.total > 0 {
+                            status.received as f32 / status.total as f32
+                        } else {
+                            0.0
+                        };
+                        ui.add(egui::ProgressBar::new(fraction).text(format!(
+                            "{} — {} / {}",
+                            status.label,
+                            human_bytes(status.received),
+                            human_bytes(status.total)
+                        )));
+                        if let Some(error) = &status.error {
+                            ui.colored_label(theme::ERROR, error);
+                        } else if status.finished {
+                            ui.colored_label(theme::GOOD, format!("{} installed", status.label));
+                        }
+                    }
+                    ui.separator();
+                    if remote.is_empty() {
+                        ui.colored_label(
+                            theme::MUTED,
+                            "No bases listed yet — refresh the catalog.",
+                        );
+                    }
+                    let busy = download.as_ref().is_some_and(|status| !status.finished);
+                    for base in &remote {
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                ui.label(RichText::new(&base.label).strong());
+                                let kind = if base.kind.is_empty() {
+                                    "base"
+                                } else {
+                                    &base.kind
+                                };
+                                let short = &base.identity[..12.min(base.identity.len())];
+                                ui.small(format!(
+                                    "{} · {} · {} · {}",
+                                    base.kernel_version,
+                                    kind,
+                                    human_bytes(base.total_size),
+                                    short
+                                ));
+                            });
+                            if installed.contains(&base.identity) {
+                                ui.colored_label(theme::GOOD, "installed");
+                            } else if ui
+                                .add_enabled(!busy, egui::Button::new("Download"))
+                                .clicked()
+                            {
+                                request = Some(base.identity.clone());
+                            }
+                        });
+                    }
+                });
+            self.download_open = open;
+            if refresh {
+                self.send(Command::RefreshRemoteBases);
+            }
+            if let Some(identity) = request {
+                self.send(Command::DownloadBase { identity });
+            }
+        }
+        if self.build_open {
+            let mut open = true;
+            egui::Window::new("Build base")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(true)
+                .default_width(560.0)
+                .show(ctx, |ui| {
+                    ui.label(
+                        "Build a base locally from source. Missing host tools are listed; nothing is installed automatically.",
+                    );
+                    ui.separator();
+                    for profile in antinomie_monitor_core::distribution::BUILD_PROFILES {
+                        let missing = profile.missing_tools();
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                ui.label(RichText::new(profile.label).strong());
+                                ui.small(profile.id);
+                            });
+                            if missing.is_empty() {
+                                ui.colored_label(theme::GOOD, "host tools ready");
+                            } else {
+                                ui.colored_label(
+                                    theme::WARN,
+                                    format!("missing: {}", missing.join(", ")),
+                                );
+                            }
+                        });
+                    }
+                    ui.separator();
+                    ui.small("Local build workflows are delivered by ANT-T0019.");
+                });
+            self.build_open = open;
+        }
         if let Some((vm_id, duplicate, name)) = &mut self.name_action {
             let mut open = true;
             let mut save = false;
@@ -2513,6 +2673,22 @@ impl eframe::App for MonitorApp {
     }
 }
 
+/// Compact byte size for catalog rows and download progress.
+fn human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
 fn run_status(run: &RunSummary) -> &'static str {
     match run.state {
         RunState::Unknown => "Unknown",
@@ -2905,6 +3081,8 @@ mod tests {
             credentials: CredentialForm::default(),
             import_open: false,
             import_directory: String::new(),
+            download_open: false,
+            build_open: false,
             name_action: None,
             filter: String::new(),
             selected_event: None,
