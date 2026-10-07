@@ -16,7 +16,7 @@
       "ptrace.setregs and setregset write back exactly the registers just read",
       "ptrace.getregset/setregset use NT_PRSTATUS with a 512-byte buffer; the kernel rewrites iov_len to 216",
       "ptrace.getsigmask_badsize passes size 4; ptrace.peeksiginfo asks for one entry from the per-thread queue (the pending SIGUSR1)",
-      "ptrace.get_thread_area reads TLS index 12; ptrace.arch_prctl_get_fs uses ARCH_GET_FS",
+      "ptrace.get_thread_area reads TLS index 12; ptrace.arch_prctl_get_fs passes ARCH_GET_FS as data and the output pointer as addr",
       "keyctl cases use a 'user' key 'ant:probe' with payload 'secret-payload' added by add_key to the process keyring; read_query passes a NULL buffer",
       "keyctl.dh_compute uses that key for all three parameters (CONFIG_KEY_DH_OPERATIONS=n); pkey_query fails because user keys have no asymmetric operations; instantiate_iov fails without an authorization key",
       "keyctl.join_session creates the session keyring 'ant-session' for the probe process only; keyctl.revoke revokes the probe key last",
@@ -585,8 +585,8 @@
       "fields": [
         {
           "phase": "exit",
-          "arg": 3,
-          "key": "arg3.value",
+          "arg": 2,
+          "key": "arg2.value",
           "layout": "linux-6.12.94/x86_64/unsigned_long",
           "size": 8,
           "captured": 8,

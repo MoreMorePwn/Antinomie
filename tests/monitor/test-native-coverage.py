@@ -265,6 +265,22 @@ class CoverageTests(unittest.TestCase):
         self.assertFalse(self.schema([field], observed={"arg1.data": "00000000"})["passed"])
         self.assertFalse(self.schema([field])["passed"])
 
+    def test_schema_result_token_uses_the_case_return_value(self):
+        expected = {"arg": 2, "key": "arg2.buffer", "layout": "", "size": "result",
+                    "captured": "result", "declared": "result", "status": "COMPLETE",
+                    "data": None}
+        actual = {"arg": 2, "layout": "", "size": 7, "captured": 7, "declared": 7,
+                  "status": "COMPLETE", "chunks": {}}
+        self.assertEqual(coverage.field_problems(expected, actual, {}, 7), [])
+        self.assertTrue(coverage.field_problems(expected, actual, {}, 8))
+
+    def test_errno_aliases_compare_by_value(self):
+        case = {"result": -1, "errno": 95}
+        self.assertTrue(coverage.expected_result(case, "errno:EOPNOTSUPP"))
+        self.assertTrue(coverage.expected_result(case, "errno:ENOTSUP"))
+        self.assertFalse(coverage.expected_result(case, "errno:EINVAL"))
+        self.assertFalse(coverage.expected_result(case, "errno:NOT_A_NAME"))
+
     def test_unimplemented_row_requires_traced_enosys(self):
         self.inventory["syscalls"][1]["implemented"] = False
         for errno_value, verdict in ((38, "EXPECTED_ENOSYS"), (22, "FAIL")):

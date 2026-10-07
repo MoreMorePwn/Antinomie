@@ -7,13 +7,20 @@
 #include <linux/filter.h>
 #include <linux/futex.h>
 #include <linux/io_uring.h>
+#include <linux/keyctl.h>
 #include <linux/openat2.h>
+#include <linux/prctl.h>
+#include <linux/seccomp.h>
+#include <asm/ldt.h>
+#include <asm/prctl.h>
+#include <elf.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
 #include <pthread.h>
 #include <sched.h>
 #include <signal.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,6 +29,7 @@
 #include <sys/eventfd.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/ptrace.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -32,13 +40,23 @@
 #include <sys/timerfd.h>
 #include <sys/times.h>
 #include <sys/uio.h>
+#include <sys/user.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
 #include <sys/xattr.h>
 #include <time.h>
 #include <unistd.h>
 
+#ifndef PR_GET_AUXV
+#define PR_GET_AUXV 0x41555856
+#endif
+#ifndef PR_SET_VMA
+#define PR_SET_VMA 0x53564d41
+#define PR_SET_VMA_ANON_NAME 0
+#endif
+
 static const char marker[] = "ANTINOMIE-NATIVE-PAYLOAD";
+static unsigned long ptrace_word = 0x414e54494e4f4d49UL;
 static unsigned failures;
 static unsigned case_count;
 static pthread_mutex_t output_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -51,11 +69,11 @@ static uint64_t monotonic_ns(void)
 }
 
 /* Labeled cases are compared with tests/monitor/fixtures/native-schema. A
- * kernel-dependent output is printed as "observed" hex under its field key.
+ * kernel-dependent value is printed as "observed" hex under its field key.
  */
 static long observed_labeled(const char *label, const char *name, long nr, long value,
                              int expected_errno, uint64_t started_ns, uint64_t finished_ns,
-                             const void *output, const socklen_t *output_len)
+                             const char *observed_members)
 {
     int error = value < 0 ? errno : 0;
     const char *verdict = "PASS";
@@ -81,12 +99,8 @@ static long observed_labeled(const char *label, const char *name, long nr, long 
            (unsigned long long)started_ns, (unsigned long long)finished_ns);
     if (label)
         printf(",\"label\":\"%s\"", label);
-    if (output && output_len && value == 0) {
-        printf(",\"observed\":{\"arg3.optval\":\"");
-        for (socklen_t i = 0; i < *output_len; i++)
-            printf("%02x", ((const unsigned char *)output)[i]);
-        printf("\"}");
-    }
+    if (observed_members && *observed_members)
+        printf(",\"observed\":{%s}", observed_members);
     puts("}");
     pthread_mutex_unlock(&output_lock);
     /* Functional coverage is paced; overflow is a separate lossy stress test. */
@@ -96,11 +110,48 @@ static long observed_labeled(const char *label, const char *name, long nr, long 
     return value;
 }
 
+static void require(int condition, const char *what);
+
 static long observed(const char *name, long nr, long value, int expected_errno,
                      uint64_t started_ns, uint64_t finished_ns)
 {
     return observed_labeled(NULL, name, nr, value, expected_errno, started_ns,
-                            finished_ns, NULL, NULL);
+                            finished_ns, NULL);
+}
+
+/* One labeled call at a time per thread: CALL records it, observe() adds the
+ * bytes the program saw under a field key, and report() prints the case.
+ */
+struct pending_case {
+    const char *label, *name;
+    long nr, value;
+    int expected, error;
+    uint64_t started_ns, finished_ns;
+    size_t used;
+    char observed[8192];
+};
+static __thread struct pending_case pending;
+
+static void observe(const char *key, const void *data, size_t length)
+{
+    size_t room = sizeof(pending.observed) - pending.used;
+    int written = snprintf(pending.observed + pending.used, room, "%s\"%s\":\"",
+                           pending.used ? "," : "", key);
+
+    require(written > 0 && (size_t)written + 2 * length + 2 <= room, "observed buffer");
+    pending.used += written;
+    for (size_t i = 0; i < length; i++)
+        pending.used += sprintf(pending.observed + pending.used, "%02x",
+                                ((const unsigned char *)data)[i]);
+    pending.used += sprintf(pending.observed + pending.used, "\"");
+}
+
+static long report(void)
+{
+    errno = pending.error;
+    return observed_labeled(pending.label, pending.name, pending.nr, pending.value,
+                            pending.expected, pending.started_ns, pending.finished_ns,
+                            pending.observed);
 }
 
 #define OBSERVE(name, expected, ...) ({ \
@@ -112,19 +163,27 @@ static long observed(const char *name, long nr, long value, int expected_errno,
     observed(#name, SYS_##name, ant_case_internal_result, expected, \
              ant_case_internal_start, ant_case_internal_end); \
 })
-#define LABELED(label, output, output_len, name, expected, ...) ({ \
-    uint64_t ant_case_internal_start = monotonic_ns(); \
-    long ant_case_internal_result = syscall(SYS_##name, __VA_ARGS__); \
-    int ant_case_internal_errno = errno; \
-    uint64_t ant_case_internal_end = monotonic_ns(); \
-    errno = ant_case_internal_errno; \
-    observed_labeled(label, #name, SYS_##name, ant_case_internal_result, expected, \
-                     ant_case_internal_start, ant_case_internal_end, output, output_len); \
+#define CALL(case_label, sys, expected_errno, ...) ({ \
+    pending.label = case_label; pending.name = #sys; pending.nr = SYS_##sys; \
+    pending.expected = expected_errno; pending.used = 0; pending.observed[0] = 0; \
+    pending.started_ns = monotonic_ns(); \
+    pending.value = syscall(SYS_##sys, __VA_ARGS__); \
+    pending.error = errno; \
+    pending.finished_ns = monotonic_ns(); \
+    pending.value; \
+})
+#define CASE(case_label, sys, expected_errno, ...) ({ \
+    CALL(case_label, sys, expected_errno, __VA_ARGS__); \
+    report(); \
 })
 #define SOCKSET(label, expected, fd, level, option, value, len) \
-    LABELED(label, NULL, NULL, setsockopt, expected, fd, level, option, value, len)
-#define SOCKGET(label, expected, fd, level, option, buffer, len) \
-    LABELED(label, buffer, len, getsockopt, expected, fd, level, option, buffer, len)
+    CASE(label, setsockopt, expected, fd, level, option, value, len)
+#define SOCKGET(label, expected, fd, level, option, buffer, len) ({ \
+    CALL(label, getsockopt, expected, fd, level, option, buffer, len); \
+    if (pending.value == 0) \
+        observe("arg3.optval", buffer, *(len)); \
+    report(); \
+})
 #define TEST(name, ...) OBSERVE(name, 0, __VA_ARGS__)
 #define REJECT(name, error, ...) OBSERVE(name, error, __VA_ARGS__)
 
@@ -336,6 +395,212 @@ static void sockopt_cases(void)
     TEST(close, local[0]); TEST(close, local[1]); TEST(close, tcp6); TEST(close, tcp4);
 }
 
+/* Slice 2B: selector families. Every effect stays inside the probe or a child. */
+/* A forked child inherits the case counter; give each one its own ID range. */
+static void child_case_range(unsigned index)
+{
+    case_count = 100000 * index;
+}
+
+static void wait_child(pid_t child, const char *what)
+{
+    int status;
+
+    require(waitpid(child, &status, 0) == child && WIFEXITED(status) &&
+            WEXITSTATUS(status) == 0, what);
+}
+
+static void prctl_cases(void)
+{
+    static volatile char selector = SYSCALL_DISPATCH_FILTER_ALLOW;
+    struct sock_filter allow = BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
+    struct sock_fprog program = {1, &allow};
+    unsigned long auxv[64], mm_auxv[2] = {1, 2}, tid_address;
+    char original[16] = {0}, name[16];
+    int value;
+    long result;
+    pid_t child;
+    void *mapping = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+    require(mapping != MAP_FAILED, "prctl mapping");
+    require(syscall(SYS_prctl, PR_GET_NAME, original, 0, 0, 0) == 0, "current thread name");
+    CASE("prctl.set_name", prctl, 0, PR_SET_NAME, "antprobe", 0, 0, 0);
+    CASE("prctl.get_name", prctl, 0, PR_GET_NAME, name, 0, 0, 0);
+    TEST(prctl, PR_SET_NAME, original, 0, 0, 0);
+    CASE("prctl.set_pdeathsig", prctl, 0, PR_SET_PDEATHSIG, SIGTERM, 0, 0, 0);
+    CASE("prctl.get_pdeathsig", prctl, 0, PR_GET_PDEATHSIG, &value, 0, 0, 0);
+    TEST(prctl, PR_SET_PDEATHSIG, 0, 0, 0, 0);
+    CALL("prctl.get_child_subreaper", prctl, 0, PR_GET_CHILD_SUBREAPER, &value, 0, 0, 0);
+    observe("arg1.value", &value, sizeof(value));
+    report();
+    CASE("prctl.get_tsc", prctl, 0, PR_GET_TSC, &value, 0, 0, 0);
+    CASE("prctl.get_tid_address", prctl, EINVAL, PR_GET_TID_ADDRESS, &tid_address, 0, 0, 0);
+    result = CALL("prctl.get_auxv", prctl, 0, PR_GET_AUXV, auxv, sizeof(auxv), 0, 0);
+    if (result > 0)
+        observe("arg1.auxv", auxv, (size_t)result < sizeof(auxv) ? (size_t)result : sizeof(auxv));
+    report();
+    CASE("prctl.set_mm_auxv", prctl, EPERM, PR_SET_MM, PR_SET_MM_AUXV, mm_auxv,
+         sizeof(mm_auxv), 0);
+    CASE("prctl.set_vma_anon_name", prctl, EINVAL, PR_SET_VMA, PR_SET_VMA_ANON_NAME,
+         mapping, 4096, "ant-probe-vma");
+    CASE("prctl.unknown", prctl, EINVAL, 0x7fffffff, 0, 0, 0, 0);
+    child = fork();
+    require(child >= 0, "seccomp child");
+    if (!child) {
+        child_case_range(1);
+        CASE("prctl.set_no_new_privs", prctl, 0, PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+        CASE("prctl.set_seccomp_filter", prctl, 0, PR_SET_SECCOMP, SECCOMP_MODE_FILTER,
+             &program, 0, 0);
+        _exit(failures ? 3 : 0);
+    }
+    wait_child(child, "seccomp child exit");
+    child = fork();
+    require(child >= 0, "dispatch child");
+    if (!child) {
+        child_case_range(2);
+        CASE("prctl.set_syscall_user_dispatch", prctl, 0, PR_SET_SYSCALL_USER_DISPATCH,
+             PR_SYS_DISPATCH_ON, 0, 0, &selector);
+        _exit(failures ? 3 : 0);
+    }
+    wait_child(child, "dispatch child exit");
+    TEST(munmap, mapping, 4096);
+}
+
+static void ptrace_cases(void)
+{
+    struct __ptrace_peeksiginfo_args peek = {0, 0, 1};
+    struct user_regs_struct regs;
+    struct user_fpregs_struct fpregs;
+    struct user_desc desc;
+    unsigned char regset[512], info[88];
+    struct iovec iov = {regset, sizeof(regset)};
+    unsigned long word = 0, message, fs;
+    uint64_t mask;
+    siginfo_t siginfo, peeked[1];
+    sigset_t block;
+    long result;
+    pid_t child;
+    int status;
+
+    child = fork();
+    require(child >= 0, "tracee");
+    if (!child) {
+        child_case_range(3);
+        sigemptyset(&block);
+        sigaddset(&block, SIGUSR1);
+        sigprocmask(SIG_BLOCK, &block, NULL);
+        CASE("ptrace.traceme", ptrace, 0, PTRACE_TRACEME, 0, 0, 0);
+        raise(SIGUSR1);
+        raise(SIGSTOP);
+        _exit(failures ? 3 : 0);
+    }
+    require(waitpid(child, &status, 0) == child && WIFSTOPPED(status) &&
+            WSTOPSIG(status) == SIGSTOP, "tracee stop");
+    CASE("ptrace.peekdata", ptrace, 0, PTRACE_PEEKDATA, child, &ptrace_word, &word);
+    require(word == 0x414e54494e4f4d49UL, "tracee word");
+    CASE("ptrace.pokedata", ptrace, 0, PTRACE_POKEDATA, child, &ptrace_word,
+         0x5345545345544553UL);
+    CALL("ptrace.peekuser", ptrace, 0, PTRACE_PEEKUSER, child,
+         offsetof(struct user, regs.orig_rax), &word);
+    observe("arg3.word", &word, sizeof(word));
+    report();
+    CALL("ptrace.getregs", ptrace, 0, PTRACE_GETREGS, child, 0, &regs);
+    observe("arg3.regs", &regs, sizeof(regs));
+    report();
+    CALL("ptrace.setregs", ptrace, 0, PTRACE_SETREGS, child, 0, &regs);
+    observe("arg3.regs", &regs, sizeof(regs));
+    report();
+    CALL("ptrace.getfpregs", ptrace, 0, PTRACE_GETFPREGS, child, 0, &fpregs);
+    observe("arg3.fpregs", &fpregs, sizeof(fpregs));
+    report();
+    CALL("ptrace.getregset", ptrace, 0, PTRACE_GETREGSET, child, NT_PRSTATUS, &iov);
+    observe("arg3.iovec.data", regset, iov.iov_len);
+    report();
+    CALL("ptrace.setregset", ptrace, 0, PTRACE_SETREGSET, child, NT_PRSTATUS, &iov);
+    observe("arg3.iovec.data", regset, iov.iov_len);
+    report();
+    CALL("ptrace.getsiginfo", ptrace, 0, PTRACE_GETSIGINFO, child, 0, &siginfo);
+    observe("arg3.siginfo", &siginfo, sizeof(siginfo));
+    report();
+    CALL("ptrace.getsigmask", ptrace, 0, PTRACE_GETSIGMASK, child, sizeof(mask), &mask);
+    observe("arg3.sigmask", &mask, sizeof(mask));
+    report();
+    CASE("ptrace.getsigmask_badsize", ptrace, EINVAL, PTRACE_GETSIGMASK, child, 4, &mask);
+    result = CALL("ptrace.peeksiginfo", ptrace, 0, PTRACE_PEEKSIGINFO, child, &peek, peeked);
+    if (result == 1)
+        observe("arg3.siginfo", peeked, sizeof(peeked));
+    report();
+    CALL("ptrace.geteventmsg", ptrace, 0, PTRACE_GETEVENTMSG, child, 0, &message);
+    observe("arg3.message", &message, sizeof(message));
+    report();
+    CASE("ptrace.setoptions", ptrace, 0, PTRACE_SETOPTIONS, child, 0, PTRACE_O_TRACESYSGOOD);
+    result = CALL("ptrace.get_syscall_info", ptrace, 0, PTRACE_GET_SYSCALL_INFO, child,
+                  sizeof(info), info);
+    if (result > 0)
+        observe("arg3.info", info, (size_t)result < sizeof(info) ? (size_t)result : sizeof(info));
+    report();
+    CALL("ptrace.arch_prctl_get_fs", ptrace, 0, PTRACE_ARCH_PRCTL, child, &fs, ARCH_GET_FS);
+    observe("arg2.value", &fs, sizeof(fs));
+    report();
+    CALL("ptrace.get_thread_area", ptrace, 0, PTRACE_GET_THREAD_AREA, child, 12, &desc);
+    observe("arg3.desc", &desc, sizeof(desc));
+    report();
+    CASE("ptrace.unknown", ptrace, EIO, 0x7fff, child, 0, 0);
+    CASE("ptrace.cont", ptrace, 0, PTRACE_CONT, child, 0, 0);
+    wait_child(child, "tracee exit");
+}
+
+static void keyctl_cases(void)
+{
+    char buffer[256];
+    struct iovec iov = {"abc", 3};
+    struct keyctl_pkey_query query;
+    struct keyctl_dh_params dh;
+    long key, result;
+
+    key = TEST(add_key, "user", "ant:probe", "secret-payload", 14, KEY_SPEC_PROCESS_KEYRING);
+    require(key > 0, "probe key");
+    dh = (struct keyctl_dh_params){.private = key, .prime = key, .base = key};
+    result = CALL("keyctl.describe", keyctl, 0, KEYCTL_DESCRIBE, key, buffer, sizeof(buffer));
+    if (result > 0)
+        observe("arg2.buffer", buffer,
+                (size_t)result < sizeof(buffer) ? (size_t)result : sizeof(buffer));
+    report();
+    CASE("keyctl.read", keyctl, 0, KEYCTL_READ, key, buffer, 64);
+    require(!memcmp(buffer, "secret-payload", 14), "key payload");
+    CASE("keyctl.read_query", keyctl, 0, KEYCTL_READ, key, NULL, 0);
+    CASE("keyctl.update", keyctl, 0, KEYCTL_UPDATE, key, "updated", 7);
+    CASE("keyctl.search", keyctl, 0, KEYCTL_SEARCH, KEY_SPEC_PROCESS_KEYRING, "user",
+         "ant:probe", 0);
+    result = CALL("keyctl.capabilities", keyctl, 0, KEYCTL_CAPABILITIES, buffer, 16);
+    if (result > 0)
+        observe("arg1.buffer", buffer, result < 16 ? (size_t)result : 16);
+    report();
+    CALL("keyctl.dh_compute", keyctl, EOPNOTSUPP, KEYCTL_DH_COMPUTE, &dh, buffer, 64, NULL);
+    observe("arg1.params", &dh, sizeof(dh));
+    report();
+    CASE("keyctl.pkey_query", keyctl, EOPNOTSUPP, KEYCTL_PKEY_QUERY, key, 0, "enc=raw", &query);
+    CASE("keyctl.instantiate_iov", keyctl, EPERM, KEYCTL_INSTANTIATE_IOV, key, &iov, 1,
+         KEY_SPEC_PROCESS_KEYRING);
+    CASE("keyctl.get_keyring_id", keyctl, 0, KEYCTL_GET_KEYRING_ID, KEY_SPEC_PROCESS_KEYRING, 0);
+    CASE("keyctl.join_session", keyctl, 0, KEYCTL_JOIN_SESSION_KEYRING, "ant-session");
+    CASE("keyctl.unknown", keyctl, EOPNOTSUPP, 0x7fff, 0, 0, 0, 0);
+    CASE("keyctl.revoke", keyctl, 0, KEYCTL_REVOKE, key);
+}
+
+static void sysfs_cases(void)
+{
+    char buffer[256];
+    long index = CASE("sysfs.index", sysfs, 0, 1, "proc");
+
+    require(index >= 0, "proc filesystem index");
+    CASE("sysfs.name", sysfs, 0, 2, index, buffer);
+    require(!strcmp(buffer, "proc"), "proc filesystem name");
+    CASE("sysfs.count", sysfs, 0, 3);
+    CASE("sysfs.bad_index", sysfs, EINVAL, 2, 9999, buffer);
+    CASE("sysfs.unknown", sysfs, EINVAL, 9);
+}
+
 /* Slice 2G: rows without an entry point in the pinned syscall_64.tbl. */
 static void unavailable_cases(void)
 {
@@ -358,7 +623,7 @@ static void unavailable_cases(void)
         errno = error;
         snprintf(label, sizeof(label), "unavailable.%s", rows[i].name);
         observed_labeled(label, rows[i].name, rows[i].number, result, ENOSYS,
-                         started, finished, NULL, NULL);
+                         started, finished, NULL);
     }
 }
 
@@ -633,6 +898,7 @@ int main(int argc, char **argv)
     require(original >= 0 && mkdtemp(directory) && chdir(directory) == 0,
             "isolated working directory");
     file_cases(); descriptor_cases(); sockopt_cases(); unavailable_cases();
+    prctl_cases(); ptrace_cases(); keyctl_cases(); sysfs_cases();
     memory_and_process_cases(); aio_cases(); uring_cases();
     require(sched_getaffinity(0, sizeof(available), &available) == 0, "available CPUs");
     for (int cpu = 0; cpu < CPU_SETSIZE && count < 4; cpu++)

@@ -836,11 +836,277 @@ fn socket_option_name(get: bool, level: i32, option: i32) -> String {
     format!("Unknown option {option:#x}")
 }
 
+// prctl options, PR_SET_MM sub-options, ptrace requests and keyctl commands
+// named by the pinned UAPI headers; the kernel capture in native_capture.c
+// handles the same selectors.
+const PRCTL_OPTIONS: &[(&str, u64)] = &[
+    ("PR_SET_PDEATHSIG", 1),
+    ("PR_GET_PDEATHSIG", 2),
+    ("PR_GET_DUMPABLE", 3),
+    ("PR_SET_DUMPABLE", 4),
+    ("PR_GET_UNALIGN", 5),
+    ("PR_SET_UNALIGN", 6),
+    ("PR_GET_KEEPCAPS", 7),
+    ("PR_SET_KEEPCAPS", 8),
+    ("PR_GET_FPEMU", 9),
+    ("PR_SET_FPEMU", 10),
+    ("PR_GET_FPEXC", 11),
+    ("PR_SET_FPEXC", 12),
+    ("PR_GET_TIMING", 13),
+    ("PR_SET_TIMING", 14),
+    ("PR_SET_NAME", 15),
+    ("PR_GET_NAME", 16),
+    ("PR_GET_ENDIAN", 19),
+    ("PR_SET_ENDIAN", 20),
+    ("PR_GET_SECCOMP", 21),
+    ("PR_SET_SECCOMP", 22),
+    ("PR_CAPBSET_READ", 23),
+    ("PR_CAPBSET_DROP", 24),
+    ("PR_GET_TSC", 25),
+    ("PR_SET_TSC", 26),
+    ("PR_GET_SECUREBITS", 27),
+    ("PR_SET_SECUREBITS", 28),
+    ("PR_SET_TIMERSLACK", 29),
+    ("PR_GET_TIMERSLACK", 30),
+    ("PR_TASK_PERF_EVENTS_DISABLE", 31),
+    ("PR_TASK_PERF_EVENTS_ENABLE", 32),
+    ("PR_MCE_KILL", 33),
+    ("PR_MCE_KILL_GET", 34),
+    ("PR_SET_MM", 35),
+    ("PR_SET_CHILD_SUBREAPER", 36),
+    ("PR_GET_CHILD_SUBREAPER", 37),
+    ("PR_SET_NO_NEW_PRIVS", 38),
+    ("PR_GET_NO_NEW_PRIVS", 39),
+    ("PR_GET_TID_ADDRESS", 40),
+    ("PR_SET_THP_DISABLE", 41),
+    ("PR_GET_THP_DISABLE", 42),
+    ("PR_MPX_ENABLE_MANAGEMENT", 43),
+    ("PR_MPX_DISABLE_MANAGEMENT", 44),
+    ("PR_SET_FP_MODE", 45),
+    ("PR_GET_FP_MODE", 46),
+    ("PR_CAP_AMBIENT", 47),
+    ("PR_SVE_SET_VL", 50),
+    ("PR_SVE_GET_VL", 51),
+    ("PR_GET_SPECULATION_CTRL", 52),
+    ("PR_SET_SPECULATION_CTRL", 53),
+    ("PR_PAC_RESET_KEYS", 54),
+    ("PR_SET_TAGGED_ADDR_CTRL", 55),
+    ("PR_GET_TAGGED_ADDR_CTRL", 56),
+    ("PR_SET_IO_FLUSHER", 57),
+    ("PR_GET_IO_FLUSHER", 58),
+    ("PR_SET_SYSCALL_USER_DISPATCH", 59),
+    ("PR_PAC_SET_ENABLED_KEYS", 60),
+    ("PR_PAC_GET_ENABLED_KEYS", 61),
+    ("PR_SCHED_CORE", 62),
+    ("PR_SME_SET_VL", 63),
+    ("PR_SME_GET_VL", 64),
+    ("PR_SET_MDWE", 65),
+    ("PR_GET_MDWE", 66),
+    ("PR_SET_MEMORY_MERGE", 67),
+    ("PR_GET_MEMORY_MERGE", 68),
+    ("PR_RISCV_V_SET_CONTROL", 69),
+    ("PR_RISCV_V_GET_CONTROL", 70),
+    ("PR_RISCV_SET_ICACHE_FLUSH_CTX", 71),
+    ("PR_PPC_GET_DEXCR", 72),
+    ("PR_PPC_SET_DEXCR", 73),
+    ("PR_GET_AUXV", 0x41555856),
+    ("PR_SET_VMA", 0x53564d41),
+    ("PR_SET_PTRACER", 0x59616d61),
+];
+
+const PRCTL_MM_OPTIONS: &[(&str, u64)] = &[
+    ("PR_SET_MM_START_CODE", 1),
+    ("PR_SET_MM_END_CODE", 2),
+    ("PR_SET_MM_START_DATA", 3),
+    ("PR_SET_MM_END_DATA", 4),
+    ("PR_SET_MM_START_STACK", 5),
+    ("PR_SET_MM_START_BRK", 6),
+    ("PR_SET_MM_BRK", 7),
+    ("PR_SET_MM_ARG_START", 8),
+    ("PR_SET_MM_ARG_END", 9),
+    ("PR_SET_MM_ENV_START", 10),
+    ("PR_SET_MM_ENV_END", 11),
+    ("PR_SET_MM_AUXV", 12),
+    ("PR_SET_MM_EXE_FILE", 13),
+    ("PR_SET_MM_MAP", 14),
+    ("PR_SET_MM_MAP_SIZE", 15),
+];
+
+const PTRACE_REQUESTS: &[(&str, u64)] = &[
+    ("PTRACE_TRACEME", 0),
+    ("PTRACE_PEEKTEXT", 1),
+    ("PTRACE_PEEKDATA", 2),
+    ("PTRACE_PEEKUSR", 3),
+    ("PTRACE_POKETEXT", 4),
+    ("PTRACE_POKEDATA", 5),
+    ("PTRACE_POKEUSR", 6),
+    ("PTRACE_CONT", 7),
+    ("PTRACE_KILL", 8),
+    ("PTRACE_SINGLESTEP", 9),
+    ("PTRACE_GETREGS", 12),
+    ("PTRACE_SETREGS", 13),
+    ("PTRACE_GETFPREGS", 14),
+    ("PTRACE_SETFPREGS", 15),
+    ("PTRACE_ATTACH", 16),
+    ("PTRACE_DETACH", 17),
+    ("PTRACE_GETFPXREGS", 18),
+    ("PTRACE_SETFPXREGS", 19),
+    ("PTRACE_OLDSETOPTIONS", 21),
+    ("PTRACE_SYSCALL", 24),
+    ("PTRACE_GET_THREAD_AREA", 25),
+    ("PTRACE_SET_THREAD_AREA", 26),
+    ("PTRACE_ARCH_PRCTL", 30),
+    ("PTRACE_SYSEMU", 31),
+    ("PTRACE_SYSEMU_SINGLESTEP", 32),
+    ("PTRACE_SINGLEBLOCK", 33),
+    ("PTRACE_SETOPTIONS", 0x4200),
+    ("PTRACE_GETEVENTMSG", 0x4201),
+    ("PTRACE_GETSIGINFO", 0x4202),
+    ("PTRACE_SETSIGINFO", 0x4203),
+    ("PTRACE_GETREGSET", 0x4204),
+    ("PTRACE_SETREGSET", 0x4205),
+    ("PTRACE_SEIZE", 0x4206),
+    ("PTRACE_INTERRUPT", 0x4207),
+    ("PTRACE_LISTEN", 0x4208),
+    ("PTRACE_PEEKSIGINFO", 0x4209),
+    ("PTRACE_GETSIGMASK", 0x420a),
+    ("PTRACE_SETSIGMASK", 0x420b),
+    ("PTRACE_SECCOMP_GET_FILTER", 0x420c),
+    ("PTRACE_SECCOMP_GET_METADATA", 0x420d),
+    ("PTRACE_GET_SYSCALL_INFO", 0x420e),
+    ("PTRACE_GET_RSEQ_CONFIGURATION", 0x420f),
+    ("PTRACE_SET_SYSCALL_USER_DISPATCH_CONFIG", 0x4210),
+    ("PTRACE_GET_SYSCALL_USER_DISPATCH_CONFIG", 0x4211),
+];
+
+const KEYCTL_COMMANDS: &[(&str, u64)] = &[
+    ("KEYCTL_GET_KEYRING_ID", 0),
+    ("KEYCTL_JOIN_SESSION_KEYRING", 1),
+    ("KEYCTL_UPDATE", 2),
+    ("KEYCTL_REVOKE", 3),
+    ("KEYCTL_CHOWN", 4),
+    ("KEYCTL_SETPERM", 5),
+    ("KEYCTL_DESCRIBE", 6),
+    ("KEYCTL_CLEAR", 7),
+    ("KEYCTL_LINK", 8),
+    ("KEYCTL_UNLINK", 9),
+    ("KEYCTL_SEARCH", 10),
+    ("KEYCTL_READ", 11),
+    ("KEYCTL_INSTANTIATE", 12),
+    ("KEYCTL_NEGATE", 13),
+    ("KEYCTL_SET_REQKEY_KEYRING", 14),
+    ("KEYCTL_SET_TIMEOUT", 15),
+    ("KEYCTL_ASSUME_AUTHORITY", 16),
+    ("KEYCTL_GET_SECURITY", 17),
+    ("KEYCTL_SESSION_TO_PARENT", 18),
+    ("KEYCTL_REJECT", 19),
+    ("KEYCTL_INSTANTIATE_IOV", 20),
+    ("KEYCTL_INVALIDATE", 21),
+    ("KEYCTL_GET_PERSISTENT", 22),
+    ("KEYCTL_DH_COMPUTE", 23),
+    ("KEYCTL_PKEY_QUERY", 24),
+    ("KEYCTL_PKEY_ENCRYPT", 25),
+    ("KEYCTL_PKEY_DECRYPT", 26),
+    ("KEYCTL_PKEY_SIGN", 27),
+    ("KEYCTL_PKEY_VERIFY", 28),
+    ("KEYCTL_RESTRICT_KEYRING", 29),
+    ("KEYCTL_MOVE", 30),
+    ("KEYCTL_CAPABILITIES", 31),
+    ("KEYCTL_WATCH_KEY", 32),
+];
+
+const PTRACE_OPTIONS: &[(&str, u64)] = &[
+    ("PTRACE_O_TRACESYSGOOD", 0x1),
+    ("PTRACE_O_TRACEFORK", 0x2),
+    ("PTRACE_O_TRACEVFORK", 0x4),
+    ("PTRACE_O_TRACECLONE", 0x8),
+    ("PTRACE_O_TRACEEXEC", 0x10),
+    ("PTRACE_O_TRACEVFORKDONE", 0x20),
+    ("PTRACE_O_TRACEEXIT", 0x40),
+    ("PTRACE_O_TRACESECCOMP", 0x80),
+    ("PTRACE_O_EXITKILL", 0x10_0000),
+    ("PTRACE_O_SUSPEND_SECCOMP", 0x20_0000),
+];
+
+fn named(table: &[(&'static str, u64)], value: u64, kind: &str) -> String {
+    table
+        .iter()
+        .find(|&&(_, number)| number == value)
+        .map_or_else(
+            || format!("Unknown {kind} {value:#x}"),
+            |&(name, _)| name.into(),
+        )
+}
+
+fn ptrace_options(value: u64) -> String {
+    let mut known = 0;
+    let mut names: Vec<String> = PTRACE_OPTIONS
+        .iter()
+        .filter(|&&(_, bit)| value & bit != 0)
+        .map(|&(name, bit)| {
+            known |= bit;
+            name.to_owned()
+        })
+        .collect();
+    if value & !known != 0 {
+        names.push(format!("unknown bits {:#x}", value & !known));
+    }
+    if names.is_empty() {
+        "0".into()
+    } else {
+        names.join(" | ")
+    }
+}
+
+fn prctl_suboption(option: u64, value: u64) -> Option<String> {
+    const PR_SET_MM: u64 = 35;
+    const PR_SCHED_CORE: u64 = 62;
+    const PR_SET_SYSCALL_USER_DISPATCH: u64 = 59;
+    const PR_SET_VMA: u64 = 0x5356_4d41;
+    let table: &[(&str, u64)] = match option {
+        PR_SET_MM => PRCTL_MM_OPTIONS,
+        PR_SCHED_CORE => &[
+            ("PR_SCHED_CORE_GET", 0),
+            ("PR_SCHED_CORE_CREATE", 1),
+            ("PR_SCHED_CORE_SHARE_TO", 2),
+            ("PR_SCHED_CORE_SHARE_FROM", 3),
+        ],
+        PR_SET_SYSCALL_USER_DISPATCH => &[("PR_SYS_DISPATCH_OFF", 0), ("PR_SYS_DISPATCH_ON", 1)],
+        PR_SET_VMA => &[("PR_SET_VMA_ANON_NAME", 0)],
+        _ => return None,
+    };
+    Some(named(table, value, "sub-option"))
+}
+
 /// Name a selector argument whose meaning may depend on another argument, such
 /// as a socket option name given its level. None means the argument is not a
 /// selector in the pinned schema.
 pub fn selector_name(number: u64, index: usize, args: &[u64; 6]) -> Option<String> {
+    const PTRACE_SETOPTIONS: u64 = 0x4200;
+    const PTRACE_SEIZE: u64 = 0x4206;
+    const PTRACE_OLDSETOPTIONS: u64 = 21;
     match (number, index) {
+        (101, 0) => Some(named(PTRACE_REQUESTS, args[0], "request")),
+        (101, 3)
+            if matches!(
+                args[0],
+                PTRACE_SETOPTIONS | PTRACE_SEIZE | PTRACE_OLDSETOPTIONS
+            ) =>
+        {
+            Some(ptrace_options(args[3]))
+        }
+        (139, 0) => Some(
+            match args[0] {
+                1 => "filesystem name to index",
+                2 => "filesystem index to name",
+                3 => "filesystem count",
+                _ => return Some(format!("Unknown option {:#x}", args[0])),
+            }
+            .into(),
+        ),
+        (157, 0) => Some(named(PRCTL_OPTIONS, args[0] as u32 as u64, "option")),
+        (157, 1) => prctl_suboption(args[0] as u32 as u64, args[1]),
+        (250, 0) => Some(named(KEYCTL_COMMANDS, args[0] as u32 as u64, "command")),
         (54 | 55, 1) => Some(
             lookup(SOCKET_LEVELS, args[1] as i32)
                 .map_or_else(|| format!("Unknown level {}", args[1] as i32), Into::into),
@@ -965,7 +1231,62 @@ mod tests {
     }
 
     #[test]
+    fn selector_families_name_options_suboptions_and_ptrace_flags() {
+        let args = |a: u64, b: u64, d: u64| [a, b, 0, d, 0, 0];
+        assert_eq!(
+            selector_name(157, 0, &args(15, 0, 0)).as_deref(),
+            Some("PR_SET_NAME")
+        );
+        assert_eq!(
+            selector_name(157, 0, &args(0x4155_5856, 0, 0)).as_deref(),
+            Some("PR_GET_AUXV")
+        );
+        assert_eq!(
+            selector_name(157, 1, &args(35, 12, 0)).as_deref(),
+            Some("PR_SET_MM_AUXV")
+        );
+        assert_eq!(selector_name(157, 1, &args(15, 12, 0)), None);
+        assert_eq!(
+            selector_name(157, 0, &args(0x7fff_ffff, 0, 0)).as_deref(),
+            Some("Unknown option 0x7fffffff")
+        );
+        assert_eq!(
+            selector_name(101, 0, &args(2, 0, 0)).as_deref(),
+            Some("PTRACE_PEEKDATA")
+        );
+        assert_eq!(
+            selector_name(101, 0, &args(0x4204, 0, 0)).as_deref(),
+            Some("PTRACE_GETREGSET")
+        );
+        assert_eq!(
+            selector_name(101, 3, &args(0x4200, 0, 0x81)).as_deref(),
+            Some("PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACESECCOMP")
+        );
+        assert_eq!(selector_name(101, 3, &args(2, 0, 0x81)), None);
+        assert_eq!(
+            selector_name(250, 0, &args(11, 0, 0)).as_deref(),
+            Some("KEYCTL_READ")
+        );
+        assert_eq!(
+            selector_name(139, 0, &args(2, 0, 0)).as_deref(),
+            Some("filesystem index to name")
+        );
+    }
+
+    #[test]
     fn socket_option_tables_have_unique_values() {
+        for table in [
+            PRCTL_OPTIONS,
+            PRCTL_MM_OPTIONS,
+            PTRACE_REQUESTS,
+            KEYCTL_COMMANDS,
+        ] {
+            let mut values: Vec<_> = table.iter().map(|&(_, value)| value).collect();
+            let count = values.len();
+            values.sort_unstable();
+            values.dedup();
+            assert_eq!(values.len(), count);
+        }
         for table in [SOL_SOCKET_OPTIONS, IP_OPTIONS, IPV6_OPTIONS, TCP_OPTIONS] {
             let mut values: Vec<_> = table
                 .iter()

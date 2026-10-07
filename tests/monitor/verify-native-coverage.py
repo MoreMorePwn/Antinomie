@@ -337,15 +337,16 @@ def expected_result(case, result):
         return case["result"] >= 0
     if result == "positive":
         return case["result"] > 0
-    name = result.removeprefix("errno:")
-    return case["result"] < 0 and errno.errorcode.get(case["errno"]) == name
+    # Compare numbers: aliases such as EOPNOTSUPP and ENOTSUP share one value.
+    number = getattr(errno, result.removeprefix("errno:"), None)
+    return case["result"] < 0 and number is not None and case["errno"] == number
 
 
-def field_problems(expected, actual, observed):
+def field_problems(expected, actual, observed, result=None):
     problems = []
     for member in ("arg", "layout", "size", "captured", "declared", "status"):
         want = expected[member]
-        want = U64_MAX if want == "max" else want
+        want = U64_MAX if want == "max" else result if want == "result" else want
         if actual.get(member) != want:
             problems.append(f"{member} {actual.get(member)!r} != {want!r}")
     data = bytearray()
@@ -396,7 +397,8 @@ def schema_report(fixture_dir, labeled, fields):
                     else:
                         problems.extend(f"{name[0]} {name[1]}: {problem}" for problem in
                                         field_problems(item, recorded[name],
-                                                       case.get("observed", {})))
+                                                       case.get("observed", {}),
+                                                       case["result"]))
             rows.append({"slice": document["slice"], "label": expected["label"],
                          "verdict": "FAIL" if problems else "PASS", "problems": problems})
     return {"passed": bool(rows) and all(row["verdict"] == "PASS" for row in rows),
