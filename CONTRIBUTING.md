@@ -80,9 +80,10 @@ cd ~/src/antinomie
 scripts/bootstrap.sh                 # default adapter: debian-6.12.94-1-trixie
 ```
 
-`bootstrap.sh` verifies the pinned inputs, extracts the baseline tree, and
-creates the Git author repo on top of the Debian-patched baseline. It is safe
-to re-run.
+`bootstrap.sh` fetches the large upstream source tarball on demand (see
+`scripts/fetch-inputs.sh`; live Debian pool first, `snapshot.debian.org`
+fallback), verifies all pinned inputs, extracts the baseline tree, and creates
+the Git author repo on top of the Debian-patched baseline. It is safe to re-run.
 
 To target a different adapter explicitly:
 

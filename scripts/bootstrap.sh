@@ -32,7 +32,8 @@ done
 
 say "adapter: $ADAPTER ($DISTRO $RELEASE, linux $SOURCE_VERSION)"
 
-# 0. verify the pinned inputs
+# 0. fetch the large upstream input on demand, then verify the pinned inputs
+"$SCRIPT_DIR/fetch-inputs.sh" "$ADAPTER"
 "$SCRIPT_DIR/verify-inputs.sh" "$ADAPTER"
 
 # 1. extract the Quilt build tree (upstream + Debian main series)

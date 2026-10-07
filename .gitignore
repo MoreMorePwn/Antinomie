@@ -4,6 +4,9 @@
 # ---------------------------------------------------------------------------
 /work/
 
+# Large upstream Debian source input: fetched on demand by scripts/fetch-inputs.sh
+*.orig.tar.xz
+
 # Build products
 *.deb
 *.udeb
