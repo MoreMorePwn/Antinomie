@@ -22,6 +22,8 @@ pub(crate) struct ProgramRun {
     pub boot_bundle_identity: Option<String>,
     pub disk_base_identity: Option<String>,
     pub execution_generation: u64,
+    /// Terminal READ requests that never received a reply before finalize.
+    pub terminal_reads_unanswered: u64,
 }
 
 impl ProgramRun {
@@ -52,6 +54,7 @@ impl ProgramRun {
             boot_bundle_identity: None,
             disk_base_identity: None,
             execution_generation: 0,
+            terminal_reads_unanswered: 0,
         };
         run.persist_summary()?;
         Ok(run)
@@ -69,6 +72,22 @@ impl ProgramRun {
             &self.summary.directory.join("manifest.json"),
             &serde_json::json!({"format":"ANTT run raw LE32","run":self.summary,"packets":self.capture.packets,"bytes":self.stored_len(),"persistence_error":self.summary.recording_error,"boot_bundle_identity":self.boot_bundle_identity,"disk_base_identity":self.disk_base_identity}),
         )
+    }
+    /// Complete only after EOF with every terminal READ reply received.
+    pub fn terminal_complete(&self) -> bool {
+        self.summary.terminal_eof && self.terminal_reads_unanswered == 0
+    }
+    pub fn terminal_issue(&self) -> Option<String> {
+        if self.terminal_reads_unanswered > 0 {
+            Some(format!(
+                "{} terminal read replies never arrived; consumed output may be missing",
+                self.terminal_reads_unanswered
+            ))
+        } else if !self.summary.terminal_eof {
+            Some("VM ended before terminal EOF; terminal tail may be missing".into())
+        } else {
+            None
+        }
     }
     pub fn storage_error(&mut self, error: impl Into<String>) {
         self.summary.recording_error.get_or_insert(error.into());
@@ -209,7 +228,7 @@ impl ProgramRun {
         let (rows, cols) = self.terminal.screen().size();
         storage::atomic_json(
             &self.summary.directory.join("manifest.json"),
-            &serde_json::json!({"format":"ANTT run raw LE32","run":self.summary,"packets":self.capture.packets,"bytes":self.stored_len(),"persistence_error":self.summary.recording_error,"final_state":state,"health":health,"terminal_rows":rows,"terminal_cols":cols,"terminal_complete":self.summary.terminal_eof,"terminal_issue":if self.summary.terminal_eof {None} else {Some("VM ended before terminal EOF; terminal tail may be missing")},"quota_scope":"VM boot shared raw, fields, transcript, journal and screen","boot_bundle_identity":self.boot_bundle_identity,"disk_base_identity":self.disk_base_identity}),
+            &serde_json::json!({"format":"ANTT run raw LE32","run":self.summary,"packets":self.capture.packets,"bytes":self.stored_len(),"persistence_error":self.summary.recording_error,"final_state":state,"health":health,"terminal_rows":rows,"terminal_cols":cols,"terminal_complete":self.terminal_complete(),"terminal_issue":self.terminal_issue(),"quota_scope":"VM boot shared raw, fields, transcript, journal and screen","boot_bundle_identity":self.boot_bundle_identity,"disk_base_identity":self.disk_base_identity}),
         )?;
         result
     }
@@ -263,6 +282,41 @@ mod tests {
         assert_eq!(
             run.summary.execution.as_ref().unwrap().root_exit,
             Some(WaitStatus::Exited { code: 7 })
+        );
+        drop(run);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn unanswered_terminal_reads_make_the_terminal_incomplete_even_after_eof() {
+        let directory =
+            std::env::temp_dir().join(format!("ant-terminal-reads-{}", storage::unique_id()));
+        let summary = RunSummary {
+            id: "run".into(),
+            vm_id: "vm".into(),
+            boot_id: "boot".into(),
+            session_id: 1,
+            root_task_cookie: 2,
+            pid: 3,
+            request: ExecRequest::default(),
+            directory: directory.clone(),
+            terminal_eof: false,
+            state: RunState::Running,
+            recording_error: None,
+            execution: None,
+        };
+        let mut run = ProgramRun::new(summary, 65536).unwrap();
+        run.eof(65536).unwrap();
+        assert!(run.terminal_complete());
+        assert_eq!(run.terminal_issue(), None);
+        run.terminal_reads_unanswered = 2;
+        run.finalize(65536, "vm-stop", &Health::default()).unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(directory.join("manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["terminal_complete"], false);
+        assert_eq!(
+            manifest["terminal_issue"],
+            "2 terminal read replies never arrived; consumed output may be missing"
         );
         drop(run);
         std::fs::remove_dir_all(directory).unwrap();

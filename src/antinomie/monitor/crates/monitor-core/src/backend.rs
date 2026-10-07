@@ -152,6 +152,10 @@ struct Session {
     pending_len: usize,
     pending_overflow: bool,
     terminal_cursor: usize,
+    /// Terminal READ requests whose deadline passed before their reply arrived,
+    /// keyed by request id. The guest answers commands in submission order and
+    /// has already consumed the PTY bytes, so a late reply still belongs to its run.
+    late_reads: BTreeMap<u64, u64>,
     status_cursor: usize,
     last_status_query: Instant,
     persisted_packets: u64,
@@ -364,23 +368,72 @@ impl Session {
             return Err("guest command deadline exhausted before submission".into());
         }
         let id = self.transport.send(opcode, args)?;
+        self.wait_reply(id, opcode, snapshot, sender, timeout)
+            .map_err(RequestError::into_message)
+    }
+    /// A reply for an earlier request: a late terminal READ is applied to its run;
+    /// anything else has no remaining waiter.
+    fn other_reply(
+        &mut self,
+        reply_id: u64,
+        status: i32,
+        payload: &[u8],
+        awaiting: Option<u64>,
+        snapshot: &mut Snapshot,
+        sender: &SyncSender<Notification>,
+    ) {
+        if let Some(cookie) = self.late_reads.remove(&reply_id) {
+            if let Err(error) = self.apply_terminal_reply(cookie, status, payload, snapshot, sender)
+            {
+                snapshot.last_error = Some(format!("late terminal read: {error}"));
+            }
+        } else {
+            snapshot.last_error = Some(match awaiting {
+                Some(id) => format!("unmatched command reply {reply_id}; awaiting {id}"),
+                None => format!("unmatched command reply {reply_id}"),
+            });
+        }
+    }
+    /// Apply replies already available without sending a command.
+    fn drain_replies(
+        &mut self,
+        snapshot: &mut Snapshot,
+        sender: &SyncSender<Notification>,
+    ) -> Result<(), String> {
+        self.pump(snapshot, sender)?;
+        while let Some((reply_id, status, payload)) = self.transport.reply()? {
+            self.other_reply(reply_id, status, &payload, None, snapshot, sender);
+        }
+        Ok(())
+    }
+    fn wait_reply(
+        &mut self,
+        id: u64,
+        opcode: u32,
+        snapshot: &mut Snapshot,
+        sender: &SyncSender<Notification>,
+        timeout: Duration,
+    ) -> Result<Vec<u8>, RequestError> {
         let deadline = Instant::now() + timeout;
         loop {
-            self.pump(snapshot, sender)?;
-            while let Some((reply_id, status, payload)) = self.transport.reply()? {
+            self.pump(snapshot, sender).map_err(RequestError::Failed)?;
+            while let Some((reply_id, status, payload)) =
+                self.transport.reply().map_err(RequestError::Failed)?
+            {
                 if reply_id != id {
-                    snapshot.last_error =
-                        Some(format!("unmatched command reply {reply_id}; awaiting {id}"));
+                    self.other_reply(reply_id, status, &payload, Some(id), snapshot, sender);
                     continue;
                 }
                 if status < 0 {
-                    return Err(format!(
+                    return Err(RequestError::Failed(format!(
                         "guest command 0x{opcode:x}: {}",
                         std::io::Error::from_raw_os_error(-status)
-                    ));
+                    )));
                 }
                 if status != 0 {
-                    return Err(format!("guest command returned unexpected status {status}"));
+                    return Err(RequestError::Failed(format!(
+                        "guest command returned unexpected status {status}"
+                    )));
                 }
                 return Ok(payload);
             }
@@ -388,20 +441,31 @@ impl Session {
                 .process
                 .child
                 .try_wait()
-                .map_err(|e| e.to_string())?
+                .map_err(|e| RequestError::Failed(e.to_string()))?
                 .is_some()
             {
-                return Err("VM exited while waiting for command reply".into());
+                return Err(RequestError::Failed(
+                    "VM exited while waiting for command reply".into(),
+                ));
             }
             if Instant::now() >= deadline {
-                return Err(format!("guest command {id} timed out; outcome unknown"));
+                return Err(RequestError::TimedOut(format!(
+                    "guest command {id} timed out; outcome unknown"
+                )));
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             let poll_timeout = remaining.as_millis().min(10) as i32;
-            self.transport.poll(poll_timeout)?;
+            self.transport
+                .poll(poll_timeout)
+                .map_err(RequestError::Failed)?;
         }
     }
     fn finalize(&mut self, state: &str, snapshot: &mut Snapshot) -> Result<(), String> {
+        for cookie in std::mem::take(&mut self.late_reads).into_values() {
+            if let Some(run) = self.runs.get_mut(&cookie) {
+                run.terminal_reads_unanswered = run.terminal_reads_unanswered.saturating_add(1);
+            }
+        }
         let cookies: Vec<_> = self.runs.keys().copied().collect();
         for cookie in cookies {
             let available = self.available();
@@ -460,12 +524,63 @@ impl Session {
         if run.summary.terminal_eof {
             return Ok(());
         }
-        let mut args = control::with_session(run.summary.session_id);
+        // Debug builds can force short deadlines to exercise late replies.
+        #[cfg(debug_assertions)]
+        let timeout = std::env::var("ANTINOMIE_TEST_TERMINAL_READ_TIMEOUT_US")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .map_or(timeout, Duration::from_micros);
+        if timeout.is_zero() {
+            return Err("guest command deadline exhausted before submission".into());
+        }
+        let session_id = run.summary.session_id;
+        // At most one READ per run is outstanding. While an earlier reply is late,
+        // spend this budget waiting for it instead of queueing more reads.
+        let deadline = Instant::now() + timeout;
+        while self.late_reads.values().any(|&pending| pending == cookie) {
+            self.drain_replies(snapshot, sender)?;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if !self.late_reads.values().any(|&pending| pending == cookie) {
+                break;
+            }
+            if remaining.is_zero() {
+                return Ok(());
+            }
+            self.transport.poll(remaining.as_millis().min(10) as i32)?;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let run = self.runs.get(&cookie).ok_or("unknown run")?;
+        if run.summary.terminal_eof || remaining.is_zero() {
+            return Ok(());
+        }
+        let mut args = control::with_session(session_id);
         args.extend(4096u32.to_le_bytes());
         args.extend(0u32.to_le_bytes());
-        let reply = self.request(control::READ, &args, snapshot, sender, timeout)?;
-        let flags = u32_at(&reply, 0).map_err(|e| e.to_string())?;
-        let count = u32_at(&reply, 4).map_err(|e| e.to_string())? as usize;
+        let id = self.transport.send(control::READ, &args)?;
+        match self.wait_reply(id, control::READ, snapshot, sender, remaining) {
+            Ok(reply) => self.apply_terminal_reply(cookie, 0, &reply, snapshot, sender),
+            Err(RequestError::TimedOut(_)) => {
+                // The guest may already have consumed output for this reply; keep
+                // the id so the reply is applied when it arrives.
+                self.late_reads.insert(id, cookie);
+                Ok(())
+            }
+            Err(RequestError::Failed(error)) => Err(error),
+        }
+    }
+    fn apply_terminal_reply(
+        &mut self,
+        cookie: u64,
+        status: i32,
+        reply: &[u8],
+        snapshot: &mut Snapshot,
+        sender: &SyncSender<Notification>,
+    ) -> Result<(), String> {
+        if status != 0 {
+            return Err(format!("terminal read returned status {status}"));
+        }
+        let flags = u32_at(reply, 0).map_err(|e| e.to_string())?;
+        let count = u32_at(reply, 4).map_err(|e| e.to_string())? as usize;
         if reply.len() != 8 + count || count > 4096 || flags & !1 != 0 {
             return Err("invalid terminal read reply".into());
         }
@@ -490,6 +605,7 @@ impl Session {
             persistence_error = Some(error);
         }
         let sequence = run.sequence;
+        let run_id = run.summary.id.clone();
         if let Some(error) = persistence_error {
             self.stop_saving(error.clone());
             snapshot.health.persistence_error = Some(error);
@@ -497,7 +613,7 @@ impl Session {
         if (count > 0 || eof)
             && sender
                 .try_send(Notification::Terminal {
-                    run_id: run_id.into(),
+                    run_id,
                     sequence,
                     data: reply[8..].to_vec(),
                     eof,
@@ -507,6 +623,20 @@ impl Session {
             snapshot.health.ui_dropped = snapshot.health.ui_dropped.saturating_add(1);
         }
         Ok(())
+    }
+}
+
+/// A command wait outcome: only a timeout leaves the guest-side outcome unknown.
+enum RequestError {
+    TimedOut(String),
+    Failed(String),
+}
+
+impl RequestError {
+    fn into_message(self) -> String {
+        match self {
+            Self::TimedOut(message) | Self::Failed(message) => message,
+        }
     }
 }
 
@@ -1376,6 +1506,7 @@ impl Worker {
                 pending_len: 0,
                 pending_overflow: false,
                 terminal_cursor: 0,
+                late_reads: BTreeMap::new(),
                 status_cursor: 0,
                 last_status_query: Instant::now(),
                 persisted_packets: 0,
