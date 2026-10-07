@@ -45,6 +45,7 @@ impl Default for Settings {
 enum Confirm {
     Reset(String),
     Delete(String),
+    DeleteBase(String),
     Upload {
         source: PathBuf,
         destination: String,
@@ -461,6 +462,12 @@ impl MonitorApp {
             preferred_new_base(&self.snapshot, &self.settings.bundle).map(|base| base.id.clone());
         self.credentials.reset();
         self.create_open = true;
+    }
+
+    /// Start a new VM pinned to a specific installed base.
+    fn new_image_from(&mut self, base_identity: String) {
+        self.new_image();
+        self.draft.base_identity = Some(base_identity);
     }
 
     fn create_vm(&mut self) -> Result<(), String> {
@@ -1346,6 +1353,7 @@ impl MonitorApp {
     fn sidebar(&mut self, ctx: &egui::Context) {
         let mut selected_vm = None;
         let mut action = None;
+        let mut base_action: Option<(String, String)> = None;
         egui::SidePanel::left("vms")
             .default_width(210.0)
             .min_width(190.0)
@@ -1378,8 +1386,10 @@ impl MonitorApp {
                     }
                 });
                 ui.separator();
+                let list_budget = ui.available_height();
                 egui::ScrollArea::vertical()
                     .id_salt("vm_list")
+                    .max_height((list_budget * 0.55).max(80.0))
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         if self.snapshot.vms.is_empty() {
@@ -1433,7 +1443,131 @@ impl MonitorApp {
                             });
                         }
                     });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    let button_width =
+                        ui.spacing().interact_size.y + ui.spacing().button_padding.x * 2.0;
+                    let title_width =
+                        (ui.available_width() - button_width - ui.spacing().item_spacing.x)
+                            .max(0.0);
+                    ui.add_sized(
+                        [title_width, ui.spacing().interact_size.y],
+                        egui::Label::new(RichText::new("Base images").strong()).truncate(),
+                    )
+                    .on_hover_text("Installed base images");
+                    ui.menu_button(egui_phosphor::regular::PLUS, |ui| {
+                        if ui
+                            .add_enabled(
+                                self.snapshot.active_vm.is_none(),
+                                egui::Button::new("Import base…"),
+                            )
+                            .clicked()
+                        {
+                            self.import_open = true;
+                            ui.close_menu();
+                        }
+                        if ui.button("Download base…").clicked() {
+                            self.download_open = true;
+                            if !self.snapshot.remote_refreshing {
+                                self.send(Command::RefreshRemoteBases);
+                            }
+                            ui.close_menu();
+                        }
+                        if ui.button("Build base…").clicked() {
+                            self.build_open = true;
+                            ui.close_menu();
+                        }
+                    })
+                    .response
+                    .on_hover_text("Add base");
+                });
+                egui::ScrollArea::vertical()
+                    .id_salt("base_list")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if self.snapshot.bases.is_empty() {
+                            ui.label(RichText::new("No base images").color(theme::MUTED));
+                            if ui.button("Add base…").clicked() {
+                                self.download_open = true;
+                                if !self.snapshot.remote_refreshing {
+                                    self.send(Command::RefreshRemoteBases);
+                                }
+                            }
+                        }
+                        for base in &self.snapshot.bases {
+                            let dependents = self
+                                .snapshot
+                                .vms
+                                .iter()
+                                .filter(|vm| vm.base_identity.as_deref() == Some(base.id.as_str()))
+                                .count();
+                            let guest = base
+                                .guest
+                                .as_ref()
+                                .map_or("Linux 6.12.94".to_string(), |guest| guest.id.clone());
+                            let label =
+                                format!("{}  {}", egui_phosphor::regular::HARD_DRIVE, base.label);
+                            let response = ui
+                                .add_sized(
+                                    [ui.available_width(), self.settings.font_size + 14.0],
+                                    egui::Button::new(RichText::new(label))
+                                        .frame(false)
+                                        .truncate(),
+                                )
+                                .on_hover_text(format!(
+                                    "{}\n{}\n{:.1} GiB on disk · guest {guest} · used by {} VM(s)",
+                                    base.label,
+                                    base.directory.display(),
+                                    base.size_bytes as f64 / 1073741824.0,
+                                    dependents
+                                ));
+                            response.context_menu(|ui| {
+                                if ui.button("New VM from this base").clicked() {
+                                    base_action = Some((base.id.clone(), "New VM".to_string()));
+                                    ui.close_menu();
+                                }
+                                if ui.button("Open Directory").clicked() {
+                                    base_action =
+                                        Some((base.id.clone(), "Open Directory".to_string()));
+                                    ui.close_menu();
+                                }
+                                if ui
+                                    .add_enabled(
+                                        self.snapshot.active_vm.is_none(),
+                                        egui::Button::new("Delete base"),
+                                    )
+                                    .clicked()
+                                {
+                                    base_action = Some((base.id.clone(), "Delete".to_string()));
+                                    ui.close_menu();
+                                }
+                            });
+                        }
+                    });
             });
+        if let Some((identity, action)) = base_action {
+            match action.as_str() {
+                "New VM" => self.new_image_from(identity),
+                "Open Directory" => {
+                    if let Some(base) = self.snapshot.bases.iter().find(|base| base.id == identity)
+                    {
+                        match std::process::Command::new("xdg-open")
+                            .arg(&base.directory)
+                            .spawn()
+                        {
+                            Ok(mut child) => {
+                                std::thread::spawn(move || {
+                                    let _ = child.wait();
+                                });
+                            }
+                            Err(error) => self.status = format!("Open Directory: {error}"),
+                        }
+                    }
+                }
+                "Delete" => self.confirm = Some(Confirm::DeleteBase(identity)),
+                _ => {}
+            }
+        }
         if let Some(vm_id) = selected_vm {
             if self.selected.as_ref() != Some(&vm_id) {
                 self.selected = Some(vm_id);
@@ -2512,6 +2646,9 @@ impl MonitorApp {
                 Confirm::Delete(_) => {
                     "Delete this VM configuration and disk? Disk changes will be lost. Retained run recordings and terminal history are preserved."
                 }
+                Confirm::DeleteBase(_) => {
+                    "Delete this base image? This cannot be undone. VMs that reference it must be deleted first."
+                }
                 Confirm::Upload { .. } => "Overwrite the chosen guest path with this host file?",
                 Confirm::Nat { .. } => {
                     "Enable NAT? The guest can connect to the host network and Internet."
@@ -2527,7 +2664,7 @@ impl MonitorApp {
                 ui.horizontal(|ui| {
                     let enabled = !self.closing
                         && match confirm {
-                            Confirm::Reset(_) | Confirm::Delete(_) => {
+                            Confirm::Reset(_) | Confirm::Delete(_) | Confirm::DeleteBase(_) => {
                                 self.snapshot.active_vm.is_none()
                             }
                             Confirm::Upload { vm_id, .. } => {
@@ -2558,6 +2695,10 @@ impl MonitorApp {
                         }),
                         Confirm::Delete(vm_id) => self.send(Command::Delete {
                             vm_id,
+                            confirmed: true,
+                        }),
+                        Confirm::DeleteBase(identity) => self.send(Command::DeleteBase {
+                            identity,
                             confirmed: true,
                         }),
                         Confirm::Upload {
@@ -3441,6 +3582,7 @@ mod tests {
             min_ram_mib: 256,
             min_disk_gib: 1,
             fixed_display,
+            size_bytes: 0,
         }
     }
 
@@ -3808,6 +3950,7 @@ mod tests {
                 min_ram_mib: 2048,
                 min_disk_gib: 8,
                 fixed_display: true,
+                size_bytes: 0,
                 guest: Some(antinomie_monitor_core::GuestProfile {
                     id: "debian-xfce".into(),
                     label: "Debian 13 (Xfce)".into(),
@@ -3884,6 +4027,7 @@ mod tests {
                 min_ram_mib: 2048,
                 min_disk_gib: 8,
                 fixed_display: true,
+                size_bytes: 0,
                 guest: Some(antinomie_monitor_core::GuestProfile {
                     id: "debian-xfce".into(),
                     label: "Debian 13 (Xfce)".into(),
@@ -3983,6 +4127,7 @@ mod tests {
                         min_ram_mib: 2048,
                         min_disk_gib: 8,
                         fixed_display: true,
+                        size_bytes: 0,
                         guest: Some(antinomie_monitor_core::GuestProfile {
                             id: "debian-xfce".into(),
                             label: "Debian 13 (Xfce)".into(),

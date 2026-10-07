@@ -288,6 +288,7 @@ pub(crate) fn installed_bases(options: &BackendOptions) -> Result<Vec<BaseSummar
             min_disk_gib: bundle.guest.as_ref().map_or(1, |guest| guest.min_disk_gib),
             guest: bundle.guest,
             fixed_display: bundle.fixed_display,
+            size_bytes: fs::metadata(&bundle.base_disk).map_or(0, |meta| meta.len()),
         });
         if bases.len() > 128 {
             return Err("installed base catalog exceeds limit".into());

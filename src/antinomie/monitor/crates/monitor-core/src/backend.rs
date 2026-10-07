@@ -1022,6 +1022,45 @@ impl Worker {
                 });
                 Ok("base build started".into())
             }
+            Command::DeleteBase {
+                identity,
+                confirmed,
+            } => {
+                if !confirmed {
+                    return Err("base deletion requires confirmation".into());
+                }
+                if self.session.is_some() || self.snapshot.active_vm.is_some() {
+                    return Err("stop the VM before deleting a base".into());
+                }
+                if identity.len() != 64
+                    || !identity
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                {
+                    return Err("invalid base identity".into());
+                }
+                let dependents: Vec<&str> = self
+                    .snapshot
+                    .vms
+                    .iter()
+                    .filter(|vm| vm.base_identity.as_deref() == Some(identity.as_str()))
+                    .map(|vm| vm.name.as_str())
+                    .collect();
+                if !dependents.is_empty() {
+                    return Err(format!(
+                        "base is used by {} VM(s): {}",
+                        dependents.len(),
+                        dependents.join(", ")
+                    ));
+                }
+                let directory = self.options.data_dir.join("bases").join(&identity);
+                if !directory.is_dir() {
+                    return Err("unknown base".into());
+                }
+                fs::remove_dir_all(&directory).map_err(|e| e.to_string())?;
+                self.refresh_locations()?;
+                Ok("base deleted".into())
+            }
             Command::Save(mut vm) => {
                 storage::validate_vm(&vm)?;
                 vm.launch.validate_for(&self.options)?;

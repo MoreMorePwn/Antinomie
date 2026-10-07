@@ -383,6 +383,8 @@ pub struct BaseSummary {
     pub min_ram_mib: u32,
     pub min_disk_gib: u32,
     pub fixed_display: bool,
+    /// Size of the base disk image on disk, in bytes.
+    pub size_bytes: u64,
 }
 
 /// One base advertised by the remote catalog, flattened for the UI.
@@ -524,6 +526,11 @@ pub enum Command {
     /// Build a base locally (host Linux) from the configured workspace.
     BuildBase {
         profile: String,
+    },
+    /// Delete an installed base; blocked while any VM references it.
+    DeleteBase {
+        identity: String,
+        confirmed: bool,
     },
     Save(VmConfig),
     Rename {
