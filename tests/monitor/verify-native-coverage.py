@@ -346,8 +346,11 @@ def expected_result(case, result):
 
 def field_problems(expected, actual, observed, result=None):
     problems = []
+    seen = observed.get(expected["key"])
     for member in ("arg", "layout", "size", "captured", "declared", "status"):
         want = expected[member]
+        if want == "observed":
+            want = len(bytes.fromhex(seen)) if seen is not None else None
         want = U64_MAX if want == "max" else result if want == "result" else want
         if actual.get(member) != want:
             problems.append(f"{member} {actual.get(member)!r} != {want!r}")
@@ -390,7 +393,10 @@ def schema_report(fixture_dir, labeled, fields):
                     if name in recorded:
                         problems.append(f"duplicate field {name}")
                     recorded[name] = field
-                wanted = {(item["phase"], item["key"]): item for item in expected["fields"]}
+                observed = case.get("observed", {})
+                # A when_observed field exists exactly when the probe reported it.
+                wanted = {(item["phase"], item["key"]): item for item in expected["fields"]
+                          if not item.get("when_observed") or item["key"] in observed}
                 for name in sorted(set(recorded) - set(wanted)):
                     problems.append(f"unexpected field {name}")
                 for name, item in sorted(wanted.items()):

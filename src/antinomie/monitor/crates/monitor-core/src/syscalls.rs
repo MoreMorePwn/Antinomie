@@ -1030,6 +1030,47 @@ const KEYCTL_COMMANDS: &[(&str, u64)] = &[
     ("KEYCTL_WATCH_KEY", 32),
 ];
 
+// bpf commands named by the pinned UAPI `enum bpf_cmd` (aliases keep the first name).
+const BPF_COMMANDS: &[(&str, u64)] = &[
+    ("BPF_MAP_CREATE", 0),
+    ("BPF_MAP_LOOKUP_ELEM", 1),
+    ("BPF_MAP_UPDATE_ELEM", 2),
+    ("BPF_MAP_DELETE_ELEM", 3),
+    ("BPF_MAP_GET_NEXT_KEY", 4),
+    ("BPF_PROG_LOAD", 5),
+    ("BPF_OBJ_PIN", 6),
+    ("BPF_OBJ_GET", 7),
+    ("BPF_PROG_ATTACH", 8),
+    ("BPF_PROG_DETACH", 9),
+    ("BPF_PROG_TEST_RUN", 10),
+    ("BPF_PROG_GET_NEXT_ID", 11),
+    ("BPF_MAP_GET_NEXT_ID", 12),
+    ("BPF_PROG_GET_FD_BY_ID", 13),
+    ("BPF_MAP_GET_FD_BY_ID", 14),
+    ("BPF_OBJ_GET_INFO_BY_FD", 15),
+    ("BPF_PROG_QUERY", 16),
+    ("BPF_RAW_TRACEPOINT_OPEN", 17),
+    ("BPF_BTF_LOAD", 18),
+    ("BPF_BTF_GET_FD_BY_ID", 19),
+    ("BPF_TASK_FD_QUERY", 20),
+    ("BPF_MAP_LOOKUP_AND_DELETE_ELEM", 21),
+    ("BPF_MAP_FREEZE", 22),
+    ("BPF_BTF_GET_NEXT_ID", 23),
+    ("BPF_MAP_LOOKUP_BATCH", 24),
+    ("BPF_MAP_LOOKUP_AND_DELETE_BATCH", 25),
+    ("BPF_MAP_UPDATE_BATCH", 26),
+    ("BPF_MAP_DELETE_BATCH", 27),
+    ("BPF_LINK_CREATE", 28),
+    ("BPF_LINK_UPDATE", 29),
+    ("BPF_LINK_GET_FD_BY_ID", 30),
+    ("BPF_LINK_GET_NEXT_ID", 31),
+    ("BPF_ENABLE_STATS", 32),
+    ("BPF_ITER_CREATE", 33),
+    ("BPF_LINK_DETACH", 34),
+    ("BPF_PROG_BIND_MAP", 35),
+    ("BPF_TOKEN_CREATE", 36),
+];
+
 const PTRACE_OPTIONS: &[(&str, u64)] = &[
     ("PTRACE_O_TRACESYSGOOD", 0x1),
     ("PTRACE_O_TRACEFORK", 0x2),
@@ -1155,6 +1196,7 @@ pub fn selector_name(number: u64, index: usize, args: &[u64; 6]) -> Option<Strin
         (157, 0) => Some(named(PRCTL_OPTIONS, args[0] as u32 as u64, "option")),
         (157, 1) => prctl_suboption(args[0] as u32 as u64, args[1]),
         (250, 0) => Some(named(KEYCTL_COMMANDS, args[0] as u32 as u64, "command")),
+        (321, 0) => Some(named(BPF_COMMANDS, args[0] as u32 as u64, "command")),
         (179, 0) => Some(quota_command(args[0])),
         (443, 1) => Some(quota_command(args[1])),
         (54 | 55, 1) => Some(
@@ -1329,6 +1371,14 @@ mod tests {
             selector_name(443, 1, &args(3, (0x5808 << 8) | 2, 0)).as_deref(),
             Some("Q_XGETQSTATV / PRJQUOTA")
         );
+        assert_eq!(
+            selector_name(321, 0, &args(5, 0, 0)).as_deref(),
+            Some("BPF_PROG_LOAD")
+        );
+        assert_eq!(
+            selector_name(321, 0, &args(0x7fff, 0, 0)).as_deref(),
+            Some("Unknown command 0x7fff")
+        );
         let kexec = argument_flags(246, 3, (62 << 16) | 1).unwrap();
         assert_eq!(kexec.names, ["KEXEC_ARCH_X86_64", "KEXEC_ON_CRASH"]);
         assert_eq!(kexec.unknown_bits, 0);
@@ -1341,6 +1391,7 @@ mod tests {
             PRCTL_MM_OPTIONS,
             PTRACE_REQUESTS,
             KEYCTL_COMMANDS,
+            BPF_COMMANDS,
         ] {
             let mut values: Vec<_> = table.iter().map(|&(_, value)| value).collect();
             let count = values.len();

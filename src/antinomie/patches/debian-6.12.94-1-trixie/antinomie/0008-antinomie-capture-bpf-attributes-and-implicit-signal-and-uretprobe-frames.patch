@@ -1,0 +1,483 @@
+Description: antinomie: capture bpf attributes and implicit signal and uretprobe frames
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-07
+
+
+---
+diff --git a/kernel/antinomie/native_capture.c b/kernel/antinomie/native_capture.c
+index 0c50463f2..f23948696 100644
+--- a/kernel/antinomie/native_capture.c
++++ b/kernel/antinomie/native_capture.c
+@@ -1,4 +1,5 @@
+ // SPDX-License-Identifier: GPL-2.0-only
++#include <linux/bpf.h>
+ #include <linux/fs.h>
+ #include <linux/fdtable.h>
+ #include <linux/exportfs.h>
+@@ -62,6 +63,8 @@
+ #include <asm/ldt.h>
+ #include <asm/prctl.h>
+ #include <asm/user.h>
++#include <asm/fpu/types.h>
++#include <asm/sigframe.h>
+ 
+ #include "capture_api.h"
+ #include "native_capture.h"
+@@ -2550,6 +2553,434 @@ static void capture_rseq(struct ant_task *ctx, const u64 args[6], bool output, l
+ 	}
+ }
+ 
++/* Slice 2E: frames the kernel reads from the user stack instead of an
++ * argument. Their fields use index 255 and context.* keys.
++ */
++static void capture_rt_sigreturn(struct ant_task *ctx)
++{
++	unsigned long address = current_pt_regs()->sp - sizeof(long);
++	struct fxregs_state fx;
++	struct rt_sigframe frame;
++	struct _fpx_sw_bytes *sw = (struct _fpx_sw_bytes *)fx.sw_reserved;
++	enum ant_status status;
++	u64 fpstate, limit;
++	u32 magic2;
++
++	status = copy_from_user_nofault(&frame, (void __user *)address, sizeof(frame)) ?
++		ANT_COPY_FAULT : ANT_COMPLETE;
++	ant_capture_field(ctx, 255, "context.rt_sigframe", LAYOUT("rt_sigframe"), 3, address,
++			  &frame, sizeof(frame), sizeof(frame), status);
++	fpstate = (unsigned long)frame.uc.uc_mcontext.fpstate;
++	if (status != ANT_COMPLETE || !fpstate || ant_capture_lost(ctx))
++		return;
++	status = copy_from_user_nofault(&fx, (void __user *)(unsigned long)fpstate, sizeof(fx)) ?
++		ANT_COPY_FAULT : ANT_COMPLETE;
++	ant_capture_field(ctx, 255, "context.fpstate", LAYOUT("fxregs_state"), 3, fpstate, &fx,
++			  sizeof(fx), sizeof(fx), status);
++	/* check_xstate_in_sigframe(): if any check fails, the kernel ignores the
++	 * extension and restores the legacy state only, so nothing more is read.
++	 */
++	limit = min_t(u64, sw->extended_size, current->thread.fpu.fpstate->user_size);
++	if (status != ANT_COMPLETE || sw->magic1 != FP_XSTATE_MAGIC1 ||
++	    sw->xstate_size < sizeof(fx) + sizeof(struct xstate_header) ||
++	    sw->xstate_size > limit || ant_capture_lost(ctx) ||
++	    copy_from_user_nofault(&magic2, (void __user *)(unsigned long)
++				   (fpstate + sw->xstate_size), sizeof(magic2)) ||
++	    magic2 != FP_XSTATE_MAGIC2)
++		return;
++	ant_capture_field(ctx, 255, "context.fpstate.xstate", LAYOUT("xstate"), 3,
++			  fpstate + sizeof(fx), NULL, sw->xstate_size - sizeof(fx),
++			  sw->xstate_size - sizeof(fx), ANT_COMPLETE);
++}
++
++/* The uretprobe trampoline saves r11, rcx and rax at sp before the syscall. */
++static void capture_uretprobe(struct ant_task *ctx)
++{
++	ant_capture_field(ctx, 255, "context.uretprobe_regs", LAYOUT("uretprobe_regs"), 3,
++			  current_pt_regs()->sp, NULL, 3 * sizeof(unsigned long),
++			  3 * sizeof(unsigned long), ANT_COMPLETE);
++}
++
++/* Slice 2H: bpf(cmd, attr, size). Nested fields come from the snapshot of the
++ * attribute block taken here, never from a second read of user memory, except
++ * for lengths the kernel writes back, which are re-read at exit.
++ */
++#define ANT_BPF_MAX_INSNS 1000000	/* BPF_COMPLEXITY_LIMIT_INSNS */
++#define ANT_BPF_MAX_BTF (16 * 1024 * 1024)	/* BTF_MAX_SIZE, kernel/bpf/btf.c */
++#define ANT_BPF_REC_MIN 8		/* MIN_BPF_FUNCINFO_SIZE */
++#define ANT_BPF_REC_MAX 252		/* MAX_FUNCINFO_REC_SIZE */
++#define ANT_BPF_MULTI_MAX BIT(20)	/* MAX_KPROBE_MULTI_CNT / MAX_UPROBE_MULTI_CNT */
++
++struct ant_bpf_state {
++	union bpf_attr attr;
++	u32 size;
++	u32 key_size;
++	u32 value_size;
++	u32 batch_size;
++	bool map_known;
++	bool map_info;
++};
++
++/* Key, value and batch-token sizes as kernel/bpf/syscall.c computes them. */
++static void bpf_map_sizes(struct ant_bpf_state *state, u32 fd)
++{
++#ifdef CONFIG_BPF_SYSCALL
++	struct bpf_map *map = bpf_map_get(fd);
++
++	if (IS_ERR(map))
++		return;
++	state->map_known = true;
++	state->key_size = map->key_size;
++	switch (map->map_type) {
++	case BPF_MAP_TYPE_PERCPU_HASH: case BPF_MAP_TYPE_LRU_PERCPU_HASH:
++	case BPF_MAP_TYPE_PERCPU_ARRAY: case BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE:
++		state->value_size = round_up(map->value_size, 8) * num_possible_cpus();
++		break;
++	case BPF_MAP_TYPE_PERF_EVENT_ARRAY: case BPF_MAP_TYPE_CGROUP_ARRAY:
++	case BPF_MAP_TYPE_ARRAY_OF_MAPS: case BPF_MAP_TYPE_PROG_ARRAY:
++	case BPF_MAP_TYPE_HASH_OF_MAPS:
++		state->value_size = sizeof(u32);
++		break;
++	default:
++		state->value_size = map->value_size;
++	}
++	switch (map->map_type) {
++	case BPF_MAP_TYPE_HASH: case BPF_MAP_TYPE_PERCPU_HASH:
++	case BPF_MAP_TYPE_LRU_HASH: case BPF_MAP_TYPE_LRU_PERCPU_HASH:
++		state->batch_size = sizeof(u32);
++		break;
++	default:
++		state->batch_size = map->key_size;
++	}
++	bpf_map_put(map);
++#endif
++}
++
++static void bpf_buffer(struct ant_task *ctx, const char *key, const char *layout, u64 address,
++		       u64 count, u64 element, u64 ceiling)
++{
++	u64 size = element && count <= U64_MAX / element ? count * element : U64_MAX;
++
++	if (!address || ant_capture_lost(ctx))
++		return;
++	ant_capture_field(ctx, 1, key, layout, 1, address, NULL, min(size, ceiling), size,
++			  size > ceiling ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++}
++
++static void bpf_map_buffer(struct ant_task *ctx, struct ant_bpf_state *state, const char *key,
++			   u64 address, u64 count, u32 element)
++{
++	if (!address || ant_capture_lost(ctx))
++		return;
++	if (!state->map_known)
++		ant_capture_field(ctx, 1, key, "", 1, address, NULL, U64_MAX, U64_MAX,
++				  ANT_CONTEXT_MISSING);
++	else
++		bpf_buffer(ctx, key, "", address, count, element, MAX_RW_COUNT);
++}
++
++/* A length the kernel rewrote in the attribute block, if the caller's block
++ * covers it; recorded before the output it bounds.
++ */
++static bool bpf_rewritten(struct ant_task *ctx, struct ant_bpf_state *state, u64 attr,
++			  size_t offset, const char *key, u32 *value)
++{
++	enum ant_status status;
++
++	if (offset + sizeof(u32) > state->size || ant_capture_lost(ctx))
++		return false;
++	status = copy_from_user_nofault(value, (void __user *)(unsigned long)(attr + offset),
++					sizeof(*value)) ? ANT_COPY_FAULT : ANT_COMPLETE;
++	ant_capture_field(ctx, 1, key, LAYOUT("u32"), 3, attr + offset, value, sizeof(*value),
++			  sizeof(*value), status);
++	return status == ANT_COMPLETE;
++}
++
++static void bpf_log(struct ant_task *ctx, const char *key, u64 address, u32 size)
++{
++	/* The verifier writes its log on failure too; read back the string it wrote. */
++	if (address && size && !ant_capture_lost(ctx))
++		ant_capture_string(ctx, 1, key, address, size);
++}
++
++static void capture_bpf_link_create(struct ant_task *ctx, const union bpf_attr *a)
++{
++	u64 names, index, address;
++	char key[64];
++	u32 cnt;
++
++	switch (a->link_create.attach_type) {
++	case BPF_TRACE_KPROBE_MULTI: case BPF_TRACE_KPROBE_SESSION:
++		cnt = a->link_create.kprobe_multi.cnt;
++		names = a->link_create.kprobe_multi.syms;
++		bpf_buffer(ctx, "arg1.attr.syms", LAYOUT("char_ptr[]"), names, cnt, sizeof(u64),
++			   ANT_BPF_MULTI_MAX * sizeof(u64));
++		for (index = 0; names && cnt <= ANT_BPF_MULTI_MAX && index < cnt &&
++		     !ant_capture_lost(ctx); index++) {
++			if (copy_from_user_nofault(&address, (void __user *)(unsigned long)
++						   (names + index * sizeof(u64)), sizeof(address)))
++				break;
++			scnprintf(key, sizeof(key), "arg1.attr.syms[%llu]", index);
++			ant_capture_string(ctx, 1, key, address, KSYM_NAME_LEN);
++		}
++		bpf_buffer(ctx, "arg1.attr.addrs", LAYOUT("u64[]"),
++			   a->link_create.kprobe_multi.addrs, cnt, sizeof(u64),
++			   ANT_BPF_MULTI_MAX * sizeof(u64));
++		bpf_buffer(ctx, "arg1.attr.cookies", LAYOUT("u64[]"),
++			   a->link_create.kprobe_multi.cookies, cnt, sizeof(u64),
++			   ANT_BPF_MULTI_MAX * sizeof(u64));
++		return;
++	case BPF_TRACE_UPROBE_MULTI:
++		cnt = a->link_create.uprobe_multi.cnt;
++		if (a->link_create.uprobe_multi.path && !ant_capture_lost(ctx))
++			ant_capture_string(ctx, 1, "arg1.attr.path",
++					   a->link_create.uprobe_multi.path, PATH_MAX);
++		bpf_buffer(ctx, "arg1.attr.offsets", LAYOUT("u64[]"),
++			   a->link_create.uprobe_multi.offsets, cnt, sizeof(u64),
++			   ANT_BPF_MULTI_MAX * sizeof(u64));
++		bpf_buffer(ctx, "arg1.attr.ref_ctr_offsets", LAYOUT("u64[]"),
++			   a->link_create.uprobe_multi.ref_ctr_offsets, cnt, sizeof(u64),
++			   ANT_BPF_MULTI_MAX * sizeof(u64));
++		bpf_buffer(ctx, "arg1.attr.cookies", LAYOUT("u64[]"),
++			   a->link_create.uprobe_multi.cookies, cnt, sizeof(u64),
++			   ANT_BPF_MULTI_MAX * sizeof(u64));
++		return;
++	case BPF_TRACE_ITER:
++		bpf_buffer(ctx, "arg1.attr.iter_info", LAYOUT("bpf_iter_link_info"),
++			   a->link_create.iter_info, a->link_create.iter_info_len, 1, PAGE_SIZE);
++		return;
++	default:
++		return;
++	}
++}
++
++static void capture_bpf_entry(struct ant_task *ctx, struct ant_bpf_state *state, u32 cmd)
++{
++	const union bpf_attr *a = &state->attr;
++
++	switch (cmd) {
++	case BPF_MAP_LOOKUP_ELEM: case BPF_MAP_LOOKUP_AND_DELETE_ELEM:
++	case BPF_MAP_DELETE_ELEM: case BPF_MAP_UPDATE_ELEM: case BPF_MAP_GET_NEXT_KEY:
++		bpf_map_sizes(state, a->map_fd);
++		bpf_map_buffer(ctx, state, "arg1.attr.key", a->key, 1, state->key_size);
++		if (cmd == BPF_MAP_UPDATE_ELEM)
++			bpf_map_buffer(ctx, state, "arg1.attr.value", a->value, 1,
++				       state->value_size);
++		return;
++	case BPF_MAP_LOOKUP_BATCH: case BPF_MAP_LOOKUP_AND_DELETE_BATCH:
++	case BPF_MAP_UPDATE_BATCH: case BPF_MAP_DELETE_BATCH:
++		bpf_map_sizes(state, a->batch.map_fd);
++		bpf_map_buffer(ctx, state, "arg1.attr.in_batch", a->batch.in_batch, 1,
++			       state->batch_size);
++		if (cmd == BPF_MAP_UPDATE_BATCH || cmd == BPF_MAP_DELETE_BATCH)
++			bpf_map_buffer(ctx, state, "arg1.attr.keys", a->batch.keys, a->batch.count,
++				       state->key_size);
++		if (cmd == BPF_MAP_UPDATE_BATCH)
++			bpf_map_buffer(ctx, state, "arg1.attr.values", a->batch.values,
++				       a->batch.count, state->value_size);
++		return;
++	case BPF_PROG_LOAD:
++		bpf_buffer(ctx, "arg1.attr.insns", LAYOUT("bpf_insn[]"), a->insns, a->insn_cnt,
++			   sizeof(struct bpf_insn), ANT_BPF_MAX_INSNS * sizeof(struct bpf_insn));
++		if (a->license && !ant_capture_lost(ctx))
++			ant_capture_string(ctx, 1, "arg1.attr.license", a->license, 128);
++		if (a->func_info_rec_size >= ANT_BPF_REC_MIN &&
++		    a->func_info_rec_size <= ANT_BPF_REC_MAX)
++			bpf_buffer(ctx, "arg1.attr.func_info", LAYOUT("bpf_func_info[]"),
++				   a->func_info, a->func_info_cnt, a->func_info_rec_size,
++				   MAX_RW_COUNT);
++		if (a->line_info_rec_size >= ANT_BPF_REC_MIN &&
++		    a->line_info_rec_size <= ANT_BPF_REC_MAX)
++			bpf_buffer(ctx, "arg1.attr.line_info", LAYOUT("bpf_line_info[]"),
++				   a->line_info, a->line_info_cnt, a->line_info_rec_size,
++				   MAX_RW_COUNT);
++		bpf_buffer(ctx, "arg1.attr.core_relos", LAYOUT("bpf_core_relo[]"), a->core_relos,
++			   a->core_relo_cnt, a->core_relo_rec_size, MAX_RW_COUNT);
++		/* Linux 6.12 has no fd_array count, so its extent is unknown. */
++		if (a->fd_array)
++			capture_gap(ctx, "bpf.fd_array_unbounded", ANT_NO_DECODER);
++		return;
++	case BPF_BTF_LOAD:
++		bpf_buffer(ctx, "arg1.attr.btf", "", a->btf, a->btf_size, 1, ANT_BPF_MAX_BTF);
++		return;
++	case BPF_OBJ_PIN: case BPF_OBJ_GET:
++		if (!ant_capture_lost(ctx))
++			ant_capture_string(ctx, 1, "arg1.attr.pathname", a->pathname, PATH_MAX);
++		return;
++	case BPF_PROG_TEST_RUN:
++		bpf_buffer(ctx, "arg1.attr.data_in", "", a->test.data_in, a->test.data_size_in, 1,
++			   MAX_RW_COUNT);
++		bpf_buffer(ctx, "arg1.attr.ctx_in", "", a->test.ctx_in, a->test.ctx_size_in, 1,
++			   MAX_RW_COUNT);
++		return;
++	case BPF_OBJ_GET_INFO_BY_FD:
++		bpf_map_sizes(state, a->info.bpf_fd);
++		state->map_info = state->map_known;
++		/* Pointers inside the info structures are not followed. */
++		capture_gap(ctx, "bpf.info_nested", ANT_NO_DECODER);
++		return;
++	case BPF_RAW_TRACEPOINT_OPEN:
++		if (a->raw_tracepoint.name && !ant_capture_lost(ctx))
++			ant_capture_string(ctx, 1, "arg1.attr.name", a->raw_tracepoint.name, 128);
++		return;
++	case BPF_LINK_CREATE:
++		capture_bpf_link_create(ctx, a);
++		return;
++	default:
++		return;
++	}
++}
++
++static void capture_bpf_exit(struct ant_task *ctx, struct ant_bpf_state *state, u32 cmd,
++			     u64 attr, long result)
++{
++	const union bpf_attr *a = &state->attr;
++	u32 count;
++
++	switch (cmd) {
++	case BPF_MAP_LOOKUP_ELEM: case BPF_MAP_LOOKUP_AND_DELETE_ELEM:
++		if (result == 0)
++			bpf_map_buffer(ctx, state, "arg1.attr.value", a->value, 1,
++				       state->value_size);
++		return;
++	case BPF_MAP_GET_NEXT_KEY:
++		if (result == 0)
++			bpf_map_buffer(ctx, state, "arg1.attr.next_key", a->next_key, 1,
++				       state->key_size);
++		return;
++	case BPF_MAP_LOOKUP_BATCH: case BPF_MAP_LOOKUP_AND_DELETE_BATCH:
++		/* -ENOENT reports the end of the map after copying what was found. */
++		if ((result != 0 && result != -ENOENT) ||
++		    !bpf_rewritten(ctx, state, attr, offsetof(union bpf_attr, batch.count),
++				   "arg1.attr.count", &count))
++			return;
++		count = min(count, a->batch.count);
++		bpf_map_buffer(ctx, state, "arg1.attr.out_batch", a->batch.out_batch, 1,
++			       state->batch_size);
++		bpf_map_buffer(ctx, state, "arg1.attr.keys", a->batch.keys, count, state->key_size);
++		bpf_map_buffer(ctx, state, "arg1.attr.values", a->batch.values, count,
++			       state->value_size);
++		return;
++	case BPF_PROG_LOAD:
++		bpf_log(ctx, "arg1.attr.log_buf", a->log_buf, a->log_size);
++		return;
++	case BPF_BTF_LOAD:
++		bpf_log(ctx, "arg1.attr.btf_log_buf", a->btf_log_buf, a->btf_log_size);
++		return;
++	case BPF_PROG_TEST_RUN:
++		if (result)
++			return;
++		if (a->test.data_out &&
++		    bpf_rewritten(ctx, state, attr, offsetof(union bpf_attr, test.data_size_out),
++				  "arg1.attr.data_size_out", &count))
++			bpf_buffer(ctx, "arg1.attr.data_out", "", a->test.data_out,
++				   min(count, a->test.data_size_out), 1, MAX_RW_COUNT);
++		if (a->test.ctx_out &&
++		    bpf_rewritten(ctx, state, attr, offsetof(union bpf_attr, test.ctx_size_out),
++				  "arg1.attr.ctx_size_out", &count))
++			bpf_buffer(ctx, "arg1.attr.ctx_out", "", a->test.ctx_out,
++				   min(count, a->test.ctx_size_out), 1, MAX_RW_COUNT);
++		return;
++	case BPF_OBJ_GET_INFO_BY_FD:
++		if (result ||
++		    !bpf_rewritten(ctx, state, attr, offsetof(union bpf_attr, info.info_len),
++				   "arg1.attr.info_len", &count))
++			return;
++		bpf_buffer(ctx, "arg1.attr.info",
++			   state->map_info ? LAYOUT("bpf_map_info") : LAYOUT("bpf_info"),
++			   a->info.info, min(count, a->info.info_len), 1, PAGE_SIZE);
++		return;
++	case BPF_PROG_QUERY:
++		if (result ||
++		    !bpf_rewritten(ctx, state, attr, offsetof(union bpf_attr, query.prog_cnt),
++				   "arg1.attr.prog_cnt", &count))
++			return;
++		count = min(count, a->query.prog_cnt);
++		bpf_buffer(ctx, "arg1.attr.prog_ids", LAYOUT("u32[]"), a->query.prog_ids, count,
++			   sizeof(u32), MAX_RW_COUNT);
++		bpf_buffer(ctx, "arg1.attr.prog_attach_flags", LAYOUT("u32[]"),
++			   a->query.prog_attach_flags, count, sizeof(u32), MAX_RW_COUNT);
++		bpf_buffer(ctx, "arg1.attr.link_ids", LAYOUT("u32[]"), a->query.link_ids, count,
++			   sizeof(u32), MAX_RW_COUNT);
++		bpf_buffer(ctx, "arg1.attr.link_attach_flags", LAYOUT("u32[]"),
++			   a->query.link_attach_flags, count, sizeof(u32), MAX_RW_COUNT);
++		return;
++	case BPF_TASK_FD_QUERY:
++		if (!result && a->task_fd_query.buf &&
++		    bpf_rewritten(ctx, state, attr, offsetof(union bpf_attr, task_fd_query.buf_len),
++				  "arg1.attr.buf_len", &count) && !ant_capture_lost(ctx))
++			ant_capture_string(ctx, 1, "arg1.attr.buf", a->task_fd_query.buf,
++					   min(count + 1, a->task_fd_query.buf_len));
++		return;
++	default:
++		return;
++	}
++}
++
++static bool bpf_known_command(u32 cmd)
++{
++	switch (cmd) {
++	case BPF_MAP_CREATE: case BPF_MAP_LOOKUP_ELEM: case BPF_MAP_UPDATE_ELEM:
++	case BPF_MAP_DELETE_ELEM: case BPF_MAP_GET_NEXT_KEY: case BPF_PROG_LOAD:
++	case BPF_OBJ_PIN: case BPF_OBJ_GET: case BPF_PROG_ATTACH: case BPF_PROG_DETACH:
++	case BPF_PROG_TEST_RUN: case BPF_PROG_GET_NEXT_ID: case BPF_MAP_GET_NEXT_ID:
++	case BPF_PROG_GET_FD_BY_ID: case BPF_MAP_GET_FD_BY_ID: case BPF_OBJ_GET_INFO_BY_FD:
++	case BPF_PROG_QUERY: case BPF_RAW_TRACEPOINT_OPEN: case BPF_BTF_LOAD:
++	case BPF_BTF_GET_FD_BY_ID: case BPF_TASK_FD_QUERY: case BPF_MAP_LOOKUP_AND_DELETE_ELEM:
++	case BPF_MAP_FREEZE: case BPF_BTF_GET_NEXT_ID: case BPF_MAP_LOOKUP_BATCH:
++	case BPF_MAP_LOOKUP_AND_DELETE_BATCH: case BPF_MAP_UPDATE_BATCH:
++	case BPF_MAP_DELETE_BATCH: case BPF_LINK_CREATE: case BPF_LINK_UPDATE:
++	case BPF_LINK_GET_FD_BY_ID: case BPF_LINK_GET_NEXT_ID: case BPF_ENABLE_STATS:
++	case BPF_ITER_CREATE: case BPF_LINK_DETACH: case BPF_PROG_BIND_MAP:
++	case BPF_TOKEN_CREATE:
++		return true;
++	default:
++		return false;
++	}
++}
++
++static void capture_bpf(struct ant_task *ctx, const u64 args[6], bool output, long result)
++{
++	struct ant_bpf_state *state;
++	enum ant_status status;
++	u32 cmd = args[0], size = args[2];
++	u64 copied;
++
++	if (output) {
++		state = ant_capture_state(ctx);
++		if (state && !ant_capture_lost(ctx))
++			capture_bpf_exit(ctx, state, cmd, args[1], result);
++		return;
++	}
++	if (size > PAGE_SIZE) {
++		ant_capture_field(ctx, 1, "arg1.attr", LAYOUT("bpf_attr"), 3, args[1], NULL,
++				  size, size, ANT_INVALID_EXTENT);
++		return;
++	}
++	state = kzalloc(sizeof(*state), GFP_NOWAIT);
++	copied = min_t(u64, size, sizeof(state->attr));
++	status = !state ? ANT_RESOURCE_EXHAUSTED :
++		copy_from_user_nofault(&state->attr, (void __user *)(unsigned long)args[1],
++				       copied) ? ANT_COPY_FAULT : ANT_COMPLETE;
++	ant_capture_field(ctx, 1, "arg1.attr", bpf_known_command(cmd) ? LAYOUT("bpf_attr") : "",
++			  3, args[1], state ? &state->attr : NULL, copied, size, status);
++	if (size > sizeof(state->attr) && !ant_capture_lost(ctx))
++		ant_capture_field(ctx, 1, "arg1.attr.extension", "", 1,
++				  args[1] + sizeof(state->attr), NULL,
++				  size - sizeof(state->attr), size - sizeof(state->attr),
++				  ANT_COMPLETE);
++	if (!bpf_known_command(cmd))
++		capture_gap(ctx, "bpf.unknown_selector", ANT_NO_DECODER);
++	if (status != ANT_COMPLETE || !bpf_known_command(cmd)) {
++		kfree(state);
++		return;
++	}
++	state->size = size;
++	ant_capture_set_state(ctx, state, release_allocation);
++	if (!ant_capture_lost(ctx))
++		capture_bpf_entry(ctx, state, cmd);
++}
++
+ /* Socket options. The table below was reviewed against the pinned
+  * net/core/sock.c, net/ipv4/ip_sockglue.c, net/ipv6/ipv6_sockglue.c and
+  * net/ipv4/tcp.c handlers. A (level, optname) pair absent from it is still
+@@ -2977,10 +3408,17 @@ u8 ant_native_capture(struct ant_task *ctx, u64 nr, const u64 args[6],
+ 	case 250:
+ 		capture_keyctl(ctx, args, output, result);
+ 		return ANT_CAPTURE_OWNED | BIT(1) | BIT(2) | BIT(3) | BIT(4);
+-	case 15: case 335:
++	case 15:
++		if (!output)
++			capture_rt_sigreturn(ctx);
++		return ANT_CAPTURE_OWNED;
++	case 335:
+ 		if (!output)
+-			capture_gap(ctx, "schema.arch_context", ANT_CONTEXT_MISSING);
+-		return 0;
++			capture_uretprobe(ctx);
++		return ANT_CAPTURE_OWNED;
++	case 321:
++		capture_bpf(ctx, args, output, result);
++		return ANT_CAPTURE_OWNED | BIT(1);
+ 	case 72:
+ 		capture_fcntl(ctx, args, output, result);
+ 		return ANT_CAPTURE_OWNED | BIT(2);

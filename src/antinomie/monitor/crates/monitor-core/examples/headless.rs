@@ -236,6 +236,43 @@ fn run() -> Result<(), String> {
     })?;
     wait_command(&backend, id, &mut snapshot, &mut terminal, 20)?;
     terminal_until(&backend, b"PASS", &mut snapshot, &mut terminal)?;
+    let main_run = snapshot.runs.last().ok_or("run missing")?.id.clone();
+    // The same probe then runs as root for the privileged bpf and uretprobe
+    // cases (contract revision 5); quota tests stop after the main run.
+    let mut root_run = None;
+    if test_quota.is_none() {
+        let main_terminal = std::mem::take(&mut terminal);
+        let id = backend.send(Command::Execute(ExecRequest {
+            path: "/tmp/antinomie-probe".into(),
+            args: vec!["--root-bpf".into()],
+            env: vec!["PATH=/bin:/sbin".into(), "ANT_PROBE=verified".into()],
+            uid: 0,
+            gid: 0,
+            ..ExecRequest::default()
+        }))?;
+        wait_command(&backend, id, &mut snapshot, &mut terminal, 20)?;
+        terminal_until(&backend, b"NATIVE PASS", &mut snapshot, &mut terminal)?;
+        // The snapshot's run order is not launch order, and it may lag the terminal;
+        // find the root run by its request once the snapshot includes it.
+        let until = Instant::now() + Duration::from_secs(10);
+        while root_run.is_none() {
+            while let Some(n) = backend.try_recv() {
+                if let Notification::Snapshot(s) = n {
+                    snapshot = s;
+                }
+            }
+            root_run = snapshot
+                .runs
+                .iter()
+                .find(|run| run.request.args.iter().any(|arg| arg == "--root-bpf"))
+                .map(|run| run.id.clone());
+            if root_run.is_none() && Instant::now() > until {
+                return Err("root run missing from snapshot".into());
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        terminal = main_terminal;
+    }
     let id = backend.send(Command::RecorderStats)?;
     let recorder = wait_command(&backend, id, &mut snapshot, &mut terminal, 10)?;
     let id = backend.send(Command::Stop)?;
@@ -249,7 +286,16 @@ fn run() -> Result<(), String> {
     if snapshot.state != VmState::Stopped {
         return Err("VM did not stop".into());
     }
-    let directory = &snapshot.runs.last().ok_or("run capture missing")?.directory;
+    let run_directory = |id: &str| {
+        snapshot
+            .runs
+            .iter()
+            .find(|run| run.id == id)
+            .map(|run| run.directory.clone())
+            .ok_or("run capture missing")
+    };
+    let directory = &run_directory(&main_run)?;
+    let root_directory = root_run.as_deref().map(run_directory).transpose()?;
     let recording = open_recording(directory).map_err(|e| e.to_string())?;
     if recording.events.is_empty() {
         return Err("probe produced no syscall events".into());
@@ -296,7 +342,7 @@ fn run() -> Result<(), String> {
     }
     println!(
         "{}",
-        serde_json::json!({"vm_id":vm_id,"capture_dir":directory,"event_count":recording.events.len(),"complete_count":recording.events.iter().filter(|e|e.complete).count(),"terminal":String::from_utf8_lossy(&terminal),"recorder":recorder,"health":snapshot.health,"manifest":recording.manifest,"test_quota_size":test_quota})
+        serde_json::json!({"vm_id":vm_id,"capture_dir":directory,"root_capture_dir":root_directory,"event_count":recording.events.len(),"complete_count":recording.events.iter().filter(|e|e.complete).count(),"terminal":String::from_utf8_lossy(&terminal),"recorder":recorder,"health":snapshot.health,"manifest":recording.manifest,"test_quota_size":test_quota})
     );
     Ok(())
 }

@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/aio_abi.h>
+#include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/futex.h>
 #include <linux/dqblk_xfs.h>
@@ -11,6 +12,7 @@
 #include <linux/kexec.h>
 #include <linux/keyctl.h>
 #include <linux/openat2.h>
+#include <linux/perf_event.h>
 #include <linux/prctl.h>
 #include <linux/seccomp.h>
 #include <asm/ldt.h>
@@ -138,7 +140,7 @@ struct pending_case {
     int expected, error;
     uint64_t started_ns, finished_ns;
     size_t used;
-    char observed[8192];
+    char observed[65536];
 };
 static __thread struct pending_case pending;
 
@@ -702,6 +704,323 @@ static void slice_2c_cases(void)
             !pthread_join(thread, NULL), "rseq thread");
 }
 
+/* Slice 2H, unprivileged part: map creation and program load are refused, but
+ * their attribute blocks and program inputs are still recorded.
+ */
+static const struct bpf_insn return_zero[2] = {
+    {.code = BPF_ALU64 | BPF_MOV | BPF_K, .dst_reg = BPF_REG_0, .imm = 0},
+    {.code = BPF_JMP | BPF_EXIT},
+};
+
+#define BPF_CASE(label, expected, command, attr, size) ({ \
+    union bpf_attr bpf_case_entry = (attr); \
+    CALL(label, bpf, expected, command, &(attr), size); \
+    observe("arg1.attr", &bpf_case_entry, size); \
+    pending.value; \
+})
+
+static void bpf_unprivileged_cases(void)
+{
+    union bpf_attr attr;
+
+    memset(&attr, 0, sizeof(attr));
+    attr.map_type = BPF_MAP_TYPE_ARRAY;
+    attr.key_size = 4;
+    attr.value_size = 8;
+    attr.max_entries = 4;
+    strcpy(attr.map_name, "ant_array");
+    BPF_CASE("bpf.map_create_unprivileged", EPERM, BPF_MAP_CREATE, attr, 72);
+    report();
+    memset(&attr, 0, sizeof(attr));
+    attr.prog_type = BPF_PROG_TYPE_SOCKET_FILTER;
+    attr.insn_cnt = 2;
+    attr.insns = (uintptr_t)return_zero;
+    attr.license = (uintptr_t)"GPL";
+    BPF_CASE("bpf.prog_load_unprivileged", EPERM, BPF_PROG_LOAD, attr, 40);
+    report();
+    memset(&attr, 0, sizeof(attr));
+    attr.map_fd = 0x414e5449;
+    BPF_CASE("bpf.unknown", EINVAL, 0x7fff, attr, 16);
+    report();
+}
+
+/* Slice 2E: the handler copies its signal frame and FPU state just before
+ * returning through the trampoline's rt_sigreturn.
+ */
+static unsigned char signal_frame[440], signal_fx[512], signal_xstate[16384];
+static size_t signal_xstate_len;
+
+static void frame_handler(int signal, siginfo_t *info, void *context)
+{
+    ucontext_t *uc = context;
+    const unsigned char *fp = (const unsigned char *)uc->uc_mcontext.fpregs;
+    uint32_t sw[6];
+
+    (void)signal; (void)info;
+    memcpy(signal_frame, (const unsigned char *)uc - sizeof(long), sizeof(signal_frame));
+    signal_xstate_len = 0;
+    if (!fp)
+        return;
+    memcpy(signal_fx, fp, sizeof(signal_fx));
+    memcpy(sw, fp + 464, sizeof(sw));          /* fxregs_state.sw_reserved */
+    /* Mirror the kernel: below 512 + 64 bytes, or without FP_XSTATE_MAGIC2 at
+     * the end, the extension is ignored and the legacy state is restored.
+     */
+    if (sw[0] == 0x46505853U && sw[4] >= 576 && sw[4] - 512 <= sizeof(signal_xstate) &&
+        !memcmp(fp + sw[4], "\x45\x58\x50\x46", 4)) {
+        signal_xstate_len = sw[4] - 512;
+        memcpy(signal_xstate, fp + 512, signal_xstate_len);
+    }
+}
+
+static void rt_sigreturn_case(void)
+{
+    struct sigaction action = {.sa_sigaction = frame_handler, .sa_flags = SA_SIGINFO};
+    struct sigaction previous;
+
+    require(sigaction(SIGUSR2, &action, &previous) == 0, "frame handler");
+    pending = (struct pending_case){.label = "rt_sigreturn.handler_return",
+                                    .name = "rt_sigreturn", .nr = SYS_rt_sigreturn};
+    pending.started_ns = monotonic_ns();
+    raise(SIGUSR2);
+    pending.finished_ns = monotonic_ns();
+    observe("context.rt_sigframe", signal_frame, sizeof(signal_frame));
+    observe("context.fpstate", signal_fx, sizeof(signal_fx));
+    if (signal_xstate_len)
+        observe("context.fpstate.xstate", signal_xstate, signal_xstate_len);
+    report();
+    require(sigaction(SIGUSR2, &previous, NULL) == 0, "restore SIGUSR2");
+}
+
+/* Root run (--root-bpf): privileged bpf and a real uretprobe. Every map,
+ * program, BTF object and perf event is closed before NATIVE PASS.
+ */
+__attribute__((noinline)) int ant_uretprobe_target(void)
+{
+    __asm__ volatile("" ::: "memory");
+    return 42;
+}
+
+static int read_number(const char *path, const char *prefix)
+{
+    char text[64] = {0};
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+
+    require(fd >= 0 && read(fd, text, sizeof(text) - 1) > 0, path);
+    close(fd);
+    require(!strncmp(text, prefix, strlen(prefix)), path);
+    return atoi(text + strlen(prefix));
+}
+
+static uint64_t file_offset_of(const void *address)
+{
+    char line[512];
+    FILE *maps = fopen("/proc/self/maps", "re");
+    uint64_t start, end, offset, result = 0;
+
+    require(maps != NULL, "process maps");
+    while (fgets(line, sizeof(line), maps)) {
+        if (sscanf(line, "%lx-%lx %*s %lx", &start, &end, &offset) == 3 &&
+            (uintptr_t)address >= start && (uintptr_t)address < end) {
+            result = (uintptr_t)address - start + offset;
+            break;
+        }
+    }
+    fclose(maps);
+    require(result != 0, "probe function mapping");
+    return result;
+}
+
+static void uretprobe_case(void)
+{
+    struct perf_event_attr event;
+    char path[256];
+    ssize_t length = readlink("/proc/self/exe", path, sizeof(path) - 1);
+    int fd, value;
+
+    require(length > 0, "probe path");
+    path[length] = 0;
+    memset(&event, 0, sizeof(event));
+    event.size = sizeof(event);
+    event.type = read_number("/sys/bus/event_source/devices/uprobe/type", "");
+    event.config = 1ULL << read_number("/sys/bus/event_source/devices/uprobe/format/retprobe",
+                                       "config:");
+    event.config1 = (uintptr_t)path;
+    event.config2 = file_offset_of((const void *)ant_uretprobe_target);
+    fd = TEST(perf_event_open, &event, 0, -1, -1, PERF_FLAG_FD_CLOEXEC);
+    require(fd >= 0, "uprobe return probe");
+    pending = (struct pending_case){.label = "uretprobe.return_value", .name = "uretprobe",
+                                    .nr = 335};
+    pending.started_ns = monotonic_ns();
+    value = ant_uretprobe_target();
+    pending.finished_ns = monotonic_ns();
+    pending.value = value;
+    require(value == 42, "probed function result");
+    report();
+    TEST(close, fd);
+}
+
+static unsigned possible_cpus(void)
+{
+    char text[64] = {0};
+    unsigned first, last;
+    int fd = open("/sys/devices/system/cpu/possible", O_RDONLY | O_CLOEXEC);
+
+    require(fd >= 0 && read(fd, text, sizeof(text) - 1) > 0, "possible CPUs");
+    close(fd);
+    if (sscanf(text, "%u-%u", &first, &last) == 2)
+        return last - first + 1;
+    return 1;
+}
+
+static int root_bpf_mode(void)
+{
+    static const unsigned char btf_blob[45] = {
+        0x9f, 0xeb, 1, 0, 24, 0, 0, 0,        /* magic, version, flags, hdr_len */
+        0, 0, 0, 0, 16, 0, 0, 0,              /* type_off 0, type_len 16 */
+        16, 0, 0, 0, 5, 0, 0, 0,              /* str_off 16, str_len 5 */
+        1, 0, 0, 0, 0, 0, 0, 1, 4, 0, 0, 0,   /* "int": BTF_KIND_INT, size 4 */
+        32, 0, 0, 0,                          /* 32-bit signed encoding 0 */
+        0, 'i', 'n', 't', 0,
+    };
+    static const struct bpf_insn lone_exit[1] = {{.code = BPF_JMP | BPF_EXIT}};
+    unsigned char value[8], values[32], percpu[8 * 256], data_in[64] = {0}, data_out[128];
+    unsigned char info[64];
+    char log[4096];
+    uint32_t key, next_key, batch_out, keys[4], data_size_out, info_len;
+    union bpf_attr attr;
+    int map, percpu_map, program, btf;
+    unsigned cpus = possible_cpus();
+    long result;
+
+    require(getuid() == 0, "root run");
+    require(cpus <= 256, "possible CPU bound");
+    memset(&attr, 0, sizeof(attr));
+    attr.map_type = BPF_MAP_TYPE_ARRAY;
+    attr.key_size = 4;
+    attr.value_size = 8;
+    attr.max_entries = 4;
+    strcpy(attr.map_name, "ant_array");
+    map = BPF_CASE("bpf.map_create_array", 0, BPF_MAP_CREATE, attr, 72);
+    report();
+    require(map >= 0, "array map");
+    key = 1;
+    memcpy(value, "ANTIMAP1", 8);
+    memset(&attr, 0, sizeof(attr));
+    attr.map_fd = map;
+    attr.key = (uintptr_t)&key;
+    attr.value = (uintptr_t)value;
+    attr.flags = BPF_ANY;
+    BPF_CASE("bpf.map_update", 0, BPF_MAP_UPDATE_ELEM, attr, 32);
+    report();
+    memset(value, 0, sizeof(value));
+    BPF_CASE("bpf.map_lookup", 0, BPF_MAP_LOOKUP_ELEM, attr, 32);
+    report();
+    require(!memcmp(value, "ANTIMAP1", 8), "map lookup value");
+    attr.next_key = (uintptr_t)&next_key;
+    BPF_CASE("bpf.map_get_next_key", 0, BPF_MAP_GET_NEXT_KEY, attr, 32);
+    report();
+    attr.value = 0;
+    BPF_CASE("bpf.map_delete_array", EINVAL, BPF_MAP_DELETE_ELEM, attr, 32);
+    report();
+    memset(&attr, 0, sizeof(attr));
+    attr.batch.map_fd = map;
+    attr.batch.out_batch = (uintptr_t)&batch_out;
+    attr.batch.keys = (uintptr_t)keys;
+    attr.batch.values = (uintptr_t)values;
+    attr.batch.count = 4;
+    result = BPF_CASE("bpf.map_lookup_batch", 0, BPF_MAP_LOOKUP_BATCH, attr, 56);
+    if (result < 0 && pending.error == ENOENT)
+        pending.expected = ENOENT;           /* end of map after copying all entries */
+    observe("arg1.attr.out_batch", &batch_out, sizeof(batch_out));
+    observe("arg1.attr.values", values, sizeof(values));
+    report();
+
+    memset(&attr, 0, sizeof(attr));
+    attr.map_type = BPF_MAP_TYPE_PERCPU_ARRAY;
+    attr.key_size = 4;
+    attr.value_size = 8;
+    attr.max_entries = 1;
+    percpu_map = TEST(bpf, BPF_MAP_CREATE, &attr, 72);
+    require(percpu_map >= 0, "per-CPU map");
+    key = 0;
+    memset(&attr, 0, sizeof(attr));
+    attr.map_fd = percpu_map;
+    attr.key = (uintptr_t)&key;
+    attr.value = (uintptr_t)percpu;
+    BPF_CASE("bpf.percpu_lookup", 0, BPF_MAP_LOOKUP_ELEM, attr, 32);
+    observe("arg1.attr.value", percpu, 8 * cpus);
+    report();
+
+    memset(&attr, 0, sizeof(attr));
+    memset(log, 0, sizeof(log));
+    attr.prog_type = BPF_PROG_TYPE_SOCKET_FILTER;
+    attr.insn_cnt = 2;
+    attr.insns = (uintptr_t)return_zero;
+    attr.license = (uintptr_t)"GPL";
+    attr.log_level = 1;
+    attr.log_size = sizeof(log);
+    attr.log_buf = (uintptr_t)log;
+    program = BPF_CASE("bpf.prog_load", 0, BPF_PROG_LOAD, attr, 40);
+    observe("arg1.attr.log_buf", log, strlen(log) + 1);
+    report();
+    require(program >= 0, "socket filter");
+    memset(log, 0, sizeof(log));
+    attr.insn_cnt = 1;
+    attr.insns = (uintptr_t)lone_exit;
+    BPF_CASE("bpf.prog_load_rejected", EACCES, BPF_PROG_LOAD, attr, 40);
+    observe("arg1.attr.log_buf", log, strlen(log) + 1);
+    report();
+
+    memset(&attr, 0, sizeof(attr));
+    attr.test.prog_fd = program;
+    attr.test.data_size_in = sizeof(data_in);
+    attr.test.data_size_out = sizeof(data_out);
+    attr.test.data_in = (uintptr_t)data_in;
+    attr.test.data_out = (uintptr_t)data_out;
+    BPF_CASE("bpf.prog_test_run", 0, BPF_PROG_TEST_RUN, attr, 32);
+    observe("arg1.attr.data_in", data_in, sizeof(data_in));
+    data_size_out = attr.test.data_size_out;
+    observe("arg1.attr.data_size_out", &data_size_out, sizeof(data_size_out));
+    observe("arg1.attr.data_out", data_out,
+            data_size_out < sizeof(data_out) ? data_size_out : sizeof(data_out));
+    report();
+
+    memset(&attr, 0, sizeof(attr));
+    attr.info.bpf_fd = map;
+    attr.info.info_len = sizeof(info);
+    attr.info.info = (uintptr_t)info;
+    BPF_CASE("bpf.obj_get_info_map", 0, BPF_OBJ_GET_INFO_BY_FD, attr, 16);
+    info_len = attr.info.info_len;
+    observe("arg1.attr.info", info, info_len < sizeof(info) ? info_len : sizeof(info));
+    report();
+
+    memset(&attr, 0, sizeof(attr));
+    attr.pathname = (uintptr_t)"/sys/fs/bpf/ant-missing";
+    BPF_CASE("bpf.obj_get_missing", ENOENT, BPF_OBJ_GET, attr, 16);
+    report();
+    memset(&attr, 0, sizeof(attr));
+    attr.raw_tracepoint.name = (uintptr_t)"sched_switch";
+    attr.raw_tracepoint.prog_fd = program;
+    BPF_CASE("bpf.raw_tracepoint_bad_prog", EINVAL, BPF_RAW_TRACEPOINT_OPEN, attr, 12);
+    report();
+    memset(&attr, 0, sizeof(attr));
+    attr.btf = (uintptr_t)btf_blob;
+    attr.btf_size = sizeof(btf_blob);
+    btf = BPF_CASE("bpf.btf_load", 0, BPF_BTF_LOAD, attr, 28);
+    observe("arg1.attr.btf", btf_blob, sizeof(btf_blob));
+    report();
+
+    uretprobe_case();
+    if (btf >= 0) TEST(close, btf);
+    TEST(close, program); TEST(close, percpu_map); TEST(close, map);
+    printf("NATIVE READY failures=%u\n", failures);
+    if (failures)
+        return 1;
+    puts("NATIVE PASS");
+    return 0;
+}
+
 /* Slice 2G: rows without an entry point in the pinned syscall_64.tbl. */
 static void unavailable_cases(void)
 {
@@ -995,11 +1314,14 @@ int main(int argc, char **argv)
         if (!mode) pthread_exit(NULL);
         for (;;) pause();
     }
+    if (argc == 2 && !strcmp(argv[1], "--root-bpf"))
+        return root_bpf_mode();
     require(argc == 1, "known probe mode");
     require(original >= 0 && mkdtemp(directory) && chdir(directory) == 0,
             "isolated working directory");
     file_cases(); descriptor_cases(); sockopt_cases(); unavailable_cases();
     prctl_cases(); ptrace_cases(); keyctl_cases(); sysfs_cases(); slice_2c_cases();
+    bpf_unprivileged_cases(); rt_sigreturn_case();
     memory_and_process_cases(); aio_cases(); uring_cases();
     require(sched_getaffinity(0, sizeof(available), &available) == 0, "available CPUs");
     for (int cpu = 0; cpu < CPU_SETSIZE && count < 4; cpu++)

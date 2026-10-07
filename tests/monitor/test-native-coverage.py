@@ -284,6 +284,19 @@ class CoverageTests(unittest.TestCase):
         self.assertTrue(coverage.expected_result({"result": 0, "errno": 0}, "zero|errno:EINVAL"))
         self.assertFalse(coverage.expected_result(case, "zero|errno:EINVAL"))
 
+    def test_observed_size_and_when_observed_fields(self):
+        field = self.expected_field(size="observed", captured="observed", declared="observed",
+                                    data="observed")
+        self.assertTrue(self.schema([field], observed={"arg1.data": "41424344"})["passed"])
+        self.assertFalse(self.schema([field], observed={"arg1.data": "414243"})["passed"])
+        optional = self.expected_field(key="arg1.extra", when_observed=True)
+        # Absent from the probe report: the field must be absent too.
+        self.assertTrue(self.schema([self.expected_field(), optional])["passed"])
+        result = self.schema([self.expected_field(), optional],
+                             observed={"arg1.extra": "41424344"})
+        self.assertFalse(result["passed"])
+        self.assertIn("missing field ('exit', 'arg1.extra')", result["cases"][0]["problems"])
+
     def test_unimplemented_row_requires_traced_enosys(self):
         self.inventory["syscalls"][1]["implemented"] = False
         for errno_value, verdict in ((38, "EXPECTED_ENOSYS"), (22, "FAIL")):

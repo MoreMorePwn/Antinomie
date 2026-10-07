@@ -393,7 +393,7 @@ pointer (`current_pt_regs()->sp` at entry). Fields use argument index 255 and
 |---|---|
 | `context.rt_sigframe` | `struct rt_sigframe` (440 bytes on x86-64: return address, `ucontext`, `siginfo`) at `sp - 8`, where the kernel reads it. The kernel reads the signal mask, flags, alternate stack and `sigcontext` from it |
 | `context.fpstate` | If `uc_mcontext.fpstate` is non-NULL: the 512-byte `fxregs_state` it points to |
-| `context.fpstate.xstate` | Only if that block carries `FP_XSTATE_MAGIC1` and `512 + 64 <= xstate_size <= min(extended_size, the task's fpstate->user_size)` (the kernel's own checks): the `xstate_size - 512` bytes that follow. Otherwise the kernel restores the legacy state only and no field is recorded; out-of-range sizes record `ANT_INVALID_EXTENT` |
+| `context.fpstate.xstate` | Only if that block carries `FP_XSTATE_MAGIC1`, `512 + 64 <= xstate_size <= min(extended_size, the task's fpstate->user_size)` and `FP_XSTATE_MAGIC2` follows the state (the kernel's own checks): the `xstate_size - 512` bytes that follow. If any check fails the kernel ignores the extension and restores the legacy state only, so no field is recorded (correction while implementing: the draft recorded `ANT_INVALID_EXTENT` for out-of-range sizes, but the kernel does not reject them; on a CPU without XSAVE the frame carries `FP_XSTATE_MAGIC1` with `xstate_size` 512) |
 
 The exit value is the restored `rax` of the interrupted code, not a return value.
 
