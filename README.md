@@ -1,70 +1,107 @@
-# Antinomie kernel packaging
+# Antinomie
 
-This repository maintains the **Antinomie delta** against a pinned Debian
-kernel source package. It is a *packaging* repository: it holds patch text and
-packaging metadata, never an extracted kernel tree.
+Antinomie is a desktop application for watching what a program does inside a
+virtual machine. You start a QEMU/KVM guest, copy a program into it, run it, and
+the app records every system call the program and its child processes make,
+together with the data they pass to the kernel. Recordings are saved, so you can
+reopen and inspect any run later.
 
-- **Baseline:** Debian `linux` **6.12.94-1**, `trixie-security`, source format
-  `3.0 (quilt)`.
-- **Delta:** an extra Quilt series applied on top of Debian's 79-patch main
-  series, namespaced under `debian/patches/antinomie/`.
-- **Design:** one distro-agnostic *core* plus one thin *adapter* per
-  (distro, source-package version). Adding a target costs an adapter folder,
-  not a fork of the kernel.
+It is built for malware analysis and reverse engineering: run untrusted code in a
+disposable guest, then read exactly which files, sockets, processes and kernel
+features it touched.
 
-## Quickstart
+## How it works
 
-```bash
-git clone <url> ~/src/antinomie
-cd ~/src/antinomie
+- **Guest kernel.** The guests run Linux 6.12.94 with a small patch that records
+  system calls. The kernel itself runs your programs and terminals, so no helper
+  program sits inside the guest for malware to spot or tamper with.
+- **Transport.** Records reach the host over shared memory. If the host cannot keep
+  up, the loss is counted and shown, never hidden.
+- **Host app.** A native Linux desktop application (Rust, egui) manages VMs and
+  shows live and saved traces.
+- **Guests.** Two base images:
+  - **BusyBox**: tiny and fast to boot, good for quick tests.
+  - **Debian 13 (Xfce)**: a full desktop, closer to a real target machine.
 
-scripts/bootstrap.sh                       # build the disposable work trees
-#   edit in work/debian-6.12.94-1-trixie/core, then commit there
-scripts/commit.sh                          # turn that commit into a Quilt patch
-git commit -m "antinomie: <change>" && git push
-```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, patch
-conventions, and the maintenance playbook.
-
-The initial native monitoring application, kernel-only controls and BusyBox
-guest workflow are documented in [Native Monitor](src/antinomie/monitor/README.md).
-Shared agent conventions are in [AGENTS.md](AGENTS.md).
-
-## License
-
-Original independently licensable Antinomie host/tooling code is
-[MIT licensed](LICENSE), copyright 2026 MikiMiku (MoreMorePwn).
-Kernel-derived and imported material retain their existing terms. See
-[licensing scope](LICENSING.md) and [third-party notices](THIRD-PARTY-NOTICES.md)
-before redistribution; the whole kernel or guest image is not MIT licensed.
-
-## Layout
-
-```
-.
-├── CONTRIBUTING.md                  workflow, conventions, maintenance
-├── scripts/
-│   ├── bootstrap.sh                 build work/ trees for an adapter
-│   ├── commit.sh                    commit -> DEP-3 Quilt patch
-│   └── verify-inputs.sh             verify pinned input hashes
-├── src/                             durable, tracked
-│   ├── debian/                      pinned Debian inputs + packaging reference
-│   └── antinomie/
-│       ├── core/6.12/               the portable delta (patch series)
-│       ├── patches/debian-6.12.94-1-trixie/antinomie/   generated Quilt view
-│       └── packaging/
-│           └── debian-6.12.94-1-trixie/   adapter: adapter.conf, config, fence
-└── work/                            disposable, gitignored, rebuilt on demand
-    └── debian-6.12.94-1-trixie/
-        ├── linux-6.12.94/           extracted tree (upstream + Debian series)
-        ├── core/                    Git author repo
-        └── images/                  rootfs / qcow2 pipeline
-```
+Captured data is an observation, not proof: memory can change while it is being
+read, and anything the app could not decode or lost is marked as such.
 
 ## Requirements
 
-- An **ext4** workspace. Never extract or build on a case-insensitive or 9p
-  mount (the kernel tree has case-colliding paths that silently lose files).
-- `git`, `dpkg-source`, `quilt`, `sha256sum`, and the Debian kernel build
-  dependencies.
+- Linux x86-64 host (WSL2 works with an X11 display)
+- QEMU (`qemu-system-x86_64`); KVM (`/dev/kvm`) strongly recommended
+- Rust to build the app; building kernels and bases needs the tools listed in
+  [CONTRIBUTING.md](CONTRIBUTING.md)
+
+## Quick start
+
+```bash
+git clone https://github.com/MoreMorePwn/Antinomie.git ~/src/antinomie
+cd ~/src/antinomie
+scripts/build-monitor-host.sh   # build the app (once, or after updates)
+scripts/run-monitor.sh          # start it
+```
+
+Your bases, VM disks and recordings are kept in `~/antinomie`.
+
+## Using the app
+
+### 1. Get a base image
+The **Base images** section in the left sidebar lists installed bases. Use
+**Add base** to get one:
+- **Download base…**: fetch a published, checksum-verified base.
+- **Import base…**: install a bundle folder you already have.
+- **Build base…**: build one locally from the repository scripts.
+
+Bases are read-only templates. Right-click a base to make a **New VM from this
+base** or to **Delete base**. Deleting is refused while any VM still uses it.
+
+### 2. Create a VM
+Choose **New VM**, pick the installed base, and set name, CPU count, RAM and
+disk size. Debian bases also ask for a username and password; the guest
+account is created for you. Each VM gets its own disk layered on the base, so
+the base never changes.
+
+Right-click a VM for **Rename**, **Duplicate** (the VM must be stopped),
+**Open Directory**, **Settings** (resolution, fullscreen or fit to window,
+acceleration, CPU model) and **Delete**.
+
+### 3. Start it and run a program
+1. Select the VM and press **Start VM**. Only one VM runs at a time, and its
+   network is disconnected by default.
+2. **Upload file** copies a program from the host (**Host file**) to a path in
+   the guest (**Guest path**).
+3. **Launch program** runs it. Set the **Executable**, **Arguments**,
+   **Working directory** and **Environment**. Each launch gets its own terminal
+   window for input and output.
+4. **Stop** ends a run together with all of its child processes. Closing a
+   terminal window does not stop the program.
+
+### 4. Read the results
+- **Syscall Trace**: every recorded call with its arguments, return value and
+  captured data. Flags and options are decoded into names (for example
+  `O_CREAT | O_CLOEXEC`, `SOL_SOCKET / SO_RCVBUF`, `PR_SET_NAME`), unknown bits
+  are listed separately, and captured buffers can be inspected byte by byte.
+- **Run History**: every run on the selected VM, including earlier boots, with
+  its command line, user, status and exit code. Double-click a run to open its
+  saved trace.
+- **Details** and **Activity**: the selected call or run, and VM events.
+
+Panels can be dragged out into their own windows and docked back;
+**View → Reset layout** restores the default arrangement. Text size is under
+**Tools → Settings**.
+
+## Development
+
+Kernel changes, the patch workflow, building kernels and base images, and the
+test suites are described in [CONTRIBUTING.md](CONTRIBUTING.md) and
+[MONITOR-IMPLEMENTATION.md](MONITOR-IMPLEMENTATION.md). Coding agents follow
+[AGENTS.md](AGENTS.md).
+
+## License
+
+Original Antinomie host and tooling code is [MIT licensed](LICENSE), copyright
+2026 MikiMiku (MoreMorePwn). Kernel-derived and imported material keep their own
+terms. Read the [licensing scope](LICENSING.md) and
+[third-party notices](THIRD-PARTY-NOTICES.md) before redistributing; the kernel
+and guest images as a whole are not MIT licensed.
