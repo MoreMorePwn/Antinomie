@@ -96,13 +96,16 @@ for symbol in $DEBIAN_BUILTIN; do
     "$config" --file "$build_tree/.config" --enable "$symbol"
 done
 "$config" --file "$build_tree/.config" --disable IKCONFIG_PROC
+# The image builders read the embedded configuration from a gzip bzImage
+# (pinned format); Debian compresses with zstd.
+"$config" --file "$build_tree/.config" --disable KERNEL_ZSTD --enable KERNEL_GZIP
 # Debian's signing key is not available; the build generates its own.
 "$config" --file "$build_tree/.config" --set-str MODULE_SIG_KEY "certs/signing_key.pem"
 "$config" --file "$build_tree/.config" --set-str SYSTEM_TRUSTED_KEYS ""
 "$config" --file "$build_tree/.config" --set-str SYSTEM_REVOCATION_KEYS ""
 make -C "$source_tree" O="$build_tree" olddefconfig
 # shellcheck disable=SC2086
-require_symbols $DEBIAN_BUILTIN $DEBIAN_PARITY
+require_symbols $DEBIAN_BUILTIN $DEBIAN_PARITY KERNEL_GZIP
 "$source_tree/scripts/diffconfig" "$reference/.config" "$build_tree/.config" \
     > "$build_tree/antinomie-config-deviations.txt"
 # LOCALVERSION= keeps the release exactly 6.12.94 (no "+" for an untagged tree).
