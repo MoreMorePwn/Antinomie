@@ -257,3 +257,70 @@ Correction found while writing the probe (2026-10-07): revision 3 first placed
 the `PTRACE_ARCH_PRCTL` code in `addr` and the output in `data` (`arg3.value`).
 The pinned `arch_ptrace()` passes them the other way round, so the output is
 `arg2.value` and the fixture was updated to match.
+
+## 10. Revision 4: Slice 2C (2026-10-07)
+
+Approved by the user on 2026-10-07 together with `tests/monitor/fixtures/native-schema/2c.json`.
+The user also chose a root-run step inside the disposable VM for the slice 2H `bpf` probe.
+`bpf` is split out into its own slice (2H) and contract because of its size.
+
+### 10.1 mount(dev_name, dir_name, type, flags, data)
+
+| Argument | Capture (entry) |
+|---|---|
+| `dev_name` | `arg0.dev_name` string, ceiling `PATH_MAX` (`copy_mount_string`) |
+| `dir_name` | `arg1.dir_name` string, ceiling `PATH_MAX` |
+| `type` | `arg2.type` string, ceiling `PATH_MAX` |
+| `flags` | scalar; the host decodes `MS_*` names |
+| `data` | `arg4.data`, layout `mount_options`: the readable prefix of one page (`PAGE_SIZE`), as `copy_mount_options()` reads it. If the page has an unreadable part, `arg4.data.tail` records the remainder with `ANT_COPY_FAULT`; this can also mean a non-resident page the kernel would have faulted in. NULL `data` records no field. The UI shows the bytes up to the first NUL as text when they are printable |
+
+### 10.2 quotactl(cmd, special, id, addr) and quotactl_fd(fd, cmd, id, addr)
+
+`cmd` is `QCMD(subcommand, type)`. `quotactl` records `arg1.special`, a
+block-device path string with ceiling `PATH_MAX` (NULL is allowed only for
+`Q_SYNC`). For both calls, `addr` has these roles:
+
+| Subcommand | `addr` (key `arg3.*` in both calls) |
+|---|---|
+| `Q_QUOTAON` | `arg3.quota_file` path string, `PATH_MAX` (`quotactl` only; `quotactl_fd` rejects it) |
+| `Q_GETFMT` | exit, `result == 0`: `arg3.format` `u32` |
+| `Q_GETINFO` / `Q_SETINFO` | `arg3.info` `if_dqinfo` out / in |
+| `Q_GETQUOTA` / `Q_GETNEXTQUOTA` / `Q_SETQUOTA` | `arg3.dqblk` `if_dqblk` out / `if_nextdqblk` out / `if_dqblk` in |
+| `Q_XQUOTAON` / `Q_XQUOTAOFF` / `Q_XQUOTARM` | `arg3.flags` `u32` in |
+| `Q_XGETQSTAT` | exit: `arg3.stat` `fs_quota_stat` |
+| `Q_XGETQSTATV` | entry: `arg3.qs_version` 1 byte (the kernel reads only this); exit: `arg3.stat` `fs_quota_statv` |
+| `Q_XSETQLIM` / `Q_XGETQUOTA` / `Q_XGETNEXTQUOTA` | `arg3.dquot` `fs_disk_quota` in / out / out |
+| `Q_QUOTAOFF`, `Q_SYNC`, `Q_XQUOTASYNC` | scalar |
+| Other | `quotactl.unknown_selector` gap |
+
+### 10.3 kexec_load(entry, nr_segments, segments, flags)
+
+| Capture (entry) | Rule |
+|---|---|
+| `arg2.segments` | `kexec_segment[]`, `nr_segments * 32` bytes; `ANT_INVALID_EXTENT` without copy above `KEXEC_SEGMENT_MAX` (16) |
+| `arg2.segments[i].buf` | Each segment's buffer, `bufsz` bytes, bounded like `write()` by `MAX_RW_COUNT`. A large image may exceed the transport rate; that loss is reported, as for `write()`. A zero `bufsz` records no field |
+
+The host decodes `flags` (`KEXEC_ON_CRASH`, `KEXEC_PRESERVE_CONTEXT`, `KEXEC_UPDATE_ELFCOREHDR`, `KEXEC_CRASH_HOTPLUG_SUPPORT`, and the architecture field).
+
+### 10.4 rseq(rseq, rseq_len, flags, sig)
+
+| Phase | Capture |
+|---|---|
+| Entry | `arg0.rseq`, layout `rseq`, `min(rseq_len, sizeof(struct rseq))` bytes (32 on 6.12), with `rseq_len` as the declared length. The kernel reads only the known fields |
+| Exit, registration accepted (`result == 0`, no `RSEQ_FLAG_UNREGISTER`) | `arg0.rseq.updates`: 32 bytes, `ANT_ASYNC_UNOBSERVED`. The kernel writes the CPU, node and mm ids later, on every return to user space |
+| Exit, unregistration accepted | `arg0.rseq`: the 32 bytes the kernel just reset |
+
+The host decodes `flags` (`RSEQ_FLAG_UNREGISTER`); this group already exists.
+
+### 10.5 Probe environment for 2C
+
+- `mount` success runs in a forked child that calls
+  `unshare(CLONE_NEWUSER | CLONE_NEWNS)` and mounts a 1 MiB tmpfs on the probe's
+  private `mnt` directory. This needs `CONFIG_USER_NS` (on since ANT-T0022). The
+  mount disappears with the child's namespace.
+- `kexec_load` and the privileged `quotactl` paths run as UID 1000 and are
+  rejected (`EPERM`, `ENOENT` or `ENOSYS`). Their entry fields are still checked;
+  quota output layouts have no runtime coverage, because no quota-enabled
+  filesystem exists in the probe VM.
+- `rseq` unregistration and re-registration run on a dedicated pthread, which
+  registers again immediately; the main thread only sees rejected calls.
