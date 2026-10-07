@@ -102,6 +102,31 @@ def retry_observations(prefix=True, whole=False):
     return bytes(raw)
 
 
+def syscall_field(number, phase, object_id, key, content, layout="", status=0,
+                  size=None, declared=None, address=0x1000, arg=3):
+    """Entry/exit field records as the recorder writes them for a native syscall."""
+    size = len(content) if size is None else size
+    declared = size if declared is None else declared
+
+    def packet(kind, body):
+        header = bytearray(summary(number, phase)[4:140])
+        struct.pack_into("<I", header, 100, object_id)
+        struct.pack_into("<I", header, 120, len(body))
+        struct.pack_into("<I", header, 12, 136 + len(body))
+        header[99] = kind
+        return struct.pack("<I", 136 + len(body)) + header + body
+    name, label = key.encode(), layout.encode()
+    begin = bytearray(40)
+    begin[0] = arg
+    struct.pack_into("<Q", begin, 8, address)
+    struct.pack_into("<Q", begin, 24, declared)
+    struct.pack_into("<HH", begin, 32, len(name), len(label))
+    captured = len(content) if status == 0 else 0
+    end = struct.pack("<QQIiQ", size, captured, status, 0, 1)
+    chunks = packet(3, content) if captured else b""
+    return packet(2, begin + name + label) + chunks + packet(4, end)
+
+
 class CoverageTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -193,6 +218,64 @@ class CoverageTests(unittest.TestCase):
         self.assertTrue(result["partial_read"]["payload_verified"])
         self.assertFalse(result["partial_read"]["retry_observed"])
         self.assertFalse(result["passed"])
+
+    def schema(self, fixture_fields, observed=None, extra=b""):
+        case = {"name": "read", "number": 0, "result": 7, "errno": 0, "verdict": "PASS",
+                "case_id": 1, "tid": 20, "started_ns": 100, "finished_ns": 110,
+                "label": "read.sample"}
+        if observed is not None:
+            case["observed"] = observed
+        self.transcript.write_text("ANT_CASE " + json.dumps(case) + "\nNATIVE PASS\n")
+        self.raw.write_bytes(summary(0, 1) + syscall_field(0, 2, 1, "arg1.data", b"ABCD",
+                                                           layout="int") + extra
+                             + summary(0, 2, 7))
+        fixtures = self.root / "fixtures"
+        fixtures.mkdir(exist_ok=True)
+        (fixtures / "sample.json").write_text(json.dumps({"slice": "test", "cases": [
+            {"label": "read.sample", "syscall": "read", "result": "positive",
+             "fields": fixture_fields}]}))
+        result = coverage.report(self.transcript, self.raw, self.inventory, frozenset({0}))
+        return coverage.schema_report(fixtures, result["_labeled"], result["_fields"])
+
+    def expected_field(self, **changes):
+        field = {"phase": "exit", "arg": 3, "key": "arg1.data", "layout": "int", "size": 4,
+                 "captured": 4, "declared": 4, "status": "COMPLETE", "data": "41424344"}
+        field.update(changes)
+        return field
+
+    def test_schema_fixture_matches_exact_fields(self):
+        self.assertTrue(self.schema([self.expected_field()])["passed"])
+
+    def test_schema_fixture_rejects_wrong_bytes_layout_and_status(self):
+        for change in ({"data": "41424345"}, {"layout": "u32"}, {"status": "COPY_FAULT"},
+                       {"declared": 8}, {"phase": "entry"}):
+            with self.subTest(change=change):
+                self.assertFalse(self.schema([self.expected_field(**change)])["passed"])
+
+    def test_schema_fixture_rejects_unexpected_field(self):
+        extra = syscall_field(0, 2, 2, "schema.gap", b"", status=4, size=coverage.U64_MAX,
+                              declared=coverage.U64_MAX, arg=255)
+        result = self.schema([self.expected_field()], extra=extra)
+        self.assertFalse(result["passed"])
+        self.assertIn("unexpected field ('exit', 'schema.gap')", result["cases"][0]["problems"])
+
+    def test_schema_observed_bytes_come_from_the_probe(self):
+        field = self.expected_field(data="observed")
+        self.assertTrue(self.schema([field], observed={"arg1.data": "41424344"})["passed"])
+        self.assertFalse(self.schema([field], observed={"arg1.data": "00000000"})["passed"])
+        self.assertFalse(self.schema([field])["passed"])
+
+    def test_unimplemented_row_requires_traced_enosys(self):
+        self.inventory["syscalls"][1]["implemented"] = False
+        for errno_value, verdict in ((38, "EXPECTED_ENOSYS"), (22, "FAIL")):
+            with self.subTest(errno=errno_value):
+                self.transcript.write_text("ANT_CASE " + json.dumps({
+                    "name": "write", "number": 1, "result": -1, "errno": errno_value,
+                    "verdict": "EXPECTED_REJECTION", "case_id": 1, "tid": 20,
+                    "started_ns": 100, "finished_ns": 110}) + "\nNATIVE PASS\n")
+                self.raw.write_bytes(summary(1, 1) + summary(1, 2, -errno_value))
+                rows = {row["name"]: row for row in self.report()["cases"]}
+                self.assertEqual(rows["write"]["verdict"], verdict)
 
 
 if __name__ == "__main__":

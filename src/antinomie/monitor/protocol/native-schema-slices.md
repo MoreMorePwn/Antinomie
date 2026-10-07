@@ -1,8 +1,9 @@
 # Native Schema Slice Contract: 2A, 2B, 2G
 
-ANT-T0009 producer/consumer contract, revision 1, 2026-10-07.
+ANT-T0009 producer/consumer contract, revision 2, 2026-10-07.
 Status: approved by the user on 2026-10-07, including choice (a) for unknown
-socket options (raw `optval` up to `optlen`, capped at 128 KiB).
+socket options (raw `optval` up to `optlen`, capped at 128 KiB). Revision 2
+records corrections found while implementing and testing slice 2A; see Section 8.
 The V7 transport, the field record wire layout and `native-syscalls.json`
 stay authoritative and unchanged. This contract adds kernel capture rules,
 host naming rules, probe cases and verifier checks for:
@@ -28,7 +29,7 @@ syscall's `arg2` parameter.
 | Output phase | Output buffers are copied at exit only when the selector's success rule holds (usually `result == 0` or `result >= 0`) and are bounded by the smaller of the declared capacity and the kernel-reported written size |
 | Value-result lengths | When a length lives in user memory and the kernel rewrites it (`getsockopt` optlen, regset `iovec.iov_len`), entry saves the snapshot through `ant_capture_set_state` and exit reads the rewritten value; both are recorded |
 | Another process's memory | An address that belongs to another address space (ptrace tracee addresses) is recorded as `ANT_ADDRESS_ONLY` with address and length. It is never dereferenced |
-| Kernel ceilings | A declared length above the pinned kernel limit is captured up to the limit, with `ANT_INVALID_EXTENT` on that field |
+| Kernel ceilings | A declared length above the pinned kernel limit is recorded with `ANT_INVALID_EXTENT` and no bytes, as the existing recorder does for every field status other than `ANT_COMPLETE` |
 | Config-disabled paths | If the pinned config compiles a selector out (for example `CONFIG_CHECKPOINT_RESTORE=n`), the program's arguments are still captured by UAPI meaning; the returned error records the rejection. No capture claims that the kernel consumed them |
 | Strings | `ant_capture_string` with the kernel's own ceiling for that argument |
 | Secrets | Key payloads, socket filters and register contents are recorded like any other buffer. Recordings can therefore contain the program's secrets, as `read`/`write` recordings already do |
@@ -53,7 +54,7 @@ syscall's `arg2` parameter.
 | Phase | Capture |
 |---|---|
 | Entry | `arg4.optlen` (`int`), saved as the capacity. For options whose `optval` is also input (Section 2.2), `arg3.optval_in` of that option's input layout |
-| Exit, `result == 0` | `arg4.optlen` again (the written length); `arg3.optval` of `min(written, capacity, layout or 128 KiB)` bytes with the option's layout, or raw plus a `sockopt.unknown_option` gap for unknown pairs |
+| Exit, `result == 0` | `arg4.optlen` again (the written length); `arg3.optval` of `min(written, layout or 128 KiB)` bytes with the option's layout (empty for unknown pairs, whose gap was recorded at entry). The declared length is the written length; a written length above the capacity is `ANT_INVALID_EXTENT`. `SO_GET_FILTER` counts instructions in `optlen`, so its byte count is `written * 8` |
 | Exit, error | nothing |
 
 ### 2.1 Known option table (initial)
@@ -69,7 +70,15 @@ The implementation table is reviewed against the pinned
 | `IPPROTO_IPV6` | `IPV6_ADD_MEMBERSHIP`/`IPV6_DROP_MEMBERSHIP` `ipv6_mreq` |
 | `IPPROTO_TCP` | `TCP_INFO` (get) `tcp_info`, length-bounded; `TCP_CONGESTION`, `TCP_ULP` bounded `char[]` |
 
-### 2.2 Explicitly Unsupported nested layouts
+### 2.2 Number collisions
+
+- `SO_GET_FILTER` and `SO_ATTACH_FILTER` share number 26 under `SOL_SOCKET`;
+  `setsockopt` means attach and `getsockopt` means get.
+- Netfilter commands 64–67 overlap `IPV6_RECVTCLASS` (66) and `IPV6_TCLASS` (67).
+  The IP handlers pass to netfilter only options they do not know, so the
+  netfilter rule applies only when no option rule matched.
+
+### 2.3 Explicitly Unsupported nested layouts
 
 These keep the top-level raw bytes and add a `NO_DECODER` gap naming the nested pointer:
 - netfilter `IPT_SO_SET_REPLACE`/`IP6T_SO_SET_REPLACE` (`counters` pointer)
@@ -168,7 +177,7 @@ and the host labels the row Not implemented.
 | Item | Contract |
 |---|---|
 | Selector names | Enum groups `prctl_option`, `ptrace_request`, `keyctl_cmd`, `sysfs_option`, `sockopt_level` use full-width masks so that an exact value matches one name |
-| Dependent names | New `selector_names(number, args) -> Vec<String>` resolves names that depend on another argument: the optname given the level, the `PR_SET_MM`/`PR_SET_VMA`/`PR_SCHED_CORE` sub-op, and the `PTRACE_O_*` flags for `SEIZE`/`SETOPTIONS`. Unknown values render as hex plus `Unknown` |
+| Dependent names | `selector_name(number, index, args) -> Option<String>` names one argument that may depend on another: the optname given the level and direction (slice 2A); the `PR_SET_MM`/`PR_SET_VMA`/`PR_SCHED_CORE` sub-op and the `PTRACE_O_*` flags for `SEIZE`/`SETOPTIONS` (slice 2B). Unknown values render as `Unknown …` plus the raw value |
 | Layout labels | The UI shows the kernel's layout string and byte count. Structured decoding of these layouts is outside this slice |
 
 ## 6. Fixtures and Verification
@@ -181,7 +190,7 @@ and the host labels the row Not implemented.
 | Verifier | New `--schema-fixtures DIR` compares each probe case's recorded fields with its fixture; a missing or extra field fails the case |
 | ENOSYS verdict | New `EXPECTED_ENOSYS` verdict. It counts as covered only for rows with `"implemented": false`; elsewhere `ENOSYS` remains SKIP |
 | Ledger | `setsockopt`, `getsockopt`, `ptrace`, `sysfs`, `prctl` and `keyctl` move to `native_capture`; the 17 rows move to `not_implemented_verified` only after a probe run shows `EXPECTED_ENOSYS` for each |
-| Rejections | Privileged selectors that return `EPERM` as UID 1000 (for example `SO_BINDTODEVICE`, `PR_SET_MM`) still have to show entry fields that match the fixture. They are reported as an expected rejection, not as a PASS of output capture |
+| Rejections | Privileged selectors that return `EPERM` as UID 1000 (for example `PR_SET_MM`) still have to show entry fields that match the fixture. They are reported as an expected rejection, not as a PASS of output capture |
 
 ## 7. Fixture Format
 
@@ -214,3 +223,14 @@ and the host labels the row Not implemented.
 | `status` | `ant_status` name without the `ANT_` prefix |
 | `data` | Lowercase hex of the exact captured bytes; `"observed"` means they must equal the hex the probe printed under the same key in the `ANT_CASE` `"observed"` map (for kernel-dependent outputs); `null` means unchecked (for example a struct holding a pointer) |
 | `address` | Optional: `"nonzero"`, or `"observed"` to compare with the probe-reported address |
+
+## 8. Revision 2 Corrections (2026-10-07)
+
+| Item | Revision 1 | Revision 2 |
+|---|---|---|
+| Over-limit lengths | Captured up to the limit | `ANT_INVALID_EXTENT` with no bytes, matching the recorder |
+| `SO_BINDTODEVICE` | Listed as an `EPERM` example | Unprivileged binding of an unbound socket succeeds (`sock_bindtoindex_locked` only checks `CAP_NET_RAW` when rebinding); fixture expects success |
+| `SO_GET_FILTER` | Separate rule | Shares number 26 with `SO_ATTACH_FILTER`; one rule, selected by direction |
+| Netfilter range | Checked before option rules | Checked only when no option rule matched (`IPV6_TCLASS`/`IPV6_RECVTCLASS` are 67/66) |
+| Host naming API | `selector_names(number, args) -> Vec<String>` | `selector_name(number, index, args) -> Option<String>`, one argument at a time for the trace view |
+| 2G kernel | Raw arguments only | Unchanged kernel; existing `schema.argument_metadata` gap kept |

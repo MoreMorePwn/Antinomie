@@ -217,6 +217,8 @@ def generate(kernel, output, c_header):
         if entry and entry != "sys_ni_syscall" and arguments is None:
             missing.append(f"{row['number']} {row['name']} ({entry})")
         row["arguments"] = arguments or []
+        # No table entry point, or the kernel's ENOSYS stub: never implemented here.
+        row["implemented"] = bool(entry) and entry != "sys_ni_syscall"
         row["arg_count"] = len(arguments) if arguments is not None else None
         if row["name"] in ARGUMENT_NAMES:
             source, names = ARGUMENT_NAMES[row["name"]]

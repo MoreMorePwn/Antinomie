@@ -186,7 +186,13 @@ impl Inspector {
                                             .id_salt((key(invocation), phase, index))
                                             .default_open(false)
                                             .show(ui, |ui| {
-                                                show_flags(ui, event.syscall_nr, index, value);
+                                                show_flags(
+                                                    ui,
+                                                    event.syscall_nr,
+                                                    index,
+                                                    value,
+                                                    Some(args),
+                                                );
                                                 if ui
                                                     .selectable_label(selected, "Numeric value")
                                                     .clicked()
@@ -308,7 +314,15 @@ impl Inspector {
                             if let Some(event) =
                                 invocation.entry.as_ref().or(invocation.exit.as_ref())
                             {
-                                show_flags(ui, event.syscall_nr, *index, *value);
+                                show_flags(
+                                    ui,
+                                    event.syscall_nr,
+                                    *index,
+                                    *value,
+                                    event.args.or_else(|| {
+                                        invocation.entry.as_ref().and_then(|entry| entry.args)
+                                    }),
+                                );
                             }
                             numeric(ui, *value, 8);
                         }
@@ -550,7 +564,10 @@ pub(crate) fn argument_name(nr: u64, index: usize) -> &'static str {
     names.get(index).copied().unwrap_or(GENERIC[index.min(5)])
 }
 
-fn show_flags(ui: &mut egui::Ui, number: u64, index: usize, value: u64) {
+fn show_flags(ui: &mut egui::Ui, number: u64, index: usize, value: u64, args: Option<[u64; 6]>) {
+    if let Some(name) = args.and_then(|args| syscalls::selector_name(number, index, &args)) {
+        ui.label(format!("{name} (raw {value:#x})"));
+    }
     if let Some(flags) = syscalls::argument_flags(number, index, value) {
         ui.label(format!("{} (raw {value:#x})", flags.names.join(" | ")));
         if flags.unknown_bits != 0 {

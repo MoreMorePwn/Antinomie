@@ -4,9 +4,12 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/aio_abi.h>
+#include <linux/filter.h>
 #include <linux/futex.h>
 #include <linux/io_uring.h>
 #include <linux/openat2.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <poll.h>
 #include <pthread.h>
 #include <sched.h>
@@ -47,8 +50,12 @@ static uint64_t monotonic_ns(void)
     return (uint64_t)time.tv_sec * 1000000000 + time.tv_nsec;
 }
 
-static long observed(const char *name, long nr, long value, int expected_errno,
-                     uint64_t started_ns, uint64_t finished_ns)
+/* Labeled cases are compared with tests/monitor/fixtures/native-schema. A
+ * kernel-dependent output is printed as "observed" hex under its field key.
+ */
+static long observed_labeled(const char *label, const char *name, long nr, long value,
+                             int expected_errno, uint64_t started_ns, uint64_t finished_ns,
+                             const void *output, const socklen_t *output_len)
 {
     int error = value < 0 ? errno : 0;
     const char *verdict = "PASS";
@@ -69,15 +76,31 @@ static long observed(const char *name, long nr, long value, int expected_errno,
         failures++;
     printf("ANT_CASE {\"name\":\"%s\",\"number\":%ld,\"result\":%ld,"
            "\"errno\":%d,\"verdict\":\"%s\",\"case_id\":%u,\"tid\":%ld,"
-           "\"started_ns\":%llu,\"finished_ns\":%llu}\n", name, nr, value,
+           "\"started_ns\":%llu,\"finished_ns\":%llu", name, nr, value,
            error, verdict, ++case_count, syscall(SYS_gettid),
            (unsigned long long)started_ns, (unsigned long long)finished_ns);
+    if (label)
+        printf(",\"label\":\"%s\"", label);
+    if (output && output_len && value == 0) {
+        printf(",\"observed\":{\"arg3.optval\":\"");
+        for (socklen_t i = 0; i < *output_len; i++)
+            printf("%02x", ((const unsigned char *)output)[i]);
+        printf("\"}");
+    }
+    puts("}");
     pthread_mutex_unlock(&output_lock);
     /* Functional coverage is paced; overflow is a separate lossy stress test. */
     struct timespec pause = {0, 2000000};
     nanosleep(&pause, NULL);
     errno = error;
     return value;
+}
+
+static long observed(const char *name, long nr, long value, int expected_errno,
+                     uint64_t started_ns, uint64_t finished_ns)
+{
+    return observed_labeled(NULL, name, nr, value, expected_errno, started_ns,
+                            finished_ns, NULL, NULL);
 }
 
 #define OBSERVE(name, expected, ...) ({ \
@@ -89,6 +112,19 @@ static long observed(const char *name, long nr, long value, int expected_errno,
     observed(#name, SYS_##name, ant_case_internal_result, expected, \
              ant_case_internal_start, ant_case_internal_end); \
 })
+#define LABELED(label, output, output_len, name, expected, ...) ({ \
+    uint64_t ant_case_internal_start = monotonic_ns(); \
+    long ant_case_internal_result = syscall(SYS_##name, __VA_ARGS__); \
+    int ant_case_internal_errno = errno; \
+    uint64_t ant_case_internal_end = monotonic_ns(); \
+    errno = ant_case_internal_errno; \
+    observed_labeled(label, #name, SYS_##name, ant_case_internal_result, expected, \
+                     ant_case_internal_start, ant_case_internal_end, output, output_len); \
+})
+#define SOCKSET(label, expected, fd, level, option, value, len) \
+    LABELED(label, NULL, NULL, setsockopt, expected, fd, level, option, value, len)
+#define SOCKGET(label, expected, fd, level, option, buffer, len) \
+    LABELED(label, buffer, len, getsockopt, expected, fd, level, option, buffer, len)
 #define TEST(name, ...) OBSERVE(name, 0, __VA_ARGS__)
 #define REJECT(name, error, ...) OBSERVE(name, error, __VA_ARGS__)
 
@@ -235,6 +271,95 @@ static void descriptor_cases(void)
     TEST(recvmsg, sockets[1], &message, 0);
     TEST(shutdown, sockets[0], SHUT_RDWR);
     TEST(close, sockets[0]); TEST(close, sockets[1]);
+}
+
+/* Slice 2A: never-connected sockets and a local pair; no network I/O. */
+static void sockopt_cases(void)
+{
+    static const char unknown[] = "ANTINOMIE-SOCKOPT";
+    struct sock_filter accept_all = BPF_STMT(BPF_RET | BPF_K, 0xffffffff);
+    struct sock_fprog program = {1, &accept_all};
+    struct linger linger = {1, 5};
+    struct { long seconds, microseconds; } old_timeout = {2, 500000};
+    struct { int64_t seconds, microseconds; } new_timeout = {3, 0};
+    struct ip_mreqn group = {.imr_multiaddr.s_addr = htonl(0xef010203)};
+    unsigned char buffer[512];
+    int local[2], value;
+    socklen_t length;
+    int tcp4 = TEST(socket, AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    int tcp6 = TEST(socket, AF_INET6, SOCK_STREAM | SOCK_CLOEXEC, 0);
+
+    require(tcp4 >= 0 && tcp6 >= 0, "unconnected TCP sockets");
+    require(TEST(socketpair, AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, local) == 0,
+            "local stream pair");
+    value = 65536;
+    SOCKSET("sockopt.so_rcvbuf.set", 0, tcp4, SOL_SOCKET, SO_RCVBUF, &value, sizeof(value));
+    length = 4;
+    SOCKGET("sockopt.so_rcvbuf.get", 0, tcp4, SOL_SOCKET, SO_RCVBUF, buffer, &length);
+    length = 16;
+    SOCKGET("sockopt.so_rcvbuf.get_oversize", 0, tcp4, SOL_SOCKET, SO_RCVBUF, buffer, &length);
+    SOCKSET("sockopt.so_linger.set", 0, tcp4, SOL_SOCKET, SO_LINGER, &linger, sizeof(linger));
+    length = sizeof(linger);
+    SOCKGET("sockopt.so_linger.get", 0, tcp4, SOL_SOCKET, SO_LINGER, buffer, &length);
+    SOCKSET("sockopt.so_rcvtimeo_old.set", 0, tcp4, SOL_SOCKET, SO_RCVTIMEO_OLD,
+            &old_timeout, sizeof(old_timeout));
+    SOCKSET("sockopt.so_rcvtimeo_new.set", 0, tcp4, SOL_SOCKET, SO_RCVTIMEO_NEW,
+            &new_timeout, sizeof(new_timeout));
+    length = 12;
+    SOCKGET("sockopt.so_peercred.get", 0, local[0], SOL_SOCKET, SO_PEERCRED, buffer, &length);
+    SOCKSET("sockopt.so_attach_filter.set", 0, local[0], SOL_SOCKET, SO_ATTACH_FILTER,
+            &program, sizeof(program));
+    length = 1;
+    SOCKGET("sockopt.so_get_filter.get", 0, local[0], SOL_SOCKET, SO_GET_FILTER, buffer, &length);
+    SOCKSET("sockopt.so_bindtodevice.set", 0, tcp4, SOL_SOCKET, SO_BINDTODEVICE, "lo", 2);
+    value = 1;
+    SOCKSET("sockopt.tcp_nodelay.set", 0, tcp4, IPPROTO_TCP, TCP_NODELAY, &value, sizeof(value));
+    length = 16;
+    SOCKGET("sockopt.tcp_congestion.get", 0, tcp4, IPPROTO_TCP, TCP_CONGESTION, buffer, &length);
+    length = 104;
+    SOCKGET("sockopt.tcp_info.get", 0, tcp4, IPPROTO_TCP, TCP_INFO, buffer, &length);
+    value = 64;
+    SOCKSET("sockopt.ip_ttl.set", 0, tcp4, IPPROTO_IP, IP_TTL, &value, sizeof(value));
+    value = 1;
+    SOCKSET("sockopt.ipv6_v6only.set", 0, tcp6, IPPROTO_IPV6, IPV6_V6ONLY, &value, sizeof(value));
+    value = 0;
+    SOCKSET("sockopt.ipv6_tclass.set", 0, tcp6, IPPROTO_IPV6, IPV6_TCLASS, &value, sizeof(value));
+    SOCKSET("sockopt.ip_add_membership.set", EPROTO, tcp4, IPPROTO_IP, IP_ADD_MEMBERSHIP,
+            &group, sizeof(group));
+    SOCKSET("sockopt.unknown.set", ENOPROTOOPT, tcp4, SOL_SOCKET, 0x7fff,
+            unknown, sizeof(unknown) - 1);
+    length = 8;
+    SOCKGET("sockopt.unknown.get", ENOPROTOOPT, tcp4, SOL_SOCKET, 0x7fff, buffer, &length);
+    SOCKSET("sockopt.short_int.set", EINVAL, tcp4, SOL_SOCKET, SO_KEEPALIVE, &value, 2);
+    SOCKSET("sockopt.fault.set", EFAULT, tcp4, SOL_SOCKET, SO_RCVBUF, (void *)1, 4);
+    SOCKSET("sockopt.negative_optlen.set", EINVAL, tcp4, SOL_SOCKET, SO_RCVBUF, &value, -1);
+    TEST(close, local[0]); TEST(close, local[1]); TEST(close, tcp6); TEST(close, tcp4);
+}
+
+/* Slice 2G: rows without an entry point in the pinned syscall_64.tbl. */
+static void unavailable_cases(void)
+{
+    static const struct { long number; const char *name; } rows[] = {
+        {134, "uselib"}, {156, "_sysctl"}, {174, "create_module"},
+        {177, "get_kernel_syms"}, {178, "query_module"}, {180, "nfsservctl"},
+        {181, "getpmsg"}, {182, "putpmsg"}, {183, "afs_syscall"}, {184, "tuxcall"},
+        {185, "security"}, {205, "set_thread_area"}, {211, "get_thread_area"},
+        {212, "lookup_dcookie"}, {214, "epoll_ctl_old"}, {215, "epoll_wait_old"},
+        {236, "vserver"},
+    };
+    char label[64];
+
+    for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        uint64_t started = monotonic_ns();
+        long result = syscall(rows[i].number, 0, 0, 0, 0, 0, 0);
+        int error = errno;
+        uint64_t finished = monotonic_ns();
+
+        errno = error;
+        snprintf(label, sizeof(label), "unavailable.%s", rows[i].name);
+        observed_labeled(label, rows[i].name, rows[i].number, result, ENOSYS,
+                         started, finished, NULL, NULL);
+    }
 }
 
 static void memory_and_process_cases(void)
@@ -507,7 +632,8 @@ int main(int argc, char **argv)
     require(argc == 1, "known probe mode");
     require(original >= 0 && mkdtemp(directory) && chdir(directory) == 0,
             "isolated working directory");
-    file_cases(); descriptor_cases(); memory_and_process_cases(); aio_cases(); uring_cases();
+    file_cases(); descriptor_cases(); sockopt_cases(); unavailable_cases();
+    memory_and_process_cases(); aio_cases(); uring_cases();
     require(sched_getaffinity(0, sizeof(available), &available) == 0, "available CPUs");
     for (int cpu = 0; cpu < CPU_SETSIZE && count < 4; cpu++)
         if (CPU_ISSET(cpu, &available)) selected[count++] = cpu;

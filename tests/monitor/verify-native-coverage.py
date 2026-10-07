@@ -8,12 +8,18 @@ is safe. Presence is verified separately from payload decoder completeness.
 """
 import argparse
 import collections
+import errno
 import json
 import struct
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 INVENTORY = ROOT / "src/antinomie/monitor/protocol/native-syscalls.json"
+STATUS_NAMES = ["COMPLETE", "COPY_FAULT", "INVALID_EXTENT", "UNKNOWN_EXTENT", "NO_DECODER",
+                "NULL_POINTER", "ADDRESS_ONLY", "ASYNC_UNOBSERVED", "RESOURCE_EXHAUSTED",
+                "ABORTED_ON_LOSS", "CONTEXT_MISSING", "NOT_WRITTEN"]
+U64_MAX = (1 << 64) - 1
+FIELD_DATA_BUDGET = 1 << 20
 
 
 def packets(path):
@@ -163,7 +169,8 @@ def fixed_async_report(raw, require_partial_read=False):
     return result
 
 
-def report(transcript, raw, inventory):
+def report(transcript, raw, inventory, fixture_numbers=frozenset()):
+    """fixture_numbers selects syscalls whose entry/exit field records are kept."""
     cases = collections.defaultdict(list)
     text = transcript.read_text(errors="strict")
     if "NATIVE PASS" not in text:
@@ -182,6 +189,8 @@ def report(transcript, raw, inventory):
                     or not 0 < item["started_ns"] <= item["finished_ns"]):
                 raise ValueError("invalid or absent probe identity/time interval; rerun updated probe")
             case_ids.add(item["case_id"])
+            if "label" in item and not isinstance(item["label"], str):
+                raise ValueError("invalid probe case label")
             cases[item["number"]].append(item)
     if not cases:
         raise ValueError("probe produced no case results")
@@ -190,9 +199,34 @@ def report(transcript, raw, inventory):
     incomplete = collections.Counter()
     statuses = collections.defaultdict(collections.Counter)
     async_fields = collections.Counter()
+    fields = collections.defaultdict(dict)
+    retained = 0
     for packet in packets(raw):
         number, = struct.unpack_from("<Q", packet, 88)
         phase, kind = packet[98:100]
+        if number in fixture_numbers and phase in (1, 2) and kind in (2, 3, 4):
+            identity = struct.unpack_from("<QQQ", packet, 24)
+            object_id, = struct.unpack_from("<I", packet, 100)
+            field = fields[identity].setdefault((phase, object_id), {"chunks": {}})
+            if kind == 2:
+                key_len, layout_len = struct.unpack_from("<HH", packet, 168)
+                if len(packet) != 176 + key_len + layout_len:
+                    raise ValueError("bad field key/layout lengths")
+                field["arg"] = packet[136]
+                field["address"], = struct.unpack_from("<Q", packet, 144)
+                field["declared"], = struct.unpack_from("<Q", packet, 160)
+                field["key"] = packet[176:176 + key_len].decode("utf8", errors="strict")
+                field["layout"] = packet[176 + key_len:].decode("utf8", errors="strict")
+            elif kind == 3:
+                offset, = struct.unpack_from("<Q", packet, 104)
+                chunk = packet[136:]
+                retained += len(chunk)
+                if retained > FIELD_DATA_BUDGET:
+                    raise ValueError("fixture field data budget exceeded")
+                field["chunks"][offset] = chunk
+            else:
+                field["size"], field["captured"], status = struct.unpack_from("<QQI", packet, 136)
+                field["status"] = STATUS_NAMES[status] if status < len(STATUS_NAMES) else str(status)
         if kind == 1:
             if len(packet) != 256:
                 raise ValueError("bad event summary size")
@@ -251,6 +285,7 @@ def report(transcript, raw, inventory):
                         and exit_event[3] == expected
                         and case["started_ns"] <= entry[2] <= exit_event[2] <= case["finished_ns"]):
                     used.add(identity)
+                    case["identity"] = identity
                     matched += 1
                     break
         verdict = "SKIP"
@@ -264,6 +299,12 @@ def report(transcript, raw, inventory):
                 verdict, reason = "FAIL", "Missing distinct invocation pair matching task, time and return"
             elif all(case["verdict"] == "SKIP" for case in observations):
                 reason = "Guest feature or permission unavailable; rejection was traced"
+            elif item.get("implemented") is False:
+                if all(case["verdict"] == "EXPECTED_REJECTION" and case["errno"] == 38
+                       for case in observations):
+                    verdict, reason = "EXPECTED_ENOSYS", "No entry point; ENOSYS was traced"
+                else:
+                    verdict, reason = "FAIL", "Unimplemented row did not return ENOSYS"
             else:
                 verdict, reason = "PASS", "Safe exercise and entry/exit observed"
         rows.append({"number": nr, "name": item["name"], "verdict": verdict,
@@ -273,11 +314,93 @@ def report(transcript, raw, inventory):
                      "capture_verdict": "INCOMPLETE" if incomplete[nr] else "NOT_VERIFIED",
                      "incomplete_events": incomplete[nr],
                      "field_statuses": dict(statuses[nr])})
-    return {"kernel_version": inventory["kernel_version"], "native_count": len(rows),
+    labeled = {}
+    for observations in cases.values():
+        for case in observations:
+            if "label" in case:
+                if case["label"] in labeled:
+                    raise ValueError(f"duplicate probe case label {case['label']}")
+                labeled[case["label"]] = case
+    return {"_labeled": labeled, "_fields": fields,
+            "kernel_version": inventory["kernel_version"], "native_count": len(rows),
             "summary": dict(collections.Counter(row["verdict"] for row in rows)),
             "async_field_counts": dict(async_fields),
             "payload_completeness_verified": False,
             "note": "PASS verifies this safe exercise and tracing, not all syscall layouts",
+            "cases": rows}
+
+
+def expected_result(case, result):
+    if result == "zero":
+        return case["result"] == 0
+    if result == "nonnegative":
+        return case["result"] >= 0
+    if result == "positive":
+        return case["result"] > 0
+    name = result.removeprefix("errno:")
+    return case["result"] < 0 and errno.errorcode.get(case["errno"]) == name
+
+
+def field_problems(expected, actual, observed):
+    problems = []
+    for member in ("arg", "layout", "size", "captured", "declared", "status"):
+        want = expected[member]
+        want = U64_MAX if want == "max" else want
+        if actual.get(member) != want:
+            problems.append(f"{member} {actual.get(member)!r} != {want!r}")
+    data = bytearray()
+    for offset, chunk in sorted(actual["chunks"].items()):
+        if offset != len(data):
+            problems.append("noncontiguous chunks")
+            break
+        data.extend(chunk)
+    data = bytes(data[:actual.get("captured", 0)])
+    if expected["data"] == "observed":
+        want = observed.get(expected["key"])
+        if want is None or data.hex() != want:
+            problems.append(f"data {data.hex()} != observed {want}")
+    elif expected["data"] is not None and data.hex() != expected["data"]:
+        problems.append(f"data {data.hex()} != {expected['data']}")
+    if expected.get("address") == "nonzero" and not actual.get("address"):
+        problems.append("address is zero")
+    return problems
+
+
+def schema_report(fixture_dir, labeled, fields):
+    """Compare every fixture case with the fields recorded for its invocation."""
+    rows = []
+    for path in sorted(fixture_dir.glob("*.json")):
+        document = json.loads(path.read_text())
+        for expected in document["cases"]:
+            problems = []
+            case = labeled.get(expected["label"])
+            if case is None:
+                problems.append("probe case missing")
+            elif "identity" not in case:
+                problems.append("no matching invocation pair")
+            else:
+                if not expected_result(case, expected["result"]):
+                    problems.append(f"result {case['result']} errno {case['errno']}")
+                recorded = {}
+                for (phase, _), field in fields.get(case["identity"], {}).items():
+                    name = ("entry" if phase == 1 else "exit", field.get("key"))
+                    if name in recorded:
+                        problems.append(f"duplicate field {name}")
+                    recorded[name] = field
+                wanted = {(item["phase"], item["key"]): item for item in expected["fields"]}
+                for name in sorted(set(recorded) - set(wanted)):
+                    problems.append(f"unexpected field {name}")
+                for name, item in sorted(wanted.items()):
+                    if name not in recorded:
+                        problems.append(f"missing field {name}")
+                    else:
+                        problems.extend(f"{name[0]} {name[1]}: {problem}" for problem in
+                                        field_problems(item, recorded[name],
+                                                       case.get("observed", {})))
+            rows.append({"slice": document["slice"], "label": expected["label"],
+                         "verdict": "FAIL" if problems else "PASS", "problems": problems})
+    return {"passed": bool(rows) and all(row["verdict"] == "PASS" for row in rows),
+            "summary": dict(collections.Counter(row["verdict"] for row in rows)),
             "cases": rows}
 
 
@@ -288,16 +411,31 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--require-fixed-async", action="store_true")
     parser.add_argument("--require-partial-read", action="store_true")
+    parser.add_argument("--schema-fixtures", type=Path,
+                        help="directory of native-schema fixture files to enforce")
     args = parser.parse_args()
     transcript = args.transcript or args.recording / "terminal-transcript.raw"
-    result = report(transcript, args.recording / "telemetry.raw",
-                    json.loads(INVENTORY.read_text()))
+    inventory = json.loads(INVENTORY.read_text())
+    numbers = {}
+    if args.schema_fixtures:
+        names = {item["name"]: item["number"] for item in inventory["syscalls"]}
+        for path in args.schema_fixtures.glob("*.json"):
+            for case in json.loads(path.read_text())["cases"]:
+                numbers[case.get("number", names.get(case["syscall"]))] = True
+    result = report(transcript, args.recording / "telemetry.raw", inventory,
+                    frozenset(numbers))
+    labeled, fields = result.pop("_labeled"), result.pop("_fields")
+    if args.schema_fixtures:
+        result["schema_fixtures"] = schema_report(args.schema_fixtures, labeled, fields)
     if args.require_fixed_async or args.require_partial_read:
         result["fixed_async"] = fixed_async_report(args.recording / "telemetry.raw", args.require_partial_read)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result["summary"]))
+    if args.schema_fixtures:
+        print(json.dumps({"schema_fixtures": result["schema_fixtures"]["summary"]}))
     if result["summary"].get("FAIL", 0) or ((args.require_fixed_async or args.require_partial_read)
-                                          and not result["fixed_async"]["passed"]):
+                                          and not result["fixed_async"]["passed"]) or (
+            args.schema_fixtures and not result["schema_fixtures"]["passed"]):
         raise SystemExit(1)
 
 

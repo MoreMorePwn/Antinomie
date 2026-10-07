@@ -1,0 +1,510 @@
+From ce0fb9713cc3e2dc58ee4ef535833725fe094483 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Wed, 7 Oct 2026 18:20:00 +0700
+Subject: [PATCH] antinomie: capture socket options by level and name
+
+Decode setsockopt/getsockopt optval by (level, optname) using a table
+reviewed against the pinned socket, IPv4, IPv6 and TCP handlers. Unknown
+pairs keep raw bytes bounded by optlen (128 KiB ceiling) with an explicit
+no-decoder gap; netfilter and other nested layouts are marked
+unsupported. getsockopt records optlen at entry and exit and bounds the
+output by the written length. The classic BPF program capture is shared
+with seccomp.
+---
+ kernel/antinomie/native_capture.c | 450 ++++++++++++++++++++++++++++--
+ 1 file changed, 434 insertions(+), 16 deletions(-)
+
+diff --git a/kernel/antinomie/native_capture.c b/kernel/antinomie/native_capture.c
+index 290ed2351..0bf1fe764 100644
+--- a/kernel/antinomie/native_capture.c
++++ b/kernel/antinomie/native_capture.c
+@@ -15,6 +15,12 @@
+ #include <linux/signal.h>
+ #include <linux/slab.h>
+ #include <linux/socket.h>
++#include <linux/in.h>
++#include <linux/in6.h>
++#include <linux/ipv6.h>
++#include <linux/net_tstamp.h>
++#include <linux/tcp.h>
++#include <net/tcp.h>
+ #include <linux/time.h>
+ #include <linux/uaccess.h>
+ #include <linux/uio.h>
+@@ -1309,31 +1315,46 @@ static void capture_futex(struct ant_task *ctx, u64 nr, const u64 args[6],
+ 				 sizeof(struct __kernel_timespec));
+ }
+ 
+-static void capture_seccomp(struct ant_task *ctx, const u64 args[6],
+-			    bool output, long result)
++/* A classic BPF program header and the instruction array it points to. The
++ * array lives in the caller's memory and its length is bounded by BPF_MAXINSNS.
++ */
++static void capture_fprog(struct ant_task *ctx, u8 arg, u64 address, u64 declared,
++			  const char *key)
+ {
+ 	struct sock_fprog program;
+ 	enum ant_status status;
++	char filter_key[64];
+ 	u64 size;
+ 
++	if (declared != sizeof(program)) {
++		ant_capture_field(ctx, arg, key, LAYOUT("sock_fprog"), 3, address, NULL,
++				  min_t(u64, declared, sizeof(program)), declared,
++				  ANT_INVALID_EXTENT);
++		return;
++	}
++	status = copy_from_user_nofault(&program, (void __user *)(unsigned long)address,
++					sizeof(program)) ? ANT_COPY_FAULT : ANT_COMPLETE;
++	ant_capture_field(ctx, arg, key, LAYOUT("sock_fprog"), 3,
++			  address, &program, sizeof(program), sizeof(program), status);
++	if (status != ANT_COMPLETE || ant_capture_lost(ctx))
++		return;
++	size = (u64)program.len * sizeof(struct sock_filter);
++	scnprintf(filter_key, sizeof(filter_key), "%s.filter", key);
++	ant_capture_field(ctx, arg, filter_key, LAYOUT("sock_filter[]"), 3,
++			  (unsigned long)program.filter, NULL, size, size,
++			  program.len && program.len <= BPF_MAXINSNS ?
++			  ANT_COMPLETE : ANT_INVALID_EXTENT);
++}
++
++static void capture_seccomp(struct ant_task *ctx, const u64 args[6],
++			    bool output, long result)
++{
+ 	switch ((u32)args[0]) {
+ 	case SECCOMP_SET_MODE_STRICT:
+ 		break;
+ 	case SECCOMP_SET_MODE_FILTER:
+-		if (output)
+-			return;
+-		status = copy_from_user_nofault(&program, (void __user *)(unsigned long)args[2],
+-						sizeof(program)) ?
+-			ANT_COPY_FAULT : ANT_COMPLETE;
+-		ant_capture_field(ctx, 2, "arg2.program", LAYOUT("sock_fprog"), 3,
+-				  args[2], &program, sizeof(program), sizeof(program), status);
+-		if (status == ANT_COMPLETE && !ant_capture_lost(ctx)) {
+-			size = (u64)program.len * sizeof(struct sock_filter);
+-			ant_capture_field(ctx, 2, "arg2.program.filter", LAYOUT("sock_filter[]"), 3,
+-					  (unsigned long)program.filter, NULL, size, size,
+-					  program.len && program.len <= BPF_MAXINSNS ?
+-					  ANT_COMPLETE : ANT_INVALID_EXTENT);
+-		}
++		if (!output)
++			capture_fprog(ctx, 2, args[2], sizeof(struct sock_fprog), "arg2.program");
+ 		break;
+ 	case SECCOMP_GET_ACTION_AVAIL:
+ 		if (!output)
+@@ -1805,6 +1826,396 @@ static void capture_remaining_small(struct ant_task *ctx, u64 nr, const u64 args
+ 	}
+ }
+ 
++/* Socket options. The table below was reviewed against the pinned
++ * net/core/sock.c, net/ipv4/ip_sockglue.c, net/ipv6/ipv6_sockglue.c and
++ * net/ipv4/tcp.c handlers. A (level, optname) pair absent from it is still
++ * captured as raw bytes bounded by optlen, with an explicit no-decoder gap.
++ */
++#define ANT_SOCKOPT_CEILING (128 * 1024)	/* pinned default optmem_max */
++#define ANT_IPT_SO_BASE 64	/* IPT_SO_SET_REPLACE / IPT_SO_GET_INFO */
++#define ANT_IPT_SO_LAST 67	/* IPT_SO_GET_REVISION_TARGET */
++
++enum ant_sockopt_set {
++	ANT_SET_UNKNOWN, ANT_SET_INT, ANT_SET_INT_OR_BYTE, ANT_SET_FIXED,
++	ANT_SET_BY_LENGTH, ANT_SET_BYTES, ANT_SET_FPROG, ANT_SET_LABELED,
++	ANT_SET_NESTED,
++};
++
++enum ant_sockopt_get {
++	ANT_GET_UNKNOWN, ANT_GET_INT, ANT_GET_INT_OR_BYTE, ANT_GET_FIXED,
++	ANT_GET_LABELED, ANT_GET_FILTER_COUNT, ANT_GET_INPUT_NESTED,
++};
++
++struct ant_sockopt_rule {
++	s32 level;
++	s32 name;
++	u8 set;
++	u8 get;
++	u32 size;
++	u32 alt_size;
++	const char *layout;
++	const char *alt_layout;
++};
++
++#define SO_INT(l, n) { l, n, ANT_SET_INT, ANT_GET_INT, sizeof(int), 0, LAYOUT("int"), NULL }
++#define SO_INT_GET(l, n) { l, n, ANT_SET_UNKNOWN, ANT_GET_INT, sizeof(int), 0, LAYOUT("int"), NULL }
++#define SO_BYTE(l, n) { l, n, ANT_SET_INT_OR_BYTE, ANT_GET_INT_OR_BYTE, sizeof(int), 1, \
++			LAYOUT("int"), LAYOUT("u8") }
++#define SO_FIXED(l, n, t, name) { l, n, ANT_SET_FIXED, ANT_GET_FIXED, sizeof(t), 0, \
++				  LAYOUT(name), NULL }
++#define SO_FIXED_GET(l, n, t, name) { l, n, ANT_SET_UNKNOWN, ANT_GET_FIXED, sizeof(t), 0, \
++				      LAYOUT(name), NULL }
++#define SO_BY_LENGTH(l, n, t, name, alt, alt_name) { l, n, ANT_SET_BY_LENGTH, ANT_GET_FIXED, \
++	sizeof(t), sizeof(alt), LAYOUT(name), LAYOUT(alt_name) }
++#define SO_BYTES(l, n, ceiling) { l, n, ANT_SET_BYTES, ANT_GET_LABELED, ceiling, 0, \
++				  LAYOUT("char[]"), NULL }
++#define SO_LABELED(l, n, ceiling, name) { l, n, ANT_SET_LABELED, ANT_GET_LABELED, ceiling, 0, \
++					  LAYOUT(name), NULL }
++#define SO_LABELED_GET(l, n, name) { l, n, ANT_SET_UNKNOWN, ANT_GET_LABELED, 0, 0, \
++				     LAYOUT(name), NULL }
++#define SO_NESTED(l, n, name) { l, n, ANT_SET_NESTED, ANT_GET_LABELED, 0, 0, LAYOUT(name), NULL }
++#define SO_NESTED_IO(l, n, name) { l, n, ANT_SET_NESTED, ANT_GET_INPUT_NESTED, 0, 0, \
++				   LAYOUT(name), NULL }
++
++static const struct ant_sockopt_rule sockopt_rules[] = {
++	SO_INT(SOL_SOCKET, SO_DEBUG), SO_INT(SOL_SOCKET, SO_REUSEADDR),
++	SO_INT(SOL_SOCKET, SO_TYPE), SO_INT(SOL_SOCKET, SO_ERROR),
++	SO_INT(SOL_SOCKET, SO_DONTROUTE), SO_INT(SOL_SOCKET, SO_BROADCAST),
++	SO_INT(SOL_SOCKET, SO_SNDBUF), SO_INT(SOL_SOCKET, SO_RCVBUF),
++	SO_INT(SOL_SOCKET, SO_SNDBUFFORCE), SO_INT(SOL_SOCKET, SO_RCVBUFFORCE),
++	SO_INT(SOL_SOCKET, SO_KEEPALIVE), SO_INT(SOL_SOCKET, SO_OOBINLINE),
++	SO_INT(SOL_SOCKET, SO_NO_CHECK), SO_INT(SOL_SOCKET, SO_PRIORITY),
++	SO_INT(SOL_SOCKET, SO_PASSCRED), SO_INT(SOL_SOCKET, SO_PASSPIDFD),
++	SO_INT(SOL_SOCKET, SO_RCVLOWAT), SO_INT(SOL_SOCKET, SO_BSDCOMPAT),
++	SO_INT(SOL_SOCKET, SO_REUSEPORT), SO_INT(SOL_SOCKET, SO_PASSSEC),
++	SO_INT(SOL_SOCKET, SO_TIMESTAMP_OLD), SO_INT(SOL_SOCKET, SO_TIMESTAMP_NEW),
++	SO_INT(SOL_SOCKET, SO_TIMESTAMPNS_OLD), SO_INT(SOL_SOCKET, SO_TIMESTAMPNS_NEW),
++	SO_INT(SOL_SOCKET, SO_PROTOCOL), SO_INT(SOL_SOCKET, SO_DOMAIN),
++	SO_INT(SOL_SOCKET, SO_MARK), SO_INT(SOL_SOCKET, SO_RCVMARK),
++	SO_INT(SOL_SOCKET, SO_RXQ_OVFL), SO_INT(SOL_SOCKET, SO_WIFI_STATUS),
++	SO_INT(SOL_SOCKET, SO_PEEK_OFF), SO_INT(SOL_SOCKET, SO_NOFCS),
++	SO_INT(SOL_SOCKET, SO_LOCK_FILTER), SO_INT(SOL_SOCKET, SO_SELECT_ERR_QUEUE),
++	SO_INT(SOL_SOCKET, SO_BUSY_POLL), SO_INT(SOL_SOCKET, SO_PREFER_BUSY_POLL),
++	SO_INT(SOL_SOCKET, SO_BUSY_POLL_BUDGET), SO_INT(SOL_SOCKET, SO_INCOMING_CPU),
++	SO_INT(SOL_SOCKET, SO_CNX_ADVICE), SO_INT(SOL_SOCKET, SO_ZEROCOPY),
++	SO_INT(SOL_SOCKET, SO_BINDTOIFINDEX), SO_INT(SOL_SOCKET, SO_TXREHASH),
++	SO_INT(SOL_SOCKET, SO_BUF_LOCK), SO_INT(SOL_SOCKET, SO_RESERVE_MEM),
++	SO_INT(SOL_SOCKET, SO_ATTACH_BPF), SO_INT(SOL_SOCKET, SO_ATTACH_REUSEPORT_EBPF),
++	SO_INT(SOL_SOCKET, SO_DETACH_FILTER), SO_INT(SOL_SOCKET, SO_DETACH_REUSEPORT_BPF),
++	SO_INT_GET(SOL_SOCKET, SO_ACCEPTCONN), SO_INT_GET(SOL_SOCKET, SO_SNDLOWAT),
++	SO_INT_GET(SOL_SOCKET, SO_PEERPIDFD), SO_INT_GET(SOL_SOCKET, SO_INCOMING_NAPI_ID),
++	SO_INT_GET(SOL_SOCKET, SO_BPF_EXTENSIONS),
++	SO_FIXED(SOL_SOCKET, SO_LINGER, struct linger, "linger"),
++	SO_FIXED(SOL_SOCKET, SO_RCVTIMEO_OLD, struct __kernel_old_timeval, "__kernel_old_timeval"),
++	SO_FIXED(SOL_SOCKET, SO_SNDTIMEO_OLD, struct __kernel_old_timeval, "__kernel_old_timeval"),
++	SO_FIXED(SOL_SOCKET, SO_RCVTIMEO_NEW,
++		 struct __kernel_sock_timeval, "__kernel_sock_timeval"),
++	SO_FIXED(SOL_SOCKET, SO_SNDTIMEO_NEW,
++		 struct __kernel_sock_timeval, "__kernel_sock_timeval"),
++	SO_FIXED(SOL_SOCKET, SO_TXTIME, struct sock_txtime, "sock_txtime"),
++	SO_FIXED_GET(SOL_SOCKET, SO_PEERCRED, struct ucred, "ucred"),
++	SO_FIXED_GET(SOL_SOCKET, SO_COOKIE, u64, "u64"),
++	SO_FIXED_GET(SOL_SOCKET, SO_NETNS_COOKIE, u64, "u64"),
++	SO_BY_LENGTH(SOL_SOCKET, SO_TIMESTAMPING_OLD, struct so_timestamping, "so_timestamping",
++		     int, "int"),
++	SO_BY_LENGTH(SOL_SOCKET, SO_TIMESTAMPING_NEW, struct so_timestamping, "so_timestamping",
++		     int, "int"),
++	SO_BY_LENGTH(SOL_SOCKET, SO_MAX_PACING_RATE, u64, "u64", int, "int"),
++	SO_BYTES(SOL_SOCKET, SO_BINDTODEVICE, IFNAMSIZ - 1),
++	/* SO_GET_FILTER shares SO_ATTACH_FILTER's number; the direction selects it. */
++	{ SOL_SOCKET, SO_ATTACH_FILTER, ANT_SET_FPROG, ANT_GET_FILTER_COUNT, 0, 0,
++	  LAYOUT("sock_filter[]"), NULL },
++	{ SOL_SOCKET, SO_ATTACH_REUSEPORT_CBPF, ANT_SET_FPROG, ANT_GET_UNKNOWN, 0, 0, NULL, NULL },
++	SO_LABELED(SOL_SOCKET, SO_DEVMEM_DONTNEED, ANT_SOCKOPT_CEILING, "dmabuf_token[]"),
++	SO_LABELED_GET(SOL_SOCKET, SO_PEERNAME, "sockaddr"),
++	SO_LABELED_GET(SOL_SOCKET, SO_PEERSEC, "char[]"),
++	SO_LABELED_GET(SOL_SOCKET, SO_PEERGROUPS, "gid_t[]"),
++	SO_LABELED_GET(SOL_SOCKET, SO_MEMINFO, "u32[]"),
++
++	SO_BYTE(IPPROTO_IP, IP_PKTINFO), SO_BYTE(IPPROTO_IP, IP_RECVTTL),
++	SO_BYTE(IPPROTO_IP, IP_RECVOPTS), SO_BYTE(IPPROTO_IP, IP_RECVTOS),
++	SO_BYTE(IPPROTO_IP, IP_RETOPTS), SO_BYTE(IPPROTO_IP, IP_TOS),
++	SO_BYTE(IPPROTO_IP, IP_TTL), SO_BYTE(IPPROTO_IP, IP_HDRINCL),
++	SO_BYTE(IPPROTO_IP, IP_MTU_DISCOVER), SO_BYTE(IPPROTO_IP, IP_RECVERR),
++	SO_BYTE(IPPROTO_IP, IP_ROUTER_ALERT), SO_BYTE(IPPROTO_IP, IP_FREEBIND),
++	SO_BYTE(IPPROTO_IP, IP_PASSSEC), SO_BYTE(IPPROTO_IP, IP_TRANSPARENT),
++	SO_BYTE(IPPROTO_IP, IP_MINTTL), SO_BYTE(IPPROTO_IP, IP_NODEFRAG),
++	SO_BYTE(IPPROTO_IP, IP_BIND_ADDRESS_NO_PORT), SO_BYTE(IPPROTO_IP, IP_UNICAST_IF),
++	SO_BYTE(IPPROTO_IP, IP_MULTICAST_TTL), SO_BYTE(IPPROTO_IP, IP_MULTICAST_ALL),
++	SO_BYTE(IPPROTO_IP, IP_MULTICAST_LOOP), SO_BYTE(IPPROTO_IP, IP_RECVORIGDSTADDR),
++	SO_BYTE(IPPROTO_IP, IP_CHECKSUM), SO_BYTE(IPPROTO_IP, IP_RECVFRAGSIZE),
++	SO_BYTE(IPPROTO_IP, IP_RECVERR_RFC4884), SO_BYTE(IPPROTO_IP, IP_LOCAL_PORT_RANGE),
++	SO_INT_GET(IPPROTO_IP, IP_MTU), SO_INT_GET(IPPROTO_IP, IP_PROTOCOL),
++	SO_LABELED(IPPROTO_IP, IP_OPTIONS, 40, "ip_options"),
++	SO_LABELED(IPPROTO_IP, IP_MULTICAST_IF, sizeof(struct ip_mreqn), "ip_multicast_if"),
++	SO_LABELED_GET(IPPROTO_IP, IP_PKTOPTIONS, "cmsghdr[]"),
++	SO_BY_LENGTH(IPPROTO_IP, IP_ADD_MEMBERSHIP, struct ip_mreqn, "ip_mreqn",
++		     struct ip_mreq, "ip_mreq"),
++	SO_BY_LENGTH(IPPROTO_IP, IP_DROP_MEMBERSHIP, struct ip_mreqn, "ip_mreqn",
++		     struct ip_mreq, "ip_mreq"),
++	SO_FIXED(IPPROTO_IP, IP_ADD_SOURCE_MEMBERSHIP, struct ip_mreq_source, "ip_mreq_source"),
++	SO_FIXED(IPPROTO_IP, IP_DROP_SOURCE_MEMBERSHIP, struct ip_mreq_source, "ip_mreq_source"),
++	SO_FIXED(IPPROTO_IP, IP_BLOCK_SOURCE, struct ip_mreq_source, "ip_mreq_source"),
++	SO_FIXED(IPPROTO_IP, IP_UNBLOCK_SOURCE, struct ip_mreq_source, "ip_mreq_source"),
++	SO_FIXED(IPPROTO_IP, MCAST_JOIN_GROUP, struct group_req, "group_req"),
++	SO_FIXED(IPPROTO_IP, MCAST_LEAVE_GROUP, struct group_req, "group_req"),
++	SO_FIXED(IPPROTO_IP, MCAST_JOIN_SOURCE_GROUP, struct group_source_req, "group_source_req"),
++	SO_FIXED(IPPROTO_IP, MCAST_LEAVE_SOURCE_GROUP, struct group_source_req, "group_source_req"),
++	SO_FIXED(IPPROTO_IP, MCAST_BLOCK_SOURCE, struct group_source_req, "group_source_req"),
++	SO_FIXED(IPPROTO_IP, MCAST_UNBLOCK_SOURCE, struct group_source_req, "group_source_req"),
++	SO_NESTED_IO(IPPROTO_IP, IP_MSFILTER, "ip_msfilter"),
++	SO_NESTED_IO(IPPROTO_IP, MCAST_MSFILTER, "group_filter"),
++	SO_NESTED(IPPROTO_IP, IP_IPSEC_POLICY, "xfrm_userpolicy_info"),
++	SO_NESTED(IPPROTO_IP, IP_XFRM_POLICY, "xfrm_userpolicy_info"),
++
++	SO_INT(IPPROTO_IPV6, IPV6_ADDRFORM), SO_INT(IPPROTO_IPV6, IPV6_MTU_DISCOVER),
++	SO_INT(IPPROTO_IPV6, IPV6_MTU), SO_INT(IPPROTO_IPV6, IPV6_RECVERR),
++	SO_INT(IPPROTO_IPV6, IPV6_ROUTER_ALERT), SO_INT(IPPROTO_IPV6, IPV6_ROUTER_ALERT_ISOLATE),
++	SO_INT(IPPROTO_IPV6, IPV6_V6ONLY), SO_INT(IPPROTO_IPV6, IPV6_RECVPKTINFO),
++	SO_INT(IPPROTO_IPV6, IPV6_2292PKTINFO), SO_INT(IPPROTO_IPV6, IPV6_RECVHOPLIMIT),
++	SO_INT(IPPROTO_IPV6, IPV6_2292HOPLIMIT), SO_INT(IPPROTO_IPV6, IPV6_RECVRTHDR),
++	SO_INT(IPPROTO_IPV6, IPV6_2292RTHDR), SO_INT(IPPROTO_IPV6, IPV6_RECVHOPOPTS),
++	SO_INT(IPPROTO_IPV6, IPV6_2292HOPOPTS), SO_INT(IPPROTO_IPV6, IPV6_RECVDSTOPTS),
++	SO_INT(IPPROTO_IPV6, IPV6_2292DSTOPTS), SO_INT(IPPROTO_IPV6, IPV6_TCLASS),
++	SO_INT(IPPROTO_IPV6, IPV6_RECVTCLASS), SO_INT(IPPROTO_IPV6, IPV6_FLOWINFO),
++	SO_INT(IPPROTO_IPV6, IPV6_RECVPATHMTU), SO_INT(IPPROTO_IPV6, IPV6_TRANSPARENT),
++	SO_INT(IPPROTO_IPV6, IPV6_FREEBIND), SO_INT(IPPROTO_IPV6, IPV6_RECVORIGDSTADDR),
++	SO_INT(IPPROTO_IPV6, IPV6_UNICAST_HOPS), SO_INT(IPPROTO_IPV6, IPV6_MULTICAST_HOPS),
++	SO_INT(IPPROTO_IPV6, IPV6_MULTICAST_LOOP), SO_INT(IPPROTO_IPV6, IPV6_UNICAST_IF),
++	SO_INT(IPPROTO_IPV6, IPV6_MULTICAST_IF), SO_INT(IPPROTO_IPV6, IPV6_MULTICAST_ALL),
++	SO_INT(IPPROTO_IPV6, IPV6_AUTOFLOWLABEL), SO_INT(IPPROTO_IPV6, IPV6_DONTFRAG),
++	SO_INT(IPPROTO_IPV6, IPV6_RECVERR_RFC4884), SO_INT(IPPROTO_IPV6, IPV6_RECVFRAGSIZE),
++	SO_INT(IPPROTO_IPV6, IPV6_ADDR_PREFERENCES), SO_INT(IPPROTO_IPV6, IPV6_MINHOPCOUNT),
++	SO_INT(IPPROTO_IPV6, IPV6_FLOWINFO_SEND),
++	SO_FIXED(IPPROTO_IPV6, IPV6_ADD_MEMBERSHIP, struct ipv6_mreq, "ipv6_mreq"),
++	SO_FIXED(IPPROTO_IPV6, IPV6_DROP_MEMBERSHIP, struct ipv6_mreq, "ipv6_mreq"),
++	SO_FIXED(IPPROTO_IPV6, IPV6_JOIN_ANYCAST, struct ipv6_mreq, "ipv6_mreq"),
++	SO_FIXED(IPPROTO_IPV6, IPV6_LEAVE_ANYCAST, struct ipv6_mreq, "ipv6_mreq"),
++	SO_FIXED(IPPROTO_IPV6, IPV6_PKTINFO, struct in6_pktinfo, "in6_pktinfo"),
++	SO_FIXED(IPPROTO_IPV6, MCAST_JOIN_GROUP, struct group_req, "group_req"),
++	SO_FIXED(IPPROTO_IPV6, MCAST_LEAVE_GROUP, struct group_req, "group_req"),
++	SO_FIXED(IPPROTO_IPV6, MCAST_JOIN_SOURCE_GROUP,
++		 struct group_source_req, "group_source_req"),
++	SO_FIXED(IPPROTO_IPV6, MCAST_LEAVE_SOURCE_GROUP,
++		 struct group_source_req, "group_source_req"),
++	SO_FIXED(IPPROTO_IPV6, MCAST_BLOCK_SOURCE, struct group_source_req, "group_source_req"),
++	SO_FIXED(IPPROTO_IPV6, MCAST_UNBLOCK_SOURCE, struct group_source_req, "group_source_req"),
++	SO_LABELED(IPPROTO_IPV6, IPV6_HOPOPTS, ANT_SOCKOPT_CEILING, "ipv6_opt_hdr"),
++	SO_LABELED(IPPROTO_IPV6, IPV6_RTHDR, ANT_SOCKOPT_CEILING, "ipv6_opt_hdr"),
++	SO_LABELED(IPPROTO_IPV6, IPV6_DSTOPTS, ANT_SOCKOPT_CEILING, "ipv6_opt_hdr"),
++	SO_LABELED(IPPROTO_IPV6, IPV6_RTHDRDSTOPTS, ANT_SOCKOPT_CEILING, "ipv6_opt_hdr"),
++	SO_LABELED(IPPROTO_IPV6, IPV6_2292PKTOPTIONS, ANT_SOCKOPT_CEILING, "cmsghdr[]"),
++	SO_LABELED(IPPROTO_IPV6, IPV6_FLOWLABEL_MGR, ANT_SOCKOPT_CEILING, "in6_flowlabel_req"),
++	SO_NESTED_IO(IPPROTO_IPV6, MCAST_MSFILTER, "group_filter"),
++	SO_NESTED(IPPROTO_IPV6, IPV6_IPSEC_POLICY, "xfrm_userpolicy_info"),
++	SO_NESTED(IPPROTO_IPV6, IPV6_XFRM_POLICY, "xfrm_userpolicy_info"),
++
++	SO_INT(IPPROTO_TCP, TCP_NODELAY), SO_INT(IPPROTO_TCP, TCP_MAXSEG),
++	SO_INT(IPPROTO_TCP, TCP_CORK), SO_INT(IPPROTO_TCP, TCP_KEEPIDLE),
++	SO_INT(IPPROTO_TCP, TCP_KEEPINTVL), SO_INT(IPPROTO_TCP, TCP_KEEPCNT),
++	SO_INT(IPPROTO_TCP, TCP_SYNCNT), SO_INT(IPPROTO_TCP, TCP_LINGER2),
++	SO_INT(IPPROTO_TCP, TCP_DEFER_ACCEPT), SO_INT(IPPROTO_TCP, TCP_WINDOW_CLAMP),
++	SO_INT(IPPROTO_TCP, TCP_QUICKACK), SO_INT(IPPROTO_TCP, TCP_USER_TIMEOUT),
++	SO_INT(IPPROTO_TCP, TCP_REPAIR), SO_INT(IPPROTO_TCP, TCP_REPAIR_QUEUE),
++	SO_INT(IPPROTO_TCP, TCP_QUEUE_SEQ), SO_INT(IPPROTO_TCP, TCP_FASTOPEN),
++	SO_INT(IPPROTO_TCP, TCP_FASTOPEN_CONNECT), SO_INT(IPPROTO_TCP, TCP_FASTOPEN_NO_COOKIE),
++	SO_INT(IPPROTO_TCP, TCP_TIMESTAMP), SO_INT(IPPROTO_TCP, TCP_NOTSENT_LOWAT),
++	SO_INT(IPPROTO_TCP, TCP_THIN_LINEAR_TIMEOUTS), SO_INT(IPPROTO_TCP, TCP_THIN_DUPACK),
++	SO_INT(IPPROTO_TCP, TCP_SAVE_SYN), SO_INT(IPPROTO_TCP, TCP_INQ),
++	SO_INT(IPPROTO_TCP, TCP_TX_DELAY),
++	SO_BYTES(IPPROTO_TCP, TCP_CONGESTION, TCP_CA_NAME_MAX - 1),
++	SO_BYTES(IPPROTO_TCP, TCP_ULP, TCP_ULP_NAME_MAX - 1),
++	SO_FIXED(IPPROTO_TCP, TCP_MD5SIG, struct tcp_md5sig, "tcp_md5sig"),
++	SO_FIXED(IPPROTO_TCP, TCP_MD5SIG_EXT, struct tcp_md5sig, "tcp_md5sig"),
++	SO_FIXED(IPPROTO_TCP, TCP_REPAIR_WINDOW, struct tcp_repair_window, "tcp_repair_window"),
++	SO_LABELED(IPPROTO_TCP, TCP_FASTOPEN_KEY, 2 * TCP_FASTOPEN_KEY_LENGTH, "tcp_fastopen_key"),
++	SO_LABELED(IPPROTO_TCP, TCP_REPAIR_OPTIONS, ANT_SOCKOPT_CEILING, "tcp_repair_opt[]"),
++	SO_LABELED(IPPROTO_TCP, TCP_AO_ADD_KEY, ANT_SOCKOPT_CEILING, "tcp_ao_add"),
++	SO_LABELED(IPPROTO_TCP, TCP_AO_DEL_KEY, ANT_SOCKOPT_CEILING, "tcp_ao_del"),
++	SO_LABELED(IPPROTO_TCP, TCP_AO_INFO, ANT_SOCKOPT_CEILING, "tcp_ao_info_opt"),
++	SO_LABELED(IPPROTO_TCP, TCP_AO_REPAIR, ANT_SOCKOPT_CEILING, "tcp_ao_repair"),
++	SO_LABELED_GET(IPPROTO_TCP, TCP_INFO, "tcp_info"),
++	SO_LABELED_GET(IPPROTO_TCP, TCP_CC_INFO, "tcp_cc_info"),
++	SO_LABELED_GET(IPPROTO_TCP, TCP_SAVED_SYN, ""),
++	{ IPPROTO_TCP, TCP_ZEROCOPY_RECEIVE, ANT_SET_UNKNOWN, ANT_GET_INPUT_NESTED, 0, 0,
++	  LAYOUT("tcp_zerocopy_receive"), NULL },
++	{ IPPROTO_TCP, TCP_AO_GET_KEYS, ANT_SET_UNKNOWN, ANT_GET_INPUT_NESTED, 0, 0,
++	  LAYOUT("tcp_ao_getsockopt"), NULL },
++};
++
++struct ant_sockopt_state {
++	s32 capacity;
++};
++
++static const struct ant_sockopt_rule *sockopt_rule(s32 level, s32 name)
++{
++	unsigned int index;
++
++	for (index = 0; index < ARRAY_SIZE(sockopt_rules); index++)
++		if (sockopt_rules[index].level == level && sockopt_rules[index].name == name)
++			return &sockopt_rules[index];
++	return NULL;
++}
++
++/* netfilter table replacement and queries carry nested counter pointers and
++ * variable entry blobs. The IP handlers pass only options they do not know to
++ * netfilter (IPV6_RECVTCLASS and IPV6_TCLASS share this range), so this applies
++ * only when no rule matched.
++ */
++static bool sockopt_netfilter(const struct ant_sockopt_rule *rule, s32 level, s32 name)
++{
++	return !rule && (level == IPPROTO_IP || level == IPPROTO_IPV6) &&
++		name >= ANT_IPT_SO_BASE && name <= ANT_IPT_SO_LAST;
++}
++
++static void sockopt_raw(struct ant_task *ctx, const char *key, const char *layout,
++			u64 address, s32 length, u64 ceiling)
++{
++	ant_capture_field(ctx, 3, key, layout, 1, address, NULL,
++			  min_t(u64, length, ceiling), length,
++			  length > ceiling ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++}
++
++static void capture_setsockopt(struct ant_task *ctx, const u64 args[6])
++{
++	const struct ant_sockopt_rule *rule = sockopt_rule(args[1], args[2]);
++	s32 length = args[4];
++	u64 address = args[3];
++	enum ant_status status;
++	u64 size;
++
++	if (length < 0)
++		return;
++	if (sockopt_netfilter(rule, args[1], args[2])) {
++		sockopt_raw(ctx, "arg3.optval", LAYOUT("ipt_replace"), address, length,
++			    ANT_SOCKOPT_CEILING);
++		capture_gap(ctx, "sockopt.unsupported_nested", ANT_NO_DECODER);
++		return;
++	}
++	switch (rule ? rule->set : ANT_SET_UNKNOWN) {
++	case ANT_SET_INT:
++	case ANT_SET_INT_OR_BYTE:
++		if (rule->set == ANT_SET_INT_OR_BYTE && length && length < sizeof(int)) {
++			ant_capture_field(ctx, 3, "arg3.optval", rule->alt_layout, 3, address,
++					  NULL, 1, length, ANT_COMPLETE);
++			return;
++		}
++		fallthrough;
++	case ANT_SET_FIXED:
++		size = min_t(u64, length, rule->size);
++		status = length >= rule->size ? ANT_COMPLETE : ANT_INVALID_EXTENT;
++		ant_capture_field(ctx, 3, "arg3.optval", rule->layout, 3, address, NULL,
++				  size, length, status);
++		return;
++	case ANT_SET_BY_LENGTH:
++		if (length >= rule->size)
++			ant_capture_field(ctx, 3, "arg3.optval", rule->layout, 3, address,
++					  NULL, rule->size, length, ANT_COMPLETE);
++		else
++			ant_capture_field(ctx, 3, "arg3.optval", rule->alt_layout, 3, address,
++					  NULL, min_t(u64, length, rule->alt_size), length,
++					  length >= rule->alt_size ? ANT_COMPLETE :
++					  ANT_INVALID_EXTENT);
++		return;
++	case ANT_SET_BYTES:
++		/* The kernel copies at most this many bytes and terminates them itself. */
++		ant_capture_field(ctx, 3, "arg3.optval", rule->layout, 1, address, NULL,
++				  min_t(u64, length, rule->size), length, ANT_COMPLETE);
++		return;
++	case ANT_SET_FPROG:
++		capture_fprog(ctx, 3, address, length, "arg3.optval");
++		return;
++	case ANT_SET_LABELED:
++		sockopt_raw(ctx, "arg3.optval", rule->layout, address, length, rule->size);
++		return;
++	case ANT_SET_NESTED:
++		sockopt_raw(ctx, "arg3.optval", rule->layout, address, length,
++			    ANT_SOCKOPT_CEILING);
++		capture_gap(ctx, "sockopt.unsupported_nested", ANT_NO_DECODER);
++		return;
++	default:
++		sockopt_raw(ctx, "arg3.optval", "", address, length, ANT_SOCKOPT_CEILING);
++		capture_gap(ctx, "sockopt.unknown_option", ANT_NO_DECODER);
++	}
++}
++
++static void capture_getsockopt(struct ant_task *ctx, const u64 args[6],
++			       bool output, long result)
++{
++	const struct ant_sockopt_rule *rule = sockopt_rule(args[1], args[2]);
++	u8 get = rule ? rule->get : ANT_GET_UNKNOWN;
++	struct ant_sockopt_state *state;
++	enum ant_status status;
++	const char *layout;
++	s32 length;
++	u64 size, ceiling;
++
++	if (sockopt_netfilter(rule, args[1], args[2]))
++		get = ANT_GET_INPUT_NESTED;
++	status = copy_from_user_nofault(&length, (void __user *)(unsigned long)args[4],
++					sizeof(length)) ? ANT_COPY_FAULT : ANT_COMPLETE;
++	if (output && result)
++		return;
++	ant_capture_field(ctx, 4, "arg4.optlen", LAYOUT("int"), 3, args[4], &length,
++			  sizeof(length), sizeof(length), status);
++	if (!output) {
++		if (get == ANT_GET_UNKNOWN)
++			capture_gap(ctx, "sockopt.unknown_option", ANT_NO_DECODER);
++		if (status != ANT_COMPLETE || ant_capture_lost(ctx))
++			return;
++		if (get == ANT_GET_INPUT_NESTED && length > 0) {
++			sockopt_raw(ctx, "arg3.optval_in", rule ? rule->layout : "",
++				    args[3], length, ANT_SOCKOPT_CEILING);
++			capture_gap(ctx, "sockopt.unsupported_nested", ANT_NO_DECODER);
++		}
++		state = kzalloc(sizeof(*state), GFP_NOWAIT);
++		if (!state)
++			return;
++		state->capacity = length;
++		ant_capture_set_state(ctx, state, release_allocation);
++		return;
++	}
++	if (ant_capture_lost(ctx))
++		return;
++	state = ant_capture_state(ctx);
++	if (!state || status != ANT_COMPLETE) {
++		ant_capture_field(ctx, 3, "arg3.optval", "", 1, args[3], NULL,
++				  U64_MAX, U64_MAX, ANT_CONTEXT_MISSING);
++		return;
++	}
++	layout = rule ? rule->layout : "";
++	ceiling = ANT_SOCKOPT_CEILING;
++	switch (get) {
++	case ANT_GET_INT_OR_BYTE:
++		if (length < sizeof(int))
++			layout = rule->alt_layout;
++		fallthrough;
++	case ANT_GET_INT:
++	case ANT_GET_FIXED:
++		ceiling = rule->size;
++		break;
++	case ANT_GET_FILTER_COUNT:
++		/* SO_GET_FILTER counts instructions, not bytes, in optlen. */
++		if (length < 0 || length > BPF_MAXINSNS)
++			length = -1;
++		else
++			length *= sizeof(struct sock_filter);
++		ceiling = BPF_MAXINSNS * sizeof(struct sock_filter);
++		break;
++	case ANT_GET_UNKNOWN:
++		layout = "";
++		break;
++	}
++	if (length < 0 || (get != ANT_GET_FILTER_COUNT && length > state->capacity)) {
++		ant_capture_field(ctx, 3, "arg3.optval", layout, 1, args[3], NULL,
++				  U64_MAX, length, ANT_INVALID_EXTENT);
++		return;
++	}
++	size = min_t(u64, length, ceiling);
++	ant_capture_field(ctx, 3, "arg3.optval", layout, 1, args[3], NULL, size, length,
++			  length > ceiling ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++}
++
+ u8 ant_native_capture(struct ant_task *ctx, u64 nr, const u64 args[6],
+ 		      bool output, long result)
+ {
+@@ -1988,6 +2399,13 @@ u8 ant_native_capture(struct ant_task *ctx, u64 nr, const u64 args[6],
+ 	case 51: case 52: case 288:
+ 		capture_address(ctx, args, output, result);
+ 		return ANT_CAPTURE_OWNED | BIT(1) | BIT(2);
++	case 54:
++		if (!output)
++			capture_setsockopt(ctx, args);
++		return ANT_CAPTURE_OWNED | BIT(3);
++	case 55:
++		capture_getsockopt(ctx, args, output, result);
++		return ANT_CAPTURE_OWNED | BIT(3) | BIT(4);
+ 	case 53:
+ 		if (output && result == 0 && !ant_capture_lost(ctx))
+ 			ant_capture_field(ctx, 3, "arg3.socketpair", LAYOUT("int[2]"), 3,
+-- 
+2.53.0
+

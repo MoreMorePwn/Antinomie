@@ -9,7 +9,9 @@
       "so_peercred, so_attach_filter use unix[0]; ipv6_v6only uses tcp6; every other case uses tcp4",
       "so_attach_filter program: one instruction BPF_RET|BPF_K accepting 0xffffffff bytes",
       "unknown cases use level SOL_SOCKET and optname 0x7fff",
-      "fault.set passes optval address 1; negative_optlen.set passes optlen -1"
+      "fault.set passes optval address 1; negative_optlen.set passes optlen -1",
+      "so_get_filter reads back the one-instruction program attached to unix[0]; optlen counts instructions",
+      "ipv6_tclass uses tcp6 and checks that option 67 is not treated as a netfilter command"
     ]
   },
   "cases": [
@@ -276,9 +278,49 @@
       ]
     },
     {
+      "label": "sockopt.so_get_filter.get",
+      "syscall": "getsockopt",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 4,
+          "key": "arg4.optlen",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "01000000"
+        },
+        {
+          "phase": "exit",
+          "arg": 4,
+          "key": "arg4.optlen",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "01000000"
+        },
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.optval",
+          "layout": "linux-6.12.94/x86_64/sock_filter[]",
+          "size": 8,
+          "captured": 8,
+          "declared": 8,
+          "status": "COMPLETE",
+          "data": "06000000ffffffff"
+        }
+      ]
+    },
+    {
       "label": "sockopt.so_bindtodevice.set",
       "syscall": "setsockopt",
-      "result": "errno:EPERM",
+      "result": "zero",
       "fields": [
         {
           "phase": "entry",
@@ -424,6 +466,24 @@
           "declared": 4,
           "status": "COMPLETE",
           "data": "01000000"
+        }
+      ]
+    },
+    {
+      "label": "sockopt.ipv6_tclass.set",
+      "syscall": "setsockopt",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.optval",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "00000000"
         }
       ]
     },
