@@ -49,6 +49,7 @@
 #include <sys/timerfd.h>
 #include <sys/times.h>
 #include <sys/uio.h>
+#include <sys/un.h>
 #include <sys/user.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
@@ -1370,6 +1371,377 @@ static void uring_cases(void)
     TEST(close, fd);
 }
 
+/* Slice 2F: async requests are matched by user_data in
+ * tests/monitor/fixtures/native-schema-async, not by syscall case.
+ */
+struct ring {
+    struct io_uring_params p;
+    int fd;
+    void *sq, *cq;
+    size_t sq_size, cq_size;
+    struct io_uring_sqe *sqes;
+    unsigned *sq_tail, *sq_array, *sq_flags, *cq_head, *cq_tail, sq_mask, cq_mask;
+    struct io_uring_cqe *cqes;
+};
+
+static int ring_open(struct ring *r, unsigned entries, unsigned flags)
+{
+    memset(r, 0, sizeof(*r));
+    r->p.flags = flags;
+    if (flags & IORING_SETUP_SQPOLL) r->p.sq_thread_idle = 2000;
+    r->fd = TEST(io_uring_setup, entries, &r->p);
+    if (r->fd < 0) return -1;
+    r->sq_size = r->p.sq_off.array + r->p.sq_entries * sizeof(unsigned);
+    r->cq_size = r->p.cq_off.cqes + r->p.cq_entries * sizeof(struct io_uring_cqe);
+    if (r->sq_size < r->cq_size) r->sq_size = r->cq_size;
+    r->sq = mmap(NULL, r->sq_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE,
+                 r->fd, IORING_OFF_SQ_RING);
+    r->sqes = mmap(NULL, r->p.sq_entries * sizeof(*r->sqes), PROT_READ | PROT_WRITE,
+                   MAP_SHARED | MAP_POPULATE, r->fd, IORING_OFF_SQES);
+    require(r->p.features & IORING_FEAT_SINGLE_MMAP, "2F single-mmap ring");
+    require(r->sq != MAP_FAILED && r->sqes != MAP_FAILED, "2F ring maps");
+    r->cq = r->sq;
+    r->sq_tail = r->sq + r->p.sq_off.tail;
+    r->sq_array = r->sq + r->p.sq_off.array;
+    r->sq_flags = r->sq + r->p.sq_off.flags;
+    r->sq_mask = *(unsigned *)(r->sq + r->p.sq_off.ring_mask);
+    r->cq_head = r->cq + r->p.cq_off.head;
+    r->cq_tail = r->cq + r->p.cq_off.tail;
+    r->cq_mask = *(unsigned *)(r->cq + r->p.cq_off.ring_mask);
+    r->cqes = r->cq + r->p.cq_off.cqes;
+    return 0;
+}
+
+static struct io_uring_sqe *ring_sqe(struct ring *r, uint8_t opcode, uint64_t user_data)
+{
+    unsigned tail = *r->sq_tail, slot = tail & r->sq_mask;
+    struct io_uring_sqe *sqe = &r->sqes[slot];
+
+    memset(sqe, 0, sizeof(*sqe));
+    sqe->opcode = opcode;
+    sqe->user_data = user_data;
+    r->sq_array[slot] = slot;
+    return sqe;
+}
+
+/* Publish every prepared SQE, then wait for `wait` completions. */
+static void ring_submit(struct ring *r, unsigned count, unsigned wait)
+{
+    __atomic_store_n(r->sq_tail, *r->sq_tail + count, __ATOMIC_RELEASE);
+    if (r->p.flags & IORING_SETUP_SQPOLL) {
+        if (__atomic_load_n(r->sq_flags, __ATOMIC_ACQUIRE) & IORING_SQ_NEED_WAKEUP)
+            TEST(io_uring_enter, r->fd, 0, 0, IORING_ENTER_SQ_WAKEUP, NULL, 0);
+        if (wait)
+            TEST(io_uring_enter, r->fd, 0, wait, IORING_ENTER_GETEVENTS, NULL, 0);
+        return;
+    }
+    require(TEST(io_uring_enter, r->fd, count, wait, wait ? IORING_ENTER_GETEVENTS : 0,
+                 NULL, 0) == (long)count, "2F submission");
+}
+
+/* Take the completion for user_data. Earlier completions for other requests
+ * are kept until asked for.
+ */
+static struct { uint64_t user_data; int result; } stash[16];
+static unsigned stashed;
+
+static int ring_result(struct ring *r, uint64_t user_data, int *result)
+{
+    for (unsigned i = 0; i < stashed; i++) {
+        if (stash[i].user_data == user_data) {
+            *result = stash[i].result;
+            stash[i] = stash[--stashed];
+            return 0;
+        }
+    }
+    for (int attempt = 0; attempt < 200; attempt++) {
+        unsigned head = *r->cq_head;
+        while (head != __atomic_load_n(r->cq_tail, __ATOMIC_ACQUIRE)) {
+            struct io_uring_cqe *cqe = &r->cqes[head & r->cq_mask];
+            int found = cqe->user_data == user_data;
+            if (found) {
+                *result = cqe->res;
+            } else {
+                require(stashed < 16, "2F completion stash");
+                stash[stashed].user_data = cqe->user_data;
+                stash[stashed++].result = cqe->res;
+            }
+            __atomic_store_n(r->cq_head, ++head, __ATOMIC_RELEASE);
+            if (found) return 0;
+        }
+        TEST(io_uring_enter, r->fd, 0, 1, IORING_ENTER_GETEVENTS, NULL, 0);
+    }
+    return -1;
+}
+
+static void ring_close(struct ring *r)
+{
+    munmap(r->sqes, r->p.sq_entries * sizeof(*r->sqes));
+    munmap(r->sq, r->sq_size);
+    TEST(close, r->fd);
+}
+
+static void async_begin(void)
+{
+    pending.used = 0;
+    pending.observed[0] = 0;
+}
+
+static void async_report(const char *label, uint64_t user_data, long result)
+{
+    pthread_mutex_lock(&output_lock);
+    printf("ANT_ASYNC {\"label\":\"%s\",\"user_data\":\"0x%016llx\",\"result\":%ld,"
+           "\"observed\":{%s}}\n", label, (unsigned long long)user_data, result,
+           pending.observed);
+    pthread_mutex_unlock(&output_lock);
+}
+
+static int uring_case(struct ring *r, const char *label, uint64_t user_data,
+                      int expected)
+{
+    int result = 0;
+
+    ring_submit(r, 1, 1);
+    require(ring_result(r, user_data, &result) == 0, label);
+    if (result != expected) {
+        printf("2F %s result %d expected %d\n", label, result, expected);
+        require(0, label);
+    }
+    return result;
+}
+
+#define UD(n) (0x2f00000000000000ULL + (n))
+
+static void slice_2f_cases(void)
+{
+    static const char iowq[] = "ANTINOMIE-IOWQ-READ-PAYLOAD-0001";
+    static const char sqpoll[] = "ANTINOMIE-SQPOLL";
+    struct io_uring_sqe *sqe;
+    struct ring r, poll;
+    char buffer[64];
+    int pipes[2], result;
+
+    if (ring_open(&r, 16, 0) < 0) return;
+    require(pipe(pipes) == 0, "2F pipe");
+
+    /* io-wq: IOSQE_ASYNC punts the read to a worker of this process. */
+    require(write(pipes[1], iowq, 32) == 32, "2F pipe payload");
+    async_begin();
+    sqe = ring_sqe(&r, IORING_OP_READ, UD(1));
+    sqe->fd = pipes[0]; sqe->addr = (uintptr_t)buffer; sqe->len = 32;
+    sqe->flags = IOSQE_ASYNC;
+    result = uring_case(&r, "2f.uring_read_iowq", UD(1), 32);
+    require(!memcmp(buffer, iowq, 32), "2F io-wq payload");
+    async_report("2f.uring_read_iowq", UD(1), result);
+
+    /* AIO O_DIRECT read on the ext4 root: completion arrives in interrupt
+     * context, so the output is read when io_getevents reaps it.
+     */
+    {
+        aio_context_t context = 0;
+        struct iocb request = {0}, *requests[] = {&request};
+        struct io_event completion;
+        struct timespec timeout = {5, 0};
+        void *data = NULL;
+        int fd;
+
+        if (TEST(io_setup, 4, &context) == 0) {
+            require(posix_memalign(&data, 4096, 4096) == 0, "2F aligned AIO buffer");
+            for (int i = 0; i < 4096; i++) ((char *)data)[i] = "ANTINOMIE-AIO-2F"[i % 16];
+            fd = TEST(openat, AT_FDCWD, "aio-2f", O_CREAT | O_RDWR | O_DIRECT, 0600);
+            require(fd >= 0 && TEST(pwrite64, fd, data, 4096, 0) == 4096, "2F AIO file");
+            memset(data, 0, 4096);
+            request.aio_data = UD(2);
+            request.aio_lio_opcode = IOCB_CMD_PREAD;
+            request.aio_fildes = fd;
+            request.aio_buf = (uintptr_t)data;
+            request.aio_nbytes = 4096;
+            async_begin();
+            require(TEST(io_submit, context, 1, requests) == 1 &&
+                    TEST(io_getevents, context, 1, 1, &completion, &timeout) == 1 &&
+                    completion.data == UD(2) && completion.res == 4096, "2F AIO read");
+            observe("async.payload.output", data, 4096);
+            async_report("2f.aio_direct_read_reaped", UD(2), completion.res);
+            TEST(close, fd);
+            TEST(unlink, "aio-2f");
+            TEST(io_destroy, context);
+            free(data);
+        }
+    }
+
+    /* SQPOLL: the kernel thread submits; the request belongs to this run. */
+    if (ring_open(&poll, 4, IORING_SETUP_SQPOLL) == 0) {
+        async_begin();
+        sqe = ring_sqe(&poll, IORING_OP_WRITE, UD(3));
+        sqe->fd = pipes[1]; sqe->addr = (uintptr_t)sqpoll; sqe->len = 16;
+        result = uring_case(&poll, "2f.sqpoll_write", UD(3), 16);
+        require(read(pipes[0], buffer, 16) == 16 && !memcmp(buffer, sqpoll, 16),
+                "2F SQPOLL payload");
+        async_report("2f.sqpoll_write", UD(3), result);
+        ring_close(&poll);
+    }
+
+    {
+        struct sockaddr_un address = {.sun_family = AF_UNIX};
+        socklen_t length = offsetof(struct sockaddr_un, sun_path) + 1 +
+                           sizeof("antinomie-2f-bind") - 1;
+        int sock = TEST(socket, AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+
+        memcpy(address.sun_path + 1, "antinomie-2f-bind", sizeof("antinomie-2f-bind") - 1);
+        async_begin();
+        sqe = ring_sqe(&r, IORING_OP_BIND, UD(4));
+        sqe->fd = sock; sqe->addr = (uintptr_t)&address; sqe->addr2 = length;
+        result = uring_case(&r, "2f.bind", UD(4), 0);
+        observe("async.operand.sockaddr", &address, length);
+        async_report("2f.bind", UD(4), result);
+        TEST(close, sock);
+    }
+
+    {
+        int files[2] = {-1, -1}, update[2] = {pipes[0], pipes[1]};
+
+        require(TEST(io_uring_register, r.fd, IORING_REGISTER_FILES, files, 2) == 0,
+                "2F file table");
+        async_begin();
+        sqe = ring_sqe(&r, IORING_OP_FILES_UPDATE, UD(5));
+        sqe->fd = -1; sqe->addr = (uintptr_t)update; sqe->len = 2; sqe->off = 0;
+        result = uring_case(&r, "2f.files_update", UD(5), 2);
+        observe("async.operand.fds", update, sizeof(update));
+        async_report("2f.files_update", UD(5), result);
+        TEST(io_uring_register, r.fd, IORING_UNREGISTER_FILES, NULL, 0);
+    }
+
+    {
+        siginfo_t info;
+        long child = fork();
+
+        if (child == 0) _exit(0);
+        memset(&info, 0, sizeof(info));
+        async_begin();
+        sqe = ring_sqe(&r, IORING_OP_WAITID, UD(6));
+        sqe->len = P_PID; sqe->fd = child; sqe->file_index = WEXITED;
+        sqe->addr2 = (uintptr_t)&info;
+        result = uring_case(&r, "2f.waitid", UD(6), 0);
+        require(info.si_pid == child && info.si_status == 0, "2F waitid siginfo");
+        observe("async.operand.siginfo", &info, sizeof(info));
+        async_report("2f.waitid", UD(6), result);
+    }
+
+    {
+        static uint32_t word;
+        struct futex_waitv waiter = {.val = 1, .uaddr = (uintptr_t)&word,
+                                     .flags = FUTEX2_SIZE_U32 | FUTEX2_PRIVATE};
+
+        async_begin();
+        sqe = ring_sqe(&r, IORING_OP_FUTEX_WAKE, UD(7));
+        sqe->fd = FUTEX2_SIZE_U32 | FUTEX2_PRIVATE; sqe->addr = (uintptr_t)&word;
+        sqe->addr2 = 1; sqe->addr3 = FUTEX_BITSET_MATCH_ANY;
+        result = uring_case(&r, "2f.futex_wake", UD(7), 0);
+        async_report("2f.futex_wake", UD(7), result);
+
+        async_begin();
+        sqe = ring_sqe(&r, IORING_OP_FUTEX_WAITV, UD(8));
+        sqe->addr = (uintptr_t)&waiter; sqe->len = 1;
+        result = uring_case(&r, "2f.futex_waitv_mismatch", UD(8), -EAGAIN);
+        observe("async.operand.futexv", &waiter, sizeof(waiter));
+        async_report("2f.futex_waitv_mismatch", UD(8), result);
+    }
+
+    {
+        static char buffers[4][128];
+
+        async_begin();
+        sqe = ring_sqe(&r, IORING_OP_PROVIDE_BUFFERS, UD(9));
+        sqe->fd = 4; sqe->addr = (uintptr_t)buffers; sqe->len = 128;
+        sqe->buf_group = 1; sqe->off = 0;
+        result = uring_case(&r, "2f.provide_buffers", UD(9), 0);
+        async_report("2f.provide_buffers", UD(9), result);
+        sqe = ring_sqe(&r, IORING_OP_REMOVE_BUFFERS, UD(0x20));
+        sqe->fd = 4; sqe->buf_group = 1;
+        uring_case(&r, "2f.remove_buffers", UD(0x20), 4);
+    }
+
+    {
+        int sock = TEST(socket, AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        int value = 65536, out = 0;
+
+        async_begin();
+        sqe = ring_sqe(&r, IORING_OP_URING_CMD, UD(10));
+        sqe->fd = sock; sqe->cmd_op = SOCKET_URING_OP_SETSOCKOPT;
+        sqe->level = SOL_SOCKET; sqe->optname = SO_RCVBUF;
+        sqe->optval = (uintptr_t)&value; sqe->optlen = sizeof(value);
+        result = uring_case(&r, "2f.setsockopt_cmd", UD(10), 0);
+        async_report("2f.setsockopt_cmd", UD(10), result);
+
+        async_begin();
+        sqe = ring_sqe(&r, IORING_OP_URING_CMD, UD(11));
+        sqe->fd = sock; sqe->cmd_op = SOCKET_URING_OP_GETSOCKOPT;
+        sqe->level = SOL_SOCKET; sqe->optname = SO_RCVBUF;
+        sqe->optval = (uintptr_t)&out; sqe->optlen = sizeof(out);
+        result = uring_case(&r, "2f.getsockopt_cmd", UD(11), 4);
+        observe("async.operand.optval", &out, sizeof(out));
+        async_report("2f.getsockopt_cmd", UD(11), result);
+        TEST(close, sock);
+    }
+
+    {
+        struct __kernel_timespec ten = {10, 0};
+        int timeout = 0, cancel = 0;
+
+        sqe = ring_sqe(&r, IORING_OP_TIMEOUT, UD(12));
+        sqe->addr = (uintptr_t)&ten; sqe->len = 1;
+        ring_submit(&r, 1, 0);
+        sqe = ring_sqe(&r, IORING_OP_ASYNC_CANCEL, UD(13));
+        sqe->addr = UD(12);
+        ring_submit(&r, 1, 2);
+        require(ring_result(&r, UD(12), &timeout) == 0, "2F timeout completion");
+        require(ring_result(&r, UD(13), &cancel) == 0, "2F cancel completion");
+        if (timeout != -ECANCELED || cancel != 0)
+            printf("2F cancel: timeout %d cancel %d\n", timeout, cancel);
+        require(timeout == -ECANCELED && cancel == 0, "2F canceled timeout");
+        async_begin();
+        async_report("2f.timeout_canceled", UD(12), timeout);
+        async_report("2f.async_cancel", UD(13), cancel);
+    }
+
+    TEST(close, pipes[0]);
+    TEST(close, pipes[1]);
+    ring_close(&r);
+}
+
+/* Contract 14.6: more requests in flight than the recorder tracks. */
+static int async_stress_mode(void)
+{
+    struct __kernel_timespec ten = {10, 0};
+    struct io_uring_sqe *sqe;
+    unsigned completed = 0;
+    struct ring r;
+
+    require(ring_open(&r, 512, 0) == 0, "stress ring");
+    for (unsigned i = 0; i < 300; i++) {
+        sqe = ring_sqe(&r, IORING_OP_TIMEOUT, 0x2f57000000000000ULL + i);
+        sqe->addr = (uintptr_t)&ten; sqe->len = 1;
+        __atomic_store_n(r.sq_tail, *r.sq_tail + 1, __ATOMIC_RELEASE);
+    }
+    require(syscall(SYS_io_uring_enter, r.fd, 300, 0, 0, NULL, 0) == 300, "stress submit");
+    sqe = ring_sqe(&r, IORING_OP_ASYNC_CANCEL, 0x2f57ffffffffffffULL);
+    sqe->cancel_flags = IORING_ASYNC_CANCEL_ANY;
+    __atomic_store_n(r.sq_tail, *r.sq_tail + 1, __ATOMIC_RELEASE);
+    require(syscall(SYS_io_uring_enter, r.fd, 1, 301, IORING_ENTER_GETEVENTS, NULL, 0) == 1,
+            "stress cancel");
+    while (*r.cq_head != __atomic_load_n(r.cq_tail, __ATOMIC_ACQUIRE)) {
+        __atomic_store_n(r.cq_head, *r.cq_head + 1, __ATOMIC_RELEASE);
+        completed++;
+    }
+    ring_close(&r);
+    printf("ASYNC STRESS completions=%u failures=%u\n", completed, failures);
+    require(completed == 301, "stress completions");
+    if (failures)
+        return 1;
+    puts("ASYNC STRESS PASS");
+    return 0;
+}
+
 static void *thread_cases(void *arg)
 {
     cpu_set_t target;
@@ -1419,13 +1791,21 @@ int main(int argc, char **argv)
     }
     if (argc == 2 && !strcmp(argv[1], "--root-bpf"))
         return root_bpf_mode();
+    if (argc == 2 && !strcmp(argv[1], "--async-stress"))
+        return async_stress_mode();
     require(argc == 1, "known probe mode");
     require(original >= 0 && mkdtemp(directory) && chdir(directory) == 0,
             "isolated working directory");
     file_cases(); descriptor_cases(); sockopt_cases(); unavailable_cases();
     prctl_cases(); ptrace_cases(); keyctl_cases(); sysfs_cases(); slice_2c_cases();
     bpf_unprivileged_cases(); rt_sigreturn_case(); slice_2d_cases();
-    memory_and_process_cases(); aio_cases(); uring_cases();
+    memory_and_process_cases(); aio_cases(); uring_cases(); slice_2f_cases();
+    /* Async records are published later, in one burst, by a kernel worker.
+     * Let it drain before the pinned threads, so the functional run stays
+     * paced; overflow is exercised separately by --async-stress.
+     */
+    struct timespec drain = {0, 500000000};
+    nanosleep(&drain, NULL);
     require(sched_getaffinity(0, sizeof(available), &available) == 0, "available CPUs");
     for (int cpu = 0; cpu < CPU_SETSIZE && count < 4; cpu++)
         if (CPU_ISSET(cpu, &available)) selected[count++] = cpu;

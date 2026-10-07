@@ -593,6 +593,7 @@ fn async_stage(event: &antinomie_monitor_core::EventSummary) -> String {
         Some(4) => "Completion".into(),
         Some(5) => "Canceled".into(),
         Some(6) => "Observation unavailable".into(),
+        Some(7) => "Reaped".into(),
         Some(stage) => format!("Unknown stage {stage}"),
         None => "Unknown stage".into(),
     }

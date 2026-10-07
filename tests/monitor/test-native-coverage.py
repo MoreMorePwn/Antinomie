@@ -309,6 +309,50 @@ class CoverageTests(unittest.TestCase):
                 rows = {row["name"]: row for row in self.report()["cases"]}
                 self.assertEqual(rows["write"]["verdict"], verdict)
 
+    def async_case(self, stages=(1, 2, 4, 7), output=b"R" * 16, flags=0, observed=None,
+                   status=None):
+        """One AIO request: stage 7 carries the output read at reap time."""
+        raw = bytearray()
+        for stage in stages:
+            event_id = 200 + stage
+            values = {"async.request_id": 9, "async.user_data": 0x2f00000000000002,
+                      "async.stage": stage, "async.final": int(stage == 4),
+                      "async.flags": flags}
+            for object_id, (name, value) in enumerate(values.items(), 1):
+                raw.extend(field_packets(event_id, object_id, name, struct.pack("<Q", value)))
+            if stage == 7:
+                raw.extend(field_packets(event_id, 20, "async.payload.output", output))
+        self.raw.write_bytes(bytes(raw))
+        probe = {"label": "2f.aio", "user_data": "0x2f00000000000002", "result": 16,
+                 "observed": {"async.payload.output": (observed or b"R" * 16).hex()}}
+        self.transcript.write_text("ANT_ASYNC " + json.dumps(probe) + "\n")
+        fixtures = self.root / "async"
+        fixtures.mkdir(exist_ok=True)
+        (fixtures / "2f.json").write_text(json.dumps({"slice": "2f", "cases": [{
+            "label": "2f.aio", "user_data": "0x2f00000000000002", "stages": [1, 2, 4, 7],
+            "flags_clear": ["ABANDONED"], "fields": [{
+                "stage": 7, "key": "async.payload.output", "layout": "", "size": 16,
+                "status": "COMPLETE", "data": "observed"}]}],
+            "stress": {"label": "2f.stress", "run": {"async_loss_min": 1, "incomplete": True}}}))
+        return coverage.async_fixture_report(fixtures, self.raw, self.transcript, status)
+
+    def test_async_fixture_matches_stages_flags_and_reaped_output(self):
+        result = self.async_case(status={"async_loss_count": 3, "flags": 16})
+        self.assertTrue(result["passed"], result)
+
+    def test_async_fixture_rejects_missing_stage_wrong_bytes_and_flags(self):
+        status = {"async_loss_count": 3, "flags": 16}
+        for case in [{"stages": (1, 2, 4)}, {"output": b"X" * 16}, {"flags": 4}]:
+            with self.subTest(case=case):
+                self.assertFalse(self.async_case(status=status, **case)["cases"][0]["verdict"]
+                                 == "PASS")
+
+    def test_async_stress_requires_counted_loss_and_incomplete_run(self):
+        for status in [None, {"async_loss_count": 0, "flags": 16},
+                       {"async_loss_count": 5, "flags": 0}]:
+            with self.subTest(status=status):
+                self.assertEqual(self.async_case(status=status)["cases"][-1]["verdict"], "FAIL")
+
 
 if __name__ == "__main__":
     unittest.main()

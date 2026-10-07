@@ -240,6 +240,7 @@ fn run() -> Result<(), String> {
     // The same probe then runs as root for the privileged bpf and uretprobe
     // cases (contract revision 5); quota tests stop after the main run.
     let mut root_run = None;
+    let mut stress_run = None;
     if test_quota.is_none() {
         let main_terminal = std::mem::take(&mut terminal);
         let id = backend.send(Command::Execute(ExecRequest {
@@ -271,6 +272,40 @@ fn run() -> Result<(), String> {
             }
             thread::sleep(Duration::from_millis(20));
         }
+        // Contract revision 7, 14.8: a third run (UID 1000) exhausts async
+        // staging, so its deliberate losses stay out of the main run.
+        let id = backend.send(Command::Execute(ExecRequest {
+            path: "/tmp/antinomie-probe".into(),
+            args: vec!["--async-stress".into()],
+            env: vec!["PATH=/bin:/sbin".into(), "ANT_PROBE=verified".into()],
+            ..ExecRequest::default()
+        }))?;
+        wait_command(&backend, id, &mut snapshot, &mut terminal, 20)?;
+        terminal_until(&backend, b"ASYNC STRESS PASS", &mut snapshot, &mut terminal)?;
+        let until = Instant::now() + Duration::from_secs(15);
+        loop {
+            while let Some(n) = backend.try_recv() {
+                if let Notification::Snapshot(s) = n {
+                    snapshot = s;
+                }
+            }
+            // Its status is final once the tree exited and no request is pending.
+            let finished = snapshot.runs.iter().find(|run| {
+                run.request.args.iter().any(|arg| arg == "--async-stress")
+                    && run
+                        .execution
+                        .as_ref()
+                        .is_some_and(|e| e.flags & 2 != 0 && e.pending_async_count == 0)
+            });
+            if let Some(run) = finished {
+                stress_run = Some((run.id.clone(), run.execution.clone()));
+                break;
+            }
+            if Instant::now() > until {
+                return Err("async stress run did not finish".into());
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
         terminal = main_terminal;
     }
     let id = backend.send(Command::RecorderStats)?;
@@ -296,6 +331,11 @@ fn run() -> Result<(), String> {
     };
     let directory = &run_directory(&main_run)?;
     let root_directory = root_run.as_deref().map(run_directory).transpose()?;
+    let stress_directory = stress_run
+        .as_ref()
+        .map(|(id, _)| run_directory(id))
+        .transpose()?;
+    let stress_execution = stress_run.and_then(|(_, execution)| execution);
     let recording = open_recording(directory).map_err(|e| e.to_string())?;
     if recording.events.is_empty() {
         return Err("probe produced no syscall events".into());
@@ -342,7 +382,7 @@ fn run() -> Result<(), String> {
     }
     println!(
         "{}",
-        serde_json::json!({"vm_id":vm_id,"capture_dir":directory,"root_capture_dir":root_directory,"event_count":recording.events.len(),"complete_count":recording.events.iter().filter(|e|e.complete).count(),"terminal":String::from_utf8_lossy(&terminal),"recorder":recorder,"health":snapshot.health,"manifest":recording.manifest,"test_quota_size":test_quota})
+        serde_json::json!({"vm_id":vm_id,"capture_dir":directory,"root_capture_dir":root_directory,"stress_capture_dir":stress_directory,"stress_execution":stress_execution,"event_count":recording.events.len(),"complete_count":recording.events.iter().filter(|e|e.complete).count(),"terminal":String::from_utf8_lossy(&terminal),"recorder":recorder,"health":snapshot.health,"manifest":recording.manifest,"test_quota_size":test_quota})
     );
     Ok(())
 }

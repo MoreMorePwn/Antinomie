@@ -20,7 +20,9 @@ Choose a fresh, previously nonexistent `DATA_DIR` below a disposable test root.
 src/antinomie/monitor/target/debug/examples/headless \
   BUNDLE DATA_DIR work/monitor-native-probe
 python3 tests/monitor/verify-native-coverage.py RUN_RECORDING_DIR \
-  --require-partial-read --output work/native-coverage.json
+  --require-partial-read --schema-fixtures tests/monitor/fixtures/native-schema \
+  --async-fixtures tests/monitor/fixtures/native-schema-async \
+  --async-run-status HEADLESS_REPORT.json --output work/native-coverage.json
 python3 tests/monitor/test-native-coverage.py
 ```
 
@@ -30,7 +32,9 @@ python3 tests/monitor/test-native-coverage.py
 | Descriptor/network cases | Private pipes, eventfd, timerfd, epoll and AF_UNIX socketpair; no external connections |
 | Memory/process cases | Private anonymous mapping, read-only identity/resource queries, no-op/mismatched futex, child wait status |
 | Linux AIO | Owned aligned buffer and private O_DIRECT file; completion checked before context destruction/free |
-| io_uring | Private ring and NOP; registered-buffer write/read each verified against 4096 bytes; an 8192-byte fixed read exercises hot-prefix/cold-tail retry capture. No shared producer or SQPOLL exercise |
+| io_uring | Private ring and NOP; registered-buffer write/read each verified against 4096 bytes; an 8192-byte fixed read exercises hot-prefix/cold-tail retry capture.
+| Slice 2F async | Thirteen requests matched by `user_data` (`ANT_ASYNC` lines): an io-wq read, an O_DIRECT AIO read whose output is recorded at reap (stage 7), an SQPOLL write, typed operands (bind, files_update, waitid, futex, futex_waitv, provide_buffers, socket uring_cmd) and a canceled timeout. A 0.5 s pause then lets the kernel publish their records before the pinned-thread phase |
+| Async stress | `--async-stress` is a third run (UID 1000): 300 ten-second timeouts exceed the 256 tracked requests and are canceled together; the run must report async loss and the incomplete flag. Its transport drops are deliberate and stay out of the main run |
 | Multicore | Four concurrent pthreads pinned to distinct allowed CPUs when four are available; emits the available test CPU count |
 | Deadline | 30-second process alarm, including the host release barrier; disposable VM contains resources left by an interrupted run |
 | Environmental rejection | ENOSYS, EOPNOTSUPP, EPERM, EACCES and ENODEV are recorded as SKIP, not PASS |

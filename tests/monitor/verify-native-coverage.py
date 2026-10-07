@@ -414,6 +414,169 @@ def schema_report(fixture_dir, labeled, fields):
             "cases": rows}
 
 
+ASYNC_FLAGS = {"PAYLOAD_GAP": 1, "PRODUCER_UNKNOWN": 2, "ABANDONED": 4}
+
+
+def async_events(raw, budget=8192):
+    """Every async event (phase 3) with its fields, keyed by key."""
+    events = {}
+    retained = 0
+    for packet in packets(raw):
+        if packet[98] != 3:
+            continue
+        identity = struct.unpack_from("<QQQ", packet, 24) + struct.unpack_from("<Q", packet, 48)
+        event = events.setdefault(identity, {})
+        if len(events) > 16384:
+            raise ValueError("async verifier event budget exceeded")
+        kind = packet[99]
+        if kind not in (2, 3, 4):
+            continue
+        object_id = struct.unpack_from("<I", packet, 100)[0]
+        field = event.setdefault(object_id, {"chunks": {}})
+        if len(event) > 64:
+            raise ValueError("async verifier field budget exceeded")
+        if kind == 2:
+            key_len, layout_len = struct.unpack_from("<HH", packet, 168)
+            if len(packet) != 176 + key_len + layout_len:
+                raise ValueError("bad async field metadata")
+            field["key"] = packet[176:176 + key_len].decode("utf8", errors="strict")
+            field["layout"] = packet[176 + key_len:].decode("utf8", errors="strict")
+        elif kind == 3:
+            offset = struct.unpack_from("<Q", packet, 104)[0]
+            if offset < budget:
+                chunk = packet[136:136 + min(budget - offset, len(packet) - 136)]
+                retained += len(chunk)
+                if retained > FIELD_DATA_BUDGET:
+                    raise ValueError("async field data budget exceeded")
+                field["chunks"][offset] = chunk
+        else:
+            if len(packet) != 168:
+                raise ValueError("bad async field end")
+            field["size"], field["captured"], status = struct.unpack_from("<QQI", packet, 136)
+            field["status"] = STATUS_NAMES[status] if status < len(STATUS_NAMES) else str(status)
+    result = []
+    for fields in events.values():
+        named = {}
+        for field in fields.values():
+            data = bytearray()
+            for offset, chunk in sorted(field["chunks"].items()):
+                if offset != len(data):
+                    break
+                data.extend(chunk)
+            field["data"] = bytes(data[:field.get("captured", 0)])
+            if "key" in field:
+                named[field["key"]] = field
+        result.append(named)
+    return result
+
+
+def async_scalar(fields, key):
+    field = fields.get(key, {})
+    if field.get("status") == "COMPLETE" and len(field.get("data", b"")) == 8:
+        return struct.unpack("<Q", field["data"])[0]
+    return None
+
+
+def async_transcript(transcript):
+    """ANT_ASYNC lines: the probe's own view of each labeled request."""
+    reported = {}
+    for line in transcript.read_text(errors="strict").splitlines():
+        if line.startswith("ANT_ASYNC "):
+            item = json.loads(line.removeprefix("ANT_ASYNC "))
+            if item["label"] in reported:
+                raise ValueError(f"duplicate async probe label {item['label']}")
+            reported[item["label"]] = item
+    return reported
+
+
+def async_field_problems(expected, actual, observed):
+    problems = []
+    seen = observed.get(expected["key"])
+    for member in ("layout", "size", "status"):
+        want = expected[member]
+        if want == "observed":
+            want = len(bytes.fromhex(seen)) if seen is not None else None
+        if actual.get(member) != want:
+            problems.append(f"{member} {actual.get(member)!r} != {want!r}")
+    complete = actual.get("status") == "COMPLETE"
+    if actual.get("captured") != (actual.get("size") if complete else 0):
+        problems.append(f"captured {actual.get('captured')!r} for {actual.get('status')}")
+    data = actual.get("data", b"")
+    if expected["data"] == "observed":
+        if seen is None or data.hex() != seen:
+            problems.append(f"data {data.hex()[:64]} != observed {str(seen)[:64]}")
+    elif expected["data"] is not None and data.hex() != expected["data"]:
+        problems.append(f"data {data.hex()} != {expected['data']}")
+    return problems
+
+
+def async_fixture_report(fixture_dir, raw, transcript, run_status=None):
+    """Contract revision 7, 14.7: requests are matched by user_data."""
+    events = async_events(raw)
+    reported = async_transcript(transcript)
+    rows = []
+    for path in sorted(fixture_dir.glob("*.json")):
+        document = json.loads(path.read_text())
+        for expected in document["cases"]:
+            problems = []
+            user_data = int(expected["user_data"], 16)
+            selected = [fields for fields in events
+                        if async_scalar(fields, "async.user_data") == user_data]
+            probe = reported.get(expected["label"])
+            if probe is None:
+                problems.append("probe case missing")
+            elif int(probe["user_data"], 16) != user_data:
+                problems.append("probe user_data mismatch")
+            request_ids = {async_scalar(fields, "async.request_id") for fields in selected}
+            if len(request_ids) != 1 or None in request_ids or 0 in request_ids:
+                problems.append(f"request ids {sorted(map(str, request_ids))}")
+            stages = sorted({async_scalar(fields, "async.stage") for fields in selected},
+                            key=str)
+            if stages != sorted(expected["stages"]):
+                problems.append(f"stages {stages} != {expected['stages']}")
+            finals = [fields for fields in selected if async_scalar(fields, "async.final") == 1]
+            last = finals[-1] if finals else (selected[-1] if selected else {})
+            flags = async_scalar(last, "async.flags") or 0
+            for name in expected.get("flags_set", []):
+                if not flags & ASYNC_FLAGS[name]:
+                    problems.append(f"flag {name} not set")
+            for name in expected.get("flags_clear", []):
+                if flags & ASYNC_FLAGS[name]:
+                    problems.append(f"flag {name} set")
+            observed = probe.get("observed", {}) if probe else {}
+            for item in expected["fields"]:
+                matches = [fields[item["key"]] for fields in selected
+                           if item["key"] in fields
+                           and async_scalar(fields, "async.stage") == item["stage"]]
+                name = f"stage {item['stage']} {item['key']}"
+                if len(matches) != 1:
+                    problems.append(f"{name}: {len(matches)} records")
+                else:
+                    problems.extend(f"{name}: {problem}" for problem in
+                                    async_field_problems(item, matches[0], observed))
+            rows.append({"slice": document["slice"], "label": expected["label"],
+                         "verdict": "FAIL" if problems else "PASS", "problems": problems,
+                         "events": len(selected)})
+        stress = document.get("stress")
+        if stress:
+            problems = []
+            if run_status is None:
+                problems.append("stress run status not supplied")
+            else:
+                losses = run_status.get("async_loss_count", 0)
+                incomplete = bool(run_status.get("flags", 0) & 16)
+                if losses < stress["run"]["async_loss_min"]:
+                    problems.append(f"async losses {losses}")
+                if incomplete != stress["run"]["incomplete"]:
+                    problems.append(f"incomplete {incomplete}")
+            rows.append({"slice": document["slice"], "label": stress["label"],
+                         "verdict": "FAIL" if problems else "PASS", "problems": problems,
+                         "run_status": run_status})
+    return {"passed": bool(rows) and all(row["verdict"] == "PASS" for row in rows),
+            "summary": dict(collections.Counter(row["verdict"] for row in rows)),
+            "cases": rows}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("recording", type=Path)
@@ -423,6 +586,10 @@ def main():
     parser.add_argument("--require-partial-read", action="store_true")
     parser.add_argument("--schema-fixtures", type=Path,
                         help="directory of native-schema fixture files to enforce")
+    parser.add_argument("--async-fixtures", type=Path,
+                        help="directory of native-schema-async fixture files to enforce")
+    parser.add_argument("--async-run-status", type=Path,
+                        help="headless report (stress_execution) for the async stress block")
     args = parser.parse_args()
     transcript = args.transcript or args.recording / "terminal-transcript.raw"
     inventory = json.loads(INVENTORY.read_text())
@@ -437,15 +604,25 @@ def main():
     labeled, fields = result.pop("_labeled"), result.pop("_fields")
     if args.schema_fixtures:
         result["schema_fixtures"] = schema_report(args.schema_fixtures, labeled, fields)
+    if args.async_fixtures:
+        status = None
+        if args.async_run_status:
+            document = json.loads(args.async_run_status.read_text())
+            status = document.get("stress_execution", document)
+        result["async_fixtures"] = async_fixture_report(
+            args.async_fixtures, args.recording / "telemetry.raw", transcript, status)
     if args.require_fixed_async or args.require_partial_read:
         result["fixed_async"] = fixed_async_report(args.recording / "telemetry.raw", args.require_partial_read)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result["summary"]))
     if args.schema_fixtures:
         print(json.dumps({"schema_fixtures": result["schema_fixtures"]["summary"]}))
+    if args.async_fixtures:
+        print(json.dumps({"async_fixtures": result["async_fixtures"]["summary"]}))
     if result["summary"].get("FAIL", 0) or ((args.require_fixed_async or args.require_partial_read)
                                           and not result["fixed_async"]["passed"]) or (
-            args.schema_fixtures and not result["schema_fixtures"]["passed"]):
+            args.schema_fixtures and not result["schema_fixtures"]["passed"]) or (
+            args.async_fixtures and not result["async_fixtures"]["passed"]):
         raise SystemExit(1)
 
 

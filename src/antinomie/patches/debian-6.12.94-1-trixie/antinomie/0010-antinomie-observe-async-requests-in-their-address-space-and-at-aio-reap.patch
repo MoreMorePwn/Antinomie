@@ -1,0 +1,990 @@
+Description: antinomie: observe async requests in their address space and at AIO reap
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-08
+
+
+---
+diff --git a/fs/aio.c b/fs/aio.c
+index 492c0c141..488871fb6 100644
+--- a/fs/aio.c
++++ b/fs/aio.c
+@@ -899,6 +899,7 @@ void exit_aio(struct mm_struct *mm)
+ 	struct ctx_rq_wait wait;
+ 	int i, skipped;
+ 
++	ant_monitor_aio_exit(mm);
+ 	if (!table)
+ 		return;
+ 
+@@ -1601,6 +1602,7 @@ static int aio_read(struct kiocb *req, const struct iocb *iocb,
+ 	struct aio_kiocb *tracked = container_of(req, struct aio_kiocb, rw);
+ 	struct iov_iter observed;
+ 	ssize_t result;
++	u64 deferred;
+ #endif
+ 
+ 	ret = aio_prep_rw(req, iocb, READ);
+@@ -1618,8 +1620,17 @@ static int aio_read(struct kiocb *req, const struct iocb *iocb,
+ 	ret = rw_verify_area(READ, file, &req->ki_pos, iov_iter_count(&iter));
+ 	if (!ret) {
+ #ifdef CONFIG_ANTINOMIE
++		/* A queued read may complete in interrupt context, where its
++		 * buffer cannot be read; io_getevents() reads it instead.
++		 */
++		deferred = vectored ? 0 :
++			ant_monitor_aio_defer(&tracked->ant_async, tracked->ki_ctx->user_id,
++					      tracked->ki_res.obj, tracked->ki_res.data,
++					      iocb->aio_buf, iocb->aio_nbytes);
+ 		observed = iter;
+ 		result = file->f_op->read_iter(req, &iter);
++		if (result != -EIOCBQUEUED)
++			ant_monitor_aio_undefer(&tracked->ant_async, deferred);
+ 		if (result >= 0)
+ 			ant_monitor_async_iter(&tracked->ant_async, &observed, result, 0, true);
+ 		aio_rw_done(req, result);
+@@ -2274,6 +2285,8 @@ static long do_io_getevents(aio_context_t ctx_id,
+ 			ret = read_events(ioctx, min_nr, nr, events, until);
+ 		percpu_ref_put(&ioctx->users);
+ 	}
++	if (ret > 0)
++		ant_monitor_aio_reaped(ctx_id, events, ret);
+ 
+ 	return ret;
+ }
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+index 33ac3b216..bc500ec9e 100644
+--- a/include/linux/antinomie_monitor.h
++++ b/include/linux/antinomie_monitor.h
+@@ -8,6 +8,7 @@ struct ant_task;
+ struct ant_run;
+ struct ant_async;
+ struct iov_iter;
++struct mm_struct;
+ #define ANT_ASYNC_IO_URING 1
+ #define ANT_ASYNC_AIO 2
+ #define ANT_ASYNC_PAYLOAD_GAP BIT(0)
+@@ -26,6 +27,11 @@ int ant_monitor_run_status(u64 root_cookie, void *out);
+ void ant_monitor_run_stopped(u64 root_cookie);
+ struct ant_async *ant_monitor_async_begin(u8 system, u32 opcode, u64 user_data,
+ 					  u32 flags, const void *descriptor, size_t descriptor_len);
++struct ant_async *ant_monitor_async_begin_attributed(struct task_struct *owner,
++						     u64 root_cookie, u64 task_cookie,
++						     u8 system, u32 opcode, u64 user_data,
++						     u32 flags, const void *descriptor,
++						     size_t descriptor_len);
+ void ant_monitor_async_accepted(struct ant_async **slot, int result);
+ void ant_monitor_async_complete(struct ant_async **slot, s64 result,
+ 				u32 flags, bool final);
+@@ -39,6 +45,15 @@ void ant_monitor_async_iter(struct ant_async **slot,
+ void ant_monitor_async_memory(struct ant_async **slot, const char *key,
+ 			      const char *layout, u16 encoding, u64 address,
+ 			      const void *snapshot, u64 size, bool output, bool complete);
++void ant_monitor_async_scalar(struct ant_async **slot);
++void ant_monitor_async_address(struct ant_async **slot, const char *key,
++			       const char *layout, u64 address, u64 size);
++void ant_monitor_async_gap(struct ant_async **slot, const char *key, u64 address);
++u64 ant_monitor_aio_defer(struct ant_async **slot, u64 ctx_id, u64 obj, u64 data,
++			  u64 buf, u64 len);
++void ant_monitor_aio_undefer(struct ant_async **slot, u64 request_id);
++void ant_monitor_aio_reaped(u64 ctx_id, const void __user *events, long nr);
++void ant_monitor_aio_exit(struct mm_struct *mm);
+ void ant_monitor_operand(u8 arg, const char *key, const char *layout, const void *data,
+ 			 size_t size);
+ #else
+@@ -56,6 +71,17 @@ static inline struct ant_async *ant_monitor_async_begin(u8 system, u32 opcode,
+ 	return NULL;
+ }
+ 
++static inline struct ant_async *ant_monitor_async_begin_attributed(struct task_struct *owner,
++								   u64 root_cookie,
++								   u64 task_cookie, u8 system,
++								   u32 opcode, u64 user_data,
++								   u32 flags,
++								   const void *descriptor,
++								   size_t descriptor_len)
++{
++	return NULL;
++}
++
+ static inline void ant_monitor_async_accepted(struct ant_async **slot, int result) {}
+ static inline void ant_monitor_async_complete(struct ant_async **slot, s64 result,
+ 					      u32 flags, bool final) {}
+@@ -71,6 +97,21 @@ static inline void ant_monitor_async_memory(struct ant_async **slot, const char
+ 					    const char *layout, u16 encoding, u64 address,
+ 					    const void *snapshot, u64 size,
+ 					    bool output, bool complete) {}
++static inline void ant_monitor_async_scalar(struct ant_async **slot) {}
++static inline void ant_monitor_async_address(struct ant_async **slot, const char *key,
++					     const char *layout, u64 address, u64 size) {}
++static inline void ant_monitor_async_gap(struct ant_async **slot, const char *key,
++					 u64 address) {}
++static inline u64 ant_monitor_aio_defer(struct ant_async **slot, u64 ctx_id, u64 obj,
++					u64 data, u64 buf, u64 len)
++{
++	return 0;
++}
++
++static inline void ant_monitor_aio_undefer(struct ant_async **slot, u64 request_id) {}
++static inline void ant_monitor_aio_reaped(u64 ctx_id, const void __user *events,
++					  long nr) {}
++static inline void ant_monitor_aio_exit(struct mm_struct *mm) {}
+ static inline void ant_monitor_operand(u8 arg, const char *key, const char *layout,
+ 				       const void *data, size_t size) {}
+ #endif
+diff --git a/include/linux/io_uring_types.h b/include/linux/io_uring_types.h
+index 25b484095..21d484d70 100644
+--- a/include/linux/io_uring_types.h
++++ b/include/linux/io_uring_types.h
+@@ -237,6 +237,13 @@ struct io_ring_ctx {
+ 		unsigned int		iowq_limits_set : 1;
+ 
+ 		struct task_struct	*submitter_task;
++#ifdef CONFIG_ANTINOMIE
++		/* Ring creator: SQPOLL and foreign submissions are attributed here. */
++		struct pid		*ant_tgid;
++		struct task_struct	*ant_creator;
++		u64			ant_root_cookie;
++		u64			ant_task_cookie;
++#endif
+ 		struct io_rings		*rings;
+ 		struct percpu_ref	refs;
+ 
+@@ -587,9 +594,6 @@ static inline void io_kiocb_cmd_sz_check(size_t cmd_sz)
+ #define cmd_to_io_kiocb(ptr)	((struct io_kiocb *) ptr)
+ 
+ struct io_kiocb {
+-#ifdef CONFIG_ANTINOMIE
+-	struct ant_async		*ant_async;
+-#endif
+ 	union {
+ 		/*
+ 		 * NOTE! Each of the io_kiocb union members has the file pointer
+@@ -666,6 +670,10 @@ struct io_kiocb {
+ 		u64			extra1;
+ 		u64			extra2;
+ 	} big_cqe;
++#ifdef CONFIG_ANTINOMIE
++	/* Never first: cmd_to_io_kiocb() relies on ->cmd at offset 0. */
++	struct ant_async		*ant_async;
++#endif
+ };
+ 
+ struct io_overflow_cqe {
+diff --git a/io_uring/futex.c b/io_uring/futex.c
+index a3d2b700b..bae915c2b 100644
+--- a/io_uring/futex.c
++++ b/io_uring/futex.c
+@@ -186,6 +186,9 @@ int io_futex_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+ 	    !futex_validate_input(iof->futex_flags, iof->futex_mask))
+ 		return -EINVAL;
+ 
++	/* The word is compared or woken; the SQE carries the operation's value. */
++	ant_uring_address(req, "async.operand.futex", "linux-6.12.94/x86_64/u32",
++			  (unsigned long)iof->uaddr, sizeof(u32));
+ 	return 0;
+ }
+ 
+@@ -230,6 +233,9 @@ int io_futexv_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+ 		kfree(futexv);
+ 		return ret;
+ 	}
++	ant_uring_memory(req, "async.operand.futexv", "linux-6.12.94/x86_64/futex_waitv[]", 3,
++			 (unsigned long)iof->uwaitv, NULL,
++			 iof->futex_nr * sizeof(struct futex_waitv), false, true);
+ 
+ 	iof->futexv_owned = 0;
+ 	iof->futexv_unqueued = 0;
+diff --git a/io_uring/io_uring.c b/io_uring/io_uring.c
+index cd1297586..99352fe9a 100644
+--- a/io_uring/io_uring.c
++++ b/io_uring/io_uring.c
+@@ -2167,6 +2167,7 @@ static u32 ant_uring_payload_flags(u8 opcode)
+ 	case IORING_OP_CLOSE:
+ 	case IORING_OP_FALLOCATE:
+ 	case IORING_OP_FADVISE:
++	case IORING_OP_MADVISE:
+ 	case IORING_OP_SPLICE:
+ 	case IORING_OP_REMOVE_BUFFERS:
+ 	case IORING_OP_TEE:
+@@ -2192,9 +2193,20 @@ static inline int io_submit_sqe(struct io_ring_ctx *ctx, struct io_kiocb *req,
+ 
+ #ifdef CONFIG_ANTINOMIE
+ 	/* The entering task is the submission observer. An mmap SQE does not
+-	 * establish which process wrote it; SQPOLL has no user task origin.
++	 * establish which process wrote it. The SQPOLL thread and tasks outside
++	 * the creator's thread group submit on behalf of the ring creator's run.
+ 	 */
+-	req->ant_async = ant_monitor_async_begin(ANT_ASYNC_IO_URING,
++	if (ctx->ant_root_cookie && ((current->flags & PF_IO_WORKER) ||
++				     task_tgid(current) != ctx->ant_tgid))
++		req->ant_async = ant_monitor_async_begin_attributed(ctx->ant_creator,
++						 ctx->ant_root_cookie, ctx->ant_task_cookie,
++						 ANT_ASYNC_IO_URING,
++						 READ_ONCE(sqe->opcode), READ_ONCE(sqe->user_data),
++						 ant_uring_payload_flags(READ_ONCE(sqe->opcode)),
++						 sqe, ctx->flags & IORING_SETUP_SQE128 ?
++						 128 : sizeof(*sqe));
++	else
++		req->ant_async = ant_monitor_async_begin(ANT_ASYNC_IO_URING,
+ 						 READ_ONCE(sqe->opcode), READ_ONCE(sqe->user_data),
+ 						 ant_uring_payload_flags(READ_ONCE(sqe->opcode)),
+ 						 sqe, ctx->flags & IORING_SETUP_SQE128 ?
+@@ -2789,6 +2801,11 @@ static __cold void io_ring_ctx_free(struct io_ring_ctx *ctx)
+ 		put_cred(ctx->sq_creds);
+ 	if (ctx->submitter_task)
+ 		put_task_struct(ctx->submitter_task);
++#ifdef CONFIG_ANTINOMIE
++	put_pid(ctx->ant_tgid);
++	if (ctx->ant_creator)
++		put_task_struct(ctx->ant_creator);
++#endif
+ 
+ 	/* there are no registered resources left, nobody uses it */
+ 	if (ctx->rsrc_node)
+@@ -3366,7 +3383,6 @@ SYSCALL_DEFINE6(io_uring_enter, unsigned int, fd, u32, to_submit,
+ 	 */
+ 	ret = 0;
+ 	if (ctx->flags & IORING_SETUP_SQPOLL) {
+-		ant_monitor_async_unavailable();
+ 		if (unlikely(ctx->sq_data->thread == NULL)) {
+ 			ret = -EOWNERDEAD;
+ 			goto out;
+@@ -3598,6 +3614,12 @@ static __cold int io_uring_create(unsigned entries, struct io_uring_params *p,
+ 	ctx = io_ring_ctx_alloc(p);
+ 	if (!ctx)
+ 		return -ENOMEM;
++#ifdef CONFIG_ANTINOMIE
++	ctx->ant_tgid = get_pid(task_tgid(current));
++	ctx->ant_creator = get_task_struct(current);
++	ctx->ant_root_cookie = current->ant_root_cookie;
++	ctx->ant_task_cookie = current->ant_cookie;
++#endif
+ 
+ 	ctx->clockid = CLOCK_MONOTONIC;
+ 	ctx->clock_offset = 0;
+@@ -3747,8 +3769,6 @@ static __cold int io_uring_create(unsigned entries, struct io_uring_params *p,
+ 		goto err_fput;
+ 
+ 	trace_io_uring_create(ret, ctx, p->sq_entries, p->cq_entries, p->flags);
+-	if (ctx->flags & IORING_SETUP_SQPOLL)
+-		ant_monitor_async_unavailable();
+ 	return ret;
+ err:
+ 	io_ring_ctx_wait_and_kill(ctx);
+@@ -3892,6 +3912,8 @@ static int __init io_uring_init(void)
+ 	BUILD_BUG_ON((SQE_VALID_FLAGS | SQE_COMMON_FLAGS) != SQE_VALID_FLAGS);
+ 
+ 	BUILD_BUG_ON(__REQ_F_LAST_BIT > 8 * sizeof_field(struct io_kiocb, flags));
++	/* cmd_to_io_kiocb() casts the command back to its request. */
++	BUILD_BUG_ON(offsetof(struct io_kiocb, cmd) != 0);
+ 
+ 	BUILD_BUG_ON(sizeof(atomic_t) != sizeof(u32));
+ 
+diff --git a/io_uring/io_uring.h b/io_uring/io_uring.h
+index ce4c41aa5..bfc0316f3 100644
+--- a/io_uring/io_uring.h
++++ b/io_uring/io_uring.h
+@@ -78,6 +78,28 @@ static inline void ant_uring_memory(struct io_kiocb *req, const char *key,
+ #endif
+ }
+ 
++static inline void ant_uring_scalar(struct io_kiocb *req)
++{
++#ifdef CONFIG_ANTINOMIE
++	ant_monitor_async_scalar(&req->ant_async);
++#endif
++}
++
++static inline void ant_uring_address(struct io_kiocb *req, const char *key,
++				     const char *layout, u64 address, u64 size)
++{
++#ifdef CONFIG_ANTINOMIE
++	ant_monitor_async_address(&req->ant_async, key, layout, address, size);
++#endif
++}
++
++static inline void ant_uring_gap(struct io_kiocb *req, const char *key, u64 address)
++{
++#ifdef CONFIG_ANTINOMIE
++	ant_monitor_async_gap(&req->ant_async, key, address);
++#endif
++}
++
+ struct io_wait_queue {
+ 	struct wait_queue_entry wq;
+ 	struct io_ring_ctx *ctx;
+diff --git a/io_uring/kbuf.c b/io_uring/kbuf.c
+index df5ba0d7f..ed30d186f 100644
+--- a/io_uring/kbuf.c
++++ b/io_uring/kbuf.c
+@@ -558,6 +558,8 @@ int io_provide_buffers_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe
+ 	if (tmp + p->nbufs > MAX_BIDS_PER_BGID)
+ 		return -EINVAL;
+ 	p->bid = tmp;
++	/* Reads that later select a buffer record its bytes through their iterator. */
++	ant_uring_address(req, "async.operand.buffers", "", p->addr, size);
+ 	return 0;
+ }
+ 
+diff --git a/io_uring/rsrc.c b/io_uring/rsrc.c
+index 1687e35e2..8989906ac 100644
+--- a/io_uring/rsrc.c
++++ b/io_uring/rsrc.c
+@@ -554,6 +554,8 @@ int io_files_update_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+ 	if (!up->nr_args)
+ 		return -EINVAL;
+ 	up->arg = READ_ONCE(sqe->addr);
++	ant_uring_memory(req, "async.operand.fds", "linux-6.12.94/x86_64/int[]", 3, up->arg,
++			 NULL, (u64)up->nr_args * sizeof(__s32), false, true);
+ 	return 0;
+ }
+ 
+diff --git a/io_uring/timeout.c b/io_uring/timeout.c
+index 266d4949d..120ba7ef7 100644
+--- a/io_uring/timeout.c
++++ b/io_uring/timeout.c
+@@ -448,6 +448,8 @@ int io_timeout_remove_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+ 	} else if (tr->flags) {
+ 		/* timeout removal doesn't support flags */
+ 		return -EINVAL;
++	} else {
++		ant_uring_scalar(req);
+ 	}
+ 
+ 	return 0;
+diff --git a/io_uring/uring_cmd.c b/io_uring/uring_cmd.c
+index e5d0cc8a8..a1e69b9bb 100644
+--- a/io_uring/uring_cmd.c
++++ b/io_uring/uring_cmd.c
+@@ -252,6 +252,23 @@ int io_uring_cmd(struct io_kiocb *req, unsigned int issue_flags)
+ 	}
+ 
+ 	ret = file->f_op->uring_cmd(ioucmd, issue_flags);
++#ifdef CONFIG_ANTINOMIE
++	/* Socket option commands record their operand; any other command is
++	 * driver-specific and stays an explicit gap.
++	 */
++	if (ret != -EAGAIN) {
++		bool socket_cmd = false;
++#if defined(CONFIG_NET)
++		socket_cmd = sock_from_file(file) != NULL;
++#endif
++		if (socket_cmd && (ioucmd->cmd_op == SOCKET_URING_OP_SIOCINQ ||
++				   ioucmd->cmd_op == SOCKET_URING_OP_SIOCOUTQ))
++			ant_uring_scalar(req);
++		else if (!socket_cmd || (ioucmd->cmd_op != SOCKET_URING_OP_GETSOCKOPT &&
++					 ioucmd->cmd_op != SOCKET_URING_OP_SETSOCKOPT))
++			ant_uring_gap(req, "async.operand.uring_cmd", 0);
++	}
++#endif
+ 	if (ret == -EAGAIN) {
+ 		struct uring_cache *cache = req->async_data;
+ 
+@@ -285,6 +302,8 @@ void io_uring_cmd_issue_blocking(struct io_uring_cmd *ioucmd)
+ 	io_req_queue_iowq(req);
+ }
+ 
++#define ANT_URING_OPTVAL_MAX (128 * 1024)
++
+ static inline int io_uring_cmd_getsockopt(struct socket *sock,
+ 					  struct io_uring_cmd *cmd,
+ 					  unsigned int issue_flags)
+@@ -304,8 +323,13 @@ static inline int io_uring_cmd_getsockopt(struct socket *sock,
+ 	err = do_sock_getsockopt(sock, compat, level, optname,
+ 				 USER_SOCKPTR(optval),
+ 				 KERNEL_SOCKPTR(&optlen));
+-	if (err)
++	if (err) {
++		ant_uring_scalar(cmd_to_io_kiocb(cmd));
+ 		return err;
++	}
++	ant_uring_memory(cmd_to_io_kiocb(cmd), "async.operand.optval", "", 1,
++			 (unsigned long)optval, NULL, min(optlen, ANT_URING_OPTVAL_MAX),
++			 true, true);
+ 
+ 	/* On success, return optlen */
+ 	return optlen;
+@@ -325,6 +349,11 @@ static inline int io_uring_cmd_setsockopt(struct socket *sock,
+ 	optlen = READ_ONCE(cmd->sqe->optlen);
+ 	level = READ_ONCE(cmd->sqe->level);
+ 	optval_s = USER_SOCKPTR(optval);
++	/* Raw by optlen, as slice 2A records options without a decoder. */
++	if (optlen >= 0)
++		ant_uring_memory(cmd_to_io_kiocb(cmd), "async.operand.optval", "", 1,
++				 (unsigned long)optval, NULL,
++				 min(optlen, ANT_URING_OPTVAL_MAX), false, true);
+ 
+ 	return do_sock_setsockopt(sock, compat, level, optname, optval_s,
+ 				  optlen);
+diff --git a/io_uring/waitid.c b/io_uring/waitid.c
+index ef2283728..cef6ca016 100644
+--- a/io_uring/waitid.c
++++ b/io_uring/waitid.c
+@@ -111,6 +111,12 @@ static int io_waitid_finish(struct io_kiocb *req, int ret)
+ 
+ 	if (!io_waitid_copy_si(req, signo))
+ 		ret = -EFAULT;
++	if (!ret && io_kiocb_to_cmd(req, struct io_waitid)->infop)
++		ant_uring_memory(req, "async.operand.siginfo", "linux-6.12.94/x86_64/siginfo_t", 3,
++				 (unsigned long)io_kiocb_to_cmd(req, struct io_waitid)->infop,
++				 NULL, sizeof(siginfo_t), true, true);
++	else
++		ant_uring_scalar(req);
+ 	io_waitid_free(req);
+ 	return ret;
+ }
+diff --git a/kernel/antinomie/async.c b/kernel/antinomie/async.c
+index bc4afff12..de38aac48 100644
+--- a/kernel/antinomie/async.c
++++ b/kernel/antinomie/async.c
+@@ -7,18 +7,23 @@
+ #include <linux/ktime.h>
+ #include <linux/overflow.h>
+ #include <linux/refcount.h>
++#include <linux/sched/mm.h>
+ #include <linux/sched/task.h>
+ #include <linux/sched/signal.h>
+ #include <linux/slab.h>
+ #include <linux/spinlock.h>
++#include <linux/uaccess.h>
+ #include <linux/workqueue.h>
++#include <uapi/linux/aio_abi.h>
+ #include <uapi/linux/io_uring.h>
+ 
+ #include "async.h"
++#include "capture_api.h"
+ #include "run.h"
+ 
+ #define ANT_ASYNC_REQUEST_COUNT 256
+ #define ANT_ASYNC_RECORD_COUNT 1024
++#define ANT_AIO_REAP_COUNT 64
+ 
+ struct ant_async {
+ 	struct ant_async_event event;
+@@ -27,6 +32,18 @@ struct ant_async {
+ 	atomic_t capture_busy;
+ 	u64 output_end;
+ 	bool payload_failed;
++	/* The reap table owns the missing output (contract 14.2). */
++	bool payload_deferred;
++};
++
++/* An AIO read whose completion could not read user memory. Its output is
++ * read when the submitting address space reaps the event (stage 7).
++ */
++struct ant_aio_reap {
++	struct ant_async_event event;
++	struct mm_struct *mm;
++	u64 ctx_id, obj, data, buf, len;
++	bool used;
+ };
+ 
+ struct ant_async_record {
+@@ -47,6 +64,24 @@ static DEFINE_SPINLOCK(record_lock);
+ static DEFINE_SPINLOCK(request_lock);
+ static void publish_records(struct work_struct *work);
+ static DECLARE_WORK(publish_work, publish_records);
++static struct ant_aio_reap reaps[ANT_AIO_REAP_COUNT];
++static atomic_t reap_used = ATOMIC_INIT(0);
++/* Taken only in process context; request_lock may nest inside it. */
++static DEFINE_SPINLOCK(reap_lock);
++
++static void event_hold(const struct ant_async_event *event)
++{
++	get_task_struct(event->origin);
++	if (event->owner)
++		get_task_struct(event->owner);
++}
++
++static void event_release(const struct ant_async_event *event)
++{
++	if (event->owner)
++		put_task_struct(event->owner);
++	put_task_struct(event->origin);
++}
+ 
+ static void stage_record(struct ant_async *request, u32 stage, s64 result,
+ 			 u64 flags, bool final)
+@@ -78,7 +113,7 @@ static void stage_record(struct ant_async *request, u32 stage, s64 result,
+ 	event->cpu = raw_smp_processor_id();
+ 	if (stage != 1)
+ 		event->descriptor_len = 0;
+-	get_task_struct(event->origin);
++	event_hold(event);
+ 	record_tail = (record_tail + 1) % ANT_ASYNC_RECORD_COUNT;
+ 	record_count++;
+ 	spin_unlock_irqrestore(&record_lock, irqflags);
+@@ -110,7 +145,7 @@ static void publish_records(struct work_struct *work)
+ 		}
+ 		if (error)
+ 			ant_run_async_loss(record.event.root_cookie);
+-		put_task_struct(record.event.origin);
++		event_release(&record.event);
+ 		cond_resched();
+ 	}
+ }
+@@ -133,7 +168,7 @@ int ant_async_stage_packet(const struct ant_async_event *event,
+ 	record->event = *event;
+ 	record->packet_len = packet_len;
+ 	memcpy(record->packet, packet, packet_len);
+-	get_task_struct(event->origin);
++	event_hold(event);
+ 	record_tail = (record_tail + 1) % ANT_ASYNC_RECORD_COUNT;
+ 	record_count++;
+ 	spin_unlock_irqrestore(&record_lock, irqflags);
+@@ -141,29 +176,28 @@ int ant_async_stage_packet(const struct ant_async_event *event,
+ 	return 0;
+ }
+ 
+-struct ant_async *ant_monitor_async_begin(u8 system, u32 opcode, u64 user_data,
+-					  u32 flags, const void *descriptor, size_t descriptor_len)
++static struct ant_async *begin(struct task_struct *owner, u64 root_cookie, u64 task_cookie,
++			       u8 system, u32 opcode, u64 user_data, u32 flags,
++			       const void *descriptor, size_t descriptor_len)
+ {
+ 	const struct cred *cred = current_cred();
+ 	struct ant_async *request;
+ 	struct ant_async_event *event;
+ 
+-	if (!current->ant_cookie)
+-		return NULL;
+ 	if (descriptor_len > sizeof(event->descriptor)) {
+-		ant_run_async_incomplete(current->ant_root_cookie);
++		ant_run_async_incomplete(root_cookie);
+ 		return NULL;
+ 	}
+ 	if (!atomic_add_unless(&request_count, 1, ANT_ASYNC_REQUEST_COUNT)) {
+-		ant_run_async_loss(current->ant_root_cookie);
+-		ant_run_async_incomplete(current->ant_root_cookie);
++		ant_run_async_loss(root_cookie);
++		ant_run_async_incomplete(root_cookie);
+ 		return NULL;
+ 	}
+ 	request = kzalloc(sizeof(*request), GFP_NOWAIT);
+ 	if (!request) {
+ 		atomic_dec(&request_count);
+-		ant_run_async_loss(current->ant_root_cookie);
+-		ant_run_async_incomplete(current->ant_root_cookie);
++		ant_run_async_loss(root_cookie);
++		ant_run_async_incomplete(root_cookie);
+ 		return NULL;
+ 	}
+ 	event = &request->event;
+@@ -172,12 +206,17 @@ struct ant_async *ant_monitor_async_begin(u8 system, u32 opcode, u64 user_data,
+ 	request->capture = ant_monitor_async_capture_alloc();
+ 	event->origin = current;
+ 	get_task_struct(current);
++	if (owner) {
++		event->owner = owner;
++		get_task_struct(owner);
++	}
++	event->mm = current->mm;
+ 	event->request_id = atomic64_inc_return(&request_ids);
+ 	event->parent_call_id = ant_monitor_parent_call_id();
+ 	event->entry_ns = ktime_get_ns();
+ 	event->cpu = raw_smp_processor_id();
+-	event->root_cookie = current->ant_root_cookie;
+-	event->task_cookie = current->ant_cookie;
++	event->root_cookie = root_cookie;
++	event->task_cookie = task_cookie;
+ 	event->start_boot_ns = current->start_boottime;
+ 	event->pid = task_tgid_nr(current);
+ 	event->tid = task_pid_nr(current);
+@@ -198,6 +237,26 @@ struct ant_async *ant_monitor_async_begin(u8 system, u32 opcode, u64 user_data,
+ 	return request;
+ }
+ 
++struct ant_async *ant_monitor_async_begin(u8 system, u32 opcode, u64 user_data,
++					  u32 flags, const void *descriptor, size_t descriptor_len)
++{
++	if (!current->ant_cookie)
++		return NULL;
++	return begin(NULL, current->ant_root_cookie, current->ant_cookie, system, opcode,
++		     user_data, flags, descriptor, descriptor_len);
++}
++
++/* Contract 14.3: the submitting task is not the ring's producer of record. */
++struct ant_async *ant_monitor_async_begin_attributed(struct task_struct *owner,
++						     u64 root_cookie, u64 task_cookie,
++						     u8 system, u32 opcode, u64 user_data,
++						     u32 flags, const void *descriptor,
++						     size_t descriptor_len)
++{
++	return begin(owner, root_cookie, task_cookie, system, opcode, user_data,
++		     flags | ANT_ASYNC_PRODUCER_UNKNOWN, descriptor, descriptor_len);
++}
++
+ static struct ant_async *get_request(struct ant_async **slot, bool final)
+ {
+ 	struct ant_async *request;
+@@ -219,7 +278,7 @@ static void put_request(struct ant_async *request)
+ {
+ 	if (!refcount_dec_and_test(&request->refs))
+ 		return;
+-	put_task_struct(request->event.origin);
++	event_release(&request->event);
+ 	ant_monitor_async_capture_free(request->capture);
+ 	kfree(request);
+ 	atomic_dec(&request_count);
+@@ -232,7 +291,7 @@ static void finish_request(struct ant_async *request)
+ 
+ 	spin_lock_irqsave(&request_lock, irqflags);
+ 	payload_missing = (request->event.flags & ANT_ASYNC_PAYLOAD_GAP) &&
+-		!request->payload_failed;
++		!request->payload_failed && !request->payload_deferred;
+ 	spin_unlock_irqrestore(&request_lock, irqflags);
+ 	if (payload_missing)
+ 		ant_run_async_loss(request->event.root_cookie);
+@@ -337,7 +396,8 @@ void ant_monitor_async_memory(struct ant_async **slot, const char *key,
+ 		failed = true;
+ 	} else {
+ 		failed = !request->capture || ant_monitor_async_capture_memory(request->capture,
+-				&event, key, layout, encoding, address, snapshot, size, output);
++				&event, key, layout, encoding, address, snapshot, size,
++				output ? 4 : 1, -1);
+ 		atomic_set_release(&request->capture_busy, 0);
+ 	}
+ 	spin_lock_irqsave(&request_lock, irqflags);
+@@ -425,3 +485,204 @@ void ant_monitor_async_unavailable(void)
+ 	if (current->ant_cookie)
+ 		ant_run_async_incomplete(current->ant_root_cookie);
+ }
++
++/* The request has no payload beyond its scalar submission (contract 14.4). */
++void ant_monitor_async_scalar(struct ant_async **slot)
++{
++	struct ant_async *request = get_request(slot, false);
++	unsigned long irqflags;
++
++	if (!request)
++		return;
++	spin_lock_irqsave(&request_lock, irqflags);
++	if (!request->payload_failed)
++		request->event.flags &= ~ANT_ASYNC_PAYLOAD_GAP;
++	spin_unlock_irqrestore(&request_lock, irqflags);
++	put_request(request);
++}
++
++static void status_field(struct ant_async **slot, const char *key, const char *layout,
++			 u64 address, u64 size, bool output, int status, bool complete)
++{
++	struct ant_async *request = get_request(slot, false);
++	struct ant_async_event event;
++	unsigned long irqflags;
++	bool failed;
++
++	if (!request)
++		return;
++	spin_lock_irqsave(&request_lock, irqflags);
++	event = request->event;
++	spin_unlock_irqrestore(&request_lock, irqflags);
++	if (atomic_cmpxchg(&request->capture_busy, 0, 1)) {
++		failed = true;
++	} else {
++		failed = !request->capture || ant_monitor_async_capture_memory(request->capture,
++				&event, key, layout, 3, address, NULL, size,
++				output ? 4 : 1, status);
++		atomic_set_release(&request->capture_busy, 0);
++	}
++	spin_lock_irqsave(&request_lock, irqflags);
++	if (failed) {
++		request->event.flags |= ANT_ASYNC_PAYLOAD_GAP;
++		request->payload_failed = true;
++	} else if (complete && !request->payload_failed) {
++		request->event.flags &= ~ANT_ASYNC_PAYLOAD_GAP;
++	}
++	spin_unlock_irqrestore(&request_lock, irqflags);
++	if (failed)
++		ant_run_async_loss(request->event.root_cookie);
++	put_request(request);
++}
++
++/* Memory the kernel compares, wakes or hands out later: its address and
++ * extent are the operand, its bytes are not.
++ */
++void ant_monitor_async_address(struct ant_async **slot, const char *key,
++			       const char *layout, u64 address, u64 size)
++{
++	status_field(slot, key, layout, address, size, false, ANT_ADDRESS_ONLY, true);
++}
++
++/* An operand without a decoder. The request's payload gap stays set. */
++void ant_monitor_async_gap(struct ant_async **slot, const char *key, u64 address)
++{
++	status_field(slot, key, "", address, U64_MAX, false, ANT_NO_DECODER, false);
++}
++
++/* Register an AIO read before it is started, so an interrupt completion that
++ * races with read_iter() cannot count the missing output before it is owned.
++ */
++u64 ant_monitor_aio_defer(struct ant_async **slot, u64 ctx_id, u64 obj, u64 data,
++			  u64 buf, u64 len)
++{
++	struct ant_async *request = get_request(slot, false);
++	struct ant_aio_reap *entry = NULL;
++	unsigned long irqflags;
++	u64 request_id = 0;
++	int i;
++
++	if (!request)
++		return 0;
++	spin_lock(&reap_lock);
++	for (i = 0; i < ANT_AIO_REAP_COUNT; i++) {
++		if (!reaps[i].used) {
++			entry = &reaps[i];
++			break;
++		}
++	}
++	if (entry) {
++		spin_lock_irqsave(&request_lock, irqflags);
++		entry->event = request->event;
++		request->payload_deferred = true;
++		spin_unlock_irqrestore(&request_lock, irqflags);
++		event_hold(&entry->event);
++		entry->mm = current->mm;
++		entry->ctx_id = ctx_id;
++		entry->obj = obj;
++		entry->data = data;
++		entry->buf = buf;
++		entry->len = len;
++		entry->used = true;
++		atomic_inc(&reap_used);
++		request_id = entry->event.request_id;
++	}
++	spin_unlock(&reap_lock);
++	/* A full table leaves the gap to finish_request(), which counts it. */
++	put_request(request);
++	return request_id;
++}
++
++static bool reap_take(struct ant_aio_reap *out, struct mm_struct *mm, u64 request_id,
++		      u64 ctx_id, u64 obj, u64 data)
++{
++	bool found = false;
++	int i;
++
++	spin_lock(&reap_lock);
++	for (i = 0; i < ANT_AIO_REAP_COUNT; i++) {
++		struct ant_aio_reap *entry = &reaps[i];
++
++		if (!entry->used || entry->mm != mm)
++			continue;
++		if (request_id ? entry->event.request_id != request_id :
++		    entry->ctx_id != ctx_id || entry->obj != obj || entry->data != data)
++			continue;
++		*out = *entry;
++		entry->used = false;
++		atomic_dec(&reap_used);
++		found = true;
++		break;
++	}
++	spin_unlock(&reap_lock);
++	return found;
++}
++
++/* read_iter() did not queue the request: its result is observed inline. */
++void ant_monitor_aio_undefer(struct ant_async **slot, u64 request_id)
++{
++	struct ant_async *request;
++	struct ant_aio_reap entry;
++	unsigned long irqflags;
++
++	if (!request_id || !reap_take(&entry, current->mm, request_id, 0, 0, 0))
++		return;
++	event_release(&entry.event);
++	request = get_request(slot, false);
++	if (!request)
++		return;
++	spin_lock_irqsave(&request_lock, irqflags);
++	request->payload_deferred = false;
++	spin_unlock_irqrestore(&request_lock, irqflags);
++	put_request(request);
++}
++
++void ant_monitor_aio_reaped(u64 ctx_id, const void __user *events, long nr)
++{
++	const struct io_event __user *reaped = events;
++	struct ant_aio_reap entry;
++	struct ant_task *ctx;
++	struct io_event ev;
++	long i;
++
++	for (i = 0; i < nr && atomic_read(&reap_used); i++) {
++		if (copy_from_user(&ev, &reaped[i], sizeof(ev)))
++			return;
++		if (!reap_take(&entry, current->mm, 0, ctx_id, ev.obj, ev.data))
++			continue;
++		if (ev.res > 0) {
++			entry.event.result = ev.res;
++			entry.event.flags &= ~ANT_ASYNC_PAYLOAD_GAP;
++			ctx = ant_monitor_async_capture_alloc();
++			if (!ctx || ant_monitor_async_capture_memory(ctx, &entry.event,
++					"async.payload.output", "", 1, entry.buf, NULL,
++					min_t(u64, ev.res, entry.len), 7, -1))
++				ant_run_async_loss(entry.event.root_cookie);
++			ant_monitor_async_capture_free(ctx);
++		}
++		event_release(&entry.event);
++	}
++}
++
++/* The address space is going away before its events were reaped. */
++void ant_monitor_aio_exit(struct mm_struct *mm)
++{
++	struct ant_aio_reap entry;
++	int i;
++
++	if (!atomic_read(&reap_used))
++		return;
++	for (i = 0; i < ANT_AIO_REAP_COUNT; i++) {
++		spin_lock(&reap_lock);
++		if (!reaps[i].used || reaps[i].mm != mm) {
++			spin_unlock(&reap_lock);
++			continue;
++		}
++		entry = reaps[i];
++		reaps[i].used = false;
++		atomic_dec(&reap_used);
++		spin_unlock(&reap_lock);
++		ant_run_async_loss(entry.event.root_cookie);
++		event_release(&entry.event);
++	}
++}
+diff --git a/kernel/antinomie/async.h b/kernel/antinomie/async.h
+index a133f8bcd..709a859c9 100644
+--- a/kernel/antinomie/async.h
++++ b/kernel/antinomie/async.h
+@@ -5,11 +5,18 @@
+ #include <linux/types.h>
+ 
+ struct task_struct;
++struct mm_struct;
+ struct ant_task;
+ struct iov_iter;
+ 
+ struct ant_async_event {
+ 	struct task_struct *origin;
++	/* Attributed requests (contract 14.3): the ring creator, whose task
++	 * cookie the event carries and whose counters sequence its packets.
++	 */
++	struct task_struct *owner;
++	/* Compared, never dereferenced: identifies the origin's address space. */
++	struct mm_struct *mm;
+ 	u64 request_id;
+ 	u64 parent_call_id;
+ 	u64 entry_ns;
+@@ -39,7 +46,8 @@ void ant_monitor_async_capture_free(struct ant_task *ctx);
+ int ant_monitor_async_capture_memory(struct ant_task *ctx,
+ 				     const struct ant_async_event *event, const char *key,
+ 				     const char *layout, u16 encoding, u64 address,
+-				     const void *snapshot, u64 size, bool output);
++				     const void *snapshot, u64 size, u32 stage, int status);
++bool ant_async_same_space(const struct ant_async_event *event);
+ int ant_monitor_async_capture(struct ant_task *ctx,
+ 			      const struct ant_async_event *event,
+ 			      const struct iov_iter *iter, size_t size,
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index 9e244a7a3..4aca34ec1 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -81,7 +81,7 @@ static int publish(struct ant_task *ctx, u8 kind, u32 object_id,
+ {
+ 	u8 *p = ctx->packet;
+ 	const struct ant_async_event *async = ctx->async_event;
+-	struct task_struct *origin = async ? async->origin : current;
++	struct task_struct *origin = !async ? current : async->owner ?: async->origin;
+ 	int error;
+ 
+ 	memset(p, 0, ANT_HEADER_SIZE);
+@@ -132,7 +132,7 @@ static void event_begin(struct ant_task *ctx, u8 phase, long result)
+ 	u8 *body = ctx->packet + ANT_HEADER_SIZE;
+ 	const struct cred *cred = current_cred();
+ 	const struct ant_async_event *async = ctx->async_event;
+-	struct task_struct *origin = async ? async->origin : current;
++	struct task_struct *origin = !async ? current : async->owner ?: async->origin;
+ 	u32 validity = BIT(6) | BIT(9);
+ 	int i;
+ 
+@@ -856,31 +856,45 @@ void ant_monitor_async_capture_free(struct ant_task *ctx)
+ 	kfree(ctx);
+ }
+ 
++/* Contract 14.1: user memory named by a request is read by any task running in
++ * the origin's address space (the submitter, its io-wq workers, the SQPOLL
++ * thread), never from interrupt context. The origin reference keeps its
++ * signal_struct alive, so a recycled mm pointer cannot match another group.
++ */
++bool ant_async_same_space(const struct ant_async_event *event)
++{
++	return !in_interrupt() && current->mm && current->mm == event->mm &&
++		current->signal == event->origin->signal;
++}
++
++/* status < 0 derives the status from the context; otherwise it is recorded
++ * as given with no bytes copied (ADDRESS_ONLY, NO_DECODER).
++ */
+ int ant_monitor_async_capture_memory(struct ant_task *ctx,
+ 				     const struct ant_async_event *event, const char *key,
+ 				     const char *layout, u16 encoding, u64 address,
+-				     const void *snapshot, u64 size, bool output)
++				     const void *snapshot, u64 size, u32 stage, int status)
+ {
+ 	struct ant_async_event observed = *event;
+-	struct ant_task *origin_ctx = current->ant_monitor;
+-	enum ant_status status = ANT_COMPLETE;
++	enum ant_status observed_status = ANT_COMPLETE;
+ 	int error;
+ 
+-	observed.stage = output ? 4 : 1;
++	observed.stage = stage;
+ 	observed.final = false;
+ 	observed.descriptor_len = 0;
+ 	observed.timestamp_ns = ktime_get_ns();
+ 	observed.cpu = raw_smp_processor_id();
+-	if (size && !snapshot && (in_interrupt() || current != event->origin || !current->mm ||
+-				  !origin_ctx || !origin_ctx->active ||
+-				  origin_ctx->call_id != event->parent_call_id))
+-		status = ANT_ASYNC_UNOBSERVED;
++	if (status >= 0)
++		observed_status = status;
++	else if (size && !snapshot && !ant_async_same_space(event))
++		observed_status = ANT_ASYNC_UNOBSERVED;
+ 	ctx->async_staged = true;
+-	ctx->async_output = output;
++	ctx->async_output = stage != 1;
+ 	async_context(ctx, &observed);
+ 	ctx->flags |= ANT_OBSERVATIONAL;
+ 	ctx->kernel_imported = !!snapshot;
+-	field(ctx, 255, key, layout, encoding, address, snapshot, size, size, status);
++	field(ctx, 255, key, layout, encoding, address, snapshot, size,
++	      size, observed_status);
+ 	ctx->kernel_imported = false;
+ 	event_end(ctx);
+ 	error = ctx->failed_count || (ctx->state & 1) ? -ENODATA : 0;
+@@ -895,7 +909,6 @@ int ant_monitor_async_capture(struct ant_task *ctx,
+ {
+ 	struct ant_async_event observed = *event;
+ 	struct iov_iter iter = *source;
+-	struct ant_task *origin_ctx = current->ant_monitor;
+ 	u64 values[] = { output ? 2 : 1, source->count, result_offset };
+ 	static const char * const keys[] = { "async.payload.direction",
+ 		"async.payload.requested_size", "async.payload.result_offset" };
+@@ -914,13 +927,10 @@ int ant_monitor_async_capture(struct ant_task *ctx,
+ 	if (size > source->count) {
+ 		status = ANT_INVALID_EXTENT;
+ 	} else if (user_backed_iter(source)) {
+-		/* A task reference does not retain its old mm. Only inspect user
+-		 * iterators inside the still-active originating syscall; later
+-		 * task work/IRQ callbacks explicitly report unavailable content.
++		/* IRQ completions and foreign address spaces cannot read the
++		 * iterator's user memory; they report unavailable content.
+ 		 */
+-		if (size && (in_interrupt() || current != event->origin || !current->mm ||
+-			     !origin_ctx || !origin_ctx->active ||
+-			     origin_ctx->call_id != event->parent_call_id))
++		if (size && !ant_async_same_space(event))
+ 			status = ANT_ASYNC_UNOBSERVED;
+ 	} else if (!iov_iter_is_bvec(source) && !iov_iter_is_kvec(source)) {
+ 		status = ANT_NO_DECODER;
