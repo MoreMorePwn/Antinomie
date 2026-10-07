@@ -30,8 +30,9 @@ impl Panel {
 }
 
 /// Bumped when the default arrangement changes, so a layout saved before the
-/// change is replaced by the new default once.
-const LAYOUT_VERSION: u32 = 1;
+/// change is replaced by the new default once. Version 2 also replaces layouts
+/// that closing a detached window had flattened into one tab bar.
+const LAYOUT_VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct WorkspaceLayout {
@@ -92,13 +93,13 @@ impl WorkspaceLayout {
             }
         });
         for panel in [
-            Panel::Trace,
             Panel::RunHistory,
+            Panel::Trace,
             Panel::Details,
             Panel::Activity,
         ] {
             if self.dock.find_tab(&panel).is_none() {
-                self.dock.push_to_first_leaf(panel);
+                self.return_home(panel);
             }
         }
         self.geometry
@@ -308,6 +309,42 @@ impl WorkspaceLayout {
         }
     }
 
+    /// Puts a panel back where the default layout keeps it: Run History and
+    /// the trace in the upper tab bar, Details and Activity in the lower one,
+    /// recreating that split when the other group is all that is left.
+    fn return_home(&mut self, panel: Panel) {
+        let lower = matches!(panel, Panel::Details | Panel::Activity);
+        let (own, other) = if lower {
+            (
+                [Panel::Details, Panel::Activity],
+                [Panel::RunHistory, Panel::Trace],
+            )
+        } else {
+            (
+                [Panel::RunHistory, Panel::Trace],
+                [Panel::Details, Panel::Activity],
+            )
+        };
+        // The first panel of each group goes before its sibling.
+        let first = panel == own[0];
+        let tree = self.dock.main_surface_mut();
+        if let Some((node, _)) = own.iter().find_map(|sibling| tree.find_tab(sibling)) {
+            if first {
+                tree[node].insert_tab(TabIndex(0), panel);
+            } else {
+                tree[node].append_tab(panel);
+            }
+        } else if let Some((node, _)) = other.iter().find_map(|sibling| tree.find_tab(sibling)) {
+            if lower {
+                tree.split_below(node, 0.63, vec![panel]);
+            } else {
+                tree.split_above(node, 0.37, vec![panel]);
+            }
+        } else {
+            tree.push_to_first_leaf(panel);
+        }
+    }
+
     fn close_surface(&mut self, app: &mut MonitorApp, surface: SurfaceIndex) {
         let panels: Vec<_> = self.dock[surface].tabs().cloned().collect();
         self.dock.remove_surface(surface);
@@ -315,7 +352,7 @@ impl WorkspaceLayout {
             if let Panel::Terminal(id) = panel {
                 app.close_terminal_view(&id);
             } else {
-                self.dock.push_to_first_leaf(panel);
+                self.return_home(panel);
             }
         }
     }
@@ -419,6 +456,71 @@ mod tests {
             [Panel::Trace, Panel::RunHistory]
         );
         assert!(WorkspaceLayout::restore(None).version >= 1);
+    }
+
+    #[test]
+    fn returning_panels_go_home_instead_of_into_the_first_tab_bar() {
+        // Details and Activity left in a window that was then closed.
+        let mut layout = WorkspaceLayout::default();
+        for panel in [Panel::Details, Panel::Activity] {
+            let location = layout.dock.find_tab(&panel).expect("default panel");
+            layout.dock.remove_tab(location);
+        }
+        layout.validate();
+        let top = layout
+            .dock
+            .find_main_surface_tab(&Panel::Trace)
+            .expect("trace stays")
+            .0;
+        let bottom = layout
+            .dock
+            .find_main_surface_tab(&Panel::Details)
+            .expect("details returns")
+            .0;
+        assert_ne!(top, bottom, "Details must not join the trace's tab bar");
+        assert_eq!(leaf_tabs(&layout, top), [Panel::RunHistory, Panel::Trace]);
+        assert_eq!(
+            leaf_tabs(&layout, bottom),
+            [Panel::Details, Panel::Activity]
+        );
+
+        // Every panel missing rebuilds the default arrangement, not one bar.
+        let mut empty = WorkspaceLayout {
+            dock: DockState::new(Vec::new()),
+            ..WorkspaceLayout::default()
+        };
+        empty.validate();
+        let top = empty.dock.find_main_surface_tab(&Panel::Trace).unwrap().0;
+        let bottom = empty
+            .dock
+            .find_main_surface_tab(&Panel::Activity)
+            .unwrap()
+            .0;
+        assert_eq!(leaf_tabs(&empty, top), [Panel::RunHistory, Panel::Trace]);
+        assert_eq!(leaf_tabs(&empty, bottom), [Panel::Details, Panel::Activity]);
+    }
+
+    #[test]
+    fn restore_replaces_a_version_1_flattened_layout() {
+        let flattened = WorkspaceLayout {
+            version: 1,
+            dock: DockState::new(vec![
+                Panel::Trace,
+                Panel::RunHistory,
+                Panel::Details,
+                Panel::Activity,
+            ]),
+            ..WorkspaceLayout::default()
+        };
+        let restored = WorkspaceLayout::restore(Some(flattened));
+        assert_eq!(
+            leaf_tabs(&restored, NodeIndex::root().left()),
+            [Panel::RunHistory, Panel::Trace]
+        );
+        assert_eq!(
+            leaf_tabs(&restored, NodeIndex::root().right()),
+            [Panel::Details, Panel::Activity]
+        );
     }
 
     #[test]

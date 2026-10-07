@@ -122,6 +122,8 @@ pub struct MonitorApp {
     name_action: Option<(String, bool, String)>,
     status: String,
     filter: String,
+    /// Trace table order: the clicked column and whether it is descending.
+    trace_sort: Option<(TraceColumn, bool)>,
     selected_event: Option<InvocationKey>,
     selected_run: Option<String>,
     archive_selected: bool,
@@ -209,6 +211,7 @@ impl MonitorApp {
             name_action: None,
             status,
             filter: String::new(),
+            trace_sort: None,
             selected_event: None,
             selected_run: None,
             archive_selected: false,
@@ -1369,27 +1372,18 @@ impl MonitorApp {
                     .inner_margin(egui::Margin::same(8)),
             )
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    let button_width =
-                        ui.spacing().interact_size.y + ui.spacing().button_padding.x * 2.0;
-                    let title_width =
-                        (ui.available_width() - button_width - ui.spacing().item_spacing.x)
-                            .max(0.0);
-                    ui.add_sized(
-                        [title_width, ui.spacing().interact_size.y],
-                        egui::Label::new(RichText::new("Virtual machines").strong()).truncate(),
-                    )
-                    .on_hover_text("Virtual machines");
-                    if icon(
-                        ui,
-                        egui_phosphor::regular::PLUS,
-                        "New VM",
-                        self.snapshot.active_vm.is_none(),
-                    ) {
-                        self.new_image();
-                    }
-                });
-                ui.separator();
+                if section_header(
+                    ui,
+                    "Virtual machines",
+                    "Virtual machines",
+                    "New VM",
+                    self.snapshot.active_vm.is_none(),
+                    false,
+                )
+                .clicked()
+                {
+                    self.new_image();
+                }
                 let list_budget = ui.available_height();
                 egui::ScrollArea::vertical()
                     .id_salt("vm_list")
@@ -1448,18 +1442,26 @@ impl MonitorApp {
                         }
                     });
                 ui.separator();
-                ui.horizontal(|ui| {
-                    let button_width =
-                        ui.spacing().interact_size.y + ui.spacing().button_padding.x * 2.0;
-                    let title_width =
-                        (ui.available_width() - button_width - ui.spacing().item_spacing.x)
-                            .max(0.0);
-                    ui.add_sized(
-                        [title_width, ui.spacing().interact_size.y],
-                        egui::Label::new(RichText::new("Base images").strong()).truncate(),
-                    )
-                    .on_hover_text("Installed base images");
-                    ui.menu_button(egui_phosphor::regular::PLUS, |ui| {
+                let add_base = egui::Id::new("add_base_menu");
+                let open = ui.memory(|memory| memory.is_popup_open(add_base));
+                let header = section_header(
+                    ui,
+                    "Base images",
+                    "Installed base images",
+                    "Add base",
+                    true,
+                    open,
+                );
+                if header.clicked() {
+                    ui.memory_mut(|memory| memory.toggle_popup(add_base));
+                }
+                egui::popup::popup_below_widget(
+                    ui,
+                    add_base,
+                    &header,
+                    egui::PopupCloseBehavior::CloseOnClick,
+                    |ui| {
+                        ui.set_min_width(140.0);
                         if ui
                             .add_enabled(
                                 self.snapshot.active_vm.is_none(),
@@ -1468,23 +1470,18 @@ impl MonitorApp {
                             .clicked()
                         {
                             self.import_open = true;
-                            ui.close_menu();
                         }
                         if ui.button("Download base…").clicked() {
                             self.download_open = true;
                             if !self.snapshot.remote_refreshing {
                                 self.send(Command::RefreshRemoteBases);
                             }
-                            ui.close_menu();
                         }
                         if ui.button("Build base…").clicked() {
                             self.build_open = true;
-                            ui.close_menu();
                         }
-                    })
-                    .response
-                    .on_hover_text("Add base");
-                });
+                    },
+                );
                 egui::ScrollArea::vertical()
                     .id_salt("base_list")
                     .auto_shrink([false, false])
@@ -1949,6 +1946,10 @@ impl MonitorApp {
                     .contains(&filter)
             })
             .collect();
+        let mut invocations = invocations;
+        if let Some((column, descending)) = self.trace_sort {
+            sort_invocations(&mut invocations, column, descending);
+        }
         let height = self.settings.font_size + 14.0;
         let table_height = (ui.available_height() - height).max(0.0);
         let compact = ui.available_width() < 900.0;
@@ -1980,18 +1981,39 @@ impl MonitorApp {
                     .column(Column::initial(widths[5]).at_least(50.0).clip(true))
                     .column(Column::remainder().at_least(130.0).clip(true))
                     .header(height, |mut header| {
-                        for label in [
-                            "Time",
-                            "Sequence",
-                            "TID",
-                            "CPU",
-                            "Syscall (number)",
-                            "Return",
-                            "Info",
-                        ] {
+                        for column in TraceColumn::ALL {
                             header.col(|ui| {
-                                ui.add(egui::Label::new(RichText::new(label).strong()).truncate())
-                                    .on_hover_text(label);
+                                let sorted =
+                                    self.trace_sort.filter(|(sorted, _)| *sorted == column);
+                                let label = match sorted {
+                                    Some((_, false)) => format!(
+                                        "{} {}",
+                                        column.title(),
+                                        egui_phosphor::regular::CARET_UP
+                                    ),
+                                    Some((_, true)) => format!(
+                                        "{} {}",
+                                        column.title(),
+                                        egui_phosphor::regular::CARET_DOWN
+                                    ),
+                                    None => column.title().to_string(),
+                                };
+                                let response = ui
+                                    .add(
+                                        egui::Label::new(RichText::new(label).strong())
+                                            .truncate()
+                                            .selectable(false)
+                                            .sense(egui::Sense::click()),
+                                    )
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                    .on_hover_text(format!("Sort by {}", column.title()));
+                                if response.clicked() {
+                                    // A new column sorts ascending; the same column flips.
+                                    self.trace_sort = Some((
+                                        column,
+                                        sorted.is_some_and(|(_, descending)| !descending),
+                                    ));
+                                }
                             });
                         }
                     })
@@ -3241,6 +3263,154 @@ fn sync_runs(terminals: &mut BTreeMap<String, RunTerminal>, snapshot: &Snapshot)
     }
 }
 
+/// A sortable column of the syscall trace table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TraceColumn {
+    Time,
+    Sequence,
+    Tid,
+    Cpu,
+    Syscall,
+    Return,
+    Info,
+}
+
+impl TraceColumn {
+    const ALL: [Self; 7] = [
+        Self::Time,
+        Self::Sequence,
+        Self::Tid,
+        Self::Cpu,
+        Self::Syscall,
+        Self::Return,
+        Self::Info,
+    ];
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::Time => "Time",
+            Self::Sequence => "Sequence",
+            Self::Tid => "TID",
+            Self::Cpu => "CPU",
+            Self::Syscall => "Syscall (number)",
+            Self::Return => "Return",
+            Self::Info => "Info",
+        }
+    }
+}
+
+/// Orders the table by one column. Ties keep time, then sequence, order; a
+/// call without an exit sorts after every returned value.
+fn sort_invocations(invocations: &mut [InvocationSummary], column: TraceColumn, descending: bool) {
+    use std::cmp::Ordering;
+    let time = |invocation: &InvocationSummary| {
+        trace::representative(invocation).map(|event| (event.timestamp_ns, event.event_seq))
+    };
+    let compare = |a: &InvocationSummary, b: &InvocationSummary| -> Ordering {
+        let (Some(x), Some(y)) = (trace::representative(a), trace::representative(b)) else {
+            return Ordering::Equal;
+        };
+        match column {
+            TraceColumn::Time => x.timestamp_ns.cmp(&y.timestamp_ns),
+            TraceColumn::Sequence => x.event_seq.cmp(&y.event_seq),
+            TraceColumn::Tid => x.tid.cmp(&y.tid),
+            TraceColumn::Cpu => x.cpu.cmp(&y.cpu),
+            TraceColumn::Syscall => x
+                .syscall_name
+                .cmp(&y.syscall_name)
+                .then(x.syscall_nr.cmp(&y.syscall_nr)),
+            TraceColumn::Return => {
+                let result = |invocation: &InvocationSummary| {
+                    invocation.exit.as_ref().and_then(|exit| exit.result)
+                };
+                match (result(a), result(b)) {
+                    (Some(x), Some(y)) => x.cmp(&y),
+                    (Some(_), None) => Ordering::Less,
+                    (None, Some(_)) => Ordering::Greater,
+                    (None, None) => Ordering::Equal,
+                }
+            }
+            TraceColumn::Info => Ordering::Equal,
+        }
+    };
+    if column == TraceColumn::Info {
+        // The info text is built once per row, not once per comparison.
+        if descending {
+            invocations.sort_by_cached_key(|invocation| {
+                (std::cmp::Reverse(trace::info(invocation)), time(invocation))
+            });
+        } else {
+            invocations
+                .sort_by_cached_key(|invocation| (trace::info(invocation), time(invocation)));
+        }
+        return;
+    }
+    invocations.sort_by(|a, b| {
+        let order = compare(a, b);
+        let order = if descending { order.reverse() } else { order };
+        order.then_with(|| time(a).cmp(&time(b)))
+    });
+}
+
+/// A sidebar section title with a "+" action on its right and a separator
+/// below. The "+" lights up while hovered, or while its menu is `open`.
+fn section_header(
+    ui: &mut egui::Ui,
+    title: &str,
+    title_tooltip: &str,
+    action: &str,
+    enabled: bool,
+    open: bool,
+) -> egui::Response {
+    let size = ui.spacing().interact_size.y;
+    let response = ui
+        .horizontal(|ui| {
+            let title_width = (ui.available_width() - size - ui.spacing().item_spacing.x).max(0.0);
+            // Left-aligned, so every section title starts at the same edge.
+            ui.allocate_ui_with_layout(
+                egui::vec2(title_width, size),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_min_size(egui::vec2(title_width, size));
+                    ui.add(egui::Label::new(RichText::new(title).strong()).truncate())
+                        .on_hover_text(title_tooltip);
+                },
+            );
+            let sense = if enabled {
+                egui::Sense::click()
+            } else {
+                egui::Sense::hover()
+            };
+            let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), sense);
+            let lit = enabled && (response.hovered() || open);
+            if ui.is_rect_visible(rect) {
+                if lit {
+                    ui.painter().rect_filled(rect, 4.0, theme::PRIMARY);
+                }
+                let color = match (enabled, lit) {
+                    (false, _) => theme::MUTED.gamma_multiply(0.5),
+                    (true, true) => egui::Color32::WHITE,
+                    (true, false) => theme::TEXT,
+                };
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    egui_phosphor::regular::PLUS,
+                    egui::FontId::proportional(ui.text_style_height(&egui::TextStyle::Body)),
+                    color,
+                );
+            }
+            if enabled {
+                response.on_hover_text(action)
+            } else {
+                response.on_hover_text(format!("{action} (stop the running VM first)"))
+            }
+        })
+        .inner;
+    ui.separator();
+    response
+}
+
 fn icon(ui: &mut egui::Ui, icon: &str, tooltip: &str, enabled: bool) -> bool {
     ui.add_enabled(
         enabled,
@@ -3307,6 +3477,7 @@ mod tests {
             build_open: false,
             name_action: None,
             filter: String::new(),
+            trace_sort: None,
             selected_event: None,
             selected_run: None,
             archive_selected: false,
@@ -3628,9 +3799,9 @@ mod tests {
             .expect("base images title")
             .1;
         assert_eq!(rows.len(), 2);
-        // Left-aligned like the VM list, not centred in the sidebar.
+        // Left-aligned with the section title, not centred in the sidebar.
         assert!(
-            rows.iter().all(|row| row.left() < title.left()),
+            rows.iter().all(|row| row.left() < title.left() + 12.0),
             "{rows:?} {title:?}"
         );
         let target = rows[1].center();
@@ -3658,6 +3829,180 @@ mod tests {
         // Selecting a base starts nothing: no dialog, no command.
         assert!(app.submitted.is_empty());
         assert!(app.confirm.is_none());
+    }
+
+    #[test]
+    fn section_headers_share_a_layout_and_the_add_control_lights_on_hover() {
+        fn lit(output: &egui::FullOutput, point: egui::Pos2) -> bool {
+            fn find(shape: &egui::Shape, point: egui::Pos2) -> bool {
+                match shape {
+                    egui::Shape::Rect(rect) => {
+                        rect.fill == theme::PRIMARY && rect.rect.contains(point)
+                    }
+                    egui::Shape::Vec(shapes) => shapes.iter().any(|shape| find(shape, point)),
+                    _ => false,
+                }
+            }
+            output.shapes.iter().any(|shape| find(&shape.shape, point))
+        }
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 820.0);
+        let mut app = app();
+        app.snapshot.bases = vec![test_base("first", true)];
+        for _ in 0..3 {
+            let _ = render(&mut app, &ctx, size);
+        }
+        let output = render(&mut app, &ctx, size);
+        let shown = texts(&output);
+        let header = |title: &str| {
+            let title = shown
+                .iter()
+                .find(|(text, _)| text == title)
+                .unwrap_or_else(|| panic!("missing {title}"))
+                .1;
+            let add = shown
+                .iter()
+                .find(|(text, rect)| {
+                    text == egui_phosphor::regular::PLUS
+                        && rect.center().y > title.top()
+                        && rect.center().y < title.bottom()
+                })
+                .unwrap_or_else(|| panic!("missing + beside {title:?}"))
+                .1;
+            (title, add)
+        };
+        let (vm_title, vm_add) = header("Virtual machines");
+        let (base_title, base_add) = header("Base images");
+        // Glyph side bearings differ by about a pixel between the two titles.
+        assert!(
+            (vm_title.left() - base_title.left()).abs() < 2.0,
+            "{vm_title:?} {base_title:?}"
+        );
+        assert!((vm_add.center().x - base_add.center().x).abs() < 0.5);
+        assert!((vm_add.height() - base_add.height()).abs() < 0.5);
+        assert!(!lit(&output, base_add.center()));
+
+        let target = base_add.center();
+        let frame = |app: &mut MonitorApp, events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| app.draw(ctx),
+            )
+        };
+        let _ = frame(&mut app, vec![egui::Event::PointerMoved(target)]);
+        let hovered = frame(&mut app, vec![]);
+        assert!(lit(&hovered, target), "hovered + must light up");
+        let click = |pressed| egui::Event::PointerButton {
+            pos: target,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        let _ = frame(&mut app, vec![click(true)]);
+        let _ = frame(&mut app, vec![click(false)]);
+        let opened = frame(&mut app, vec![]);
+        assert!(texts(&opened)
+            .iter()
+            .any(|(text, _)| text == "Import base…"));
+        assert!(lit(&opened, target), "+ stays lit while its menu is open");
+    }
+
+    #[test]
+    fn trace_columns_sort_both_ways_with_stable_ties() {
+        let call = |call_id: u64, tid: u32, time: u64, result: Option<i64>| {
+            let mut entry = event(1, 0);
+            entry.call_id = call_id;
+            entry.tid = tid;
+            entry.timestamp_ns = time;
+            entry.event_seq = call_id * 2;
+            let mut exit = entry.clone();
+            exit.phase = 2;
+            exit.event_seq += 1;
+            exit.result = result;
+            vec![entry, exit]
+        };
+        let events: Vec<_> = [
+            call(1, 30, 300, Some(5)),
+            call(2, 10, 100, Some(-2)),
+            call(3, 20, 200, Some(5)),
+        ]
+        .concat();
+        let order = |column, descending| {
+            let mut invocations = antinomie_monitor_core::pair_events(&events);
+            sort_invocations(&mut invocations, column, descending);
+            invocations.iter().map(|i| i.call_id).collect::<Vec<_>>()
+        };
+        assert_eq!(order(TraceColumn::Time, false), [2, 3, 1]);
+        assert_eq!(order(TraceColumn::Time, true), [1, 3, 2]);
+        assert_eq!(order(TraceColumn::Tid, false), [2, 3, 1]);
+        assert_eq!(order(TraceColumn::Tid, true), [1, 3, 2]);
+        // Equal returns keep time order in both directions.
+        assert_eq!(order(TraceColumn::Return, false), [2, 3, 1]);
+        assert_eq!(order(TraceColumn::Return, true), [3, 1, 2]);
+    }
+
+    #[test]
+    fn clicking_a_trace_header_sorts_and_shows_the_direction() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 820.0);
+        let mut app = app();
+        app.snapshot.events = vec![event(1, 0), event(2, 3)];
+        for _ in 0..3 {
+            let _ = render(&mut app, &ctx, size);
+        }
+        let header = |app: &mut MonitorApp| {
+            texts(&render(app, &ctx, size))
+                .into_iter()
+                .find(|(text, _)| text.starts_with("TID"))
+                .expect("TID header")
+        };
+        let (text, rect) = header(&mut app);
+        assert_eq!(text, "TID");
+        let click = |app: &mut MonitorApp| {
+            let pos = rect.center();
+            for events in [
+                vec![egui::Event::PointerMoved(pos)],
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                }],
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::default(),
+                }],
+            ] {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| app.draw(ctx),
+                );
+            }
+        };
+        click(&mut app);
+        assert_eq!(app.trace_sort, Some((TraceColumn::Tid, false)));
+        assert_eq!(
+            header(&mut app).0,
+            format!("TID {}", egui_phosphor::regular::CARET_UP)
+        );
+        click(&mut app);
+        assert_eq!(app.trace_sort, Some((TraceColumn::Tid, true)));
+        assert_eq!(
+            header(&mut app).0,
+            format!("TID {}", egui_phosphor::regular::CARET_DOWN)
+        );
     }
 
     #[test]
