@@ -296,6 +296,8 @@ pub struct BackendOptions {
     pub curl: PathBuf,
     /// Anonymous base bucket file endpoint (`.../resolve`).
     pub remote_base: String,
+    /// Product repository checkout used for local base builds (host Linux).
+    pub build_workspace: Option<PathBuf>,
     /// Shared quota for raw packets, assembled fields and terminal artifacts, in bytes.
     pub capture_quota_size: u64,
     pub shutdown_timeout: Duration,
@@ -315,6 +317,7 @@ impl Default for BackendOptions {
             qemu_img: "qemu-img".into(),
             curl: "curl".into(),
             remote_base: crate::distribution::DEFAULT_REMOTE_BASE.to_string(),
+            build_workspace: None,
             capture_quota_size: 4 * 1024 * 1024 * 1024,
             shutdown_timeout: Duration::from_secs(10),
             bootstrap_gpa: None,
@@ -402,6 +405,19 @@ pub struct DownloadStatus {
     pub label: String,
     pub received: u64,
     pub total: u64,
+    pub finished: bool,
+    pub error: Option<String>,
+}
+
+/// Progress and log tail of the single active local build.
+#[derive(Clone, Debug, Default)]
+pub struct BuildStatus {
+    pub profile: String,
+    pub label: String,
+    /// Current step label (`kernel`, `image`) or `done`.
+    pub stage: String,
+    /// Bounded tail of the combined build output.
+    pub log: Vec<String>,
     pub finished: bool,
     pub error: Option<String>,
 }
@@ -505,6 +521,10 @@ pub enum Command {
     DownloadBase {
         identity: String,
     },
+    /// Build a base locally (host Linux) from the configured workspace.
+    BuildBase {
+        profile: String,
+    },
     Save(VmConfig),
     Rename {
         vm_id: String,
@@ -529,6 +549,7 @@ pub enum Command {
         bundle_dir: PathBuf,
         capture_quota_size: u64,
         shutdown_timeout_secs: u64,
+        build_workspace: Option<PathBuf>,
     },
     Upload {
         source: PathBuf,
@@ -608,6 +629,8 @@ pub struct Snapshot {
     pub remote_refreshing: bool,
     /// Progress of the single active remote download, if any.
     pub download: Option<DownloadStatus>,
+    /// Progress and log tail of the single active local build, if any.
+    pub build: Option<BuildStatus>,
     pub vm_locations: Vec<VmLocations>,
     pub active_vm: Option<String>,
     pub state: VmState,

@@ -1,6 +1,7 @@
 pub mod api;
 mod archive_io;
 mod backend;
+pub mod build;
 mod control;
 mod display;
 pub mod distribution;

@@ -27,6 +27,8 @@ struct Settings {
     quota_gib: u32,
     timeout: u64,
     font_size: f32,
+    /// Product repository checkout used for local base builds.
+    build_workspace: String,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -35,6 +37,7 @@ impl Default for Settings {
             quota_gib: 4,
             timeout: 10,
             font_size: 16.0,
+            build_workspace: String::new(),
         }
     }
 }
@@ -169,6 +172,8 @@ impl MonitorApp {
         settings.font_size = settings.font_size.clamp(12.0, 24.0);
         theme::text_size(&cc.egui_ctx, settings.font_size);
         options.bundle_dir = PathBuf::from(&settings.bundle);
+        options.build_workspace = (!settings.build_workspace.trim().is_empty())
+            .then(|| PathBuf::from(settings.build_workspace.trim()));
         options.capture_quota_size = u64::from(settings.quota_gib) * 1024 * 1024 * 1024;
         options.shutdown_timeout = Duration::from_secs(settings.timeout);
         let (backend, status) = match Backend::new(options.clone()) {
@@ -2081,37 +2086,91 @@ impl MonitorApp {
         }
         if self.build_open {
             let mut open = true;
+            let mut workspace = self.settings.build_workspace.clone();
+            let build = self.snapshot.build.clone();
+            let active = build.as_ref().is_some_and(|status| !status.finished);
+            let mut request: Option<String> = None;
             egui::Window::new("Build base")
                 .open(&mut open)
                 .collapsible(false)
                 .resizable(true)
-                .default_width(560.0)
+                .default_width(620.0)
                 .show(ctx, |ui| {
-                    ui.label(
-                        "Build a base locally from source. Missing host tools are listed; nothing is installed automatically.",
+                    ui.horizontal(|ui| {
+                        ui.label("Repository workspace");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut workspace)
+                                .desired_width(380.0)
+                                .hint_text("path to the Antinomie checkout"),
+                        );
+                    });
+                    ui.small(
+                        "Local build runs the repository scripts (ANT-ADR-0001); nothing is installed automatically.",
                     );
                     ui.separator();
-                    for profile in antinomie_monitor_core::distribution::BUILD_PROFILES {
-                        let missing = profile.missing_tools();
+                    for profile in antinomie_monitor_core::build::BUILD_PROFILES {
+                        let missing = antinomie_monitor_core::build::missing(profile.kind);
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
                                 ui.label(RichText::new(profile.label).strong());
                                 ui.small(profile.id);
                             });
-                            if missing.is_empty() {
-                                ui.colored_label(theme::GOOD, "host tools ready");
-                            } else {
+                            if !missing.is_empty() {
                                 ui.colored_label(
                                     theme::WARN,
-                                    format!("missing: {}", missing.join(", ")),
+                                    format!(
+                                        "missing: {}",
+                                        missing
+                                            .iter()
+                                            .map(|tool| tool.tool)
+                                            .collect::<Vec<_>>()
+                                            .join(", ")
+                                    ),
                                 );
+                            } else if workspace.trim().is_empty() {
+                                ui.colored_label(theme::MUTED, "set a workspace");
+                            } else if ui
+                                .add_enabled(!active, egui::Button::new("Build"))
+                                .clicked()
+                            {
+                                request = Some(profile.id.to_string());
+                            } else {
+                                ui.colored_label(theme::GOOD, "host tools ready");
                             }
                         });
+                        let hint = antinomie_monitor_core::build::install_hint(profile.kind);
+                        if !hint.is_empty() {
+                            ui.small(format!("  {hint}"));
+                        }
                     }
-                    ui.separator();
-                    ui.small("Local build workflows are delivered by ANT-T0019.");
+                    if let Some(status) = &build {
+                        ui.separator();
+                        ui.label(
+                            RichText::new(format!("{} — {}", status.label, status.stage)).strong(),
+                        );
+                        if let Some(error) = &status.error {
+                            ui.colored_label(theme::ERROR, error);
+                        } else if status.finished {
+                            ui.colored_label(theme::GOOD, "installed");
+                        }
+                        egui::ScrollArea::vertical()
+                            .max_height(220.0)
+                            .show(ui, |ui| {
+                                for line in &status.log {
+                                    ui.small(line);
+                                }
+                            });
+                    }
                 });
             self.build_open = open;
+            let changed = self.settings.build_workspace != workspace;
+            self.settings.build_workspace = workspace;
+            if changed {
+                self.update_options();
+            }
+            if let Some(profile) = request {
+                self.send(Command::BuildBase { profile });
+            }
         }
         if let Some((vm_id, duplicate, name)) = &mut self.name_action {
             let mut open = true;
@@ -2632,6 +2691,8 @@ impl MonitorApp {
             bundle_dir: PathBuf::from(&self.settings.bundle),
             capture_quota_size: u64::from(self.settings.quota_gib) * 1073741824,
             shutdown_timeout_secs: self.settings.timeout,
+            build_workspace: (!self.settings.build_workspace.trim().is_empty())
+                .then(|| PathBuf::from(self.settings.build_workspace.trim())),
         });
     }
 }

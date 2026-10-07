@@ -1,6 +1,6 @@
 use crate::{
     api::*,
-    control, distribution,
+    build, control, distribution,
     parser::{Assembler, u32_at, u64_at},
     run::ProgramRun,
     storage::{self, Bundle, RawCapture},
@@ -71,6 +71,7 @@ impl Backend {
                     catalog: distribution::Catalog::default(),
                     refresh: None,
                     download: None,
+                    build: None,
                     last_publish: Instant::now(),
                     latest_snapshot: worker_snapshot,
                 }
@@ -523,6 +524,8 @@ struct Worker {
     refresh: Option<Receiver<Result<distribution::Catalog, String>>>,
     /// In-flight base download.
     download: Option<DownloadJob>,
+    /// In-flight local build.
+    build: Option<BuildJob>,
     last_publish: Instant,
     latest_snapshot: Arc<Mutex<Option<Snapshot>>>,
 }
@@ -532,6 +535,14 @@ struct DownloadJob {
     label: String,
     total: u64,
     progress: Arc<Mutex<(u64, bool)>>,
+    done: Receiver<Result<(), String>>,
+}
+
+struct BuildJob {
+    label: String,
+    stage: Arc<Mutex<String>>,
+    log: Arc<Mutex<std::collections::VecDeque<String>>>,
+    cancel: Arc<AtomicBool>,
     done: Receiver<Result<(), String>>,
 }
 impl Worker {
@@ -629,10 +640,57 @@ impl Worker {
             self.publish();
         }
     }
+    fn poll_build(&mut self) {
+        if let Some(job) = self.build.as_ref() {
+            let stage = job
+                .stage
+                .lock()
+                .map(|guard| guard.clone())
+                .unwrap_or_default();
+            let log: Vec<String> = job
+                .log
+                .lock()
+                .map(|guard| guard.iter().cloned().collect())
+                .unwrap_or_default();
+            if let Some(status) = self.snapshot.build.as_mut() {
+                status.stage = stage;
+                status.log = log;
+            }
+        }
+        let finished = self.build.as_ref().and_then(|job| {
+            job.done.try_recv().ok().or_else(|| {
+                if matches!(job.done.try_recv(), Err(mpsc::TryRecvError::Disconnected)) {
+                    Some(Err("build worker disconnected".into()))
+                } else {
+                    None
+                }
+            })
+        });
+        if let Some(result) = finished {
+            let job = self.build.take().expect("build job present");
+            let error = result.err();
+            if let Some(error) = &error {
+                self.snapshot.last_error = Some(error.clone());
+            }
+            if let Err(error) = self.refresh_locations() {
+                self.snapshot.last_error = Some(error);
+            }
+            if let Some(status) = self.snapshot.build.as_mut() {
+                status.stage = "done".into();
+                status.finished = true;
+                status.error = error;
+                let _ = job.label;
+            }
+            self.publish();
+        }
+    }
     fn run(mut self) {
         self.publish();
         loop {
             if self.closing.load(Ordering::Relaxed) {
+                if let Some(job) = self.build.as_ref() {
+                    job.cancel.store(true, Ordering::Relaxed);
+                }
                 let result = self.stop();
                 if let Err(e) = result {
                     self.snapshot.last_error = Some(e);
@@ -733,6 +791,7 @@ impl Worker {
                 self.snapshot.last_error = Some(error);
             }
             self.poll_remote();
+            self.poll_build();
             if self.last_publish.elapsed() >= Duration::from_millis(250) {
                 self.publish();
             }
@@ -861,6 +920,107 @@ impl Worker {
                     error: None,
                 });
                 Ok("base download started".into())
+            }
+            Command::BuildBase { profile } => {
+                if self.build.is_some() {
+                    return Err("a base build is already in progress".into());
+                }
+                let spec = build::profile(&profile).ok_or("unknown build profile")?;
+                let missing = build::missing(spec.kind);
+                if !missing.is_empty() {
+                    let hint = build::install_hint(spec.kind);
+                    return Err(format!(
+                        "missing host tools: {}{}",
+                        missing
+                            .iter()
+                            .map(|tool| tool.tool)
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        if hint.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" (install with: {hint})")
+                        }
+                    ));
+                }
+                let workspace = self
+                    .options
+                    .build_workspace
+                    .clone()
+                    .ok_or("no build workspace configured; set it in Settings")?;
+                if !workspace.join("scripts").is_dir() {
+                    return Err(format!(
+                        "build workspace {} is not a repository checkout",
+                        workspace.display()
+                    ));
+                }
+                let output = self.options.data_dir.join("builds").join(format!(
+                    "{}-{}",
+                    spec.id,
+                    crate::storage::unique_id()
+                ));
+                let steps = build::plan(&workspace, spec.kind, &output);
+                let stage = Arc::new(Mutex::new("kernel".to_string()));
+                let log = Arc::new(Mutex::new(VecDeque::<String>::new()));
+                let cancel = Arc::new(AtomicBool::new(false));
+                let (sender, receiver) = mpsc::channel();
+                let worker_stage = stage.clone();
+                let worker_log = log.clone();
+                let worker_cancel = cancel.clone();
+                let options = self.options.clone();
+                let output_thread = output.clone();
+                thread::Builder::new()
+                    .name("antinomie-build".into())
+                    .spawn(move || {
+                        let mut step_index = 0usize;
+                        let result = build::run(&steps, &workspace, &worker_cancel, |line| {
+                            if line.starts_with("$ ") {
+                                step_index += 1;
+                                let name = match step_index {
+                                    1 => "kernel",
+                                    2 => "image",
+                                    _ => "stage",
+                                };
+                                if let Ok(mut guard) = worker_stage.lock() {
+                                    *guard = name.to_string();
+                                }
+                            }
+                            if let Ok(mut guard) = worker_log.lock() {
+                                if guard.len() >= 200 {
+                                    guard.pop_front();
+                                }
+                                guard.push_back(line.to_string());
+                            }
+                        })
+                        .and_then(|()| {
+                            let bundle = Bundle::load(&output_thread)?;
+                            storage::validate_disk_chain(&options, &bundle.base_disk, None)?;
+                            bundle.install(&options)?;
+                            Ok(())
+                        });
+                        let ok = result.is_ok();
+                        let _ = sender.send(result);
+                        if ok {
+                            let _ = fs::remove_dir_all(&output_thread);
+                        }
+                    })
+                    .map_err(|e| e.to_string())?;
+                self.build = Some(BuildJob {
+                    label: spec.label.to_string(),
+                    stage,
+                    log,
+                    cancel,
+                    done: receiver,
+                });
+                self.snapshot.build = Some(BuildStatus {
+                    profile: spec.id.to_string(),
+                    label: spec.label.to_string(),
+                    stage: "kernel".into(),
+                    log: Vec::new(),
+                    finished: false,
+                    error: None,
+                });
+                Ok("base build started".into())
             }
             Command::Save(mut vm) => {
                 storage::validate_vm(&vm)?;
@@ -1000,6 +1160,7 @@ impl Worker {
                 bundle_dir,
                 capture_quota_size,
                 shutdown_timeout_secs,
+                build_workspace,
             } => {
                 if self.session.is_some() {
                     return Err("stop VM before changing settings".into());
@@ -1013,6 +1174,7 @@ impl Worker {
                 self.options.bundle_dir = bundle_dir;
                 self.options.capture_quota_size = capture_quota_size;
                 self.options.shutdown_timeout = Duration::from_secs(shutdown_timeout_secs);
+                self.options.build_workspace = build_workspace;
                 Ok("settings updated".into())
             }
             Command::OpenRecording { directory } => Err(format!(
@@ -1773,6 +1935,7 @@ mod tests {
             catalog: distribution::Catalog::default(),
             refresh: None,
             download: None,
+            build: None,
             last_publish: Instant::now(),
             latest_snapshot: Arc::new(Mutex::new(None)),
         };
@@ -1852,6 +2015,7 @@ mod tests {
             catalog: distribution::Catalog::default(),
             refresh: None,
             download: None,
+            build: None,
             last_publish: Instant::now(),
             latest_snapshot: Arc::new(Mutex::new(None)),
         };
@@ -1942,6 +2106,7 @@ mod tests {
             catalog: distribution::Catalog::default(),
             refresh: None,
             download: None,
+            build: None,
             last_publish: Instant::now(),
             latest_snapshot: Arc::new(Mutex::new(None)),
         };
@@ -2061,6 +2226,7 @@ mod tests {
             catalog: distribution::Catalog::default(),
             refresh: None,
             download: None,
+            build: None,
             last_publish: Instant::now(),
             latest_snapshot: Arc::new(Mutex::new(None)),
         };

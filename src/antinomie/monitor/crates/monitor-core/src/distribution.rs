@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File},
     io::Read,
-    path::{Path, PathBuf},
+    path::Path,
     process::{Command as ProcessCommand, Stdio},
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
@@ -26,47 +26,6 @@ pub const DEFAULT_REMOTE_BASE: &str =
 
 /// Catalog file name at the bucket root.
 pub const CATALOG_FILE: &str = "index.json";
-
-/// Buildable profiles offered by "Build base" (implemented in ANT-T0019).
-pub const BUILD_PROFILES: &[BuildProfile] = &[
-    BuildProfile {
-        id: "debian-xfce",
-        label: "Debian 13 (Xfce)",
-        tools: &["virt-builder", "qemu-system-x86_64", "qemu-img"],
-    },
-    BuildProfile {
-        id: "busybox",
-        label: "BusyBox (minimal)",
-        tools: &["qemu-system-x86_64", "qemu-img"],
-    },
-];
-
-/// A locally buildable base and the host tools it needs.
-#[derive(Clone, Debug)]
-pub struct BuildProfile {
-    pub id: &'static str,
-    pub label: &'static str,
-    pub tools: &'static [&'static str],
-}
-
-impl BuildProfile {
-    /// Host tools that are currently missing from `PATH`.
-    pub fn missing_tools(&self) -> Vec<&'static str> {
-        self.tools
-            .iter()
-            .copied()
-            .filter(|tool| which(tool).is_none())
-            .collect()
-    }
-}
-
-/// Minimal `PATH` lookup for a bare tool name.
-pub fn which(tool: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(tool))
-        .find(|candidate| candidate.is_file())
-}
 
 /// The parsed catalog. Unknown fields are ignored so the bucket can grow.
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -383,6 +342,7 @@ pub fn fetch_catalog(curl: &Path, remote_base: &str) -> Result<Catalog, String> 
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::path::PathBuf;
 
     fn write(path: &Path, bytes: &[u8]) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -494,7 +454,7 @@ mod tests {
 
     #[test]
     fn downloads_and_verifies_over_file_url() {
-        if which("curl").is_none() {
+        if crate::build::which("curl").is_none() {
             return;
         }
         let source = staging("source");
@@ -534,7 +494,7 @@ mod tests {
 
     #[test]
     fn rejects_hash_mismatch() {
-        if which("curl").is_none() {
+        if crate::build::which("curl").is_none() {
             return;
         }
         let source = staging("bad-source");
@@ -559,7 +519,7 @@ mod tests {
     #[test]
     #[ignore = "network: hits the public Hugging Face bucket"]
     fn fetches_real_bucket_catalog_and_downloads_reference_base() {
-        if which("curl").is_none() {
+        if crate::build::which("curl").is_none() {
             return;
         }
         let catalog = fetch_catalog(Path::new("curl"), DEFAULT_REMOTE_BASE).expect("catalog");
