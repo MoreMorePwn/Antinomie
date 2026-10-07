@@ -1,0 +1,928 @@
+{
+  "contract": "native-schema-slices.md revision 3",
+  "slice": "2b",
+  "setup": {
+    "notes": [
+      "Everything runs as UID 1000 in the disposable probe VM; every effect stays inside the probe or its own children",
+      "prctl.set_name sets the probe thread name to 'antprobe'; an unlabeled call restores the previous name afterwards",
+      "prctl.set_pdeathsig sets SIGTERM (15); an unlabeled call restores 0 afterwards",
+      "prctl.get_auxv passes a 512-byte buffer; saved_auxv is 416 bytes (AT_VECTOR_SIZE 52 with IA32_EMULATION)",
+      "prctl.set_mm_auxv passes {1, 2} with length 16 and is rejected for lacking CAP_SYS_RESOURCE",
+      "prctl.set_vma_anon_name names a private 4096-byte mapping; CONFIG_ANON_VMA_NAME=n rejects it",
+      "child A sets no_new_privs, then installs a one-instruction allow-all seccomp filter (BPF_RET|BPF_K 0x7fff0000), then exits",
+      "child B turns on syscall user dispatch with selector byte 0 (allow) and an empty region, then exits",
+      "child C blocks SIGUSR1, calls PTRACE_TRACEME, raises SIGUSR1 (stays pending) and SIGSTOP; the parent runs the ptrace cases while it is stopped, then PTRACE_CONT lets it exit",
+      "ptrace.peekdata/pokedata use a word in the child's copy of a probe global holding 0x414e54494e4f4d49; peekuser reads offset 120 (orig_rax)",
+      "ptrace.setregs and setregset write back exactly the registers just read",
+      "ptrace.getregset/setregset use NT_PRSTATUS with a 512-byte buffer; the kernel rewrites iov_len to 216",
+      "ptrace.getsigmask_badsize passes size 4; ptrace.peeksiginfo asks for one entry from the per-thread queue (the pending SIGUSR1)",
+      "ptrace.get_thread_area reads TLS index 12; ptrace.arch_prctl_get_fs uses ARCH_GET_FS",
+      "keyctl cases use a 'user' key 'ant:probe' with payload 'secret-payload' added by add_key to the process keyring; read_query passes a NULL buffer",
+      "keyctl.dh_compute uses that key for all three parameters (CONFIG_KEY_DH_OPERATIONS=n); pkey_query fails because user keys have no asymmetric operations; instantiate_iov fails without an authorization key",
+      "keyctl.join_session creates the session keyring 'ant-session' for the probe process only; keyctl.revoke revokes the probe key last",
+      "sysfs.name uses the index returned by sysfs.index; bad_index is 9999; unknown uses option 9",
+      "unknown selectors: prctl 0x7fffffff, ptrace 0x7fff, keyctl 0x7fff"
+    ]
+  },
+  "cases": [
+    {
+      "label": "prctl.set_name",
+      "syscall": "prctl",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.name",
+          "layout": "",
+          "size": 9,
+          "captured": 9,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": "616e7470726f626500"
+        }
+      ]
+    },
+    {
+      "label": "prctl.get_name",
+      "syscall": "prctl",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 1,
+          "key": "arg1.name",
+          "layout": "linux-6.12.94/x86_64/char[16]",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": "616e7470726f62650000000000000000"
+        }
+      ]
+    },
+    {
+      "label": "prctl.set_pdeathsig",
+      "syscall": "prctl",
+      "result": "zero",
+      "fields": []
+    },
+    {
+      "label": "prctl.get_pdeathsig",
+      "syscall": "prctl",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 1,
+          "key": "arg1.value",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "0f000000"
+        }
+      ]
+    },
+    {
+      "label": "prctl.get_child_subreaper",
+      "syscall": "prctl",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 1,
+          "key": "arg1.value",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "prctl.get_tsc",
+      "syscall": "prctl",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 1,
+          "key": "arg1.value",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "01000000"
+        }
+      ]
+    },
+    {
+      "label": "prctl.get_tid_address",
+      "syscall": "prctl",
+      "result": "errno:EINVAL",
+      "fields": []
+    },
+    {
+      "label": "prctl.get_auxv",
+      "syscall": "prctl",
+      "result": "positive",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 1,
+          "key": "arg1.auxv",
+          "layout": "linux-6.12.94/x86_64/unsigned_long[]",
+          "size": 416,
+          "captured": 416,
+          "declared": 416,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "prctl.set_mm_auxv",
+      "syscall": "prctl",
+      "result": "errno:EPERM",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 2,
+          "key": "arg2.auxv",
+          "layout": "linux-6.12.94/x86_64/unsigned_long[]",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": "01000000000000000200000000000000"
+        }
+      ]
+    },
+    {
+      "label": "prctl.set_vma_anon_name",
+      "syscall": "prctl",
+      "result": "errno:EINVAL",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 4,
+          "key": "arg4.name",
+          "layout": "",
+          "size": 14,
+          "captured": 14,
+          "declared": 80,
+          "status": "COMPLETE",
+          "data": "616e742d70726f62652d766d6100"
+        }
+      ]
+    },
+    {
+      "label": "prctl.set_no_new_privs",
+      "syscall": "prctl",
+      "result": "zero",
+      "fields": [],
+      "process": "child A"
+    },
+    {
+      "label": "prctl.set_seccomp_filter",
+      "syscall": "prctl",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 2,
+          "key": "arg2.program",
+          "layout": "linux-6.12.94/x86_64/sock_fprog",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": null
+        },
+        {
+          "phase": "entry",
+          "arg": 2,
+          "key": "arg2.program.filter",
+          "layout": "linux-6.12.94/x86_64/sock_filter[]",
+          "size": 8,
+          "captured": 8,
+          "declared": 8,
+          "status": "COMPLETE",
+          "data": "060000000000ff7f",
+          "address": "nonzero"
+        }
+      ],
+      "process": "child A"
+    },
+    {
+      "label": "prctl.set_syscall_user_dispatch",
+      "syscall": "prctl",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 4,
+          "key": "arg4.selector",
+          "layout": "linux-6.12.94/x86_64/u8",
+          "size": 1,
+          "captured": 0,
+          "declared": 1,
+          "status": "ASYNC_UNOBSERVED",
+          "data": null,
+          "address": "nonzero"
+        }
+      ],
+      "process": "child B"
+    },
+    {
+      "label": "prctl.unknown",
+      "syscall": "prctl",
+      "result": "errno:EINVAL",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "prctl.unknown_selector",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ]
+    },
+    {
+      "label": "ptrace.traceme",
+      "syscall": "ptrace",
+      "result": "zero",
+      "fields": [],
+      "process": "child C"
+    },
+    {
+      "label": "ptrace.peekdata",
+      "syscall": "ptrace",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 2,
+          "key": "arg2.tracee_address",
+          "layout": "linux-6.12.94/x86_64/unsigned_long",
+          "size": 8,
+          "captured": 0,
+          "declared": 8,
+          "status": "ADDRESS_ONLY",
+          "data": null,
+          "address": "nonzero"
+        },
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.word",
+          "layout": "linux-6.12.94/x86_64/unsigned_long",
+          "size": 8,
+          "captured": 8,
+          "declared": 8,
+          "status": "COMPLETE",
+          "data": "494d4f4e49544e41"
+        }
+      ]
+    },
+    {
+      "label": "ptrace.pokedata",
+      "syscall": "ptrace",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 2,
+          "key": "arg2.tracee_address",
+          "layout": "linux-6.12.94/x86_64/unsigned_long",
+          "size": 8,
+          "captured": 0,
+          "declared": 8,
+          "status": "ADDRESS_ONLY",
+          "data": null,
+          "address": "nonzero"
+        }
+      ]
+    },
+    {
+      "label": "ptrace.peekuser",
+      "syscall": "ptrace",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.word",
+          "layout": "linux-6.12.94/x86_64/unsigned_long",
+          "size": 8,
+          "captured": 8,
+          "declared": 8,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "ptrace.getregs",
+      "syscall": "ptrace",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.regs",
+          "layout": "linux-6.12.94/x86_64/user_regs_struct",
+          "size": 216,
+          "captured": 216,
+          "declared": 216,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "ptrace.setregs",
+      "syscall": "ptrace",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.regs",
+          "layout": "linux-6.12.94/x86_64/user_regs_struct",
+          "size": 216,
+          "captured": 216,
+          "declared": 216,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "ptrace.getfpregs",
+      "syscall": "ptrace",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.fpregs",
+          "layout": "linux-6.12.94/x86_64/user_i387_struct",
+          "size": 512,
+          "captured": 512,
+          "declared": 512,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "ptrace.getregset",
+      "syscall": "ptrace",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.iovec",
+          "layout": "linux-6.12.94/x86_64/iovec",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": null
+        },
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.iov_len",
+          "layout": "linux-6.12.94/x86_64/u64",
+          "size": 8,
+          "captured": 8,
+          "declared": 8,
+          "status": "COMPLETE",
+          "data": "d800000000000000"
+        },
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.iovec.data",
+          "layout": "",
+          "size": 216,
+          "captured": 216,
+          "declared": 216,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "ptrace.setregset",
+      "syscall": "ptrace",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.iovec",
+          "layout": "linux-6.12.94/x86_64/iovec",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": null
+        },
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.iovec.data",
+          "layout": "",
+          "size": 216,
+          "captured": 216,
+          "declared": 216,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.iov_len",
+          "layout": "linux-6.12.94/x86_64/u64",
+          "size": 8,
+          "captured": 8,
+          "declared": 8,
+          "status": "COMPLETE",
+          "data": "d800000000000000"
+        }
+      ]
+    },
+    {
+      "label": "ptrace.getsiginfo",
+      "syscall": "ptrace",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.siginfo",
+          "layout": "linux-6.12.94/x86_64/siginfo_t",
+          "size": 128,
+          "captured": 128,
+          "declared": 128,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "ptrace.getsigmask",
+      "syscall": "ptrace",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.sigmask",
+          "layout": "linux-6.12.94/x86_64/sigset_t",
+          "size": 8,
+          "captured": 8,
+          "declared": 8,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "ptrace.getsigmask_badsize",
+      "syscall": "ptrace",
+      "result": "errno:EINVAL",
+      "fields": []
+    },
+    {
+      "label": "ptrace.peeksiginfo",
+      "syscall": "ptrace",
+      "result": "positive",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 2,
+          "key": "arg2.args",
+          "layout": "linux-6.12.94/x86_64/ptrace_peeksiginfo_args",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": "00000000000000000000000001000000"
+        },
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.siginfo",
+          "layout": "linux-6.12.94/x86_64/siginfo_t[]",
+          "size": 128,
+          "captured": 128,
+          "declared": 128,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "ptrace.geteventmsg",
+      "syscall": "ptrace",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.message",
+          "layout": "linux-6.12.94/x86_64/unsigned_long",
+          "size": 8,
+          "captured": 8,
+          "declared": 8,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "ptrace.setoptions",
+      "syscall": "ptrace",
+      "result": "zero",
+      "fields": []
+    },
+    {
+      "label": "ptrace.get_syscall_info",
+      "syscall": "ptrace",
+      "result": "positive",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.info",
+          "layout": "linux-6.12.94/x86_64/ptrace_syscall_info",
+          "size": 24,
+          "captured": 24,
+          "declared": 24,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "ptrace.arch_prctl_get_fs",
+      "syscall": "ptrace",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.value",
+          "layout": "linux-6.12.94/x86_64/unsigned_long",
+          "size": 8,
+          "captured": 8,
+          "declared": 8,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "ptrace.get_thread_area",
+      "syscall": "ptrace",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.desc",
+          "layout": "linux-6.12.94/x86_64/user_desc",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "ptrace.unknown",
+      "syscall": "ptrace",
+      "result": "errno:EIO",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "ptrace.unknown_selector",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ]
+    },
+    {
+      "label": "ptrace.cont",
+      "syscall": "ptrace",
+      "result": "zero",
+      "fields": []
+    },
+    {
+      "label": "keyctl.describe",
+      "syscall": "keyctl",
+      "result": "positive",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 2,
+          "key": "arg2.buffer",
+          "layout": "",
+          "size": "result",
+          "captured": "result",
+          "declared": "result",
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "keyctl.read",
+      "syscall": "keyctl",
+      "result": "positive",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 2,
+          "key": "arg2.buffer",
+          "layout": "",
+          "size": 14,
+          "captured": 14,
+          "declared": 14,
+          "status": "COMPLETE",
+          "data": "7365637265742d7061796c6f6164"
+        }
+      ]
+    },
+    {
+      "label": "keyctl.read_query",
+      "syscall": "keyctl",
+      "result": "positive",
+      "fields": []
+    },
+    {
+      "label": "keyctl.update",
+      "syscall": "keyctl",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 2,
+          "key": "arg2.payload",
+          "layout": "",
+          "size": 7,
+          "captured": 7,
+          "declared": 7,
+          "status": "COMPLETE",
+          "data": "75706461746564"
+        }
+      ]
+    },
+    {
+      "label": "keyctl.search",
+      "syscall": "keyctl",
+      "result": "positive",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 2,
+          "key": "arg2.type",
+          "layout": "",
+          "size": 5,
+          "captured": 5,
+          "declared": 32,
+          "status": "COMPLETE",
+          "data": "7573657200"
+        },
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.description",
+          "layout": "",
+          "size": 10,
+          "captured": 10,
+          "declared": 4096,
+          "status": "COMPLETE",
+          "data": "616e743a70726f626500"
+        }
+      ]
+    },
+    {
+      "label": "keyctl.capabilities",
+      "syscall": "keyctl",
+      "result": "positive",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 1,
+          "key": "arg1.buffer",
+          "layout": "",
+          "size": 2,
+          "captured": 2,
+          "declared": 2,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "keyctl.dh_compute",
+      "syscall": "keyctl",
+      "result": "errno:EOPNOTSUPP",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.params",
+          "layout": "linux-6.12.94/x86_64/keyctl_dh_params",
+          "size": 12,
+          "captured": 12,
+          "declared": 12,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "keyctl.pkey_query",
+      "syscall": "keyctl",
+      "result": "errno:EOPNOTSUPP",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.info",
+          "layout": "",
+          "size": 8,
+          "captured": 8,
+          "declared": 4096,
+          "status": "COMPLETE",
+          "data": "656e633d72617700"
+        }
+      ]
+    },
+    {
+      "label": "keyctl.instantiate_iov",
+      "syscall": "keyctl",
+      "result": "errno:EPERM",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 2,
+          "key": "arg2.iov",
+          "layout": "linux-6.12.94/x86_64/iovec[]",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": null
+        },
+        {
+          "phase": "entry",
+          "arg": 2,
+          "key": "arg2.iov[0].data",
+          "layout": "",
+          "size": 3,
+          "captured": 3,
+          "declared": 3,
+          "status": "COMPLETE",
+          "data": "616263"
+        }
+      ]
+    },
+    {
+      "label": "keyctl.get_keyring_id",
+      "syscall": "keyctl",
+      "result": "positive",
+      "fields": []
+    },
+    {
+      "label": "keyctl.join_session",
+      "syscall": "keyctl",
+      "result": "positive",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.name",
+          "layout": "",
+          "size": 12,
+          "captured": 12,
+          "declared": 4096,
+          "status": "COMPLETE",
+          "data": "616e742d73657373696f6e00"
+        }
+      ]
+    },
+    {
+      "label": "keyctl.revoke",
+      "syscall": "keyctl",
+      "result": "zero",
+      "fields": []
+    },
+    {
+      "label": "keyctl.unknown",
+      "syscall": "keyctl",
+      "result": "errno:EOPNOTSUPP",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "keyctl.unknown_selector",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ]
+    },
+    {
+      "label": "sysfs.index",
+      "syscall": "sysfs",
+      "result": "nonnegative",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.fsname",
+          "layout": "",
+          "size": 5,
+          "captured": 5,
+          "declared": 4096,
+          "status": "COMPLETE",
+          "data": "70726f6300"
+        }
+      ]
+    },
+    {
+      "label": "sysfs.name",
+      "syscall": "sysfs",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 2,
+          "key": "arg2.fsname",
+          "layout": "",
+          "size": 5,
+          "captured": 5,
+          "declared": 4096,
+          "status": "COMPLETE",
+          "data": "70726f6300"
+        }
+      ]
+    },
+    {
+      "label": "sysfs.count",
+      "syscall": "sysfs",
+      "result": "positive",
+      "fields": []
+    },
+    {
+      "label": "sysfs.bad_index",
+      "syscall": "sysfs",
+      "result": "errno:EINVAL",
+      "fields": []
+    },
+    {
+      "label": "sysfs.unknown",
+      "syscall": "sysfs",
+      "result": "errno:EINVAL",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "sysfs.unknown_selector",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ]
+    }
+  ]
+}

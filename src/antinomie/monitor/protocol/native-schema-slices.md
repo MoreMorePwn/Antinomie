@@ -1,6 +1,6 @@
 # Native Schema Slice Contract: 2A, 2B, 2G
 
-ANT-T0009 producer/consumer contract, revision 2, 2026-10-07.
+ANT-T0009 producer/consumer contract, revision 3, 2026-10-07. Section 9 and the 2B fixtures were approved by the user on 2026-10-07.
 Status: approved by the user on 2026-10-07, including choice (a) for unknown
 socket options (raw `optval` up to `optlen`, capped at 128 KiB). Revision 2
 records corrections found while implementing and testing slice 2A; see Section 8.
@@ -219,7 +219,8 @@ and the host labels the row Not implemented.
 | `result` | `zero`, `nonnegative`, `positive`, or `errno:<NAME>` |
 | `fields` | The complete set of fields recorded for that invocation, in both phases. A missing or extra field fails the case |
 | `phase` | `entry` or `exit` |
-| `size`, `captured`, `declared` | Object size, bytes actually captured, and declared length; `"max"` stands for `U64_MAX` |
+| `size`, `captured`, `declared` | Object size, bytes actually captured, and declared length; `"max"` stands for `U64_MAX`, and `"result"` for the case's return value (revision 3) |
+| `process` | Optional note that the case runs in a named child of the probe (revision 3) |
 | `status` | `ant_status` name without the `ANT_` prefix |
 | `data` | Lowercase hex of the exact captured bytes; `"observed"` means they must equal the hex the probe printed under the same key in the `ANT_CASE` `"observed"` map (for kernel-dependent outputs); `null` means unchecked (for example a struct holding a pointer) |
 | `address` | Optional: `"nonzero"`, or `"observed"` to compare with the probe-reported address |
@@ -234,3 +235,20 @@ and the host labels the row Not implemented.
 | Netfilter range | Checked before option rules | Checked only when no option rule matched (`IPV6_TCLASS`/`IPV6_RECVTCLASS` are 67/66) |
 | Host naming API | `selector_names(number, args) -> Vec<String>` | `selector_name(number, index, args) -> Option<String>`, one argument at a time for the trace view |
 | 2G kernel | Raw arguments only | Unchanged kernel; existing `schema.argument_metadata` gap kept |
+
+## 9. Revision 3: 2B Field Rules (2026-10-07)
+
+The 2B fixtures (`tests/monitor/fixtures/native-schema/2b.json`) depend on these
+rules, which make Section 3 exact.
+
+| Rule | Contract |
+|---|---|
+| Truncated outputs | When the kernel returns the full length and copies only up to the caller's capacity (`PR_GET_AUXV`, `KEYCTL_DESCRIBE`/`READ`/`GET_SECURITY`/`CAPABILITIES`, `PTRACE_GET_SYSCALL_INFO`/`GET_RSEQ_CONFIGURATION`), the field's byte count is `min(capacity, result)` and its declared length is `result` |
+| NULL output buffer | A NULL output pointer (a length query such as `KEYCTL_READ` with no buffer) records no field |
+| Fixed outputs | `PR_GET_NAME` is `char[16]`; `PR_GET_PDEATHSIG`, `PR_GET_CHILD_SUBREAPER` and `PR_GET_TSC` are `int` under key `arg1.value` |
+| Tracee addresses | `PEEKTEXT`/`PEEKDATA`/`POKETEXT`/`POKEDATA` record `arg2.tracee_address`, layout `unsigned_long`, 8 bytes, `ANT_ADDRESS_ONLY`, never copied |
+| Regsets | Entry: `arg3.iovec` (layout `iovec`); `SETREGSET` adds the input `arg3.iovec.data`. Exit on success: `arg3.iov_len` (`u64`, rewritten by the kernel) and, for `GETREGSET`, `arg3.iovec.data` of that length. The `SETREGSET` input ceiling is the largest x86-64 regset, taken in-kernel from the native regset view |
+| Other `ptrace` keys | `arg3.word`, `arg3.regs`, `arg3.fpregs`, `arg3.siginfo`, `arg3.sigmask`, `arg3.message`, `arg3.info`, `arg3.value`, `arg3.desc`, `arg2.args`; `PEEKSIGINFO` output layout `siginfo_t[]` |
+| Async selector | `PR_SET_SYSCALL_USER_DISPATCH` records `arg4.selector`, layout `u8`, 1 byte, `ANT_ASYNC_UNOBSERVED`, never copied |
+| `keyctl` keys | `arg1.name`, `arg2.payload`, `arg2.type`, `arg3.description`, `arg2.buffer`, `arg1.buffer`, `arg1.params`, `arg3.info`; `INSTANTIATE_IOV` uses the shared vector keys `arg2.iov` and `arg2.iov[i].data` |
+| `sysfs` keys | `arg1.fsname` (input string, ceiling `PATH_MAX`); `arg2.fsname` (output string read to the NUL the kernel wrote, same ceiling) |
