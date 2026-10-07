@@ -1,0 +1,265 @@
+{
+  "contract": "native-schema-slices.md revision 7",
+  "slice": "2f",
+  "setup": {
+    "notes": [
+      "Main run (UID 1000). user_data values 0x2f000000000000NN identify each case",
+      "uring_read_iowq reads 32 bytes from a pipe with IOSQE_ASYNC, forcing an io-wq worker",
+      "aio_direct_read_reaped reads one 4096-byte block with O_DIRECT through io_submit; its interrupt completion is observed when io_getevents reaps it",
+      "sqpoll_write submits a 16-byte pipe write on an IORING_SETUP_SQPOLL ring",
+      "bind binds an AF_UNIX socket to an abstract name; files_update replaces two registered file slots; waitid reaps a forked child that exited with status 0",
+      "futex_wake wakes nobody on a private futex word; futex_waitv_mismatch waits on one futex whose value differs, so it completes at once with -EAGAIN",
+      "provide_buffers provides 4 buffers of 128 bytes; setsockopt_cmd sets SO_RCVBUF to 65536 on a TCP socket and getsockopt_cmd reads it back",
+      "timeout_canceled is a 10-second IORING_OP_TIMEOUT canceled by async_cancel (IORING_ASYNC_CANCEL by user_data); async_cancel completes with 0"
+    ]
+  },
+  "cases": [
+    {
+      "label": "2f.uring_read_iowq",
+      "user_data": "0x2f00000000000001",
+      "stages": [
+        1,
+        2,
+        4
+      ],
+      "flags_clear": [
+        "PAYLOAD_GAP"
+      ],
+      "fields": [
+        {
+          "stage": 4,
+          "key": "async.payload.output",
+          "layout": "",
+          "size": 32,
+          "status": "COMPLETE",
+          "data": "414e54494e4f4d49452d494f57512d524541442d5041594c4f41442d30303031"
+        }
+      ]
+    },
+    {
+      "label": "2f.aio_direct_read_reaped",
+      "user_data": "0x2f00000000000002",
+      "stages": [
+        1,
+        2,
+        4,
+        7
+      ],
+      "fields": [
+        {
+          "stage": 7,
+          "key": "async.payload.output",
+          "layout": "",
+          "size": 4096,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "2f.sqpoll_write",
+      "user_data": "0x2f00000000000003",
+      "stages": [
+        1,
+        2,
+        4
+      ],
+      "flags_set": [
+        "PRODUCER_UNKNOWN"
+      ],
+      "fields": [
+        {
+          "stage": 1,
+          "key": "async.payload.input",
+          "layout": "",
+          "size": 16,
+          "status": "COMPLETE",
+          "data": "414e54494e4f4d49452d5351504f4c4c"
+        }
+      ]
+    },
+    {
+      "label": "2f.bind",
+      "user_data": "0x2f00000000000004",
+      "stages": [
+        1,
+        2,
+        4
+      ],
+      "fields": [
+        {
+          "stage": 1,
+          "key": "async.operand.sockaddr",
+          "layout": "linux-6.12.94/x86_64/sockaddr",
+          "size": "observed",
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "2f.files_update",
+      "user_data": "0x2f00000000000005",
+      "stages": [
+        1,
+        2,
+        4
+      ],
+      "fields": [
+        {
+          "stage": 1,
+          "key": "async.operand.fds",
+          "layout": "linux-6.12.94/x86_64/int[]",
+          "size": 8,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "2f.waitid",
+      "user_data": "0x2f00000000000006",
+      "stages": [
+        1,
+        2,
+        4
+      ],
+      "fields": [
+        {
+          "stage": 4,
+          "key": "async.operand.siginfo",
+          "layout": "linux-6.12.94/x86_64/siginfo_t",
+          "size": 128,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "2f.futex_wake",
+      "user_data": "0x2f00000000000007",
+      "stages": [
+        1,
+        2,
+        4
+      ],
+      "fields": [
+        {
+          "stage": 1,
+          "key": "async.operand.futex",
+          "layout": "linux-6.12.94/x86_64/u32",
+          "size": 4,
+          "status": "ADDRESS_ONLY",
+          "data": null
+        }
+      ]
+    },
+    {
+      "label": "2f.futex_waitv_mismatch",
+      "user_data": "0x2f00000000000008",
+      "stages": [
+        1,
+        2,
+        4
+      ],
+      "fields": [
+        {
+          "stage": 1,
+          "key": "async.operand.futexv",
+          "layout": "linux-6.12.94/x86_64/futex_waitv[]",
+          "size": 24,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "2f.provide_buffers",
+      "user_data": "0x2f00000000000009",
+      "stages": [
+        1,
+        2,
+        4
+      ],
+      "fields": [
+        {
+          "stage": 1,
+          "key": "async.operand.buffers",
+          "layout": "",
+          "size": 512,
+          "status": "ADDRESS_ONLY",
+          "data": null
+        }
+      ]
+    },
+    {
+      "label": "2f.setsockopt_cmd",
+      "user_data": "0x2f0000000000000a",
+      "stages": [
+        1,
+        2,
+        4
+      ],
+      "fields": [
+        {
+          "stage": 1,
+          "key": "async.operand.optval",
+          "layout": "",
+          "size": 4,
+          "status": "COMPLETE",
+          "data": "00000100"
+        }
+      ]
+    },
+    {
+      "label": "2f.getsockopt_cmd",
+      "user_data": "0x2f0000000000000b",
+      "stages": [
+        1,
+        2,
+        4
+      ],
+      "fields": [
+        {
+          "stage": 4,
+          "key": "async.operand.optval",
+          "layout": "",
+          "size": 4,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "2f.timeout_canceled",
+      "user_data": "0x2f0000000000000c",
+      "stages": [
+        1,
+        2,
+        5
+      ],
+      "fields": []
+    },
+    {
+      "label": "2f.async_cancel",
+      "user_data": "0x2f0000000000000d",
+      "stages": [
+        1,
+        2,
+        4
+      ],
+      "fields": []
+    }
+  ],
+  "stress": {
+    "label": "2f.staging_exhaustion",
+    "process": "--async-stress run",
+    "run": {
+      "async_loss_min": 1,
+      "incomplete": true
+    },
+    "notes": [
+      "submits 300 IORING_OP_TIMEOUT requests of 10 seconds (more than the 256 tracked in flight), then cancels them all with IORING_ASYNC_CANCEL_ALL and reaps every completion"
+    ]
+  }
+}

@@ -478,3 +478,88 @@ unusable copy. Rule: **outputs are captured only on success**, except the
 documented interruption cases already in the contract (for example the remaining
 time on `EINTR`). Nothing is recorded for a failed call's output buffers. This
 closes the earlier "partial error outputs" item as a decision rather than code.
+
+## 14. Revision 7: Slice 2F, asynchronous variants (2026-10-07)
+
+Approved by the user on 2026-10-08 together with `tests/monitor/fixtures/native-schema-async/2f.json`.
+Async requests are not syscall invocations, so their fixtures use a separate
+format (14.7) matched by the request's `user_data`.
+
+### 14.1 Same-address-space observation
+
+Today a request's user buffers are read only when `current` is the submitting
+task. io-wq workers and the SQPOLL thread are threads of the same process and
+share its memory, but their reads are recorded as `ANT_ASYNC_UNOBSERVED`. The
+rule becomes: a buffer is read when the current task uses the origin's address
+space (`current->mm == origin mm`) and the context is not an interrupt. This
+covers io_uring reads and writes punted to io-wq or run by SQPOLL. Interrupt
+completions stay unobserved (14.2).
+
+### 14.2 AIO reap-time observation
+
+An `O_DIRECT` AIO read completes in interrupt context, where user memory cannot
+be read. Such a request is kept in a bounded **reap table** (64 entries per boot)
+holding its run, process, iocb address, `aio_data`, buffer and length. When that
+process's `io_getevents`/`io_pgetevents` returns the request's event, its context
+can read the buffer. The recorder then publishes one more async event,
+**stage 7 "Reaped"**, carrying `async.payload.output` with the `res` bytes, and
+removes the entry. Entries are dropped, and counted as async loss, when the table
+is full or the process exits first. The bytes are what the buffer holds at reap
+time, normally exactly what the device wrote. The host names stage 7 "Reaped".
+
+### 14.3 Producer attribution
+
+`io_uring_setup` records the ring creator's run and task cookies on the ring. A
+submission from the SQPOLL thread, or from any task outside the creator's
+thread group, is attributed to the creator's run and flagged
+`ANT_ASYNC_PRODUCER_UNKNOWN`: the shared ring does not say which thread wrote the
+SQE. A submission by the creator's own threads keeps its real task identity.
+
+### 14.4 Typed io_uring operands
+
+| Opcode | Operand |
+|---|---|
+| `BIND` | `async.operand.sockaddr`, `addr_len` bytes, input |
+| `FILES_UPDATE` | `async.operand.fds`, `len` × 4 bytes, input |
+| `WAITID` | `async.operand.siginfo`, `siginfo_t`, output on success |
+| `FUTEX_WAIT`, `FUTEX_WAKE` | `async.operand.futex`, 4 bytes, `ANT_ADDRESS_ONLY` (the kernel compares or wakes; its value is the operation's input) |
+| `FUTEX_WAITV` | `async.operand.futexv`, `nr` × `futex_waitv`, input |
+| `PROVIDE_BUFFERS` | `async.operand.buffers`, `len` × `nbufs` bytes, `ANT_ADDRESS_ONLY` (reads that select a buffer record their data through the existing iterator capture) |
+| `URING_CMD` on a socket, `SOCKET_URING_OP_SETSOCKOPT` | `async.operand.optval`, raw, `optlen` bytes, ceiling 128 KiB (the slice 2A rule for unknown options) |
+| `URING_CMD` on a socket, `SOCKET_URING_OP_GETSOCKOPT` | output `async.operand.optval` of the returned length on success |
+| `URING_CMD` with any other command | `async.operand.uring_cmd` gap, `ANT_NO_DECODER` (driver-specific) |
+| `NOP`, `FSYNC`, `POLL_ADD`, `POLL_REMOVE`, `SYNC_FILE_RANGE`, `TIMEOUT_REMOVE` without update, `ASYNC_CANCEL`, `FALLOCATE`, `CLOSE`, `FADVISE`, `MADVISE`, `SPLICE`, `TEE`, `SHUTDOWN`, `MSG_RING`, `SOCKET`, `FIXED_FD_INSTALL`, `FTRUNCATE`, `LISTEN`, `REMOVE_BUFFERS` | scalar; the SQE is already recorded as `async.submission` |
+
+### 14.5 Cancellation
+
+A canceled request ends with stage 5, as today. The `ASYNC_CANCEL` request's own
+completion carries the number canceled. `io_cancel` on an AIO poll request
+records the target's cancellation the same way. Fixtures check the full stage
+sequence of both the target and the canceling request.
+
+### 14.6 Staging exhaustion
+
+With more than 256 requests in flight, or more than 1024 records waiting to be
+published, new requests or records are refused. Each refusal increments the run's
+async loss count and sets its incomplete flag (existing behaviour). It is now
+verified by a stress run.
+
+### 14.7 Async fixture format
+
+```json
+{"label": "2f.uring_read_iowq", "user_data": "0x2f00000000000001",
+ "stages": [1, 2, 4], "flags_set": [], "flags_clear": ["PAYLOAD_GAP"],
+ "fields": [{"stage": 4, "key": "async.payload.output", "layout": "",
+             "size": 32, "status": "COMPLETE", "data": "…"}]}
+```
+
+`stages` is the exact set of stages seen for that `user_data`. Fields are checked
+on the event of the given stage, with the same tokens as the syscall fixtures
+(`"observed"`, `"max"`, `when_observed`). A `run` block checks the run's status
+(`async_loss_min`, `incomplete`) for the stress run.
+
+### 14.8 Harness
+
+The headless harness gains a third run, `--async-stress` (UID 1000), after the
+root run, so its deliberate async losses do not affect the main run. The verifier
+gains `--async-fixtures DIR`.
