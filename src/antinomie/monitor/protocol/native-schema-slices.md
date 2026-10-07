@@ -563,3 +563,22 @@ on the event of the given stage, with the same tokens as the syscall fixtures
 The headless harness gains a third run, `--async-stress` (UID 1000), after the
 root run, so its deliberate async losses do not affect the main run. The verifier
 gains `--async-fixtures DIR`.
+
+### 14.9 Clarifications from the independent review (2026-10-08)
+
+These follow the rules above; no fixture changes.
+
+- **Reap matching (14.2).** The AIO ring is writable by the process. A reap entry
+  is therefore matched on the ring slot and the result that `aio_complete()`
+  wrote, not on event contents read back from the process. Entries are keyed by
+  the AIO context, so `mremap` of the ring keeps them. They are dropped when the
+  context is freed or the address space exits; an entry whose result is zero or
+  negative is dropped without loss.
+- **Attribution (14.3).** An attributed request records `async.parent_call_id`
+  0: no call of the ring creator submitted it.
+- **Ceilings (14.4).** A socket option above 128 KiB records `async.operand.optval`
+  as `ANT_INVALID_EXTENT` with its declared size and no bytes, as in slice 2A. A
+  `FILES_UPDATE` count above the kernel's fixed-file limit is recorded the same way.
+- **semctl (13.2).** `GETALL` records its array only when the copy to the caller
+  succeeds (13.5); an array above 1 MiB is `ANT_RESOURCE_EXHAUSTED`.
+

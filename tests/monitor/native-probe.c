@@ -1493,7 +1493,11 @@ static void async_report(const char *label, uint64_t user_data, long result)
     printf("ANT_ASYNC {\"label\":\"%s\",\"user_data\":\"0x%016llx\",\"result\":%ld,"
            "\"observed\":{%s}}\n", label, (unsigned long long)user_data, result,
            pending.observed);
-    pthread_mutex_unlock(&output_lock);
+    pthread_mutex_unlock(&output_lock);    /* Each request queues several async records; pace like the syscall cases
+     * so the kernel publishes them before the next request adds more.
+     */
+    struct timespec pause = {0, 20000000};
+    nanosleep(&pause, NULL);
 }
 
 static int uring_case(struct ring *r, const char *label, uint64_t user_data,
