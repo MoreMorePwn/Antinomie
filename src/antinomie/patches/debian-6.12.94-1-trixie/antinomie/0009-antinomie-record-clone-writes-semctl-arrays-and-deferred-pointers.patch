@@ -1,0 +1,283 @@
+Description: antinomie: record clone writes, semctl arrays and deferred pointers
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-07
+
+
+---
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+index c3640715d..33ac3b216 100644
+--- a/include/linux/antinomie_monitor.h
++++ b/include/linux/antinomie_monitor.h
+@@ -39,6 +39,8 @@ void ant_monitor_async_iter(struct ant_async **slot,
+ void ant_monitor_async_memory(struct ant_async **slot, const char *key,
+ 			      const char *layout, u16 encoding, u64 address,
+ 			      const void *snapshot, u64 size, bool output, bool complete);
++void ant_monitor_operand(u8 arg, const char *key, const char *layout, const void *data,
++			 size_t size);
+ #else
+ static inline void ant_monitor_enter(struct pt_regs *regs, long nr) {}
+ static inline void ant_monitor_exit(struct pt_regs *regs) {}
+@@ -69,5 +71,7 @@ static inline void ant_monitor_async_memory(struct ant_async **slot, const char
+ 					    const char *layout, u16 encoding, u64 address,
+ 					    const void *snapshot, u64 size,
+ 					    bool output, bool complete) {}
++static inline void ant_monitor_operand(u8 arg, const char *key, const char *layout,
++				       const void *data, size_t size) {}
+ #endif
+ #endif
+diff --git a/ipc/sem.c b/ipc/sem.c
+index a39cdc7bf..aa102929b 100644
+--- a/ipc/sem.c
++++ b/ipc/sem.c
+@@ -86,6 +86,7 @@
+ #include <linux/ipc_namespace.h>
+ #include <linux/sched/wake_q.h>
+ #include <linux/nospec.h>
++#include <linux/antinomie_monitor.h>
+ #include <linux/rhashtable.h>
+ 
+ #include <linux/uaccess.h>
+@@ -1466,6 +1467,8 @@ static int semctl_main(struct ipc_namespace *ns, int semid, int semnum,
+ 		sem_unlock(sma, -1);
+ 		rcu_read_unlock();
+ 		err = 0;
++		ant_monitor_operand(3, "arg3.array", "linux-6.12.94/x86_64/unsigned_short[]",
++				    sem_io, nsems * sizeof(ushort));
+ 		if (copy_to_user(array, sem_io, nsems*sizeof(ushort)))
+ 			err = -EFAULT;
+ 		goto out_free;
+@@ -1495,6 +1498,8 @@ static int semctl_main(struct ipc_namespace *ns, int semid, int semnum,
+ 			err = -EFAULT;
+ 			goto out_free;
+ 		}
++		ant_monitor_operand(3, "arg3.array", "linux-6.12.94/x86_64/unsigned_short[]",
++				    sem_io, nsems * sizeof(ushort));
+ 
+ 		for (i = 0; i < nsems; i++) {
+ 			if (sem_io[i] > SEMVMX) {
+diff --git a/kernel/antinomie/native_capture.c b/kernel/antinomie/native_capture.c
+index f23948696..a4925650e 100644
+--- a/kernel/antinomie/native_capture.c
++++ b/kernel/antinomie/native_capture.c
+@@ -979,11 +979,6 @@ static void capture_clone3(struct ant_task *ctx, const u64 args[6],
+ 			ant_capture_field(ctx, 0, "arg0.clone_args.set_tid", LAYOUT("pid_t[]"), 3,
+ 					  state->set_tid, NULL, size, size, status);
+ 		}
+-		if ((state->flags & (CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID)) &&
+-		    !ant_capture_lost(ctx))
+-			ant_capture_field(ctx, 0, "arg0.clone_args.child_tid", LAYOUT("pid_t"), 3,
+-					  state->child_tid, NULL, sizeof(pid_t), sizeof(pid_t),
+-					  ANT_CONTEXT_MISSING);
+ 		return;
+ 	}
+ 	if (result <= 0)
+@@ -1000,6 +995,17 @@ static void capture_clone3(struct ant_task *ctx, const u64 args[6],
+ 	if (state->flags & CLONE_PARENT_SETTID)
+ 		capture_optional(ctx, 0, state->parent_tid, "arg0.clone_args.parent_tid",
+ 				 LAYOUT("pid_t"), sizeof(pid_t));
++	/* The child writes its own TID before returning to user space, and the
++	 * kernel clears it when the child exits; neither is visible here.
++	 */
++	if ((state->flags & CLONE_CHILD_SETTID) && !ant_capture_lost(ctx))
++		ant_capture_field(ctx, 0, "arg0.clone_args.child_tid", LAYOUT("pid_t"), 3,
++				  state->child_tid, NULL, sizeof(pid_t), sizeof(pid_t),
++				  ANT_ASYNC_UNOBSERVED);
++	if ((state->flags & CLONE_CHILD_CLEARTID) && !ant_capture_lost(ctx))
++		ant_capture_field(ctx, 0, "arg0.clone_args.clear_child_tid", LAYOUT("pid_t"), 3,
++				  state->child_tid, NULL, sizeof(pid_t), sizeof(pid_t),
++				  ANT_ASYNC_UNOBSERVED);
+ }
+ 
+ static void capture_process_vm(struct ant_task *ctx, const u64 args[6],
+@@ -1016,14 +1022,12 @@ static void capture_process_vm(struct ant_task *ctx, const u64 args[6],
+ 	if (!remote)
+ 		return;
+ 	for (index = 0; index < remote->iov_count && !ant_capture_lost(ctx); index++) {
+-		scnprintf(key, sizeof(key), "arg3.remote_iov.%u.operand_unavailable", index);
+-		/* Remote addresses are not in current->mm. Only a validated operand
+-		 * hook after the kernel's ptrace authorization can supply these bytes.
+-		 */
++		scnprintf(key, sizeof(key), "arg3.remote_iov[%u].data", index);
++		/* The other process's memory is never read (user decision, ANT-T0009). */
+ 		ant_capture_field(ctx, 3, key, "", 1,
+ 				  (unsigned long)remote->iov[index].iov_base, NULL,
+ 				  remote->iov[index].iov_len, remote->iov[index].iov_len,
+-				  ANT_CONTEXT_MISSING);
++				  ANT_ADDRESS_ONLY);
+ 	}
+ 	kfree(remote);
+ }
+@@ -1081,9 +1085,10 @@ static void capture_ipc_control(struct ant_task *ctx, u64 nr, const u64 args[6],
+ 			layout = LAYOUT("seminfo");
+ 			break;
+ 		case GETALL: case SETALL:
+-			input = command == SETALL;
+-			status = ANT_UNKNOWN_EXTENT;
+-			layout = LAYOUT("unsigned_short[]");
++			/* ipc/sem.c hands over the kernel's own array copy (sem_nsems
++			 * entries) through ant_monitor_operand(); nothing to read here.
++			 */
++			ignored = true;
+ 			break;
+ 		case IPC_RMID: case GETVAL: case GETPID: case GETNCNT: case GETZCNT: case SETVAL:
+ 			ignored = true;
+@@ -3505,14 +3510,30 @@ u8 ant_native_capture(struct ant_task *ctx, u64 nr, const u64 args[6],
+ 		mask = nr == 203 || nr == 204 ? BIT(2) : nr == 237 ? BIT(3) :
+ 			nr == 238 ? BIT(1) : nr == 239 ? BIT(0) | BIT(1) : BIT(2) | BIT(3);
+ 		return ANT_CAPTURE_OWNED | mask;
+-	case 218: case 273:
++	case 218:
++		/* Zeroed and futex-woken by the kernel when the thread exits. */
+ 		if (!output)
+-			ant_capture_field(ctx, 0, "arg0.deferred_exit_address", "", 1,
+-					  args[0], NULL, nr == 218 ? sizeof(u32) :
+-					  sizeof(struct robust_list_head),
+-					  nr == 218 ? sizeof(u32) : args[1],
+-					  nr == 273 && args[1] != sizeof(struct robust_list_head) ?
+-					  ANT_INVALID_EXTENT : ANT_ASYNC_UNOBSERVED);
++			ant_capture_field(ctx, 0, "arg0.clear_child_tid", LAYOUT("pid_t"), 3,
++					  args[0], NULL, sizeof(u32), sizeof(u32),
++					  ANT_ASYNC_UNOBSERVED);
++		return ANT_CAPTURE_OWNED | BIT(0);
++	case 273:
++		if (output)
++			return ANT_CAPTURE_OWNED | BIT(0);
++		if (args[1] != sizeof(struct robust_list_head)) {
++			ant_capture_field(ctx, 0, "arg0.head", LAYOUT("robust_list_head"), 3,
++					  args[0], NULL,
++					  min_t(u64, args[1], sizeof(struct robust_list_head)),
++					  args[1], ANT_INVALID_EXTENT);
++			return ANT_CAPTURE_OWNED | BIT(0);
++		}
++		/* The kernel stores only the pointer and walks the list at thread exit. */
++		capture_fixed(ctx, 0, "arg0.head", LAYOUT("robust_list_head"), args[0],
++			      sizeof(struct robust_list_head));
++		if (!ant_capture_lost(ctx))
++			ant_capture_field(ctx, 0, "arg0.head.traversal", LAYOUT("robust_list_head"),
++					  3, args[0], NULL, sizeof(struct robust_list_head),
++					  sizeof(struct robust_list_head), ANT_ASYNC_UNOBSERVED);
+ 		return ANT_CAPTURE_OWNED | BIT(0);
+ 	case 242: case 243: case 244:
+ 		capture_mqueue(ctx, nr, args, output, result);
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index 102a36654..9e244a7a3 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -55,6 +55,12 @@ struct ant_task {
+ 	bool async_staged, async_output;
+ 	void *native_state;
+ 	void (*native_release)(void *state);
++	/* One kernel-imported operand handed over during the current syscall. */
++	const char *operand_key, *operand_layout;
++	void *operand;
++	u64 operand_size;
++	u8 operand_arg;
++	bool operand_set;
+ 	u8 packet[ANT_HEADER_SIZE + ANT_CHUNK_SIZE];
+ };
+ 
+@@ -559,9 +565,7 @@ static void capture_entry(struct ant_task *ctx)
+ 		ioctl_field(ctx, false, 0);
+ 		break;
+ 	case 56:
+-		if (a[0] & (CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID))
+-			field(ctx, 3, "arg3.child_tid", "", 1, a[3], NULL,
+-			      sizeof(u32), sizeof(u32), ANT_NO_DECODER);
++		/* clone() writes nothing the parent can read at entry; see exit. */
+ 		break;
+ 	default: {
+ 		const struct ant_native_syscall *schema = &ant_native_syscalls[ctx->nr];
+@@ -634,13 +638,66 @@ static void capture_exit(struct ant_task *ctx, long result)
+ 		ioctl_field(ctx, true, result);
+ 		break;
+ 	case 56:
+-		if (result > 0 && (a[0] & CLONE_PARENT_SETTID))
++		if (result <= 0)
++			break;
++		if (a[0] & CLONE_PARENT_SETTID)
+ 			user_field(ctx, 2, "arg2.parent_tid", "linux-6.12.94/x86_64/pid_t", 3,
+ 				   a[2], sizeof(u32));
++		if (a[0] & CLONE_PIDFD)
++			user_field(ctx, 2, "arg2.pidfd", "linux-6.12.94/x86_64/int", 3,
++				   a[2], sizeof(int));
++		/* The child writes its own TID before returning to user space, and
++		 * the kernel clears it when the child exits; neither is visible here.
++		 */
++		if (a[0] & CLONE_CHILD_SETTID)
++			field(ctx, 3, "arg3.child_tid", "linux-6.12.94/x86_64/pid_t", 3, a[3],
++			      NULL, sizeof(u32), sizeof(u32), ANT_ASYNC_UNOBSERVED);
++		if (a[0] & CLONE_CHILD_CLEARTID)
++			field(ctx, 3, "arg3.clear_child_tid", "linux-6.12.94/x86_64/pid_t", 3,
++			      a[3], NULL, sizeof(u32), sizeof(u32), ANT_ASYNC_UNOBSERVED);
+ 		break;
+ 	}
+ }
+ 
++static void operand_clear(struct ant_task *ctx)
++{
++	kfree(ctx->operand);
++	ctx->operand = NULL;
++	ctx->operand_set = false;
++}
++
++/* A kernel path hands over its own copy of a user operand whose extent only
++ * the kernel knows; it is emitted at this syscall's exit as kernel-imported.
++ */
++void ant_monitor_operand(u8 arg, const char *key, const char *layout, const void *data,
++			 size_t size)
++{
++	struct ant_task *ctx = current->ant_monitor;
++
++	if (!current->ant_cookie || !ctx || !ctx->active)
++		return;
++	operand_clear(ctx);
++	ctx->operand_key = key;
++	ctx->operand_layout = layout;
++	ctx->operand_arg = arg;
++	ctx->operand_size = size;
++	ctx->operand = size ? kmemdup(data, size, GFP_NOWAIT) : NULL;
++	ctx->operand_set = true;
++}
++
++static void operand_emit(struct ant_task *ctx)
++{
++	if (!ctx->operand_set)
++		return;
++	ctx->kernel_imported = true;
++	field(ctx, ctx->operand_arg, ctx->operand_key, ctx->operand_layout, 3,
++	      ctx->operand_arg < 6 ? ctx->args[ctx->operand_arg] : 0, ctx->operand,
++	      ctx->operand_size, ctx->operand_size,
++	      ctx->operand || !ctx->operand_size ? ANT_COMPLETE : ANT_RESOURCE_EXHAUSTED);
++	ctx->kernel_imported = false;
++	operand_clear(ctx);
++}
++
+ void ant_monitor_enter(struct pt_regs *regs, long nr)
+ {
+ 	struct ant_task *ctx;
+@@ -661,6 +718,7 @@ void ant_monitor_enter(struct pt_regs *regs, long nr)
+ 		return;
+ 	ctx->busy = true;
+ 	ant_capture_set_state(ctx, NULL, NULL);
++	operand_clear(ctx);
+ 	kfree(ctx->iov);
+ 	ctx->iov = NULL;
+ 	ctx->iov_count = 0;
+@@ -695,6 +753,7 @@ void ant_monitor_exit(struct pt_regs *regs)
+ 		return;
+ 	ctx->busy = true;
+ 	event_begin(ctx, 2, regs->ax);
++	operand_emit(ctx);
+ 	capture_exit(ctx, regs->ax);
+ 	event_end(ctx);
+ 	ctx->active = false;
+@@ -1011,6 +1070,7 @@ void ant_monitor_release(struct task_struct *task)
+ 
+ 	if (ctx) {
+ 		ant_capture_set_state(ctx, NULL, NULL);
++		operand_clear(ctx);
+ 		kfree(ctx->iov);
+ 		kfree(ctx);
+ 	}

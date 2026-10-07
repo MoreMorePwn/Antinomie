@@ -7,6 +7,7 @@
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/futex.h>
+#include <linux/sched.h>
 #include <linux/dqblk_xfs.h>
 #include <linux/io_uring.h>
 #include <linux/kexec.h>
@@ -36,6 +37,7 @@
 #include <sys/mount.h>
 #include <sys/ptrace.h>
 #include <sys/quota.h>
+#include <sys/sem.h>
 #include <sys/rseq.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
@@ -1021,6 +1023,107 @@ static int root_bpf_mode(void)
     return 0;
 }
 
+/* Slice 2D: clone writes, semctl arrays, process_vm, deferred pointers. */
+static void reap_clone(long child, const char *what)
+{
+    int status;
+
+    require(child > 0 && waitpid(child, &status, 0) == child && WIFEXITED(status) &&
+            WEXITSTATUS(status) == 0, what);
+}
+
+static void slice_2d_cases(void)
+{
+    static const char remote[16] __attribute__((nonstring)) = "ANTINOMIE-REMOTE";
+    static const char written[16] __attribute__((nonstring)) = "ANTINOMIE-WRITEV";
+    struct clone_args args;
+    struct robust_list_head head, *saved_head;
+    unsigned short values[3] = {1, 2, 3}, read_back[3];
+    char local[16], target[16];
+    struct iovec local_iov, remote_iov;
+    pid_t parent_tid = 0, child_tid = 0;
+    int pidfd = -1, semid, entry_size;
+    size_t saved_len;
+    long child;
+
+    child = CALL("clone.parent_and_child_tid", clone, 0,
+                 CLONE_PARENT_SETTID | CLONE_CHILD_SETTID | SIGCHLD, 0, &parent_tid,
+                 &child_tid, 0);
+    if (child == 0)
+        _exit(0);
+    observe("arg2.parent_tid", &parent_tid, sizeof(parent_tid));
+    report();
+    reap_clone(child, "clone settid child");
+    child = CALL("clone.pidfd", clone, 0, CLONE_PIDFD | SIGCHLD, 0, &pidfd, 0, 0);
+    if (child == 0)
+        _exit(0);
+    observe("arg2.pidfd", &pidfd, sizeof(pidfd));
+    report();
+    reap_clone(child, "clone pidfd child");
+    close(pidfd);
+    child = CALL("clone.clear_child_tid", clone, 0, CLONE_CHILD_CLEARTID | SIGCHLD, 0, 0,
+                 &child_tid, 0);
+    if (child == 0)
+        _exit(0);
+    report();
+    reap_clone(child, "clone cleartid child");
+    memset(&args, 0, sizeof(args));
+    args.flags = CLONE_PIDFD | CLONE_PARENT_SETTID | CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID;
+    args.pidfd = (uintptr_t)&pidfd;
+    args.parent_tid = (uintptr_t)&parent_tid;
+    args.child_tid = (uintptr_t)&child_tid;
+    args.exit_signal = SIGCHLD;
+    entry_size = 88;                         /* CLONE_ARGS_SIZE_VER2 */
+    {
+        struct clone_args entry = args;
+
+        child = CALL("clone3.tids_and_pidfd", clone3, 0, &args, entry_size);
+        if (child == 0)
+            _exit(0);
+        observe("arg0.clone_args", &entry, entry_size);
+    }
+    observe("arg0.clone_args.pidfd", &pidfd, sizeof(pidfd));
+    observe("arg0.clone_args.parent_tid", &parent_tid, sizeof(parent_tid));
+    report();
+    reap_clone(child, "clone3 child");
+    close(pidfd);
+
+    semid = semget(IPC_PRIVATE, 3, IPC_CREAT | 0600);
+    require(semid >= 0, "private semaphore set");
+    CASE("semctl.setall", semctl, 0, semid, 0, SETALL, values);
+    CASE("semctl.getall", semctl, 0, semid, 0, GETALL, read_back);
+    require(!memcmp(values, read_back, sizeof(values)), "semaphore values");
+    CASE("semctl.setall_bad_id", semctl, EINVAL, -1, 0, SETALL, values);
+    TEST(semctl, semid, 0, IPC_RMID, 0);
+
+    local_iov = (struct iovec){local, sizeof(local)};
+    remote_iov = (struct iovec){(void *)remote, sizeof(remote)};
+    CASE("process_vm_readv.self", process_vm_readv, 0, getpid(), &local_iov, 1, &remote_iov,
+         1, 0);
+    require(!memcmp(local, remote, sizeof(local)), "process_vm_readv copy");
+    local_iov = (struct iovec){(void *)written, sizeof(written)};
+    remote_iov = (struct iovec){target, sizeof(target)};
+    CASE("process_vm_writev.self", process_vm_writev, 0, getpid(), &local_iov, 1, &remote_iov,
+         1, 0);
+    require(!memcmp(target, written, sizeof(target)), "process_vm_writev copy");
+
+    child = fork();
+    require(child >= 0, "set_tid_address child");
+    if (!child) {
+        child_case_range(6);
+        CASE("set_tid_address.child", set_tid_address, 0, &child_tid);
+        _exit(failures ? 3 : 0);
+    }
+    wait_child(child, "set_tid_address child exit");
+    require(syscall(SYS_get_robust_list, 0, &saved_head, &saved_len) == 0, "glibc robust list");
+    head = (struct robust_list_head){.list = {&head.list}, .futex_offset = 0};
+    CALL("set_robust_list.self", set_robust_list, 0, &head, sizeof(head));
+    observe("arg0.head", &head, sizeof(head));
+    report();
+    CASE("set_robust_list.bad_len", set_robust_list, EINVAL, &head, 16);
+    require(syscall(SYS_set_robust_list, saved_head, saved_len) == 0, "restore robust list");
+}
+
 /* Slice 2G: rows without an entry point in the pinned syscall_64.tbl. */
 static void unavailable_cases(void)
 {
@@ -1321,7 +1424,7 @@ int main(int argc, char **argv)
             "isolated working directory");
     file_cases(); descriptor_cases(); sockopt_cases(); unavailable_cases();
     prctl_cases(); ptrace_cases(); keyctl_cases(); sysfs_cases(); slice_2c_cases();
-    bpf_unprivileged_cases(); rt_sigreturn_case();
+    bpf_unprivileged_cases(); rt_sigreturn_case(); slice_2d_cases();
     memory_and_process_cases(); aio_cases(); uring_cases();
     require(sched_getaffinity(0, sizeof(available), &available) == 0, "available CPUs");
     for (int cpu = 0; cpu < CPU_SETSIZE && count < 4; cpu++)

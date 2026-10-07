@@ -58,7 +58,8 @@ read -r -p "Bug/CVE (optional): " bug
 
 # ---- next series number ----------------------------------------------------
 last="$(ls "$VIEW" 2>/dev/null | sed -n 's/^\([0-9]\{4\}\)-.*/\1/p' | sort -n | tail -1)"
-num="$(printf '%04d' $(( ${last:-0} + 1 )))"
+# 10# keeps zero-padded numbers such as 0008 from being read as octal.
+num="$(printf '%04d' $(( 10#${last:-0} + 1 )))"
 
 # ---- filename --------------------------------------------------------------
 slug="$(printf '%s' "$desc" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-')"
