@@ -1,0 +1,101 @@
+{
+  "contract": "native-schema-slices.md revision 5",
+  "slice": "2h",
+  "setup": {
+    "notes": [
+      "Attribute sizes are passed explicitly, as libbpf does (offsetofend of the last field used), so they do not depend on the probe's header version",
+      "Runs as UID 1000: map creation and program load are refused (unprivileged BPF is off), and an unknown command 0x7fff is EINVAL",
+      "prog_load_unprivileged passes the two-instruction program r0 = 0; exit with license 'GPL'",
+      "Attribute sizes from the pinned 6.12 header (sizeof(union bpf_attr) is 152): map_create 72, element ops 32, batch 56, prog_load with log 40, test_run 32, get_info 16, obj_get 16, raw_tracepoint 12, btf_load 28"
+    ]
+  },
+  "cases": [
+    {
+      "label": "bpf.map_create_unprivileged",
+      "syscall": "bpf",
+      "result": "errno:EPERM",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr",
+          "layout": "linux-6.12.94/x86_64/bpf_attr",
+          "size": 72,
+          "captured": 72,
+          "declared": 72,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "bpf.prog_load_unprivileged",
+      "syscall": "bpf",
+      "result": "errno:EPERM",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr",
+          "layout": "linux-6.12.94/x86_64/bpf_attr",
+          "size": 40,
+          "captured": 40,
+          "declared": 40,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr.insns",
+          "layout": "linux-6.12.94/x86_64/bpf_insn[]",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": "b7000000000000009500000000000000"
+        },
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr.license",
+          "layout": "",
+          "size": 4,
+          "captured": 4,
+          "declared": 128,
+          "status": "COMPLETE",
+          "data": "47504c00"
+        }
+      ]
+    },
+    {
+      "label": "bpf.unknown",
+      "syscall": "bpf",
+      "result": "errno:EINVAL",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr",
+          "layout": "",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "bpf.unknown_selector",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ]
+    }
+  ]
+}

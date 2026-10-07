@@ -1,0 +1,53 @@
+{
+  "contract": "native-schema-slices.md revision 5",
+  "slice": "2e",
+  "setup": {
+    "notes": [
+      "A SIGUSR2 handler installed with rt_sigaction (glibc's restorer) copies its 440-byte signal frame (from the ucontext pointer minus 8) and the FPU state it points to just before returning; raise(SIGUSR2) delivers it on return from tgkill, so the trampoline's rt_sigreturn restores rax = 0",
+      "context.fpstate.xstate is required exactly when the handler finds FP_XSTATE_MAGIC1 in the frame and reports the extension under that key (the default QEMU CPU model may lack XSAVE, in which case the field must be absent); its size is the frame's xstate_size minus 512"
+    ]
+  },
+  "cases": [
+    {
+      "label": "rt_sigreturn.handler_return",
+      "syscall": "rt_sigreturn",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "context.rt_sigframe",
+          "layout": "linux-6.12.94/x86_64/rt_sigframe",
+          "size": 440,
+          "captured": 440,
+          "declared": 440,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "context.fpstate",
+          "layout": "linux-6.12.94/x86_64/fxregs_state",
+          "size": 512,
+          "captured": 512,
+          "declared": 512,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "context.fpstate.xstate",
+          "layout": "linux-6.12.94/x86_64/xstate",
+          "size": "observed",
+          "captured": "observed",
+          "declared": "observed",
+          "status": "COMPLETE",
+          "data": "observed",
+          "when_observed": true
+        }
+      ]
+    }
+  ]
+}

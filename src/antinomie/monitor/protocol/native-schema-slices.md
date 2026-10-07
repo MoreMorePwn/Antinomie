@@ -325,3 +325,94 @@ The host decodes `flags` (`RSEQ_FLAG_UNREGISTER`); this group already exists.
   filesystem exists in the probe VM.
 - `rseq` unregistration and re-registration run on a dedicated pthread, which
   registers again immediately; the main thread only sees rejected calls.
+
+## 11. Revision 5: Slice 2H, bpf (2026-10-07)
+
+Approved by the user on 2026-10-07, together with Section 12 and `tests/monitor/fixtures/native-schema/2h.json`
+(UID 1000 cases) and `tests/monitor/fixtures/native-schema-root/2h-root.json`
+(root-run cases). Both kernel profiles enable `CONFIG_BPF_SYSCALL`, and both keep
+unprivileged BPF off, as stock Debian does.
+
+### 11.1 Common rules
+
+| Rule | Contract |
+|---|---|
+| Attribute block | Entry: `arg1.attr`, layout `bpf_attr`, `min(size, sizeof(union bpf_attr))` bytes, declared `size`. A larger `size` (up to `PAGE_SIZE`, which the kernel requires to be zero-filled) adds `arg1.attr.extension`. Above `PAGE_SIZE`: `ANT_INVALID_EXTENT`, no copy. Nested fields come from the kernel's own snapshot of that block, never from a second read |
+| Map-derived sizes | Key, value and batch sizes come from the map object found by `map_fd` (`bpf_map_get()`), using the kernel's rules: per-CPU maps use `round_up(value_size, 8) * num_possible_cpus()`; fd-based maps use 4 bytes; others use `value_size`. If the fd is not a map: `ANT_CONTEXT_MISSING` with no copy |
+| Rewritten counts | Lengths the kernel writes back (`batch.count`, `info.info_len`, `test.data_size_out`, `test.ctx_size_out`, `query.prog_cnt`, `task_fd_query.buf_len`) are re-read from the attribute block at exit and recorded as `arg1.attr.<name>` (`u32`) before the output they bound |
+| Outputs | Exit, on success, unless stated otherwise |
+| Unknown command | Raw `arg1.attr` with an empty layout plus a `bpf.unknown_selector` gap |
+
+### 11.2 Commands
+
+| Command | Nested capture |
+|---|---|
+| `MAP_CREATE` | none (the map name is inline) |
+| `MAP_LOOKUP_ELEM`, `MAP_LOOKUP_AND_DELETE_ELEM` | entry `arg1.attr.key` (key size); exit `arg1.attr.value` (value size) |
+| `MAP_UPDATE_ELEM` | entry `arg1.attr.key`, `arg1.attr.value` |
+| `MAP_DELETE_ELEM` | entry `arg1.attr.key` |
+| `MAP_GET_NEXT_KEY` | entry `arg1.attr.key` (none if NULL: first key); exit `arg1.attr.next_key` |
+| `MAP_*_BATCH` | entry `arg1.attr.in_batch` (4 bytes for hash maps, key size otherwise; none if NULL); `UPDATE_BATCH`/`DELETE_BATCH` entry `keys` (and `values` for update) of `count` entries; `LOOKUP_*_BATCH` exit, on success or `ENOENT` (end of map), the rewritten `count`, `out_batch`, `keys` and `values` of that many entries |
+| `PROG_LOAD` | entry `arg1.attr.insns` (`insn_cnt * 8`, at most 1,000,000 instructions); `arg1.attr.license` string ≤ 128; `func_info`, `line_info` (`cnt * rec_size`, record size 8–252), `core_relos` (`cnt * rec_size`); `fd_array` address only with a `bpf.fd_array_unbounded` gap (6.12 has no count). Exit, **whatever the result**, when `log_size > 0`: `arg1.attr.log_buf` as the NUL-terminated string the verifier wrote, ceiling `log_size` |
+| `BTF_LOAD` | entry `arg1.attr.btf` (`btf_size`, at most 16 MiB); exit, whatever the result, `arg1.attr.btf_log_buf` like the program log |
+| `OBJ_PIN`, `OBJ_GET` | entry `arg1.attr.pathname` string, `PATH_MAX` |
+| `PROG_TEST_RUN` | entry `data_in` (`data_size_in`), `ctx_in` (`ctx_size_in`); exit rewritten `data_size_out`/`ctx_size_out`, then `data_out`/`ctx_out` of those sizes |
+| `OBJ_GET_INFO_BY_FD` | exit rewritten `info_len`, then `arg1.attr.info` of `min(info_len, input info_len)`; pointers inside the info structure are not followed (`bpf.info_nested` gap) |
+| `PROG_QUERY` | exit rewritten `prog_cnt`, then `prog_ids` (and `prog_attach_flags`, `link_ids`, `link_attach_flags` when set) of that many `u32` |
+| `RAW_TRACEPOINT_OPEN` | entry `arg1.attr.name` string ≤ 128 |
+| `TASK_FD_QUERY` | exit rewritten `buf_len`, then `arg1.attr.buf` string |
+| `LINK_CREATE` | `kprobe_multi`: `syms` (array of `cnt` string pointers; each string ≤ `KSYM_NAME_LEN`), `addrs`, `cookies` (`cnt * 8`); `uprobe_multi`: `path` string, `offsets`, `ref_ctr_offsets`, `cookies`; `iter_info` (`iter_info_len`); other targets scalar |
+| `PROG_ATTACH`, `PROG_DETACH`, `MAP_FREEZE`, `*_GET_NEXT_ID`, `*_GET_FD_BY_ID`, `LINK_UPDATE`, `LINK_DETACH`, `ENABLE_STATS`, `ITER_CREATE`, `PROG_BIND_MAP`, `TOKEN_CREATE` | none beyond `arg1.attr` |
+
+### 11.3 Probe and harness
+
+- The UID 1000 probe adds `bpf` cases that are rejected (`EPERM`, `EINVAL`); their
+  attribute blocks and program inputs are still checked.
+- The harness then launches the same probe as **root** with `--root-bpf` in the
+  same disposable VM. This run creates an array map and a per-CPU array map, loads
+  and test-runs a two-instruction socket filter, loads a minimal BTF blob, and
+  closes everything before printing `NATIVE PASS`; nothing outlives the process.
+  It is verified separately against `native-schema-root/`.
+- The fixture format gains `"observed"` for `size`/`captured`/`declared`: the value
+  must equal the byte length of the observed data for that field (used for verifier
+  logs, whose exact text the kernel decides).
+- The fixture format also gains `"when_observed": true` on a field: the field is
+  required exactly when the probe reported observed data under its key, and must
+  be absent otherwise (used where the guest CPU decides whether state exists).
+
+## 12. Revision 5: Slice 2E, implicit frames (2026-10-07)
+
+Approved together with Section 11. These syscalls take no pointer argument;
+their input is a frame on the user stack, located from the caller's saved stack
+pointer (`current_pt_regs()->sp` at entry). Fields use argument index 255 and
+`context.*` keys. The existing `schema.arch_context` gap is replaced.
+
+### 12.1 rt_sigreturn
+
+| Field (entry) | Rule |
+|---|---|
+| `context.rt_sigframe` | `struct rt_sigframe` (440 bytes on x86-64: return address, `ucontext`, `siginfo`) at `sp - 8`, where the kernel reads it. The kernel reads the signal mask, flags, alternate stack and `sigcontext` from it |
+| `context.fpstate` | If `uc_mcontext.fpstate` is non-NULL: the 512-byte `fxregs_state` it points to |
+| `context.fpstate.xstate` | Only if that block carries `FP_XSTATE_MAGIC1` and `512 + 64 <= xstate_size <= min(extended_size, the task's fpstate->user_size)` (the kernel's own checks): the `xstate_size - 512` bytes that follow. Otherwise the kernel restores the legacy state only and no field is recorded; out-of-range sizes record `ANT_INVALID_EXTENT` |
+
+The exit value is the restored `rax` of the interrupted code, not a return value.
+
+### 12.2 uretprobe
+
+| Field (entry) | Rule |
+|---|---|
+| `context.uretprobe_regs` | The three words the kernel trampoline saved at `sp` (`r11`, `rcx`, `rax`), 24 bytes, as the kernel reads them |
+
+The kernel accepts the call only from its uretprobe trampoline and otherwise kills
+the caller with `SIGILL`; the exit value is the probed function's return value.
+
+### 12.3 Probe
+
+- UID 1000 run: a `SIGUSR2` handler installed with `rt_sigaction` copies its
+  signal frame and FPU state just before returning; the case covers the `raise()`
+  and the trampoline's `rt_sigreturn`. The fixture compares the captured frame
+  with those copies.
+- Root run: a `perf_event_open` uprobe return probe on a non-inlined probe
+  function returning 42 (the uprobe PMU type and `retprobe` bit come from
+  `/sys/bus/event_source/devices/uprobe`); calling the function makes the kernel
+  trampoline issue `uretprobe`. The event is closed afterwards.

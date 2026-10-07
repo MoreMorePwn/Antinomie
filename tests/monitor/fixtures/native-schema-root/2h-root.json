@@ -1,0 +1,595 @@
+{
+  "contract": "native-schema-slices.md revision 5",
+  "slice": "2h-root",
+  "setup": {
+    "notes": [
+      "Attribute sizes are passed explicitly, as libbpf does (offsetofend of the last field used), so they do not depend on the probe's header version",
+      "Runs as root with --root-bpf in the disposable probe VM, after the UID 1000 probe; every map and program is closed before NATIVE PASS",
+      "array map: key 4, value 8, max_entries 4, name 'ant_array'; element 1 is set to 'ANTIMAP1' with BPF_ANY; deleting from an array is EINVAL",
+      "map_lookup_batch starts with a NULL in_batch and count 4 over the whole array",
+      "per-CPU array: key 4, value 8, max_entries 1; with 4 possible CPUs the value is 32 bytes",
+      "prog_load: socket filter r0 = 0; exit, license 'GPL', log_level 1 with a 4096-byte log; prog_load_rejected: a lone exit, rejected by the verifier because R0 is not set",
+      "prog_test_run runs the socket filter on a 64-byte zeroed frame with a 128-byte data_out",
+      "obj_get_info_map asks for 64 bytes of bpf_map_info for the array map",
+      "obj_get_missing names /sys/fs/bpf/ant-missing; raw_tracepoint_bad_prog attaches the socket filter to 'sched_switch'",
+      "btf_load passes a 45-byte BTF blob: header, one 32-bit INT type named 'int', and its string table",
+      "Attribute sizes from the pinned 6.12 header (sizeof(union bpf_attr) is 152): map_create 72, element ops 32, batch 56, prog_load with log 40, test_run 32, get_info 16, obj_get 16, raw_tracepoint 12, btf_load 28"
+    ]
+  },
+  "cases": [
+    {
+      "label": "bpf.map_create_array",
+      "syscall": "bpf",
+      "result": "positive",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr",
+          "layout": "linux-6.12.94/x86_64/bpf_attr",
+          "size": 72,
+          "captured": 72,
+          "declared": 72,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ],
+      "process": "root run"
+    },
+    {
+      "label": "bpf.map_update",
+      "syscall": "bpf",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr",
+          "layout": "linux-6.12.94/x86_64/bpf_attr",
+          "size": 32,
+          "captured": 32,
+          "declared": 32,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr.key",
+          "layout": "",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "01000000"
+        },
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr.value",
+          "layout": "",
+          "size": 8,
+          "captured": 8,
+          "declared": 8,
+          "status": "COMPLETE",
+          "data": "414e54494d415031"
+        }
+      ],
+      "process": "root run"
+    },
+    {
+      "label": "bpf.map_lookup",
+      "syscall": "bpf",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr",
+          "layout": "linux-6.12.94/x86_64/bpf_attr",
+          "size": 32,
+          "captured": 32,
+          "declared": 32,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr.key",
+          "layout": "",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "01000000"
+        },
+        {
+          "phase": "exit",
+          "arg": 1,
+          "key": "arg1.attr.value",
+          "layout": "",
+          "size": 8,
+          "captured": 8,
+          "declared": 8,
+          "status": "COMPLETE",
+          "data": "414e54494d415031"
+        }
+      ],
+      "process": "root run"
+    },
+    {
+      "label": "bpf.map_get_next_key",
+      "syscall": "bpf",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr",
+          "layout": "linux-6.12.94/x86_64/bpf_attr",
+          "size": 32,
+          "captured": 32,
+          "declared": 32,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr.key",
+          "layout": "",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "01000000"
+        },
+        {
+          "phase": "exit",
+          "arg": 1,
+          "key": "arg1.attr.next_key",
+          "layout": "",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "02000000"
+        }
+      ],
+      "process": "root run"
+    },
+    {
+      "label": "bpf.map_delete_array",
+      "syscall": "bpf",
+      "result": "errno:EINVAL",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr",
+          "layout": "linux-6.12.94/x86_64/bpf_attr",
+          "size": 32,
+          "captured": 32,
+          "declared": 32,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr.key",
+          "layout": "",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "01000000"
+        }
+      ],
+      "process": "root run"
+    },
+    {
+      "label": "bpf.map_lookup_batch",
+      "syscall": "bpf",
+      "result": "zero|errno:ENOENT",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr",
+          "layout": "linux-6.12.94/x86_64/bpf_attr",
+          "size": 56,
+          "captured": 56,
+          "declared": 56,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "exit",
+          "arg": 1,
+          "key": "arg1.attr.count",
+          "layout": "linux-6.12.94/x86_64/u32",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "04000000"
+        },
+        {
+          "phase": "exit",
+          "arg": 1,
+          "key": "arg1.attr.out_batch",
+          "layout": "",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "exit",
+          "arg": 1,
+          "key": "arg1.attr.keys",
+          "layout": "",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": "00000000010000000200000003000000"
+        },
+        {
+          "phase": "exit",
+          "arg": 1,
+          "key": "arg1.attr.values",
+          "layout": "",
+          "size": 32,
+          "captured": 32,
+          "declared": 32,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ],
+      "process": "root run"
+    },
+    {
+      "label": "bpf.percpu_lookup",
+      "syscall": "bpf",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr",
+          "layout": "linux-6.12.94/x86_64/bpf_attr",
+          "size": 32,
+          "captured": 32,
+          "declared": 32,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr.key",
+          "layout": "",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "00000000"
+        },
+        {
+          "phase": "exit",
+          "arg": 1,
+          "key": "arg1.attr.value",
+          "layout": "",
+          "size": 32,
+          "captured": 32,
+          "declared": 32,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ],
+      "process": "root run"
+    },
+    {
+      "label": "bpf.prog_load",
+      "syscall": "bpf",
+      "result": "positive",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr",
+          "layout": "linux-6.12.94/x86_64/bpf_attr",
+          "size": 40,
+          "captured": 40,
+          "declared": 40,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr.insns",
+          "layout": "linux-6.12.94/x86_64/bpf_insn[]",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": "b7000000000000009500000000000000"
+        },
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr.license",
+          "layout": "",
+          "size": 4,
+          "captured": 4,
+          "declared": 128,
+          "status": "COMPLETE",
+          "data": "47504c00"
+        },
+        {
+          "phase": "exit",
+          "arg": 1,
+          "key": "arg1.attr.log_buf",
+          "layout": "",
+          "size": "observed",
+          "captured": "observed",
+          "declared": 4096,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ],
+      "process": "root run"
+    },
+    {
+      "label": "bpf.prog_load_rejected",
+      "syscall": "bpf",
+      "result": "errno:EACCES",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr",
+          "layout": "linux-6.12.94/x86_64/bpf_attr",
+          "size": 40,
+          "captured": 40,
+          "declared": 40,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr.insns",
+          "layout": "linux-6.12.94/x86_64/bpf_insn[]",
+          "size": 8,
+          "captured": 8,
+          "declared": 8,
+          "status": "COMPLETE",
+          "data": "9500000000000000"
+        },
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr.license",
+          "layout": "",
+          "size": 4,
+          "captured": 4,
+          "declared": 128,
+          "status": "COMPLETE",
+          "data": "47504c00"
+        },
+        {
+          "phase": "exit",
+          "arg": 1,
+          "key": "arg1.attr.log_buf",
+          "layout": "",
+          "size": "observed",
+          "captured": "observed",
+          "declared": 4096,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ],
+      "process": "root run"
+    },
+    {
+      "label": "bpf.prog_test_run",
+      "syscall": "bpf",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr",
+          "layout": "linux-6.12.94/x86_64/bpf_attr",
+          "size": 32,
+          "captured": 32,
+          "declared": 32,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr.data_in",
+          "layout": "",
+          "size": 64,
+          "captured": 64,
+          "declared": 64,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "exit",
+          "arg": 1,
+          "key": "arg1.attr.data_size_out",
+          "layout": "linux-6.12.94/x86_64/u32",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "exit",
+          "arg": 1,
+          "key": "arg1.attr.data_out",
+          "layout": "",
+          "size": "observed",
+          "captured": "observed",
+          "declared": "observed",
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ],
+      "process": "root run"
+    },
+    {
+      "label": "bpf.obj_get_info_map",
+      "syscall": "bpf",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr",
+          "layout": "linux-6.12.94/x86_64/bpf_attr",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "exit",
+          "arg": 1,
+          "key": "arg1.attr.info_len",
+          "layout": "linux-6.12.94/x86_64/u32",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "40000000"
+        },
+        {
+          "phase": "exit",
+          "arg": 1,
+          "key": "arg1.attr.info",
+          "layout": "linux-6.12.94/x86_64/bpf_map_info",
+          "size": 64,
+          "captured": 64,
+          "declared": 64,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "bpf.info_nested",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ],
+      "process": "root run"
+    },
+    {
+      "label": "bpf.obj_get_missing",
+      "syscall": "bpf",
+      "result": "errno:ENOENT",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr",
+          "layout": "linux-6.12.94/x86_64/bpf_attr",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr.pathname",
+          "layout": "",
+          "size": 24,
+          "captured": 24,
+          "declared": 4096,
+          "status": "COMPLETE",
+          "data": "2f7379732f66732f6270662f616e742d6d697373696e6700"
+        }
+      ],
+      "process": "root run"
+    },
+    {
+      "label": "bpf.raw_tracepoint_bad_prog",
+      "syscall": "bpf",
+      "result": "errno:EINVAL",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr",
+          "layout": "linux-6.12.94/x86_64/bpf_attr",
+          "size": 12,
+          "captured": 12,
+          "declared": 12,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr.name",
+          "layout": "",
+          "size": 13,
+          "captured": 13,
+          "declared": 128,
+          "status": "COMPLETE",
+          "data": "73636865645f73776974636800"
+        }
+      ],
+      "process": "root run"
+    },
+    {
+      "label": "bpf.btf_load",
+      "syscall": "bpf",
+      "result": "positive",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr",
+          "layout": "linux-6.12.94/x86_64/bpf_attr",
+          "size": 28,
+          "captured": 28,
+          "declared": 28,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.attr.btf",
+          "layout": "",
+          "size": 45,
+          "captured": 45,
+          "declared": 45,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ],
+      "process": "root run"
+    }
+  ]
+}

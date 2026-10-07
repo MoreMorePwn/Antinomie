@@ -1,0 +1,30 @@
+{
+  "contract": "native-schema-slices.md revision 5",
+  "slice": "2e-root",
+  "setup": {
+    "notes": [
+      "Root run: a uprobe return probe (perf_event_open on the uprobe PMU, retprobe bit set) on the non-inlined probe function ant_uretprobe_target in /tmp/antinomie-probe, which returns 42; calling it once makes the kernel trampoline issue uretprobe; the perf event is closed afterwards"
+    ]
+  },
+  "cases": [
+    {
+      "label": "uretprobe.return_value",
+      "syscall": "uretprobe",
+      "result": "positive",
+      "process": "root run",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "context.uretprobe_regs",
+          "layout": "linux-6.12.94/x86_64/uretprobe_regs",
+          "size": 24,
+          "captured": 24,
+          "declared": 24,
+          "status": "COMPLETE",
+          "data": null
+        }
+      ]
+    }
+  ]
+}
