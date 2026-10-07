@@ -1,0 +1,549 @@
+{
+  "contract": "native-schema-slices.md revision 1",
+  "slice": "2a",
+  "setup": {
+    "tcp4": "socket(AF_INET, SOCK_STREAM, 0), never connected",
+    "tcp6": "socket(AF_INET6, SOCK_STREAM, 0), never connected",
+    "unix": "socketpair(AF_UNIX, SOCK_STREAM, 0)",
+    "notes": [
+      "so_peercred, so_attach_filter use unix[0]; ipv6_v6only uses tcp6; every other case uses tcp4",
+      "so_attach_filter program: one instruction BPF_RET|BPF_K accepting 0xffffffff bytes",
+      "unknown cases use level SOL_SOCKET and optname 0x7fff",
+      "fault.set passes optval address 1; negative_optlen.set passes optlen -1"
+    ]
+  },
+  "cases": [
+    {
+      "label": "sockopt.so_rcvbuf.set",
+      "syscall": "setsockopt",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.optval",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "00000100"
+        }
+      ]
+    },
+    {
+      "label": "sockopt.so_rcvbuf.get",
+      "syscall": "getsockopt",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 4,
+          "key": "arg4.optlen",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "04000000"
+        },
+        {
+          "phase": "exit",
+          "arg": 4,
+          "key": "arg4.optlen",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "04000000"
+        },
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.optval",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "sockopt.so_rcvbuf.get_oversize",
+      "syscall": "getsockopt",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 4,
+          "key": "arg4.optlen",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "10000000"
+        },
+        {
+          "phase": "exit",
+          "arg": 4,
+          "key": "arg4.optlen",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "04000000"
+        },
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.optval",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "sockopt.so_linger.set",
+      "syscall": "setsockopt",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.optval",
+          "layout": "linux-6.12.94/x86_64/linger",
+          "size": 8,
+          "captured": 8,
+          "declared": 8,
+          "status": "COMPLETE",
+          "data": "0100000005000000"
+        }
+      ]
+    },
+    {
+      "label": "sockopt.so_linger.get",
+      "syscall": "getsockopt",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 4,
+          "key": "arg4.optlen",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "08000000"
+        },
+        {
+          "phase": "exit",
+          "arg": 4,
+          "key": "arg4.optlen",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "08000000"
+        },
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.optval",
+          "layout": "linux-6.12.94/x86_64/linger",
+          "size": 8,
+          "captured": 8,
+          "declared": 8,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "sockopt.so_rcvtimeo_old.set",
+      "syscall": "setsockopt",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.optval",
+          "layout": "linux-6.12.94/x86_64/__kernel_old_timeval",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": "020000000000000020a1070000000000"
+        }
+      ]
+    },
+    {
+      "label": "sockopt.so_rcvtimeo_new.set",
+      "syscall": "setsockopt",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.optval",
+          "layout": "linux-6.12.94/x86_64/__kernel_sock_timeval",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": "03000000000000000000000000000000"
+        }
+      ]
+    },
+    {
+      "label": "sockopt.so_peercred.get",
+      "syscall": "getsockopt",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 4,
+          "key": "arg4.optlen",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "0c000000"
+        },
+        {
+          "phase": "exit",
+          "arg": 4,
+          "key": "arg4.optlen",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "0c000000"
+        },
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.optval",
+          "layout": "linux-6.12.94/x86_64/ucred",
+          "size": 12,
+          "captured": 12,
+          "declared": 12,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "sockopt.so_attach_filter.set",
+      "syscall": "setsockopt",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.optval",
+          "layout": "linux-6.12.94/x86_64/sock_fprog",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": null
+        },
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.optval.filter",
+          "layout": "linux-6.12.94/x86_64/sock_filter[]",
+          "size": 8,
+          "captured": 8,
+          "declared": 8,
+          "status": "COMPLETE",
+          "data": "06000000ffffffff",
+          "address": "nonzero"
+        }
+      ]
+    },
+    {
+      "label": "sockopt.so_bindtodevice.set",
+      "syscall": "setsockopt",
+      "result": "errno:EPERM",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.optval",
+          "layout": "linux-6.12.94/x86_64/char[]",
+          "size": 2,
+          "captured": 2,
+          "declared": 2,
+          "status": "COMPLETE",
+          "data": "6c6f"
+        }
+      ]
+    },
+    {
+      "label": "sockopt.tcp_nodelay.set",
+      "syscall": "setsockopt",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.optval",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "01000000"
+        }
+      ]
+    },
+    {
+      "label": "sockopt.tcp_congestion.get",
+      "syscall": "getsockopt",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 4,
+          "key": "arg4.optlen",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "10000000"
+        },
+        {
+          "phase": "exit",
+          "arg": 4,
+          "key": "arg4.optlen",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "10000000"
+        },
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.optval",
+          "layout": "linux-6.12.94/x86_64/char[]",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "sockopt.tcp_info.get",
+      "syscall": "getsockopt",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 4,
+          "key": "arg4.optlen",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "68000000"
+        },
+        {
+          "phase": "exit",
+          "arg": 4,
+          "key": "arg4.optlen",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "68000000"
+        },
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.optval",
+          "layout": "linux-6.12.94/x86_64/tcp_info",
+          "size": 104,
+          "captured": 104,
+          "declared": 104,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "sockopt.ip_ttl.set",
+      "syscall": "setsockopt",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.optval",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "40000000"
+        }
+      ]
+    },
+    {
+      "label": "sockopt.ipv6_v6only.set",
+      "syscall": "setsockopt",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.optval",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "01000000"
+        }
+      ]
+    },
+    {
+      "label": "sockopt.ip_add_membership.set",
+      "syscall": "setsockopt",
+      "result": "errno:EPROTO",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.optval",
+          "layout": "linux-6.12.94/x86_64/ip_mreqn",
+          "size": 12,
+          "captured": 12,
+          "declared": 12,
+          "status": "COMPLETE",
+          "data": "ef0102030000000000000000"
+        }
+      ]
+    },
+    {
+      "label": "sockopt.unknown.set",
+      "syscall": "setsockopt",
+      "result": "errno:ENOPROTOOPT",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.optval",
+          "layout": "",
+          "size": 17,
+          "captured": 17,
+          "declared": 17,
+          "status": "COMPLETE",
+          "data": "414e54494e4f4d49452d534f434b4f5054"
+        },
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "sockopt.unknown_option",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ]
+    },
+    {
+      "label": "sockopt.unknown.get",
+      "syscall": "getsockopt",
+      "result": "errno:ENOPROTOOPT",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 4,
+          "key": "arg4.optlen",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "08000000"
+        },
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "sockopt.unknown_option",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ]
+    },
+    {
+      "label": "sockopt.short_int.set",
+      "syscall": "setsockopt",
+      "result": "errno:EINVAL",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.optval",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 2,
+          "captured": 0,
+          "declared": 2,
+          "status": "INVALID_EXTENT",
+          "data": null
+        }
+      ]
+    },
+    {
+      "label": "sockopt.fault.set",
+      "syscall": "setsockopt",
+      "result": "errno:EFAULT",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.optval",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 0,
+          "declared": 4,
+          "status": "COPY_FAULT",
+          "data": null
+        }
+      ]
+    },
+    {
+      "label": "sockopt.negative_optlen.set",
+      "syscall": "setsockopt",
+      "result": "errno:EINVAL",
+      "fields": []
+    }
+  ]
+}

@@ -1,0 +1,334 @@
+{
+  "contract": "native-schema-slices.md revision 1",
+  "slice": "2g",
+  "setup": {
+    "notes": [
+      "each case calls syscall(number, 0, 0, 0, 0, 0, 0) by raw number"
+    ]
+  },
+  "cases": [
+    {
+      "label": "unavailable.uselib",
+      "syscall": "uselib",
+      "result": "errno:ENOSYS",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "schema.argument_metadata",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ],
+      "number": 134
+    },
+    {
+      "label": "unavailable._sysctl",
+      "syscall": "_sysctl",
+      "result": "errno:ENOSYS",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "schema.argument_metadata",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ],
+      "number": 156
+    },
+    {
+      "label": "unavailable.create_module",
+      "syscall": "create_module",
+      "result": "errno:ENOSYS",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "schema.argument_metadata",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ],
+      "number": 174
+    },
+    {
+      "label": "unavailable.get_kernel_syms",
+      "syscall": "get_kernel_syms",
+      "result": "errno:ENOSYS",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "schema.argument_metadata",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ],
+      "number": 177
+    },
+    {
+      "label": "unavailable.query_module",
+      "syscall": "query_module",
+      "result": "errno:ENOSYS",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "schema.argument_metadata",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ],
+      "number": 178
+    },
+    {
+      "label": "unavailable.nfsservctl",
+      "syscall": "nfsservctl",
+      "result": "errno:ENOSYS",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "schema.argument_metadata",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ],
+      "number": 180
+    },
+    {
+      "label": "unavailable.getpmsg",
+      "syscall": "getpmsg",
+      "result": "errno:ENOSYS",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "schema.argument_metadata",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ],
+      "number": 181
+    },
+    {
+      "label": "unavailable.putpmsg",
+      "syscall": "putpmsg",
+      "result": "errno:ENOSYS",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "schema.argument_metadata",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ],
+      "number": 182
+    },
+    {
+      "label": "unavailable.afs_syscall",
+      "syscall": "afs_syscall",
+      "result": "errno:ENOSYS",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "schema.argument_metadata",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ],
+      "number": 183
+    },
+    {
+      "label": "unavailable.tuxcall",
+      "syscall": "tuxcall",
+      "result": "errno:ENOSYS",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "schema.argument_metadata",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ],
+      "number": 184
+    },
+    {
+      "label": "unavailable.security",
+      "syscall": "security",
+      "result": "errno:ENOSYS",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "schema.argument_metadata",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ],
+      "number": 185
+    },
+    {
+      "label": "unavailable.set_thread_area",
+      "syscall": "set_thread_area",
+      "result": "errno:ENOSYS",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "schema.argument_metadata",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ],
+      "number": 205
+    },
+    {
+      "label": "unavailable.get_thread_area",
+      "syscall": "get_thread_area",
+      "result": "errno:ENOSYS",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "schema.argument_metadata",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ],
+      "number": 211
+    },
+    {
+      "label": "unavailable.lookup_dcookie",
+      "syscall": "lookup_dcookie",
+      "result": "errno:ENOSYS",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "schema.argument_metadata",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ],
+      "number": 212
+    },
+    {
+      "label": "unavailable.epoll_ctl_old",
+      "syscall": "epoll_ctl_old",
+      "result": "errno:ENOSYS",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "schema.argument_metadata",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ],
+      "number": 214
+    },
+    {
+      "label": "unavailable.epoll_wait_old",
+      "syscall": "epoll_wait_old",
+      "result": "errno:ENOSYS",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "schema.argument_metadata",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ],
+      "number": 215
+    },
+    {
+      "label": "unavailable.vserver",
+      "syscall": "vserver",
+      "result": "errno:ENOSYS",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 255,
+          "key": "schema.argument_metadata",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": "max",
+          "status": "NO_DECODER",
+          "data": null
+        }
+      ],
+      "number": 236
+    }
+  ]
+}
