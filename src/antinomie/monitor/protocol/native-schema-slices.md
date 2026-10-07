@@ -416,3 +416,65 @@ the caller with `SIGILL`; the exit value is the probed function's return value.
   function returning 42 (the uprobe PMU type and `retprobe` bit come from
   `/sys/bus/event_source/devices/uprobe`); calling the function makes the kernel
   trampoline issue `uretprobe`. The event is closed afterwards.
+
+## 13. Revision 6: Slice 2D, nested and stateful variants (2026-10-07)
+
+Approved by the user on 2026-10-07 together with `tests/monitor/fixtures/native-schema/2d.json`.
+
+### 13.1 clone and clone3 writes
+
+A forked child starts with no syscall context, so nothing is recorded in the
+child for its own first return. The parent's exit event therefore records every
+write that `clone` makes, with the context where it happens:
+
+| Flag | `clone` key | `clone3` key | Capture at the parent's exit (`result > 0`) |
+|---|---|---|---|
+| `CLONE_PARENT_SETTID` | `arg2.parent_tid` | `arg0.clone_args.parent_tid` | `pid_t` the kernel wrote in the parent |
+| `CLONE_PIDFD` | `arg2.pidfd` (the `parent_tid` slot) | `arg0.clone_args.pidfd` | `int` written in the parent |
+| `CLONE_CHILD_SETTID` | `arg3.child_tid` | `arg0.clone_args.child_tid` | 4 bytes, `ANT_ASYNC_UNOBSERVED`: the child writes its own TID (this result, as seen in the child's PID namespace) before returning to user space |
+| `CLONE_CHILD_CLEARTID` | `arg3.clear_child_tid` | `arg0.clone_args.clear_child_tid` | 4 bytes, `ANT_ASYNC_UNOBSERVED`: zeroed and futex-woken when the child exits |
+
+This replaces the `NO_DECODER` (`clone`) and `CONTEXT_MISSING` (`clone3`) entry
+markers. `newsp` and `tls` are values the kernel never dereferences.
+
+### 13.2 semctl GETALL and SETALL
+
+The array length is the set's `sem_nsems`, which only the kernel knows. Two
+hooks in `ipc/sem.c` `semctl_main()` hand the recorder the kernel's own copy of
+the array: for `SETALL` right after it is copied in, for `GETALL` right before it
+is copied out. At exit the recorder emits it as `arg3.array`, layout
+`unsigned_short[]`, `nsems * 2` bytes, marked kernel-imported. That is the exact
+operand, not a second read of user memory. If the kernel never reached the
+copy (an earlier error), no field is recorded; if the stash allocation fails,
+`ANT_RESOURCE_EXHAUSTED`. This replaces the `ANT_UNKNOWN_EXTENT` field.
+
+The hook API is `ant_monitor_operand(key, layout, data, size)` (one pending
+operand per syscall, freed at exit or task exit); it is a no-op when
+`CONFIG_ANTINOMIE` is off.
+
+### 13.3 process_vm_readv and process_vm_writev
+
+Per the user's earlier decision, the other process's memory is never read.
+Each remote segment becomes `arg3.remote_iov[i].data`, `iov_len` bytes,
+`ANT_ADDRESS_ONLY` (previously `ANT_CONTEXT_MISSING`). Local buffers keep the
+shared vector rules: `writev` input at entry, `readv` output at exit bounded by
+the result.
+
+### 13.4 Deferred kernel-managed pointers
+
+| Syscall | Capture |
+|---|---|
+| `set_tid_address(tidptr)` | `arg0.clear_child_tid`, 4 bytes, `ANT_ASYNC_UNOBSERVED`: zeroed and futex-woken when the thread exits |
+| `set_robust_list(head, len)` | `arg0.head`, `robust_list_head`, 24 bytes, the registered head as the program wrote it (the kernel stores only the pointer); `arg0.head.traversal`, `ANT_ASYNC_UNOBSERVED`: the kernel walks the list when the thread exits. `len != 24` keeps `ANT_INVALID_EXTENT` with no copy |
+
+These replace the generic `arg0.deferred_exit_address` key.
+
+### 13.5 Outputs on failure
+
+Audit of the pinned kernel: where a syscall can write user output and still
+fail (`pipe`/`pipe2`, `socketpair`, `accept`/`accept4`, `getsockopt` and similar),
+the failure is that write itself faulting, so the user buffer holds a partial,
+unusable copy. Rule: **outputs are captured only on success**, except the
+documented interruption cases already in the contract (for example the remaining
+time on `EINTR`). Nothing is recorded for a failed call's output buffers. This
+closes the earlier "partial error outputs" item as a decision rather than code.

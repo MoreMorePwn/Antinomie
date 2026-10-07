@@ -1,0 +1,361 @@
+{
+  "contract": "native-schema-slices.md revision 6",
+  "slice": "2d",
+  "setup": {
+    "notes": [
+      "clone cases use the raw fork-like clone (no new stack, SIGCHLD); each child exits immediately with _exit(0) and the parent reaps it",
+      "clone.parent_and_child_tid sets CLONE_PARENT_SETTID|CLONE_CHILD_SETTID; clone.pidfd sets CLONE_PIDFD with the parent_tid slot as the pidfd output; clone.clear_child_tid sets CLONE_CHILD_CLEARTID",
+      "clone3 passes an 88-byte clone_args (CLONE_ARGS_SIZE_VER2) with CLONE_PIDFD|CLONE_PARENT_SETTID|CLONE_CHILD_SETTID|CLONE_CHILD_CLEARTID and exit_signal SIGCHLD",
+      "semctl cases use a private 3-semaphore set: SETALL {1,2,3} then GETALL, then IPC_RMID; setall_bad_id uses semid -1 (EINVAL before any copy)",
+      "process_vm cases target the probe's own PID: readv copies a 16-byte 'ANTINOMIE-REMOTE' buffer into a local one; writev copies 'ANTINOMIE-WRITEV' into another buffer of the probe",
+      "set_tid_address runs in child F, which then exits; set_robust_list registers a local empty list head (next points to itself, futex_offset 0) after saving glibc's head with get_robust_list, then restores glibc's head; bad_len passes 16"
+    ]
+  },
+  "cases": [
+    {
+      "label": "clone.parent_and_child_tid",
+      "syscall": "clone",
+      "result": "positive",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 2,
+          "key": "arg2.parent_tid",
+          "layout": "linux-6.12.94/x86_64/pid_t",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.child_tid",
+          "layout": "linux-6.12.94/x86_64/pid_t",
+          "size": 4,
+          "captured": 0,
+          "declared": 4,
+          "status": "ASYNC_UNOBSERVED",
+          "data": null,
+          "address": "nonzero"
+        }
+      ]
+    },
+    {
+      "label": "clone.pidfd",
+      "syscall": "clone",
+      "result": "positive",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 2,
+          "key": "arg2.pidfd",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "clone.clear_child_tid",
+      "syscall": "clone",
+      "result": "positive",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.clear_child_tid",
+          "layout": "linux-6.12.94/x86_64/pid_t",
+          "size": 4,
+          "captured": 0,
+          "declared": 4,
+          "status": "ASYNC_UNOBSERVED",
+          "data": null,
+          "address": "nonzero"
+        }
+      ]
+    },
+    {
+      "label": "clone3.tids_and_pidfd",
+      "syscall": "clone3",
+      "result": "positive",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 0,
+          "key": "arg0.clone_args",
+          "layout": "linux-6.12.94/x86_64/clone_args",
+          "size": 88,
+          "captured": 88,
+          "declared": 88,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "exit",
+          "arg": 0,
+          "key": "arg0.clone_args.pidfd",
+          "layout": "linux-6.12.94/x86_64/int",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "exit",
+          "arg": 0,
+          "key": "arg0.clone_args.parent_tid",
+          "layout": "linux-6.12.94/x86_64/pid_t",
+          "size": 4,
+          "captured": 4,
+          "declared": 4,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "exit",
+          "arg": 0,
+          "key": "arg0.clone_args.child_tid",
+          "layout": "linux-6.12.94/x86_64/pid_t",
+          "size": 4,
+          "captured": 0,
+          "declared": 4,
+          "status": "ASYNC_UNOBSERVED",
+          "data": null,
+          "address": "nonzero"
+        },
+        {
+          "phase": "exit",
+          "arg": 0,
+          "key": "arg0.clone_args.clear_child_tid",
+          "layout": "linux-6.12.94/x86_64/pid_t",
+          "size": 4,
+          "captured": 0,
+          "declared": 4,
+          "status": "ASYNC_UNOBSERVED",
+          "data": null,
+          "address": "nonzero"
+        }
+      ]
+    },
+    {
+      "label": "semctl.setall",
+      "syscall": "semctl",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.array",
+          "layout": "linux-6.12.94/x86_64/unsigned_short[]",
+          "size": 6,
+          "captured": 6,
+          "declared": 6,
+          "status": "COMPLETE",
+          "data": "010002000300"
+        }
+      ]
+    },
+    {
+      "label": "semctl.getall",
+      "syscall": "semctl",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 3,
+          "key": "arg3.array",
+          "layout": "linux-6.12.94/x86_64/unsigned_short[]",
+          "size": 6,
+          "captured": 6,
+          "declared": 6,
+          "status": "COMPLETE",
+          "data": "010002000300"
+        }
+      ]
+    },
+    {
+      "label": "semctl.setall_bad_id",
+      "syscall": "semctl",
+      "result": "errno:EINVAL",
+      "fields": []
+    },
+    {
+      "label": "process_vm_readv.self",
+      "syscall": "process_vm_readv",
+      "result": "positive",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.iov",
+          "layout": "linux-6.12.94/x86_64/iovec[]",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": null
+        },
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.remote_iov",
+          "layout": "linux-6.12.94/x86_64/iovec[]",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": null
+        },
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.remote_iov[0].data",
+          "layout": "",
+          "size": 16,
+          "captured": 0,
+          "declared": 16,
+          "status": "ADDRESS_ONLY",
+          "data": null,
+          "address": "nonzero"
+        },
+        {
+          "phase": "exit",
+          "arg": 1,
+          "key": "arg1.iov[0].data",
+          "layout": "",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": "414e54494e4f4d49452d52454d4f5445"
+        }
+      ]
+    },
+    {
+      "label": "process_vm_writev.self",
+      "syscall": "process_vm_writev",
+      "result": "positive",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.iov",
+          "layout": "linux-6.12.94/x86_64/iovec[]",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": null
+        },
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.iov[0].data",
+          "layout": "",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": "414e54494e4f4d49452d575249544556"
+        },
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.remote_iov",
+          "layout": "linux-6.12.94/x86_64/iovec[]",
+          "size": 16,
+          "captured": 16,
+          "declared": 16,
+          "status": "COMPLETE",
+          "data": null
+        },
+        {
+          "phase": "entry",
+          "arg": 3,
+          "key": "arg3.remote_iov[0].data",
+          "layout": "",
+          "size": 16,
+          "captured": 0,
+          "declared": 16,
+          "status": "ADDRESS_ONLY",
+          "data": null,
+          "address": "nonzero"
+        }
+      ]
+    },
+    {
+      "label": "set_tid_address.child",
+      "syscall": "set_tid_address",
+      "result": "positive",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 0,
+          "key": "arg0.clear_child_tid",
+          "layout": "linux-6.12.94/x86_64/pid_t",
+          "size": 4,
+          "captured": 0,
+          "declared": 4,
+          "status": "ASYNC_UNOBSERVED",
+          "data": null,
+          "address": "nonzero"
+        }
+      ],
+      "process": "child F"
+    },
+    {
+      "label": "set_robust_list.self",
+      "syscall": "set_robust_list",
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 0,
+          "key": "arg0.head",
+          "layout": "linux-6.12.94/x86_64/robust_list_head",
+          "size": 24,
+          "captured": 24,
+          "declared": 24,
+          "status": "COMPLETE",
+          "data": "observed"
+        },
+        {
+          "phase": "entry",
+          "arg": 0,
+          "key": "arg0.head.traversal",
+          "layout": "linux-6.12.94/x86_64/robust_list_head",
+          "size": 24,
+          "captured": 0,
+          "declared": 24,
+          "status": "ASYNC_UNOBSERVED",
+          "data": null,
+          "address": "nonzero"
+        }
+      ]
+    },
+    {
+      "label": "set_robust_list.bad_len",
+      "syscall": "set_robust_list",
+      "result": "errno:EINVAL",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 0,
+          "key": "arg0.head",
+          "layout": "linux-6.12.94/x86_64/robust_list_head",
+          "size": 16,
+          "captured": 0,
+          "declared": 16,
+          "status": "INVALID_EXTENT",
+          "data": null
+        }
+      ]
+    }
+  ]
+}
