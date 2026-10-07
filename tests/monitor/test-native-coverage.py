@@ -280,6 +280,9 @@ class CoverageTests(unittest.TestCase):
         self.assertTrue(coverage.expected_result(case, "errno:ENOTSUP"))
         self.assertFalse(coverage.expected_result(case, "errno:EINVAL"))
         self.assertFalse(coverage.expected_result(case, "errno:NOT_A_NAME"))
+        self.assertTrue(coverage.expected_result(case, "zero|errno:ENOTSUP"))
+        self.assertTrue(coverage.expected_result({"result": 0, "errno": 0}, "zero|errno:EINVAL"))
+        self.assertFalse(coverage.expected_result(case, "zero|errno:EINVAL"))
 
     def test_unimplemented_row_requires_traced_enosys(self):
         self.inventory["syscalls"][1]["implemented"] = False

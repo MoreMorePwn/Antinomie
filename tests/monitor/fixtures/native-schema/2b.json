@@ -1,5 +1,5 @@
 {
-  "contract": "native-schema-slices.md revision 3",
+  "contract": "native-schema-slices.md revision 3; expectations for the ANT-T0022 minimal kernel configuration",
   "slice": "2b",
   "setup": {
     "notes": [
@@ -8,7 +8,7 @@
       "prctl.set_pdeathsig sets SIGTERM (15); an unlabeled call restores 0 afterwards",
       "prctl.get_auxv passes a 512-byte buffer; saved_auxv is 416 bytes (AT_VECTOR_SIZE 52 with IA32_EMULATION)",
       "prctl.set_mm_auxv passes {1, 2} with length 16 and is rejected for lacking CAP_SYS_RESOURCE",
-      "prctl.set_vma_anon_name names a private 4096-byte mapping; CONFIG_ANON_VMA_NAME=n rejects it",
+      "prctl.set_vma_anon_name names a private 4096-byte mapping; CONFIG_ANON_VMA_NAME is on in the minimal profile (success) and off in the Debian profile (EINVAL); the entry field is the same either way",
       "child A sets no_new_privs, then installs a one-instruction allow-all seccomp filter (BPF_RET|BPF_K 0x7fff0000), then exits",
       "child B turns on syscall user dispatch with selector byte 0 (allow) and an empty region, then exits",
       "child C blocks SIGUSR1, calls PTRACE_TRACEME, raises SIGUSR1 (stays pending) and SIGSTOP; the parent runs the ptrace cases while it is stopped, then PTRACE_CONT lets it exit",
@@ -18,10 +18,11 @@
       "ptrace.getsigmask_badsize passes size 4; ptrace.peeksiginfo asks for one entry from the per-thread queue (the pending SIGUSR1)",
       "ptrace.get_thread_area reads TLS index 12; ptrace.arch_prctl_get_fs passes ARCH_GET_FS as data and the output pointer as addr",
       "keyctl cases use a 'user' key 'ant:probe' with payload 'secret-payload' added by add_key to the process keyring; read_query passes a NULL buffer",
-      "keyctl.dh_compute uses that key for all three parameters (CONFIG_KEY_DH_OPERATIONS=n); pkey_query fails because user keys have no asymmetric operations; instantiate_iov fails without an authorization key",
+      "keyctl.dh_compute uses that key for all three parameters (CONFIG_KEY_DH_OPERATIONS=y since ANT-T0022; a user key's payload is not valid DH parameters, so EINVAL); pkey_query fails because user keys have no asymmetric operations; instantiate_iov fails without an authorization key",
       "keyctl.join_session creates the session keyring 'ant-session' for the probe process only; keyctl.revoke revokes the probe key last",
       "sysfs.name uses the index returned by sysfs.index; bad_index is 9999; unknown uses option 9",
-      "unknown selectors: prctl 0x7fffffff, ptrace 0x7fff, keyctl 0x7fff"
+      "unknown selectors: prctl 0x7fffffff, ptrace 0x7fff, keyctl 0x7fff",
+      "prctl.get_tid_address succeeds because the minimal kernel enables CONFIG_CHECKPOINT_RESTORE (ANT-T0022); the probe main thread's clear_child_tid address is compared as observed"
     ]
   },
   "cases": [
@@ -124,8 +125,20 @@
     {
       "label": "prctl.get_tid_address",
       "syscall": "prctl",
-      "result": "errno:EINVAL",
-      "fields": []
+      "result": "zero",
+      "fields": [
+        {
+          "phase": "exit",
+          "arg": 1,
+          "key": "arg1.tid_address",
+          "layout": "linux-6.12.94/x86_64/address",
+          "size": 8,
+          "captured": 8,
+          "declared": 8,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
     },
     {
       "label": "prctl.get_auxv",
@@ -166,7 +179,7 @@
     {
       "label": "prctl.set_vma_anon_name",
       "syscall": "prctl",
-      "result": "errno:EINVAL",
+      "result": "zero|errno:EINVAL",
       "fields": [
         {
           "phase": "entry",
@@ -748,7 +761,7 @@
     {
       "label": "keyctl.dh_compute",
       "syscall": "keyctl",
-      "result": "errno:EOPNOTSUPP",
+      "result": "errno:EINVAL",
       "fields": [
         {
           "phase": "entry",

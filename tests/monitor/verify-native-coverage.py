@@ -331,6 +331,8 @@ def report(transcript, raw, inventory, fixture_numbers=frozenset()):
 
 
 def expected_result(case, result):
+    if "|" in result:
+        return any(expected_result(case, choice) for choice in result.split("|"))
     if result == "zero":
         return case["result"] == 0
     if result == "nonnegative":

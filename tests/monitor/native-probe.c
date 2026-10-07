@@ -396,10 +396,13 @@ static void sockopt_cases(void)
 }
 
 /* Slice 2B: selector families. Every effect stays inside the probe or a child. */
-/* A forked child inherits the case counter; give each one its own ID range. */
+/* A forked child inherits the case and failure counters; give each child its
+ * own ID range and count only its own failures in its exit status.
+ */
 static void child_case_range(unsigned index)
 {
     case_count = 100000 * index;
+    failures = 0;
 }
 
 static void wait_child(pid_t child, const char *what)
@@ -434,14 +437,19 @@ static void prctl_cases(void)
     observe("arg1.value", &value, sizeof(value));
     report();
     CASE("prctl.get_tsc", prctl, 0, PR_GET_TSC, &value, 0, 0, 0);
-    CASE("prctl.get_tid_address", prctl, EINVAL, PR_GET_TID_ADDRESS, &tid_address, 0, 0, 0);
+    CALL("prctl.get_tid_address", prctl, 0, PR_GET_TID_ADDRESS, &tid_address, 0, 0, 0);
+    observe("arg1.tid_address", &tid_address, sizeof(tid_address));
+    report();
     result = CALL("prctl.get_auxv", prctl, 0, PR_GET_AUXV, auxv, sizeof(auxv), 0, 0);
     if (result > 0)
         observe("arg1.auxv", auxv, (size_t)result < sizeof(auxv) ? (size_t)result : sizeof(auxv));
     report();
     CASE("prctl.set_mm_auxv", prctl, EPERM, PR_SET_MM, PR_SET_MM_AUXV, mm_auxv,
          sizeof(mm_auxv), 0);
-    CASE("prctl.set_vma_anon_name", prctl, EINVAL, PR_SET_VMA, PR_SET_VMA_ANON_NAME,
+    /* CONFIG_ANON_VMA_NAME differs by kernel profile; learn it first. */
+    value = syscall(SYS_prctl, PR_SET_VMA, PR_SET_VMA_ANON_NAME, mapping, 4096, "probe") ?
+        errno : 0;
+    CASE("prctl.set_vma_anon_name", prctl, value, PR_SET_VMA, PR_SET_VMA_ANON_NAME,
          mapping, 4096, "ant-probe-vma");
     CASE("prctl.unknown", prctl, EINVAL, 0x7fffffff, 0, 0, 0, 0);
     child = fork();
@@ -576,7 +584,7 @@ static void keyctl_cases(void)
     if (result > 0)
         observe("arg1.buffer", buffer, result < 16 ? (size_t)result : 16);
     report();
-    CALL("keyctl.dh_compute", keyctl, EOPNOTSUPP, KEYCTL_DH_COMPUTE, &dh, buffer, 64, NULL);
+    CALL("keyctl.dh_compute", keyctl, EINVAL, KEYCTL_DH_COMPUTE, &dh, buffer, 64, NULL);
     observe("arg1.params", &dh, sizeof(dh));
     report();
     CASE("keyctl.pkey_query", keyctl, EOPNOTSUPP, KEYCTL_PKEY_QUERY, key, 0, "enc=raw", &query);

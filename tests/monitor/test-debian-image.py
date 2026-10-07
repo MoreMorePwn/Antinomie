@@ -77,6 +77,24 @@ class DebianImageTests(unittest.TestCase):
                     with self.assertRaises(RuntimeError):
                         image.kernel_release(kernel)
 
+    def test_modular_kernel_requires_matching_installed_modules(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            config = root / "config"
+            config.write_text("CONFIG_EXT4_FS=y\nCONFIG_SND=m\n")
+            self.assertTrue(image.kernel_uses_modules(config))
+            config.write_text("CONFIG_EXT4_FS=y\n# CONFIG_SND is not set\n")
+            self.assertFalse(image.kernel_uses_modules(config))
+            self.assertIsNone(image.module_tree(None, "6.12.94 (builder) #1"))
+            with self.assertRaises(RuntimeError):
+                image.module_tree(root, "6.12.94 (builder) #1")
+            tree = root / "lib/modules/6.12.94"
+            tree.mkdir(parents=True)
+            (tree / "modules.dep").write_text("")
+            self.assertEqual(image.module_tree(root, "6.12.94 (builder) #1"), tree)
+            with self.assertRaises(RuntimeError):
+                image.module_tree(root, "6.12.95 (builder) #1")
+
     def test_profile_contract(self):
         self.assertEqual(image.PROFILE, {"id": "debian-xfce", "label": "Debian 13 (Xfce)",
             "min_ram_mib": 2048, "min_disk_gib": 16, "requires_credentials": True, "graphical": True})

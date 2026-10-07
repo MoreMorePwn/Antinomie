@@ -183,7 +183,22 @@ def validate_root(guest, root):
         raise RuntimeError("template root filesystem must be ext4")
 
 
-def convert_root(source, raw, provenance, log):
+def module_tree(modules, release):
+    """Return the installed module directory matching the kernel release."""
+    if modules is None:
+        return None
+    tree = modules / "lib/modules" / release.split()[0]
+    if not (tree / "modules.dep").is_file():
+        raise RuntimeError(f"--modules lacks lib/modules/{release.split()[0]}/modules.dep")
+    return tree
+
+
+def kernel_uses_modules(config):
+    return config is not None and any(line.endswith("=m")
+                                      for line in config.read_text().splitlines())
+
+
+def convert_root(source, raw, provenance, log, modules=None):
     with raw.open("xb") as target:
         target.truncate(16 << 30)
     with Guestfish([source, raw], log) as guest:
@@ -211,6 +226,17 @@ def convert_root(source, raw, provenance, log):
         guest.command("mount", "/dev/sdb", "/")
         if guest.command("cat", "/etc/fstab") != "/dev/vda / ext4 defaults 0 1":
             raise RuntimeError("converted root has unexpected fstab")
+        if modules is not None:
+            # Debian 13 is merged-/usr; /lib/modules resolves to /usr/lib/modules.
+            archive = raw.parent / "modules.tar"
+            subprocess.run(["tar", "--create", "--file", str(archive), "--owner=0",
+                            "--group=0", "--numeric-owner", "--directory",
+                            str(modules.parent), modules.name], check=True)
+            guest.command("mkdir-p", "/usr/lib/modules")
+            guest.command("tar-in", str(archive), "/usr/lib/modules")
+            archive.unlink()
+            if not guest.command("exists", f"/usr/lib/modules/{modules.name}/modules.dep") == "true":
+                raise RuntimeError("kernel modules did not reach the converted root")
         shadow = guest.command("cat", "/etc/shadow").splitlines()
         if not any(line.startswith(("root:!", "root:*")) for line in shadow):
             raise RuntimeError("base root password must be locked")
@@ -222,7 +248,8 @@ def convert_root(source, raw, provenance, log):
             raise RuntimeError("base must leave GID 1000 free for per-VM credentials")
         guest.command("umount-all")
     return {"root_device": root, "root_filesystem": "ext4", "root_size": source_size,
-            "copy": "libguestfs copy-device-to-device; exact filesystem blocks"}
+            "copy": "libguestfs copy-device-to-device; exact filesystem blocks",
+            "kernel_modules": None if modules is None else f"/usr/lib/modules/{modules.name}"}
 
 
 def initrd_provenance(root, provenance):
@@ -279,7 +306,8 @@ def make_initrd(output, staging, provenance):
     output.write_bytes(gzip.stdout)
 
 
-def assemble_bundle(kernel, output, staging, template_entry, cache, kernel_config=None):
+def assemble_bundle(kernel, output, staging, template_entry, cache, kernel_config=None,
+                    modules=None):
     if output.exists():
         raise RuntimeError("output already exists; choose a new unpublished bundle path")
     helpers = monitor_helpers()
@@ -289,7 +317,8 @@ def assemble_bundle(kernel, output, staging, template_entry, cache, kernel_confi
     raw = staging / "root.raw"
     conversion_log = output.parent / (output.name + "-conversion.log")
     with conversion_log.open("w") as log:
-        conversion = convert_root(staging / "template.raw", raw, provenance, log)
+        conversion = convert_root(staging / "template.raw", raw, provenance, log,
+                                  module_tree(modules, release))
     shutil.copy2(conversion_log, provenance / "conversion.log")
     subprocess.run(["qemu-img", "convert", "-f", "raw", "-O", "qcow2",
                     str(raw), str(bundle / "base.qcow2")], check=True)
@@ -330,10 +359,13 @@ def assemble_bundle(kernel, output, staging, template_entry, cache, kernel_confi
     bundle.rename(output)
 
 
-def build(kernel, output, kernel_config=None):
+def build(kernel, output, kernel_config=None, modules=None):
     if output.exists():
         raise RuntimeError("output already exists; choose a new unpublished bundle path")
-    kernel_release(kernel)
+    release = kernel_release(kernel)
+    if kernel_uses_modules(kernel_config) and modules is None:
+        raise RuntimeError("kernel config builds modules; pass --modules with its install root")
+    module_tree(modules, release)
     monitor_helpers().fixed_display_config(kernel_config, kernel)
     output.parent.mkdir(parents=True, exist_ok=True)
     env = appliance_environment()
@@ -371,7 +403,7 @@ def build(kernel, output, kernel_config=None):
         with builder_log.open("w") as log:
             subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
         shutil.copy2(builder_log, provenance / "builder.log")
-        assemble_bundle(kernel, output, staging, entries[0], cache, kernel_config)
+        assemble_bundle(kernel, output, staging, entries[0], cache, kernel_config, modules)
 
 
 def main():
@@ -380,6 +412,8 @@ def main():
     parser.add_argument("--kernel-config", type=Path,
                         help="matching kernel .config; validates built-in fixed-display support")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--modules", type=Path,
+                        help="modules_install root (INSTALL_MOD_PATH) matching the kernel")
     args = parser.parse_args()
     if not args.kernel.is_file():
         parser.error("an existing patched Linux 6.12.94 kernel is required")
@@ -387,7 +421,7 @@ def main():
         if shutil.which(tool) is None:
             parser.error("required installed tool missing: " + tool)
     try:
-        build(args.kernel, args.output, args.kernel_config)
+        build(args.kernel, args.output, args.kernel_config, args.modules)
     except (RuntimeError, subprocess.CalledProcessError) as error:
         parser.exit(1, "Debian image build failed: " + str(error) + "\n")
     print(args.output)

@@ -216,7 +216,7 @@ and the host labels the row Not implemented.
 | Member | Meaning |
 |---|---|
 | `label` | Stable case name. The probe prints it as `"label"` in its `ANT_CASE` line; sequential `case_id` values are not stable across probe edits |
-| `result` | `zero`, `nonnegative`, `positive`, or `errno:<NAME>` |
+| `result` | `zero`, `nonnegative`, `positive`, or `errno:<NAME>`; alternatives separated by `|` when the pinned kernel profiles legitimately differ (ANT-T0022) |
 | `fields` | The complete set of fields recorded for that invocation, in both phases. A missing or extra field fails the case |
 | `phase` | `entry` or `exit` |
 | `size`, `captured`, `declared` | Object size, bytes actually captured, and declared length; `"max"` stands for `U64_MAX`, and `"result"` for the case's return value (revision 3) |

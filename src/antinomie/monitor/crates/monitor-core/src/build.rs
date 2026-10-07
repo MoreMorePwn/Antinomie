@@ -237,34 +237,48 @@ pub struct Step {
 
 /// Build the ordered steps for a profile against a workspace checkout.
 ///
-/// The kernel step prints the bzImage path; the image step consumes
-/// `work/monitor-build/{arch/x86/boot/bzImage,.config}` and writes the source
-/// bundle to `output`.
+/// The kernel step builds the profile's kernel: `minimal` into
+/// `work/monitor-build` for BusyBox, or the pinned Debian configuration into
+/// `work/monitor-build-debian` (with installed modules) for Debian Xfce. The
+/// image step consumes that kernel, its `.config` and, for Debian, its modules,
+/// and writes the source bundle to `output`.
 pub fn plan(workspace: &Path, kind: Kind, output: &Path) -> Vec<Step> {
-    let kernel = workspace.join("work/monitor-build/arch/x86/boot/bzImage");
-    let config = workspace.join("work/monitor-build/.config");
-    let script = match kind {
-        Kind::BusyBox => "scripts/build-monitor-image.py",
-        Kind::DebianXfce => "scripts/build-debian-image.py",
+    let (profile, tree, script) = match kind {
+        Kind::BusyBox => (
+            "minimal",
+            "work/monitor-build",
+            "scripts/build-monitor-image.py",
+        ),
+        Kind::DebianXfce => (
+            "debian",
+            "work/monitor-build-debian",
+            "scripts/build-debian-image.py",
+        ),
     };
+    let tree = workspace.join(tree);
+    let mut image = vec![
+        script.into(),
+        "--kernel".into(),
+        tree.join("arch/x86/boot/bzImage").display().to_string(),
+        "--kernel-config".into(),
+        tree.join(".config").display().to_string(),
+        "--output".into(),
+        output.display().to_string(),
+    ];
+    if kind == Kind::DebianXfce {
+        image.push("--modules".into());
+        image.push(tree.join("modules-install").display().to_string());
+    }
     vec![
         Step {
             label: "kernel",
             program: "bash".into(),
-            args: vec!["scripts/build-monitor-kernel.sh".into()],
+            args: vec!["scripts/build-monitor-kernel.sh".into(), profile.into()],
         },
         Step {
             label: "image",
             program: "python3".into(),
-            args: vec![
-                script.into(),
-                "--kernel".into(),
-                kernel.display().to_string(),
-                "--kernel-config".into(),
-                config.display().to_string(),
-                "--output".into(),
-                output.display().to_string(),
-            ],
+            args: image,
         },
     ]
 }
@@ -370,13 +384,32 @@ mod tests {
                 .any(|a| a.ends_with("build-debian-image.py"))
         );
         assert!(steps[1].args.iter().any(|a| a == "/out/debian"));
+        assert_eq!(steps[0].args[1], "debian");
+        assert!(
+            steps[1]
+                .args
+                .iter()
+                .any(|a| a == "/repo/work/monitor-build-debian/.config")
+        );
+        assert!(
+            steps[1].args.windows(2).any(|w| w[0] == "--modules"
+                && w[1] == "/repo/work/monitor-build-debian/modules-install")
+        );
         let busy = plan(workspace, Kind::BusyBox, output);
+        assert_eq!(busy[0].args[1], "minimal");
         assert!(
             busy[1]
                 .args
                 .iter()
                 .any(|a| a.ends_with("build-monitor-image.py"))
         );
+        assert!(
+            busy[1]
+                .args
+                .iter()
+                .any(|a| a == "/repo/work/monitor-build/.config")
+        );
+        assert!(!busy[1].args.iter().any(|a| a == "--modules"));
     }
 
     #[test]
