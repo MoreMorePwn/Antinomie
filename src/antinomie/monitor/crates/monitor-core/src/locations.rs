@@ -413,6 +413,7 @@ mod tests {
                 state: RunState::Finalized,
                 recording_error: None,
                 execution: None,
+                analysis: None,
             };
             storage::atomic_json(&directory.join("run.json"), &run).unwrap();
         }

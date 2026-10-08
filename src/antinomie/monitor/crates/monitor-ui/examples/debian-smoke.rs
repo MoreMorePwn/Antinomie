@@ -47,6 +47,7 @@ impl Harness {
                         .insert(id, if success { Ok(message) } else { Err(message) });
                 }
                 Notification::TerminalScreen { .. } => {}
+                Notification::AnalysisUpdated { .. } => {}
             }
         }
         Ok(())

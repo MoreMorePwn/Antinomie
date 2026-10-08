@@ -339,6 +339,8 @@ pub struct ExecRequest {
     pub env: Vec<String>,
     pub uid: u32,
     pub gid: u32,
+    #[serde(default)]
+    pub analysis: crate::analysis::AnalysisSelection,
 }
 
 /// Identity is persistent and boot-scoped; PID is descriptive, never an owner key.
@@ -357,6 +359,8 @@ pub struct RunSummary {
     pub recording_error: Option<String>,
     #[serde(default)]
     pub execution: Option<RunExecution>,
+    #[serde(default)]
+    pub analysis: Option<crate::analysis::AnalysisReport>,
 }
 
 /// Authoritative boot-scoped guest status, independent of archive/terminal state.
@@ -579,6 +583,7 @@ impl Default for ExecRequest {
             ],
             uid: 1000,
             gid: 1000,
+            analysis: crate::analysis::AnalysisSelection::default(),
         }
     }
 }
@@ -643,6 +648,15 @@ pub enum Command {
         executable: bool,
     },
     Execute(ExecRequest),
+    AnalyzeOnly {
+        path: String,
+        uid: u32,
+        gid: u32,
+        analysis: crate::analysis::AnalysisSelection,
+    },
+    CancelAnalysis {
+        analysis_id: String,
+    },
     TerminalInput {
         run_id: String,
         data: Vec<u8>,
@@ -722,6 +736,7 @@ pub struct Snapshot {
     pub health: Health,
     pub events: Vec<EventSummary>,
     pub runs: Vec<RunSummary>,
+    pub analysis_reports: Vec<crate::analysis::AnalysisReport>,
     pub capture_dir: Option<PathBuf>,
     pub serial_log: Option<PathBuf>,
     /// The running guest kernel, once it has answered the INFO probe.
@@ -774,6 +789,10 @@ pub enum Notification {
         message: String,
     },
     RunStarted(RunSummary),
+    AnalysisUpdated {
+        run_id: Option<String>,
+        report: crate::analysis::AnalysisReport,
+    },
     Terminal {
         run_id: String,
         sequence: u64,

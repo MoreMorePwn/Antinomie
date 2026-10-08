@@ -1,0 +1,773 @@
+From eacd49af198b7bf64d117490050b39ab5616c961 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Thu, 8 Oct 2026 17:41:41 +0700
+Subject: [PATCH] antinomie: capture bounded initial executable specimens for
+ static analysis
+
+---
+ fs/exec.c                         |   1 +
+ include/linux/antinomie_monitor.h |   3 +
+ kernel/antinomie/Makefile         |   1 +
+ kernel/antinomie/control.c        |  45 ++-
+ kernel/antinomie/control_wire.h   |  24 +-
+ kernel/antinomie/specimen.c       | 488 ++++++++++++++++++++++++++++++
+ kernel/antinomie/specimen.h       |  17 ++
+ 7 files changed, 573 insertions(+), 6 deletions(-)
+ create mode 100644 kernel/antinomie/specimen.c
+ create mode 100644 kernel/antinomie/specimen.h
+
+diff --git a/fs/exec.c b/fs/exec.c
+index 173e830c8..a9de6fc6e 100644
+--- a/fs/exec.c
++++ b/fs/exec.c
+@@ -1879,6 +1879,7 @@ static int bprm_execve(struct linux_binprm *bprm)
+ 	if (retval)
+ 		goto out;
+ 
++	ant_monitor_specimen_exec(bprm->file);
+ 	retval = exec_binprm(bprm);
+ 	if (retval < 0)
+ 		goto out;
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+index d3d3b14d3..3fb92c984 100644
+--- a/include/linux/antinomie_monitor.h
++++ b/include/linux/antinomie_monitor.h
+@@ -7,6 +7,7 @@ struct pt_regs;
+ struct ant_task;
+ struct ant_run;
+ struct ant_async;
++struct file;
+ struct iov_iter;
+ struct mm_struct;
+ #define ANT_ASYNC_IO_URING 1
+@@ -19,6 +20,7 @@ void ant_monitor_enter(struct pt_regs *regs, long nr);
+ void ant_monitor_exit(struct pt_regs *regs);
+ void ant_monitor_fork(struct task_struct *child);
+ void ant_monitor_exec(void);
++void ant_monitor_specimen_exec(struct file *file);
+ void ant_monitor_task_exit(bool group_dead);
+ void ant_monitor_release(struct task_struct *task);
+ int ant_monitor_launch(const char *path, char **argv, char **envp);
+@@ -67,6 +69,7 @@ static inline void ant_monitor_enter(struct pt_regs *regs, long nr) {}
+ static inline void ant_monitor_exit(struct pt_regs *regs) {}
+ static inline void ant_monitor_fork(struct task_struct *child) {}
+ static inline void ant_monitor_exec(void) {}
++static inline void ant_monitor_specimen_exec(struct file *file) {}
+ static inline void ant_monitor_task_exit(bool group_dead) {}
+ static inline void ant_monitor_release(struct task_struct *task) {}
+ static inline struct ant_async *ant_monitor_async_begin(u8 system, u32 opcode,
+diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
+index 75c6b9b07..46f532ff8 100644
+--- a/kernel/antinomie/Makefile
++++ b/kernel/antinomie/Makefile
+@@ -1,2 +1,3 @@
+ obj-y += bootstrap.o guest.o recorder.o control.o run.o async.o native_capture.o
+ obj-y += async_capture.o
++obj-y += specimen.o
+diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
+index 96f92c448..99d194c2e 100644
+--- a/kernel/antinomie/control.c
++++ b/kernel/antinomie/control.c
+@@ -22,6 +22,7 @@
+ #include <linux/unaligned.h>
+ #include <linux/workqueue.h>
+ #include "control_wire.h"
++#include "specimen.h"
+ 
+ #define ANT_SESSION_MAX 64
+ 
+@@ -39,6 +40,7 @@ struct ant_launch {
+ 	char *path, *cwd, **argv, **envp;
+ 	kuid_t uid;
+ 	kgid_t gid;
++	struct ant_specimen *specimen;
+ };
+ 
+ static LIST_HEAD(sessions);
+@@ -150,6 +152,7 @@ static void free_launch(struct ant_launch *launch)
+ 
+ static void launch_cleanup(struct subprocess_info *info)
+ {
++	ant_specimen_disarm(((struct ant_launch *)info->data)->specimen);
+ 	free_launch(info->data);
+ }
+ 
+@@ -225,6 +228,7 @@ static int launch_init(struct subprocess_info *info, struct cred *cred)
+ 	session->pid = task_pid_nr(current);
+ 	session->task_cookie = current->ant_cookie;
+ 	session->pgrp = get_task_pid(current, PIDTYPE_PGID);
++	ant_specimen_arm(launch->specimen);
+ 	return 0;
+ }
+ 
+@@ -233,11 +237,15 @@ static int execute(const u8 *args, size_t args_len, void *reply, size_t *reply_l
+ 	struct ant_launch *launch;
+ 	struct ant_session *session;
+ 	struct subprocess_info *info;
+-	u32 argc, envc;
++	struct ant_specimen *specimen = NULL;
++	u32 argc, envc, flags;
+ 	size_t offset = 32;
+ 	int error;
+ 
+-	if (args_len < offset || get_unaligned_le32(args + 4))
++	if (args_len < offset)
++		return -EINVAL;
++	flags = get_unaligned_le32(args + 4);
++	if (flags & ~ANTC_EXEC_SPECIMEN)
+ 		return -EINVAL;
+ 	argc = get_unaligned_le32(args + 16);
+ 	envc = get_unaligned_le32(args + 20);
+@@ -272,6 +280,16 @@ static int execute(const u8 *args, size_t args_len, void *reply, size_t *reply_l
+ 	error = vector_arg(args, args_len, &offset, envc, &launch->envp);
+ 	if (error)
+ 		goto fail;
++	if (flags & ANTC_EXEC_SPECIMEN) {
++		if (args_len - offset != 8) {
++			error = -EINVAL;
++			goto fail;
++		}
++		specimen = ant_specimen_create(get_unaligned_le32(args + offset),
++					       get_unaligned_le32(args + offset + 4));
++		launch->specimen = specimen;
++		offset += 8;
++	}
+ 	if (offset != args_len) {
+ 		error = -EINVAL;
+ 		goto fail;
+@@ -292,6 +310,7 @@ static int execute(const u8 *args, size_t args_len, void *reply, size_t *reply_l
+ 	error = call_usermodehelper_exec(info, UMH_WAIT_EXEC);
+ 	/* UMH owns and has freed launch regardless of success. */
+ 	if (error) {
++		ant_specimen_finish(specimen, false);
+ 		free_session(session);
+ 		return error;
+ 	}
+@@ -302,8 +321,14 @@ static int execute(const u8 *args, size_t args_len, void *reply, size_t *reply_l
+ 	put_unaligned_le32(session->pid, reply + 16);
+ 	put_unaligned_le32(0, reply + 20);
+ 	*reply_len = 24;
++	if (flags & ANTC_EXEC_SPECIMEN) {
++		ant_specimen_reply(specimen, reply + 24);
++		*reply_len = 48;
++	}
++	ant_specimen_finish(specimen, true);
+ 	return 0;
+ fail:
++	ant_specimen_finish(specimen, false);
+ 	free_session(session);
+ 	free_launch(launch);
+ 	return error;
+@@ -501,7 +526,8 @@ static int command(const void *data, size_t args_len, void *reply,
+ 	if (args_len < ANTC_HEADER_SIZE || get_unaligned_le16(args) != ANTC_VERSION ||
+ 	    get_unaligned_le16(args + 2) != ANTC_HEADER_SIZE)
+ 		return opcode == ANTC_RUN_STATUS ? -EINVAL : -EPROTO;
+-	if (opcode != ANTC_UPLOAD_BEGIN && get_unaligned_le32(args + 4))
++	if (opcode != ANTC_UPLOAD_BEGIN && opcode != ANTC_EXEC &&
++	    get_unaligned_le32(args + 4))
+ 		return -EINVAL;
+ 	switch (opcode) {
+ 	case ANTC_UPLOAD_BEGIN:
+@@ -509,7 +535,17 @@ static int command(const void *data, size_t args_len, void *reply,
+ 	case ANTC_UPLOAD_CHUNK: case ANTC_UPLOAD_COMMIT: case ANTC_UPLOAD_ABORT:
+ 		return upload_command(opcode, args, args_len, reply, reply_len);
+ 	case ANTC_EXEC:
++		if (capacity < (get_unaligned_le32(args + 4) ? 48 : 24))
++			return -EMSGSIZE;
+ 		return execute(args, args_len, reply, reply_len);
++	case ANTC_ACQUIRE:
++		if (capacity < 24)
++			return -EMSGSIZE;
++		return ant_specimen_acquire(args, args_len, reply, reply_len);
++	case ANTC_SPECIMEN_READ:
++		return ant_specimen_read(args, args_len, reply, capacity, reply_len);
++	case ANTC_SPECIMEN_RELEASE:
++		return ant_specimen_release(args, args_len);
+ 	case ANTC_TERMINAL_INPUT: case ANTC_TERMINAL_READ:
+ 	case ANTC_TERMINAL_RESIZE: case ANTC_SIGNAL:
+ 		return terminal_command(opcode, args, args_len, reply, capacity, reply_len);
+@@ -564,7 +600,8 @@ static int __init ant_control_init(void)
+ 		ANTC_UPLOAD_CHUNK, ANTC_UPLOAD_COMMIT, ANTC_UPLOAD_ABORT, ANTC_EXEC,
+ 		ANTC_TERMINAL_INPUT, ANTC_TERMINAL_READ, ANTC_TERMINAL_RESIZE,
+ 		ANTC_SIGNAL, ANTC_STOP_RUN, ANTC_RUN_STATUS, ANTC_STATS,
+-		ANTC_SHUTDOWN };
++		ANTC_SHUTDOWN, ANTC_ACQUIRE, ANTC_SPECIMEN_READ,
++		ANTC_SPECIMEN_RELEASE };
+ 	int i, error;
+ 
+ 	for (i = 0; i < ARRAY_SIZE(opcodes); i++) {
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index d7c62aff8..dfb3b6cea 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -11,7 +11,7 @@
+  */
+ #define ANTC_VERSION 1
+ /* Contract revision of the guest's observable behaviour (native-schema-slices). */
+-#define ANTC_REVISION 9
++#define ANTC_REVISION 10
+ #define ANTC_HEADER_SIZE 8
+ #define ANTC_UPLOAD_BEGIN 0x1001
+ #define ANTC_UPLOAD_CHUNK 0x1002
+@@ -34,6 +34,10 @@
+ #define ANTC_INFO 0x1021
+ #define ANTC_INFO_SIZE 160
+ #define ANTC_SHUTDOWN 0x1030
++#define ANTC_ACQUIRE 0x1040
++#define ANTC_SPECIMEN_READ 0x1041
++#define ANTC_SPECIMEN_RELEASE 0x1042
++#define ANTC_EXEC_SPECIMEN 1
+ #define ANTC_UPLOAD_OVERWRITE 1
+ #define ANTC_UPLOAD_EXECUTABLE 2
+ 
+@@ -47,13 +51,29 @@
+  * COMMIT verifies total, fsyncs and closes; ABORT closes (partial destination
+  * remains, visibly incomplete). No implicit execution.
+  *
+- * EXEC: header flags=0, u32 uid at 8, u32 gid at 12, u32 argc at 16,
++ * EXEC: header flags=0 or EXEC_SPECIMEN, u32 uid at 8, u32 gid at 12, u32 argc at 16,
+  * u32 envc at 20, u32 path_len at 24, u32 cwd_len at 28; path then cwd
+  * at 32, followed by argc then envc entries, each u32 byte_len + bytes.
+  * argc >= 1, explicit argv[0], absolute executable and cwd, no interior NUL.
+  * Reply: u64 session_id, u64 task_cookie, u32 pid, u32 reserved=0 (24 bytes).
+  * Each launch owns a Unix98 PTY. Target is spawned directly by kernel
+  * usermodehelper_exec; no userspace control/helper process.
++ * EXEC_SPECIMEN appends u32 max_size, u32 timeout_ms after argv/env.
++ * Its reply appends the 24-byte acquisition reply to the normal 24 bytes.
++ * Acquisition failure never changes the execution result.
++ *
++ * ACQUIRE: header flags=0, uid at 8, gid at 12, u32 path_len at 16,
++ * reserved=0 at 20, absolute path at 24, then u32 max_size, timeout_ms.
++ * Acquisition reply: u64 id, u64 size, i32 status, u32 reserved=0.
++ * Ready status=0 has nonzero id; unavailable negative errno has id/size=0.
++ * max_size is 1..64MiB; timeout_ms is 1..5000. Initial exec captures the
++ * opened bprm file; scripts do not prove what an interpreter later reopens.
++ * SPECIMEN_READ: header flags=0, u64 id at 8, u64 offset at 16,
++ * u32 capacity at 24 (1..16328), u32 reserved=0 at 28. Reply: u64 offset,
++ * u64 total_len, u32 count, u32 reserved=0, immutable data at 24.
++ * SPECIMEN_RELEASE: header flags=0, u64 id at 8; empty reply.
++ * Unknown/stale IDs rejected. Ready handles expire after 180s idle.
++ * One active copy, at most four handles, 64MiB global memory reservation.
+  *
+  * INPUT: header, u64 session_id at 8, bytes at 16.
+  * Reply: u64 bytes_written (partial writes possible).
+diff --git a/kernel/antinomie/specimen.c b/kernel/antinomie/specimen.c
+new file mode 100644
+index 000000000..282c633fc
+--- /dev/null
++++ b/kernel/antinomie/specimen.c
+@@ -0,0 +1,488 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#include <linux/antinomie_monitor.h>
++#include <linux/completion.h>
++#include <linux/cred.h>
++#include <linux/file.h>
++#include <linux/fs.h>
++#include <linux/jiffies.h>
++#include <linux/magic.h>
++#include <linux/mutex.h>
++#include <linux/namei.h>
++#include <linux/refcount.h>
++#include <linux/sched.h>
++#include <linux/slab.h>
++#include <linux/unaligned.h>
++#include <linux/vmalloc.h>
++#include <linux/workqueue.h>
++#include "specimen.h"
++
++#define ANT_SPECIMEN_MAX (64U * 1024 * 1024)
++#define ANT_SPECIMEN_HANDLES 4
++#define ANT_SPECIMEN_IDLE (180 * HZ)
++
++struct ant_specimen {
++	struct list_head node;
++	struct work_struct work;
++	struct completion done;
++	refcount_t refs;
++	struct file *file;
++	const struct cred *cred;
++	char *path;
++	void *data;
++	u64 id;
++	size_t len, reserved;
++	u32 max_size, timeout_ms;
++	unsigned long touched, deadline;
++	int status;
++	bool canceled, ready, denied, started;
++};
++
++/* Protects publication, timeout, exclusion ownership and global reservations.
++ * No file I/O, allocation or final reference release occurs under this mutex.
++ */
++static DEFINE_MUTEX(specimen_lock);
++static LIST_HEAD(ready_specimens);
++static u64 next_id;
++static size_t reserved_size;
++static unsigned int handle_count;
++static bool copying;
++static struct task_struct *armed_task;
++static struct ant_specimen *armed_specimen;
++
++static void specimen_put(struct ant_specimen *specimen)
++{
++	if (!refcount_dec_and_test(&specimen->refs))
++		return;
++	mutex_lock(&specimen_lock);
++	reserved_size -= specimen->reserved;
++	handle_count--;
++	mutex_unlock(&specimen_lock);
++	vfree(specimen->data);
++	put_cred(specimen->cred);
++	kfree(specimen->path);
++	kfree(specimen);
++}
++
++static void expire_specimens(struct work_struct *work);
++static DECLARE_DELAYED_WORK(expiry_work, expire_specimens);
++
++static void expire_specimens(struct work_struct *work)
++{
++	struct ant_specimen *specimen, *next;
++	LIST_HEAD(expired);
++	bool remaining;
++
++	mutex_lock(&specimen_lock);
++	list_for_each_entry_safe(specimen, next, &ready_specimens, node) {
++		if (time_after_eq(jiffies, specimen->touched + ANT_SPECIMEN_IDLE)) {
++			specimen->ready = false;
++			list_move_tail(&specimen->node, &expired);
++		}
++	}
++	remaining = !list_empty(&ready_specimens);
++	mutex_unlock(&specimen_lock);
++	list_for_each_entry_safe(specimen, next, &expired, node) {
++		list_del_init(&specimen->node);
++		specimen_put(specimen);
++	}
++	if (remaining)
++		schedule_delayed_work(&expiry_work, 30 * HZ);
++}
++
++static bool specimen_canceled(struct ant_specimen *specimen)
++{
++	bool canceled;
++
++	mutex_lock(&specimen_lock);
++	canceled = specimen->canceled;
++	mutex_unlock(&specimen_lock);
++	return canceled;
++}
++
++static void specimen_copy(struct work_struct *work)
++{
++	struct ant_specimen *specimen = container_of(work, struct ant_specimen, work);
++	const struct cred *old_cred = override_creds(specimen->cred);
++	struct file *file = specimen->file;
++	loff_t pos = 0, len;
++	ssize_t count;
++	int status = 0;
++	bool published = false;
++
++	if (specimen_canceled(specimen)) {
++		status = -ETIMEDOUT;
++		goto out;
++	}
++	if (!file) {
++		file = filp_open(specimen->path, O_RDONLY | O_LARGEFILE | O_NONBLOCK, 0);
++		if (IS_ERR(file)) {
++			status = PTR_ERR(file);
++			file = NULL;
++			goto out;
++		}
++	}
++	if (!S_ISREG(file_inode(file)->i_mode) ||
++	    (file->f_inode->i_sb->s_magic != EXT4_SUPER_MAGIC &&
++	     file->f_inode->i_sb->s_magic != TMPFS_MAGIC)) {
++		status = -EOPNOTSUPP;
++		goto out;
++	}
++	status = inode_permission(file_mnt_idmap(file), file_inode(file), MAY_READ);
++	if (status)
++		goto out;
++	/* Initial exec already owns its exclusion. Analyze Only must own one,
++	 * and timeout may release it while a canceled read still owns the file.
++	 */
++	if (specimen->path) {
++		mutex_lock(&specimen_lock);
++		if (specimen->canceled)
++			status = -ETIMEDOUT;
++		else {
++			status = deny_write_access(file);
++			if (!status) {
++				specimen->file = file;
++				specimen->denied = true;
++			}
++		}
++		mutex_unlock(&specimen_lock);
++		if (status)
++			goto out;
++	}
++	len = i_size_read(file_inode(file));
++	if (len < 0 || len > specimen->max_size) {
++		status = -EFBIG;
++		goto out;
++	}
++	mutex_lock(&specimen_lock);
++	if (max_t(size_t, len, 1) > ANT_SPECIMEN_MAX - reserved_size) {
++		mutex_unlock(&specimen_lock);
++		status = -ENOSPC;
++		goto out;
++	}
++	specimen->reserved = max_t(size_t, len, 1);
++	reserved_size += specimen->reserved;
++	mutex_unlock(&specimen_lock);
++	specimen->data = vmalloc(max_t(size_t, len, 1));
++	if (!specimen->data) {
++		status = -ENOMEM;
++		goto out;
++	}
++	while (pos < len) {
++		if (specimen_canceled(specimen)) {
++			status = -ETIMEDOUT;
++			goto out;
++		}
++		count = kernel_read(file, specimen->data + pos,
++				    min_t(loff_t, len - pos, 64 * 1024), &pos);
++		if (count <= 0) {
++			status = count < 0 ? count : -ENODATA;
++			goto out;
++		}
++		cond_resched();
++	}
++	if (i_size_read(file_inode(file)) != len)
++		status = -ESTALE;
++out:
++	revert_creds(old_cred);
++	mutex_lock(&specimen_lock);
++	if (specimen->denied) {
++		allow_write_access(file);
++		specimen->denied = false;
++	}
++	if (time_after_eq(jiffies, specimen->deadline)) {
++		specimen->canceled = true;
++		specimen->status = -ETIMEDOUT;
++	}
++	if (!specimen->canceled) {
++		specimen->status = status;
++		if (!status) {
++			specimen->len = len;
++			specimen->id = ++next_id;
++			specimen->touched = jiffies;
++			specimen->ready = true;
++			refcount_inc(&specimen->refs);
++			list_add_tail(&specimen->node, &ready_specimens);
++			published = true;
++		}
++	}
++	specimen->file = NULL;
++	mutex_unlock(&specimen_lock);
++	if (file)
++		fput(file);
++	mutex_lock(&specimen_lock);
++	copying = false;
++	mutex_unlock(&specimen_lock);
++	if (published)
++		schedule_delayed_work(&expiry_work, 30 * HZ);
++	complete(&specimen->done);
++	specimen_put(specimen);
++}
++
++struct ant_specimen *ant_specimen_create(u32 max_size, u32 timeout_ms)
++{
++	struct ant_specimen *specimen;
++
++	if (!max_size || max_size > ANT_SPECIMEN_MAX || !timeout_ms || timeout_ms > 5000)
++		return ERR_PTR(-EINVAL);
++	specimen = kzalloc(sizeof(*specimen), GFP_KERNEL);
++	if (!specimen)
++		return ERR_PTR(-ENOMEM);
++	mutex_lock(&specimen_lock);
++	if (copying || handle_count >= ANT_SPECIMEN_HANDLES) {
++		mutex_unlock(&specimen_lock);
++		kfree(specimen);
++		return ERR_PTR(-ENOSPC);
++	}
++	copying = true;
++	handle_count++;
++	mutex_unlock(&specimen_lock);
++	specimen->max_size = max_size;
++	specimen->timeout_ms = timeout_ms;
++	specimen->status = -EINPROGRESS;
++	specimen->cred = get_current_cred();
++	refcount_set(&specimen->refs, 1);
++	INIT_LIST_HEAD(&specimen->node);
++	INIT_WORK(&specimen->work, specimen_copy);
++	init_completion(&specimen->done);
++	return specimen;
++}
++
++void ant_specimen_arm(struct ant_specimen *specimen)
++{
++	if (IS_ERR_OR_NULL(specimen))
++		return;
++	/* The control caller keeps the job alive until UMH_WAIT_EXEC returns. */
++	mutex_lock(&specimen_lock);
++	armed_task = current;
++	get_task_struct(current);
++	armed_specimen = specimen;
++	put_cred(specimen->cred);
++	specimen->cred = get_current_cred();
++	mutex_unlock(&specimen_lock);
++}
++
++void ant_specimen_disarm(struct ant_specimen *specimen)
++{
++	struct task_struct *task = NULL;
++
++	if (IS_ERR_OR_NULL(specimen))
++		return;
++	mutex_lock(&specimen_lock);
++	if (armed_specimen == specimen) {
++		task = armed_task;
++		armed_task = NULL;
++		armed_specimen = NULL;
++		copying = false;
++	}
++	mutex_unlock(&specimen_lock);
++	if (task)
++		put_task_struct(task);
++}
++
++static void specimen_wait(struct ant_specimen *specimen)
++{
++	wait_for_completion_timeout(&specimen->done,
++				    msecs_to_jiffies(specimen->timeout_ms));
++	mutex_lock(&specimen_lock);
++	if (specimen->status == -EINPROGRESS) {
++		specimen->canceled = true;
++		specimen->status = -ETIMEDOUT;
++		if (specimen->denied) {
++			allow_write_access(specimen->file);
++			specimen->denied = false;
++		}
++	}
++	mutex_unlock(&specimen_lock);
++}
++
++void ant_monitor_specimen_exec(struct file *file)
++{
++	struct ant_specimen *specimen = NULL;
++	struct task_struct *task = NULL;
++
++	mutex_lock(&specimen_lock);
++	if (current == armed_task) {
++		specimen = armed_specimen;
++		task = armed_task;
++		armed_task = NULL;
++		armed_specimen = NULL;
++		specimen->file = get_file(file);
++		/* UMH committed launch credentials after its init callback. */
++		put_cred(specimen->cred);
++		specimen->cred = get_current_cred();
++		refcount_inc(&specimen->refs);
++		specimen->started = true;
++		specimen->deadline = jiffies + msecs_to_jiffies(specimen->timeout_ms);
++	}
++	mutex_unlock(&specimen_lock);
++	if (!specimen)
++		return;
++	put_task_struct(task);
++	schedule_work(&specimen->work);
++	specimen_wait(specimen);
++}
++
++void ant_specimen_reply(struct ant_specimen *specimen, void *reply)
++{
++	memset(reply, 0, 24);
++	if (IS_ERR(specimen)) {
++		put_unaligned_le32(PTR_ERR(specimen), reply + 16);
++		return;
++	}
++	mutex_lock(&specimen_lock);
++	put_unaligned_le64(specimen->ready ? specimen->id : 0, reply);
++	put_unaligned_le64(specimen->ready ? specimen->len : 0, reply + 8);
++	put_unaligned_le32(specimen->status, reply + 16);
++	mutex_unlock(&specimen_lock);
++}
++
++void ant_specimen_finish(struct ant_specimen *specimen, bool executed)
++{
++	bool removed = false;
++
++	if (IS_ERR_OR_NULL(specimen))
++		return;
++	ant_specimen_disarm(specimen);
++	mutex_lock(&specimen_lock);
++	if (!specimen->started)
++		copying = false;
++	if (!executed && specimen->ready) {
++		list_del_init(&specimen->node);
++		specimen->ready = false;
++		removed = true;
++	}
++	mutex_unlock(&specimen_lock);
++	if (removed)
++		specimen_put(specimen);
++	specimen_put(specimen);
++}
++
++int ant_specimen_acquire(const u8 *args, size_t args_len, void *reply,
++			 size_t *reply_len)
++{
++	struct ant_specimen *specimen;
++	struct cred *cred;
++	struct group_info *groups;
++	u32 path_len;
++	int status;
++
++	if (args_len < 32 || get_unaligned_le32(args + 20))
++		return -EINVAL;
++	path_len = get_unaligned_le32(args + 16);
++	if (!path_len || path_len > PATH_MAX || path_len != args_len - 32 ||
++	    args[24] != '/' || memchr(args + 24, 0, path_len))
++		return -EINVAL;
++	specimen = ant_specimen_create(get_unaligned_le32(args + 24 + path_len),
++				       get_unaligned_le32(args + 28 + path_len));
++	if (IS_ERR(specimen))
++		goto reply;
++	specimen->path = kmemdup_nul(args + 24, path_len, GFP_KERNEL);
++	cred = prepare_creds();
++	if (!specimen->path || !cred) {
++		if (cred)
++			abort_creds(cred);
++		status = -ENOMEM;
++		goto fail;
++	}
++	cred->uid = cred->euid = cred->suid = cred->fsuid =
++		make_kuid(&init_user_ns, get_unaligned_le32(args + 8));
++	cred->gid = cred->egid = cred->sgid = cred->fsgid =
++		make_kgid(&init_user_ns, get_unaligned_le32(args + 12));
++	if (!uid_valid(cred->uid) || !gid_valid(cred->gid)) {
++		abort_creds(cred);
++		status = -EINVAL;
++		goto fail;
++	}
++	groups = groups_alloc(0);
++	if (!groups) {
++		abort_creds(cred);
++		status = -ENOMEM;
++		goto fail;
++	}
++	set_groups(cred, groups);
++	put_group_info(groups);
++	if (!uid_eq(cred->uid, GLOBAL_ROOT_UID)) {
++		cred->cap_inheritable = cred->cap_permitted = cred->cap_effective = CAP_EMPTY_SET;
++		cred->cap_ambient = CAP_EMPTY_SET;
++	}
++	put_cred(specimen->cred);
++	specimen->cred = cred;
++	refcount_inc(&specimen->refs);
++	specimen->started = true;
++	specimen->deadline = jiffies + msecs_to_jiffies(specimen->timeout_ms);
++	schedule_work(&specimen->work);
++	specimen_wait(specimen);
++reply:
++	ant_specimen_reply(specimen, reply);
++	*reply_len = 24;
++	ant_specimen_finish(specimen, true);
++	return 0;
++fail:
++	mutex_lock(&specimen_lock);
++	copying = false;
++	mutex_unlock(&specimen_lock);
++	specimen->status = status;
++	goto reply;
++}
++
++int ant_specimen_read(const u8 *args, size_t args_len, void *reply,
++		     size_t capacity, size_t *reply_len)
++{
++	struct ant_specimen *specimen, *found = NULL;
++	u64 offset;
++	u32 count;
++
++	if (args_len != 32 || get_unaligned_le32(args + 28))
++		return -EINVAL;
++	count = get_unaligned_le32(args + 24);
++	if (!count || count > 16328 || capacity < 24 || count > capacity - 24)
++		return -EINVAL;
++	offset = get_unaligned_le64(args + 16);
++	mutex_lock(&specimen_lock);
++	list_for_each_entry(specimen, &ready_specimens, node)
++		if (specimen->id == get_unaligned_le64(args + 8)) {
++			found = specimen;
++			break;
++		}
++	if (!found) {
++		mutex_unlock(&specimen_lock);
++		return -ENOENT;
++	}
++	if (offset > found->len) {
++		mutex_unlock(&specimen_lock);
++		return -EINVAL;
++	}
++	count = min_t(u64, count, found->len - offset);
++	found->touched = jiffies;
++	refcount_inc(&found->refs);
++	mutex_unlock(&specimen_lock);
++	put_unaligned_le64(offset, reply);
++	put_unaligned_le64(found->len, reply + 8);
++	put_unaligned_le32(count, reply + 16);
++	put_unaligned_le32(0, reply + 20);
++	memcpy(reply + 24, found->data + offset, count);
++	*reply_len = 24 + count;
++	specimen_put(found);
++	return 0;
++}
++
++int ant_specimen_release(const u8 *args, size_t args_len)
++{
++	struct ant_specimen *specimen, *found = NULL;
++
++	if (args_len != 16)
++		return -EINVAL;
++	mutex_lock(&specimen_lock);
++	list_for_each_entry(specimen, &ready_specimens, node)
++		if (specimen->id == get_unaligned_le64(args + 8)) {
++			found = specimen;
++			list_del_init(&found->node);
++			found->ready = false;
++			break;
++		}
++	mutex_unlock(&specimen_lock);
++	if (!found)
++		return -ENOENT;
++	specimen_put(found);
++	return 0;
++}
+diff --git a/kernel/antinomie/specimen.h b/kernel/antinomie/specimen.h
+new file mode 100644
+index 000000000..331209884
+--- /dev/null
++++ b/kernel/antinomie/specimen.h
+@@ -0,0 +1,17 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef ANT_SPECIMEN_H
++#define ANT_SPECIMEN_H
++
++struct ant_specimen;
++struct ant_specimen *ant_specimen_create(u32 max_size, u32 timeout_ms);
++void ant_specimen_arm(struct ant_specimen *specimen);
++void ant_specimen_disarm(struct ant_specimen *specimen);
++void ant_specimen_reply(struct ant_specimen *specimen, void *reply);
++void ant_specimen_finish(struct ant_specimen *specimen, bool executed);
++int ant_specimen_acquire(const u8 *args, size_t args_len, void *reply,
++			 size_t *reply_len);
++int ant_specimen_read(const u8 *args, size_t args_len, void *reply,
++		     size_t capacity, size_t *reply_len);
++int ant_specimen_release(const u8 *args, size_t args_len);
++
++#endif
+-- 
+2.53.0
+

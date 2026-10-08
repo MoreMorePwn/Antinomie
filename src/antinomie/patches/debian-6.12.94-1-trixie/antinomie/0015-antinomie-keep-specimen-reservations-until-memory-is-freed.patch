@@ -1,0 +1,36 @@
+Description: antinomie: keep specimen reservations until memory is freed
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-08
+
+
+---
+diff --git a/kernel/antinomie/specimen.c b/kernel/antinomie/specimen.c
+index 282c633fc..469f54a21 100644
+--- a/kernel/antinomie/specimen.c
++++ b/kernel/antinomie/specimen.c
+@@ -51,16 +51,19 @@ static struct ant_specimen *armed_specimen;
+ 
+ static void specimen_put(struct ant_specimen *specimen)
+ {
++	size_t reserved;
++
+ 	if (!refcount_dec_and_test(&specimen->refs))
+ 		return;
+-	mutex_lock(&specimen_lock);
+-	reserved_size -= specimen->reserved;
+-	handle_count--;
+-	mutex_unlock(&specimen_lock);
++	reserved = specimen->reserved;
+ 	vfree(specimen->data);
+ 	put_cred(specimen->cred);
+ 	kfree(specimen->path);
+ 	kfree(specimen);
++	mutex_lock(&specimen_lock);
++	reserved_size -= reserved;
++	handle_count--;
++	mutex_unlock(&specimen_lock);
+ }
+ 
+ static void expire_specimens(struct work_struct *work);

@@ -465,10 +465,16 @@ pub fn list_vm_runs(
                 return Err(RecordingError::Limit("run metadata exceeds limit"));
             }
             let mut run: RunSummary = serde_json::from_reader(file)?;
+            if let Some(report) = &run.analysis {
+                crate::analysis::jobs::validate_report(report).map_err(|_| {
+                    RecordingError::Limit("archived analysis report violates bounds")
+                })?;
+            }
             if run.vm_id != vm_id {
                 continue;
             }
             run.directory = entry.path();
+            reopen_analysis_sidecar(&root, &mut run)?;
             if matches!(run.state, RunState::Running | RunState::StopRequested) {
                 run.state = RunState::Unknown;
             }
@@ -528,7 +534,13 @@ pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
                 return Err(RecordingError::Limit("run metadata exceeds limit"));
             }
             let mut run: RunSummary = serde_json::from_reader(file)?;
+            if let Some(report) = &run.analysis {
+                crate::analysis::jobs::validate_report(report).map_err(|_| {
+                    RecordingError::Limit("archived analysis report violates bounds")
+                })?;
+            }
             run.directory = entry.path();
+            reopen_analysis_sidecar(&data_root, &mut run)?;
             if matches!(run.state, RunState::Running | RunState::StopRequested) {
                 run.state = RunState::Unknown;
             }
@@ -581,6 +593,7 @@ pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
                     .and_then(|e| e.as_str())
                     .map(String::from),
                 execution: None,
+                analysis: None,
             });
             if runs.len() > 1024 {
                 return Err(RecordingError::Limit(
@@ -591,6 +604,38 @@ pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
     }
     runs.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(runs)
+}
+fn reopen_analysis_sidecar(root: &Path, run: &mut RunSummary) -> Result<(), RecordingError> {
+    let Some(embedded) = run.analysis.as_ref() else {
+        return Ok(());
+    };
+    let path = run.directory.join("analysis/report.json");
+    let file = match archive_io::open_regular(root, &path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if file.metadata()?.len() > 128 * 1024 {
+        return Err(RecordingError::Limit("analysis sidecar exceeds bound"));
+    }
+    let report: crate::analysis::AnalysisReport = serde_json::from_reader(file)?;
+    crate::analysis::jobs::validate_report(&report)
+        .map_err(|_| RecordingError::Limit("analysis sidecar violates bounds"))?;
+    if report.id != embedded.id
+        || report.source_path != embedded.source_path
+        || report.sections.len() != embedded.sections.len()
+        || report
+            .sections
+            .iter()
+            .zip(&embedded.sections)
+            .any(|(section, expected)| section.kind != expected.kind)
+    {
+        return Err(RecordingError::Limit(
+            "analysis sidecar identity does not match run",
+        ));
+    }
+    run.analysis = Some(report);
+    Ok(())
 }
 pub fn read_captured_range(
     recording: &Path,
@@ -653,6 +698,56 @@ pub fn read_captured_range(
 mod tests {
     use super::*;
     use std::io::Write;
+    #[test]
+    fn matching_analysis_sidecar_refreshes_reaper_state_and_rejects_identity_change() {
+        use crate::analysis::{AnalysisSelection, AnalysisState};
+        let root =
+            std::env::temp_dir().join(format!("ant-analysis-sidecar-{}", storage::unique_id()));
+        storage::private_dir(&root.join("analysis")).unwrap();
+        let selection = AnalysisSelection::default();
+        let mut report = crate::analysis::jobs::new_report("/tmp/sample", &selection);
+        report.state = AnalysisState::Partial;
+        report.reason = Some("worker cleanup pending".into());
+        let mut run = RunSummary {
+            id: "run".into(),
+            vm_id: "vm".into(),
+            boot_id: "boot".into(),
+            session_id: 1,
+            root_task_cookie: 2,
+            pid: 3,
+            request: ExecRequest::default(),
+            directory: root.clone(),
+            terminal_eof: true,
+            state: RunState::Finalized,
+            recording_error: None,
+            execution: None,
+            analysis: Some(report.clone()),
+        };
+        reopen_analysis_sidecar(&root, &mut run).unwrap();
+        assert_eq!(
+            run.analysis.as_ref().unwrap().reason.as_deref(),
+            Some("worker cleanup pending")
+        );
+        report.reason = Some("worker cleanup completed".into());
+        storage::atomic_bytes(
+            &root.join("analysis/report.json"),
+            &serde_json::to_vec(&report).unwrap(),
+        )
+        .unwrap();
+        reopen_analysis_sidecar(&root, &mut run).unwrap();
+        assert_eq!(
+            run.analysis.as_ref().unwrap().reason.as_deref(),
+            Some("worker cleanup completed")
+        );
+        report.id = "different-job".into();
+        storage::atomic_bytes(
+            &root.join("analysis/report.json"),
+            &serde_json::to_vec(&report).unwrap(),
+        )
+        .unwrap();
+        assert!(reopen_analysis_sidecar(&root, &mut run).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn raw_and_terminal_fifo_members_are_rejected_before_reader_open() {
         let directory =

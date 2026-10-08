@@ -14,7 +14,12 @@ pub(crate) const INFO: u32 = 0x1021;
 pub(crate) const INFO_SIZE: usize = 160;
 pub(crate) const SHUTDOWN: u32 = 0x1030;
 /// Guest contract revision this host implements (`ANTC_REVISION`).
-pub const REVISION: u32 = 9;
+pub const REVISION: u32 = 10;
+pub(crate) const ACQUIRE: u32 = 0x1040;
+pub(crate) const SPECIMEN_READ: u32 = 0x1041;
+pub(crate) const SPECIMEN_RELEASE: u32 = 0x1042;
+pub(crate) const SPECIMEN_MAX_SIZE: u32 = 64 * 1024 * 1024;
+pub(crate) const SPECIMEN_CHUNK_SIZE: u32 = 16328;
 pub(crate) fn header(flags: u32) -> Vec<u8> {
     let mut v = vec![1, 0, 8, 0];
     v.extend(flags.to_le_bytes());
@@ -84,6 +89,87 @@ pub(crate) fn execute(r: &ExecRequest) -> Result<Vec<u8>, String> {
     }
     Ok(v)
 }
+pub(crate) fn execute_analysis(r: &ExecRequest, supported: bool) -> Result<Vec<u8>, String> {
+    r.analysis.validate()?;
+    let mut encoded = execute(r)?;
+    if supported && r.analysis.enabled {
+        encoded[4..8].copy_from_slice(&1u32.to_le_bytes());
+        encoded.extend(SPECIMEN_MAX_SIZE.to_le_bytes());
+        encoded.extend(5000u32.to_le_bytes());
+    }
+    Ok(encoded)
+}
+pub(crate) fn acquire(path: &str, uid: u32, gid: u32) -> Result<Vec<u8>, String> {
+    string(path, true)?;
+    let mut encoded = header(0);
+    encoded.extend(uid.to_le_bytes());
+    encoded.extend(gid.to_le_bytes());
+    encoded.extend(
+        u32::try_from(path.len())
+            .map_err(|_| "path too long")?
+            .to_le_bytes(),
+    );
+    encoded.extend(0u32.to_le_bytes());
+    encoded.extend(path.as_bytes());
+    encoded.extend(SPECIMEN_MAX_SIZE.to_le_bytes());
+    encoded.extend(5000u32.to_le_bytes());
+    Ok(encoded)
+}
+pub(crate) fn acquisition(reply: &[u8]) -> Result<(u64, u64), String> {
+    use crate::parser::{u32_at, u64_at};
+    if reply.len() != 24 || u32_at(reply, 20).map_err(|e| e.to_string())? != 0 {
+        return Err("invalid acquisition reply length or padding".into());
+    }
+    let id = u64_at(reply, 0).map_err(|e| e.to_string())?;
+    let size = u64_at(reply, 8).map_err(|e| e.to_string())?;
+    let status = u32_at(reply, 16).map_err(|e| e.to_string())? as i32;
+    if status < 0 && id == 0 && size == 0 {
+        let errno = status
+            .checked_neg()
+            .filter(|&n| n <= 4095)
+            .ok_or("invalid acquisition errno")?;
+        return Err(format!(
+            "guest acquisition unavailable: {}",
+            std::io::Error::from_raw_os_error(errno)
+        ));
+    }
+    if status != 0 || id == 0 || size > u64::from(SPECIMEN_MAX_SIZE) {
+        return Err("invalid acquisition identity, size or status".into());
+    }
+    Ok((id, size))
+}
+pub(crate) fn specimen_read(id: u64, offset: u64, capacity: u32) -> Vec<u8> {
+    let mut encoded = with_session(id);
+    encoded.extend(offset.to_le_bytes());
+    encoded.extend(capacity.to_le_bytes());
+    encoded.extend(0u32.to_le_bytes());
+    encoded
+}
+pub(crate) fn specimen_chunk(
+    reply: &[u8],
+    offset: u64,
+    total: u64,
+    capacity: u32,
+) -> Result<&[u8], String> {
+    use crate::parser::{u32_at, u64_at};
+    if reply.len() < 24 {
+        return Err("truncated specimen reply".into());
+    }
+    let count = u32_at(reply, 16).map_err(|e| e.to_string())?;
+    if u64_at(reply, 0).map_err(|e| e.to_string())? != offset
+        || u64_at(reply, 8).map_err(|e| e.to_string())? != total
+        || u32_at(reply, 20).map_err(|e| e.to_string())? != 0
+        || count > capacity
+        || count == 0
+        || reply.len() != 24 + count as usize
+        || offset
+            .checked_add(u64::from(count))
+            .is_none_or(|end| end > total)
+    {
+        return Err("invalid or noncontiguous specimen reply".into());
+    }
+    Ok(&reply[24..])
+}
 /// Decode an INFO reply: the kernel's revision, source id and release.
 pub(crate) fn info(reply: &[u8]) -> Result<crate::api::GuestKernel, String> {
     if reply.len() != INFO_SIZE {
@@ -131,6 +217,48 @@ pub(crate) fn info(reply: &[u8]) -> Result<crate::api::GuestKernel, String> {
 mod tests {
     use super::*;
     #[test]
+    fn analysis_wire_preserves_off_and_legacy_execution_and_rejects_bad_replies() {
+        let mut request = ExecRequest::default();
+        assert_eq!(
+            execute_analysis(&request, true).unwrap(),
+            execute(&request).unwrap()
+        );
+        request.analysis.enabled = true;
+        assert_eq!(
+            execute_analysis(&request, false).unwrap(),
+            execute(&request).unwrap()
+        );
+        let extended = execute_analysis(&request, true).unwrap();
+        assert_eq!(&extended[4..8], &1u32.to_le_bytes());
+        assert_eq!(extended.len(), execute(&request).unwrap().len() + 8);
+        let mut ready = Vec::new();
+        ready.extend(4u64.to_le_bytes());
+        ready.extend(3u64.to_le_bytes());
+        ready.extend(0i32.to_le_bytes());
+        ready.extend(0u32.to_le_bytes());
+        assert_eq!(acquisition(&ready).unwrap(), (4, 3));
+        for len in 0..24 {
+            assert!(acquisition(&ready[..len]).is_err());
+        }
+        ready[0..8].fill(0);
+        assert!(acquisition(&ready).is_err());
+        ready[8..16].fill(0);
+        ready[16..20].copy_from_slice(&i32::MIN.to_le_bytes());
+        assert!(acquisition(&ready).is_err());
+        let mut chunk = Vec::new();
+        chunk.extend(0u64.to_le_bytes());
+        chunk.extend(3u64.to_le_bytes());
+        chunk.extend(3u32.to_le_bytes());
+        chunk.extend(0u32.to_le_bytes());
+        chunk.extend(b"abc");
+        assert_eq!(specimen_chunk(&chunk, 0, 3, 3).unwrap(), b"abc");
+        assert!(specimen_chunk(&chunk, 1, 3, 3).is_err());
+        assert!(specimen_chunk(&chunk, 0, 3, 2).is_err());
+        assert!(specimen_chunk(&chunk[..26], 0, 3, 3).is_err());
+        assert_eq!(specimen_read(4, 0, 3).len(), 32);
+        assert_eq!(acquire("/tmp/a", 1000, 1000).unwrap().len(), 38);
+    }
+    #[test]
     fn constants_match_the_shared_control_header() {
         let header = include_str!("../../../protocol/control.h");
         let define = |name: &str| -> u32 {
@@ -150,6 +278,9 @@ mod tests {
             ("ANTC_UPLOAD_COMMIT", UPLOAD_COMMIT),
             ("ANTC_UPLOAD_ABORT", UPLOAD_ABORT),
             ("ANTC_EXEC", EXEC),
+            ("ANTC_ACQUIRE", ACQUIRE),
+            ("ANTC_SPECIMEN_READ", SPECIMEN_READ),
+            ("ANTC_SPECIMEN_RELEASE", SPECIMEN_RELEASE),
             ("ANTC_TERMINAL_INPUT", INPUT),
             ("ANTC_TERMINAL_READ", READ),
             ("ANTC_TERMINAL_RESIZE", RESIZE),

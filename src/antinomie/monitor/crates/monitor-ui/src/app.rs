@@ -127,6 +127,7 @@ pub struct MonitorApp {
     trace_sort: Option<(TraceColumn, bool)>,
     selected_event: Option<InvocationKey>,
     selected_run: Option<String>,
+    selected_analysis: Option<String>,
     archive_selected: bool,
     history_generation: u64,
     run_filter: RunFilter,
@@ -158,6 +159,8 @@ pub struct MonitorApp {
     closing: bool,
     #[cfg(test)]
     submitted: Vec<Command>,
+    #[cfg(test)]
+    launch_action_rects: Option<(egui::Rect, egui::Rect)>,
 }
 
 impl MonitorApp {
@@ -215,6 +218,7 @@ impl MonitorApp {
             trace_sort: None,
             selected_event: None,
             selected_run: None,
+            selected_analysis: None,
             archive_selected: false,
             history_generation: 0,
             run_filter: RunFilter::All,
@@ -249,6 +253,8 @@ impl MonitorApp {
             closing: false,
             #[cfg(test)]
             submitted: Vec::new(),
+            #[cfg(test)]
+            launch_action_rects: None,
         };
         match ArchiveWorker::new() {
             Ok(worker) => {
@@ -402,6 +408,29 @@ impl MonitorApp {
                             self.snapshot.runs.push(run);
                         }
                         sync_runs(&mut self.terminals, &self.snapshot);
+                    }
+                    Some(Notification::AnalysisUpdated { run_id, report }) => {
+                        if let Some(id) = run_id {
+                            for run in self.snapshot.runs.iter_mut().chain(self.history.iter_mut())
+                            {
+                                if run.id == id {
+                                    run.analysis = Some(report.clone());
+                                }
+                            }
+                        } else if let Some(current) = self
+                            .snapshot
+                            .analysis_reports
+                            .iter_mut()
+                            .find(|current| current.id == report.id)
+                        {
+                            *current = report;
+                        } else {
+                            if self.snapshot.analysis_reports.len() >= 8 {
+                                self.snapshot.analysis_reports.remove(0);
+                            }
+                            self.selected_analysis = Some(report.id.clone());
+                            self.snapshot.analysis_reports.push(report);
+                        }
                     }
                     Some(Notification::Terminal {
                         run_id,
@@ -645,6 +674,7 @@ impl MonitorApp {
 
     fn select_run(&mut self, id: Option<String>) {
         self.archive_selected = false;
+        self.selected_analysis = None;
         self.selected_run = id;
         self.selected_event = None;
         self.inspector.clear();
@@ -1217,6 +1247,7 @@ impl MonitorApp {
                     ui.menu_button("View", |ui| {
                         for view in [
                             Panel::Trace,
+                            Panel::StaticAnalysis,
                             Panel::RunHistory,
                             Panel::Details,
                             Panel::Activity,
@@ -1765,60 +1796,65 @@ impl MonitorApp {
 
     fn launch_form(&mut self, ui: &mut egui::Ui) {
         ui.add_enabled_ui(self.running() && self.pending_launch.is_none(), |ui| {
-            egui::Grid::new("launch")
-                .num_columns(2)
-                .spacing([12.0, 6.0])
+            let selection_error = self.exec.analysis.validate().err();
+            let footer = ui.spacing().interact_size.y
+                + 24.0
+                + if selection_error.is_some() {
+                    ui.text_style_height(&egui::TextStyle::Body) + 10.0
+                } else {
+                    0.0
+                };
+            egui::ScrollArea::vertical()
+                .id_salt("run-setup")
+                .max_height((ui.available_height() - footer).max(80.0))
+                .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    ui.label("Executable");
-                    ui.add(egui::TextEdit::singleline(&mut self.exec.path).desired_width(290.0));
-                    ui.end_row();
-                    ui.label("Arguments");
-                    ui.add(
-                        egui::TextEdit::multiline(&mut self.args)
-                            .desired_rows(3)
-                            .desired_width(290.0),
-                    )
-                    .on_hover_text("One argument per line");
-                    ui.end_row();
-                    ui.label("Working directory");
-                    ui.add(egui::TextEdit::singleline(&mut self.exec.cwd).desired_width(290.0));
-                    ui.end_row();
-                    ui.label("Environment");
-                    ui.add(
-                        egui::TextEdit::multiline(&mut self.env)
-                            .desired_rows(3)
-                            .desired_width(290.0),
-                    )
-                    .on_hover_text("One NAME=value entry per line");
-                    ui.end_row();
-                    ui.label("Identity");
-                    ui.horizontal(|ui| {
-                        numeric(ui, "UID", &mut self.exec.uid, 0..=u32::MAX);
-                        numeric(ui, "GID", &mut self.exec.gid, 0..=u32::MAX);
-                    });
-                    ui.end_row();
+                    crate::analysis::launch_fields(
+                        ui,
+                        &mut self.exec,
+                        &mut self.args,
+                        &mut self.env,
+                    );
                 });
             ui.separator();
-            if ui
-                .add_enabled(
-                    !self.exec.path.trim().is_empty(),
-                    egui::Button::new(format!("{} Launch", egui_phosphor::regular::PLAY))
-                        .fill(theme::PRIMARY),
-                )
-                .clicked()
-            {
-                self.exec.args = self.args.lines().map(str::to_owned).collect();
-                self.exec.env = self
-                    .env
-                    .lines()
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_owned)
-                    .collect();
-                self.send(Command::Execute(self.exec.clone()));
-                if self.pending_launch.is_some() {
-                    self.launch_open = false;
-                }
+            if let Some(reason) = selection_error {
+                ui.colored_label(theme::ERROR, reason);
             }
+            ui.horizontal(|ui| {
+                let run = ui.add_enabled(
+                    !self.exec.path.trim().is_empty() && self.exec.analysis.validate().is_ok(),
+                    egui::Button::new(format!("{} Run", egui_phosphor::regular::PLAY))
+                        .fill(theme::PRIMARY),
+                );
+                if run.clicked() {
+                    match crate::analysis::snapshot(&self.exec, &self.args, &self.env) {
+                        Ok(request) => self.send(Command::Execute(request)),
+                        Err(reason) => self.status = reason,
+                    }
+                    if self.pending_launch.is_some() {
+                        self.launch_open = false;
+                    }
+                }
+                let analyze = ui.add_enabled(
+                    self.exec.analysis.enabled
+                        && !self.exec.path.trim().is_empty()
+                        && self.exec.analysis.validate().is_ok(),
+                    egui::Button::new("Analyze Only"),
+                );
+                if analyze.clicked() {
+                    self.send(Command::AnalyzeOnly {
+                        path: self.exec.path.clone(),
+                        uid: self.exec.uid,
+                        gid: self.exec.gid,
+                        analysis: self.exec.analysis.clone(),
+                    });
+                    self.focus_panel = Some(Panel::StaticAnalysis);
+                }
+                #[cfg(test)]
+                {
+                    self.launch_action_rects = Some((run.rect, analyze.rect));
+                }
+            });
         });
     }
 
@@ -2602,18 +2638,16 @@ impl MonitorApp {
         }
         if self.launch_open {
             let mut open = true;
-            egui::Window::new("Launch program")
+            egui::Window::new("Run Program")
                 .open(&mut open)
                 .collapsible(false)
-                .resizable(false)
-                .default_width(500.0)
-                .default_height(0.0)
-                .max_width(540.0)
+                .resizable(true)
+                .default_width(1000.0)
+                .default_height(540.0)
+                .max_width((ctx.screen_rect().width() - 50.0).max(300.0))
                 .max_height((ctx.screen_rect().height() - 90.0).max(200.0))
                 .show(ctx, |ui| {
-                    scroll_dialog(ui, ctx, |ui| {
-                        self.launch_form(ui);
-                    });
+                    self.launch_form(ui);
                 });
             self.launch_open &= open;
         }
@@ -2850,6 +2884,49 @@ impl MonitorApp {
         ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
         match panel {
             Panel::Trace => self.events(ui),
+            Panel::StaticAnalysis => {
+                egui::ComboBox::from_id_salt("analysis-source")
+                    .selected_text(self.selected_analysis.as_deref().unwrap_or("Selected run"))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.selected_analysis, None, "Selected run");
+                        for report in &self.snapshot.analysis_reports {
+                            ui.selectable_value(
+                                &mut self.selected_analysis,
+                                Some(report.id.clone()),
+                                format!("{} ({:?})", report.source_path, report.state),
+                            );
+                        }
+                    });
+                if let Some(id) = self.selected_analysis.as_deref() {
+                    let report = self
+                        .snapshot
+                        .analysis_reports
+                        .iter()
+                        .find(|report| report.id == id);
+                    let cancel = crate::analysis::report(ui, report);
+                    if let Some(analysis_id) = cancel {
+                        self.send(Command::CancelAnalysis { analysis_id });
+                    }
+                    return;
+                }
+                if let Some(id) = self.selected_run.as_deref() {
+                    let run = if self.archive_selected {
+                        self.history
+                            .iter()
+                            .find(|run| run.id == id)
+                            .or_else(|| self.run(id))
+                    } else {
+                        self.run(id)
+                    };
+                    let cancel =
+                        crate::analysis::report(ui, run.and_then(|run| run.analysis.as_ref()));
+                    if let Some(analysis_id) = cancel {
+                        self.send(Command::CancelAnalysis { analysis_id });
+                    }
+                } else {
+                    ui.label("Select a run to view its static analysis report.");
+                }
+            }
             Panel::RunHistory => self.run_history(ui),
             Panel::Details => self.details(ui),
             Panel::Activity => self.activity(ui),
@@ -3520,6 +3597,7 @@ mod tests {
             trace_sort: None,
             selected_event: None,
             selected_run: None,
+            selected_analysis: None,
             archive_selected: false,
             history_generation: 0,
             run_filter: RunFilter::All,
@@ -3550,6 +3628,7 @@ mod tests {
             smoke: None,
             closing: false,
             submitted: Vec::new(),
+            launch_action_rects: None,
         }
     }
 
@@ -3588,6 +3667,7 @@ mod tests {
             state: RunState::Running,
             recording_error: None,
             execution: None,
+            analysis: None,
         }
     }
 
@@ -5788,5 +5868,248 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn analysis_setup_fixture() -> MonitorApp {
+        let mut app = app();
+        app.snapshot.state = VmState::Running;
+        app.selected = Some("vm".into());
+        app.snapshot.active_vm = app.selected.clone();
+        let mut vm = VmConfig::default();
+        vm.id = "vm".into();
+        vm.name = "Analysis QA".into();
+        app.snapshot.vms.push(vm);
+        app.launch_open = true;
+        app.exec.path = "/usr/bin/sample".into();
+        app.exec.analysis.enabled = true;
+        app.exec.analysis.checks = vec![
+            antinomie_monitor_core::AnalysisKind::Metadata,
+            antinomie_monitor_core::AnalysisKind::Structures,
+        ];
+        app
+    }
+
+    #[test]
+    fn run_setup_keeps_final_actions_visible_and_dispatches_a_selection_snapshot() {
+        for (size, font) in [
+            (egui::vec2(1280.0, 820.0), 18.0),
+            (egui::vec2(1280.0, 820.0), 24.0),
+            (egui::vec2(800.0, 600.0), 24.0),
+        ] {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            theme::text_size(&ctx, font);
+            let mut app = analysis_setup_fixture();
+            app.settings.font_size = font;
+            for _ in 0..3 {
+                let _ = render(&mut app, &ctx, size);
+            }
+            let output = render(&mut app, &ctx, size);
+            let visible = texts(&output);
+            let action = |suffix: &str| {
+                visible
+                    .iter()
+                    .find(|(text, _)| text.ends_with(suffix))
+                    .unwrap_or_else(|| panic!("missing {suffix} at {size:?}/{font}: {visible:?}"))
+                    .1
+            };
+            let run_rect = action(" Run");
+            assert!(run_rect.bottom() < size.y);
+            let _ = action("Analyze Only");
+            let (run_rect, analyze_rect) = app.launch_action_rects.unwrap();
+            assert!((analyze_rect.center().y - run_rect.center().y).abs() < 1.0);
+            assert!(run_rect.right() < analyze_rect.left());
+            for pressed in [true, false] {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        events: vec![
+                            egui::Event::PointerMoved(run_rect.center()),
+                            egui::Event::PointerButton {
+                                pos: run_rect.center(),
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                    |ctx| app.draw(ctx),
+                );
+            }
+            assert!(app.submitted.iter().any(|command| matches!(command, Command::Execute(request) if request.analysis.enabled && request.analysis.checks.len() == 2)), "Run action did not submit at {size:?}/{font}");
+            app.exec.analysis.checks.clear();
+            assert!(app.submitted.iter().any(|command| matches!(command, Command::Execute(request) if request.analysis.checks.len() == 2)));
+        }
+    }
+
+    #[test]
+    fn static_analysis_uses_selected_archive_report_without_submitting_work() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut app = app();
+        let mut live = run("same-run");
+        let report = |id: &str| antinomie_monitor_core::AnalysisReport {
+            id: id.into(),
+            state: antinomie_monitor_core::AnalysisState::Unavailable,
+            source_path: "/sample".into(),
+            specimen_sha256: None,
+            specimen_len: None,
+            reason: Some("Acquisition unavailable in fixture".into()),
+            sections: Vec::new(),
+        };
+        live.analysis = Some(report("live-report"));
+        app.snapshot.runs.push(live.clone());
+        live.analysis = Some(report("archive-report"));
+        app.history.push(live);
+        app.selected_run = Some("same-run".into());
+        app.archive_selected = true;
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default()
+                .show(ctx, |ui| app.show_panel(ui, &Panel::StaticAnalysis));
+        });
+        let visible = texts(&output);
+        assert!(visible
+            .iter()
+            .any(|(text, _)| text == "Analysis ID: archive-report"));
+        assert!(!visible
+            .iter()
+            .any(|(text, _)| text == "Analysis ID: live-report"));
+        assert!(app.submitted.is_empty());
+    }
+
+    #[test]
+    fn analyze_only_and_cancel_do_not_launch_or_stop_a_program() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 820.0);
+        let mut app = analysis_setup_fixture();
+        for _ in 0..3 {
+            let _ = render(&mut app, &ctx, size);
+        }
+        let output = render(&mut app, &ctx, size);
+        let target = texts(&output)
+            .into_iter()
+            .find(|(text, _)| text == "Analyze Only")
+            .unwrap()
+            .1
+            .center();
+        for pressed in [true, false] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events: vec![
+                        egui::Event::PointerMoved(target),
+                        egui::Event::PointerButton {
+                            pos: target,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ctx| app.draw(ctx),
+            );
+        }
+        assert!(app.submitted.iter().any(|command| matches!(command, Command::AnalyzeOnly { analysis, path, .. } if analysis.enabled && path == "/usr/bin/sample")));
+        assert!(app.pending_launch.is_none() && app.terminals.is_empty());
+        app.launch_open = false;
+        app.snapshot
+            .analysis_reports
+            .push(antinomie_monitor_core::AnalysisReport {
+                id: "standalone-job".into(),
+                state: antinomie_monitor_core::AnalysisState::Running,
+                source_path: "/sample".into(),
+                specimen_sha256: None,
+                specimen_len: None,
+                reason: None,
+                sections: Vec::new(),
+            });
+        app.selected_analysis = Some("standalone-job".into());
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default()
+                .show(ctx, |ui| app.show_panel(ui, &Panel::StaticAnalysis));
+        });
+        let target = texts(&output)
+            .into_iter()
+            .find(|(text, _)| text == "Cancel Analysis")
+            .unwrap()
+            .1
+            .center();
+        for pressed in [true, false] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![
+                        egui::Event::PointerMoved(target),
+                        egui::Event::PointerButton {
+                            pos: target,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default()
+                        .show(ctx, |ui| app.show_panel(ui, &Panel::StaticAnalysis));
+                },
+            );
+        }
+        assert!(app.submitted.iter().any(|command| matches!(command, Command::CancelAnalysis { analysis_id } if analysis_id == "standalone-job")));
+        assert!(!app
+            .submitted
+            .iter()
+            .any(|command| matches!(command, Command::Execute(_) | Command::StopRun { .. })));
+        assert!(app.pending_launch.is_none() && app.terminals.is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires X11 native rendering; exits after 20 seconds"]
+    fn native_analysis_setup_fixture() {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        struct QaApp {
+            app: MonitorApp,
+            deadline: Instant,
+        }
+        impl eframe::App for QaApp {
+            fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+                if Instant::now() >= self.deadline {
+                    self.app.snapshot.active_vm = None;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                eframe::App::update(&mut self.app, ctx, frame);
+            }
+        }
+        let small = std::env::var_os("ANTINOMIE_ANALYSIS_QA_SMALL").is_some();
+        let size = if small {
+            [800.0, 600.0]
+        } else {
+            [1280.0, 820.0]
+        };
+        eframe::run_native(
+            "Antinomie Run Setup QA",
+            eframe::NativeOptions {
+                viewport: egui::ViewportBuilder::default().with_inner_size(size),
+                persist_window: false,
+                event_loop_builder: Some(Box::new(|builder| {
+                    builder.with_x11();
+                    builder.with_any_thread(true);
+                })),
+                ..Default::default()
+            },
+            Box::new(move |cc| {
+                theme::install(&cc.egui_ctx);
+                let mut app = analysis_setup_fixture();
+                app.settings.font_size = if small { 24.0 } else { 18.0 };
+                theme::text_size(&cc.egui_ctx, app.settings.font_size);
+                Ok(Box::new(QaApp {
+                    app,
+                    deadline: Instant::now() + Duration::from_secs(20),
+                }))
+            }),
+        )
+        .unwrap();
     }
 }

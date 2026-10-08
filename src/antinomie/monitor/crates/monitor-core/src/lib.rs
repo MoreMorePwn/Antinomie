@@ -1,3 +1,4 @@
+pub mod analysis;
 pub mod api;
 mod archive_io;
 mod backend;
@@ -15,5 +16,6 @@ pub mod storage;
 pub mod syscalls;
 mod transport;
 mod vm;
+pub use analysis::*;
 pub use api::*;
 pub use backend::Backend;

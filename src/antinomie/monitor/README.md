@@ -66,6 +66,43 @@ do not resume using both roots as independent copies of the same VM.
 The build directory can be removed without breaking those installed bases.
 Do not remove application data to clean build products.
 
+## Opt-in static analysis
+
+**Run Program** opens the launch setup. Launch fields are on the left and an
+expandable **Static Analysis** checkbox tree is on the right: **Triage** and
+**Deep analysis** group individual checks. On smaller windows the sections
+stack and scroll. **Run** and **Analyze Only** share the footer, with Run first.
+Analysis is off by default; enabling it requires at least one selected check.
+Analyze Only acquires a guest file without launching it or opening a terminal.
+
+Analysis covers only the initial guest executable, not descendants, later execs
+or optional dependencies. The revision-10 guest captures the initial exec file
+under the launch credentials. Read permission is required separately from
+execute permission. For scripts, the specimen is the initial script, not a
+guarantee about bytes later reopened by its interpreter. Acquisition waits at
+most five seconds and accepts at most 64 MiB. Failure marks analysis unavailable
+but does not prevent the requested program from executing. Older guests execute
+normally and report analysis unavailable; the host never retries an exec just
+because capture failed.
+
+Expensive analysis runs in a mandatory Bubblewrap-isolated worker, with no
+network, no sample execution and bounded CPU, memory, scratch and report output.
+Install `bubblewrap`, `file`, and `binutils` for the available external adapters.
+Built-in parsing handles ELF, PE and Mach-O metadata/structures, strings and
+entropy; unknown formats retain generic triage. `readelf` and `objdump` provide
+supported ELF hardening checks and optional disassembly. File identification is
+partial evidence, not a definitive compiler/packer verdict. Rule matches,
+capabilities and decompilation currently report **Unavailable**: selecting their
+checkboxes does not install tools or imply an adapter exists.
+
+The dockable **Static Analysis** tab displays selected-run or standalone results.
+Complete specimens, reports and worker logs are saved in the recording directory
+under `analysis/`, or `analyses/<job-id>/` for Analyze Only. They consume recording
+quota and may contain sensitive bytes. Reports are bounded to 128 KiB and mark
+truncated evidence as partial. Archived reports reopen without running analysis.
+Cancel stops the analysis job, not the guest program. Missing tools, isolation
+failure and resource limits remain explicit report states.
+
 ## Debian desktop base
 
 The Debian builder additionally requires `virt-builder`, `guestfish`,

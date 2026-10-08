@@ -18,6 +18,7 @@ pub(crate) struct ProgramRun {
     terminal: vt100::Parser,
     terminal_len: u64,
     screen_len: u64,
+    analysis_metadata_len: u64,
     pub sequence: u64,
     pub boot_bundle_identity: Option<String>,
     pub disk_base_identity: Option<String>,
@@ -41,7 +42,7 @@ impl ProgramRun {
         };
         let journal = open("terminal.journal")?;
         let transcript = open("terminal-transcript.raw")?;
-        let run = Self {
+        let mut run = Self {
             summary,
             capture,
             assembler,
@@ -50,12 +51,14 @@ impl ProgramRun {
             terminal: vt100::Parser::new(24, 80, 0),
             terminal_len: 0,
             screen_len: 0,
+            analysis_metadata_len: 0,
             sequence: 0,
             boot_bundle_identity: None,
             disk_base_identity: None,
             execution_generation: 0,
             terminal_reads_unanswered: 0,
         };
+        run.refresh_analysis_metadata()?;
         run.persist_summary()?;
         Ok(run)
     }
@@ -65,6 +68,32 @@ impl ProgramRun {
             .saturating_add(self.assembler.stored_len())
             .saturating_add(self.terminal_len)
             .saturating_add(self.screen_len)
+            .saturating_add(self.analysis_metadata_len)
+    }
+    /// Count only the new report's contribution to the two existing metadata files.
+    pub fn refresh_analysis_metadata(&mut self) -> Result<(), String> {
+        if self.summary.analysis.is_none() {
+            self.analysis_metadata_len = 0;
+            return Ok(());
+        }
+        let mut run = serde_json::to_value(&self.summary).map_err(|e| e.to_string())?;
+        let mut manifest = serde_json::json!({"run":run.clone()});
+        let reported_len = serde_json::to_vec_pretty(&run)
+            .map_err(|e| e.to_string())?
+            .len()
+            + serde_json::to_vec_pretty(&manifest)
+                .map_err(|e| e.to_string())?
+                .len();
+        run["analysis"] = serde_json::Value::Null;
+        manifest["run"]["analysis"] = serde_json::Value::Null;
+        let baseline_len = serde_json::to_vec_pretty(&run)
+            .map_err(|e| e.to_string())?
+            .len()
+            + serde_json::to_vec_pretty(&manifest)
+                .map_err(|e| e.to_string())?
+                .len();
+        self.analysis_metadata_len = reported_len.saturating_sub(baseline_len) as u64;
+        Ok(())
     }
     /// Saves the summary and manifest on the background writer, so a slow
     /// `fsync` cannot stall telemetry draining while the VM runs. `finalize`
@@ -247,6 +276,57 @@ impl ProgramRun {
 mod tests {
     use super::*;
     #[test]
+    fn embedded_analysis_metadata_counts_both_persisted_copies() {
+        let directory =
+            std::env::temp_dir().join(format!("ant-analysis-metadata-{}", storage::unique_id()));
+        let summary = RunSummary {
+            id: "run".into(),
+            vm_id: "vm".into(),
+            boot_id: "boot".into(),
+            session_id: 1,
+            root_task_cookie: 2,
+            pid: 3,
+            request: ExecRequest::default(),
+            directory: directory.clone(),
+            terminal_eof: false,
+            state: RunState::Running,
+            recording_error: None,
+            execution: None,
+            analysis: None,
+        };
+        let mut run = ProgramRun::new(summary, 1024 * 1024).unwrap();
+        assert_eq!(run.stored_len(), 0);
+        let mut report = crate::analysis::jobs::new_report(
+            "/tmp/sample",
+            &crate::analysis::AnalysisSelection::default(),
+        );
+        crate::analysis::jobs::fail(
+            &mut report,
+            crate::analysis::AnalysisState::Unavailable,
+            "fixture has no acquisition",
+        );
+        run.summary.analysis = Some(report);
+        run.refresh_analysis_metadata().unwrap();
+        run.persist_summary().unwrap();
+        storage::flush_json();
+        let mut increment = 0;
+        for (filename, nested) in [("run.json", false), ("manifest.json", true)] {
+            let mut encoded: serde_json::Value =
+                serde_json::from_reader(File::open(directory.join(filename)).unwrap()).unwrap();
+            let present = serde_json::to_vec_pretty(&encoded).unwrap().len();
+            if nested {
+                encoded["run"]["analysis"] = serde_json::Value::Null;
+            } else {
+                encoded["analysis"] = serde_json::Value::Null;
+            }
+            increment += present - serde_json::to_vec_pretty(&encoded).unwrap().len();
+        }
+        assert_eq!(run.stored_len(), increment as u64);
+        assert!(increment > 0);
+        drop(run);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
     fn eof_and_execution_completion_do_not_stop_recording_or_erase_root_exit() {
         let directory =
             std::env::temp_dir().join(format!("ant-run-state-{}", storage::unique_id()));
@@ -273,6 +353,7 @@ mod tests {
             state: RunState::Running,
             recording_error: None,
             execution: Some(execution),
+            analysis: None,
         };
         let mut run = ProgramRun::new(summary, 65536).unwrap();
         run.eof(65536).unwrap();
@@ -312,6 +393,7 @@ mod tests {
             state: RunState::Running,
             recording_error: None,
             execution: None,
+            analysis: None,
         };
         let mut run = ProgramRun::new(summary, 65536).unwrap();
         run.eof(65536).unwrap();
@@ -346,6 +428,7 @@ mod tests {
             state: RunState::Running,
             recording_error: None,
             execution: None,
+            analysis: None,
         };
         let mut run = ProgramRun::new(summary, 65536).unwrap();
         run.resize(4, 20, 65536).unwrap();

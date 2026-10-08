@@ -25,7 +25,7 @@ VIEW="$REPO/src/antinomie/patches/$ADAPTER/antinomie"
 SERIES="$VIEW/series"
 COREDIR="$REPO/src/antinomie/core/$UPSTREAM_LINE"
 
-[ -d "$CORE/.git" ] || { echo "commit: author repo missing; run scripts/bootstrap.sh first" >&2; exit 1; }
+[ -e "$CORE/.git" ] || { echo "commit: author repo missing; run scripts/bootstrap.sh first" >&2; exit 1; }
 mkdir -p "$VIEW" "$COREDIR"
 
 COMMIT="${1:-HEAD}"

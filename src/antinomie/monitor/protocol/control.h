@@ -11,7 +11,7 @@
  */
 #define ANTC_VERSION 1
 /* Contract revision of the guest's observable behaviour (native-schema-slices). */
-#define ANTC_REVISION 9
+#define ANTC_REVISION 10
 #define ANTC_HEADER_SIZE 8
 #define ANTC_UPLOAD_BEGIN 0x1001
 #define ANTC_UPLOAD_CHUNK 0x1002
@@ -34,6 +34,10 @@
 #define ANTC_INFO 0x1021
 #define ANTC_INFO_SIZE 160
 #define ANTC_SHUTDOWN 0x1030
+#define ANTC_ACQUIRE 0x1040
+#define ANTC_SPECIMEN_READ 0x1041
+#define ANTC_SPECIMEN_RELEASE 0x1042
+#define ANTC_EXEC_SPECIMEN 1
 #define ANTC_UPLOAD_OVERWRITE 1
 #define ANTC_UPLOAD_EXECUTABLE 2
 
@@ -47,13 +51,29 @@
  * COMMIT verifies total, fsyncs and closes; ABORT closes (partial destination
  * remains, visibly incomplete). No implicit execution.
  *
- * EXEC: header flags=0, u32 uid at 8, u32 gid at 12, u32 argc at 16,
+ * EXEC: header flags=0 or EXEC_SPECIMEN, u32 uid at 8, u32 gid at 12, u32 argc at 16,
  * u32 envc at 20, u32 path_len at 24, u32 cwd_len at 28; path then cwd
  * at 32, followed by argc then envc entries, each u32 byte_len + bytes.
  * argc >= 1, explicit argv[0], absolute executable and cwd, no interior NUL.
  * Reply: u64 session_id, u64 task_cookie, u32 pid, u32 reserved=0 (24 bytes).
  * Each launch owns a Unix98 PTY. Target is spawned directly by kernel
  * usermodehelper_exec; no userspace control/helper process.
+ * EXEC_SPECIMEN appends u32 max_size, u32 timeout_ms after argv/env.
+ * Its reply appends the 24-byte acquisition reply to the normal 24 bytes.
+ * Acquisition failure never changes the execution result.
+ *
+ * ACQUIRE: header flags=0, uid at 8, gid at 12, u32 path_len at 16,
+ * reserved=0 at 20, absolute path at 24, then u32 max_size, timeout_ms.
+ * Acquisition reply: u64 id, u64 size, i32 status, u32 reserved=0.
+ * Ready status=0 has nonzero id; unavailable negative errno has id/size=0.
+ * max_size is 1..64MiB; timeout_ms is 1..5000. Initial exec captures the
+ * opened bprm file; scripts do not prove what an interpreter later reopens.
+ * SPECIMEN_READ: header flags=0, u64 id at 8, u64 offset at 16,
+ * u32 capacity at 24 (1..16328), u32 reserved=0 at 28. Reply: u64 offset,
+ * u64 total_len, u32 count, u32 reserved=0, immutable data at 24.
+ * SPECIMEN_RELEASE: header flags=0, u64 id at 8; empty reply.
+ * Unknown/stale IDs rejected. Ready handles expire after 180s idle.
+ * One active copy, at most four handles, 64MiB global memory reservation.
  *
  * INPUT: header, u64 session_id at 8, bytes at 16.
  * Reply: u64 bytes_written (partial writes possible).

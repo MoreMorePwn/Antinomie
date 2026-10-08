@@ -102,6 +102,7 @@ mod tests {
             state: RunState::Running,
             recording_error: None,
             execution: None,
+            analysis: None,
         };
         let mut first = RunTerminal::new(run.clone());
         let second = RunTerminal::new(run);
@@ -128,6 +129,7 @@ mod tests {
             state: RunState::Running,
             recording_error: None,
             execution: None,
+            analysis: None,
         };
         let mut terminal = RunTerminal::new(run);
         terminal.output(1, b"before", false);

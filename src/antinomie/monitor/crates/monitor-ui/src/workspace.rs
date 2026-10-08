@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum Panel {
     Trace,
+    StaticAnalysis,
     RunHistory,
     Details,
     Activity,
@@ -21,6 +22,7 @@ impl Panel {
     pub(crate) fn title(&self) -> &str {
         match self {
             Self::Trace => "Syscall Trace",
+            Self::StaticAnalysis => "Static Analysis",
             Self::RunHistory => "Run History",
             Self::Details => "Details",
             Self::Activity => "Activity",
@@ -55,7 +57,7 @@ impl Default for WorkspaceLayout {
     fn default() -> Self {
         // Run History is the first (leftmost) tab, next to the trace; the trace
         // stays the open tab so the startup view is unchanged.
-        let mut dock = DockState::new(vec![Panel::RunHistory, Panel::Trace]);
+        let mut dock = DockState::new(vec![Panel::RunHistory, Panel::Trace, Panel::StaticAnalysis]);
         dock.set_active_tab((SurfaceIndex::main(), NodeIndex::root(), TabIndex(1)));
         dock.main_surface_mut().split_below(
             NodeIndex::root(),
@@ -95,6 +97,7 @@ impl WorkspaceLayout {
         for panel in [
             Panel::RunHistory,
             Panel::Trace,
+            Panel::StaticAnalysis,
             Panel::Details,
             Panel::Activity,
         ] {
@@ -316,13 +319,13 @@ impl WorkspaceLayout {
         let lower = matches!(panel, Panel::Details | Panel::Activity);
         let (own, other) = if lower {
             (
-                [Panel::Details, Panel::Activity],
-                [Panel::RunHistory, Panel::Trace],
+                vec![Panel::Details, Panel::Activity],
+                vec![Panel::RunHistory, Panel::Trace, Panel::StaticAnalysis],
             )
         } else {
             (
-                [Panel::RunHistory, Panel::Trace],
-                [Panel::Details, Panel::Activity],
+                vec![Panel::RunHistory, Panel::Trace, Panel::StaticAnalysis],
+                vec![Panel::Details, Panel::Activity],
             )
         };
         // The first panel of each group goes before its sibling.
@@ -421,7 +424,10 @@ mod tests {
     fn default_layout_puts_run_history_first_with_the_trace_open() {
         let layout = WorkspaceLayout::default();
         let top = NodeIndex::root().left();
-        assert_eq!(leaf_tabs(&layout, top), [Panel::RunHistory, Panel::Trace]);
+        assert_eq!(
+            leaf_tabs(&layout, top),
+            [Panel::RunHistory, Panel::Trace, Panel::StaticAnalysis]
+        );
         let egui_dock::Node::Leaf { tabs, active, .. } = &layout.dock.main_surface()[top] else {
             panic!("top node must hold tabs");
         };
@@ -443,7 +449,7 @@ mod tests {
         let restored = WorkspaceLayout::restore(Some(saved));
         assert_eq!(
             leaf_tabs(&restored, NodeIndex::root().left()),
-            [Panel::RunHistory, Panel::Trace]
+            [Panel::RunHistory, Panel::Trace, Panel::StaticAnalysis]
         );
         // A current-version layout the user rearranged is kept as saved.
         let custom = WorkspaceLayout {
@@ -478,7 +484,10 @@ mod tests {
             .expect("details returns")
             .0;
         assert_ne!(top, bottom, "Details must not join the trace's tab bar");
-        assert_eq!(leaf_tabs(&layout, top), [Panel::RunHistory, Panel::Trace]);
+        assert_eq!(
+            leaf_tabs(&layout, top),
+            [Panel::RunHistory, Panel::Trace, Panel::StaticAnalysis]
+        );
         assert_eq!(
             leaf_tabs(&layout, bottom),
             [Panel::Details, Panel::Activity]
@@ -496,7 +505,10 @@ mod tests {
             .find_main_surface_tab(&Panel::Activity)
             .unwrap()
             .0;
-        assert_eq!(leaf_tabs(&empty, top), [Panel::RunHistory, Panel::Trace]);
+        assert_eq!(
+            leaf_tabs(&empty, top),
+            [Panel::RunHistory, Panel::Trace, Panel::StaticAnalysis]
+        );
         assert_eq!(leaf_tabs(&empty, bottom), [Panel::Details, Panel::Activity]);
     }
 
@@ -515,7 +527,7 @@ mod tests {
         let restored = WorkspaceLayout::restore(Some(flattened));
         assert_eq!(
             leaf_tabs(&restored, NodeIndex::root().left()),
-            [Panel::RunHistory, Panel::Trace]
+            [Panel::RunHistory, Panel::Trace, Panel::StaticAnalysis]
         );
         assert_eq!(
             leaf_tabs(&restored, NodeIndex::root().right()),
@@ -595,12 +607,64 @@ mod tests {
             .dock
             .add_window(vec![Panel::Trace, Panel::Terminal("past".into())]);
         layout.validate();
-        assert_eq!(layout.dock.iter_all_tabs().count(), 4);
+        assert_eq!(layout.dock.iter_all_tabs().count(), 5);
         assert_eq!(
             layout
                 .dock
                 .iter_all_tabs()
                 .filter(|(_, tab)| **tab == Panel::Trace)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn analysis_tab_is_added_to_saved_custom_layout_and_detaches_without_reset() {
+        let mut custom = WorkspaceLayout::default();
+        let trace = custom.dock.find_tab(&Panel::Trace).unwrap();
+        let detached_trace = custom.dock.detach_tab(
+            trace,
+            Rect::from_min_size(egui::pos2(40.0, 60.0), egui::vec2(700.0, 400.0)),
+        );
+        let analysis = custom.dock.find_tab(&Panel::StaticAnalysis).unwrap();
+        custom.dock.remove_tab(analysis);
+        let mut restored = WorkspaceLayout::restore(Some(custom));
+        restored.validate();
+        assert_eq!(
+            restored.dock.find_tab(&Panel::Trace).unwrap().0,
+            detached_trace
+        );
+        let analysis = restored.dock.find_tab(&Panel::StaticAnalysis).unwrap();
+        let detached_analysis = restored.dock.detach_tab(
+            analysis,
+            Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(820.0, 520.0)),
+        );
+        assert_ne!(detached_analysis, detached_trace);
+        restored.targets.push((
+            SurfaceIndex::main(),
+            NodeIndex(1),
+            Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 500.0)),
+        ));
+        restored.drop_panel(
+            &Panel::StaticAnalysis,
+            detached_analysis,
+            egui::pos2(400.0, 250.0),
+        );
+        assert!(restored
+            .dock
+            .find_tab(&Panel::StaticAnalysis)
+            .unwrap()
+            .0
+            .is_main());
+        assert_eq!(
+            restored.dock.find_tab(&Panel::Trace).unwrap().0,
+            detached_trace
+        );
+        assert_eq!(
+            restored
+                .dock
+                .iter_all_tabs()
+                .filter(|(_, panel)| **panel == Panel::StaticAnalysis)
                 .count(),
             1
         );

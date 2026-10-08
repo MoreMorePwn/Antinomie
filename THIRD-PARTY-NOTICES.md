@@ -35,6 +35,13 @@ their notices does not authorize removal of those requirements.
 
 ## Other components and release gate
 
+Static-analysis executable parsing uses `object 0.40.0` with read/std features
+only (no write, build or automatic compression). The MIT option is selected;
+its unmodified locked crate notice is retained in
+[object-MIT.txt](LICENSES/third-party/object-MIT.txt). Generic byte analysis is
+original code. Optional external analysis tools and isolation utilities retain
+their own terms and are not relicensed or bundled by this dependency addition.
+
 The native workspace uses `egui_dock 0.16.0` under MIT. Its unmodified crate
 notice is retained in [egui-dock-MIT.txt](LICENSES/third-party/egui-dock-MIT.txt).
 The adapter for separate operating-system viewports is original project code;

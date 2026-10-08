@@ -139,6 +139,7 @@ impl Drop for Backend {
 }
 
 struct Session {
+    analysis: crate::analysis::jobs::Jobs,
     transport: Transport,
     process: VmProcess,
     capture: RawCapture,
@@ -180,6 +181,7 @@ impl Session {
             .bytes
             .saturating_add(self.assembler.stored_len())
             .saturating_add(self.runs.values().map(ProgramRun::stored_len).sum::<u64>())
+            .saturating_add(self.analysis.stored_len())
     }
     fn available(&self) -> u64 {
         self.capture.quota().saturating_sub(self.stored_len())
@@ -201,6 +203,70 @@ impl Session {
     }
     fn update_runs(&self, snapshot: &mut Snapshot) {
         snapshot.runs = self.runs.values().map(|run| run.summary.clone()).collect();
+    }
+    fn analysis_updates(&mut self, snapshot: &mut Snapshot, sender: &SyncSender<Notification>) {
+        for (run_id, report) in self.analysis.updates() {
+            if let Some(id) = &run_id {
+                if let Some(run) = self.runs.values_mut().find(|r| &r.summary.id == id) {
+                    run.summary.analysis = Some(report.clone());
+                    if let Err(error) = run.refresh_analysis_metadata() {
+                        run.storage_error(format!("analysis metadata accounting: {error}"));
+                    }
+                    if let Err(error) = run.persist_summary() {
+                        run.storage_error(format!("analysis metadata persistence: {error}"));
+                    }
+                }
+            } else {
+                if let Some(existing) = snapshot
+                    .analysis_reports
+                    .iter_mut()
+                    .find(|r| r.id == report.id)
+                {
+                    *existing = report.clone();
+                } else {
+                    if snapshot.analysis_reports.len() == 8 {
+                        snapshot.analysis_reports.remove(0);
+                    }
+                    snapshot.analysis_reports.push(report.clone());
+                }
+            }
+            let _ = sender.try_send(Notification::AnalysisUpdated { run_id, report });
+        }
+        self.update_runs(snapshot);
+    }
+    fn analysis_tick(&mut self, snapshot: &mut Snapshot, sender: &SyncSender<Notification>) {
+        match self.analysis.next() {
+            Some(crate::analysis::jobs::Action::Read {
+                id,
+                offset,
+                total,
+                capacity,
+            }) => {
+                let result = self.request(
+                    control::SPECIMEN_READ,
+                    &control::specimen_read(id, offset, capacity),
+                    snapshot,
+                    sender,
+                    Duration::from_millis(100),
+                );
+                self.analysis.chunk(result, offset, total, capacity);
+            }
+            Some(crate::analysis::jobs::Action::Release(id)) => {
+                if let Err(error) = self.request(
+                    control::SPECIMEN_RELEASE,
+                    &control::with_session(id),
+                    snapshot,
+                    sender,
+                    Duration::from_millis(100),
+                ) {
+                    snapshot.last_error = Some(format!(
+                        "specimen release failed; guest expiry must reclaim handle {id}: {error}"
+                    ));
+                }
+            }
+            None => {}
+        }
+        self.analysis_updates(snapshot, sender);
     }
     fn query_run_status(
         &mut self,
@@ -358,7 +424,9 @@ impl Session {
         refresh_storage_health(
             &mut snapshot.health,
             &self.capture,
-            self.assembler.stored_len(),
+            self.assembler
+                .stored_len()
+                .saturating_add(self.analysis.persisted_len()),
             &self.runs,
         );
         snapshot.health.parser_evicted_count = self.assembler.evicted_count
@@ -566,6 +634,8 @@ impl Session {
         }
     }
     fn finalize(&mut self, state: &str, snapshot: &mut Snapshot) -> Result<(), String> {
+        self.analysis.shutdown();
+        self.analysis_updates(snapshot, &mpsc::sync_channel(1).0);
         for cookie in std::mem::take(&mut self.late_reads).into_values() {
             if let Some(run) = self.runs.get_mut(&cookie) {
                 run.terminal_reads_unanswered = run.terminal_reads_unanswered.saturating_add(1);
@@ -602,7 +672,9 @@ impl Session {
         refresh_storage_health(
             &mut snapshot.health,
             &self.capture,
-            self.assembler.stored_len(),
+            self.assembler
+                .stored_len()
+                .saturating_add(self.analysis.persisted_len()),
             &self.runs,
         );
         self.capture.final_health = Some(snapshot.health.clone());
@@ -612,7 +684,9 @@ impl Session {
         refresh_storage_health(
             &mut snapshot.health,
             &self.capture,
-            self.assembler.stored_len(),
+            self.assembler
+                .stored_len()
+                .saturating_add(self.analysis.persisted_len()),
             &self.runs,
         );
         summaries.and(manifest)
@@ -986,6 +1060,7 @@ impl Worker {
                         if let Err(error) = session.probe_kernel(&mut self.snapshot, &self.sender) {
                             self.snapshot.last_error = Some(format!("guest info: {error}"));
                         }
+                        session.analysis_tick(&mut self.snapshot, &self.sender);
                     }
                     Err(e) => {
                         self.snapshot.last_error = Some(e.to_string());
@@ -1612,6 +1687,7 @@ impl Worker {
                 };
             capture.manifest(&vm, &bundle, &disk_bundle, "running")?;
             Ok(Session {
+                analysis: crate::analysis::jobs::Jobs::default(),
                 transport,
                 process,
                 capture,
@@ -1790,7 +1866,14 @@ impl Worker {
                 if session.runs.len() >= 64 {
                     return Err("this VM boot reached the 64-run limit; restart the VM before another launch".into());
                 }
-                let args = control::execute(&request)?;
+                let supported = self
+                    .snapshot
+                    .guest_kernel
+                    .as_ref()
+                    .and_then(|k| k.revision)
+                    .is_some_and(|r| r >= 10);
+                let args = control::execute_analysis(&request, supported)?;
+                let selected = request.analysis.enabled;
                 let run_id = storage::unique_id();
                 let directory = crate::locations::locations(&self.options, &session.vm.id)?
                     .recording_directory
@@ -1803,12 +1886,15 @@ impl Worker {
                     session_id: 0,
                     root_task_cookie: 0,
                     pid: 0,
-                    request,
+                    request: request.clone(),
                     directory,
                     terminal_eof: false,
                     state: RunState::Unknown,
                     recording_error: Some("execution has not been acknowledged".into()),
                     execution: None,
+                    analysis: selected.then(|| {
+                        crate::analysis::jobs::new_report(&request.path, &request.analysis)
+                    }),
                 };
                 let mut run = ProgramRun::new(summary, session.capture.quota())?;
                 run.summary.recording_error = None;
@@ -1829,7 +1915,9 @@ impl Worker {
                         return Err(error);
                     }
                 };
-                if reply.len() != 24 || u32_at(&reply, 20).map_err(|e| e.to_string())? != 0 {
+                if reply.len() != if selected && supported { 48 } else { 24 }
+                    || u32_at(&reply, 20).map_err(|e| e.to_string())? != 0
+                {
                     return Err("invalid execution reply".into());
                 }
                 let id = u64_at(&reply, 0).map_err(|e| e.to_string())?;
@@ -1844,6 +1932,27 @@ impl Worker {
                 run.summary.root_task_cookie = cookie;
                 run.summary.pid = pid;
                 run.summary.state = RunState::Running;
+                if let Some(report) = run.summary.analysis.take() {
+                    let acquisition = if supported {
+                        control::acquisition(&reply[24..])
+                    } else {
+                        Err(
+                            "guest predates revision 10; execution continued without acquisition"
+                                .into(),
+                        )
+                    };
+                    let available = session.available().saturating_sub(run.stored_len());
+                    run.summary.analysis = Some(session.analysis.submit(
+                        Some(run.summary.id.clone()),
+                        report,
+                        run.summary.directory.join("analysis"),
+                        acquisition,
+                        available,
+                    ));
+                    if let Err(error) = run.refresh_analysis_metadata() {
+                        run.storage_error(format!("analysis metadata accounting: {error}"));
+                    }
+                }
                 if let Some(error) = session.capture.error.clone() {
                     run.capture.error = Some(error.clone());
                     run.storage_error(error);
@@ -1894,6 +2003,56 @@ impl Worker {
                 session.update_runs(&mut self.snapshot);
                 self.emit(Notification::RunStarted(summary));
                 Ok(format!("launched pid {pid}, terminal session {id}"))
+            }
+            Command::AnalyzeOnly {
+                path,
+                uid,
+                gid,
+                analysis,
+            } => {
+                analysis.validate()?;
+                control::string(&path, true)?;
+                if !analysis.enabled {
+                    return Err("Analyze Only requires static analysis enabled".into());
+                }
+                if self.snapshot.analysis_reports.len() >= 8 {
+                    return Err("this VM boot reached the eight standalone analysis limit".into());
+                }
+                let report = crate::analysis::jobs::new_report(&path, &analysis);
+                let directory = crate::locations::locations(&self.options, &session.vm.id)?
+                    .recording_directory
+                    .join("analyses")
+                    .join(&report.id);
+                let supported = self
+                    .snapshot
+                    .guest_kernel
+                    .as_ref()
+                    .and_then(|k| k.revision)
+                    .is_some_and(|r| r >= 10);
+                let acquisition = if supported {
+                    session
+                        .request(
+                            control::ACQUIRE,
+                            &control::acquire(&path, uid, gid)?,
+                            &mut self.snapshot,
+                            &self.sender,
+                            timeout,
+                        )
+                        .and_then(|reply| control::acquisition(&reply))
+                } else {
+                    Err("guest predates revision 10; Analyze Only unavailable".into())
+                };
+                let available = session.available();
+                session
+                    .analysis
+                    .submit(None, report, directory, acquisition, available);
+                session.analysis_updates(&mut self.snapshot, &self.sender);
+                Ok("standalone analysis request recorded".into())
+            }
+            Command::CancelAnalysis { analysis_id } => {
+                session.analysis.cancel(&analysis_id)?;
+                session.analysis_updates(&mut self.snapshot, &self.sender);
+                Ok("analysis cancelled; program continues".into())
             }
             Command::Upload {
                 source,
@@ -2634,6 +2793,7 @@ mod tests {
                     state: RunState::Running,
                     recording_error: None,
                     execution: None,
+                    analysis: None,
                 },
                 1024,
             )
@@ -2694,6 +2854,7 @@ mod tests {
                             state: RunState::Running,
                             recording_error: None,
                             execution: None,
+                            analysis: None,
                         },
                         1024,
                     )
@@ -2795,6 +2956,7 @@ mod tests {
                     state: RunState::Running,
                     recording_error: None,
                     execution: None,
+                    analysis: None,
                 },
                 65536,
             )

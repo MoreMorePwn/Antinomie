@@ -1,3 +1,4 @@
+mod analysis;
 mod app;
 mod archive;
 mod folders;
@@ -37,6 +38,9 @@ fn hexadecimal(value: &str) -> Result<u64, String> {
 }
 
 fn main() -> eframe::Result<()> {
+    if let Some(code) = antinomie_monitor_core::analysis::worker_main_if_requested() {
+        std::process::exit(code);
+    }
     let args = Arguments::parse();
     let restore_bundle = args.bundle.is_none();
     let mut options = BackendOptions::default();

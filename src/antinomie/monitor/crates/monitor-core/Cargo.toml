@@ -13,7 +13,8 @@ sha2 = "0.10"
 vt100 = "0.15"
 rusqlite = "0.40.2"
 x11rb = "0.13.2"
-rustix = { version = "1", features = ["event", "net"] }
+rustix = { version = "1", features = ["event", "net", "process"] }
+object = { version = "0.40", default-features = false, features = ["read", "std"] }
 
 [build-dependencies]
 cc = "1"

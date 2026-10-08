@@ -33,6 +33,22 @@ on 2026-10-01. Core workers/review use gpt-6.1-sol; bounded support may use Luna
 
 ## Ownership
 
+### Accepted ANT-T0025 Update
+
+User authorized complete static-analysis acquisition/backend and launch setup
+on 2026-10-08. Run Program opens launch fields left, opt-in analysis checkboxes
+right and a final Run button. Initial executable only; no descendant/later exec
+static acquisition. Triage plus optional deep analysis, local/no network default,
+exact initial guest exec-file acquisition with bounded wait, failure continues
+execution and reports unavailable. Retained reports reopen without rescanning.
+The frozen revision-1 implementation contract is in the documentation task
+directory, ANT-T0025 - Implementation Contract.md. Application control revision
+10 adds optional specimen controls; V7 remains unchanged, revision-9 guests
+still launch with explicit analysis unavailable. Resource/isolation/compatibility
+limits and engine gaps must be recorded, not presented as complete clean scans.
+Development is isolated in feature/static-analysis; preserve concurrent dirty
+image-builder work and do not replace the normal executable before integration.
+
 ### Accepted ANT-T0012 Update
 
 User authorized saved per-VM guest/window resolution, fullscreen, fit-to-window,
