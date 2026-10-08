@@ -112,7 +112,31 @@ pub(crate) fn snapshot(
     Ok(request)
 }
 
-pub(crate) fn report(ui: &mut egui::Ui, report: Option<&AnalysisReport>) -> Option<String> {
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ReportAction {
+    Cancel(String),
+    OpenSection {
+        report_id: String,
+        kind: AnalysisKind,
+    },
+}
+
+pub(crate) fn section_title(kind: AnalysisKind) -> &'static str {
+    match kind {
+        AnalysisKind::Metadata => "Metadata",
+        AnalysisKind::Structures => "Structures",
+        AnalysisKind::Strings => "Strings",
+        AnalysisKind::Entropy => "Entropy",
+        AnalysisKind::Hardening => "Hardening",
+        AnalysisKind::Rules => "Rules",
+        AnalysisKind::Identification => "Identification",
+        AnalysisKind::Capabilities => "Capabilities",
+        AnalysisKind::Disassembly => "Disassembly",
+        AnalysisKind::Decompilation => "Decompilation",
+    }
+}
+
+pub(crate) fn report(ui: &mut egui::Ui, report: Option<&AnalysisReport>) -> Option<ReportAction> {
     let Some(report) = report else {
         ui.label("No static analysis report for this run.");
         return None;
@@ -123,6 +147,7 @@ pub(crate) fn report(ui: &mut egui::Ui, report: Option<&AnalysisReport>) -> Opti
             | antinomie_monitor_core::AnalysisState::Queued
             | antinomie_monitor_core::AnalysisState::Running
     ) && ui.button("Cancel Analysis").clicked();
+    let mut action = cancel.then(|| ReportAction::Cancel(report.id.clone()));
     egui::ScrollArea::both()
         .id_salt("static-analysis-report")
         .show(ui, |ui| {
@@ -141,28 +166,62 @@ pub(crate) fn report(ui: &mut egui::Ui, report: Option<&AnalysisReport>) -> Opti
                 ui.colored_label(crate::theme::MUTED, reason);
             }
             for section in &report.sections {
-                egui::CollapsingHeader::new(format!(
-                    "{} ({:?})",
-                    section.kind.label(),
-                    section.state
-                ))
-                .id_salt((&report.id, section.kind.label()))
-                .default_open(true)
-                .show(ui, |ui| {
-                    ui.label(&section.summary);
-                    for entry in &section.entries {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.strong(&entry.label);
-                            ui.label(&entry.value);
-                            if let Some(offset) = entry.offset {
-                                ui.monospace(format!("File offset: 0x{offset:x}"));
-                            }
+                ui.separator();
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .button(format!("{} Open", egui_phosphor::regular::ARROW_SQUARE_OUT))
+                        .clicked()
+                    {
+                        action = Some(ReportAction::OpenSection {
+                            report_id: report.id.clone(),
+                            kind: section.kind,
                         });
+                    }
+                    ui.strong(section.kind.label());
+                    ui.label(format!(
+                        "{:?} / {} entries",
+                        section.state,
+                        section.entries.len()
+                    ));
+                });
+            }
+        });
+    action
+}
+
+pub(crate) fn section(ui: &mut egui::Ui, report: Option<&AnalysisReport>, kind: AnalysisKind) {
+    let Some(report) = report else {
+        ui.label("This retained analysis report is unavailable.");
+        return;
+    };
+    egui::ScrollArea::both()
+        .id_salt((&report.id, kind.label()))
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.strong(kind.label());
+                ui.label(&report.source_path);
+            });
+            ui.label(format!("Analysis ID: {}", report.id));
+            if let Some(reason) = &report.reason {
+                ui.colored_label(crate::theme::MUTED, reason);
+            }
+            let Some(section) = report.sections.iter().find(|section| section.kind == kind) else {
+                ui.label("This section has no retained result.");
+                return;
+            };
+            ui.label(format!("{:?}", section.state));
+            ui.label(&section.summary);
+            ui.separator();
+            for entry in &section.entries {
+                ui.horizontal_wrapped(|ui| {
+                    ui.strong(&entry.label);
+                    ui.label(&entry.value);
+                    if let Some(offset) = entry.offset {
+                        ui.monospace(format!("File offset: 0x{offset:x}"));
                     }
                 });
             }
         });
-    cancel.then(|| report.id.clone())
 }
 
 #[cfg(test)]

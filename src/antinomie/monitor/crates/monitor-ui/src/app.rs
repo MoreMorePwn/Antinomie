@@ -128,6 +128,8 @@ pub struct MonitorApp {
     selected_event: Option<InvocationKey>,
     selected_run: Option<String>,
     selected_analysis: Option<String>,
+    analysis_windows: BTreeMap<String, antinomie_monitor_core::AnalysisReport>,
+    pending_analysis_sections: Vec<(String, antinomie_monitor_core::AnalysisKind)>,
     archive_selected: bool,
     history_generation: u64,
     run_filter: RunFilter,
@@ -219,6 +221,8 @@ impl MonitorApp {
             selected_event: None,
             selected_run: None,
             selected_analysis: None,
+            analysis_windows: BTreeMap::new(),
+            pending_analysis_sections: Vec::new(),
             archive_selected: false,
             history_generation: 0,
             run_filter: RunFilter::All,
@@ -329,6 +333,7 @@ impl MonitorApp {
             }
         }
         let mut activity = Vec::new();
+        let mut analysis_changed = false;
         let was_offline = self.offline_run().is_some();
         if let Some(backend) = &self.backend {
             for _ in 0..256 {
@@ -363,6 +368,7 @@ impl MonitorApp {
                             self.pending_launch = None;
                         }
                         self.snapshot = snapshot;
+                        analysis_changed = true;
                     }
                     Some(Notification::CommandResult {
                         id,
@@ -410,6 +416,9 @@ impl MonitorApp {
                         sync_runs(&mut self.terminals, &self.snapshot);
                     }
                     Some(Notification::AnalysisUpdated { run_id, report }) => {
+                        if let Some(current) = self.analysis_windows.get_mut(&report.id) {
+                            current.clone_from(&report);
+                        }
                         if let Some(id) = run_id {
                             for run in self.snapshot.runs.iter_mut().chain(self.history.iter_mut())
                             {
@@ -456,6 +465,9 @@ impl MonitorApp {
                     None => break,
                 }
             }
+        }
+        if analysis_changed {
+            self.refresh_analysis_windows();
         }
         if self
             .selected
@@ -2869,8 +2881,111 @@ impl MonitorApp {
         }
     }
 
+    fn analysis_report(&self, id: &str) -> Option<&antinomie_monitor_core::AnalysisReport> {
+        self.snapshot
+            .runs
+            .iter()
+            .chain(&self.history)
+            .filter_map(|run| run.analysis.as_ref())
+            .chain(&self.snapshot.analysis_reports)
+            .find(|report| report.id == id)
+            .or_else(|| self.analysis_windows.get(id))
+    }
+
+    fn refresh_analysis_windows(&mut self) {
+        for (id, current) in &mut self.analysis_windows {
+            if let Some(report) = self
+                .snapshot
+                .runs
+                .iter()
+                .chain(&self.history)
+                .filter_map(|run| run.analysis.as_ref())
+                .chain(&self.snapshot.analysis_reports)
+                .find(|report| &report.id == id)
+            {
+                if current != report {
+                    current.clone_from(report);
+                }
+            }
+        }
+    }
+
+    fn analysis_action(&mut self, action: Option<crate::analysis::ReportAction>) {
+        match action {
+            Some(crate::analysis::ReportAction::Cancel(analysis_id)) => {
+                self.send(Command::CancelAnalysis { analysis_id })
+            }
+            Some(crate::analysis::ReportAction::OpenSection { report_id, kind }) => {
+                if let Err(reason) = self.open_analysis_section(report_id, kind) {
+                    self.status = reason;
+                }
+            }
+            None => {}
+        }
+    }
+
+    fn open_analysis_section(
+        &mut self,
+        report_id: String,
+        kind: antinomie_monitor_core::AnalysisKind,
+    ) -> Result<(), String> {
+        if !self.analysis_windows.contains_key(&report_id) {
+            if self.analysis_windows.len() >= 8 {
+                return Err("Eight analysis reports are open. Close a result window before opening another report.".into());
+            }
+            let report = self
+                .analysis_report(&report_id)
+                .ok_or("The retained analysis report is unavailable")?
+                .clone();
+            self.analysis_windows.insert(report_id.clone(), report);
+        }
+        let request = (report_id, kind);
+        if !self.pending_analysis_sections.contains(&request) {
+            self.pending_analysis_sections.push(request);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn take_analysis_sections(
+        &mut self,
+    ) -> Vec<(String, antinomie_monitor_core::AnalysisKind)> {
+        std::mem::take(&mut self.pending_analysis_sections)
+    }
+
+    pub(crate) fn retain_analysis_windows(&mut self, ids: &[String]) {
+        self.analysis_windows.retain(|id, _| {
+            ids.contains(id)
+                || self
+                    .pending_analysis_sections
+                    .iter()
+                    .any(|(pending, _)| pending == id)
+        });
+    }
+
     pub(crate) fn panel_title(&self, panel: &Panel) -> String {
         match panel {
+            Panel::AnalysisSection { report_id, kind } => {
+                let path = self
+                    .analysis_windows
+                    .get(report_id)
+                    .map(|report| report.source_path.as_str())
+                    .unwrap_or("Unavailable");
+                let name = std::path::Path::new(path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(path);
+                let mut name_title: String = name.chars().take(24).collect();
+                if name.chars().count() > 24 {
+                    name_title.push_str("..");
+                }
+                let id_title: String = report_id.chars().take(8).collect();
+                format!(
+                    "{} / {} / {}",
+                    crate::analysis::section_title(*kind),
+                    name_title,
+                    id_title
+                )
+            }
             Panel::Terminal(id) => self
                 .terminals
                 .get(id)
@@ -2884,6 +2999,9 @@ impl MonitorApp {
         ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
         match panel {
             Panel::Trace => self.events(ui),
+            Panel::AnalysisSection { report_id, kind } => {
+                crate::analysis::section(ui, self.analysis_windows.get(report_id), *kind);
+            }
             Panel::StaticAnalysis => {
                 egui::ComboBox::from_id_salt("analysis-source")
                     .selected_text(self.selected_analysis.as_deref().unwrap_or("Selected run"))
@@ -2903,10 +3021,8 @@ impl MonitorApp {
                         .analysis_reports
                         .iter()
                         .find(|report| report.id == id);
-                    let cancel = crate::analysis::report(ui, report);
-                    if let Some(analysis_id) = cancel {
-                        self.send(Command::CancelAnalysis { analysis_id });
-                    }
+                    let action = crate::analysis::report(ui, report);
+                    self.analysis_action(action);
                     return;
                 }
                 if let Some(id) = self.selected_run.as_deref() {
@@ -2918,11 +3034,9 @@ impl MonitorApp {
                     } else {
                         self.run(id)
                     };
-                    let cancel =
+                    let action =
                         crate::analysis::report(ui, run.and_then(|run| run.analysis.as_ref()));
-                    if let Some(analysis_id) = cancel {
-                        self.send(Command::CancelAnalysis { analysis_id });
-                    }
+                    self.analysis_action(action);
                 } else {
                     ui.label("Select a run to view its static analysis report.");
                 }
@@ -3598,6 +3712,8 @@ mod tests {
             selected_event: None,
             selected_run: None,
             selected_analysis: None,
+            analysis_windows: BTreeMap::new(),
+            pending_analysis_sections: Vec::new(),
             archive_selected: false,
             history_generation: 0,
             run_filter: RunFilter::All,
@@ -6295,5 +6411,306 @@ mod tests {
             }
         }
         assert!(evidence.retained && evidence.reopened);
+    }
+
+    fn section_report(id: &str, marker: &str) -> antinomie_monitor_core::AnalysisReport {
+        use antinomie_monitor_core::{
+            AnalysisEntry, AnalysisKind, AnalysisReport, AnalysisSection, AnalysisSectionState,
+            AnalysisState,
+        };
+        AnalysisReport {
+            id: id.into(),
+            state: AnalysisState::Partial,
+            source_path: format!("/fixture/{marker}"),
+            specimen_sha256: None,
+            specimen_len: Some(4096),
+            reason: Some("Synthetic UI fixture; no analyzer was run".into()),
+            sections: vec![
+                AnalysisSection {
+                    kind: AnalysisKind::Metadata,
+                    state: AnalysisSectionState::Complete,
+                    summary: format!("{marker} metadata"),
+                    entries: vec![AnalysisEntry {
+                        label: "Identity".into(),
+                        value: marker.into(),
+                        offset: None,
+                    }],
+                },
+                AnalysisSection {
+                    kind: AnalysisKind::Structures,
+                    state: AnalysisSectionState::Unavailable,
+                    summary: format!("{marker} structures unavailable"),
+                    entries: Vec::new(),
+                },
+                AnalysisSection {
+                    kind: AnalysisKind::Strings,
+                    state: AnalysisSectionState::Partial,
+                    summary: "Bounded synthetic rows".into(),
+                    entries: (0..2048)
+                        .map(|index| AnalysisEntry {
+                            label: format!("Row {index}"),
+                            value: "Synthetic evidence".into(),
+                            offset: Some(index),
+                        })
+                        .collect(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn section_windows_keep_report_identity_and_prune_only_unreferenced_reports() {
+        use antinomie_monitor_core::AnalysisKind;
+        let mut app = app();
+        let mut archived = run("archived");
+        archived.analysis = Some(section_report("archive-a", "ARCHIVE A"));
+        app.history.push(archived);
+        app.snapshot
+            .analysis_reports
+            .push(section_report("standalone-b", "STANDALONE B"));
+        app.open_analysis_section("archive-a".into(), AnalysisKind::Metadata)
+            .unwrap();
+        app.open_analysis_section("archive-a".into(), AnalysisKind::Metadata)
+            .unwrap();
+        app.open_analysis_section("standalone-b".into(), AnalysisKind::Structures)
+            .unwrap();
+        app.retain_analysis_windows(&[]);
+        assert_eq!(
+            app.analysis_windows.len(),
+            2,
+            "pending requests retain snapshots"
+        );
+        assert_eq!(
+            app.take_analysis_sections().len(),
+            2,
+            "duplicate sections reuse a panel"
+        );
+        app.selected_analysis = Some("standalone-b".into());
+        app.select_archive_run("archived".into());
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                app.show_panel(
+                    ui,
+                    &Panel::AnalysisSection {
+                        report_id: "archive-a".into(),
+                        kind: AnalysisKind::Metadata,
+                    },
+                )
+            });
+        });
+        assert!(texts(&output).iter().any(|(text, _)| text == "ARCHIVE A"));
+        assert!(!texts(&output)
+            .iter()
+            .any(|(text, _)| text == "STANDALONE B"));
+        app.retain_analysis_windows(&["standalone-b".into()]);
+        assert!(!app.analysis_windows.contains_key("archive-a"));
+        assert!(app.analysis_windows.contains_key("standalone-b"));
+        assert!(
+            app.submitted.is_empty(),
+            "opening/closing sections never scans or cancels"
+        );
+    }
+
+    #[test]
+    fn section_cache_is_bounded_and_refreshes_matching_live_reports() {
+        use antinomie_monitor_core::AnalysisKind;
+        let mut app = app();
+        for index in 0..9 {
+            let id = format!("report-{index}");
+            app.snapshot
+                .analysis_reports
+                .push(section_report(&id, "INITIAL"));
+            let result = app.open_analysis_section(id, AnalysisKind::Metadata);
+            assert_eq!(result.is_ok(), index < 8);
+        }
+        assert_eq!(app.analysis_windows.len(), 8);
+        app.open_analysis_section("report-0".into(), AnalysisKind::Strings)
+            .unwrap();
+        app.snapshot.analysis_reports[0] = section_report("report-0", "UPDATED");
+        app.refresh_analysis_windows();
+        assert_eq!(
+            app.analysis_windows["report-0"].source_path,
+            "/fixture/UPDATED"
+        );
+        assert_eq!(
+            app.analysis_windows["report-1"].source_path,
+            "/fixture/INITIAL"
+        );
+        app.take_analysis_sections();
+        app.retain_analysis_windows(&[]);
+        assert!(app.analysis_windows.is_empty());
+        app.open_analysis_section("report-8".into(), AnalysisKind::Metadata)
+            .unwrap();
+    }
+
+    #[test]
+    fn summary_is_compact_with_thousands_of_rows_and_section_renders_only_its_kind() {
+        use antinomie_monitor_core::AnalysisKind;
+        for font in [18.0, 24.0] {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            theme::text_size(&ctx, font);
+            let report = section_report("summary", "METADATA MARKER");
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 600.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        assert!(crate::analysis::report(ui, Some(&report)).is_none());
+                    });
+                },
+            );
+            assert!(texts(&output)
+                .iter()
+                .any(|(text, _)| text == "Partial / 2048 entries"));
+            assert!(!texts(&output)
+                .iter()
+                .any(|(text, _)| text.starts_with("Row ")));
+            assert!(
+                output.shapes.len() < 150,
+                "summary size must not depend on evidence row count"
+            );
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    crate::analysis::section(ui, Some(&report), AnalysisKind::Metadata)
+                });
+            });
+            assert!(texts(&output)
+                .iter()
+                .any(|(text, _)| text == "METADATA MARKER"));
+            assert!(!texts(&output)
+                .iter()
+                .any(|(text, _)| text.starts_with("Row ")));
+        }
+    }
+
+    #[test]
+    fn summary_open_button_requests_only_the_chosen_section_without_backend_work() {
+        let mut app = app();
+        app.snapshot
+            .analysis_reports
+            .push(section_report("chosen", "CHOSEN"));
+        app.selected_analysis = Some("chosen".into());
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let render = |app: &mut MonitorApp, events| {
+            ctx.run(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default()
+                        .show(ctx, |ui| app.show_panel(ui, &Panel::StaticAnalysis));
+                },
+            )
+        };
+        let mut output = render(&mut app, Vec::new());
+        for _ in 0..3 {
+            output = render(&mut app, Vec::new());
+        }
+        let target = texts(&output)
+            .iter()
+            .find(|(text, _)| text.ends_with(" Open"))
+            .unwrap()
+            .1
+            .center();
+        for pressed in [true, false] {
+            render(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(target),
+                    egui::Event::PointerButton {
+                        pos: target,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert_eq!(
+            app.take_analysis_sections(),
+            [(
+                "chosen".into(),
+                antinomie_monitor_core::AnalysisKind::Metadata
+            )]
+        );
+        assert!(app.submitted.is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires X11 native section previews; automatically exits after 15 seconds"]
+    fn native_analysis_sections_fixture() {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        struct QaApp {
+            app: MonitorApp,
+            deadline: Instant,
+        }
+        impl eframe::App for QaApp {
+            fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+                if Instant::now() >= self.deadline {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                eframe::App::update(&mut self.app, ctx, frame);
+            }
+        }
+        let small = std::env::var_os("ANTINOMIE_ANALYSIS_QA_SMALL").is_some();
+        let seconds = std::env::var("ANTINOMIE_ANALYSIS_QA_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(15)
+            .clamp(1, 120);
+        eframe::run_native(
+            "Antinomie Section Windows QA",
+            eframe::NativeOptions {
+                viewport: egui::ViewportBuilder::default().with_inner_size(if small {
+                    [800.0, 600.0]
+                } else {
+                    [1280.0, 820.0]
+                }),
+                persist_window: false,
+                event_loop_builder: Some(Box::new(|builder| {
+                    builder.with_x11().with_any_thread(true);
+                })),
+                ..Default::default()
+            },
+            Box::new(move |cc| {
+                theme::install(&cc.egui_ctx);
+                theme::text_size(&cc.egui_ctx, if small { 24.0 } else { 18.0 });
+                let mut app = app();
+                app.settings.font_size = if small { 24.0 } else { 18.0 };
+                app.snapshot
+                    .analysis_reports
+                    .push(section_report("qa-report-a", "REPORT A"));
+                app.snapshot
+                    .analysis_reports
+                    .push(section_report("qa-report-b", "REPORT B"));
+                app.selected_analysis = Some("qa-report-b".into());
+                app.layout.focus(Panel::StaticAnalysis);
+                app.open_analysis_section(
+                    "qa-report-a".into(),
+                    antinomie_monitor_core::AnalysisKind::Metadata,
+                )
+                .unwrap();
+                app.open_analysis_section(
+                    "qa-report-b".into(),
+                    antinomie_monitor_core::AnalysisKind::Strings,
+                )
+                .unwrap();
+                Ok(Box::new(QaApp {
+                    app,
+                    deadline: Instant::now() + Duration::from_secs(seconds),
+                }))
+            }),
+        )
+        .unwrap();
     }
 }

@@ -95,7 +95,13 @@ partial evidence, not a definitive compiler/packer verdict. Rule matches,
 capabilities and decompilation currently report **Unavailable**: selecting their
 checkboxes does not install tools or imply an adapter exists.
 
-The dockable **Static Analysis** tab displays selected-run or standalone results.
+The dockable **Static Analysis** tab shows a compact selected-run or standalone
+section/status list. **Open** displays that section in its own native result
+window. Drag its tab to dock it, or right-click the tab and choose **Dock**;
+ordinary clicks only select tabs. Opening the same report/section focuses its
+existing view rather than rescanning or duplicating it. Each view stays bound to
+its report even when another run is selected, and closing a view does not cancel
+analysis. Up to eight different reports can have result views open at once.
 Complete specimens, reports and worker logs are saved in the recording directory
 under `analysis/`, or `analyses/<job-id>/` for Analyze Only. They consume recording
 quota and may contain sensitive bytes. Reports are bounded to 128 KiB and mark

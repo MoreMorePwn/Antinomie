@@ -1,5 +1,6 @@
 //! A single dock tree rendered by moving each surface into its native viewport.
 use crate::{app::MonitorApp, theme};
+use antinomie_monitor_core::AnalysisKind;
 use eframe::egui::{self, Rect};
 use egui_dock::{
     DockArea, DockState, NodeIndex, Surface, SurfaceIndex, TabDestination, TabIndex, TabInsert,
@@ -12,6 +13,10 @@ use std::collections::BTreeMap;
 pub(crate) enum Panel {
     Trace,
     StaticAnalysis,
+    AnalysisSection {
+        report_id: String,
+        kind: AnalysisKind,
+    },
     RunHistory,
     Details,
     Activity,
@@ -23,6 +28,7 @@ impl Panel {
         match self {
             Self::Trace => "Syscall Trace",
             Self::StaticAnalysis => "Static Analysis",
+            Self::AnalysisSection { kind, .. } => kind.label(),
             Self::RunHistory => "Run History",
             Self::Details => "Details",
             Self::Activity => "Activity",
@@ -49,9 +55,13 @@ pub(crate) struct WorkspaceLayout {
     #[serde(skip)]
     targets: Vec<(SurfaceIndex, NodeIndex, Rect)>,
     #[serde(skip)]
-    released: Option<egui::Pos2>,
+    released: Option<(SurfaceIndex, egui::Pos2)>,
     #[serde(skip)]
     detach: Option<Panel>,
+    #[serde(skip)]
+    dock_back: Option<Panel>,
+    #[serde(skip)]
+    cancel_drag: bool,
 }
 
 impl Default for WorkspaceLayout {
@@ -73,6 +83,8 @@ impl Default for WorkspaceLayout {
             targets: Vec::new(),
             released: None,
             detach: None,
+            dock_back: None,
+            cancel_drag: false,
         }
     }
 }
@@ -88,7 +100,9 @@ impl WorkspaceLayout {
     pub(crate) fn validate(&mut self) {
         let mut seen = Vec::new();
         self.dock.retain_tabs(|tab| {
-            if matches!(tab, Panel::Terminal(_)) || seen.contains(tab) {
+            if matches!(tab, Panel::Terminal(_) | Panel::AnalysisSection { .. })
+                || seen.contains(tab)
+            {
                 false
             } else {
                 seen.push(tab.clone());
@@ -119,6 +133,7 @@ impl WorkspaceLayout {
 
     pub(crate) fn show(&mut self, app: &mut MonitorApp, ctx: &egui::Context) {
         self.targets.clear();
+        self.cancel_drag = false;
         for (id, open) in app.terminal_views() {
             let panel = Panel::Terminal(id);
             if open && self.dock.find_tab(&panel).is_none() {
@@ -179,11 +194,35 @@ impl WorkspaceLayout {
                 );
             }
         }
-        if let Some(position) = self.released.take() {
-            if let Some((panel, source)) = self.drag.take() {
-                self.drop_panel(&panel, source, position);
+        if let Some(panel) = self.dock_back.take() {
+            self.dock_panel(panel);
+        }
+        self.finish_drag();
+        for (report_id, kind) in app.take_analysis_sections() {
+            let panel = Panel::AnalysisSection { report_id, kind };
+            if self.dock.find_tab(&panel).is_none() {
+                let surface = self.dock.add_window(vec![panel.clone()]);
+                self.geometry.remove(&surface.0);
+            }
+            self.focus(panel.clone());
+            if let Some((surface, _, _)) = self.dock.find_tab(&panel) {
+                if !surface.is_main() {
+                    ctx.send_viewport_cmd_to(
+                        egui::ViewportId::from_hash_of(("workspace", surface.0)),
+                        egui::ViewportCommand::Focus,
+                    );
+                }
             }
         }
+        let report_ids: Vec<_> = self
+            .dock
+            .iter_all_tabs()
+            .filter_map(|(_, panel)| match panel {
+                Panel::AnalysisSection { report_id, .. } => Some(report_id.clone()),
+                _ => None,
+            })
+            .collect();
+        app.retain_analysis_windows(&report_ids);
     }
 
     fn native_builder(&self, index: usize, title: String) -> egui::ViewportBuilder {
@@ -233,6 +272,7 @@ impl WorkspaceLayout {
         };
         DockArea::new(&mut local)
             .id(egui::Id::new(("native-dock", surface.0)))
+            .draggable_tabs(false)
             .show_leaf_close_all_buttons(false)
             .show_leaf_collapse_buttons(false)
             .show_inside(ui, &mut viewer);
@@ -251,29 +291,18 @@ impl WorkspaceLayout {
             self.targets
                 .push((surface, NodeIndex::root(), empty_target));
         }
-        if self.drag.is_some() && ui.input(|input| input.pointer.any_released()) {
-            self.released = ui
-                .input(|input| {
-                    input
-                        .events
-                        .iter()
-                        .rev()
-                        .find_map(|event| {
-                            if let egui::Event::PointerButton {
-                                pos,
-                                pressed: false,
-                                button: egui::PointerButton::Primary,
-                                ..
-                            } = event
-                            {
-                                Some(*pos)
-                            } else {
-                                None
-                            }
-                        })
-                        .or(input.pointer.latest_pos())
-                })
-                .map(|position| position + origin.to_vec2());
+        if let Some((_, source)) = self.drag.as_ref() {
+            if let Some(position) = ui.input(primary_release) {
+                if self.released.is_none() || *source == surface {
+                    self.released = Some((surface, position + origin.to_vec2()));
+                }
+            }
+            if *source == surface
+                && self.released.is_none()
+                && ui.input(|input| !input.pointer.primary_down())
+            {
+                self.cancel_drag = true;
+            }
         }
         let tree = std::mem::replace(local.main_surface_mut(), egui_dock::Tree::new(Vec::new()));
         *self
@@ -296,9 +325,6 @@ impl WorkspaceLayout {
             .find(|(_, _, rect)| rect.contains(position))
             .copied()
         {
-            if surface == source {
-                return;
-            }
             if self.dock[surface].is_empty() {
                 self.dock
                     .move_tab(location, TabDestination::EmptySurface(surface));
@@ -327,6 +353,60 @@ impl WorkspaceLayout {
                 Rect::from_min_size(position, egui::vec2(820.0, 520.0)),
             );
         }
+        if !self.dock.is_surface_valid(source) {
+            self.geometry.remove(&source.0);
+        }
+    }
+
+    fn dock_panel(&mut self, panel: Panel) {
+        let Some(location) = self.dock.find_tab(&panel) else {
+            return;
+        };
+        if location.0.is_main() {
+            return;
+        }
+        let home = if matches!(panel, Panel::Details | Panel::Activity) {
+            [Panel::Details, Panel::Activity]
+        } else {
+            [Panel::Trace, Panel::RunHistory]
+        };
+        if self.dock.main_surface().is_empty() {
+            self.dock
+                .move_tab(location, TabDestination::EmptySurface(SurfaceIndex::main()));
+        } else {
+            let target = home
+                .iter()
+                .find_map(|tab| self.dock.find_main_surface_tab(tab))
+                .map(|(node, _)| node)
+                .or_else(|| {
+                    self.dock
+                        .main_surface()
+                        .iter()
+                        .enumerate()
+                        .find(|(_, node)| node.is_leaf())
+                        .map(|(index, _)| NodeIndex(index))
+                });
+            let Some(target) = target else {
+                return;
+            };
+            self.dock
+                .move_tab(location, (SurfaceIndex::main(), target, TabInsert::Append));
+        }
+        self.focus(panel);
+        if !self.dock.is_surface_valid(location.0) {
+            self.geometry.remove(&location.0 .0);
+        }
+    }
+
+    fn finish_drag(&mut self) {
+        if let Some((_, position)) = self.released.take() {
+            if let Some((panel, source)) = self.drag.take() {
+                self.drop_panel(&panel, source, position);
+            }
+        } else if self.cancel_drag {
+            self.drag = None;
+        }
+        self.cancel_drag = false;
     }
 
     /// Puts a panel back where the default layout keeps it: Run History and
@@ -372,6 +452,8 @@ impl WorkspaceLayout {
         for panel in panels {
             if let Panel::Terminal(id) = panel {
                 app.close_terminal_view(&id);
+            } else if matches!(panel, Panel::AnalysisSection { .. }) {
+                continue;
             } else {
                 self.return_home(panel);
             }
@@ -403,7 +485,7 @@ impl TabViewer for Viewer<'_> {
         false
     }
     fn closeable(&mut self, tab: &mut Panel) -> bool {
-        matches!(tab, Panel::Terminal(_))
+        matches!(tab, Panel::Terminal(_) | Panel::AnalysisSection { .. })
     }
     fn on_close(&mut self, tab: &mut Panel) -> bool {
         if let Panel::Terminal(id) = tab {
@@ -412,14 +494,21 @@ impl TabViewer for Viewer<'_> {
         true
     }
     fn on_tab_button(&mut self, tab: &mut Panel, response: &egui::Response) {
-        if response.drag_started()
-            || (response.hovered() && response.ctx.input(|input| input.pointer.primary_pressed()))
-        {
+        if response.drag_started_by(egui::PointerButton::Primary) {
             self.layout.drag = Some((tab.clone(), self.surface));
         }
         response.clone().on_hover_text(self.app.panel_title(tab));
     }
     fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Panel, _: SurfaceIndex, _: NodeIndex) {
+        if !self.surface.is_main()
+            && ui
+                .button("Dock")
+                .on_hover_text("Move this tab into the main window")
+                .clicked()
+        {
+            self.layout.dock_back = Some(tab.clone());
+            ui.close_menu();
+        }
         if ui.button("Detach").clicked() {
             self.layout.detach = Some(tab.clone());
             ui.close_menu();
@@ -427,9 +516,161 @@ impl TabViewer for Viewer<'_> {
     }
 }
 
+fn primary_release(input: &egui::InputState) -> Option<egui::Pos2> {
+    input.events.iter().rev().find_map(|event| match event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            ..
+        } => Some(*pos),
+        _ => None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restoring_layout_discards_ephemeral_analysis_views_not_saved_reports() {
+        let mut layout = WorkspaceLayout::default();
+        layout.dock.add_window(vec![Panel::AnalysisSection {
+            report_id: "old-report".into(),
+            kind: AnalysisKind::Strings,
+        }]);
+        layout.validate();
+        assert!(!layout
+            .dock
+            .iter_all_tabs()
+            .any(|(_, panel)| matches!(panel, Panel::AnalysisSection { .. })));
+        assert!(layout.dock.find_tab(&Panel::StaticAnalysis).is_some());
+    }
+
+    #[test]
+    fn only_an_explicit_primary_release_can_commit_a_tab_drop() {
+        let position = egui::pos2(400.0, 200.0);
+        let mut input = egui::InputState::default();
+        input.events = vec![
+            egui::Event::PointerMoved(position),
+            egui::Event::PointerButton {
+                pos: position,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos: position,
+                button: egui::PointerButton::Secondary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        assert_eq!(primary_release(&input), None);
+        input.events.push(egui::Event::PointerButton {
+            pos: position,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        assert_eq!(primary_release(&input), Some(position));
+    }
+
+    #[test]
+    fn dragging_between_main_window_leaves_moves_the_tab() {
+        let mut layout = WorkspaceLayout::default();
+        let destination = layout
+            .dock
+            .find_main_surface_tab(&Panel::Details)
+            .unwrap()
+            .0;
+        layout.targets.push((
+            SurfaceIndex::main(),
+            destination,
+            Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 500.0)),
+        ));
+        layout.drop_panel(
+            &Panel::Trace,
+            SurfaceIndex::main(),
+            egui::pos2(400.0, 250.0),
+        );
+        assert_eq!(
+            layout.dock.find_main_surface_tab(&Panel::Trace).unwrap().0,
+            destination
+        );
+    }
+
+    #[test]
+    fn dock_action_merges_a_detached_terminal_without_losing_other_tabs() {
+        let mut layout = WorkspaceLayout::default();
+        let terminal = Panel::Terminal("dock-test".into());
+        let surface = layout.dock.add_window(vec![terminal.clone()]);
+        layout.geometry.insert(
+            surface.0,
+            Rect::from_min_size(egui::pos2(100.0, 80.0), egui::vec2(820.0, 520.0)),
+        );
+        let count = layout.dock.iter_all_tabs().count();
+        layout.dock_panel(terminal.clone());
+        assert!(layout.dock.find_tab(&terminal).unwrap().0.is_main());
+        assert_eq!(layout.dock.iter_all_tabs().count(), count);
+        assert!(!layout.geometry.contains_key(&surface.0));
+    }
+
+    #[test]
+    fn dock_action_finds_a_leaf_when_preferred_home_tabs_are_detached() {
+        let mut layout = WorkspaceLayout::default();
+        for panel in [Panel::Trace, Panel::RunHistory] {
+            let location = layout.dock.find_tab(&panel).unwrap();
+            layout.dock.detach_tab(
+                location,
+                Rect::from_min_size(egui::pos2(100.0, 80.0), egui::vec2(820.0, 520.0)),
+            );
+        }
+        layout.dock.main_surface_mut().split_right(
+            NodeIndex::root(),
+            0.5,
+            vec![Panel::Terminal("main-stays".into())],
+        );
+        assert!(!layout.dock.main_surface()[NodeIndex::root()].is_leaf());
+        let terminal = Panel::Terminal("dock-fallback".into());
+        layout.dock.add_window(vec![terminal.clone()]);
+        layout.dock_panel(terminal.clone());
+        let (surface, node, _) = layout.dock.find_tab(&terminal).unwrap();
+        assert!(surface.is_main());
+        assert!(layout.dock.main_surface()[node].is_leaf());
+    }
+
+    #[test]
+    fn destination_release_wins_over_earlier_source_focus_loss() {
+        let mut layout = WorkspaceLayout::default();
+        let terminal = Panel::Terminal("release-target".into());
+        let source = layout.dock.add_window(vec![terminal.clone()]);
+        let target = layout.dock.find_main_surface_tab(&Panel::Trace).unwrap().0;
+        layout.targets.push((
+            SurfaceIndex::main(),
+            target,
+            Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 500.0)),
+        ));
+        layout.drag = Some((terminal.clone(), source));
+        layout.cancel_drag = true;
+        layout.released = Some((SurfaceIndex::main(), egui::pos2(400.0, 250.0)));
+        layout.finish_drag();
+        assert!(layout.dock.find_tab(&terminal).unwrap().0.is_main());
+        assert!(layout.drag.is_none());
+        assert!(!layout.cancel_drag);
+    }
+
+    #[test]
+    fn source_focus_loss_without_a_release_cancels_instead_of_dropping() {
+        let mut layout = WorkspaceLayout::default();
+        let before = layout.dock.iter_all_tabs().count();
+        layout.drag = Some((Panel::Trace, SurfaceIndex::main()));
+        layout.cancel_drag = true;
+        layout.finish_drag();
+        assert!(layout.drag.is_none());
+        assert_eq!(layout.dock.iter_all_tabs().count(), before);
+        assert!(layout.dock.find_tab(&Panel::Trace).unwrap().0.is_main());
+    }
 
     #[test]
     fn decorated_viewport_updates_do_not_move_or_grow_the_window() {
@@ -642,14 +883,12 @@ mod tests {
             Rect::from_min_size(egui::pos2(200.0, 100.0), egui::vec2(800.0, 500.0)),
         ));
         layout.drop_panel(&trace, detached, egui::pos2(600.0, 350.0));
-        assert!(
-            layout
-                .dock
-                .find_tab(&trace)
-                .expect("trace docked")
-                .0
-                .is_main()
-        );
+        assert!(layout
+            .dock
+            .find_tab(&trace)
+            .expect("trace docked")
+            .0
+            .is_main());
         for panel in [
             Panel::Trace,
             Panel::RunHistory,
@@ -742,14 +981,12 @@ mod tests {
             detached_analysis,
             egui::pos2(400.0, 250.0),
         );
-        assert!(
-            restored
-                .dock
-                .find_tab(&Panel::StaticAnalysis)
-                .unwrap()
-                .0
-                .is_main()
-        );
+        assert!(restored
+            .dock
+            .find_tab(&Panel::StaticAnalysis)
+            .unwrap()
+            .0
+            .is_main());
         assert_eq!(
             restored.dock.find_tab(&Panel::Trace).unwrap().0,
             detached_trace
