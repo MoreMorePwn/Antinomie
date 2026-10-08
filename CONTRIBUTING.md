@@ -261,3 +261,40 @@ digests and ordered patch list; final config digest; compiler and build-profile
 values; output `.deb` names/versions/SHA-256s; image spec, rootfs package lock,
 qcow2 digest, QEMU version and command-policy revision; test results, known
 limitations, snapshot id.
+
+---
+
+## 12. Versioning
+
+Antinomie uses semantic versioning. The one version number is
+`[workspace.package] version` in `src/antinomie/monitor/Cargo.toml`; the app
+shows it in its title bar, **Help > About Antinomie** and
+`antinomie-monitor --version`.
+
+| Change | Bump | Example |
+|---|---|---|
+| Bug fix, no new behaviour | patch | 0.1.0 → 0.1.1 |
+| New feature (anything a user can see or use) | minor | 0.1.1 → 0.2.0 |
+| First release; later, incompatible changes | major | 0.x → 1.0.0 |
+
+The guest kernel has its own **contract revision** (`ANTC_REVISION` in the
+shared control header, documented in `native-schema-slices.md`). It changes
+only when guest-visible kernel behaviour changes, and only together with a
+minor or major release:
+
+1. Raise `ANTC_REVISION` in the kernel's `control_wire.h` (mirrored to
+   `src/antinomie/monitor/protocol/control.h`).
+2. Add `{"revision": N, "first_app_version": "X.Y.0"}` to
+   `src/antinomie/monitor/protocol/revisions.json`.
+3. Raise the workspace version to `X.Y.0`.
+
+`cargo test` fails if the table does not end with the current revision, if an
+entry is not an `x.y.0` version, or if it names a version newer than the app.
+Builders refuse a kernel whose revision is not in the table. Every base
+records `built_with` (the app version that built it) and `min_app_version`
+(the first version of its kernel's revision); the app refuses bases that need
+a newer version and labels older ones as outdated. A patch release therefore
+never makes existing bases outdated.
+
+For a release: update `CHANGELOG.md`, raise the version, commit, and tag the
+commit `vX.Y.Z`.

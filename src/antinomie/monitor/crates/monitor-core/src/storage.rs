@@ -398,6 +398,12 @@ pub struct Bundle {
     /// SHA-256 of the core patch series the kernel was built from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub antinomie_source: Option<String>,
+    /// Antinomie version that built the base.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub built_with: Option<String>,
+    /// Oldest Antinomie version that can run the base (its kernel revision).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_app_version: Option<String>,
 }
 fn is_false(value: &bool) -> bool {
     !value
@@ -431,8 +437,19 @@ impl Bundle {
             {
                 Ok(())
             }
-            _ => Err("bundle has an invalid Antinomie revision or source".into()),
+            _ => Err::<(), String>("bundle has an invalid Antinomie revision or source".into()),
+        }?;
+        for version in [&self.built_with, &self.min_app_version]
+            .into_iter()
+            .flatten()
+        {
+            if crate::api::Version::parse(version).is_none() {
+                return Err(format!(
+                    "bundle has an invalid Antinomie version {version:?}"
+                ));
+            }
         }
+        Ok(())
     }
     fn identity(&self) -> Result<String, String> {
         let mut digest = Sha256::new();
@@ -543,6 +560,8 @@ impl Bundle {
                     build_provenance: self.build_provenance.clone(),
                     antinomie_revision: self.antinomie_revision,
                     antinomie_source: self.antinomie_source.clone(),
+                    built_with: self.built_with.clone(),
+                    min_app_version: self.min_app_version.clone(),
                 };
                 if copied.identity()? != identity {
                     return Err("bundle changed during import; copies rejected".into());
@@ -577,6 +596,8 @@ impl Bundle {
             build_provenance: self.build_provenance,
             antinomie_revision: self.antinomie_revision,
             antinomie_source: self.antinomie_source,
+            built_with: self.built_with,
+            min_app_version: self.min_app_version,
         };
         installed.verify_installed()?;
         atomic_json(&target.join("bundle.json"), &installed)?;
@@ -1462,6 +1483,8 @@ mod tests {
             build_provenance: None,
             antinomie_revision: None,
             antinomie_source: None,
+            built_with: None,
+            min_app_version: None,
         }
         .install(&options)
         .unwrap();
@@ -1514,8 +1537,13 @@ mod tests {
             .unwrap();
         };
         write(&bundle);
+        bundle.built_with = Some("0.1.0".into());
+        bundle.min_app_version = Some("0.1.0".into());
+        assert_eq!(bundle.identity().unwrap(), identity);
+        write(&bundle);
         let installed = Bundle::load(&source).unwrap().install(&options).unwrap();
         assert_eq!(installed.antinomie_revision, Some(9));
+        assert_eq!(installed.min_app_version.as_deref(), Some("0.1.0"));
         let reloaded = Bundle::load(installed.kernel.parent().unwrap()).unwrap();
         assert_eq!(reloaded.antinomie_source, bundle.antinomie_source);
         for (revision, source_id) in [
@@ -1528,6 +1556,13 @@ mod tests {
             bundle.antinomie_source = source_id;
             write(&bundle);
             assert!(Bundle::load(&source).is_err());
+        }
+        bundle.antinomie_revision = Some(9);
+        bundle.antinomie_source = Some("d".repeat(64));
+        for version in ["0.1", "v0.1.0", "01.0.0"] {
+            bundle.min_app_version = Some(version.into());
+            write(&bundle);
+            assert!(Bundle::load(&source).is_err(), "{version}");
         }
         fs::remove_dir_all(root).unwrap();
     }
@@ -1720,6 +1755,8 @@ mod tests {
             build_provenance: None,
             antinomie_revision: None,
             antinomie_source: None,
+            built_with: None,
+            min_app_version: None,
         };
         bundle.base_identity = Some(bundle.identity().unwrap());
         let vm = source.join("vms/old-id");
@@ -1908,6 +1945,8 @@ mod tests {
             build_provenance: Some(provenance),
             antinomie_revision: None,
             antinomie_source: None,
+            built_with: None,
+            min_app_version: None,
         };
         let options = BackendOptions {
             data_dir: directory.join("data"),

@@ -846,6 +846,7 @@ impl BuildRun {
             "format": 1,
             "profile": self.profile,
             "options": self.options.job_options(self.kind),
+            "app_version": APP_VERSION,
         });
         let kernel_cache = crate::kit::kernel_cache(&root, build::kernel_profile(self.kind))?;
         if kernel_cache.is_file() {
@@ -1181,7 +1182,7 @@ impl Worker {
                 if !bundle.kernel_version.starts_with("6.12.94") {
                     return Err("boot bundle must use Linux 6.12.94".into());
                 }
-                require_supported_revision(bundle.antinomie_revision)?;
+                require_supported(bundle.antinomie_revision, bundle.min_app_version.as_deref())?;
                 storage::validate_disk_chain(&self.options, &bundle.base_disk, None)?;
                 bundle.install(&self.options)?;
                 self.refresh_locations()?;
@@ -1218,7 +1219,7 @@ impl Worker {
                     .find(|base| base.identity == identity)
                     .cloned()
                     .ok_or("unknown base; refresh the catalog first")?;
-                require_supported_revision(base.antinomie_revision)?;
+                require_supported(base.antinomie_revision, base.min_app_version.as_deref())?;
                 if self
                     .snapshot
                     .bases
@@ -1255,7 +1256,10 @@ impl Worker {
                             },
                         )
                         .and_then(|bundle| {
-                            require_supported_revision(bundle.antinomie_revision)?;
+                            require_supported(
+                                bundle.antinomie_revision,
+                                bundle.min_app_version.as_deref(),
+                            )?;
                             storage::validate_disk_chain(&options, &bundle.base_disk, None)?;
                             bundle.install(&options)?;
                             Ok(())
@@ -1323,7 +1327,10 @@ impl Worker {
                         let output = job.output.clone();
                         let result = job.run().and_then(|()| {
                             let bundle = Bundle::load(&output)?;
-                            require_supported_revision(bundle.antinomie_revision)?;
+                            require_supported(
+                                bundle.antinomie_revision,
+                                bundle.min_app_version.as_deref(),
+                            )?;
                             storage::validate_disk_chain(&options, &bundle.base_disk, None)?;
                             bundle.install(&options)?;
                             Ok(())
@@ -1666,7 +1673,7 @@ impl Worker {
         if !bundle.kernel_version.is_empty() && !bundle.kernel_version.starts_with("6.12.94") {
             return Err("boot bundle must use the approved Linux 6.12.94 baseline".into());
         }
-        require_supported_revision(bundle.antinomie_revision)?;
+        require_supported(bundle.antinomie_revision, bundle.min_app_version.as_deref())?;
         self.snapshot.state = VmState::Starting;
         self.snapshot.active_vm = Some(id.into());
         self.snapshot.health = Health::default();
@@ -2540,6 +2547,8 @@ mod tests {
                 build_provenance: None,
                 antinomie_revision: None,
                 antinomie_source: None,
+                built_with: None,
+                min_app_version: None,
             };
             storage::atomic_json(&source.join("bundle.json"), &bundle).unwrap();
             worker
@@ -2933,6 +2942,8 @@ mod tests {
             build_provenance: None,
             antinomie_revision: None,
             antinomie_source: None,
+            built_with: None,
+            min_app_version: None,
         };
         capture
             .manifest(&VmConfig::default(), &bundle, &bundle, "clean")

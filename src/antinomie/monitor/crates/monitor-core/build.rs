@@ -9,6 +9,7 @@ const KIT_FILES: &[&str] = &[
     "scripts/build-monitor-image.py",
     "scripts/build-debian-image.py",
     "src/antinomie/packaging/debian-6.12.94-1-trixie/adapter.conf",
+    "src/antinomie/monitor/protocol/revisions.json",
     "src/debian/linux_6.12.94-1.dsc",
     "src/debian/linux_6.12.94-1.debian.tar.xz",
 ];

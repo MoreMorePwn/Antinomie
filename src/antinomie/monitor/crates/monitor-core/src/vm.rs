@@ -419,6 +419,8 @@ mod tests {
             build_provenance: None,
             antinomie_revision: None,
             antinomie_source: None,
+            built_with: None,
+            min_app_version: None,
         }
     }
 

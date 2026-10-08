@@ -98,8 +98,32 @@ def source_identity(kernel):
     return int(match[1]), match[2]
 
 
-def stamp_revision(manifest, kernel, allow_unversioned):
-    """Record the patch revision and series the kernel was built from."""
+REVISIONS = REPO / "src/antinomie/monitor/protocol/revisions.json"
+VERSION = re.compile(r"(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})")
+
+
+def first_app_version(revision):
+    """The first Antinomie version that shipped a guest contract revision."""
+    for entry in json.loads(REVISIONS.read_text())["revisions"]:
+        if entry["revision"] == revision:
+            return entry["first_app_version"]
+    raise RuntimeError(f"revision {revision} is missing from {REVISIONS.name}; "
+                       "add it with the release that introduces it")
+
+
+def workspace_version():
+    """The app version of a repository checkout, if this is one."""
+    cargo = REPO / "src/antinomie/monitor/Cargo.toml"
+    if not cargo.is_file():
+        return None
+    match = re.search(r'^\[workspace\.package\][^\[]*?^version = "([^"]+)"', cargo.read_text(),
+                      re.M | re.S)
+    return match[1] if match else None
+
+
+def stamp_revision(manifest, kernel, allow_unversioned, app_version=None):
+    """Record the patch revision and series the kernel was built from, the
+    oldest app version that can run it and the app version that built it."""
     identity = source_identity(kernel)
     if identity is None:
         if not allow_unversioned:
@@ -107,6 +131,12 @@ def stamp_revision(manifest, kernel, allow_unversioned):
                                "pass --allow-unversioned to build an unversioned base")
         return
     manifest["antinomie_revision"], manifest["antinomie_source"] = identity
+    manifest["min_app_version"] = first_app_version(identity[0])
+    built_with = app_version or workspace_version()
+    if built_with is not None:
+        if not VERSION.fullmatch(built_with):
+            raise RuntimeError(f"invalid app version {built_with!r}")
+        manifest["built_with"] = built_with
 
 
 def fixed_display_config(config, kernel=None):
@@ -227,6 +257,7 @@ def main():
     parser.add_argument("--allow-unversioned", action="store_true",
                         help="accept a development kernel without a source id")
     parser.add_argument("--hostname", default="localhost")
+    parser.add_argument("--app-version", help="Antinomie version building this base")
     parser.add_argument("--work", type=Path, default=REPO / "work",
                         help="directory for temporary build files")
     args = parser.parse_args()
@@ -277,7 +308,7 @@ def main():
                 "kernel_append": "console=tty0 console=ttyS0 panic=-1",
                 "sha256": {name: checksum(args.output / name)
                            for name in ("kernel", "initrd.gz", "base.qcow2")}}
-    stamp_revision(manifest, args.output / "kernel", args.allow_unversioned)
+    stamp_revision(manifest, args.output / "kernel", args.allow_unversioned, args.app_version)
     if fixed_display:
         manifest["fixed_display"] = True
         shutil.copy2(args.kernel_config, args.output / "kernel.config")

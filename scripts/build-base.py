@@ -15,7 +15,8 @@ profile, never on the image answers. With --kernel-cache, a matching cached
 kernel (bzImage, .config and modules) is reused; otherwise the kernel is built
 and the cache file is written for the next build.
 
-JOB.json: {"format": 1, "profile": "busybox" | "debian-xfce", "options": {...}}
+JOB.json: {"format": 1, "profile": "busybox" | "debian-xfce", "options": {...},
+           "app_version": "0.1.0"}   (app_version optional: recorded as built_with)
 """
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 MikiMiku (MoreMorePwn)
@@ -92,7 +93,10 @@ def load_job(path):
     unknown = set(values) - PROFILES[profile][2]
     if unknown:
         raise RuntimeError(f"options not offered for {profile}: " + ", ".join(sorted(unknown)))
-    return profile, values
+    app_version = job.get("app_version")
+    if app_version is not None and not isinstance(app_version, str):
+        raise RuntimeError("job app_version must be a string")
+    return profile, values, app_version
 
 
 def require_space(work, gib):
@@ -219,10 +223,12 @@ def save_cached_kernel(cache, kept, kernel_profile):
     print(f"kernel cached in {cache}", flush=True)
 
 
-def build_image(profile, values, build, work, output):
+def build_image(profile, values, build, work, output, app_version=None):
     recipe = KIT / "scripts" / PROFILES[profile][1]
     command = [sys.executable, recipe, "--kernel", build / "arch/x86/boot/bzImage",
                "--kernel-config", build / ".config", "--output", output, "--work", work]
+    if app_version:
+        command += ["--app-version", app_version]
     if profile == "busybox":
         command += ["--hostname", values.get("hostname", "localhost")]
     else:
@@ -246,7 +252,7 @@ def main():
                         help="reuse this cached kernel if it matches, else write it")
     args = parser.parse_args()
     try:
-        profile, values = load_job(args.job)
+        profile, values, app_version = load_job(args.job)
         if args.output.exists():
             raise RuntimeError(f"{args.output} already exists")
         args.work.mkdir(parents=True, exist_ok=True)
@@ -267,7 +273,7 @@ def main():
             stage("kernel")
             require_space(args.work, image_space)
         stage("image")
-        build_image(profile, values, build, args.work, args.output)
+        build_image(profile, values, build, args.work, args.output, app_version)
         if not args.keep_kernel_build:
             shutil.rmtree(build)
         stage("done")

@@ -43,7 +43,10 @@ cd ~/src/antinomie
                 # (./install.sh --uninstall removes it; application data stays)
 ```
 
-Your bases, VM disks and recordings are kept in `~/antinomie`.
+Your bases, VM disks and recordings are kept in `~/antinomie`. The app's
+version is in its title bar and **Help > About Antinomie**; see
+[CHANGELOG.md](CHANGELOG.md) and the versioning rules in
+[CONTRIBUTING.md](CONTRIBUTING.md#12-versioning).
 
 ## Using the app
 

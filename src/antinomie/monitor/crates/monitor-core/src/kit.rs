@@ -287,6 +287,7 @@ mod tests {
             ADAPTER,
             "src/debian/linux_6.12.94-1.dsc",
             "src/debian/linux_6.12.94-1.debian.tar.xz",
+            "src/antinomie/monitor/protocol/revisions.json",
             "LICENSE",
         ] {
             assert!(names.contains(&required), "{required}");

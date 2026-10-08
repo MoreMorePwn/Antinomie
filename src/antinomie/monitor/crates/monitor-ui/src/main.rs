@@ -16,7 +16,7 @@ use std::{
 };
 
 #[derive(Parser)]
-#[command(version, about = "Native Antinomie VM and syscall monitor")]
+#[command(name = "antinomie", version, about = "Native Antinomie VM and syscall monitor")]
 struct Arguments {
     #[arg(long)]
     bundle: Option<PathBuf>,
@@ -62,6 +62,7 @@ fn main() -> eframe::Result<()> {
             // icon applies to the running window.
             viewport: eframe::egui::ViewportBuilder::default()
                 .with_app_id("antinomie")
+                .with_title(format!("Antinomie {}", antinomie_monitor_core::APP_VERSION))
                 .with_inner_size([1280.0, 820.0])
                 .with_min_inner_size([800.0, 600.0]),
             ..Default::default()

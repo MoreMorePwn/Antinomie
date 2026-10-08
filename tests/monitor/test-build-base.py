@@ -39,7 +39,7 @@ class BuildBaseTests(unittest.TestCase):
                 job.write_text(json.dumps(value))
                 with self.subTest(value=value):
                     if error is None:
-                        self.assertEqual(base.load_job(job)[0], value["profile"])
+                        self.assertEqual(base.load_job(job)[:2], (value["profile"], value.get("options", {})))
                     else:
                         with self.assertRaisesRegex(RuntimeError, error):
                             base.load_job(job)

@@ -396,7 +396,7 @@ def root_image(values, raw, staging, provenance, log, modules=None):
 
 
 def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=False,
-          values=None, work=None):
+          values=None, work=None, app_version=None):
     if output.exists():
         raise RuntimeError("output already exists; choose a new unpublished bundle path")
     values = options(values or {})
@@ -453,7 +453,7 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
                     "kernel": "kernel", "initrd": "initrd.gz", "base_disk": "base.qcow2",
                     "kernel_append": APPEND, "guest": profile(values["desktop"]),
                     "sha256": hashes}
-        helpers.stamp_revision(manifest, bundle / "kernel", allow_unversioned)
+        helpers.stamp_revision(manifest, bundle / "kernel", allow_unversioned, app_version)
         if helpers.fixed_display_config(kernel_config, bundle / "kernel"):
             manifest["fixed_display"] = True
             shutil.copy2(kernel_config, provenance / "kernel.config")
@@ -482,6 +482,7 @@ def main():
                         help="JSON object of installer answers (hostname, locale, keyboard_layout, "
                              "keyboard_variant, timezone, standard, mirror, proxy)")
     parser.add_argument("--work", type=Path, help="directory for temporary build files")
+    parser.add_argument("--app-version", help="Antinomie version building this base")
     args = parser.parse_args()
     if not args.kernel.is_file():
         parser.error("an existing patched Linux 6.12.94 kernel is required")
@@ -494,7 +495,7 @@ def main():
         if not isinstance(values, dict):
             raise RuntimeError("options must be a JSON object")
         build(args.kernel, args.output, args.kernel_config, args.modules,
-              args.allow_unversioned, values, args.work)
+              args.allow_unversioned, values, args.work, args.app_version)
     except (RuntimeError, OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.exit(1, "Debian image build failed: " + str(error) + "\n")
     print(args.output)

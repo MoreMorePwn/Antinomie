@@ -407,6 +407,11 @@ fn first_item(value: Option<String>) -> Option<String> {
     (!first.is_empty()).then_some(first)
 }
 
+/// The first 12 hex digits of the kernel patch series this app builds.
+pub fn series_short() -> String {
+    crate::kit::series_hash()[..12].to_string()
+}
+
 /// The kernel build profile a base kind uses (`build-monitor-kernel.sh`).
 pub(crate) fn kernel_profile(kind: Kind) -> &'static str {
     match kind {

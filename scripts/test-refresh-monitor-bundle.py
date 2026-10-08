@@ -72,6 +72,14 @@ class RefreshTests(unittest.TestCase):
         manifest = json.loads((self.output / "bundle.json").read_text())
         self.assertEqual(manifest["antinomie_revision"], 9)
         self.assertEqual(manifest["antinomie_source"], SERIES)
+        self.assertEqual(manifest["min_app_version"], "0.1.0")
+        self.assertRegex(manifest["built_with"], r"^\d+\.\d+\.\d+$")
+
+    def test_unknown_revision_must_be_added_to_the_table(self):
+        self.set_source_id(f'CONFIG_ANTINOMIE_SOURCE_ID="99:{SERIES}"')
+        with self.assertRaisesRegex(RuntimeError, "missing from revisions.json"):
+            self.run_refresh()
+        self.assertFalse(self.output.exists())
 
     def test_unversioned_kernel_needs_explicit_consent(self):
         for line in ('CONFIG_ANTINOMIE_SOURCE_ID=""', None):

@@ -11,7 +11,7 @@ use antinomie_monitor_core::{
     pair_events, Backend, BackendOptions, BaseSummary, Command, DisplayResolution, ExecRequest,
     GuestCredentials, InvocationSummary, Notification, RevisionStatus, RunState, RunSummary,
     Snapshot, TerminalRecord, VmAcceleration, VmConfig, VmCpuModel, VmLaunchOptions, VmState,
-    WaitStatus, APP_REVISION,
+    WaitStatus, APP_REVISION, APP_VERSION,
 };
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
@@ -117,6 +117,7 @@ pub struct MonitorApp {
     import_directory: String,
     download_open: bool,
     build_open: bool,
+    about_open: bool,
     build_wizard: build_wizard::BuildWizard,
     confirm: Option<Confirm>,
     name_action: Option<(String, bool, String)>,
@@ -205,6 +206,7 @@ impl MonitorApp {
             import_directory: String::new(),
             download_open: false,
             build_open: false,
+            about_open: false,
             build_wizard: build_wizard::BuildWizard::default(),
             confirm: None,
             name_action: None,
@@ -1247,6 +1249,12 @@ impl MonitorApp {
                             ui.close_menu();
                         }
                     });
+                    ui.menu_button("Help", |ui| {
+                        if ui.button("About Antinomie").clicked() {
+                            self.about_open = true;
+                            ui.close_menu();
+                        }
+                    });
                     if self.snapshot.bases.is_empty() {
                         ui.separator();
                         if ui
@@ -1505,8 +1513,10 @@ impl MonitorApp {
                                 .guest
                                 .as_ref()
                                 .map_or("Linux 6.12.94".to_string(), |guest| guest.id.clone());
-                            let label = if RevisionStatus::of(base.revision)
-                                == RevisionStatus::Current
+                            let label = if RevisionStatus::of_base(
+                                base.revision,
+                                base.min_app_version.as_deref(),
+                            ) == RevisionStatus::Current
                             {
                                 format!("{}  {}", egui_phosphor::regular::HARD_DRIVE, base.label)
                             } else {
@@ -1539,7 +1549,7 @@ impl MonitorApp {
                                     base.directory.display(),
                                     base.size_bytes as f64 / 1073741824.0,
                                     dependents,
-                                    RevisionStatus::describe(base.revision)
+                                    describe_base(base)
                                 ));
                             if response.clicked() || response.secondary_clicked() {
                                 clicked_base = Some(base.id.clone());
@@ -1651,12 +1661,13 @@ impl MonitorApp {
                         let status = RevisionStatus::of(kernel.revision);
                         ui.colored_label(
                             if status == RevisionStatus::Current { theme::GOOD } else { theme::WARN },
-                            format!("Kernel: {}", RevisionStatus::describe(kernel.revision)),
+                            format!("Kernel: {}", RevisionStatus::describe(kernel.revision, None)),
                         )
                         .on_hover_text(format!(
-                            "Release: {}\nPatch series: {}\nThis app: revision {APP_REVISION}",
+                            "Release: {}\nPatch series: {}\nGuest contract revision: {}\nThis app: Antinomie {APP_VERSION} (revision {APP_REVISION})",
                             kernel.release.as_deref().unwrap_or("unknown"),
                             kernel.source.as_deref().unwrap_or("not recorded"),
+                            kernel.revision.map_or("none".into(), |r| r.to_string()),
                         ));
                     }
                     ui.separator();
@@ -2257,21 +2268,26 @@ impl MonitorApp {
                                 ui.small(format!(
                                     "{} · {} · {} · {} · {}",
                                     base.kernel_version,
-                                    RevisionStatus::describe(base.revision),
+                                    RevisionStatus::describe(
+                                        base.revision,
+                                        base.min_app_version.as_deref()
+                                    ),
                                     kind,
                                     human_bytes(base.total_size),
                                     short
                                 ));
                             });
-                            let newer = RevisionStatus::of(base.revision)
-                                == RevisionStatus::NeedsNewerApp;
+                            let newer = RevisionStatus::of_base(
+                                base.revision,
+                                base.min_app_version.as_deref(),
+                            ) == RevisionStatus::NeedsNewerApp;
                             if installed.contains(&base.identity) {
                                 ui.colored_label(theme::GOOD, "installed");
                             } else if ui
                                 .add_enabled(!busy && !newer, egui::Button::new("Download"))
                                 .on_disabled_hover_text(if newer {
                                     format!(
-                                        "Built for a newer Antinomie (this app is revision {APP_REVISION})"
+                                        "Built for a newer Antinomie (this is Antinomie {APP_VERSION})"
                                     )
                                 } else {
                                     "Another download is in progress".to_string()
@@ -2290,6 +2306,44 @@ impl MonitorApp {
             if let Some(identity) = request {
                 self.send(Command::DownloadBase { identity });
             }
+        }
+        if self.about_open {
+            let mut open = true;
+            egui::Window::new("About Antinomie")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label(
+                        RichText::new(format!("Antinomie {APP_VERSION}"))
+                            .strong()
+                            .size(18.0),
+                    );
+                    ui.label("Run programs in a QEMU VM and record every system call they make.");
+                    ui.add_space(6.0);
+                    egui::Grid::new("about")
+                        .num_columns(2)
+                        .spacing([16.0, 4.0])
+                        .show(ui, |ui| {
+                            ui.label(RichText::new("Guest contract revision").color(theme::MUTED));
+                            ui.label(APP_REVISION.to_string());
+                            ui.end_row();
+                            ui.label(RichText::new("Kernel patch series").color(theme::MUTED));
+                            ui.label(antinomie_monitor_core::build::series_short());
+                            ui.end_row();
+                            ui.label(RichText::new("Guest kernel").color(theme::MUTED));
+                            ui.label("Linux 6.12.94 (Debian 6.12.94-1 source)");
+                            ui.end_row();
+                        });
+                    ui.add_space(6.0);
+                    ui.small(
+                        "Versions: a fix raises the last number (0.1.0 → 0.1.1), a feature the \
+                              middle one (0.1.1 → 0.2.0); 1.0.0 is the first release. Bases record \
+                              the oldest version that can run them.",
+                    );
+                    ui.small("Licensing: see LICENSING.md in the source repository.");
+                });
+            self.about_open = open;
         }
         if self.build_open {
             let mut open = true;
@@ -2980,10 +3034,21 @@ fn base_choice_label(base: &BaseSummary) -> String {
     } else {
         format!("{} (legacy)", base.label)
     };
-    if RevisionStatus::of(base.revision) == RevisionStatus::Current {
+    if RevisionStatus::of_base(base.revision, base.min_app_version.as_deref())
+        == RevisionStatus::Current
+    {
         label
     } else {
-        format!("{label} · {}", RevisionStatus::describe(base.revision))
+        format!("{label} · {}", describe_base(base))
+    }
+}
+
+/// "for Antinomie 0.1.0" etc., plus the version that built the base.
+fn describe_base(base: &BaseSummary) -> String {
+    let status = RevisionStatus::describe(base.revision, base.min_app_version.as_deref());
+    match &base.built_with {
+        Some(version) => format!("{status} (built with {version})"),
+        None => status,
     }
 }
 
@@ -3446,6 +3511,7 @@ mod tests {
             import_directory: String::new(),
             download_open: false,
             build_open: false,
+            about_open: false,
             build_wizard: build_wizard::BuildWizard::default(),
             name_action: None,
             filter: String::new(),
@@ -3747,6 +3813,8 @@ mod tests {
             fixed_display,
             size_bytes: 0,
             revision: Some(APP_REVISION),
+            min_app_version: None,
+            built_with: None,
         }
     }
 
@@ -3757,9 +3825,9 @@ mod tests {
         base.revision = Some(APP_REVISION - 1);
         assert!(base_choice_label(&base).ends_with(", outdated"));
         base.revision = Some(APP_REVISION + 1);
-        assert!(base_choice_label(&base).ends_with("needs a newer app"));
+        assert!(base_choice_label(&base).contains("needs a newer Antinomie"));
         base.revision = None;
-        assert!(base_choice_label(&base).contains("no revision"));
+        assert!(base_choice_label(&base).contains("built before versioning"));
     }
 
     fn base_summary_for_revision(revision: Option<u32>) -> BaseSummary {
@@ -3773,6 +3841,8 @@ mod tests {
             fixed_display: true,
             size_bytes: 0,
             revision,
+            min_app_version: None,
+            built_with: None,
         }
     }
 
@@ -4370,6 +4440,8 @@ mod tests {
                 fixed_display: true,
                 size_bytes: 0,
                 revision: Some(APP_REVISION),
+                min_app_version: None,
+                built_with: None,
                 guest: Some(antinomie_monitor_core::GuestProfile {
                     id: "debian-xfce".into(),
                     label: "Debian 13 (Xfce)".into(),
@@ -4448,6 +4520,8 @@ mod tests {
                 fixed_display: true,
                 size_bytes: 0,
                 revision: Some(APP_REVISION),
+                min_app_version: None,
+                built_with: None,
                 guest: Some(antinomie_monitor_core::GuestProfile {
                     id: "debian-xfce".into(),
                     label: "Debian 13 (Xfce)".into(),
@@ -4549,6 +4623,8 @@ mod tests {
                         fixed_display: true,
                         size_bytes: 0,
                         revision: Some(APP_REVISION),
+                        min_app_version: None,
+                        built_with: None,
                         guest: Some(antinomie_monitor_core::GuestProfile {
                             id: "debian-xfce".into(),
                             label: "Debian 13 (Xfce)".into(),
