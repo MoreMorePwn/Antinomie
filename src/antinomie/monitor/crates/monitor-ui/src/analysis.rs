@@ -1,6 +1,10 @@
 //! Opt-in launch selection and retained, run-addressed analysis evidence.
-use antinomie_monitor_core::{AnalysisKind, AnalysisReport, AnalysisSelection, ExecRequest};
+use antinomie_monitor_core::{AnalysisKind, AnalysisSelection, ExecRequest};
 use eframe::egui;
+mod entropy;
+mod records;
+mod workspace;
+pub(crate) use workspace::{workspace, workspace_section, WorkspaceState};
 
 pub(crate) fn launch_fields(
     ui: &mut egui::Ui,
@@ -119,6 +123,11 @@ pub(crate) enum ReportAction {
         report_id: String,
         kind: AnalysisKind,
     },
+    ReadSpecimen {
+        report_id: String,
+        offset: u64,
+        data_len: usize,
+    },
 }
 
 pub(crate) fn section_title(kind: AnalysisKind) -> &'static str {
@@ -134,94 +143,6 @@ pub(crate) fn section_title(kind: AnalysisKind) -> &'static str {
         AnalysisKind::Disassembly => "Disassembly",
         AnalysisKind::Decompilation => "Decompilation",
     }
-}
-
-pub(crate) fn report(ui: &mut egui::Ui, report: Option<&AnalysisReport>) -> Option<ReportAction> {
-    let Some(report) = report else {
-        ui.label("No static analysis report for this run.");
-        return None;
-    };
-    let cancel = matches!(
-        report.state,
-        antinomie_monitor_core::AnalysisState::Acquiring
-            | antinomie_monitor_core::AnalysisState::Queued
-            | antinomie_monitor_core::AnalysisState::Running
-    ) && ui.button("Cancel Analysis").clicked();
-    let mut action = cancel.then(|| ReportAction::Cancel(report.id.clone()));
-    egui::ScrollArea::both()
-        .id_salt("static-analysis-report")
-        .show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.strong(format!("{:?}", report.state));
-                ui.label(&report.source_path);
-            });
-            ui.label(format!("Analysis ID: {}", report.id));
-            if let Some(hash) = &report.specimen_sha256 {
-                ui.label(format!("SHA-256: {hash}"));
-            }
-            if let Some(size) = report.specimen_len {
-                ui.label(format!("Specimen: {size} bytes"));
-            }
-            if let Some(reason) = &report.reason {
-                ui.colored_label(crate::theme::MUTED, reason);
-            }
-            for section in &report.sections {
-                ui.separator();
-                ui.horizontal_wrapped(|ui| {
-                    if ui
-                        .button(format!("{} Open", egui_phosphor::regular::ARROW_SQUARE_OUT))
-                        .clicked()
-                    {
-                        action = Some(ReportAction::OpenSection {
-                            report_id: report.id.clone(),
-                            kind: section.kind,
-                        });
-                    }
-                    ui.strong(section.kind.label());
-                    ui.label(format!(
-                        "{:?} / {} entries",
-                        section.state,
-                        section.entries.len()
-                    ));
-                });
-            }
-        });
-    action
-}
-
-pub(crate) fn section(ui: &mut egui::Ui, report: Option<&AnalysisReport>, kind: AnalysisKind) {
-    let Some(report) = report else {
-        ui.label("This retained analysis report is unavailable.");
-        return;
-    };
-    egui::ScrollArea::both()
-        .id_salt((&report.id, kind.label()))
-        .show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.strong(kind.label());
-                ui.label(&report.source_path);
-            });
-            ui.label(format!("Analysis ID: {}", report.id));
-            if let Some(reason) = &report.reason {
-                ui.colored_label(crate::theme::MUTED, reason);
-            }
-            let Some(section) = report.sections.iter().find(|section| section.kind == kind) else {
-                ui.label("This section has no retained result.");
-                return;
-            };
-            ui.label(format!("{:?}", section.state));
-            ui.label(&section.summary);
-            ui.separator();
-            for entry in &section.entries {
-                ui.horizontal_wrapped(|ui| {
-                    ui.strong(&entry.label);
-                    ui.label(&entry.value);
-                    if let Some(offset) = entry.offset {
-                        ui.monospace(format!("File offset: 0x{offset:x}"));
-                    }
-                });
-            }
-        });
 }
 
 #[cfg(test)]

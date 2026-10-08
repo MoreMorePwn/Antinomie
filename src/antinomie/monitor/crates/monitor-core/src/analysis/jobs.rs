@@ -185,12 +185,11 @@ impl Jobs {
             );
         }
         if report.state == AnalysisState::Unavailable {
-            if let Some(index) = self.queue.iter().position(|j| j.report.id == report.id) {
-                if let Some(mut job) = self.queue.remove(index) {
-                    if let Some(id) = job.handle.take() {
-                        self.release.push_back(id);
-                    }
-                }
+            if let Some(index) = self.queue.iter().position(|j| j.report.id == report.id)
+                && let Some(mut job) = self.queue.remove(index)
+                && let Some(id) = job.handle.take()
+            {
+                self.release.push_back(id);
             }
             self.retained_len = self
                 .retained_len
@@ -555,10 +554,13 @@ fn directory_len(path: &Path) -> Result<u64, String> {
     Ok(total)
 }
 fn spawn_worker(job: &Job) -> Result<Child, String> {
+    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+    spawn_worker_binary(job, &executable)
+}
+fn spawn_worker_binary(job: &Job, executable: &Path) -> Result<Child, String> {
     if CLEANUP_PENDING.load(Ordering::Acquire) {
         return Err("a previous worker still awaits reap; isolation worker unavailable".into());
     }
-    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
     let output = job.directory.join("output");
     fs::create_dir(&output).map_err(|e| e.to_string())?;
     OpenOptions::new()
@@ -727,6 +729,13 @@ pub(crate) fn validate_report(report: &AnalysisReport) -> Result<(), String> {
         || report.id.len() > 128
         || report.source_path.len() > 4096
         || report.reason.as_ref().is_some_and(|s| s.len() > 4096)
+        || report
+            .specimen_len
+            .is_some_and(|len| len > u64::from(control::SPECIMEN_MAX_SIZE))
+        || report
+            .specimen_sha256
+            .as_ref()
+            .is_some_and(|hash| hash.len() != 64 || !hash.bytes().all(|c| c.is_ascii_hexdigit()))
         || report.sections.iter().any(|s| {
             s.entries.len() > 2048
                 || s.summary.len() > 4096
@@ -744,12 +753,414 @@ pub(crate) fn validate_report(report: &AnalysisReport) -> Result<(), String> {
         {
             return Err("duplicate archived analysis section".into());
         }
+        let mut ids = std::collections::BTreeSet::new();
+        let mut entropy_count = 0;
+        for entry in &section.entries {
+            if let Some(record) = &entry.record {
+                if matches!(record.data, AnalysisData::Entropy { .. }) {
+                    entropy_count += 1;
+                    if entropy_count > 65 {
+                        return Err(
+                            "entropy section exceeds whole-file plus 64-region bound".into()
+                        );
+                    }
+                }
+                if record.revision != 1 || record.id == 0 || !ids.insert(record.id) {
+                    return Err("invalid revision or duplicate/zero analysis record id".into());
+                }
+                validate_record(section.kind, entry, record, report.specimen_len)?;
+            }
+        }
+    }
+    Ok(())
+}
+fn validate_range(range: AnalysisRange, total_len: Option<u64>) -> Result<(), String> {
+    let total_len = total_len.ok_or("analysis file range has no complete specimen length")?;
+    if range
+        .offset
+        .checked_add(range.len)
+        .is_none_or(|end| end > total_len)
+    {
+        return Err("analysis file range exceeds specimen or overflows".into());
+    }
+    Ok(())
+}
+fn validate_record(
+    kind: AnalysisKind,
+    entry: &AnalysisEntry,
+    record: &AnalysisRecord,
+    total_len: Option<u64>,
+) -> Result<(), String> {
+    let location = record.location.as_ref();
+    if let Some(location) = location {
+        if let Some(range) = location.file_range {
+            validate_range(range, total_len)?;
+            if location.kind == AnalysisAddressKind::FileOffset && location.value != range.offset {
+                return Err("file-offset location disagrees with range".into());
+            }
+            if entry.offset.is_some_and(|offset| offset != range.offset) {
+                return Err("legacy file offset disagrees with structured range".into());
+            }
+        }
+        if location.kind == AnalysisAddressKind::FileOffset
+            && total_len.is_none_or(|len| location.value > len)
+        {
+            return Err("file-offset location exceeds specimen length".into());
+        }
+    }
+    let bounded = |text: &str| text.len() <= 4096;
+    let address_location = |address: Option<u64>| {
+        location
+            .is_none_or(|l| l.kind != AnalysisAddressKind::FileOffset && Some(l.value) == address)
+    };
+    let valid = match &record.data {
+        AnalysisData::Field { group } => bounded(group),
+        AnalysisData::Section {
+            name,
+            address,
+            file_size,
+            raw_flags,
+            flags,
+            ..
+        } => {
+            kind == AnalysisKind::Structures
+                && bounded(name)
+                && bounded(raw_flags)
+                && flags.len() <= 64
+                && flags.iter().all(|f| bounded(f))
+                && address_location(Some(*address))
+                && location
+                    .and_then(|l| l.file_range)
+                    .is_none_or(|r| Some(r.len) == *file_size)
+        }
+        AnalysisData::Symbol {
+            name,
+            kind: symbol_kind,
+            scope,
+            undefined,
+            address,
+            size,
+        } => {
+            kind == AnalysisKind::Structures
+                && bounded(name)
+                && bounded(symbol_kind)
+                && bounded(scope)
+                && (!*undefined || address.is_none())
+                && address_location(*address)
+                && location
+                    .and_then(|l| l.file_range)
+                    .is_none_or(|r| r.len == *size)
+        }
+        AnalysisData::Import {
+            name,
+            library,
+            ordinal,
+        } => {
+            kind == AnalysisKind::Structures
+                && name.is_some() != ordinal.is_some()
+                && name.as_ref().is_none_or(|s| bounded(s))
+                && library.as_ref().is_none_or(|s| bounded(s))
+                && location.is_none()
+        }
+        AnalysisData::Export {
+            name,
+            ordinal,
+            address,
+        } => {
+            kind == AnalysisKind::Structures
+                && name.is_some() != ordinal.is_some()
+                && name.as_ref().is_none_or(|s| bounded(s))
+                && address_location(*address)
+        }
+        AnalysisData::String {
+            encoding,
+            byte_len,
+            retained_len,
+        } => {
+            kind == AnalysisKind::Strings
+                && bounded(encoding)
+                && !encoding.is_empty()
+                && *retained_len == entry.value.len() as u64
+                && (!matches!(encoding.as_str(), "ASCII" | "UTF-8") || *retained_len <= *byte_len)
+                && location.is_none_or(|l| {
+                    l.kind == AnalysisAddressKind::FileOffset
+                        && l.file_range.is_none_or(|r| r.len == *byte_len)
+                })
+        }
+        AnalysisData::Entropy { range, milli_bits } => {
+            validate_range(*range, total_len)?;
+            kind == AnalysisKind::Entropy
+                && *milli_bits <= 8000
+                && location.is_none_or(|l| {
+                    l.kind == AnalysisAddressKind::FileOffset
+                        && l.value == range.offset
+                        && l.file_range == Some(*range)
+                })
+        }
+        AnalysisData::Property {
+            scope,
+            observed,
+            evidence,
+        } => {
+            kind == AnalysisKind::Hardening
+                && bounded(scope)
+                && bounded(observed)
+                && bounded(evidence)
+        }
+    };
+    if !valid {
+        return Err("structured analysis record violates kind, text or evidence bounds".into());
     }
     Ok(())
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires rebuilt feature ELF in ANTINOMIE_TEST_WORKER_BINARY and working bubblewrap"]
+    fn production_worker_structured_report_and_verified_preview_smoke() {
+        let executable = PathBuf::from(
+            std::env::var_os("ANTINOMIE_TEST_WORKER_BINARY")
+                .expect("set the rebuilt feature ELF path"),
+        );
+        assert!(executable.is_absolute());
+        let retained = std::env::var_os("ANTINOMIE_TEST_REPORT_DIRECTORY").map(PathBuf::from);
+        let directory = retained.clone().unwrap_or_else(|| {
+            std::env::temp_dir().join(format!("ant-structured-smoke-{}", storage::unique_id()))
+        });
+        fs::create_dir(&directory).expect("smoke output directory must not already exist");
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        let specimen = fs::read("/usr/bin/true").unwrap();
+        fs::write(directory.join("specimen"), &specimen).unwrap();
+        let selection = AnalysisSelection {
+            enabled: true,
+            checks: vec![
+                AnalysisKind::Metadata,
+                AnalysisKind::Structures,
+                AnalysisKind::Strings,
+                AnalysisKind::Entropy,
+            ],
+        };
+        let mut report = new_report("/usr/bin/true", &selection);
+        report.state = AnalysisState::Queued;
+        report.specimen_len = Some(specimen.len() as u64);
+        report.specimen_sha256 = Some(format!("{:x}", Sha256::digest(&specimen)));
+        let job = Job {
+            run_id: None,
+            report,
+            directory: directory.clone(),
+            handle: None,
+            total_len: specimen.len() as u64,
+            received_len: specimen.len() as u64,
+            file: None,
+            deadline: Instant::now() + Duration::from_secs(15),
+            child: None,
+            reserved_len: 0,
+            digest: Sha256::new(),
+            disk_len: 0,
+            worker_len: 0,
+            report_len: 0,
+        };
+        let mut child = spawn_worker_binary(&job, &executable).unwrap();
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if Instant::now() >= job.deadline {
+                let kill = child.kill();
+                let reap = child.wait();
+                panic!("worker smoke exceeded 15 seconds: kill {kill:?}; reap {reap:?}");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(
+            status.success(),
+            "worker failed; inspect {}",
+            directory.join("worker.log").display()
+        );
+        let report = read_report(&directory.join("output/report.json"), &job.report).unwrap();
+        persist_report(&directory, &report).unwrap();
+        assert!(
+            report
+                .sections
+                .iter()
+                .flat_map(|section| &section.entries)
+                .any(|row| row
+                    .record
+                    .as_ref()
+                    .is_some_and(|record| matches!(record.data, AnalysisData::Section { .. })))
+        );
+        let page = super::super::read_specimen_range(&directory, &report.id, 0, 16).unwrap();
+        assert_eq!(page.data, &specimen[..16]);
+        eprintln!(
+            "production structured report saved at {}; {} octets; {} retained rows",
+            directory.display(),
+            fs::metadata(directory.join("report.json")).unwrap().len(),
+            report
+                .sections
+                .iter()
+                .map(|section| section.entries.len())
+                .sum::<usize>()
+        );
+        if retained.is_none() {
+            fs::remove_dir_all(directory).unwrap();
+        }
+    }
+    fn structured_fixture() -> AnalysisReport {
+        let mut report = new_report(
+            "/tmp/sample",
+            &AnalysisSelection {
+                enabled: true,
+                checks: vec![AnalysisKind::Strings],
+            },
+        );
+        report.specimen_len = Some(16);
+        report.sections[0].entries.push(AnalysisEntry {
+            label: "ASCII".into(),
+            value: "text".into(),
+            offset: Some(2),
+            record: Some(AnalysisRecord {
+                revision: 1,
+                id: 9,
+                location: Some(AnalysisLocation {
+                    kind: AnalysisAddressKind::FileOffset,
+                    value: 2,
+                    file_range: Some(AnalysisRange { offset: 2, len: 4 }),
+                }),
+                data: AnalysisData::String {
+                    encoding: "ASCII".into(),
+                    byte_len: 4,
+                    retained_len: 4,
+                },
+            }),
+        });
+        report
+    }
+    #[test]
+    fn legacy_reports_and_valid_typed_rows_share_archive_validation() {
+        let mut report = structured_fixture();
+        assert!(validate_report(&report).is_ok());
+        let entry: AnalysisEntry =
+            serde_json::from_str(r#"{"label":"legacy","value":"kept verbatim","offset":null}"#)
+                .unwrap();
+        assert!(entry.record.is_none());
+        report.sections[0].entries.push(entry);
+        assert!(validate_report(&report).is_ok());
+        let encoded = serde_json::to_vec(&report).unwrap();
+        let reopened: AnalysisReport = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(report, reopened);
+    }
+    #[test]
+    fn malformed_revision_ids_locations_ranges_and_string_lengths_are_rejected() {
+        let valid = structured_fixture();
+        let mut report = valid.clone();
+        report.sections[0].entries[0]
+            .record
+            .as_mut()
+            .unwrap()
+            .revision = 2;
+        assert!(validate_report(&report).is_err());
+        let mut report = valid.clone();
+        report.sections[0].entries[0].record.as_mut().unwrap().id = 0;
+        assert!(validate_report(&report).is_err());
+        let mut report = valid.clone();
+        let duplicate = report.sections[0].entries[0].clone();
+        report.sections[0].entries.push(duplicate);
+        assert!(validate_report(&report).is_err());
+        let mut report = valid.clone();
+        report.sections[0].entries[0]
+            .record
+            .as_mut()
+            .unwrap()
+            .location
+            .as_mut()
+            .unwrap()
+            .file_range = Some(AnalysisRange {
+            offset: u64::MAX,
+            len: 2,
+        });
+        assert!(validate_report(&report).is_err());
+        let mut report = valid.clone();
+        report.sections[0].entries[0]
+            .record
+            .as_mut()
+            .unwrap()
+            .location
+            .as_mut()
+            .unwrap()
+            .value = 3;
+        assert!(validate_report(&report).is_err());
+        let mut report = valid.clone();
+        report.sections[0].entries[0].record.as_mut().unwrap().data = AnalysisData::String {
+            encoding: "ASCII".into(),
+            byte_len: 4,
+            retained_len: 3,
+        };
+        assert!(validate_report(&report).is_err());
+        let mut report = valid.clone();
+        report.sections[0].kind = AnalysisKind::Metadata;
+        assert!(validate_report(&report).is_err());
+        let mut report = valid.clone();
+        report.specimen_len = None;
+        assert!(validate_report(&report).is_err());
+        let mut report = valid.clone();
+        report.sections[0].entries[0].record.as_mut().unwrap().data = AnalysisData::Field {
+            group: "x".repeat(4097),
+        };
+        assert!(validate_report(&report).is_err());
+    }
+    #[test]
+    fn malformed_section_flags_and_entropy_measurements_are_rejected() {
+        let mut report = structured_fixture();
+        report.sections[0].kind = AnalysisKind::Structures;
+        let record = report.sections[0].entries[0].record.as_mut().unwrap();
+        record.location = None;
+        record.data = AnalysisData::Section {
+            name: ".text".into(),
+            address: 0,
+            virtual_size: 16,
+            file_size: None,
+            raw_flags: "0x6".into(),
+            flags: vec!["EXECINSTR".into(); 65],
+        };
+        assert!(validate_report(&report).is_err());
+        report.sections[0].kind = AnalysisKind::Entropy;
+        report.sections[0].entries[0].record.as_mut().unwrap().data = AnalysisData::Entropy {
+            range: AnalysisRange { offset: 0, len: 16 },
+            milli_bits: 8001,
+        };
+        assert!(validate_report(&report).is_err());
+        report.sections[0].entries[0].record.as_mut().unwrap().data = AnalysisData::Entropy {
+            range: AnalysisRange { offset: 1, len: 16 },
+            milli_bits: 3000,
+        };
+        assert!(validate_report(&report).is_err());
+    }
+    #[test]
+    fn entropy_records_are_bounded_to_whole_file_and_sixty_four_regions() {
+        let mut report = structured_fixture();
+        report.sections[0].kind = AnalysisKind::Entropy;
+        report.sections[0].entries.clear();
+        for id in 1..=66 {
+            report.sections[0].entries.push(AnalysisEntry {
+                label: "region".into(),
+                value: "0.000".into(),
+                offset: None,
+                record: Some(AnalysisRecord {
+                    revision: 1,
+                    id,
+                    location: None,
+                    data: AnalysisData::Entropy {
+                        range: AnalysisRange { offset: 0, len: 1 },
+                        milli_bits: 0,
+                    },
+                }),
+            });
+        }
+        assert!(validate_report(&report).is_err());
+        report.sections[0].entries.pop();
+        assert!(validate_report(&report).is_ok());
+    }
     #[test]
     fn one_active_acquisition_and_eight_waiting_jobs_are_the_hard_bound() {
         let root =

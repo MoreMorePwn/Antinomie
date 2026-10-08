@@ -76,6 +76,25 @@ const ACTIVITY_LIMIT: usize = 256;
 const TERMINAL_VIEW_LIMIT: usize = 128;
 
 #[derive(Default)]
+struct AnalysisView {
+    state: crate::analysis::WorkspaceState,
+    report_id: Option<String>,
+    preview: Option<Result<antinomie_monitor_core::AnalysisSpecimenPage, String>>,
+    pending: Option<(u64, u64, usize)>,
+}
+
+impl AnalysisView {
+    fn bind(&mut self, report_id: Option<&str>) {
+        if self.report_id.as_deref() != report_id {
+            self.report_id = report_id.map(str::to_owned);
+            self.state = crate::analysis::WorkspaceState::default();
+            self.preview = None;
+            self.pending = None;
+        }
+    }
+}
+
+#[derive(Default)]
 struct CredentialForm {
     username: String,
     password: String,
@@ -129,7 +148,10 @@ pub struct MonitorApp {
     selected_run: Option<String>,
     selected_analysis: Option<String>,
     analysis_windows: BTreeMap<String, antinomie_monitor_core::AnalysisReport>,
+    analysis_directories: BTreeMap<String, PathBuf>,
     pending_analysis_sections: Vec<(String, antinomie_monitor_core::AnalysisKind)>,
+    analysis_views: BTreeMap<String, AnalysisView>,
+    analysis_generation: u64,
     archive_selected: bool,
     history_generation: u64,
     run_filter: RunFilter,
@@ -222,7 +244,10 @@ impl MonitorApp {
             selected_run: None,
             selected_analysis: None,
             analysis_windows: BTreeMap::new(),
+            analysis_directories: BTreeMap::new(),
             pending_analysis_sections: Vec::new(),
+            analysis_views: BTreeMap::new(),
+            analysis_generation: 0,
             archive_selected: false,
             history_generation: 0,
             run_filter: RunFilter::All,
@@ -654,6 +679,11 @@ impl MonitorApp {
                     self.inspector.pending = false;
                     self.inspector.error = Some("Read superseded".into());
                 }
+                Request::Specimen {
+                    view_key,
+                    generation,
+                    ..
+                } => self.fail_analysis_read(&view_key, generation, "Read superseded"),
                 _ => {}
             }
         }
@@ -667,6 +697,14 @@ impl MonitorApp {
             self.archive_pending = false;
             self.inspector.pending = false;
             self.archive_error = Some("Archive worker unavailable".into());
+            if let Request::Specimen {
+                view_key,
+                generation,
+                ..
+            } = request
+            {
+                self.fail_analysis_read(&view_key, generation, "Archive worker unavailable");
+            }
             return;
         };
         match worker.try_request(request) {
@@ -675,10 +713,22 @@ impl MonitorApp {
                 std::sync::mpsc::TrySendError::Full(request) => {
                     self.pending_archive = Some(request)
                 }
-                std::sync::mpsc::TrySendError::Disconnected(_) => {
+                std::sync::mpsc::TrySendError::Disconnected(request) => {
                     self.archive_pending = false;
                     self.inspector.pending = false;
                     self.archive_error = Some("Archive worker disconnected".into());
+                    if let Request::Specimen {
+                        view_key,
+                        generation,
+                        ..
+                    } = request
+                    {
+                        self.fail_analysis_read(
+                            &view_key,
+                            generation,
+                            "Archive worker disconnected",
+                        );
+                    }
                 }
             },
         }
@@ -687,6 +737,7 @@ impl MonitorApp {
     fn select_run(&mut self, id: Option<String>) {
         self.archive_selected = false;
         self.selected_analysis = None;
+        self.analysis_views.remove("workspace");
         self.selected_run = id;
         self.selected_event = None;
         self.inspector.clear();
@@ -983,6 +1034,32 @@ impl MonitorApp {
 
     fn handle_archive_answer(&mut self, answer: Answer) {
         match answer {
+            Answer::Specimen {
+                view_key,
+                generation,
+                report_id,
+                offset,
+                data_len,
+                result,
+            } => {
+                if let Some(view) = self.analysis_views.get_mut(&view_key) {
+                    if view.report_id.as_deref() != Some(&report_id)
+                        || view.pending != Some((generation, offset, data_len))
+                    {
+                        return;
+                    }
+                    view.pending = None;
+                    view.preview = Some(result.and_then(|page| {
+                        if page.report_id != report_id
+                            || page.offset != offset
+                            || page.data.len() != data_len
+                        {
+                            return Err("Specimen preview identity mismatch".into());
+                        }
+                        Ok(page)
+                    }));
+                }
+            }
             Answer::ListVm {
                 vm_id,
                 generation,
@@ -2910,7 +2987,56 @@ impl MonitorApp {
         }
     }
 
-    fn analysis_action(&mut self, action: Option<crate::analysis::ReportAction>) {
+    fn fail_analysis_read(&mut self, view_key: &str, generation: u64, reason: &str) {
+        if let Some(view) = self.analysis_views.get_mut(view_key) {
+            if view.pending.is_some_and(|ticket| ticket.0 == generation) {
+                view.pending = None;
+                view.preview = Some(Err(reason.into()));
+            }
+        }
+    }
+
+    fn analysis_directory(&self, report_id: &str) -> Option<PathBuf> {
+        if let Some(run) = self.snapshot.runs.iter().chain(&self.history).find(|run| {
+            run.analysis
+                .as_ref()
+                .is_some_and(|report| report.id == report_id)
+        }) {
+            return Some(run.directory.join("analysis"));
+        }
+        if let Some(directory) = self.analysis_directories.get(report_id) {
+            return Some(directory.clone());
+        }
+        if report_id.is_empty()
+            || !report_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            || !self
+                .snapshot
+                .analysis_reports
+                .iter()
+                .any(|report| report.id == report_id)
+        {
+            return None;
+        }
+        let vm_id = self
+            .snapshot
+            .active_vm
+            .as_ref()
+            .or(self.selected.as_ref())?;
+        self.snapshot
+            .vm_locations
+            .iter()
+            .find(|location| &location.vm_id == vm_id)
+            .map(|location| {
+                location
+                    .recording_directory
+                    .join("analyses")
+                    .join(report_id)
+            })
+    }
+
+    fn analysis_action(&mut self, view_key: &str, action: Option<crate::analysis::ReportAction>) {
         match action {
             Some(crate::analysis::ReportAction::Cancel(analysis_id)) => {
                 self.send(Command::CancelAnalysis { analysis_id })
@@ -2919,6 +3045,36 @@ impl MonitorApp {
                 if let Err(reason) = self.open_analysis_section(report_id, kind) {
                     self.status = reason;
                 }
+            }
+            Some(crate::analysis::ReportAction::ReadSpecimen {
+                report_id,
+                offset,
+                data_len,
+            }) => {
+                let directory = self.analysis_directory(&report_id);
+                let Some(view) = self.analysis_views.get_mut(view_key) else {
+                    return;
+                };
+                if view.report_id.as_deref() != Some(&report_id) {
+                    return;
+                }
+                view.preview = None;
+                let Some(directory) = directory else {
+                    view.pending = None;
+                    view.preview = Some(Err("Retained specimen directory unavailable".into()));
+                    return;
+                };
+                self.analysis_generation = self.analysis_generation.wrapping_add(1);
+                let generation = self.analysis_generation;
+                view.pending = Some((generation, offset, data_len));
+                self.queue_archive(Request::Specimen {
+                    view_key: view_key.into(),
+                    generation,
+                    directory,
+                    report_id,
+                    offset,
+                    data_len,
+                });
             }
             None => {}
         }
@@ -2937,6 +3093,10 @@ impl MonitorApp {
                 .analysis_report(&report_id)
                 .ok_or("The retained analysis report is unavailable")?
                 .clone();
+            if let Some(directory) = self.analysis_directory(&report_id) {
+                self.analysis_directories
+                    .insert(report_id.clone(), directory);
+            }
             self.analysis_windows.insert(report_id.clone(), report);
         }
         let request = (report_id, kind);
@@ -2960,6 +3120,15 @@ impl MonitorApp {
                     .iter()
                     .any(|(pending, _)| pending == id)
         });
+        self.analysis_views.retain(|key, view| {
+            key == "workspace"
+                || view
+                    .report_id
+                    .as_ref()
+                    .is_some_and(|id| self.analysis_windows.contains_key(id))
+        });
+        self.analysis_directories
+            .retain(|id, _| self.analysis_windows.contains_key(id));
     }
 
     pub(crate) fn panel_title(&self, panel: &Panel) -> String {
@@ -3000,7 +3169,18 @@ impl MonitorApp {
         match panel {
             Panel::Trace => self.events(ui),
             Panel::AnalysisSection { report_id, kind } => {
-                crate::analysis::section(ui, self.analysis_windows.get(report_id), *kind);
+                let key = format!("section:{report_id}:{kind:?}");
+                let report = self.analysis_windows.get(report_id);
+                let view = self.analysis_views.entry(key.clone()).or_default();
+                view.bind(report.map(|report| report.id.as_str()));
+                let action = crate::analysis::workspace_section(
+                    ui,
+                    report,
+                    *kind,
+                    &mut view.state,
+                    view.preview.as_ref(),
+                );
+                self.analysis_action(&key, action);
             }
             Panel::StaticAnalysis => {
                 egui::ComboBox::from_id_salt("analysis-source")
@@ -3021,22 +3201,34 @@ impl MonitorApp {
                         .analysis_reports
                         .iter()
                         .find(|report| report.id == id);
-                    let action = crate::analysis::report(ui, report);
-                    self.analysis_action(action);
+                    let view = self.analysis_views.entry("workspace".into()).or_default();
+                    view.bind(report.map(|report| report.id.as_str()));
+                    let action = crate::analysis::workspace(
+                        ui,
+                        report,
+                        &mut view.state,
+                        view.preview.as_ref(),
+                    );
+                    self.analysis_action("workspace", action);
                     return;
                 }
                 if let Some(id) = self.selected_run.as_deref() {
+                    let live = self.snapshot.runs.iter().find(|run| run.id == id);
                     let run = if self.archive_selected {
-                        self.history
-                            .iter()
-                            .find(|run| run.id == id)
-                            .or_else(|| self.run(id))
+                        self.history.iter().find(|run| run.id == id).or(live)
                     } else {
-                        self.run(id)
+                        live.or_else(|| self.history.iter().find(|run| run.id == id))
                     };
-                    let action =
-                        crate::analysis::report(ui, run.and_then(|run| run.analysis.as_ref()));
-                    self.analysis_action(action);
+                    let report = run.and_then(|run| run.analysis.as_ref());
+                    let view = self.analysis_views.entry("workspace".into()).or_default();
+                    view.bind(report.map(|report| report.id.as_str()));
+                    let action = crate::analysis::workspace(
+                        ui,
+                        report,
+                        &mut view.state,
+                        view.preview.as_ref(),
+                    );
+                    self.analysis_action("workspace", action);
                 } else {
                     ui.label("Select a run to view its static analysis report.");
                 }
@@ -3713,7 +3905,10 @@ mod tests {
             selected_run: None,
             selected_analysis: None,
             analysis_windows: BTreeMap::new(),
+            analysis_directories: BTreeMap::new(),
             pending_analysis_sections: Vec::new(),
+            analysis_views: BTreeMap::new(),
+            analysis_generation: 0,
             archive_selected: false,
             history_generation: 0,
             run_filter: RunFilter::All,
@@ -5991,9 +6186,11 @@ mod tests {
         app.snapshot.state = VmState::Running;
         app.selected = Some("vm".into());
         app.snapshot.active_vm = app.selected.clone();
-        let mut vm = VmConfig::default();
-        vm.id = "vm".into();
-        vm.name = "Analysis QA".into();
+        let vm = VmConfig {
+            id: "vm".into(),
+            name: "Analysis QA".into(),
+            ..VmConfig::default()
+        };
         app.snapshot.vms.push(vm);
         app.launch_open = true;
         app.exec.path = "/usr/bin/sample".into();
@@ -6087,11 +6284,169 @@ mod tests {
         let visible = texts(&output);
         assert!(visible
             .iter()
-            .any(|(text, _)| text == "Analysis ID: archive-report"));
-        assert!(!visible
-            .iter()
-            .any(|(text, _)| text == "Analysis ID: live-report"));
+            .any(|(text, _)| text.contains("archive-report")));
+        assert!(!visible.iter().any(|(text, _)| text.contains("live-report")));
         assert!(app.submitted.is_empty());
+    }
+
+    #[test]
+    fn specimen_answers_require_the_current_pane_report_and_selection_ticket() {
+        let mut app = app();
+        let view = app.analysis_views.entry("workspace".into()).or_default();
+        view.bind(Some("selected-report"));
+        view.pending = Some((7, 16, 4));
+        let answer = |view_key: &str, generation, report_id: &str| Answer::Specimen {
+            view_key: view_key.into(),
+            generation,
+            report_id: report_id.into(),
+            offset: 16,
+            data_len: 4,
+            result: Ok(antinomie_monitor_core::AnalysisSpecimenPage {
+                report_id: report_id.into(),
+                offset: 16,
+                total_len: 64,
+                data: b"data".to_vec(),
+            }),
+        };
+        app.handle_archive_answer(answer("workspace", 6, "selected-report"));
+        app.handle_archive_answer(answer("workspace", 7, "different-report"));
+        app.handle_archive_answer(answer("closed-pane", 7, "selected-report"));
+        assert!(app.analysis_views["workspace"].preview.is_none());
+        assert_eq!(app.analysis_views["workspace"].pending, Some((7, 16, 4)));
+        app.handle_archive_answer(answer("workspace", 7, "selected-report"));
+        assert_eq!(
+            app.analysis_views["workspace"]
+                .preview
+                .as_ref()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .data,
+            b"data"
+        );
+        assert!(app.analysis_views["workspace"].pending.is_none());
+        app.analysis_views
+            .get_mut("workspace")
+            .unwrap()
+            .bind(Some("new-report"));
+        app.handle_archive_answer(answer("workspace", 7, "selected-report"));
+        assert!(app.analysis_views["workspace"].preview.is_none());
+    }
+
+    #[test]
+    fn specimen_requests_use_retained_directories_and_supersession_clears_pending() {
+        let mut app = app();
+        let mut saved = run("saved-run");
+        saved.analysis = Some(section_report("saved-report", "SAVED"));
+        saved.directory = "/saved/run".into();
+        app.history.push(saved);
+        app.analysis_views
+            .entry("workspace".into())
+            .or_default()
+            .bind(Some("saved-report"));
+        app.analysis_action(
+            "workspace",
+            Some(crate::analysis::ReportAction::ReadSpecimen {
+                report_id: "saved-report".into(),
+                offset: 0,
+                data_len: 4,
+            }),
+        );
+        assert!(
+            matches!(app.pending_archive, Some(Request::Specimen { ref directory, ref report_id, .. })
+            if directory == &PathBuf::from("/saved/run/analysis") && report_id == "saved-report")
+        );
+        app.queue_archive(Request::ListVm {
+            options: app.options.clone(),
+            vm_id: "vm".into(),
+            generation: 1,
+        });
+        assert!(app.analysis_views["workspace"].pending.is_none());
+        assert!(app.analysis_views["workspace"]
+            .preview
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap_err()
+            .contains("superseded"));
+        assert!(app.submitted.is_empty());
+    }
+
+    #[test]
+    fn closed_analysis_panes_release_their_state_and_late_answers() {
+        let mut app = app();
+        app.analysis_views
+            .entry("workspace".into())
+            .or_default()
+            .bind(Some("main"));
+        let section = app
+            .analysis_views
+            .entry("section:closed:Strings".into())
+            .or_default();
+        section.bind(Some("closed"));
+        section.pending = Some((2, 0, 1));
+        app.retain_analysis_windows(&[]);
+        assert_eq!(app.analysis_views.len(), 1);
+        app.handle_archive_answer(Answer::Specimen {
+            view_key: "section:closed:Strings".into(),
+            generation: 2,
+            report_id: "closed".into(),
+            offset: 0,
+            data_len: 1,
+            result: Err("late error".into()),
+        });
+        assert_eq!(app.analysis_views.len(), 1);
+    }
+
+    #[test]
+    fn detached_analysis_retains_its_directory_after_vm_history_changes() {
+        let mut app = app();
+        let mut saved = run("saved-run");
+        saved.directory = "/saved/run".into();
+        saved.analysis = Some(section_report("saved-report", "SAVED"));
+        app.history.push(saved);
+        app.open_analysis_section(
+            "saved-report".into(),
+            antinomie_monitor_core::AnalysisKind::Strings,
+        )
+        .unwrap();
+        app.take_analysis_sections();
+        app.history.clear();
+        assert_eq!(
+            app.analysis_directory("saved-report"),
+            Some(PathBuf::from("/saved/run/analysis"))
+        );
+        app.retain_analysis_windows(&[]);
+        assert!(app.analysis_directory("saved-report").is_none());
+    }
+
+    #[test]
+    fn missing_specimen_reader_is_an_explicit_error_not_a_stuck_request() {
+        let mut app = app();
+        let mut saved = run("saved-run");
+        saved.analysis = Some(section_report("saved-report", "SAVED"));
+        app.history.push(saved);
+        app.analysis_views
+            .entry("workspace".into())
+            .or_default()
+            .bind(Some("saved-report"));
+        app.analysis_action(
+            "workspace",
+            Some(crate::analysis::ReportAction::ReadSpecimen {
+                report_id: "saved-report".into(),
+                offset: 0,
+                data_len: 1,
+            }),
+        );
+        app.flush_archive();
+        assert!(app.analysis_views["workspace"].pending.is_none());
+        assert!(app.analysis_views["workspace"]
+            .preview
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap_err()
+            .contains("unavailable"));
     }
 
     #[test]
@@ -6149,7 +6504,7 @@ mod tests {
         });
         let target = texts(&output)
             .into_iter()
-            .find(|(text, _)| text == "Cancel Analysis")
+            .find(|(text, _)| text == egui_phosphor::regular::X)
             .unwrap()
             .1
             .center();
@@ -6377,7 +6732,10 @@ mod tests {
                 .iter()
                 .map(|(_, _, next)| (*next - *size).length())
                 .fold(0.0_f32, f32::max);
-            eprintln!("Phase {start}..{end}: {} samples; outer origin {origin:?}; inner size {size:?}; max drift {max_drift}; max resize {max_resize}", samples.len());
+            eprintln!(
+                "Phase {start}..{end}: {} samples; outer origin {origin:?}; inner size {size:?}; max drift {max_drift}; max resize {max_resize}",
+                samples.len()
+            );
             assert!(
                 max_drift <= 2.0,
                 "terminal outer origin drifted {max_drift} points"
@@ -6434,6 +6792,7 @@ mod tests {
                         label: "Identity".into(),
                         value: marker.into(),
                         offset: None,
+                        record: None,
                     }],
                 },
                 AnalysisSection {
@@ -6451,6 +6810,7 @@ mod tests {
                             label: format!("Row {index}"),
                             value: "Synthetic evidence".into(),
                             offset: Some(index),
+                            record: None,
                         })
                         .collect(),
                 },
@@ -6563,13 +6923,19 @@ mod tests {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        assert!(crate::analysis::report(ui, Some(&report)).is_none());
+                        assert!(crate::analysis::workspace(
+                            ui,
+                            Some(&report),
+                            &mut crate::analysis::WorkspaceState::default(),
+                            None
+                        )
+                        .is_none());
                     });
                 },
             );
             assert!(texts(&output)
                 .iter()
-                .any(|(text, _)| text == "Partial / 2048 entries"));
+                .any(|(text, _)| text == "Partial / 2048 rows"));
             assert!(!texts(&output)
                 .iter()
                 .any(|(text, _)| text.starts_with("Row ")));
@@ -6579,7 +6945,13 @@ mod tests {
             );
             let output = ctx.run(egui::RawInput::default(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    crate::analysis::section(ui, Some(&report), AnalysisKind::Metadata)
+                    crate::analysis::workspace_section(
+                        ui,
+                        Some(&report),
+                        AnalysisKind::Metadata,
+                        &mut crate::analysis::WorkspaceState::default(),
+                        None,
+                    )
                 });
             });
             assert!(texts(&output)
@@ -6618,7 +6990,7 @@ mod tests {
         }
         let target = texts(&output)
             .iter()
-            .find(|(text, _)| text.ends_with(" Open"))
+            .find(|(text, _)| text == egui_phosphor::regular::ARROW_SQUARE_OUT)
             .unwrap()
             .1
             .center();
@@ -6680,8 +7052,10 @@ mod tests {
                 });
                 if Instant::now() >= self.deadline {
                     if !self.reported {
-                        eprintln!("native section QA: root_updates={} held_updates={} root_primary_releases={}",
-                            self.updates, self.held_updates, self.releases);
+                        eprintln!(
+                            "native section QA: root_updates={} held_updates={} root_primary_releases={}",
+                            self.updates, self.held_updates, self.releases
+                        );
                         self.reported = true;
                     }
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);

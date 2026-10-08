@@ -77,21 +77,30 @@ fn worker_main() -> Result<(), String> {
     } else {
         AnalysisState::Partial
     };
+    let encoded = bounded_report(&mut report)?;
+    super::jobs::validate_report(&report)?;
+    fs::File::create("/output/report.json")
+        .and_then(|mut f| f.write_all(&encoded).and_then(|_| f.sync_all()))
+        .map_err(|e| e.to_string())
+}
+fn bounded_report(report: &mut AnalysisReport) -> Result<Vec<u8>, String> {
     let mut encoded = serde_json::to_vec(&report).map_err(|e| e.to_string())?;
     if encoded.len() > REPORT_MAX_SIZE {
         report.state = AnalysisState::Partial;
         report.reason = Some("normalized report truncated to 128 KiB live-snapshot limit".into());
         while encoded.len() > REPORT_MAX_SIZE {
-            if let Some(section) = report.sections.iter_mut().max_by_key(|s| s.entries.len()) {
-                section.entries.truncate(section.entries.len() / 2);
-                section.state = AnalysisSectionState::Partial;
-            }
+            let section = report
+                .sections
+                .iter_mut()
+                .filter(|s| !s.entries.is_empty())
+                .max_by_key(|s| s.entries.len())
+                .ok_or("report metadata alone exceeds normalized bound")?;
+            section.entries.truncate(section.entries.len() / 2);
+            section.state = AnalysisSectionState::Partial;
             encoded = serde_json::to_vec(&report).map_err(|e| e.to_string())?;
         }
     }
-    fs::File::create("/output/report.json")
-        .and_then(|mut f| f.write_all(&encoded).and_then(|_| f.sync_all()))
-        .map_err(|e| e.to_string())
+    Ok(encoded)
 }
 
 fn entry(
@@ -120,7 +129,132 @@ fn entry(
         label,
         value,
         offset,
+        record: None,
     });
+    let id = section.entries.len() as u64;
+    if let Some(row) = section.entries.last_mut()
+        && (section.kind != AnalysisKind::Disassembly || row.label != "Disassembly")
+    {
+        let data = if section.kind == AnalysisKind::Hardening && row.label != "Engine" {
+            AnalysisData::Property {
+                scope: "Static file metadata".into(),
+                observed: row.value.clone(),
+                evidence: row.label.clone(),
+            }
+        } else {
+            AnalysisData::Field {
+                group: section.kind.label().into(),
+            }
+        };
+        row.record = Some(AnalysisRecord {
+            revision: 1,
+            id,
+            location: None,
+            data,
+        });
+    }
+}
+fn structured_entry(
+    section: &mut AnalysisSection,
+    label: impl Into<String>,
+    value: impl Into<String>,
+    location: Option<AnalysisLocation>,
+    mut data: AnalysisData,
+) {
+    let before = section.entries.len();
+    entry(
+        section,
+        label,
+        value,
+        location
+            .as_ref()
+            .and_then(|l| l.file_range.map(|r| r.offset)),
+    );
+    if section.entries.len() == before {
+        return;
+    }
+    if bound_data(&mut data) {
+        section.state = AnalysisSectionState::Partial;
+    }
+    if let Some(row) = section.entries.last_mut() {
+        if let AnalysisData::String { retained_len, .. } = &mut data {
+            *retained_len = row.value.len() as u64;
+        }
+        row.record = Some(AnalysisRecord {
+            revision: 1,
+            id: before as u64 + 1,
+            location,
+            data,
+        });
+    }
+}
+fn clip(text: &mut String) -> bool {
+    if text.len() <= VALUE_MAX_SIZE {
+        return false;
+    }
+    let mut end = VALUE_MAX_SIZE;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+    true
+}
+fn bound_data(data: &mut AnalysisData) -> bool {
+    let mut truncated = false;
+    let mut bound = |text: &mut String| {
+        truncated |= clip(text);
+    };
+    match data {
+        AnalysisData::Field { group } => bound(group),
+        AnalysisData::Section {
+            name,
+            raw_flags,
+            flags,
+            ..
+        } => {
+            bound(name);
+            bound(raw_flags);
+            for flag in flags.iter_mut() {
+                bound(flag);
+            }
+            if flags.len() > 64 {
+                flags.truncate(64);
+                truncated = true;
+            }
+        }
+        AnalysisData::Symbol {
+            name, kind, scope, ..
+        } => {
+            bound(name);
+            bound(kind);
+            bound(scope);
+        }
+        AnalysisData::Import { name, library, .. } => {
+            if let Some(name) = name {
+                bound(name);
+            }
+            if let Some(library) = library {
+                bound(library);
+            }
+        }
+        AnalysisData::Export { name, .. } => {
+            if let Some(name) = name {
+                bound(name);
+            }
+        }
+        AnalysisData::String { encoding, .. } => bound(encoding),
+        AnalysisData::Entropy { .. } => {}
+        AnalysisData::Property {
+            scope,
+            observed,
+            evidence,
+        } => {
+            bound(scope);
+            bound(observed);
+            bound(evidence);
+        }
+    }
+    truncated
 }
 fn unavailable(section: &mut AnalysisSection, reason: impl Into<String>) {
     section.state = AnalysisSectionState::Unavailable;
@@ -145,19 +279,28 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8]) {
             );
             entry(section, "Length (octets)", specimen.len().to_string(), None);
             match object::File::parse(specimen) {
-                Ok(file) => entry(
-                    section,
-                    "Object",
-                    format!(
-                        "{:?}; {:?}; {:?}; {}-bit; {:?}",
-                        file.format(),
-                        file.architecture(),
-                        file.kind(),
-                        if file.is_64() { 64 } else { 32 },
-                        file.endianness()
-                    ),
-                    None,
-                ),
+                Ok(file) => {
+                    for (label, value) in [
+                        ("Format", format!("{:?}", file.format())),
+                        ("Architecture", format!("{:?}", file.architecture())),
+                        ("Object kind", format!("{:?}", file.kind())),
+                        (
+                            "Class",
+                            format!("{}-bit", if file.is_64() { 64 } else { 32 }),
+                        ),
+                        ("Endianness", format!("{:?}", file.endianness())),
+                    ] {
+                        structured_entry(
+                            section,
+                            label,
+                            value,
+                            None,
+                            AnalysisData::Field {
+                                group: "Object header".into(),
+                            },
+                        );
+                    }
+                }
                 Err(_) => entry(
                     section,
                     "Object",
@@ -167,25 +310,18 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8]) {
             }
         }
         AnalysisKind::Entropy => {
-            let mut counts = [0u64; 256];
-            for &byte in specimen {
-                counts[byte as usize] += 1;
+            entropy_entry(section, "Whole file", specimen, 0);
+            let region_size = specimen.len().div_ceil(64).max(4096);
+            for (index, region) in specimen.chunks(region_size).take(64).enumerate() {
+                entropy_entry(
+                    section,
+                    "Measured region",
+                    region,
+                    (index * region_size) as u64,
+                );
             }
-            let entropy: f64 = counts
-                .iter()
-                .filter(|&&n| n > 0)
-                .map(|&n| {
-                    let p = n as f64 / specimen.len() as f64;
-                    -p * p.log2()
-                })
-                .sum();
-            entry(
-                section,
-                "Shannon entropy (bits/octet)",
-                format!("{entropy:.6}"),
-                None,
-            );
-            section.summary = "whole-file entropy is an indicator, not a packing verdict".into();
+            section.summary =
+                "whole-file and up to 64 measured regions; entropy is not a packing verdict".into();
         }
         AnalysisKind::Strings => {
             let mut start = 0;
@@ -196,12 +332,29 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8]) {
                     continue;
                 }
                 if index - start >= 4 {
-                    entry(
+                    let range = AnalysisRange {
+                        offset: start as u64,
+                        len: (index - start) as u64,
+                    };
+                    let retained = &specimen[start..index.min(start + VALUE_MAX_SIZE)];
+                    structured_entry(
                         section,
                         "ASCII",
-                        String::from_utf8_lossy(&specimen[start..index]).into_owned(),
-                        Some(start as u64),
+                        String::from_utf8_lossy(retained).into_owned(),
+                        Some(AnalysisLocation {
+                            kind: AnalysisAddressKind::FileOffset,
+                            value: range.offset,
+                            file_range: Some(range),
+                        }),
+                        AnalysisData::String {
+                            encoding: "ASCII".into(),
+                            byte_len: range.len,
+                            retained_len: retained.len() as u64,
+                        },
                     );
+                    if range.len > VALUE_MAX_SIZE as u64 {
+                        section.state = AnalysisSectionState::Partial;
+                    }
                 }
                 start = index + 1;
                 if section.entries.len() >= ENTRY_MAX_COUNT {
@@ -215,14 +368,26 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8]) {
         AnalysisKind::Structures | AnalysisKind::Hardening => match object::File::parse(specimen) {
             Ok(file) => {
                 if section.kind == AnalysisKind::Structures {
-                    entry(
+                    structured_entry(
                         section,
                         "Entry point (declared address)",
                         format!("0x{:x}", file.entry()),
-                        None,
+                        Some(AnalysisLocation {
+                            kind: AnalysisAddressKind::ObjectAddress,
+                            value: file.entry(),
+                            file_range: None,
+                        }),
+                        AnalysisData::Field {
+                            group: "Object header".into(),
+                        },
                     );
                     for s in file.sections() {
-                        entry(
+                        let file_range = checked_range(s.file_range(), specimen.len() as u64);
+                        if s.file_range().is_some() && file_range.is_none() {
+                            section.state = AnalysisSectionState::Partial;
+                        }
+                        let (raw_flags, flags) = section_flags(s.flags());
+                        structured_entry(
                             section,
                             "Section",
                             format!(
@@ -231,39 +396,94 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8]) {
                                 s.size(),
                                 s.flags()
                             ),
-                            s.file_range().map(|r| r.0),
+                            Some(AnalysisLocation {
+                                kind: AnalysisAddressKind::ObjectAddress,
+                                value: s.address(),
+                                file_range,
+                            }),
+                            AnalysisData::Section {
+                                name: s.name().unwrap_or("<invalid name>").into(),
+                                address: s.address(),
+                                virtual_size: s.size(),
+                                file_size: file_range.map(|r| r.len),
+                                raw_flags,
+                                flags,
+                            },
                         );
                     }
                     for symbol in file.symbols().chain(file.dynamic_symbols()) {
-                        if let Ok(name) = symbol.name() {
-                            if !name.is_empty() {
-                                entry(
-                                    section,
-                                    if symbol.is_undefined() {
-                                        "Undefined symbol"
-                                    } else {
-                                        "Symbol"
-                                    },
-                                    name,
-                                    None,
-                                );
-                            }
+                        if let Ok(name) = symbol.name()
+                            && !name.is_empty()
+                        {
+                            let address = (!symbol.is_undefined()
+                                && symbol.section_index().is_some()
+                                && !matches!(
+                                    symbol.kind(),
+                                    object::SymbolKind::Tls | object::SymbolKind::File
+                                ))
+                            .then_some(symbol.address());
+                            let file_range = address.and_then(|address| {
+                                symbol
+                                    .section_index()
+                                    .and_then(|index| file.section_by_index(index).ok())
+                                    .and_then(|section| {
+                                        symbol_range(
+                                            &section,
+                                            address,
+                                            symbol.size(),
+                                            specimen.len() as u64,
+                                        )
+                                    })
+                            });
+                            structured_entry(
+                                section,
+                                if symbol.is_undefined() {
+                                    "Undefined symbol"
+                                } else {
+                                    "Symbol"
+                                },
+                                name,
+                                address.map(|value| AnalysisLocation {
+                                    kind: AnalysisAddressKind::ObjectAddress,
+                                    value,
+                                    file_range,
+                                }),
+                                AnalysisData::Symbol {
+                                    name: name.into(),
+                                    kind: format!("{:?}", symbol.kind()),
+                                    scope: format!("{:?}", symbol.scope()),
+                                    undefined: symbol.is_undefined(),
+                                    address,
+                                    size: symbol.size(),
+                                },
+                            );
                         }
                     }
                     match file.imports() {
                         Ok(imports) => {
                             for import in imports {
                                 match import {
-                                    Ok(import) => entry(
-                                        section,
-                                        "Import",
-                                        format!(
-                                            "{}!{}",
-                                            String::from_utf8_lossy(import.library()),
-                                            object_name(import.name())
-                                        ),
-                                        None,
-                                    ),
+                                    Ok(import) => {
+                                        let (name, ordinal) = name_parts(import.name());
+                                        let library = (!import.library().is_empty()).then(|| {
+                                            String::from_utf8_lossy(import.library()).into_owned()
+                                        });
+                                        structured_entry(
+                                            section,
+                                            "Import",
+                                            format!(
+                                                "{}!{}",
+                                                library.as_deref().unwrap_or(""),
+                                                object_name(import.name())
+                                            ),
+                                            None,
+                                            AnalysisData::Import {
+                                                name,
+                                                library,
+                                                ordinal,
+                                            },
+                                        );
+                                    }
                                     Err(error) => {
                                         section.state = AnalysisSectionState::Partial;
                                         entry(
@@ -286,7 +506,28 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8]) {
                             for export in exports {
                                 match export {
                                     Ok(export) => {
-                                        entry(section, "Export", object_name(export.name()), None)
+                                        let (name, ordinal) = name_parts(export.name());
+                                        let address = match export.target() {
+                                            object::ExportTarget::Address { address, .. } => {
+                                                Some(address)
+                                            }
+                                            _ => None,
+                                        };
+                                        structured_entry(
+                                            section,
+                                            "Export",
+                                            object_name(export.name()),
+                                            address.map(|value| AnalysisLocation {
+                                                kind: AnalysisAddressKind::ObjectAddress,
+                                                value,
+                                                file_range: None,
+                                            }),
+                                            AnalysisData::Export {
+                                                name,
+                                                ordinal,
+                                                address,
+                                            },
+                                        );
                                     }
                                     Err(error) => {
                                         section.state = AnalysisSectionState::Partial;
@@ -524,6 +765,144 @@ fn object_name(name: object::NameOrOrdinal<&[u8]>) -> String {
         object::NameOrOrdinal::Ordinal(value) => format!("ordinal {value}"),
     }
 }
+fn name_parts(name: object::NameOrOrdinal<&[u8]>) -> (Option<String>, Option<u64>) {
+    match name {
+        object::NameOrOrdinal::Name(name) => {
+            (Some(String::from_utf8_lossy(name).into_owned()), None)
+        }
+        object::NameOrOrdinal::Ordinal(ordinal) => (None, Some(u64::from(ordinal))),
+    }
+}
+fn checked_range(range: Option<(u64, u64)>, total_len: u64) -> Option<AnalysisRange> {
+    range.and_then(|(offset, len)| {
+        offset
+            .checked_add(len)
+            .filter(|&end| end <= total_len)
+            .map(|_| AnalysisRange { offset, len })
+    })
+}
+fn symbol_range<'data, S: ObjectSection<'data>>(
+    section: &S,
+    address: u64,
+    size: u64,
+    total_len: u64,
+) -> Option<AnalysisRange> {
+    if section.compressed_file_range().ok()?.format != object::CompressionFormat::None {
+        return None;
+    }
+    let (section_offset, section_len) = section.file_range()?;
+    let relative = address.checked_sub(section.address())?;
+    if relative.checked_add(size)? > section_len {
+        return None;
+    }
+    checked_range(
+        Some((section_offset.checked_add(relative)?, size)),
+        total_len,
+    )
+}
+fn entropy_entry(section: &mut AnalysisSection, label: &str, specimen: &[u8], offset: u64) {
+    let mut counts = [0u64; 256];
+    for &byte in specimen {
+        counts[byte as usize] += 1;
+    }
+    let entropy: f64 = counts
+        .iter()
+        .filter(|&&n| n > 0)
+        .map(|&n| {
+            let p = n as f64 / specimen.len() as f64;
+            -p * p.log2()
+        })
+        .sum();
+    let range = AnalysisRange {
+        offset,
+        len: specimen.len() as u64,
+    };
+    structured_entry(
+        section,
+        label,
+        format!("{entropy:.6}"),
+        Some(AnalysisLocation {
+            kind: AnalysisAddressKind::FileOffset,
+            value: offset,
+            file_range: Some(range),
+        }),
+        AnalysisData::Entropy {
+            range,
+            milli_bits: (entropy * 1000.0).round().clamp(0.0, 8000.0) as u32,
+        },
+    );
+}
+fn section_flags(flags: object::SectionFlags) -> (String, Vec<String>) {
+    let (raw, masks): (u64, Vec<(u64, &str)>) = match flags {
+        object::SectionFlags::Elf { sh_flags, .. } => (
+            sh_flags.0,
+            vec![
+                (object::elf::SHF_WRITE.0, "WRITE"),
+                (object::elf::SHF_ALLOC.0, "ALLOC"),
+                (object::elf::SHF_EXECINSTR.0, "EXECINSTR"),
+                (object::elf::SHF_MERGE.0, "MERGE"),
+                (object::elf::SHF_STRINGS.0, "STRINGS"),
+                (object::elf::SHF_INFO_LINK.0, "INFO_LINK"),
+                (object::elf::SHF_LINK_ORDER.0, "LINK_ORDER"),
+                (object::elf::SHF_GROUP.0, "GROUP"),
+                (object::elf::SHF_TLS.0, "TLS"),
+                (object::elf::SHF_COMPRESSED.0, "COMPRESSED"),
+                (object::elf::SHF_EXCLUDE.0, "EXCLUDE"),
+            ],
+        ),
+        object::SectionFlags::Coff { characteristics } => (
+            u64::from(characteristics.0),
+            vec![
+                (u64::from(object::pe::IMAGE_SCN_CNT_CODE.0), "CODE"),
+                (
+                    u64::from(object::pe::IMAGE_SCN_CNT_INITIALIZED_DATA.0),
+                    "INITIALIZED_DATA",
+                ),
+                (
+                    u64::from(object::pe::IMAGE_SCN_CNT_UNINITIALIZED_DATA.0),
+                    "UNINITIALIZED_DATA",
+                ),
+                (u64::from(object::pe::IMAGE_SCN_MEM_EXECUTE.0), "EXECUTE"),
+                (u64::from(object::pe::IMAGE_SCN_MEM_READ.0), "READ"),
+                (u64::from(object::pe::IMAGE_SCN_MEM_WRITE.0), "WRITE"),
+                (
+                    u64::from(object::pe::IMAGE_SCN_MEM_DISCARDABLE.0),
+                    "DISCARDABLE",
+                ),
+                (u64::from(object::pe::IMAGE_SCN_MEM_SHARED.0), "SHARED"),
+                (
+                    u64::from(object::pe::IMAGE_SCN_MEM_NOT_CACHED.0),
+                    "NOT_CACHED",
+                ),
+                (
+                    u64::from(object::pe::IMAGE_SCN_MEM_NOT_PAGED.0),
+                    "NOT_PAGED",
+                ),
+            ],
+        ),
+        object::SectionFlags::MachO { flags, .. } => (
+            u64::from(flags.0),
+            vec![
+                (
+                    u64::from(object::macho::S_ATTR_PURE_INSTRUCTIONS.0),
+                    "PURE_INSTRUCTIONS",
+                ),
+                (
+                    u64::from(object::macho::S_ATTR_SOME_INSTRUCTIONS.0),
+                    "SOME_INSTRUCTIONS",
+                ),
+                (u64::from(object::macho::S_ATTR_DEBUG.0), "DEBUG"),
+            ],
+        ),
+        _ => return (format!("{flags:?}"), Vec::new()),
+    };
+    let decoded = masks
+        .into_iter()
+        .filter(|(mask, _)| raw & mask == *mask)
+        .map(|(_, name)| name.into())
+        .collect();
+    (format!("0x{raw:x}"), decoded)
+}
 fn bounded_command(path: &str, arguments: &[&str]) -> Result<(String, bool), String> {
     let mut child = Command::new(path)
         .args(arguments)
@@ -562,6 +941,138 @@ fn bounded_command(path: &str, arguments: &[&str]) -> Result<(String, bool), Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn compressed_elf_section_keeps_storage_range_without_fake_symbol_byte_mapping() {
+        let names = b"\0.debug_info\0.shstrtab\0";
+        let mut specimen = vec![0u8; 288 + names.len()];
+        specimen[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+        specimen[16..18].copy_from_slice(&1u16.to_le_bytes());
+        specimen[18..20].copy_from_slice(&62u16.to_le_bytes());
+        specimen[20..24].copy_from_slice(&1u32.to_le_bytes());
+        specimen[40..48].copy_from_slice(&64u64.to_le_bytes());
+        specimen[52..54].copy_from_slice(&64u16.to_le_bytes());
+        specimen[58..60].copy_from_slice(&64u16.to_le_bytes());
+        specimen[60..62].copy_from_slice(&3u16.to_le_bytes());
+        specimen[62..64].copy_from_slice(&2u16.to_le_bytes());
+        let section = &mut specimen[128..192];
+        section[0..4].copy_from_slice(&1u32.to_le_bytes());
+        section[4..8].copy_from_slice(&1u32.to_le_bytes());
+        section[8..16].copy_from_slice(&object::elf::SHF_COMPRESSED.0.to_le_bytes());
+        section[16..24].copy_from_slice(&0x1000u64.to_le_bytes());
+        section[24..32].copy_from_slice(&256u64.to_le_bytes());
+        section[32..40].copy_from_slice(&32u64.to_le_bytes());
+        section[48..56].copy_from_slice(&1u64.to_le_bytes());
+        let section = &mut specimen[192..256];
+        section[0..4].copy_from_slice(&13u32.to_le_bytes());
+        section[4..8].copy_from_slice(&3u32.to_le_bytes());
+        section[24..32].copy_from_slice(&288u64.to_le_bytes());
+        section[32..40].copy_from_slice(&(names.len() as u64).to_le_bytes());
+        section[48..56].copy_from_slice(&1u64.to_le_bytes());
+        specimen[256..260].copy_from_slice(&1u32.to_le_bytes());
+        specimen[264..272].copy_from_slice(&64u64.to_le_bytes());
+        specimen[272..280].copy_from_slice(&8u64.to_le_bytes());
+        specimen[288..].copy_from_slice(names);
+        let file = object::File::parse(specimen.as_slice()).unwrap();
+        let section = file.section_by_name(".debug_info").unwrap();
+        assert_eq!(section.file_range(), Some((256, 32)));
+        assert_eq!(
+            section.compressed_file_range().unwrap().format,
+            object::CompressionFormat::Zlib
+        );
+        assert!(symbol_range(&section, 0x1001, 2, specimen.len() as u64).is_none());
+        let mut structures = super::tests::section(AnalysisKind::Structures);
+        analyze_section(&mut structures, &specimen);
+        assert!(structures.entries.iter().any(|row|matches!(&row.record.as_ref().unwrap().data,AnalysisData::Section {flags,..} if flags.iter().any(|flag|flag=="COMPRESSED"))));
+    }
+    #[test]
+    fn actual_elf_rows_have_decoded_sections_symbols_strings_and_measured_regions() {
+        let specimen = fs::read("/usr/bin/true").unwrap();
+        let mut structures = section(AnalysisKind::Structures);
+        analyze_section(&mut structures, &specimen);
+        assert!(structures.entries.iter().any(|entry|matches!(&entry.record.as_ref().unwrap().data,AnalysisData::Section {name,flags,..} if name==".text"&&flags.iter().any(|flag|flag=="EXECINSTR"))));
+        assert!(structures.entries.iter().any(|entry|matches!(&entry.record.as_ref().unwrap().data,AnalysisData::Section {name,file_size,..} if name==".bss"&&file_size.is_none())&&entry.record.as_ref().unwrap().location.as_ref().unwrap().file_range.is_none()));
+        assert!(structures.entries.iter().any(|entry| matches!(
+            &entry.record.as_ref().unwrap().data,
+            AnalysisData::Import { .. }
+        )));
+        for kind in [
+            AnalysisKind::Metadata,
+            AnalysisKind::Structures,
+            AnalysisKind::Strings,
+            AnalysisKind::Entropy,
+        ] {
+            let mut result = section(kind);
+            analyze_section(&mut result, &specimen);
+            let mut report = crate::analysis::jobs::new_report(
+                "/usr/bin/true",
+                &AnalysisSelection {
+                    enabled: true,
+                    checks: vec![kind],
+                },
+            );
+            report.specimen_len = Some(specimen.len() as u64);
+            report.sections = vec![result];
+            bounded_report(&mut report).unwrap();
+            crate::analysis::jobs::validate_report(&report).unwrap();
+            if kind == AnalysisKind::Entropy {
+                let entropy: Vec<_> = report.sections[0]
+                    .entries
+                    .iter()
+                    .filter_map(|entry| entry.record.as_ref())
+                    .filter(|record| matches!(record.data, AnalysisData::Entropy { .. }))
+                    .collect();
+                assert!(!entropy.is_empty());
+                assert!(entropy.len() <= 65);
+            }
+        }
+    }
+    #[test]
+    fn string_lengths_entropy_bounds_and_record_ids_survive_report_truncation() {
+        let specimen = vec![b'a'; 5000];
+        let mut strings = section(AnalysisKind::Strings);
+        analyze_section(&mut strings, &specimen);
+        let row = &strings.entries[1];
+        assert_eq!(row.value.len(), 4096);
+        assert!(matches!(
+            row.record.as_ref().unwrap().data,
+            AnalysisData::String {
+                byte_len: 5000,
+                retained_len: 4096,
+                ..
+            }
+        ));
+        assert_eq!(strings.state, AnalysisSectionState::Partial);
+        let mut entropy = section(AnalysisKind::Entropy);
+        let specimen: Vec<_> = (0..=255u8).cycle().take(65536).collect();
+        analyze_section(&mut entropy, &specimen);
+        assert!(matches!(
+            entropy.entries[1].record.as_ref().unwrap().data,
+            AnalysisData::Entropy {
+                milli_bits: 8000,
+                ..
+            }
+        ));
+        let mut report = crate::analysis::jobs::new_report(
+            "/tmp/sample",
+            &AnalysisSelection {
+                enabled: true,
+                checks: vec![AnalysisKind::Metadata],
+            },
+        );
+        for _ in 0..200 {
+            entry(&mut report.sections[0], "row", "x".repeat(4096), None);
+        }
+        let encoded = bounded_report(&mut report).unwrap();
+        assert!(encoded.len() <= REPORT_MAX_SIZE);
+        assert_eq!(report.state, AnalysisState::Partial);
+        for (index, row) in report.sections[0].entries.iter().enumerate() {
+            assert_eq!(row.record.as_ref().unwrap().id, index as u64 + 1);
+        }
+        let mut malformed = report.clone();
+        malformed.sections.clear();
+        malformed.source_path = "x".repeat(REPORT_MAX_SIZE + 1);
+        assert!(bounded_report(&mut malformed).is_err());
+    }
     fn section(kind: AnalysisKind) -> AnalysisSection {
         AnalysisSection {
             kind,

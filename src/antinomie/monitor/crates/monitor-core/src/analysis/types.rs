@@ -104,7 +104,102 @@ pub struct AnalysisEntry {
     pub label: String,
     pub value: String,
     pub offset: Option<u64>,
+    /// Optional revision-1 structured evidence; missing on legacy reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record: Option<AnalysisRecord>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnalysisRange {
+    /// File offset and length, in octets.
+    pub offset: u64,
+    pub len: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnalysisAddressKind {
+    FileOffset,
+    ObjectAddress,
+    RelativeVirtualAddress,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnalysisLocation {
+    pub kind: AnalysisAddressKind,
+    pub value: u64,
+    /// Present only when the parser establishes a corresponding file range.
+    pub file_range: Option<AnalysisRange>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnalysisRecord {
+    pub revision: u16,
+    /// Nonzero, stable within one report section, including truncation.
+    pub id: u64,
+    pub location: Option<AnalysisLocation>,
+    pub data: AnalysisData,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AnalysisData {
+    Field {
+        group: String,
+    },
+    Section {
+        name: String,
+        address: u64,
+        virtual_size: u64,
+        file_size: Option<u64>,
+        raw_flags: String,
+        flags: Vec<String>,
+    },
+    Symbol {
+        name: String,
+        kind: String,
+        scope: String,
+        undefined: bool,
+        address: Option<u64>,
+        size: u64,
+    },
+    Import {
+        name: Option<String>,
+        library: Option<String>,
+        ordinal: Option<u64>,
+    },
+    Export {
+        name: Option<String>,
+        ordinal: Option<u64>,
+        address: Option<u64>,
+    },
+    String {
+        encoding: String,
+        byte_len: u64,
+        retained_len: u64,
+    },
+    Entropy {
+        range: AnalysisRange,
+        /// Shannon entropy in thousandths of a bit per octet, 0..=8000.
+        milli_bits: u32,
+    },
+    Property {
+        scope: String,
+        observed: String,
+        evidence: String,
+    },
+}
+
+/// Bounded read-only specimen preview returned by the host archive API.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnalysisSpecimenPage {
+    pub report_id: String,
+    pub offset: u64,
+    pub total_len: u64,
+    pub data: Vec<u8>,
+}
+
+pub const ANALYSIS_PREVIEW_MAX_SIZE: usize = 4096;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnalysisSection {

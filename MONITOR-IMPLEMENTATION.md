@@ -33,6 +33,18 @@ on 2026-10-01. Core workers/review use gpt-6.1-sol; bounded support may use Luna
 
 ## Ownership
 
+### Accepted ANT-T0033 Update
+
+User authorized the native static-analysis workspace redesign on 2026-10-08.
+One workspace is the default; selecting a category updates local results and
+separate dockable section panes open only on explicit request. Typed available
+evidence drives searchable/sortable tables, selected details and bounded read-only
+specimen previews. Legacy generic reports remain readable. Acquisition, launch
+scope, engine availability, guest controls and V7 remain unchanged. No new analyzer
+dependency or guest image build is needed. The revision-1 result contract and
+acceptance record are ANT-T0033 in the documentation task directory. Development
+and the rebuilt executable stay in feature/static-analysis pending integration.
+
 ### Accepted ANT-T0025 Update
 
 User authorized complete static-analysis acquisition/backend and launch setup
