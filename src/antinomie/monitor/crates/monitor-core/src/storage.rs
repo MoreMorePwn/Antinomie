@@ -173,10 +173,114 @@ pub(crate) fn sync_directory_parent(directory: &Path) -> Result<(), String> {
         .map_err(|error| format!("sync VM parent {}: {error}", parent.display()))
 }
 
+/// Atomic JSON writes that must not stall the transport worker on a slow
+/// `fsync`. One background thread writes them; a newer value for a path
+/// replaces one still pending, and a synchronous write to the same path first
+/// waits for the background copy so it can never be overwritten by older data.
+#[derive(Default)]
+struct JsonQueue {
+    pending: std::collections::BTreeMap<PathBuf, Vec<u8>>,
+    writing: Option<PathBuf>,
+    errors: std::collections::BTreeMap<PathBuf, String>,
+}
+static JSON_QUEUE: std::sync::OnceLock<(std::sync::Mutex<JsonQueue>, std::sync::Condvar)> =
+    std::sync::OnceLock::new();
+
+fn json_queue() -> &'static (std::sync::Mutex<JsonQueue>, std::sync::Condvar) {
+    JSON_QUEUE.get_or_init(|| {
+        let spawned = std::thread::Builder::new()
+            .name("antinomie-json".into())
+            .spawn(json_writer);
+        if let Err(error) = spawned {
+            panic!("JSON writer thread: {error}");
+        }
+        Default::default()
+    })
+}
+
+fn json_writer() {
+    let (lock, ready) = json_queue();
+    let mut queue = lock.lock().unwrap_or_else(|e| e.into_inner());
+    loop {
+        let Some((path, bytes)) = queue.pending.pop_first() else {
+            queue = ready.wait(queue).unwrap_or_else(|e| e.into_inner());
+            continue;
+        };
+        queue.writing = Some(path.clone());
+        drop(queue);
+        let result = write_atomic(&path, &bytes);
+        queue = lock.lock().unwrap_or_else(|e| e.into_inner());
+        queue.writing = None;
+        match result {
+            Ok(()) => queue.errors.remove(&path),
+            Err(error) => queue.errors.insert(path, error.message),
+        };
+        ready.notify_all();
+    }
+}
+
+/// Queues an atomic JSON write and returns at once. Reports the failure of an
+/// earlier background write to the same path, if any.
+pub(crate) fn queue_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
+    let mut bytes = serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?;
+    bytes.push(b'\n');
+    queue_bytes(path, bytes)
+}
+
+/// Queues an atomic write of `bytes` to `path`, like `queue_json`.
+pub(crate) fn queue_bytes(path: &Path, bytes: Vec<u8>) -> Result<(), String> {
+    let (lock, ready) = json_queue();
+    let mut queue = lock.lock().unwrap_or_else(|e| e.into_inner());
+    let earlier = queue.errors.remove(path);
+    queue.pending.insert(path.to_path_buf(), bytes);
+    ready.notify_all();
+    earlier.map_or(Ok(()), Err)
+}
+
+/// Drops a pending background write to `path` and waits for one in progress.
+fn settle_json(path: &Path) {
+    let Some((lock, ready)) = JSON_QUEUE.get() else {
+        return;
+    };
+    let mut queue = lock.lock().unwrap_or_else(|e| e.into_inner());
+    queue.pending.remove(path);
+    while queue.writing.as_deref() == Some(path) {
+        queue = ready.wait(queue).unwrap_or_else(|e| e.into_inner());
+    }
+    queue.errors.remove(path);
+}
+
+/// Waits until every queued JSON write has reached the disk.
+pub(crate) fn flush_json() {
+    let Some((lock, ready)) = JSON_QUEUE.get() else {
+        return;
+    };
+    let mut queue = lock.lock().unwrap_or_else(|e| e.into_inner());
+    while !queue.pending.is_empty() || queue.writing.is_some() {
+        queue = ready.wait(queue).unwrap_or_else(|e| e.into_inner());
+    }
+}
+
 pub(crate) fn atomic_json_checked(
     path: &Path,
     value: &impl Serialize,
 ) -> Result<(), PublicationError> {
+    let mut bytes = serde_json::to_vec_pretty(value).map_err(|e| PublicationError {
+        published: false,
+        message: e.to_string(),
+    })?;
+    bytes.push(b'\n');
+    settle_json(path);
+    write_atomic(path, &bytes)
+}
+
+/// Writes `bytes` to `path` atomically now, after any queued write to it.
+pub(crate) fn atomic_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    settle_json(path);
+    write_atomic(path, bytes).map_err(Into::into)
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), PublicationError> {
     let temporary = path.with_extension(format!("tmp-{}", unique_id()));
     let mut published = false;
     let result = (|| -> Result<(), String> {
@@ -186,8 +290,7 @@ pub(crate) fn atomic_json_checked(
             .mode(0o600)
             .open(&temporary)
             .map_err(|e| e.to_string())?;
-        serde_json::to_writer_pretty(&mut f, value).map_err(|e| e.to_string())?;
-        f.write_all(b"\n").map_err(|e| e.to_string())?;
+        f.write_all(bytes).map_err(|e| e.to_string())?;
         f.sync_all().map_err(|e| e.to_string())?;
         rename_json(&temporary, path).map_err(|e| e.to_string())?;
         published = true;
@@ -448,6 +551,9 @@ impl Bundle {
         Ok(())
     }
 }
+/// Guest RAM bounds. Sizes QEMU splits around the 4 GiB hole are mapped as two regions.
+pub const MIN_RAM_MIB: u32 = 256;
+pub const MAX_RAM_MIB: u32 = 8192;
 pub(crate) fn validate_vm(vm: &VmConfig) -> Result<(), String> {
     vm.launch.validate()?;
     if vm.id.is_empty()
@@ -465,8 +571,8 @@ pub(crate) fn validate_vm(vm: &VmConfig) -> Result<(), String> {
     if !(1..=64).contains(&vm.cpus) {
         return Err("CPU count must be 1..64".into());
     }
-    if !(256..=3072).contains(&vm.ram_mib) {
-        return Err("initial release requires 256..3072 MiB RAM, entirely below 4 GiB".into());
+    if !(MIN_RAM_MIB..=MAX_RAM_MIB).contains(&vm.ram_mib) {
+        return Err(format!("RAM must be {MIN_RAM_MIB}..{MAX_RAM_MIB} MiB"));
     }
     if !(1..=2048).contains(&vm.disk_gib) {
         return Err("disk capacity must be 1..2048 GiB".into());
@@ -1317,6 +1423,29 @@ mod tests {
         (root, options, bundle, vm)
     }
     #[test]
+    fn queued_json_keeps_the_newest_value_and_never_overwrites_a_later_sync_write() {
+        let root = std::env::temp_dir().join(format!("ant-json-queue-{}", unique_id()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("run.json");
+        for value in 0..50 {
+            queue_json(&path, &value).unwrap();
+        }
+        flush_json();
+        assert_eq!(read_json::<u32>(&path).unwrap(), 49);
+        for value in 100..150 {
+            queue_json(&path, &value).unwrap();
+            atomic_json(&path, &(value + 1000)).unwrap();
+        }
+        flush_json();
+        assert_eq!(read_json::<u32>(&path).unwrap(), 1149);
+        assert_eq!(
+            fs::read_dir(&root).unwrap().count(),
+            1,
+            "temporary files left behind"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn legacy_identity_is_exact_and_guest_metadata_changes_identity() {
         let (root, _, mut bundle, _) = guest_fixture();
         let guest_identity = bundle.identity().unwrap();
@@ -1634,6 +1763,10 @@ mod tests {
         assert!(validate_vm(&vm).is_err());
         vm.id = "ok".into();
         vm.ram_mib = 4096;
+        assert!(validate_vm(&vm).is_ok());
+        vm.ram_mib = MAX_RAM_MIB + 1;
+        assert!(validate_vm(&vm).is_err());
+        vm.ram_mib = MIN_RAM_MIB - 1;
         assert!(validate_vm(&vm).is_err());
     }
     #[test]

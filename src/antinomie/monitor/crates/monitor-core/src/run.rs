@@ -66,12 +66,19 @@ impl ProgramRun {
             .saturating_add(self.terminal_len)
             .saturating_add(self.screen_len)
     }
+    /// Saves the summary and manifest on the background writer, so a slow
+    /// `fsync` cannot stall telemetry draining while the VM runs. `finalize`
+    /// writes the final versions synchronously, after any queued ones.
     pub fn persist_summary(&self) -> Result<(), String> {
-        storage::atomic_json(&self.summary.directory.join("run.json"), &self.summary)?;
-        storage::atomic_json(
+        let run = storage::queue_json(&self.summary.directory.join("run.json"), &self.summary);
+        let manifest = storage::queue_json(
             &self.summary.directory.join("manifest.json"),
-            &serde_json::json!({"format":"ANTT run raw LE32","run":self.summary,"packets":self.capture.packets,"bytes":self.stored_len(),"persistence_error":self.summary.recording_error,"boot_bundle_identity":self.boot_bundle_identity,"disk_base_identity":self.disk_base_identity}),
-        )
+            &self.manifest(),
+        );
+        run.and(manifest)
+    }
+    fn manifest(&self) -> serde_json::Value {
+        serde_json::json!({"format":"ANTT run raw LE32","run":self.summary,"packets":self.capture.packets,"bytes":self.stored_len(),"persistence_error":self.summary.recording_error,"boot_bundle_identity":self.boot_bundle_identity,"disk_base_identity":self.disk_base_identity})
     }
     /// Complete only after EOF with every terminal READ reply received.
     pub fn terminal_complete(&self) -> bool {
@@ -182,7 +189,13 @@ impl ProgramRun {
         self.journal(3, &[], available)?;
         self.persist_summary()
     }
+    /// Saves the terminal screen on the background writer.
     pub fn save_screen(&mut self, available: u64) -> Result<(), String> {
+        let screen = self.screen_bytes(available)?;
+        self.screen_len = screen.len() as u64;
+        storage::queue_bytes(&self.summary.directory.join("terminal-screen.ansi"), screen)
+    }
+    fn screen_bytes(&mut self, available: u64) -> Result<Vec<u8>, String> {
         if self.summary.recording_error.is_some() {
             return Err("run saving stopped; final screen unavailable".into());
         }
@@ -191,18 +204,14 @@ impl ProgramRun {
             self.storage_error("capture quota exhausted; terminal screen not saved");
             return Err("capture quota exhausted; terminal screen not saved".into());
         }
-        let path = self.summary.directory.join("terminal-screen.ansi");
-        let temporary = self.summary.directory.join("terminal-screen.tmp");
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temporary)
-            .map_err(|e| e.to_string())?;
-        file.write_all(&screen)
-            .and_then(|_| file.sync_all())
-            .map_err(|e| e.to_string())?;
-        std::fs::rename(temporary, path).map_err(|e| e.to_string())?;
+        Ok(screen)
+    }
+    fn save_screen_now(&mut self, available: u64) -> Result<(), String> {
+        let screen = self.screen_bytes(available)?;
+        storage::atomic_bytes(
+            &self.summary.directory.join("terminal-screen.ansi"),
+            &screen,
+        )?;
         self.screen_len = screen.len() as u64;
         Ok(())
     }
@@ -212,7 +221,7 @@ impl ProgramRun {
         }
         let results = [
             self.capture.sync(),
-            self.save_screen(available),
+            self.save_screen_now(available),
             self.journal.sync_all().map_err(|e| e.to_string()),
             self.transcript.sync_all().map_err(|e| e.to_string()),
         ];
@@ -224,7 +233,7 @@ impl ProgramRun {
             self.storage_error(error.clone());
         }
         self.capture.final_health = Some(health.clone());
-        self.persist_summary()?;
+        storage::atomic_json(&self.summary.directory.join("run.json"), &self.summary)?;
         let (rows, cols) = self.terminal.screen().size();
         storage::atomic_json(
             &self.summary.directory.join("manifest.json"),

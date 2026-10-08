@@ -340,8 +340,9 @@ impl Event {
             }
             if !field.summary().complete {
                 s.issues.push(format!(
-                    "object {} capture incomplete, status {:?}",
-                    field.summary.object_id, field.summary.status
+                    "object {} capture incomplete, status {}",
+                    field.summary.object_id,
+                    field.summary.status.map_or("missing", status_name)
                 ));
             }
             s.issues.extend(field.issues.iter().cloned());
@@ -739,6 +740,26 @@ pub fn syscall_name(nr: u64) -> &'static str {
     crate::syscalls::syscall(nr).map_or("unknown", |entry| entry.name.as_str())
 }
 
+/// Field capture status names (contract revision 8; `capture_api.h` order).
+pub fn status_name(status: u32) -> &'static str {
+    const NAMES: [&str; 13] = [
+        "COMPLETE",
+        "COPY_FAULT",
+        "INVALID_EXTENT",
+        "UNKNOWN_EXTENT",
+        "NO_DECODER",
+        "NULL_POINTER",
+        "ADDRESS_ONLY",
+        "ASYNC_UNOBSERVED",
+        "RESOURCE_EXHAUSTED",
+        "ABORTED_ON_LOSS",
+        "CONTEXT_MISSING",
+        "NOT_WRITTEN",
+        "NOT_RESIDENT",
+    ];
+    NAMES.get(status as usize).copied().unwrap_or("UNKNOWN")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -873,6 +894,13 @@ mod tests {
         let s = a.ingest(&packet(4, 1, 0, &terminal, 1)).unwrap().unwrap();
         assert!(!s.complete);
         assert_eq!(s.fields[0].status, Some(1));
+        assert!(
+            s.issues
+                .iter()
+                .any(|issue| issue.ends_with("status COPY_FAULT"))
+        );
+        assert_eq!(status_name(12), "NOT_RESIDENT");
+        assert_eq!(status_name(13), "UNKNOWN");
         assert!(a.saving_error().is_none());
         std::fs::remove_dir_all(path).unwrap();
     }

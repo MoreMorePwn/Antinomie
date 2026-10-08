@@ -116,17 +116,26 @@ impl Transport {
             path: path.as_ptr(),
             size: ram,
         };
-        let region = Region {
+        let layout = crate::vm::RamLayout::q35(ram);
+        let mut regions = vec![Region {
             gpa: 0,
-            size: ram,
+            size: layout.low,
             file_offset: 0,
             backing_index: 0,
-        };
+        }];
+        if layout.high != 0 {
+            regions.push(Region {
+                gpa: crate::vm::HIGH_RAM_GPA,
+                size: layout.high,
+                file_offset: layout.low,
+                backing_index: 0,
+            });
+        }
         let options = Options {
             backings: &backing,
             backing_count: 1,
-            regions: &region,
-            region_count: 1,
+            regions: regions.as_ptr(),
+            region_count: regions.len(),
             ram_size: ram,
             bootstrap_gpa: bootstrap,
             init_timeout_ms: 20000,

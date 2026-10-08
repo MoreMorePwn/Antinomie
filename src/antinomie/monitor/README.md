@@ -82,8 +82,8 @@ scripts/run-monitor.sh
 
 Alternatively use **File > Import base** with the completed bundle directory.
 In **New VM**, choose **Debian 13 (Xfce)**, then enter a username, password and
-confirmation. Minimum resources are 2048 MiB RAM and 16 GiB disk; the existing
-3072 MiB RAM ceiling still applies. Creation provisions the disk offline and
+confirmation. Minimum resources are 2048 MiB RAM and 16 GiB disk; the RAM
+ceiling is 8192 MiB. Creation provisions the disk offline and
 can take longer than BusyBox creation. The account uses UID/GID 1000 and
 password-protected sudo. Root login, autologin and SSH are disabled. The desktop
 appears in QEMU's separate display window; program terminals stay in the monitor.
@@ -108,11 +108,14 @@ the existing disk overlay and original disk backing base remain unchanged.
 Recordings distinguish boot-bundle and disk-base identities. Reset still uses
 the VM's original disk base, not the current boot bundle's root filesystem.
 
-The current QEMU memory profile supports 1..64 CPUs, 256..3072 MiB RAM, and
-1..2048 GiB virtual storage. Flat RAM stays below the PCI hole. The backend
-chooses an aligned bootstrap GPA from the configured RAM size and passes the
-same value to the guest and V7 API. Larger/non-flat RAM layouts require a
-different validated memory profile, not guessed GPA-to-file arithmetic.
+The current QEMU memory profile supports 1..64 CPUs, 256..8192 MiB RAM, and
+1..2048 GiB virtual storage. On q35, QEMU keeps up to 2.75 GiB of RAM below the
+PCI hole, or only 2 GiB once RAM reaches 2.75 GiB, and places the rest at 4 GiB.
+Both parts come from one backing file, the high part directly after the low
+one. The backend declares both regions to the V7 host library and, at every
+start, compares them with QEMU's own memory map (`info mtree` over QMP),
+refusing to attach on a mismatch. The bootstrap GPA is the aligned middle of
+the low region and is passed to both the guest and the V7 API.
 
 ## VM launch settings
 

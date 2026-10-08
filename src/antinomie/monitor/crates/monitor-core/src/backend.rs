@@ -826,6 +826,7 @@ impl Worker {
                     self.snapshot.last_error = Some(e);
                 }
                 self.publish();
+                storage::flush_json();
                 break;
             }
             match self.receiver.recv_timeout(Duration::from_millis(10)) {
@@ -1483,6 +1484,10 @@ impl Worker {
             let assembler =
                 Assembler::new(capture_dir.join("objects"), self.options.capture_quota_size)
                     .map_err(|e| e.to_string())?;
+            if let Err(e) = process.verify_ram_layout() {
+                capture.manifest(&vm, &bundle, &disk_bundle, "start-failed")?;
+                return Err(e);
+            }
             let transport =
                 match Transport::open(&process.ram_path, process.ram_size, process.bootstrap) {
                     Ok(t) => t,

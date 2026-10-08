@@ -22,6 +22,71 @@ impl Drop for UnstartedRuntime {
         }
     }
 }
+/// Guest RAM as q35 lays it out: QEMU keeps 0xb0000000 bytes below 4 GiB, or
+/// only 2 GiB once RAM reaches that size, and places the rest at 4 GiB. Both
+/// parts come from one backing file, the high part directly after the low.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RamLayout {
+    pub low: u64,
+    pub high: u64,
+}
+pub(crate) const HIGH_RAM_GPA: u64 = 1 << 32;
+impl RamLayout {
+    pub fn q35(ram_size: u64) -> Self {
+        let lowmem = if ram_size >= 0xb000_0000 {
+            0x8000_0000
+        } else {
+            0xb000_0000
+        };
+        let low = ram_size.min(lowmem);
+        Self {
+            low,
+            high: ram_size - low,
+        }
+    }
+    /// Reads QEMU's `ram-below-4g`/`ram-above-4g` aliases from `info mtree`
+    /// output as (GPA, size, backing offset) triples.
+    fn from_mtree(mtree: &str) -> Result<Vec<(u64, u64, u64)>, String> {
+        let parse = |range: &str| -> Option<(u64, u64)> {
+            let (start, end) = range.trim().split_once('-')?;
+            let start = u64::from_str_radix(start, 16).ok()?;
+            let end = u64::from_str_radix(end.split_whitespace().next()?, 16).ok()?;
+            Some((start, end.checked_sub(start)?.checked_add(1)?))
+        };
+        let mut found = Vec::new();
+        for line in mtree.lines() {
+            let Some((range, alias)) = line.split_once(" (prio ") else {
+                continue;
+            };
+            let Some((_, target)) = alias
+                .split_once("alias ram-below-4g @")
+                .or_else(|| alias.split_once("alias ram-above-4g @"))
+            else {
+                continue;
+            };
+            let (gpa, size) = parse(range).ok_or("unreadable QEMU memory map")?;
+            let (offset, alias_size) = target
+                .split_once(' ')
+                .and_then(|(_, range)| parse(range))
+                .ok_or("unreadable QEMU memory map")?;
+            if alias_size != size {
+                return Err("unreadable QEMU memory map".into());
+            }
+            if !found.contains(&(gpa, size, offset)) {
+                found.push((gpa, size, offset));
+            }
+        }
+        found.sort_unstable();
+        Ok(found)
+    }
+    fn expected(&self) -> Vec<(u64, u64, u64)> {
+        let mut regions = vec![(0, self.low, 0)];
+        if self.high != 0 {
+            regions.push((HIGH_RAM_GPA, self.high, self.low));
+        }
+        regions
+    }
+}
 fn qemu_path(path: &Path) -> Result<String, String> {
     Ok(path
         .to_str()
@@ -125,12 +190,15 @@ impl VmProcess {
         };
         let ram_path = runtime_dir.join("shared-ram");
         let ram_size = u64::from(vm.ram_mib) * 1024 * 1024;
-        let bootstrap = options.bootstrap_gpa.unwrap_or((ram_size / 2) & !4095);
+        let layout = RamLayout::q35(ram_size);
+        let bootstrap = options.bootstrap_gpa.unwrap_or((layout.low / 2) & !4095);
         if bootstrap < 0x100000
             || !bootstrap.is_multiple_of(4096)
-            || bootstrap.checked_add(4096).is_none_or(|end| end > ram_size)
+            || bootstrap
+                .checked_add(4096)
+                .is_none_or(|end| end > layout.low)
         {
-            return Err("bootstrap GPA must be page aligned and inside VM RAM".into());
+            return Err("bootstrap GPA must be page aligned and inside VM RAM below 4 GiB".into());
         }
         let ram = OpenOptions::new()
             .write(true)
@@ -230,6 +298,66 @@ impl VmProcess {
                 .wait()
                 .map_err(|e| format!("{error}; QEMU reap: {e}"))?;
             return Err(error);
+        }
+        Ok(())
+    }
+    /// Confirms over QMP that QEMU placed guest RAM where the transport maps it.
+    pub fn verify_ram_layout(&self) -> Result<(), String> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let socket = loop {
+            match UnixStream::connect(&self.qmp_path) {
+                Ok(socket) => break socket,
+                Err(_) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(50))
+                }
+                Err(error) => return Err(format!("QMP connect for RAM layout: {error}")),
+            }
+        };
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .and_then(|_| socket.set_write_timeout(Some(Duration::from_secs(5))))
+            .map_err(|e| e.to_string())?;
+        let mut writer = socket.try_clone().map_err(|e| e.to_string())?;
+        let mut reader = std::io::BufReader::new(socket);
+        let mut reply = |command: &str| -> Result<serde_json::Value, String> {
+            if !command.is_empty() {
+                writer
+                    .write_all(command.as_bytes())
+                    .map_err(|e| format!("QMP write: {e}"))?;
+            }
+            loop {
+                let mut line = String::new();
+                if std::io::BufRead::read_line(&mut reader, &mut line)
+                    .map_err(|e| format!("QMP read: {e}"))?
+                    == 0
+                {
+                    return Err("QMP closed".into());
+                }
+                let value: serde_json::Value =
+                    serde_json::from_str(&line).map_err(|e| format!("QMP reply: {e}"))?;
+                if value.get("QMP").is_some() || value.get("return").is_some() {
+                    return Ok(value);
+                }
+                if let Some(error) = value.get("error") {
+                    return Err(format!("QMP error: {error}"));
+                }
+            }
+        };
+        reply("")?;
+        reply("{\"execute\":\"qmp_capabilities\"}\n")?;
+        let mtree = reply(
+            "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info mtree\"}}\n",
+        )?;
+        let mtree = mtree["return"]
+            .as_str()
+            .ok_or("QMP memory map is not text")?;
+        let layout = RamLayout::q35(self.ram_size);
+        let found = RamLayout::from_mtree(mtree)?;
+        if found != layout.expected() {
+            return Err(format!(
+                "QEMU placed guest RAM at {found:x?}, expected {:x?}",
+                layout.expected()
+            ));
         }
         Ok(())
     }
@@ -480,6 +608,63 @@ mod tests {
         }
     }
 
+    #[test]
+    fn ram_layout_follows_q35_split() {
+        const MIB: u64 = 1024 * 1024;
+        assert_eq!(
+            RamLayout::q35(2048 * MIB),
+            RamLayout {
+                low: 2048 * MIB,
+                high: 0
+            }
+        );
+        assert_eq!(
+            RamLayout::q35(2815 * MIB),
+            RamLayout {
+                low: 2815 * MIB,
+                high: 0
+            }
+        );
+        assert_eq!(
+            RamLayout::q35(2816 * MIB),
+            RamLayout {
+                low: 2048 * MIB,
+                high: 768 * MIB
+            }
+        );
+        assert_eq!(
+            RamLayout::q35(3072 * MIB),
+            RamLayout {
+                low: 2048 * MIB,
+                high: 1024 * MIB
+            }
+        );
+        assert_eq!(
+            RamLayout::q35(8192 * MIB),
+            RamLayout {
+                low: 2048 * MIB,
+                high: 6144 * MIB
+            }
+        );
+    }
+    #[test]
+    fn ram_layout_matches_qemu_memory_map() {
+        // Lines from QEMU 11.0.3 `info mtree` with -m 4096 (each appears twice).
+        let mtree = "\
+  0000000000000000-000000007fffffff (prio 0, ram): alias ram-below-4g @shared 0000000000000000-000000007fffffff
+  0000000100000000-000000017fffffff (prio 0, ram): alias ram-above-4g @shared 0000000080000000-00000000ffffffff
+    0000000000000000-000000007fffffff (prio 0, ram): alias ram-below-4g @shared 0000000000000000-000000007fffffff
+    0000000100000000-000000017fffffff (prio 0, ram): alias ram-above-4g @shared 0000000080000000-00000000ffffffff
+  00000000fec00000-00000000fec00fff (prio 0, i/o): ioapic";
+        let found = RamLayout::from_mtree(mtree).unwrap();
+        assert_eq!(found, RamLayout::q35(4096 << 20).expected());
+        assert_ne!(found, RamLayout::q35(3072 << 20).expected());
+        let low_only = "  0000000000000000-000000007fffffff (prio 0, ram): alias ram-below-4g @shared 0000000000000000-000000007fffffff";
+        assert_eq!(
+            RamLayout::from_mtree(low_only).unwrap(),
+            RamLayout::q35(2048 << 20).expected()
+        );
+    }
     #[test]
     fn owned_process_is_reaped_on_drop() {
         let child = Command::new("sleep").arg("60").spawn().unwrap();

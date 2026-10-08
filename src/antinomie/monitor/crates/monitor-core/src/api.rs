@@ -27,7 +27,9 @@ impl GuestProfile {
         {
             return Err("invalid guest profile label".into());
         }
-        if !(256..=3072).contains(&self.min_ram_mib) || !(1..=2048).contains(&self.min_disk_gib) {
+        if !(crate::storage::MIN_RAM_MIB..=crate::storage::MAX_RAM_MIB).contains(&self.min_ram_mib)
+            || !(1..=2048).contains(&self.min_disk_gib)
+        {
             return Err("guest profile resource minima exceed supported limits".into());
         }
         Ok(())
@@ -107,7 +109,9 @@ mod guest_tests {
             graphical: true,
         };
         assert!(profile.validate().is_ok());
-        profile.min_ram_mib = 4096;
+        profile.min_ram_mib = 8192;
+        assert!(profile.validate().is_ok());
+        profile.min_ram_mib = 8193;
         assert!(profile.validate().is_err());
         let vm: VmConfig = serde_json::from_str(
             r#"{"id":"legacy","name":"legacy","cpus":4,"ram_mib":2048,"disk_gib":8,"nat":false}"#,

@@ -2434,7 +2434,8 @@ impl MonitorApp {
                                 ui.end_row();
                                 ui.label("RAM (MiB)");
                                 ui.add(
-                                    egui::DragValue::new(&mut self.draft.ram_mib).range(min_ram..=3072),
+                                    egui::DragValue::new(&mut self.draft.ram_mib)
+                                        .range(min_ram..=antinomie_monitor_core::storage::MAX_RAM_MIB),
                                 );
                                 ui.end_row();
                                 ui.label("Disk (GiB)");
