@@ -22,6 +22,7 @@ third-party assets. Preserve their applicable notices and terms.
 | Imported `src/debian/`, source archives, packaging references and patches | Existing upstream/file-specific terms; excluded from root MIT grant |
 | `LICENSES/third-party/`, dependencies and embedded fonts/icons | Their own licenses/notices; excluded from root MIT grant; see [third-party notices](THIRD-PARTY-NOTICES.md) |
 | Built kernel, BusyBox rootfs, VM images and bundled host dependencies | Composite distributions, not wholly MIT; comply with each component's terms |
+| The `antinomie-monitor` executable | Composite: MIT application code, linked dependencies under their own licenses, and the embedded base build kit, which carries the kernel patch series (`src/antinomie/core/`, GPL/file-specific terms) and the Debian `linux` source package files (`src/debian/`, upstream terms) unchanged. Release archives include `LICENSE`, this file, `THIRD-PARTY-NOTICES.md` and `LICENSES/` |
 
 The shared-header licensing change does not change the Linux kernel's license.
 Historical patches retain their original notices; the ordered follow-up patch

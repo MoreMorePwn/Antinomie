@@ -5,7 +5,8 @@
 #   ~/.local/share/applications/antinomie.desktop           application menu entry
 #   ~/.local/share/icons/hicolor/scalable/apps/antinomie.svg icon
 #
-#   ./install.sh               build (if needed) and install or update
+#   ./install.sh               build (if needed) and install or update; in a
+#                              release archive, install the prebuilt app
 #   ./install.sh --uninstall   remove those three files (application data stays)
 #
 # QEMU (qemu-system-x86_64, qemu-img) and KVM access are still needed to run VMs.
@@ -31,11 +32,19 @@ elif [[ $# -gt 0 ]]; then
     exit 2
 fi
 
-bash "$repo/scripts/build-monitor-host.sh" >/dev/null
-install -D -m 0755 "$repo/work/monitor-host/antinomie-monitor" "$bin"
-install -D -m 0644 "$repo/src/antinomie/monitor/assets/antinomie.svg" "$icon"
+if [[ -x "$repo/antinomie-monitor" && -f "$repo/antinomie.desktop" ]]; then
+    # Release archive: the prebuilt app and its assets sit next to this script.
+    built="$repo/antinomie-monitor"
+    assets="$repo"
+else
+    bash "$repo/scripts/build-monitor-host.sh" >/dev/null
+    built="$repo/work/monitor-host/antinomie-monitor"
+    assets="$repo/src/antinomie/monitor/assets"
+fi
+install -D -m 0755 "$built" "$bin"
+install -D -m 0644 "$assets/antinomie.svg" "$icon"
 mkdir -p "$(dirname "$desktop")"
-sed "s|@BIN@|$bin|" "$repo/src/antinomie/monitor/assets/antinomie.desktop" > "$desktop"
+sed "s|@BIN@|$bin|" "$assets/antinomie.desktop" > "$desktop"
 chmod 0644 "$desktop"
 refresh_menus
 echo "Installed: $bin"

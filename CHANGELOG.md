@@ -4,7 +4,7 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version names the guest
 contract revision its kernel patches implement.
 
-## 0.1.0 — in development
+## 0.1.0 — 2026-10-08
 
 Guest contract revision 9 (kernel patch series `0001`–`0013`).
 
@@ -23,3 +23,10 @@ Guest contract revision 9 (kernel patch series `0001`–`0013`).
   kernel is checked against its base.
 - Guest RAM up to 8 GiB (regions above 4 GiB mapped).
 - `./run.sh` and per-user `./install.sh` (command, menu entry, icon).
+- Syscall trace rows colored by category (eleven groups covering all 375
+  native syscalls) with a category filter; failed calls marked in red.
+- Debian builds offer the installer's desktops (GNOME, Xfce, GNOME
+  Flashback, KDE Plasma, Cinnamon, MATE, LXDE, LXQt) and a base name.
+- Prebuilt bases for this version: BusyBox `312bfe10…` and Debian 13
+  (GNOME) `64953c89…` on the Hugging Face bucket
+  `MoreMorePwn/antinomie-bases`.
