@@ -232,7 +232,18 @@ impl QemuBuild<'_> {
         let key = format!("{:x}", digest.finalize());
         let overlay = builder.join(format!("tools-{}.qcow2", &key[..16]));
         if overlay.with_extension("ready").is_file() {
-            return Ok(overlay);
+            // The overlay names its backing image by absolute path; keep that
+            // valid if the data directory moved (header-only, unsafe rebase).
+            let rebased = Command::new(self.qemu_img)
+                .args(["rebase", "-u", "-F", "qcow2", "-b"])
+                .arg(image)
+                .arg(&overlay)
+                .output()
+                .map_err(|e| format!("qemu-img: {e}"))?;
+            if rebased.status.success() {
+                return Ok(overlay);
+            }
+            on_line("the cached builder tools disk is damaged; preparing it again");
         }
         for entry in fs::read_dir(builder).map_err(|e| e.to_string())?.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
