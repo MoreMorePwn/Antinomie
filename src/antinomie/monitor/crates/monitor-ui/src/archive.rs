@@ -1,7 +1,7 @@
 //! Bounded offline work, independent of rendering and the transport owner.
 use antinomie_monitor_core::{
-    recording, BackendOptions, FieldSummary, InvocationPage, RunSummary, TerminalPage,
-    TerminalRecord,
+    recording, BackendOptions, CaptureSummary, FieldSummary, InvocationPage, RunSummary,
+    TerminalPage, TerminalRecord,
 };
 use std::{
     path::PathBuf,
@@ -13,6 +13,11 @@ use std::{
 };
 
 pub(crate) enum Request {
+    ListCaptures {
+        options: BackendOptions,
+        vm_id: String,
+        generation: u64,
+    },
     ListVm {
         options: BackendOptions,
         vm_id: String,
@@ -22,6 +27,7 @@ pub(crate) enum Request {
         generation: u64,
         directory: PathBuf,
         offset: u64,
+        capture: bool,
     },
     Terminal {
         run_id: String,
@@ -52,6 +58,11 @@ pub(crate) struct TerminalReplay {
 }
 
 pub(crate) enum Answer {
+    ListCaptures {
+        vm_id: String,
+        generation: u64,
+        result: Result<Vec<CaptureSummary>, String>,
+    },
     #[cfg(test)]
     List(Result<Vec<RunSummary>, String>),
     ListVm {
@@ -105,6 +116,18 @@ impl ArchiveWorker {
                         break;
                     }
                     let answer = match request {
+                        Request::ListCaptures {
+                            options,
+                            vm_id,
+                            generation,
+                        } => Answer::ListCaptures {
+                            result: antinomie_monitor_core::capture::list_vm_captures(
+                                &options, &vm_id,
+                            )
+                            .map_err(|error| error.to_string()),
+                            vm_id,
+                            generation,
+                        },
                         Request::ListVm {
                             options,
                             vm_id,
@@ -119,13 +142,18 @@ impl ArchiveWorker {
                             generation,
                             directory,
                             offset,
+                            capture,
                         } => Answer::Invocations {
                             generation,
                             offset,
-                            result: recording::open_recording_cancellable(
-                                &directory,
-                                &worker_cancelled,
-                            )
+                            result: (if capture {
+                                antinomie_monitor_core::capture::open_capture_recording_cancellable(
+                                    &directory,
+                                    &worker_cancelled,
+                                )
+                            } else {
+                                recording::open_recording_cancellable(&directory, &worker_cancelled)
+                            })
                             .and_then(|r| {
                                 r.invocation_page_cancellable(offset, 256, &worker_cancelled)
                             })

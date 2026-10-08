@@ -680,6 +680,16 @@ pub enum Command {
         run_id: String,
     },
     RecorderStats,
+    ListProcesses {
+        after_pid: u32,
+    },
+    AttachProcess {
+        identity: crate::observation::GuestProcessIdentity,
+    },
+    CaptureAll,
+    StopCapture {
+        capture_id: String,
+    },
     OpenRecording {
         directory: PathBuf,
     },
@@ -737,6 +747,11 @@ pub struct Snapshot {
     pub events: Vec<EventSummary>,
     pub runs: Vec<RunSummary>,
     pub analysis_reports: Vec<crate::analysis::AnalysisReport>,
+    pub captures: Vec<crate::observation::CaptureSummary>,
+    /// At most the active/latest observer preview; older captures use archive paging.
+    pub capture_events: std::collections::BTreeMap<String, Vec<EventSummary>>,
+    pub boot_id: Option<String>,
+    pub process_page: Option<crate::observation::GuestProcessPage>,
     pub capture_dir: Option<PathBuf>,
     pub serial_log: Option<PathBuf>,
     /// The running guest kernel, once it has answered the INFO probe.

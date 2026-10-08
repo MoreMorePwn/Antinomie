@@ -1,0 +1,753 @@
+From 5bd2b210730606afc60dbfc13eb122fe867fad5f Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Fri, 9 Oct 2026 00:34:42 +0700
+Subject: [PATCH] antinomie: add independent process-tree and userspace capture
+ sessions
+
+---
+ include/linux/antinomie_monitor.h |   4 +
+ include/linux/sched.h             |   2 +
+ io_uring/io_uring.c               |   4 +-
+ kernel/antinomie/Makefile         |   1 +
+ kernel/antinomie/async.c          |  21 ++-
+ kernel/antinomie/async.h          |   1 +
+ kernel/antinomie/control.c        |   7 +-
+ kernel/antinomie/control_wire.h   |  39 +++++-
+ kernel/antinomie/observer.c       | 211 ++++++++++++++++++++++++++++++
+ kernel/antinomie/observer.h       |  13 ++
+ kernel/antinomie/recorder.c       | 103 +++++++++++----
+ kernel/fork.c                     |   3 +
+ 12 files changed, 371 insertions(+), 38 deletions(-)
+ create mode 100644 kernel/antinomie/observer.c
+ create mode 100644 kernel/antinomie/observer.h
+
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+index 3fb92c984..9755e8ad8 100644
+--- a/include/linux/antinomie_monitor.h
++++ b/include/linux/antinomie_monitor.h
+@@ -19,6 +19,9 @@ struct mm_struct;
+ void ant_monitor_enter(struct pt_regs *regs, long nr);
+ void ant_monitor_exit(struct pt_regs *regs);
+ void ant_monitor_fork(struct task_struct *child);
++void ant_monitor_fork_prepare(struct task_struct *child);
++u64 ant_monitor_cookie(struct task_struct *task);
++u64 ant_monitor_stream_id(void);
+ void ant_monitor_exec(void);
+ void ant_monitor_specimen_exec(struct file *file);
+ void ant_monitor_task_exit(bool group_dead);
+@@ -68,6 +71,7 @@ void ant_monitor_operand(u8 arg, const char *key, const char *layout, const void
+ static inline void ant_monitor_enter(struct pt_regs *regs, long nr) {}
+ static inline void ant_monitor_exit(struct pt_regs *regs) {}
+ static inline void ant_monitor_fork(struct task_struct *child) {}
++static inline void ant_monitor_fork_prepare(struct task_struct *child) {}
+ static inline void ant_monitor_exec(void) {}
+ static inline void ant_monitor_specimen_exec(struct file *file) {}
+ static inline void ant_monitor_task_exit(bool group_dead) {}
+diff --git a/include/linux/sched.h b/include/linux/sched.h
+index 3a856ec89..ae3ed7344 100644
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -803,11 +803,13 @@ struct task_struct {
+ #ifdef CONFIG_ANTINOMIE
+ 	u64 ant_cookie;
+ 	u64 ant_root_cookie;
++	u64 ant_observer_cookie;
+ 	struct ant_task *ant_monitor;
+ 	struct ant_run *ant_run;
+ 	atomic64_t ant_event_seq;
+ 	atomic64_t ant_packet_seq;
+ 	bool ant_root_process;
++	bool ant_counted;
+ #endif
+ 
+ 	void				*stack;
+diff --git a/io_uring/io_uring.c b/io_uring/io_uring.c
+index 856f9811e..c9a58b760 100644
+--- a/io_uring/io_uring.c
++++ b/io_uring/io_uring.c
+@@ -2194,8 +2194,8 @@ static struct ant_async *ant_uring_begin(struct io_ring_ctx *ctx,
+ 	u32 flags = ant_uring_payload_flags(opcode);
+ 	size_t len = ctx->flags & IORING_SETUP_SQE128 ? 128 : sizeof(*sqe);
+ 
+-	if (ctx->ant_root_cookie && ((current->flags & PF_IO_WORKER) ||
+-				     task_tgid(current) != ctx->ant_tgid))
++	if ((current->flags & PF_IO_WORKER) ||
++	    task_tgid(current) != ctx->ant_tgid)
+ 		return ant_monitor_async_begin_attributed(ctx->ant_creator, ctx->ant_root_cookie,
+ 							  ctx->ant_task_cookie, ANT_ASYNC_IO_URING,
+ 							  opcode, user_data, flags, sqe, len);
+diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
+index 46f532ff8..2ada5c4e9 100644
+--- a/kernel/antinomie/Makefile
++++ b/kernel/antinomie/Makefile
+@@ -1,3 +1,4 @@
+ obj-y += bootstrap.o guest.o recorder.o control.o run.o async.o native_capture.o
+ obj-y += async_capture.o
+ obj-y += specimen.o
++obj-y += observer.o
+diff --git a/kernel/antinomie/async.c b/kernel/antinomie/async.c
+index 05845bd92..1b12199f9 100644
+--- a/kernel/antinomie/async.c
++++ b/kernel/antinomie/async.c
+@@ -22,6 +22,7 @@
+ #include "async.h"
+ #include "capture_api.h"
+ #include "run.h"
++#include "observer.h"
+ 
+ #define ANT_ASYNC_REQUEST_COUNT 256
+ #define ANT_ASYNC_RECORD_COUNT 1024
+@@ -59,7 +60,7 @@ struct ant_aio_reap {
+ struct ant_async_record {
+ 	struct ant_async_event event;
+ 	size_t packet_len;
+-	u8 packet[136 + 4096];
++	u8 packet[144 + 4096];
+ };
+ 
+ static atomic_t request_count = ATOMIC_INIT(0);
+@@ -206,6 +207,7 @@ int ant_async_stage_packet(const struct ant_async_event *event,
+ }
+ 
+ static struct ant_async *begin(struct task_struct *owner, u64 root_cookie, u64 task_cookie,
++			       u64 capture_cookie,
+ 			       u8 system, u32 opcode, u64 user_data, u32 flags,
+ 			       const void *descriptor, size_t descriptor_len)
+ {
+@@ -246,6 +248,7 @@ static struct ant_async *begin(struct task_struct *owner, u64 root_cookie, u64 t
+ 	event->entry_ns = ktime_get_ns();
+ 	event->cpu = raw_smp_processor_id();
+ 	event->root_cookie = root_cookie;
++	event->capture_cookie = capture_cookie;
+ 	event->task_cookie = task_cookie;
+ 	event->start_boot_ns = current->start_boottime;
+ 	event->pid = task_tgid_nr(current);
+@@ -270,9 +273,12 @@ static struct ant_async *begin(struct task_struct *owner, u64 root_cookie, u64 t
+ struct ant_async *ant_monitor_async_begin(u8 system, u32 opcode, u64 user_data,
+ 					  u32 flags, const void *descriptor, size_t descriptor_len)
+ {
+-	if (!current->ant_cookie)
++	u64 capture_cookie = ant_observer_admit(current);
++
++	if (!READ_ONCE(current->ant_root_cookie) && !capture_cookie)
+ 		return NULL;
+-	return begin(NULL, current->ant_root_cookie, current->ant_cookie, system, opcode,
++	return begin(NULL, READ_ONCE(current->ant_root_cookie), ant_monitor_cookie(current),
++		     capture_cookie, system, opcode,
+ 		     user_data, flags, descriptor, descriptor_len);
+ }
+ 
+@@ -283,7 +289,12 @@ struct ant_async *ant_monitor_async_begin_attributed(struct task_struct *owner,
+ 						     u32 flags, const void *descriptor,
+ 						     size_t descriptor_len)
+ {
+-	return begin(owner, root_cookie, task_cookie, system, opcode, user_data,
++	u64 capture_cookie = ant_observer_admit(owner);
++
++	if (!root_cookie && !capture_cookie)
++		return NULL;
++	return begin(owner, root_cookie, task_cookie ?: ant_monitor_cookie(owner),
++		     capture_cookie, system, opcode, user_data,
+ 		     flags | ANT_ASYNC_PRODUCER_UNKNOWN, descriptor, descriptor_len);
+ }
+ 
+@@ -512,7 +523,7 @@ void ant_monitor_async_link_completion(struct ant_async **source,
+ 
+ void ant_monitor_async_unavailable(void)
+ {
+-	if (current->ant_cookie)
++	if (READ_ONCE(current->ant_root_cookie))
+ 		ant_run_async_incomplete(current->ant_root_cookie);
+ }
+ 
+diff --git a/kernel/antinomie/async.h b/kernel/antinomie/async.h
+index 5ea47035c..5dff0c48e 100644
+--- a/kernel/antinomie/async.h
++++ b/kernel/antinomie/async.h
+@@ -22,6 +22,7 @@ struct ant_async_event {
+ 	u64 entry_ns;
+ 	u64 timestamp_ns;
+ 	u64 root_cookie;
++	u64 capture_cookie;
+ 	u64 task_cookie;
+ 	u64 start_boot_ns;
+ 	u64 user_data;
+diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
+index 99d194c2e..78a9d1bbf 100644
+--- a/kernel/antinomie/control.c
++++ b/kernel/antinomie/control.c
+@@ -23,6 +23,7 @@
+ #include <linux/workqueue.h>
+ #include "control_wire.h"
+ #include "specimen.h"
++#include "observer.h"
+ 
+ #define ANT_SESSION_MAX 64
+ 
+@@ -530,6 +531,9 @@ static int command(const void *data, size_t args_len, void *reply,
+ 	    get_unaligned_le32(args + 4))
+ 		return -EINVAL;
+ 	switch (opcode) {
++	case ANTC_PROCESS_LIST: case ANTC_CAPTURE_ATTACH: case ANTC_CAPTURE_ALL:
++	case ANTC_CAPTURE_STOP: case ANTC_CAPTURE_STATUS:
++		return ant_observer_command(opcode, args, args_len, reply, capacity, reply_len);
+ 	case ANTC_UPLOAD_BEGIN:
+ 		return upload_begin(args, args_len, reply, reply_len);
+ 	case ANTC_UPLOAD_CHUNK: case ANTC_UPLOAD_COMMIT: case ANTC_UPLOAD_ABORT:
+@@ -601,7 +605,8 @@ static int __init ant_control_init(void)
+ 		ANTC_TERMINAL_INPUT, ANTC_TERMINAL_READ, ANTC_TERMINAL_RESIZE,
+ 		ANTC_SIGNAL, ANTC_STOP_RUN, ANTC_RUN_STATUS, ANTC_STATS,
+ 		ANTC_SHUTDOWN, ANTC_ACQUIRE, ANTC_SPECIMEN_READ,
+-		ANTC_SPECIMEN_RELEASE };
++		ANTC_SPECIMEN_RELEASE, ANTC_PROCESS_LIST, ANTC_CAPTURE_ATTACH,
++		ANTC_CAPTURE_ALL, ANTC_CAPTURE_STOP, ANTC_CAPTURE_STATUS };
+ 	int i, error;
+ 
+ 	for (i = 0; i < ARRAY_SIZE(opcodes); i++) {
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index dfb3b6cea..a8b8518d2 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -11,7 +11,7 @@
+  */
+ #define ANTC_VERSION 1
+ /* Contract revision of the guest's observable behaviour (native-schema-slices). */
+-#define ANTC_REVISION 10
++#define ANTC_REVISION 11
+ #define ANTC_HEADER_SIZE 8
+ #define ANTC_UPLOAD_BEGIN 0x1001
+ #define ANTC_UPLOAD_CHUNK 0x1002
+@@ -34,6 +34,20 @@
+ #define ANTC_INFO 0x1021
+ #define ANTC_INFO_SIZE 160
+ #define ANTC_SHUTDOWN 0x1030
++#define ANTC_PROCESS_LIST 0x1050
++#define ANTC_CAPTURE_ATTACH 0x1051
++#define ANTC_CAPTURE_ALL 0x1052
++#define ANTC_CAPTURE_STOP 0x1053
++#define ANTC_CAPTURE_STATUS 0x1054
++#define ANTC_PROCESS_PAGE_MAX 64
++#define ANTC_PROCESS_ENTRY_SIZE 64
++#define ANTC_CAPTURE_STATUS_SIZE 32
++#define ANTC_CAPTURE_MAX_COUNT 64
++#define ANTC_CAPTURE_ACTIVE 1
++#define ANTC_CAPTURE_STOPPED 2
++#define ANTC_CAPTURE_TAILS_POSSIBLE 4
++#define ANTC_CAPTURE_PROCESS 1
++#define ANTC_CAPTURE_USERSPACE 2
+ #define ANTC_ACQUIRE 0x1040
+ #define ANTC_SPECIMEN_READ 0x1041
+ #define ANTC_SPECIMEN_RELEASE 0x1042
+@@ -104,6 +118,29 @@
+  * or empty for an unversioned build. Kernels before revision 9 return
+  * -EOPNOTSUPP. INFO is registered before every other opcode, so INFO
+  * unsupported while STATS succeeds identifies such a kernel.
++ * PROCESS_LIST: header flags=0, u32 after_pid at 8, u32 capacity at 12,
++ * 1..64. Non-atomic live pagination of userspace process leaders, ascending
++ * PID. Reply: u64 stream_id at 0, u32 count at 8, u32 next_pid at 12
++ * (0 ends enumeration), then count 64-byte entries: u64 task_cookie at 0,
++ * u64 start_boottime at 8, u32 tgid at 16, u32 parent_tgid at 20,
++ * u32 uid/gid/thread_count at 24/28/32, u32 flags=0 at 36, comm[16] at 40
++ * (NUL terminated), reserved zeros at 56..63. PID is not authorization.
++ * CAPTURE_ATTACH: header flags=0, u64 leader task_cookie at 8,
++ * u64 start_boottime at 16, u32 tgid at 24, u32 reserved=0 at 28.
++ * Validates live identity, includes current thread group and future descendants
++ * only. CAPTURE_ALL: header only; existing/future userspace observations.
++ * Both reply with u64 capture_cookie at 0 and u64 stream_id at 8 (16 bytes).
++ * One active observer per boot; at most 64 non-reused capture IDs per boot.
++ * Existing launched-run root ownership and PTYs remain unchanged.
++ * CAPTURE_STOP / STATUS: header flags=0, u64 capture_cookie at 8.
++ * STATUS cookie=0 queries the active observer (all-zero reply if none).
++ * STOP requires a nonzero known cookie, is idempotent, never signals tasks.
++ * Both return 32-byte status: u64 cookie at 0, u32 flags at 8, u32 mode at 12,
++ * u64 start_ns at 16, u64 stop_ns at 24. STOP closes admission; admitted calls
++ * and async requests retain their old capture ID and may publish later tails.
++ * STOPPED|TAILS_POSSIBLE does not promise delivery/drain or complete capture.
++ * ANTT minor 2 / 144-byte header adds capture_cookie at offset 136, preserving
++ * launched root cookie at 128. Capture attribution is frozen on admission.
+  * SHUTDOWN: header only; empty success reply, delayed kernel_power_off.
+  */
+ #endif
+diff --git a/kernel/antinomie/observer.c b/kernel/antinomie/observer.c
+new file mode 100644
+index 000000000..31ced31aa
+--- /dev/null
++++ b/kernel/antinomie/observer.c
+@@ -0,0 +1,211 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#include <linux/antinomie_monitor.h>
++#include <linux/cred.h>
++#include <linux/errno.h>
++#include <linux/ktime.h>
++#include <linux/rcupdate.h>
++#include <linux/sched/signal.h>
++#include <linux/unaligned.h>
++
++#include "control_wire.h"
++#include "observer.h"
++
++struct ant_observer {
++	u64 cookie;
++	u64 start_ns;
++	u64 stop_ns;
++	u32 mode;
++};
++
++/* The control owner serializes writes. RCU readers retain immutable admission
++ * fields; boot-lifetime slots are never freed or reused, including after stop.
++ */
++static struct ant_observer observers[ANTC_CAPTURE_MAX_COUNT];
++static unsigned int observer_count;
++static struct ant_observer __rcu *active_observer;
++
++u64 ant_observer_admit(struct task_struct *task)
++{
++	struct ant_observer *observer;
++	u64 cookie = 0;
++
++	rcu_read_lock();
++	observer = rcu_dereference(active_observer);
++	if (observer && !(READ_ONCE(task->flags) & (PF_KTHREAD | PF_USER_WORKER)) &&
++	    (observer->mode == ANTC_CAPTURE_USERSPACE ||
++	     READ_ONCE(task->ant_observer_cookie) == observer->cookie))
++		cookie = observer->cookie;
++	rcu_read_unlock();
++	return cookie;
++}
++
++static int process_list(const u8 *args, size_t args_len, u8 *reply,
++			size_t capacity, size_t *reply_len)
++{
++	struct task_struct *page[ANTC_PROCESS_PAGE_MAX + 1], *task;
++	const struct cred *cred;
++	u32 after, limit, count = 0, pid;
++	unsigned int i, pos;
++	u8 *entry;
++
++	if (args_len != 16)
++		return -EINVAL;
++	after = get_unaligned_le32(args + 8);
++	limit = get_unaligned_le32(args + 12);
++	if (!limit || limit > ANTC_PROCESS_PAGE_MAX)
++		return -EINVAL;
++	if (capacity < 16 + limit * ANTC_PROCESS_ENTRY_SIZE)
++		return -EMSGSIZE;
++
++	/* Retain one extra leader to distinguish a full final page. tasklist_lock
++	 * protects leader/thread-group lifetimes through encoding the bounded page.
++	 */
++	read_lock(&tasklist_lock);
++	for_each_process(task) {
++		pid = task_tgid_nr(task);
++		if (pid <= after || task->flags & (PF_KTHREAD | PF_USER_WORKER) ||
++		    !atomic_read(&task->signal->live))
++			continue;
++		for (pos = 0; pos < count; pos++)
++			if (pid < task_tgid_nr(page[pos]))
++				break;
++		if (pos > limit)
++			continue;
++		if (count < limit + 1)
++			count++;
++		for (i = count - 1; i > pos; i--)
++			page[i] = page[i - 1];
++		page[pos] = task;
++	}
++	memset(reply, 0, 16 + min(count, limit) * ANTC_PROCESS_ENTRY_SIZE);
++	put_unaligned_le64(ant_monitor_stream_id(), reply);
++	put_unaligned_le32(min(count, limit), reply + 8);
++	if (count > limit)
++		put_unaligned_le32(task_tgid_nr(page[limit - 1]), reply + 12);
++	for (i = 0; i < min(count, limit); i++) {
++		task = page[i];
++		entry = reply + 16 + i * ANTC_PROCESS_ENTRY_SIZE;
++		put_unaligned_le64(ant_monitor_cookie(task), entry);
++		put_unaligned_le64(task->start_boottime, entry + 8);
++		put_unaligned_le32(task_tgid_nr(task), entry + 16);
++		put_unaligned_le32(task_tgid_nr(task->real_parent), entry + 20);
++		cred = get_task_cred(task);
++		put_unaligned_le32(from_kuid(&init_user_ns, cred->uid), entry + 24);
++		put_unaligned_le32(from_kgid(&init_user_ns, cred->gid), entry + 28);
++		put_cred(cred);
++		put_unaligned_le32(get_nr_threads(task), entry + 32);
++		__get_task_comm((char *)entry + 40, TASK_COMM_LEN, task);
++	}
++	read_unlock(&tasklist_lock);
++	*reply_len = 16 + min(count, limit) * ANTC_PROCESS_ENTRY_SIZE;
++	return 0;
++}
++
++static void status_reply(const struct ant_observer *observer, u8 *reply)
++{
++	memset(reply, 0, ANTC_CAPTURE_STATUS_SIZE);
++	if (!observer)
++		return;
++	put_unaligned_le64(observer->cookie, reply);
++	put_unaligned_le32(observer->stop_ns ?
++		ANTC_CAPTURE_STOPPED | ANTC_CAPTURE_TAILS_POSSIBLE : ANTC_CAPTURE_ACTIVE,
++		reply + 8);
++	put_unaligned_le32(observer->mode, reply + 12);
++	put_unaligned_le64(observer->start_ns, reply + 16);
++	put_unaligned_le64(observer->stop_ns, reply + 24);
++}
++
++static int start(u32 opcode, const u8 *args, size_t args_len, u8 *reply,
++		 size_t capacity, size_t *reply_len)
++{
++	struct ant_observer *observer;
++	struct task_struct *leader = NULL, *task;
++	u64 cookie = 0, start_ns = 0;
++	u32 pid = 0;
++
++	if (opcode == ANTC_CAPTURE_ATTACH) {
++		if (args_len != 32 || get_unaligned_le32(args + 28))
++			return -EINVAL;
++		cookie = get_unaligned_le64(args + 8);
++		start_ns = get_unaligned_le64(args + 16);
++		pid = get_unaligned_le32(args + 24);
++		if (!cookie || !pid)
++			return -EINVAL;
++	} else if (args_len != 8) {
++		return -EINVAL;
++	}
++	if (capacity < 16)
++		return -EMSGSIZE;
++	if (rcu_access_pointer(active_observer))
++		return -EBUSY;
++	if (observer_count == ANTC_CAPTURE_MAX_COUNT)
++		return -ENOSPC;
++
++	/* Fork copies the marker before publication under this same lock. An
++	 * attach therefore includes exactly the threads present at this boundary.
++	 */
++	write_lock_irq(&tasklist_lock);
++	if (opcode == ANTC_CAPTURE_ATTACH) {
++		for_each_process(task)
++			if (task_tgid_nr(task) == pid) {
++				leader = task;
++				break;
++			}
++		if (!leader || leader->flags & (PF_KTHREAD | PF_USER_WORKER) ||
++		    !atomic_read(&leader->signal->live) ||
++		    READ_ONCE(leader->ant_cookie) != cookie ||
++		    leader->start_boottime != start_ns) {
++			write_unlock_irq(&tasklist_lock);
++			return -ESRCH;
++		}
++	}
++	observer = &observers[observer_count++];
++	observer->cookie = observer_count;
++	observer->mode = opcode == ANTC_CAPTURE_ATTACH ?
++		ANTC_CAPTURE_PROCESS : ANTC_CAPTURE_USERSPACE;
++	observer->start_ns = ktime_get_ns();
++	if (leader) {
++		WRITE_ONCE(leader->ant_observer_cookie, observer->cookie);
++		for_each_thread(leader, task)
++			WRITE_ONCE(task->ant_observer_cookie, observer->cookie);
++	}
++	rcu_assign_pointer(active_observer, observer);
++	write_unlock_irq(&tasklist_lock);
++	put_unaligned_le64(observer->cookie, reply);
++	put_unaligned_le64(ant_monitor_stream_id(), reply + 8);
++	*reply_len = 16;
++	return 0;
++}
++
++int ant_observer_command(u32 opcode, const u8 *args, size_t args_len,
++			 void *reply, size_t capacity, size_t *reply_len)
++{
++	struct ant_observer *observer;
++	u64 cookie;
++
++	if (opcode == ANTC_PROCESS_LIST)
++		return process_list(args, args_len, reply, capacity, reply_len);
++	if (opcode == ANTC_CAPTURE_ATTACH || opcode == ANTC_CAPTURE_ALL)
++		return start(opcode, args, args_len, reply, capacity, reply_len);
++	if (args_len != 16)
++		return -EINVAL;
++	if (capacity < ANTC_CAPTURE_STATUS_SIZE)
++		return -EMSGSIZE;
++	cookie = get_unaligned_le64(args + 8);
++	if (!cookie && opcode == ANTC_CAPTURE_STOP)
++		return -EINVAL;
++	if (!cookie && opcode == ANTC_CAPTURE_STATUS) {
++		observer = rcu_access_pointer(active_observer);
++	} else {
++		if (!cookie || cookie > observer_count)
++			return -ESRCH;
++		observer = &observers[cookie - 1];
++	}
++	if (opcode == ANTC_CAPTURE_STOP && !observer->stop_ns) {
++		observer->stop_ns = ktime_get_ns();
++		rcu_assign_pointer(active_observer, NULL);
++	}
++	status_reply(observer, reply);
++	*reply_len = ANTC_CAPTURE_STATUS_SIZE;
++	return 0;
++}
+diff --git a/kernel/antinomie/observer.h b/kernel/antinomie/observer.h
+new file mode 100644
+index 000000000..c7df2a99e
+--- /dev/null
++++ b/kernel/antinomie/observer.h
+@@ -0,0 +1,13 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _ANTINOMIE_OBSERVER_H
++#define _ANTINOMIE_OBSERVER_H
++
++#include <linux/types.h>
++
++struct task_struct;
++
++u64 ant_observer_admit(struct task_struct *task);
++int ant_observer_command(u32 opcode, const u8 *args, size_t args_len,
++			 void *reply, size_t capacity, size_t *reply_len);
++
++#endif
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index 853a455de..b1b717647 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -31,12 +31,13 @@
+ #include "capture_api.h"
+ #include "native_capture.h"
+ #include "async_capture.h"
++#include "observer.h"
+ 
+ /* Scratch bounds packet size, never the logical capture extent. A task owns
+  * its context across migration; failure to allocate does not lose lineage.
+  */
+ #define ANT_CHUNK_SIZE 4096
+-#define ANT_HEADER_SIZE 136
++#define ANT_HEADER_SIZE 144
+ #define ANT_X32_BIT 0x40000000UL
+ #define ANT_SCHEMA 1
+ #define ANT_INCOMPLETE 1
+@@ -45,6 +46,7 @@
+ 
+ struct ant_task {
+ 	u64 call_id, event_seq, packet_seq, nr, args[6];
++	u64 capture_cookie;
+ 	u64 entry_ns, timestamp_ns, ip, sp;
+ 	u64 object_count, packet_count, failed_count, state;
+ 	u32 flags, object_id, sock_capacity;
+@@ -89,7 +91,7 @@ static int publish(struct ant_task *ctx, u8 kind, u32 object_id,
+ 	memset(p, 0, ANT_HEADER_SIZE);
+ 	memcpy(p, "ANTT", 4);
+ 	put_unaligned_le16(1, p + 4);
+-	put_unaligned_le16(1, p + 6);
++	put_unaligned_le16(2, p + 6);
+ 	put_unaligned_le16(ANT_HEADER_SIZE, p + 8);
+ 	put_unaligned_le16(1, p + 10);
+ 	put_unaligned_le32(ANT_HEADER_SIZE + body_len, p + 12);
+@@ -115,6 +117,7 @@ static int publish(struct ant_task *ctx, u8 kind, u32 object_id,
+ 	put_unaligned_le64(object_size, p + 112);
+ 	put_unaligned_le32(body_len, p + 120);
+ 	put_unaligned_le64(async ? async->root_cookie : current->ant_root_cookie, p + 128);
++	put_unaligned_le64(async ? async->capture_cookie : ctx->capture_cookie, p + 136);
+ 	ctx->packet_count++;
+ 	atomic64_inc(&packets_attempted);
+ 	error = ctx->async_staged ?
+@@ -710,7 +713,7 @@ void ant_monitor_operand(u8 arg, const char *key, const char *layout, const void
+ {
+ 	struct ant_task *ctx = current->ant_monitor;
+ 
+-	if (!current->ant_cookie || !ctx || !ctx->active)
++	if (!ctx || !ctx->active)
+ 		return;
+ 	operand_clear(ctx);
+ 	ctx->operand_key = key;
+@@ -741,10 +744,15 @@ static void operand_emit(struct ant_task *ctx)
+ void ant_monitor_enter(struct pt_regs *regs, long nr)
+ {
+ 	struct ant_task *ctx;
++	u64 capture_cookie;
+ 	int i;
+ 
+-	if (!current->ant_cookie || !selected(nr))
++	if (!selected(nr))
+ 		return;
++	capture_cookie = ant_observer_admit(current);
++	if (!READ_ONCE(current->ant_root_cookie) && !capture_cookie)
++		return;
++	ant_monitor_cookie(current);
+ 	ctx = current->ant_monitor;
+ 	if (!ctx) {
+ 		ctx = kzalloc(sizeof(*ctx), GFP_NOWAIT);
+@@ -756,6 +764,12 @@ void ant_monitor_enter(struct pt_regs *regs, long nr)
+ 	}
+ 	if (ctx->busy)
+ 		return;
++	if (!current->ant_counted) {
++		current->ant_counted = true;
++		atomic64_inc(&tasks_created);
++		atomic64_inc(&tasks_live);
++	}
++	ctx->capture_cookie = capture_cookie;
+ 	ctx->busy = true;
+ 	ant_capture_set_state(ctx, NULL, NULL);
+ 	operand_clear(ctx);
+@@ -807,9 +821,16 @@ void ant_monitor_exit(struct pt_regs *regs)
+ static void lifecycle(struct ant_task *ctx, const char *key, u64 value)
+ {
+ 	u8 scalar[8];
++	u64 capture_cookie;
+ 
+ 	if (!ctx || ctx->busy)
+ 		return;
++	if (!ctx->active) {
++		capture_cookie = ant_observer_admit(current);
++		if (!READ_ONCE(current->ant_root_cookie) && !capture_cookie)
++			return;
++		ctx->capture_cookie = capture_cookie;
++	}
+ 	ctx->busy = true;
+ 	put_unaligned_le64(value, scalar);
+ 	event_begin(ctx, 3, 0);
+@@ -1032,17 +1053,20 @@ int ant_monitor_launch(const char *path, char **argv, char **envp)
+ 
+ 	if (!ctx)
+ 		return -ENOMEM;
+-	current->ant_cookie = atomic64_inc_return(&cookies);
++	ant_monitor_cookie(current);
+ 	error = ant_run_launch(current, current->ant_cookie);
+ 	if (error) {
+-		current->ant_cookie = 0;
+ 		kfree(ctx);
+ 		return error;
+ 	}
+ 	WRITE_ONCE(current->ant_root_cookie, current->ant_cookie);
+ 	current->ant_monitor = ctx;
+-	atomic64_inc(&tasks_created);
+-	atomic64_inc(&tasks_live);
++	if (!current->ant_counted) {
++		current->ant_counted = true;
++		atomic64_inc(&tasks_created);
++		atomic64_inc(&tasks_live);
++	}
++	ctx->capture_cookie = ant_observer_admit(current);
+ 	ctx->nr = U64_MAX;
+ 	ctx->abi = 1;
+ 	ctx->busy = true;
+@@ -1068,6 +1092,38 @@ int ant_monitor_launch(const char *path, char **argv, char **envp)
+ 	return 0;
+ }
+ 
++u64 ant_monitor_cookie(struct task_struct *task)
++{
++	u64 cookie = READ_ONCE(task->ant_cookie), previous;
++
++	if (cookie)
++		return cookie;
++	cookie = atomic64_inc_return(&cookies);
++	previous = cmpxchg(&task->ant_cookie, 0, cookie);
++	return previous ?: cookie;
++}
++
++u64 ant_monitor_stream_id(void)
++{
++	return stream_id;
++}
++
++/* Called under tasklist_lock before publication, without allocating or sending.
++ * The command owner uses that lock to attach all current process threads.
++ */
++void ant_monitor_fork_prepare(struct task_struct *child)
++{
++	WRITE_ONCE(child->ant_observer_cookie, READ_ONCE(current->ant_observer_cookie));
++	if (!current->ant_run || child->flags & PF_USER_WORKER)
++		return;
++	ant_monitor_cookie(child);
++	WRITE_ONCE(child->ant_root_cookie, READ_ONCE(current->ant_root_cookie));
++	ant_run_fork(current, child);
++	child->ant_counted = true;
++	atomic64_inc(&tasks_created);
++	atomic64_inc(&tasks_live);
++}
++
+ void ant_monitor_fork(struct task_struct *child)
+ {
+ 	struct ant_task *ctx = current->ant_monitor;
+@@ -1077,22 +1133,12 @@ void ant_monitor_fork(struct task_struct *child)
+ 		"lifecycle.child_tgid", "lifecycle.child_start_boot_ns" };
+ 	int i;
+ 
+-	if (!current->ant_cookie)
+-		return;
+-	child->ant_cookie = atomic64_inc_return(&cookies);
+-	WRITE_ONCE(child->ant_root_cookie, current->ant_root_cookie);
+-	ant_run_fork(current, child);
+-	child->ant_monitor = kzalloc(sizeof(*ctx), GFP_NOWAIT);
+-	if (child->ant_monitor) {
+-		child->ant_monitor->nr = U64_MAX;
+-		child->ant_monitor->abi = 1;
+-	} else {
+-		atomic64_inc(&context_failures);
+-	}
+-	atomic64_inc(&tasks_created);
+-	atomic64_inc(&tasks_live);
+-	if (!ctx || ctx->busy)
++	if (!ctx || ctx->busy || (!ctx->active &&
++	    !current->ant_root_cookie && !ant_observer_admit(current)))
+ 		return;
++	ant_monitor_cookie(child);
++	if (!ctx->active)
++		ctx->capture_cookie = ant_observer_admit(current);
+ 	ctx->busy = true;
+ 	event_begin(ctx, 3, 0);
+ 	values[0] = child->ant_cookie;
+@@ -1103,9 +1149,6 @@ void ant_monitor_fork(struct task_struct *child)
+ 		put_unaligned_le64(values[i], scalar);
+ 		field(ctx, 255, keys[i], "", 4, 0, scalar, sizeof(scalar), sizeof(scalar), ANT_COMPLETE);
+ 	}
+-	if (!child->ant_monitor)
+-		field(ctx, 255, "lifecycle.child_context", "", 1, 0, NULL,
+-		      U64_MAX, U64_MAX, ANT_RESOURCE_EXHAUSTED);
+ 	event_end(ctx);
+ 	ctx->busy = false;
+ }
+@@ -1117,10 +1160,12 @@ void ant_monitor_exec(void)
+ 
+ void ant_monitor_task_exit(bool group_dead)
+ {
+-	if (!current->ant_cookie || !ant_run_exit(current, group_dead))
+-		return;
++	ant_run_exit(current, group_dead);
+ 	lifecycle(current->ant_monitor, "lifecycle.task_exit", current->exit_code);
+-	atomic64_dec(&tasks_live);
++	if (current->ant_counted) {
++		current->ant_counted = false;
++		atomic64_dec(&tasks_live);
++	}
+ }
+ 
+ void ant_monitor_release(struct task_struct *task)
+diff --git a/kernel/fork.c b/kernel/fork.c
+index 47bcd0e1d..7c8286840 100644
+--- a/kernel/fork.c
++++ b/kernel/fork.c
+@@ -1141,11 +1141,13 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
+ #ifdef CONFIG_ANTINOMIE
+ 	tsk->ant_cookie = 0;
+ 	tsk->ant_root_cookie = 0;
++	tsk->ant_observer_cookie = 0;
+ 	tsk->ant_monitor = NULL;
+ 	tsk->ant_run = NULL;
+ 	atomic64_set(&tsk->ant_event_seq, 0);
+ 	atomic64_set(&tsk->ant_packet_seq, 0);
+ 	tsk->ant_root_process = false;
++	tsk->ant_counted = false;
+ #endif
+ 
+ 	err = alloc_thread_stack_node(tsk, node);
+@@ -2593,6 +2595,7 @@ __latent_entropy struct task_struct *copy_process(
+ 	}
+ 
+ 	/* No more failure paths after this point. */
++	ant_monitor_fork_prepare(p);
+ 
+ 	/*
+ 	 * Copy seccomp details explicitly here, in case they were changed
+-- 
+2.53.0
+

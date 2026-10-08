@@ -1,6 +1,9 @@
 use crate::{
     api::*,
-    build, control, distribution,
+    build,
+    capture::CaptureSession,
+    control, distribution,
+    observation::{CaptureScope, CaptureState, CaptureSummary, OBSERVATION_MAX_COUNT},
     parser::{Assembler, u32_at, u64_at},
     run::ProgramRun,
     storage::{self, Bundle, RawCapture},
@@ -148,6 +151,8 @@ struct Session {
     bundle: Bundle,
     disk_bundle: Bundle,
     runs: BTreeMap<u64, ProgramRun>,
+    captures: BTreeMap<String, CaptureSession>,
+    pending_capture_id: Option<String>,
     boot_id: String,
     pending: VecDeque<Vec<u8>>,
     pending_len: usize,
@@ -182,17 +187,47 @@ impl Session {
             .saturating_add(self.assembler.stored_len())
             .saturating_add(self.runs.values().map(ProgramRun::stored_len).sum::<u64>())
             .saturating_add(self.analysis.stored_len())
+            .saturating_add(
+                self.captures
+                    .values()
+                    .map(CaptureSession::stored_len)
+                    .sum::<u64>(),
+            )
     }
     fn available(&self) -> u64 {
         self.capture.quota().saturating_sub(self.stored_len())
+    }
+    fn refresh_storage_health(&self, health: &mut Health) {
+        refresh_storage_health(
+            health,
+            &self.capture,
+            self.assembler
+                .stored_len()
+                .saturating_add(self.analysis.persisted_len()),
+            &self.runs,
+        );
+        health.persisted_len = health.persisted_len.saturating_add(
+            self.captures
+                .values()
+                .map(CaptureSession::stored_len)
+                .sum::<u64>(),
+        );
+        health.persistence_error = health.persistence_error.clone().or_else(|| {
+            self.captures
+                .values()
+                .find_map(|capture| capture.summary.recording_error.clone())
+        });
     }
     fn stop_saving(&mut self, error: String) {
         stop_capture_saving(
             &mut self.capture,
             &mut self.assembler,
             &mut self.runs,
-            error,
+            error.clone(),
         );
+        for capture in self.captures.values_mut() {
+            capture.storage_error(error.clone());
+        }
     }
     fn run_cookie(&self, id: &str) -> Result<u64, String> {
         self.runs
@@ -203,6 +238,197 @@ impl Session {
     }
     fn update_runs(&self, snapshot: &mut Snapshot) {
         snapshot.runs = self.runs.values().map(|run| run.summary.clone()).collect();
+    }
+    fn update_captures(&self, snapshot: &mut Snapshot) {
+        snapshot.captures = self
+            .captures
+            .values()
+            .map(|capture| capture.summary.clone())
+            .collect();
+        snapshot.capture_events.clear();
+        let preview = self
+            .captures
+            .values()
+            .find(|capture| capture.summary.state == CaptureState::Active)
+            .or_else(|| {
+                self.captures
+                    .values()
+                    .max_by_key(|capture| capture.summary.start_ns.unwrap_or(0))
+            });
+        if let Some(capture) = preview {
+            snapshot.capture_events.insert(
+                capture.summary.id.clone(),
+                bounded_live_history(capture.assembler.history()),
+            );
+        }
+    }
+    fn start_capture(
+        &mut self,
+        options: &BackendOptions,
+        scope: CaptureScope,
+        snapshot: &mut Snapshot,
+        sender: &SyncSender<Notification>,
+    ) -> Result<String, String> {
+        if self.pending_capture_id.is_some() {
+            return Err("an earlier capture start has an unknown outcome; restart the VM before another start".into());
+        }
+        if self
+            .captures
+            .values()
+            .any(|capture| capture.summary.state == CaptureState::Active)
+        {
+            return Err("stop the active capture before starting another".into());
+        }
+        if self.captures.len() >= OBSERVATION_MAX_COUNT {
+            return Err(
+                "this VM boot reached the 64-capture limit; restart the VM before another capture"
+                    .into(),
+            );
+        }
+        let (opcode, args) = match &scope {
+            CaptureScope::Process { root } => {
+                if root.boot_id != self.boot_id {
+                    return Err(
+                        "selected process belongs to a different VM boot; refresh processes".into(),
+                    );
+                }
+                (control::CAPTURE_ATTACH, control::attach_process(root)?)
+            }
+            CaptureScope::AllUserspace => (control::CAPTURE_ALL, control::header(0)),
+        };
+        let id = storage::unique_id();
+        let summary = CaptureSummary {
+            id: id.clone(), vm_id: self.vm.id.clone(), boot_id: self.boot_id.clone(),
+            capture_cookie: 0, scope,
+            directory: crate::locations::locations(options, &self.vm.id)?.recording_directory.join("captures").join(&id),
+            state: CaptureState::Unknown, recording_error: None, start_ns: None, stop_ns: None,
+            incomplete_reason: Some("start not acknowledged; capture begins with new admissions only and delivery may be incomplete".into()),
+        };
+        let mut capture = CaptureSession::new(summary, self.capture.quota())?;
+        if let Some(error) = self.capture.error.clone() {
+            capture.storage_error(error);
+        }
+        self.captures.insert(id.clone(), capture);
+        self.pending_capture_id = Some(id.clone());
+        self.update_captures(snapshot);
+        let request = match self.transport.send(opcode, &args) {
+            Ok(request) => request,
+            Err(error) => {
+                self.pending_capture_id = None;
+                if let Some(mut capture) = self.captures.remove(&id) {
+                    capture.summary.state = CaptureState::Finalized;
+                    capture.summary.incomplete_reason =
+                        Some(format!("start was not submitted: {error}"));
+                    capture.persist_summary()?;
+                }
+                self.update_captures(snapshot);
+                return Err(error);
+            }
+        };
+        let result = self.wait_reply(request, opcode, snapshot, sender, Duration::from_secs(10));
+        if let Err(RequestError::Rejected(error)) = &result {
+            self.pending_capture_id = None;
+            if let Some(mut capture) = self.captures.remove(&id) {
+                capture.summary.state = CaptureState::Finalized;
+                capture.summary.incomplete_reason =
+                    Some(format!("guest rejected capture start: {error}"));
+                capture.persist_summary()?;
+            }
+            self.update_captures(snapshot);
+            return Err(error.clone());
+        }
+        let result = result
+            .map_err(RequestError::into_message)
+            .and_then(|reply| control::capture_started(&reply));
+        match result {
+            Ok((cookie, stream)) => {
+                if self.captures.iter().any(|(other_id, capture)| {
+                    other_id != &id && capture.summary.capture_cookie == cookie
+                }) {
+                    return Err("capture acknowledgement reused an existing identity; start outcome unknown".into());
+                }
+                let capture = self
+                    .captures
+                    .get_mut(&id)
+                    .ok_or("missing provisional capture")?;
+                if let Err(error) = capture.observe_identity(cookie, stream) {
+                    capture.summary.incomplete_reason = Some("capture reply conflicts with pre-acknowledgement telemetry; outcome unknown".into());
+                    capture.persist_summary()?;
+                    self.update_captures(snapshot);
+                    return Err(format!("{error}; outcome unknown"));
+                }
+                capture.summary.capture_cookie = cookie;
+                capture.summary.state = CaptureState::Active;
+                capture.summary.incomplete_reason = Some("capture includes new admissions only; transport loss and unresolved observations may leave gaps".into());
+                capture.persist_summary()?;
+                self.pending_capture_id = None;
+                // Read-only status adds the guest admission timestamp. It never
+                // retries a start whose side effects might already have occurred.
+                if let Ok(reply) = self.request(
+                    control::CAPTURE_STATUS,
+                    &control::with_session(cookie),
+                    snapshot,
+                    sender,
+                    Duration::from_millis(500),
+                ) && let Ok(status) = control::capture_status(&reply, cookie)
+                {
+                    self.apply_capture_status(&id, status)?;
+                }
+                self.update_captures(snapshot);
+                Ok("capture started; stopping capture will leave programs running".into())
+            }
+            Err(error) => {
+                if let Some(capture) = self.captures.get_mut(&id) {
+                    capture.summary.incomplete_reason = Some(format!(
+                        "capture start acknowledgement failed: {error}; admission outcome unknown; no automatic retry"
+                    ));
+                    capture.persist_summary()?;
+                }
+                self.update_captures(snapshot);
+                Err(format!(
+                    "{error}; capture start outcome unknown; no automatic retry"
+                ))
+            }
+        }
+    }
+    fn apply_capture_status(
+        &mut self,
+        id: &str,
+        status: control::CaptureStatus,
+    ) -> Result<(), String> {
+        let capture = self
+            .captures
+            .get_mut(id)
+            .ok_or("unknown capture in this VM boot")?;
+        let mode = match capture.summary.scope {
+            CaptureScope::Process { .. } => 1,
+            CaptureScope::AllUserspace => 2,
+        };
+        if status.cookie == 0
+            || status.mode != mode
+            || (capture.summary.capture_cookie != 0
+                && capture.summary.capture_cookie != status.cookie)
+        {
+            return Err("capture status does not match archive identity or scope".into());
+        }
+        capture.summary.capture_cookie = status.cookie;
+        capture.summary.state = if status.active {
+            CaptureState::Active
+        } else {
+            CaptureState::Stopped
+        };
+        capture.summary.start_ns = Some(status.start_ns);
+        capture.summary.stop_ns = (!status.active).then_some(status.stop_ns);
+        capture.summary.incomplete_reason = Some(if status.active {
+            "capture includes new admissions only; losses and unresolved observations may leave gaps"
+        } else {
+            "admission stopped; already admitted observations may publish late tails until VM finalization"
+        }.into());
+        capture.persist_summary()?;
+        if self.pending_capture_id.as_deref() == Some(id) {
+            self.pending_capture_id = None;
+        }
+        Ok(())
     }
     fn analysis_updates(&mut self, snapshot: &mut Snapshot, sender: &SyncSender<Notification>) {
         for (run_id, report) in self.analysis.updates() {
@@ -318,15 +544,10 @@ impl Session {
         }
     }
     fn history(&self) -> Vec<EventSummary> {
-        let mut events = self.assembler.history();
-        for run in self.runs.values() {
-            events.extend(run.assembler.history());
-        }
-        events.sort_by_key(|event| event.timestamp_ns);
-        if events.len() > 2048 {
-            events.drain(..events.len() - 2048);
-        }
-        events
+        canonical_live_history(
+            self.assembler.history(),
+            self.runs.values().map(|run| run.assembler.history()),
+        )
     }
     fn pump(
         &mut self,
@@ -340,11 +561,13 @@ impl Session {
                 break;
             };
             snapshot.health.received_packets = snapshot.health.received_packets.saturating_add(1);
-            let root = crate::parser::parse_packet(&packet)
-                .map(|(header, _)| header.root_task_cookie)
-                .unwrap_or(0);
+            let header = crate::parser::parse_packet(&packet)
+                .ok()
+                .map(|(header, _)| header);
+            let root = header.as_ref().map_or(0, |header| header.root_task_cookie);
+            let capture_cookie = header.as_ref().map_or(0, |header| header.capture_cookie);
             let reserved = self.stored_len();
-            let saved =
+            let mut saved =
                 if let Some(run) = self.runs.get_mut(&root) {
                     let saved = run
                         .capture
@@ -399,7 +622,79 @@ impl Session {
                     }
                     saved
                 };
+            // Observer copies do not contribute to canonical history: the primary
+            // run/unassigned assembler above already owns each incoming packet.
+            let observer_id = self
+                .captures
+                .iter()
+                .find(|(_, capture)| {
+                    capture_cookie != 0 && capture.summary.capture_cookie == capture_cookie
+                })
+                .map(|(id, _)| id.clone())
+                .or_else(|| {
+                    (capture_cookie != 0)
+                        .then(|| self.pending_capture_id.clone())
+                        .flatten()
+                });
+            if let Some(id) = observer_id {
+                let reserved = self.stored_len();
+                if let Some(observer) = self.captures.get_mut(&id) {
+                    let identity_was_unknown = observer.summary.capture_cookie == 0;
+                    if let Err(error) = observer.observe_identity(
+                        capture_cookie,
+                        header.as_ref().map_or(0, |header| header.stream_id),
+                    ) {
+                        observer.storage_error(error);
+                        saved = false;
+                    } else {
+                        if identity_was_unknown && let Err(error) = observer.persist_summary() {
+                            observer.storage_error(error);
+                        }
+                        let copy_saved = observer.capture.append_with_reserved(
+                            &packet,
+                            reserved.saturating_sub(observer.capture.bytes),
+                        );
+                        observer.assembler.set_storage_limit(
+                            observer.assembler.stored_len().saturating_add(
+                                self.capture.quota().saturating_sub(reserved.saturating_add(
+                                    if copy_saved {
+                                        packet.len() as u64 + 4
+                                    } else {
+                                        0
+                                    },
+                                )),
+                            ),
+                        );
+                        if let Err(error) = observer.assembler.ingest(&packet) {
+                            snapshot.health.parser_errors =
+                                snapshot.health.parser_errors.saturating_add(1);
+                            snapshot.last_error = Some(error.to_string());
+                        }
+                        if let Some(error) = observer.assembler.saving_error().map(str::to_owned) {
+                            observer.storage_error(error);
+                        }
+                        if !copy_saved {
+                            observer.storage_error(
+                                observer
+                                    .capture
+                                    .error
+                                    .clone()
+                                    .unwrap_or_else(|| "observer raw saving stopped".into()),
+                            );
+                        }
+                        saved &= copy_saved;
+                    }
+                }
+            }
             propagate_object_saving_failure(&mut self.capture, &mut self.assembler, &mut self.runs);
+            if let Some(error) = self
+                .captures
+                .values()
+                .find_map(|capture| capture.summary.recording_error.clone())
+            {
+                // Unknown command outcomes are status, not persistence failures.
+                self.stop_saving(error);
+            }
             if !saved {
                 let error = self
                     .capture
@@ -421,20 +716,20 @@ impl Session {
         snapshot.health.reply_stalls = stats.reply_stalls;
         snapshot.health.transport_health = stats.health;
         snapshot.health.persisted_packets = self.persisted_packets;
-        refresh_storage_health(
-            &mut snapshot.health,
-            &self.capture,
-            self.assembler
-                .stored_len()
-                .saturating_add(self.analysis.persisted_len()),
-            &self.runs,
-        );
+        self.refresh_storage_health(&mut snapshot.health);
         snapshot.health.parser_evicted_count = self.assembler.evicted_count
             + self
                 .runs
                 .values()
                 .map(|run| run.assembler.evicted_count)
                 .sum::<u64>();
+        snapshot.health.parser_evicted_count = snapshot.health.parser_evicted_count.saturating_add(
+            self.captures
+                .values()
+                .map(|capture| capture.assembler.evicted_count)
+                .sum::<u64>(),
+        );
+        self.update_captures(snapshot);
         let _ = sender;
         Ok(())
     }
@@ -598,7 +893,7 @@ impl Session {
                     continue;
                 }
                 if status < 0 {
-                    return Err(RequestError::Failed(format!(
+                    return Err(RequestError::Rejected(format!(
                         "guest command 0x{opcode:x}: {}",
                         std::io::Error::from_raw_os_error(-status)
                     )));
@@ -651,6 +946,13 @@ impl Session {
                 snapshot.last_error = Some(error);
             }
         }
+        for capture in self.captures.values_mut() {
+            if let Err(error) = capture.finalize(&snapshot.health) {
+                capture.storage_error(error.clone());
+                snapshot.last_error = Some(format!("capture finalization: {error}"));
+            }
+        }
+        self.update_captures(snapshot);
         self.update_runs(snapshot);
         snapshot.events = self.history();
         for event in &mut snapshot.events {
@@ -669,26 +971,12 @@ impl Session {
                 .error
                 .get_or_insert_with(|| format!("event summaries persistence failed: {e}"));
         }
-        refresh_storage_health(
-            &mut snapshot.health,
-            &self.capture,
-            self.assembler
-                .stored_len()
-                .saturating_add(self.analysis.persisted_len()),
-            &self.runs,
-        );
+        self.refresh_storage_health(&mut snapshot.health);
         self.capture.final_health = Some(snapshot.health.clone());
         let manifest = self
             .capture
             .manifest(&self.vm, &self.bundle, &self.disk_bundle, state);
-        refresh_storage_health(
-            &mut snapshot.health,
-            &self.capture,
-            self.assembler
-                .stored_len()
-                .saturating_add(self.analysis.persisted_len()),
-            &self.runs,
-        );
+        self.refresh_storage_health(&mut snapshot.health);
         summaries.and(manifest)
     }
     fn read_terminal(
@@ -744,7 +1032,7 @@ impl Session {
                 self.late_reads.insert(id, cookie);
                 Ok(())
             }
-            Err(RequestError::Failed(error)) => Err(error),
+            Err(RequestError::Failed(error) | RequestError::Rejected(error)) => Err(error),
         }
     }
     fn apply_terminal_reply(
@@ -805,16 +1093,47 @@ impl Session {
     }
 }
 
-/// A command wait outcome: only a timeout leaves the guest-side outcome unknown.
+fn bounded_live_history(mut events: Vec<EventSummary>) -> Vec<EventSummary> {
+    events.sort_by_key(|event| event.timestamp_ns);
+    if events.len() > 2048 {
+        events.drain(..events.len() - 2048);
+    }
+    events
+}
+
+fn canonical_live_history(
+    boot: Vec<EventSummary>,
+    runs: impl IntoIterator<Item = Vec<EventSummary>>,
+) -> Vec<EventSummary> {
+    // Pre-acknowledgement packets remain in the boot archive after assignment;
+    // the run copy supplies the artifact paths when both summaries are present.
+    let mut unique = BTreeMap::new();
+    for event in boot.into_iter().chain(runs.into_iter().flatten()) {
+        unique.insert(
+            (
+                event.stream_id,
+                event.task_cookie,
+                event.call_id,
+                event.event_seq,
+                event.phase,
+            ),
+            event,
+        );
+    }
+    bounded_live_history(unique.into_values().collect())
+}
+
+/// A negative guest reply proves rejection; transport failures may leave unknown side effects.
 enum RequestError {
     TimedOut(String),
     Failed(String),
+    Rejected(String),
 }
 
 impl RequestError {
     fn into_message(self) -> String {
         match self {
-            Self::TimedOut(message) | Self::Failed(message) => message,
+            Self::TimedOut(message) | Self::Failed(message) | Self::Rejected(message) => message,
         }
     }
 }
@@ -1655,12 +1974,17 @@ impl Worker {
         self.snapshot.health = Health::default();
         self.snapshot.guest_kernel = None;
         self.snapshot.events.clear();
+        self.snapshot.captures.clear();
+        self.snapshot.capture_events.clear();
+        self.snapshot.process_page = None;
+        self.snapshot.boot_id = None;
         self.publish();
         self.stopping.store(false, Ordering::Relaxed);
         let result = (|| -> Result<Session, String> {
             let process = VmProcess::launch(&self.options, &vm, &bundle)?;
             self.snapshot.serial_log = Some(process.runtime_dir.join("serial.log"));
             let boot_id = storage::unique_id();
+            self.snapshot.boot_id = Some(boot_id.clone());
             let capture_dir = crate::locations::locations(&self.options, id)?
                 .recording_directory
                 .join("boots")
@@ -1696,6 +2020,8 @@ impl Worker {
                 bundle,
                 disk_bundle,
                 runs: BTreeMap::new(),
+                captures: BTreeMap::new(),
+                pending_capture_id: None,
                 boot_id,
                 pending: VecDeque::new(),
                 pending_len: 0,
@@ -1861,7 +2187,88 @@ impl Worker {
     fn guest_command(&mut self, command: Command) -> Result<String, String> {
         let session = self.session.as_mut().ok_or("VM is stopped")?;
         let timeout = Duration::from_secs(10);
+        if matches!(
+            &command,
+            Command::ListProcesses { .. }
+                | Command::AttachProcess { .. }
+                | Command::CaptureAll
+                | Command::StopCapture { .. }
+        ) && !self
+            .snapshot
+            .guest_kernel
+            .as_ref()
+            .and_then(|kernel| kernel.revision)
+            .is_some_and(|revision| revision >= 11)
+        {
+            return Err("process attachment and Capture All are unavailable; running guest requires revision 11".into());
+        }
         match command {
+            Command::ListProcesses { after_pid } => {
+                let reply = session.request(
+                    control::PROCESS_LIST,
+                    &control::process_list(after_pid),
+                    &mut self.snapshot,
+                    &self.sender,
+                    timeout,
+                )?;
+                self.snapshot.process_page =
+                    Some(control::process_page(&reply, &session.boot_id, after_pid)?);
+                Ok("guest processes refreshed".into())
+            }
+            Command::AttachProcess { identity } => session.start_capture(
+                &self.options,
+                CaptureScope::Process { root: identity },
+                &mut self.snapshot,
+                &self.sender,
+            ),
+            Command::CaptureAll => session.start_capture(
+                &self.options,
+                CaptureScope::AllUserspace,
+                &mut self.snapshot,
+                &self.sender,
+            ),
+            Command::StopCapture { capture_id } => {
+                let capture = session
+                    .captures
+                    .get(&capture_id)
+                    .ok_or("unknown capture in this VM boot")?;
+                let mut cookie = capture.summary.capture_cookie;
+                if cookie == 0 {
+                    let reply = session.request(
+                        control::CAPTURE_STATUS,
+                        &control::with_session(0),
+                        &mut self.snapshot,
+                        &self.sender,
+                        timeout,
+                    )?;
+                    let status = control::capture_status(&reply, 0)?;
+                    if status.cookie == 0 {
+                        return Err("capture identity is unknown; admission outcome unresolved until VM restart".into());
+                    }
+                    session.apply_capture_status(&capture_id, status)?;
+                    session.update_captures(&mut self.snapshot);
+                    cookie = session
+                        .captures
+                        .get(&capture_id)
+                        .ok_or("unknown capture")?
+                        .summary
+                        .capture_cookie;
+                }
+                let reply = session.request(
+                    control::CAPTURE_STOP,
+                    &control::with_session(cookie),
+                    &mut self.snapshot,
+                    &self.sender,
+                    timeout,
+                )?;
+                let status = control::capture_status(&reply, cookie)?;
+                if status.active {
+                    return Err("capture stop reply still admits observations".into());
+                }
+                session.apply_capture_status(&capture_id, status)?;
+                session.update_captures(&mut self.snapshot);
+                Ok("capture admission stopped; programs continue running and late observation tails remain recordable".into())
+            }
             Command::Execute(request) => {
                 if session.runs.len() >= 64 {
                     return Err("this VM boot reached the 64-run limit; restart the VM before another launch".into());
@@ -2365,6 +2772,72 @@ fn remaining_request_budget(deadline: Instant, maximum: Duration) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn history_event(sequence: u64, path: &str) -> EventSummary {
+        EventSummary {
+            root_task_cookie: 99,
+            stream_id: 1,
+            task_cookie: 2,
+            call_id: 3,
+            event_seq: sequence,
+            phase: 1,
+            syscall_nr: 1,
+            syscall_name: "write".into(),
+            tid: 7,
+            cpu: 0,
+            timestamp_ns: sequence,
+            args: None,
+            result: None,
+            complete: false,
+            issues: Vec::new(),
+            fields: vec![FieldSummary {
+                object_id: 1,
+                key: "buffer".into(),
+                layout: "bytes".into(),
+                logical_len: Some(1),
+                captured_len: 1,
+                status: None,
+                capture_error: 0,
+                complete: true,
+                preview: vec![1],
+                raw_path: Some(path.into()),
+                ranges: vec![(0, 1)],
+            }],
+        }
+    }
+    #[test]
+    fn canonical_history_deduplicates_pre_ack_packets_and_prefers_run_artifacts() {
+        let boot = history_event(1, "boot/object");
+        let mut run = history_event(1, "run/object");
+        run.cpu = 3;
+        run.complete = true;
+        let mut exit = history_event(1, "run/exit-object");
+        exit.phase = 2;
+        let mut other_task = history_event(1, "run/other-task");
+        other_task.task_cookie = 8;
+        let events = canonical_live_history(vec![boot], [vec![run, exit, other_task]]);
+        assert_eq!(events.len(), 3);
+        let entry = events
+            .iter()
+            .find(|event| event.task_cookie == 2 && event.phase == 1)
+            .unwrap();
+        assert!(entry.complete);
+        assert_eq!(entry.cpu, 3);
+        assert_eq!(
+            entry.fields[0].raw_path.as_deref(),
+            Some(std::path::Path::new("run/object"))
+        );
+    }
+    #[test]
+    fn capture_preview_drops_oldest_evicted_rows_at_the_total_limit() {
+        let mut events: Vec<_> = (0..2112)
+            .map(|sequence| history_event(sequence, "capture/object"))
+            .collect();
+        events.reverse();
+        let preview = bounded_live_history(events);
+        assert_eq!(preview.len(), 2048);
+        assert_eq!(preview.first().unwrap().event_seq, 64);
+        assert_eq!(preview.last().unwrap().event_seq, 2111);
+    }
     #[test]
     fn invalid_launch_settings_are_rejected_before_lifecycle_io() {
         let root =

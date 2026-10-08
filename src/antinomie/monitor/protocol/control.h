@@ -11,7 +11,7 @@
  */
 #define ANTC_VERSION 1
 /* Contract revision of the guest's observable behaviour (native-schema-slices). */
-#define ANTC_REVISION 10
+#define ANTC_REVISION 11
 #define ANTC_HEADER_SIZE 8
 #define ANTC_UPLOAD_BEGIN 0x1001
 #define ANTC_UPLOAD_CHUNK 0x1002
@@ -34,6 +34,20 @@
 #define ANTC_INFO 0x1021
 #define ANTC_INFO_SIZE 160
 #define ANTC_SHUTDOWN 0x1030
+#define ANTC_PROCESS_LIST 0x1050
+#define ANTC_CAPTURE_ATTACH 0x1051
+#define ANTC_CAPTURE_ALL 0x1052
+#define ANTC_CAPTURE_STOP 0x1053
+#define ANTC_CAPTURE_STATUS 0x1054
+#define ANTC_PROCESS_PAGE_MAX 64
+#define ANTC_PROCESS_ENTRY_SIZE 64
+#define ANTC_CAPTURE_STATUS_SIZE 32
+#define ANTC_CAPTURE_MAX_COUNT 64
+#define ANTC_CAPTURE_ACTIVE 1
+#define ANTC_CAPTURE_STOPPED 2
+#define ANTC_CAPTURE_TAILS_POSSIBLE 4
+#define ANTC_CAPTURE_PROCESS 1
+#define ANTC_CAPTURE_USERSPACE 2
 #define ANTC_ACQUIRE 0x1040
 #define ANTC_SPECIMEN_READ 0x1041
 #define ANTC_SPECIMEN_RELEASE 0x1042
@@ -104,6 +118,29 @@
  * or empty for an unversioned build. Kernels before revision 9 return
  * -EOPNOTSUPP. INFO is registered before every other opcode, so INFO
  * unsupported while STATS succeeds identifies such a kernel.
+ * PROCESS_LIST: header flags=0, u32 after_pid at 8, u32 capacity at 12,
+ * 1..64. Non-atomic live pagination of userspace process leaders, ascending
+ * PID. Reply: u64 stream_id at 0, u32 count at 8, u32 next_pid at 12
+ * (0 ends enumeration), then count 64-byte entries: u64 task_cookie at 0,
+ * u64 start_boottime at 8, u32 tgid at 16, u32 parent_tgid at 20,
+ * u32 uid/gid/thread_count at 24/28/32, u32 flags=0 at 36, comm[16] at 40
+ * (NUL terminated), reserved zeros at 56..63. PID is not authorization.
+ * CAPTURE_ATTACH: header flags=0, u64 leader task_cookie at 8,
+ * u64 start_boottime at 16, u32 tgid at 24, u32 reserved=0 at 28.
+ * Validates live identity, includes current thread group and future descendants
+ * only. CAPTURE_ALL: header only; existing/future userspace observations.
+ * Both reply with u64 capture_cookie at 0 and u64 stream_id at 8 (16 bytes).
+ * One active observer per boot; at most 64 non-reused capture IDs per boot.
+ * Existing launched-run root ownership and PTYs remain unchanged.
+ * CAPTURE_STOP / STATUS: header flags=0, u64 capture_cookie at 8.
+ * STATUS cookie=0 queries the active observer (all-zero reply if none).
+ * STOP requires a nonzero known cookie, is idempotent, never signals tasks.
+ * Both return 32-byte status: u64 cookie at 0, u32 flags at 8, u32 mode at 12,
+ * u64 start_ns at 16, u64 stop_ns at 24. STOP closes admission; admitted calls
+ * and async requests retain their old capture ID and may publish later tails.
+ * STOPPED|TAILS_POSSIBLE does not promise delivery/drain or complete capture.
+ * ANTT minor 2 / 144-byte header adds capture_cookie at offset 136, preserving
+ * launched root cookie at 128. Capture attribution is frozen on admission.
  * SHUTDOWN: header only; empty success reply, delayed kernel_power_off.
  */
 #endif

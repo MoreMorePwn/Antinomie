@@ -72,6 +72,7 @@ pub(crate) fn u64_at(b: &[u8], o: usize) -> Result<u64> {
 #[derive(Clone, Debug)]
 pub struct Header {
     pub root_task_cookie: u64,
+    pub capture_cookie: u64,
     pub record_type: u16,
     pub flags: u32,
     pub schema_id: u32,
@@ -102,10 +103,14 @@ pub fn parse_packet(packet: &[u8]) -> Result<(Header, &[u8])> {
         return Err(error("invalid ANTT magic"));
     }
     let minor = u16_at(packet, 6)?;
-    if u16_at(packet, 4)? != 1 || minor > 1 {
+    if u16_at(packet, 4)? != 1 || minor > 2 {
         return Err(error("unsupported ANTT version"));
     }
-    let header_size = if minor == 0 { 128 } else { 136 };
+    let header_size = match minor {
+        0 => 128,
+        1 => 136,
+        _ => 144,
+    };
     if packet.len() < header_size {
         return Err(error("truncated ANTT extended header"));
     }
@@ -119,7 +124,8 @@ pub fn parse_packet(packet: &[u8]) -> Result<(Header, &[u8])> {
         return Err(error("nonzero ANTT reserved word"));
     }
     let h = Header {
-        root_task_cookie: if minor == 1 { u64_at(packet, 128)? } else { 0 },
+        root_task_cookie: if minor >= 1 { u64_at(packet, 128)? } else { 0 },
+        capture_cookie: if minor == 2 { u64_at(packet, 136)? } else { 0 },
         record_type: u16_at(packet, 10)?,
         flags: u32_at(packet, 16)?,
         schema_id: u32_at(packet, 20)?,
@@ -281,6 +287,7 @@ impl Field {
 }
 struct Event {
     summary: EventSummary,
+    capture_cookie: u64,
     begin: Option<Vec<u8>>,
     end: Option<Vec<u8>>,
     fields: BTreeMap<u32, Field>,
@@ -308,6 +315,7 @@ impl Event {
                 issues: Vec::new(),
                 fields: Vec::new(),
             },
+            capture_cookie: h.capture_cookie,
             begin: None,
             end: None,
             fields: BTreeMap::new(),
@@ -511,6 +519,10 @@ impl Assembler {
         }
         if e.summary.root_task_cookie != h.root_task_cookie {
             e.issues.push("conflicting root task identity".into());
+        }
+        if e.capture_cookie != h.capture_cookie {
+            e.issues
+                .push("conflicting observer capture identity".into());
         }
         if h.flags & !0x1f != 0 {
             e.issues
@@ -806,6 +818,31 @@ mod tests {
             assert!(parse_packet(&extended[..size]).is_err());
         }
         extended[8..10].copy_from_slice(&128u16.to_le_bytes());
+        assert!(parse_packet(&extended).is_err());
+    }
+    #[test]
+    fn observer_extension_preserves_launch_owner_and_rejects_malformed_versions() {
+        let legacy = packet(1, 0, 0, &[0; 120], 1);
+        assert_eq!(parse_packet(&legacy).unwrap().0.capture_cookie, 0);
+        let mut extended = legacy[..128].to_vec();
+        extended.extend(77u64.to_le_bytes());
+        extended.extend(91u64.to_le_bytes());
+        extended.extend(&legacy[128..]);
+        extended[6..8].copy_from_slice(&2u16.to_le_bytes());
+        extended[8..10].copy_from_slice(&144u16.to_le_bytes());
+        let size = extended.len() as u32;
+        extended[12..16].copy_from_slice(&size.to_le_bytes());
+        let (header, body) = parse_packet(&extended).unwrap();
+        assert_eq!(header.root_task_cookie, 77);
+        assert_eq!(header.capture_cookie, 91);
+        assert_eq!(body, &legacy[128..]);
+        for size in 128..144 {
+            assert!(parse_packet(&extended[..size]).is_err());
+        }
+        extended[8..10].copy_from_slice(&136u16.to_le_bytes());
+        assert!(parse_packet(&extended).is_err());
+        extended[8..10].copy_from_slice(&144u16.to_le_bytes());
+        extended[6..8].copy_from_slice(&3u16.to_le_bytes());
         assert!(parse_packet(&extended).is_err());
     }
     #[test]

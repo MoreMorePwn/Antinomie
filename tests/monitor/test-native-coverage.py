@@ -128,6 +128,20 @@ def syscall_field(number, phase, object_id, key, content, layout="", status=0,
 
 
 class CoverageTests(unittest.TestCase):
+    def test_observer_header_preserves_legacy_coverage_body(self):
+        legacy = summary(0, 1)[4:]
+        extended = bytearray(legacy[:136] + struct.pack("<Q", 99) + legacy[136:])
+        struct.pack_into("<HH", extended, 6, 2, 144)
+        struct.pack_into("<I", extended, 12, len(extended))
+        with tempfile.TemporaryDirectory() as directory:
+            raw = Path(directory) / "raw.bin"
+            raw.write_bytes(struct.pack("<I", len(extended)) + extended)
+            self.assertEqual(list(coverage.packets(raw)), [legacy])
+            struct.pack_into("<H", extended, 8, 136)
+            raw.write_bytes(struct.pack("<I", len(extended)) + extended)
+            with self.assertRaises(ValueError):
+                list(coverage.packets(raw))
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

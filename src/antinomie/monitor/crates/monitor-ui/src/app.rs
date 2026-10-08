@@ -7,11 +7,13 @@ use crate::{
     workspace::{Panel, WorkspaceLayout},
 };
 use antinomie_monitor_core::{
-    pair_events, Backend, BackendOptions, BaseSummary, Command, DisplayResolution, ExecRequest,
-    GuestCredentials, InvocationSummary, Notification, RevisionStatus, RunState, RunSummary,
-    Snapshot, TerminalRecord, VmAcceleration, VmConfig, VmCpuModel, VmLaunchOptions, VmState,
-    WaitStatus, APP_REVISION,
+    pair_events, Backend, BackendOptions, BaseSummary, CaptureState, CaptureSummary, Command,
+    DisplayResolution, ExecRequest, GuestCredentials, InvocationSummary, Notification,
+    RevisionStatus, RunState, RunSummary, Snapshot, TerminalRecord, VmAcceleration, VmConfig,
+    VmCpuModel, VmLaunchOptions, VmState, WaitStatus, APP_REVISION,
 };
+#[path = "captures.rs"]
+mod captures;
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
 use serde::{Deserialize, Serialize};
@@ -74,6 +76,7 @@ struct Activity {
 
 const ACTIVITY_LIMIT: usize = 256;
 const TERMINAL_VIEW_LIMIT: usize = 128;
+const CAPTURE_HISTORY_LIMIT: usize = 1024;
 
 #[derive(Default)]
 struct AnalysisView {
@@ -146,6 +149,11 @@ pub struct MonitorApp {
     trace_sort: Option<(TraceColumn, bool)>,
     selected_event: Option<InvocationKey>,
     selected_run: Option<String>,
+    selected_capture: Option<String>,
+    capture_history: Vec<CaptureSummary>,
+    capture_tab: bool,
+    process_picker: captures::ProcessPicker,
+    pending_observer: Option<u64>,
     selected_analysis: Option<String>,
     analysis_windows: BTreeMap<String, antinomie_monitor_core::AnalysisReport>,
     analysis_directories: BTreeMap<String, PathBuf>,
@@ -242,6 +250,11 @@ impl MonitorApp {
             trace_sort: None,
             selected_event: None,
             selected_run: None,
+            selected_capture: None,
+            capture_history: Vec::new(),
+            capture_tab: false,
+            process_picker: captures::ProcessPicker::default(),
+            pending_observer: None,
             selected_analysis: None,
             analysis_windows: BTreeMap::new(),
             analysis_directories: BTreeMap::new(),
@@ -301,6 +314,11 @@ impl MonitorApp {
 
     fn send(&mut self, command: Command) {
         let launch = matches!(&command, Command::Execute(_));
+        let observer = matches!(
+            &command,
+            Command::AttachProcess { .. } | Command::CaptureAll | Command::StopCapture { .. }
+        );
+        let process_list = matches!(&command, Command::ListProcesses { .. });
         let admission = if launch {
             self.launch_admission()
         } else {
@@ -319,6 +337,12 @@ impl MonitorApp {
         if let Some(backend) = &self.backend {
             match backend.send(command) {
                 Ok(id) => {
+                    if observer {
+                        self.pending_observer = Some(id);
+                    }
+                    if process_list {
+                        self.process_picker.pending = Some(id);
+                    }
                     if launch {
                         self.pending_launch = Some(id);
                     }
@@ -359,7 +383,7 @@ impl MonitorApp {
         }
         let mut activity = Vec::new();
         let mut analysis_changed = false;
-        let was_offline = self.offline_run().is_some();
+        let was_offline = self.trace_archive_directory().is_some();
         if let Some(backend) = &self.backend {
             for _ in 0..256 {
                 match backend.try_recv() {
@@ -392,6 +416,27 @@ impl MonitorApp {
                         if new_run {
                             self.pending_launch = None;
                         }
+                        if let Some(capture) = self
+                            .selected_capture_summary()
+                            .filter(|capture| {
+                                !snapshot
+                                    .captures
+                                    .iter()
+                                    .any(|current| current.id == capture.id)
+                            })
+                            .cloned()
+                        {
+                            if !self
+                                .capture_history
+                                .iter()
+                                .any(|saved| saved.id == capture.id)
+                            {
+                                if self.capture_history.len() >= CAPTURE_HISTORY_LIMIT {
+                                    self.capture_history.remove(0);
+                                }
+                                self.capture_history.push(capture);
+                            }
+                        }
                         self.snapshot = snapshot;
                         analysis_changed = true;
                     }
@@ -400,6 +445,12 @@ impl MonitorApp {
                         success,
                         message,
                     }) => {
+                        if self.pending_observer == Some(id) {
+                            self.pending_observer = None;
+                        }
+                        if self.process_picker.pending == Some(id) {
+                            self.process_picker.pending = None;
+                        }
                         for terminal in self.terminals.values_mut() {
                             if terminal.snapshot_request == Some(id) {
                                 terminal.snapshot_request = None;
@@ -508,7 +559,7 @@ impl MonitorApp {
         for (level, message) in activity {
             self.log(level, message);
         }
-        if !was_offline && self.offline_run().is_some() {
+        if !was_offline && self.trace_archive_directory().is_some() {
             self.request_page(0);
         }
     }
@@ -655,7 +706,85 @@ impl MonitorApp {
         (self.archive_selected || !run_in_live_session(&self.snapshot, run)).then_some(run)
     }
 
+    fn capture(&self, id: &str) -> Option<&CaptureSummary> {
+        self.snapshot
+            .captures
+            .iter()
+            .chain(&self.capture_history)
+            .find(|capture| capture.id == id)
+    }
+
+    fn selected_capture_summary(&self) -> Option<&CaptureSummary> {
+        self.selected_capture
+            .as_deref()
+            .and_then(|id| self.capture(id))
+    }
+
+    fn trace_archive_directory(&self) -> Option<PathBuf> {
+        if let Some(capture) = self.selected_capture_summary() {
+            if self.archive_selected || !self.snapshot.capture_events.contains_key(&capture.id) {
+                return Some(capture.directory.clone());
+            }
+            return None;
+        }
+        self.offline_run().map(|run| run.directory.clone())
+    }
+
+    fn observer_supported(&self) -> bool {
+        self.running()
+            && !self.closing
+            && self
+                .snapshot
+                .guest_kernel
+                .as_ref()
+                .is_some_and(|kernel| kernel.revision.is_some_and(|revision| revision >= 11))
+    }
+
+    fn active_observer(&self) -> Option<&CaptureSummary> {
+        self.snapshot.captures.iter().find(|capture| {
+            Some(&capture.vm_id) == self.snapshot.active_vm.as_ref()
+                && matches!(capture.state, CaptureState::Active | CaptureState::Unknown)
+        })
+    }
+
+    fn observer_start_enabled(&self) -> bool {
+        self.observer_supported()
+            && self.pending_observer.is_none()
+            && self.active_observer().is_none()
+    }
+
+    fn open_process_picker(&mut self) {
+        self.process_picker.open = true;
+        self.process_picker.reset();
+        self.send(Command::ListProcesses { after_pid: 0 });
+    }
+
+    fn stop_observer(&mut self) {
+        if self.observer_supported() && self.pending_observer.is_none() {
+            if let Some(capture) = self.active_observer() {
+                self.send(Command::StopCapture {
+                    capture_id: capture.id.clone(),
+                });
+            }
+        }
+    }
+
+    fn refresh_captures(&mut self) {
+        if let Some(vm_id) = self.selected.clone() {
+            self.history_generation = self.history_generation.wrapping_add(1);
+            self.queue_archive(Request::ListCaptures {
+                options: self.options.clone(),
+                vm_id,
+                generation: self.history_generation,
+            });
+        }
+    }
+
     fn refresh_history(&mut self) {
+        if self.capture_tab {
+            self.refresh_captures();
+            return;
+        }
         if let Some(vm_id) = self.selected.clone() {
             self.history_generation = self.history_generation.wrapping_add(1);
             self.queue_archive(Request::ListVm {
@@ -735,13 +864,27 @@ impl MonitorApp {
     }
 
     fn select_run(&mut self, id: Option<String>) {
+        self.selected_capture = None;
         self.archive_selected = false;
         self.selected_analysis = None;
         self.analysis_views.remove("workspace");
         self.selected_run = id;
+        self.pending_archive = None;
+        self.reset_trace_selection();
+        if self.offline_run().is_some() {
+            self.request_page(0);
+        }
+    }
+
+    fn reset_trace_selection(&mut self) {
         self.selected_event = None;
         self.inspector.clear();
-        self.pending_archive = None;
+        if matches!(
+            self.pending_archive,
+            Some(Request::Invocations { .. } | Request::Captured { .. })
+        ) {
+            self.pending_archive = None;
+        }
         self.archive_generation = self.archive_generation.wrapping_add(1);
         self.archive_page.clear();
         self.archive_previous.clear();
@@ -749,16 +892,12 @@ impl MonitorApp {
         self.archive_offset = 0;
         self.archive_pending = false;
         self.archive_error = None;
-        if self.offline_run().is_some() {
-            self.request_page(0);
-        }
     }
 
     fn request_page(&mut self, offset: u64) {
-        let Some(run) = self.offline_run() else {
+        let Some(directory) = self.trace_archive_directory() else {
             return;
         };
-        let directory = run.directory.clone();
         self.archive_generation = self.archive_generation.wrapping_add(1);
         self.archive_pending = false;
         self.archive_error = None;
@@ -768,6 +907,7 @@ impl MonitorApp {
             generation: self.archive_generation,
             directory,
             offset,
+            capture: self.selected_capture.is_some(),
         };
         self.queue_archive(request);
         self.archive_pending = true;
@@ -825,6 +965,20 @@ impl MonitorApp {
             return;
         };
         ui.horizontal_wrapped(|ui| {
+            if ui.selectable_label(!self.capture_tab, "Runs").clicked() && self.capture_tab {
+                self.capture_tab = false;
+                self.refresh_history();
+            }
+            if ui.selectable_label(self.capture_tab, "Captures").clicked() && !self.capture_tab {
+                self.capture_tab = true;
+                self.refresh_captures();
+            }
+        });
+        if self.capture_tab {
+            self.capture_history_view(ui, &vm_id);
+            return;
+        }
+        ui.horizontal_wrapped(|ui| {
             for (filter, label) in [
                 (RunFilter::All, "All"),
                 (RunFilter::Live, "Live"),
@@ -841,7 +995,10 @@ impl MonitorApp {
                 self.refresh_history();
             }
             if ui
-                .selectable_label(self.selected_run.is_none(), "All live traces")
+                .selectable_label(
+                    self.selected_run.is_none() && self.selected_capture.is_none(),
+                    "All live traces",
+                )
                 .clicked()
             {
                 self.select_run(None);
@@ -1025,6 +1182,63 @@ impl MonitorApp {
         self.focus_panel = Some(Panel::Trace);
     }
 
+    fn select_capture(&mut self, id: String, archive: bool) {
+        self.selected_run = None;
+        self.reset_trace_selection();
+        self.selected_capture = Some(id);
+        self.archive_selected = archive;
+        if self.trace_archive_directory().is_some() {
+            self.request_page(0);
+        }
+        self.focus_trace();
+    }
+
+    fn capture_history_view(&mut self, ui: &mut egui::Ui, vm_id: &str) {
+        ui.horizontal_wrapped(|ui| {
+            if icon(
+                ui,
+                egui_phosphor::regular::ARROW_CLOCKWISE,
+                "Refresh Capture History",
+                true,
+            ) {
+                self.refresh_captures();
+            }
+            if ui
+                .selectable_label(
+                    self.selected_capture.is_none() && self.selected_run.is_none(),
+                    "All live traces",
+                )
+                .clicked()
+            {
+                self.select_run(None);
+            }
+        });
+        let mut items: Vec<_> = self
+            .snapshot
+            .captures
+            .iter()
+            .filter(|capture| capture.vm_id == vm_id)
+            .cloned()
+            .collect();
+        for capture in self
+            .capture_history
+            .iter()
+            .filter(|capture| capture.vm_id == vm_id)
+        {
+            if !items.iter().any(|live| live.id == capture.id) {
+                items.push(capture.clone());
+            }
+        }
+        if let Some((id, archive)) = captures::history(
+            ui,
+            &items,
+            self.selected_capture.as_deref(),
+            self.settings.font_size,
+        ) {
+            self.select_capture(id, archive);
+        }
+    }
+
     fn select_archive_run(&mut self, id: String) {
         self.select_run(Some(id));
         self.archive_selected = true;
@@ -1034,6 +1248,22 @@ impl MonitorApp {
 
     fn handle_archive_answer(&mut self, answer: Answer) {
         match answer {
+            Answer::ListCaptures {
+                vm_id,
+                generation,
+                result,
+            } => {
+                if self.selected.as_ref() != Some(&vm_id) || generation != self.history_generation {
+                    return;
+                }
+                match result {
+                    Ok(captures) => self.capture_history = captures,
+                    Err(error) => {
+                        self.status = format!("Capture History: {error}");
+                        self.log("ERROR", self.status.clone());
+                    }
+                }
+            }
             Answer::Specimen {
                 view_key,
                 generation,
@@ -1096,7 +1326,9 @@ impl MonitorApp {
                 generation,
                 offset,
                 result,
-            } if generation == self.archive_generation && self.offline_run().is_some() => {
+            } if generation == self.archive_generation
+                && self.trace_archive_directory().is_some() =>
+            {
                 self.archive_pending = false;
                 match result {
                     Ok(page) => {
@@ -1326,6 +1558,44 @@ impl MonitorApp {
                             ui.close_menu();
                         }
                         if ui
+                            .add_enabled(
+                                self.observer_start_enabled(),
+                                egui::Button::new("Attach to process"),
+                            )
+                            .clicked()
+                        {
+                            self.open_process_picker();
+                            ui.close_menu();
+                        }
+                        if ui
+                            .add_enabled(
+                                self.observer_start_enabled(),
+                                egui::Button::new("Capture All"),
+                            )
+                            .clicked()
+                        {
+                            self.send(Command::CaptureAll);
+                            ui.close_menu();
+                        }
+                        if ui
+                            .add_enabled(
+                                self.observer_supported()
+                                    && self.pending_observer.is_none()
+                                    && self.active_observer().is_some(),
+                                egui::Button::new("Stop Capture"),
+                            )
+                            .clicked()
+                        {
+                            self.stop_observer();
+                            ui.close_menu();
+                        }
+                        if self.running() && !self.observer_supported() {
+                            ui.colored_label(
+                                theme::MUTED,
+                                "Capture unavailable: guest revision 11 required",
+                            );
+                        }
+                        if ui
                             .add_enabled(self.running(), egui::Button::new("Upload file"))
                             .clicked()
                         {
@@ -1392,88 +1662,129 @@ impl MonitorApp {
             .exact_height(self.settings.font_size + 22.0)
             .frame(theme::frame(theme::PANEL))
             .show(ctx, |ui| {
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    let stopped = self.snapshot.active_vm.is_none();
-                    if icon(ui, egui_phosphor::regular::PLUS, "New VM", stopped) {
-                        self.new_image();
-                    }
-                    if icon(
-                        ui,
-                        egui_phosphor::regular::SLIDERS_HORIZONTAL,
-                        "VM configuration",
-                        self.selected.is_some() && self.snapshot.active_vm != self.selected,
-                    ) {
-                        self.configure_vm();
-                    }
-                    ui.separator();
-                    if icon(
-                        ui,
-                        egui_phosphor::regular::PLAY,
-                        "Start selected VM",
-                        self.selected.is_some() && stopped,
-                    ) {
-                        self.new_run();
-                    }
-                    if icon(
-                        ui,
-                        egui_phosphor::regular::STOP,
-                        "Shut down the current VM",
-                        !stopped,
-                    ) {
-                        self.send(Command::Stop);
-                    }
-                    ui.separator();
-                    if icon(
-                        ui,
-                        egui_phosphor::regular::TERMINAL_WINDOW,
-                        "Launch program",
-                        self.running(),
-                    ) {
-                        self.launch_open = true;
-                    }
-                    if icon(
-                        ui,
-                        egui_phosphor::regular::UPLOAD_SIMPLE,
-                        "Upload file",
-                        self.running(),
-                    ) {
-                        self.upload_open = true;
-                    }
-                    ui.separator();
-                    if icon(
-                        ui,
-                        egui_phosphor::regular::GEAR,
-                        "Recording and base settings",
-                        true,
-                    ) {
-                        self.settings_open = true;
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let name = self
-                            .snapshot
-                            .vms
-                            .iter()
-                            .find(|vm| Some(&vm.id) == self.snapshot.active_vm.as_ref())
-                            .map(|vm| vm.name.as_str())
-                            .unwrap_or(if self.snapshot.capture_dir.is_some() {
-                                "Last recording"
-                            } else {
-                                "No active VM"
-                            });
-                        ui.add(
-                            egui::Label::new(RichText::new(name).color(theme::MUTED)).truncate(),
-                        )
-                        .on_hover_text(name);
-                        ui.colored_label(
-                            if self.snapshot.state == VmState::Running {
-                                theme::GOOD
-                            } else {
-                                theme::MUTED
-                            },
-                            egui_phosphor::regular::CIRCLE,
-                        );
+                egui::ScrollArea::horizontal()
+                    .id_salt("toolbar_controls")
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                    .show(ui, |ui| {
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            let stopped = self.snapshot.active_vm.is_none();
+                            if icon(ui, egui_phosphor::regular::PLUS, "New VM", stopped) {
+                                self.new_image();
+                            }
+                            if icon(
+                                ui,
+                                egui_phosphor::regular::SLIDERS_HORIZONTAL,
+                                "VM configuration",
+                                self.selected.is_some() && self.snapshot.active_vm != self.selected,
+                            ) {
+                                self.configure_vm();
+                            }
+                            ui.separator();
+                            if icon(
+                                ui,
+                                egui_phosphor::regular::PLAY,
+                                "Start selected VM",
+                                self.selected.is_some() && stopped,
+                            ) {
+                                self.new_run();
+                            }
+                            if icon(
+                                ui,
+                                egui_phosphor::regular::STOP,
+                                "Shut down the current VM",
+                                !stopped,
+                            ) {
+                                self.send(Command::Stop);
+                            }
+                            ui.separator();
+                            if icon(
+                                ui,
+                                egui_phosphor::regular::TERMINAL_WINDOW,
+                                "Launch program",
+                                self.running(),
+                            ) {
+                                self.launch_open = true;
+                            }
+                            if icon(
+                                ui,
+                                egui_phosphor::regular::UPLOAD_SIMPLE,
+                                "Upload file",
+                                self.running(),
+                            ) {
+                                self.upload_open = true;
+                            }
+                            if icon(
+                                ui,
+                                egui_phosphor::regular::PLUG,
+                                "Attach to process",
+                                self.observer_start_enabled(),
+                            ) {
+                                self.open_process_picker();
+                            }
+                            if icon(
+                                ui,
+                                egui_phosphor::regular::RECORD,
+                                "Capture All",
+                                self.observer_start_enabled(),
+                            ) {
+                                self.send(Command::CaptureAll);
+                            }
+                            if icon(
+                                ui,
+                                egui_phosphor::regular::PAUSE,
+                                "Stop Capture (leave programs running)",
+                                self.observer_supported()
+                                    && self.pending_observer.is_none()
+                                    && self.active_observer().is_some(),
+                            ) {
+                                self.stop_observer();
+                            }
+                            ui.separator();
+                            if icon(
+                                ui,
+                                egui_phosphor::regular::GEAR,
+                                "Recording and base settings",
+                                true,
+                            ) {
+                                self.settings_open = true;
+                            }
+                            if ui.available_width() > 160.0 {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let name = self
+                                            .snapshot
+                                            .vms
+                                            .iter()
+                                            .find(|vm| {
+                                                Some(&vm.id) == self.snapshot.active_vm.as_ref()
+                                            })
+                                            .map(|vm| vm.name.as_str())
+                                            .unwrap_or(if self.snapshot.capture_dir.is_some() {
+                                                "Last recording"
+                                            } else {
+                                                "No active VM"
+                                            });
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(name).color(theme::MUTED),
+                                            )
+                                            .truncate(),
+                                        )
+                                        .on_hover_text(name);
+                                        ui.colored_label(
+                                            if self.snapshot.state == VmState::Running {
+                                                theme::GOOD
+                                            } else {
+                                                theme::MUTED
+                                            },
+                                            egui_phosphor::regular::CIRCLE,
+                                        );
+                                    },
+                                );
+                            }
+                        });
                     });
-                });
             });
     }
 
@@ -1991,7 +2302,7 @@ impl MonitorApp {
     }
 
     fn invocations(&self) -> Vec<InvocationSummary> {
-        if self.offline_run().is_some() {
+        if self.trace_archive_directory().is_some() {
             return self.archive_page.clone();
         }
         if self.selected.is_some()
@@ -1999,6 +2310,14 @@ impl MonitorApp {
             && self.selected != self.snapshot.active_vm
         {
             return Vec::new();
+        }
+        if let Some(id) = &self.selected_capture {
+            return self
+                .snapshot
+                .capture_events
+                .get(id)
+                .map(|events| pair_events(events))
+                .unwrap_or_default();
         }
         let events: Vec<_> = self
             .snapshot
@@ -2029,12 +2348,16 @@ impl MonitorApp {
     fn events(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             ui.strong("Syscalls");
+            if let Some(capture) = self.selected_capture_summary() {
+                ui.add(egui::Label::new(captures::scope(&capture.scope)).truncate())
+                    .on_hover_text(&capture.id);
+            }
             ui.add(
                 egui::TextEdit::singleline(&mut self.filter)
                     .hint_text("Filter")
                     .desired_width(130.0),
             );
-            if self.offline_run().is_some() {
+            if self.trace_archive_directory().is_some() {
                 if icon(
                     ui,
                     egui_phosphor::regular::ARROW_LEFT,
@@ -2243,6 +2566,9 @@ impl MonitorApp {
     }
 
     fn invocation_directory(&self, invocation: Option<&InvocationSummary>) -> Option<PathBuf> {
+        if let Some(capture) = self.selected_capture_summary() {
+            return Some(capture.directory.clone());
+        }
         if let Some(run) = self.offline_run() {
             return Some(run.directory.clone());
         }
@@ -2943,6 +3269,36 @@ impl MonitorApp {
         layout.show(self, ctx);
         self.layout = layout;
         self.dialogs(ctx);
+        let enabled = self.observer_start_enabled();
+        if self
+            .process_picker
+            .selected
+            .as_ref()
+            .is_some_and(|identity| self.snapshot.boot_id.as_ref() != Some(&identity.boot_id))
+        {
+            self.process_picker.selected = None;
+        }
+        let page = self
+            .snapshot
+            .process_page
+            .as_ref()
+            .filter(|page| self.snapshot.boot_id.as_ref() == Some(&page.boot_id));
+        if let Some(action) = self
+            .process_picker
+            .show(ctx, page, enabled, self.settings.font_size)
+        {
+            match action {
+                captures::ProcessAction::Refresh(after_pid) => {
+                    self.send(Command::ListProcesses { after_pid })
+                }
+                captures::ProcessAction::Attach(identity) => {
+                    if self.snapshot.boot_id.as_ref() == Some(&identity.boot_id) && enabled {
+                        self.process_picker.open = false;
+                        self.send(Command::AttachProcess { identity });
+                    }
+                }
+            }
+        }
     }
 
     pub(crate) fn terminal_views(&self) -> Vec<(String, bool)> {
@@ -3903,6 +4259,11 @@ mod tests {
             trace_sort: None,
             selected_event: None,
             selected_run: None,
+            selected_capture: None,
+            capture_history: Vec::new(),
+            capture_tab: false,
+            process_picker: captures::ProcessPicker::default(),
+            pending_observer: None,
             selected_analysis: None,
             analysis_windows: BTreeMap::new(),
             analysis_directories: BTreeMap::new(),
@@ -3980,6 +4341,429 @@ mod tests {
             execution: None,
             analysis: None,
         }
+    }
+
+    fn observer_fixture(app: &mut MonitorApp) {
+        app.selected = Some("vm".into());
+        app.snapshot.active_vm = Some("vm".into());
+        app.snapshot.state = VmState::Running;
+        app.snapshot.boot_id = Some("boot".into());
+        app.snapshot.guest_kernel = Some(antinomie_monitor_core::GuestKernel {
+            revision: Some(11),
+            source: None,
+            release: None,
+        });
+        app.snapshot.vms.push(VmConfig {
+            id: "vm".into(),
+            name: "Capture QA".into(),
+            ..VmConfig::default()
+        });
+    }
+
+    fn observer(id: &str, state: CaptureState) -> CaptureSummary {
+        CaptureSummary {
+            id: id.into(),
+            vm_id: "vm".into(),
+            boot_id: "boot".into(),
+            capture_cookie: 42,
+            scope: antinomie_monitor_core::CaptureScope::AllUserspace,
+            directory: PathBuf::from(format!("/capture/{id}")),
+            state,
+            recording_error: None,
+            start_ns: Some(1),
+            stop_ns: None,
+            incomplete_reason: Some("Admission stop does not fence delivery".into()),
+        }
+    }
+
+    #[test]
+    fn capture_selection_has_independent_events_archive_and_no_terminal() {
+        let mut app = app();
+        observer_fixture(&mut app);
+        app.snapshot.runs.push(run("launched"));
+        app.snapshot.events.push(event(1, 0));
+        app.selected_analysis = Some("static-report".into());
+        app.analysis_views.insert(
+            "workspace".into(),
+            AnalysisView {
+                report_id: Some("static-report".into()),
+                ..Default::default()
+            },
+        );
+        let mut observed = event(1, 2);
+        observed.call_id = 77;
+        app.snapshot
+            .captures
+            .push(observer("observation", CaptureState::Stopped));
+        app.snapshot
+            .capture_events
+            .insert("observation".into(), vec![observed]);
+        app.select_capture("observation".into(), false);
+        assert_eq!(app.invocations()[0].call_id, 77);
+        assert_eq!(
+            app.invocation_directory(app.invocations().first()),
+            Some("/capture/observation".into())
+        );
+        assert_eq!(app.snapshot.events.len(), 1);
+        assert!(app.selected_run.is_none());
+        assert!(app.terminals.is_empty());
+        assert_eq!(app.selected_analysis.as_deref(), Some("static-report"));
+        assert_eq!(
+            app.analysis_views["workspace"].report_id.as_deref(),
+            Some("static-report")
+        );
+        app.select_capture("observation".into(), true);
+        assert!(
+            matches!(&app.pending_archive, Some(Request::Invocations { directory, capture: true, .. }) if directory == &PathBuf::from("/capture/observation"))
+        );
+        let generation = app.archive_generation;
+        app.select_run(Some("launched".into()));
+        app.handle_archive_answer(Answer::Invocations {
+            generation,
+            offset: 0,
+            result: Ok(antinomie_monitor_core::InvocationPage {
+                invocations: pair_events(&[event(1, 9)]),
+                next_offset: None,
+                issues: Vec::new(),
+            }),
+        });
+        assert!(app.selected_capture.is_none());
+        assert_eq!(app.invocations()[0].entry.as_ref().unwrap().cpu, 0);
+        assert!(app.terminals.is_empty());
+    }
+
+    #[test]
+    fn older_observation_uses_archive_when_live_preview_is_absent() {
+        let mut app = app();
+        observer_fixture(&mut app);
+        app.capture_history
+            .push(observer("past", CaptureState::Finalized));
+        app.select_capture("past".into(), false);
+        assert!(matches!(
+            app.pending_archive,
+            Some(Request::Invocations { capture: true, .. })
+        ));
+        let generation = app.archive_generation;
+        app.handle_archive_answer(Answer::Invocations {
+            generation,
+            offset: 0,
+            result: Ok(antinomie_monitor_core::InvocationPage {
+                invocations: pair_events(&[event(1, 4)]),
+                next_offset: Some(64),
+                issues: vec!["Pending tails".into()],
+            }),
+        });
+        assert_eq!(app.invocations()[0].entry.as_ref().unwrap().cpu, 4);
+        assert_eq!(app.archive_next, Some(64));
+        assert_eq!(app.archive_error.as_deref(), Some("Pending tails"));
+        app.history_generation = 2;
+        app.handle_archive_answer(Answer::ListCaptures {
+            vm_id: "other".into(),
+            generation: 2,
+            result: Ok(Vec::new()),
+        });
+        assert_eq!(app.capture_history.len(), 1);
+    }
+
+    #[test]
+    fn stop_capture_never_submits_program_or_vm_termination() {
+        let mut app = app();
+        observer_fixture(&mut app);
+        assert!(app.observer_start_enabled());
+        app.snapshot
+            .captures
+            .push(observer("active", CaptureState::Active));
+        assert!(!app.observer_start_enabled());
+        app.stop_observer();
+        assert_eq!(app.submitted.len(), 1);
+        assert!(
+            matches!(&app.submitted[0], Command::StopCapture { capture_id } if capture_id == "active")
+        );
+        app.pending_observer = Some(9);
+        app.stop_observer();
+        assert_eq!(app.submitted.len(), 1);
+        for revision in [None, Some(10)] {
+            app.pending_observer = None;
+            app.snapshot.guest_kernel.as_mut().unwrap().revision = revision;
+            assert!(!app.observer_supported());
+            app.stop_observer();
+        }
+        assert_eq!(app.submitted.len(), 1);
+    }
+
+    #[test]
+    fn unknown_quiet_capture_start_remains_stoppable_without_a_cookie() {
+        let mut app = app();
+        observer_fixture(&mut app);
+        let mut capture = observer("unacknowledged", CaptureState::Unknown);
+        capture.capture_cookie = 0;
+        app.snapshot.captures.push(capture);
+        assert!(!app.observer_start_enabled());
+        app.stop_observer();
+        assert!(
+            matches!(&app.submitted[..], [Command::StopCapture { capture_id }] if capture_id == "unacknowledged")
+        );
+        assert!(app.terminals.is_empty());
+    }
+
+    #[test]
+    fn process_picker_preserves_task_identity_and_rejects_reused_pid_and_boot() {
+        let mut app = app();
+        observer_fixture(&mut app);
+        let identity = antinomie_monitor_core::GuestProcessIdentity {
+            boot_id: "boot".into(),
+            task_cookie: 55,
+            tgid: 42,
+            start_boot_ns: 100,
+        };
+        app.snapshot.process_page = Some(antinomie_monitor_core::GuestProcessPage {
+            boot_id: "boot".into(),
+            after_pid: 0,
+            next_pid: 42,
+            processes: vec![antinomie_monitor_core::GuestProcess {
+                identity: identity.clone(),
+                parent_tgid: 1,
+                uid: 1000,
+                gid: 1000,
+                thread_count: 3,
+                command: "guest-target".into(),
+            }],
+        });
+        app.open_process_picker();
+        assert!(matches!(
+            app.submitted.last(),
+            Some(Command::ListProcesses { after_pid: 0 })
+        ));
+        app.process_picker.selected = Some(identity.clone());
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(800.0, 600.0);
+        render(&mut app, &ctx, size);
+        assert_eq!(app.process_picker.selected.as_ref(), Some(&identity));
+        app.snapshot.process_page.as_mut().unwrap().processes[0]
+            .identity
+            .task_cookie = 56;
+        render(&mut app, &ctx, size);
+        assert!(app.process_picker.selected.is_none());
+        app.process_picker.selected = Some(identity);
+        app.snapshot.boot_id = Some("new-boot".into());
+        render(&mut app, &ctx, size);
+        assert!(app.process_picker.selected.is_none());
+        assert!(app
+            .submitted
+            .iter()
+            .all(|command| matches!(command, Command::ListProcesses { .. })));
+    }
+
+    #[test]
+    fn capture_process_and_history_layout_remain_visible_with_large_fonts() {
+        for size in [egui::vec2(800.0, 600.0), egui::vec2(1280.0, 820.0)] {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            theme::text_size(&ctx, 24.0);
+            let mut app = app();
+            observer_fixture(&mut app);
+            app.settings.font_size = 24.0;
+            app.process_picker.open = true;
+            let identity = antinomie_monitor_core::GuestProcessIdentity {
+                boot_id: "boot".into(),
+                task_cookie: 55,
+                tgid: 42,
+                start_boot_ns: 100,
+            };
+            app.process_picker.selected = Some(identity.clone());
+            app.snapshot.process_page = Some(antinomie_monitor_core::GuestProcessPage {
+                boot_id: "boot".into(),
+                processes: (1..=64)
+                    .map(|index| antinomie_monitor_core::GuestProcess {
+                        identity: antinomie_monitor_core::GuestProcessIdentity {
+                            task_cookie: if index == 1 { 55 } else { index },
+                            ..identity.clone()
+                        },
+                        parent_tgid: 1,
+                        uid: 1000,
+                        gid: 1000,
+                        thread_count: 3,
+                        command: format!("guest-process-{index}"),
+                    })
+                    .collect(),
+                ..Default::default()
+            });
+            for _ in 0..3 {
+                render(&mut app, &ctx, size);
+            }
+            let output = render(&mut app, &ctx, size);
+            let visible = texts(&output);
+            assert!(
+                visible
+                    .iter()
+                    .any(|(text, _)| text == &format!("{} Attach", egui_phosphor::regular::PLUG)),
+                "selected64rowpickeractionsclipped: {visible:?}"
+            );
+            for label in [
+                "Attach to process",
+                "PID",
+                "Name",
+                "UID",
+                "Threads",
+                "Cancel",
+            ] {
+                assert!(
+                    visible.iter().any(|(text, _)| text == label),
+                    "missing or clipped {label} at {size:?}: {visible:?}"
+                );
+            }
+            app.process_picker.open = false;
+            app.capture_tab = true;
+            app.snapshot
+                .captures
+                .push(observer("active", CaptureState::Active));
+            app.layout.focus(Panel::RunHistory);
+            for _ in 0..3 {
+                render(&mut app, &ctx, size);
+            }
+            let output = render(&mut app, &ctx, size);
+            assert!(texts(&output).iter().any(|(text, _)| text == "Captures"));
+        }
+    }
+
+    #[test]
+    fn process_picker_click_attaches_the_complete_identity_and_paginates() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut app = app();
+        observer_fixture(&mut app);
+        let identity = antinomie_monitor_core::GuestProcessIdentity {
+            boot_id: "boot".into(),
+            task_cookie: 55,
+            tgid: 42,
+            start_boot_ns: 100,
+        };
+        app.snapshot.process_page = Some(antinomie_monitor_core::GuestProcessPage {
+            boot_id: "boot".into(),
+            after_pid: 0,
+            next_pid: 42,
+            processes: vec![antinomie_monitor_core::GuestProcess {
+                identity: identity.clone(),
+                parent_tgid: 1,
+                uid: 1000,
+                gid: 1000,
+                thread_count: 3,
+                command: "guest-target".into(),
+            }],
+        });
+        app.open_process_picker();
+        let size = egui::vec2(800.0, 600.0);
+        click_label(&mut app, &ctx, size, "guest-target");
+        assert_eq!(app.process_picker.selected.as_ref(), Some(&identity));
+        click_label(
+            &mut app,
+            &ctx,
+            size,
+            &format!("{} Attach", egui_phosphor::regular::PLUG),
+        );
+        assert!(
+            matches!(app.submitted.last(), Some(Command::AttachProcess { identity: selected }) if selected == &identity)
+        );
+        assert!(!app.process_picker.open);
+        assert!(app.terminals.is_empty());
+        app.open_process_picker();
+        click_label(&mut app, &ctx, size, egui_phosphor::regular::ARROW_RIGHT);
+        assert!(matches!(
+            app.submitted.last(),
+            Some(Command::ListProcesses { after_pid: 42 })
+        ));
+        assert_eq!(app.process_picker.after_pid, 42);
+        assert!(app.process_picker.selected.is_none());
+    }
+
+    #[test]
+    #[ignore = "requires X11 capture controls preview; automatically exits after 12 seconds"]
+    fn native_capture_controls_fixture() {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        struct QaApp {
+            app: MonitorApp,
+            deadline: Instant,
+        }
+        impl eframe::App for QaApp {
+            fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+                if Instant::now() >= self.deadline {
+                    eprintln!("native capture QA commands: {:?}", self.app.submitted);
+                    assert!(self.app.terminals.is_empty());
+                    assert!(self.app.submitted.iter().all(|command| matches!(
+                        command,
+                        Command::ListProcesses { .. }
+                            | Command::AttachProcess { .. }
+                            | Command::CaptureAll
+                            | Command::StopCapture { .. }
+                    )));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                }
+                eframe::App::update(&mut self.app, ctx, frame);
+            }
+        }
+        let small = std::env::var_os("ANTINOMIE_CAPTURE_QA_SMALL").is_some();
+        let picker = std::env::var_os("ANTINOMIE_CAPTURE_QA_PICKER").is_some();
+        eframe::run_native(
+            "Antinomie Capture QA",
+            eframe::NativeOptions {
+                viewport: egui::ViewportBuilder::default().with_inner_size(if small {
+                    [800.0, 600.0]
+                } else {
+                    [1280.0, 820.0]
+                }),
+                persist_window: false,
+                event_loop_builder: Some(Box::new(|builder| {
+                    builder.with_x11().with_any_thread(true);
+                })),
+                ..Default::default()
+            },
+            Box::new(move |cc| {
+                theme::install(&cc.egui_ctx);
+                theme::text_size(&cc.egui_ctx, if small { 24.0 } else { 18.0 });
+                let mut app = app();
+                observer_fixture(&mut app);
+                app.settings.font_size = if small { 24.0 } else { 18.0 };
+                app.snapshot
+                    .captures
+                    .push(observer("previous-observation", CaptureState::Stopped));
+                app.snapshot.capture_events.insert(
+                    "previous-observation".into(),
+                    vec![event(1, 0), event(2, 1)],
+                );
+                app.capture_tab = true;
+                app.layout.focus(Panel::RunHistory);
+                if picker {
+                    app.snapshot.process_page = Some(antinomie_monitor_core::GuestProcessPage {
+                        boot_id: "boot".into(),
+                        after_pid: 0,
+                        next_pid: 64,
+                        processes: (1..=64)
+                            .map(|pid| antinomie_monitor_core::GuestProcess {
+                                identity: antinomie_monitor_core::GuestProcessIdentity {
+                                    boot_id: "boot".into(),
+                                    task_cookie: u64::from(pid),
+                                    tgid: pid,
+                                    start_boot_ns: u64::from(pid) * 100,
+                                },
+                                parent_tgid: 1,
+                                uid: 1000,
+                                gid: 1000,
+                                thread_count: 2,
+                                command: format!("guest-process-{pid}"),
+                            })
+                            .collect(),
+                    });
+                    app.open_process_picker();
+                }
+                Ok(Box::new(QaApp {
+                    app,
+                    deadline: Instant::now() + Duration::from_secs(12),
+                }))
+            }),
+        )
+        .unwrap();
     }
 
     fn render(app: &mut MonitorApp, ctx: &egui::Context, size: egui::Vec2) -> egui::FullOutput {

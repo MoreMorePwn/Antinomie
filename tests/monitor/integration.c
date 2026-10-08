@@ -32,8 +32,10 @@ static void drain(void)
         size_t body_offset;
         packets++;
         if (len < 136 || memcmp(telemetry,"ANTT",4) || get32(telemetry+12)!=len ||
-            get16(telemetry+4)!=1 || get16(telemetry+6)!=1 ||
-            get16(telemetry+8)!=136 || !get64(telemetry+128)) {
+            get16(telemetry+4)!=1 ||
+            !((get16(telemetry+6)==1 && get16(telemetry+8)==136) ||
+              (get16(telemetry+6)==2 && get16(telemetry+8)==144 && len>=144)) ||
+            !get64(telemetry+128)) {
             fprintf(stderr,"bad telemetry framing\n"); exit(30);
         }
         body_offset=get16(telemetry+8);

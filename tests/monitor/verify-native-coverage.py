@@ -33,12 +33,19 @@ def packets(path):
             data = raw.read(length)
             if len(data) != length or data[:4] != b"ANTT":
                 raise ValueError("truncated packet or bad magic")
-            if struct.unpack_from("<HHH", data, 4) != (1, 1, 136):
+            major, minor, header_size = struct.unpack_from("<HHH", data, 4)
+            if major != 1 or (minor, header_size) not in ((1, 136), (2, 144)) or length < header_size:
                 raise ValueError("unexpected schema/header")
             if struct.unpack_from("<I", data, 12)[0] != length:
                 raise ValueError("packet framing mismatch")
-            if struct.unpack_from("<I", data, 120)[0] != length - 136:
+            if struct.unpack_from("<I", data, 120)[0] != length - header_size:
                 raise ValueError("body framing mismatch")
+            # Coverage checks use the legacy body view; observer provenance is
+            # validated by observation-check, not discarded in saved recordings.
+            if minor == 2:
+                data = bytearray(data[:136] + data[144:])
+                struct.pack_into("<HH", data, 6, 1, 136)
+                struct.pack_into("<I", data, 12, len(data))
             yield data
 
 
