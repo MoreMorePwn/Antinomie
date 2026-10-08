@@ -1,5 +1,6 @@
 use crate::{
     archive::{Answer, ArchiveWorker, Request},
+    build_wizard,
     folders::{FolderPicker, Kind as FolderKind, Target as FolderTarget},
     runs::RunTerminal,
     theme,
@@ -7,10 +8,10 @@ use crate::{
     workspace::{Panel, WorkspaceLayout},
 };
 use antinomie_monitor_core::{
-    pair_events, Backend, BackendOptions, BaseSummary, CaptureState, CaptureSummary, Command,
-    DisplayResolution, ExecRequest, GuestCredentials, InvocationSummary, Notification,
-    RevisionStatus, RunState, RunSummary, Snapshot, TerminalRecord, VmAcceleration, VmConfig,
-    VmCpuModel, VmLaunchOptions, VmState, WaitStatus, APP_REVISION,
+    pair_events, syscall_groups::SyscallGroup, Backend, BackendOptions, BaseSummary, CaptureState,
+    CaptureSummary, Command, DisplayResolution, ExecRequest, GuestCredentials, InvocationSummary,
+    Notification, RevisionStatus, RunState, RunSummary, Snapshot, TerminalRecord, VmAcceleration,
+    VmConfig, VmCpuModel, VmLaunchOptions, VmState, WaitStatus, APP_REVISION, APP_VERSION,
 };
 #[path = "captures.rs"]
 mod captures;
@@ -30,8 +31,10 @@ struct Settings {
     quota_gib: u32,
     timeout: u64,
     font_size: f32,
-    /// Product repository checkout used for local base builds.
-    build_workspace: String,
+    /// Tint syscall trace rows by syscall group.
+    trace_colors: bool,
+    /// Syscall groups hidden from the trace.
+    hidden_trace_categories: Vec<SyscallGroup>,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -40,7 +43,8 @@ impl Default for Settings {
             quota_gib: 4,
             timeout: 10,
             font_size: 16.0,
-            build_workspace: String::new(),
+            trace_colors: true,
+            hidden_trace_categories: Vec::new(),
         }
     }
 }
@@ -141,6 +145,8 @@ pub struct MonitorApp {
     import_directory: String,
     download_open: bool,
     build_open: bool,
+    about_open: bool,
+    build_wizard: build_wizard::BuildWizard,
     confirm: Option<Confirm>,
     name_action: Option<(String, bool, String)>,
     status: String,
@@ -213,8 +219,6 @@ impl MonitorApp {
         settings.font_size = settings.font_size.clamp(12.0, 24.0);
         theme::text_size(&cc.egui_ctx, settings.font_size);
         options.bundle_dir = PathBuf::from(&settings.bundle);
-        options.build_workspace = (!settings.build_workspace.trim().is_empty())
-            .then(|| PathBuf::from(settings.build_workspace.trim()));
         options.capture_quota_size = u64::from(settings.quota_gib) * 1024 * 1024 * 1024;
         options.shutdown_timeout = Duration::from_secs(settings.timeout);
         let (backend, status) = match Backend::new(options.clone()) {
@@ -243,6 +247,8 @@ impl MonitorApp {
             import_directory: String::new(),
             download_open: false,
             build_open: false,
+            about_open: false,
+            build_wizard: build_wizard::BuildWizard::default(),
             confirm: None,
             name_action: None,
             status,
@@ -1639,6 +1645,12 @@ impl MonitorApp {
                             ui.close_menu();
                         }
                     });
+                    ui.menu_button("Help", |ui| {
+                        if ui.button("About Antinomie").clicked() {
+                            self.about_open = true;
+                            ui.close_menu();
+                        }
+                    });
                     if self.snapshot.bases.is_empty() {
                         ui.separator();
                         if ui
@@ -1938,8 +1950,10 @@ impl MonitorApp {
                                 .guest
                                 .as_ref()
                                 .map_or("Linux 6.12.94".to_string(), |guest| guest.id.clone());
-                            let label = if RevisionStatus::of(base.revision)
-                                == RevisionStatus::Current
+                            let label = if RevisionStatus::of_base(
+                                base.revision,
+                                base.min_app_version.as_deref(),
+                            ) == RevisionStatus::Current
                             {
                                 format!("{}  {}", egui_phosphor::regular::HARD_DRIVE, base.label)
                             } else {
@@ -1972,7 +1986,7 @@ impl MonitorApp {
                                     base.directory.display(),
                                     base.size_bytes as f64 / 1073741824.0,
                                     dependents,
-                                    RevisionStatus::describe(base.revision)
+                                    describe_base(base)
                                 ));
                             if response.clicked() || response.secondary_clicked() {
                                 clicked_base = Some(base.id.clone());
@@ -2084,12 +2098,13 @@ impl MonitorApp {
                         let status = RevisionStatus::of(kernel.revision);
                         ui.colored_label(
                             if status == RevisionStatus::Current { theme::GOOD } else { theme::WARN },
-                            format!("Kernel: {}", RevisionStatus::describe(kernel.revision)),
+                            format!("Kernel: {}", RevisionStatus::describe(kernel.revision, None)),
                         )
                         .on_hover_text(format!(
-                            "Release: {}\nPatch series: {}\nThis app: revision {APP_REVISION}",
+                            "Release: {}\nPatch series: {}\nGuest contract revision: {}\nThis app: Antinomie {APP_VERSION} (revision {APP_REVISION})",
                             kernel.release.as_deref().unwrap_or("unknown"),
                             kernel.source.as_deref().unwrap_or("not recorded"),
+                            kernel.revision.map_or("none".into(), |r| r.to_string()),
                         ));
                     }
                     ui.separator();
@@ -2399,13 +2414,20 @@ impl MonitorApp {
                 .on_hover_text(error);
         }
         let filter = self.filter.to_lowercase();
-        let invocations: Vec<_> = self
-            .invocations()
+        let all = self.invocations();
+        self.trace_categories(ui, &all);
+        let hidden = self.settings.hidden_trace_categories.clone();
+        let invocations: Vec<_> = all
             .into_iter()
             .filter(|invocation| {
                 let Some(event) = trace::representative(invocation) else {
                     return false;
                 };
+                if SyscallGroup::of(&event.syscall_name)
+                    .is_some_and(|group| hidden.contains(&group))
+                {
+                    return false;
+                }
                 filter.is_empty()
                     || format!(
                         "{} {} {} {}",
@@ -2508,7 +2530,17 @@ impl MonitorApp {
                                 }
                                 _ => event.event_seq.to_string(),
                             };
-                            for text in [
+                            let group = SyscallGroup::of(&event.syscall_name);
+                            let tint = group
+                                .filter(|_| self.settings.trace_colors)
+                                .and_then(theme::syscall_tint)
+                                .filter(|_| self.selected_event != Some(key));
+                            let failed = invocation
+                                .exit
+                                .as_ref()
+                                .and_then(|event| event.result)
+                                .is_some_and(|result| result < 0);
+                            for (column, text) in [
                                 format!("{:.6}", event.timestamp_ns as f64 / 1_000_000_000.0),
                                 sequence,
                                 event.tid.to_string(),
@@ -2521,15 +2553,41 @@ impl MonitorApp {
                                     .map(|result| result.to_string())
                                     .unwrap_or_else(|| "missing Exit".into()),
                                 trace::info(invocation),
-                            ] {
+                            ]
+                            .into_iter()
+                            .enumerate()
+                            {
                                 row.col(|ui| {
+                                    // Paint the cell and half of each gap so a tinted
+                                    // row reads as one band, as in Wireshark.
+                                    let cell = ui.max_rect().expand2(egui::vec2(
+                                        ui.spacing().item_spacing.x / 2.0,
+                                        0.0,
+                                    ));
+                                    if let Some(tint) = tint {
+                                        ui.painter().rect_filled(cell, 0.0, tint);
+                                    }
+                                    if failed && column == 0 {
+                                        let mut bar = cell;
+                                        bar.set_width(3.0);
+                                        ui.painter().rect_filled(bar, 0.0, theme::ERROR);
+                                    }
+                                    let mut label = RichText::new(&text);
+                                    if failed && column == 5 {
+                                        label = label.color(theme::ERROR);
+                                    }
                                     ui.add(
-                                        egui::Label::new(&text)
+                                        egui::Label::new(label)
                                             .truncate()
                                             .selectable(false)
                                             .sense(egui::Sense::hover()),
                                     )
-                                    .on_hover_text(&text);
+                                    .on_hover_text(match group {
+                                        Some(group) if column == 4 => {
+                                            format!("{text}\n{}", group.label())
+                                        }
+                                        _ => text.clone(),
+                                    });
                                 });
                             }
                             if row.response().clicked() {
@@ -2539,6 +2597,93 @@ impl MonitorApp {
                         });
                     });
             });
+    }
+
+    /// Category filter above the trace: one button per syscall group (with
+    /// its row count) shows or hides that group's rows, and "All" shows or
+    /// hides every group. The choice is saved with the settings; row colors
+    /// are switched in Settings.
+    fn trace_categories(&mut self, ui: &mut egui::Ui, invocations: &[InvocationSummary]) {
+        let mut counts = std::collections::BTreeMap::<SyscallGroup, usize>::new();
+        for invocation in invocations {
+            if let Some(group) = trace::representative(invocation)
+                .and_then(|event| SyscallGroup::of(&event.syscall_name))
+            {
+                *counts.entry(group).or_default() += 1;
+            }
+        }
+        let hidden = &mut self.settings.hidden_trace_categories;
+        // One row that scrolls sideways, so the buttons never push the trace
+        // table down in a narrow panel or at large text sizes.
+        egui::ScrollArea::horizontal()
+            .id_salt("trace_categories")
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let all_shown = hidden.is_empty();
+                    let all = egui::Button::new(RichText::new("All").small().strong())
+                        .fill(if all_shown {
+                            theme::PRIMARY
+                        } else {
+                            theme::PANEL
+                        })
+                        .stroke(egui::Stroke::new(1.0_f32, theme::LINE));
+                    if ui
+                        .add(all)
+                        .on_hover_text(if all_shown {
+                            "Hide every category"
+                        } else {
+                            "Show every category"
+                        })
+                        .clicked()
+                    {
+                        if all_shown {
+                            *hidden = SyscallGroup::ALL.to_vec();
+                        } else {
+                            hidden.clear();
+                        }
+                    }
+                    for group in SyscallGroup::ALL {
+                        let shown = !hidden.contains(&group);
+                        let swatch = theme::syscall_tint(group).unwrap_or(theme::RAISED);
+                        let text = RichText::new(format!(
+                            "{} {}",
+                            group.label(),
+                            counts.get(&group).copied().unwrap_or(0)
+                        ))
+                        .small()
+                        .color(if shown {
+                            theme::TEXT
+                        } else {
+                            theme::MUTED
+                        });
+                        let button = egui::Button::new(text)
+                            .fill(if shown { swatch } else { theme::PANEL })
+                            .stroke(egui::Stroke::new(1.0_f32, swatch.gamma_multiply(1.6)));
+                        if ui
+                            .add(button)
+                            .on_hover_text(if shown {
+                                "Click to hide these syscalls"
+                            } else {
+                                "Click to show these syscalls"
+                            })
+                            .clicked()
+                        {
+                            if shown {
+                                hidden.push(group);
+                            } else {
+                                hidden.retain(|other| *other != group);
+                            }
+                        }
+                    }
+                })
+            });
+        if self.settings.hidden_trace_categories.len() == SyscallGroup::ALL.len() {
+            ui.colored_label(
+                theme::MUTED,
+                "All categories are hidden; click All to show them.",
+            );
+        }
     }
 
     fn details(&mut self, ui: &mut egui::Ui) {
@@ -2598,12 +2743,16 @@ impl MonitorApp {
             egui::Window::new("Import base")
                 .open(&mut open)
                 .collapsible(false)
-                .resizable(false)
-                .default_width(420.0)
+                .resizable(true)
+                .default_width(680.0)
+                .min_width(520.0)
                 .show(ctx, |ui| {
+                    ui.label(
+                        "Folder of a built base (it contains bundle.json, kernel and base.qcow2)",
+                    );
                     ui.add(
                         egui::TextEdit::singleline(&mut self.import_directory)
-                            .desired_width(360.0)
+                            .desired_width(ui.available_width())
                             .hint_text("Bundle directory"),
                     );
                     ui.horizontal(|ui| {
@@ -2657,7 +2806,8 @@ impl MonitorApp {
                 .open(&mut open)
                 .collapsible(false)
                 .resizable(true)
-                .default_width(560.0)
+                .default_size([820.0, 540.0])
+                .min_width(600.0)
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         if ui.button("Refresh catalog").clicked() {
@@ -2697,6 +2847,7 @@ impl MonitorApp {
                         );
                     }
                     let busy = download.as_ref().is_some_and(|status| !status.finished);
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     for base in &remote {
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
@@ -2710,21 +2861,26 @@ impl MonitorApp {
                                 ui.small(format!(
                                     "{} · {} · {} · {} · {}",
                                     base.kernel_version,
-                                    RevisionStatus::describe(base.revision),
+                                    RevisionStatus::describe(
+                                        base.revision,
+                                        base.min_app_version.as_deref()
+                                    ),
                                     kind,
                                     human_bytes(base.total_size),
                                     short
                                 ));
                             });
-                            let newer = RevisionStatus::of(base.revision)
-                                == RevisionStatus::NeedsNewerApp;
+                            let newer = RevisionStatus::of_base(
+                                base.revision,
+                                base.min_app_version.as_deref(),
+                            ) == RevisionStatus::NeedsNewerApp;
                             if installed.contains(&base.identity) {
                                 ui.colored_label(theme::GOOD, "installed");
                             } else if ui
                                 .add_enabled(!busy && !newer, egui::Button::new("Download"))
                                 .on_disabled_hover_text(if newer {
                                     format!(
-                                        "Built for a newer Antinomie (this app is revision {APP_REVISION})"
+                                        "Built for a newer Antinomie (this is Antinomie {APP_VERSION})"
                                     )
                                 } else {
                                     "Another download is in progress".to_string()
@@ -2735,6 +2891,7 @@ impl MonitorApp {
                             }
                         });
                     }
+                    });
                 });
             self.download_open = open;
             if refresh {
@@ -2744,92 +2901,59 @@ impl MonitorApp {
                 self.send(Command::DownloadBase { identity });
             }
         }
+        if self.about_open {
+            let mut open = true;
+            egui::Window::new("About Antinomie")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label(
+                        RichText::new(format!("Antinomie {APP_VERSION}"))
+                            .strong()
+                            .size(18.0),
+                    );
+                    ui.label("Run programs in a QEMU VM and record every system call they make.");
+                    ui.add_space(6.0);
+                    egui::Grid::new("about")
+                        .num_columns(2)
+                        .spacing([16.0, 4.0])
+                        .show(ui, |ui| {
+                            ui.label(RichText::new("Guest contract revision").color(theme::MUTED));
+                            ui.label(APP_REVISION.to_string());
+                            ui.end_row();
+                            ui.label(RichText::new("Kernel patch series").color(theme::MUTED));
+                            ui.label(antinomie_monitor_core::build::series_short());
+                            ui.end_row();
+                            ui.label(RichText::new("Guest kernel").color(theme::MUTED));
+                            ui.label("Linux 6.12.94 (Debian 6.12.94-1 source)");
+                            ui.end_row();
+                        });
+                });
+            self.about_open = open;
+        }
         if self.build_open {
             let mut open = true;
-            let mut workspace = self.settings.build_workspace.clone();
             let build = self.snapshot.build.clone();
-            let active = build.as_ref().is_some_and(|status| !status.finished);
-            let mut request: Option<String> = None;
+            let mut action = None;
             egui::Window::new("Build base")
                 .open(&mut open)
                 .collapsible(false)
                 .resizable(true)
-                .default_width(620.0)
+                .default_size([900.0, 640.0])
+                .min_size([720.0, 480.0])
                 .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Repository workspace");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut workspace)
-                                .desired_width(380.0)
-                                .hint_text("path to the Antinomie checkout"),
-                        );
-                    });
-                    ui.small(
-                        "Local build runs the repository scripts (ANT-ADR-0001); nothing is installed automatically.",
-                    );
-                    ui.separator();
-                    for profile in antinomie_monitor_core::build::BUILD_PROFILES {
-                        let missing = antinomie_monitor_core::build::missing(profile.kind);
-                        ui.horizontal(|ui| {
-                            ui.vertical(|ui| {
-                                ui.label(RichText::new(profile.label).strong());
-                                ui.small(profile.id);
-                            });
-                            if !missing.is_empty() {
-                                ui.colored_label(
-                                    theme::WARN,
-                                    format!(
-                                        "missing: {}",
-                                        missing
-                                            .iter()
-                                            .map(|tool| tool.tool)
-                                            .collect::<Vec<_>>()
-                                            .join(", ")
-                                    ),
-                                );
-                            } else if workspace.trim().is_empty() {
-                                ui.colored_label(theme::MUTED, "set a workspace");
-                            } else if ui
-                                .add_enabled(!active, egui::Button::new("Build"))
-                                .clicked()
-                            {
-                                request = Some(profile.id.to_string());
-                            } else {
-                                ui.colored_label(theme::GOOD, "host tools ready");
-                            }
-                        });
-                        let hint = antinomie_monitor_core::build::install_hint(profile.kind);
-                        if !hint.is_empty() {
-                            ui.small(format!("  {hint}"));
-                        }
-                    }
-                    if let Some(status) = &build {
-                        ui.separator();
-                        ui.label(
-                            RichText::new(format!("{} — {}", status.label, status.stage)).strong(),
-                        );
-                        if let Some(error) = &status.error {
-                            ui.colored_label(theme::ERROR, error);
-                        } else if status.finished {
-                            ui.colored_label(theme::GOOD, "installed");
-                        }
-                        egui::ScrollArea::vertical()
-                            .max_height(220.0)
-                            .show(ui, |ui| {
-                                for line in &status.log {
-                                    ui.small(line);
-                                }
-                            });
-                    }
+                    action = self
+                        .build_wizard
+                        .show(ui, build.as_ref(), &self.options.data_dir);
                 });
             self.build_open = open;
-            let changed = self.settings.build_workspace != workspace;
-            self.settings.build_workspace = workspace;
-            if changed {
-                self.update_options();
-            }
-            if let Some(profile) = request {
-                self.send(Command::BuildBase { profile });
+            match action {
+                Some(build_wizard::Action::Build(request)) => {
+                    self.send(Command::BuildBase { request: *request })
+                }
+                Some(build_wizard::Action::Cancel) => self.send(Command::CancelBuild),
+                None => {}
             }
         }
         if let Some((vm_id, duplicate, name)) = &mut self.name_action {
@@ -3111,6 +3235,13 @@ impl MonitorApp {
                                 }
                             }
                         });
+                        ui.checkbox(
+                            &mut self.settings.trace_colors,
+                            "Color syscall trace rows by category",
+                        )
+                        .on_hover_text(
+                            "Tint each syscall by its category, like Wireshark's coloring rules",
+                        );
                         ui.separator();
                         ui.add_enabled_ui(self.snapshot.active_vm.is_none(), |ui| {
                             ui.label("Installed base");
@@ -3647,8 +3778,6 @@ impl MonitorApp {
             bundle_dir: PathBuf::from(&self.settings.bundle),
             capture_quota_size: u64::from(self.settings.quota_gib) * 1073741824,
             shutdown_timeout_secs: self.settings.timeout,
-            build_workspace: (!self.settings.build_workspace.trim().is_empty())
-                .then(|| PathBuf::from(self.settings.build_workspace.trim())),
         });
     }
 }
@@ -3788,10 +3917,21 @@ fn base_choice_label(base: &BaseSummary) -> String {
     } else {
         format!("{} (legacy)", base.label)
     };
-    if RevisionStatus::of(base.revision) == RevisionStatus::Current {
+    if RevisionStatus::of_base(base.revision, base.min_app_version.as_deref())
+        == RevisionStatus::Current
+    {
         label
     } else {
-        format!("{label} · {}", RevisionStatus::describe(base.revision))
+        format!("{label} · {}", describe_base(base))
+    }
+}
+
+/// "for Antinomie 0.1.0" etc., plus the version that built the base.
+fn describe_base(base: &BaseSummary) -> String {
+    let status = RevisionStatus::describe(base.revision, base.min_app_version.as_deref());
+    match &base.built_with {
+        Some(version) => format!("{status} (built with {version})"),
+        None => status,
     }
 }
 
@@ -4254,6 +4394,8 @@ mod tests {
             import_directory: String::new(),
             download_open: false,
             build_open: false,
+            about_open: false,
+            build_wizard: build_wizard::BuildWizard::default(),
             name_action: None,
             filter: String::new(),
             trace_sort: None,
@@ -4990,7 +5132,25 @@ mod tests {
             fixed_display,
             size_bytes: 0,
             revision: Some(APP_REVISION),
+            min_app_version: None,
+            built_with: None,
         }
+    }
+
+    #[test]
+    fn trace_coloring_is_on_by_default_and_old_settings_still_load() {
+        let settings = Settings::default();
+        assert!(settings.trace_colors);
+        assert!(settings.hidden_trace_categories.is_empty());
+        // Groups hidden from the earlier color legend are not carried over.
+        let earlier: Settings =
+            serde_json::from_str(r#"{"hidden_trace_groups": ["File"]}"#).unwrap();
+        assert!(earlier.hidden_trace_categories.is_empty());
+        let old: Settings = serde_json::from_str(
+            r#"{"bundle": "", "quota_gib": 4, "timeout": 10, "font_size": 16.0}"#,
+        )
+        .unwrap();
+        assert!(old.trace_colors);
     }
 
     #[test]
@@ -5000,9 +5160,9 @@ mod tests {
         base.revision = Some(APP_REVISION - 1);
         assert!(base_choice_label(&base).ends_with(", outdated"));
         base.revision = Some(APP_REVISION + 1);
-        assert!(base_choice_label(&base).ends_with("needs a newer app"));
+        assert!(base_choice_label(&base).contains("needs a newer Antinomie"));
         base.revision = None;
-        assert!(base_choice_label(&base).contains("no revision"));
+        assert!(base_choice_label(&base).contains("built before versioning"));
     }
 
     fn base_summary_for_revision(revision: Option<u32>) -> BaseSummary {
@@ -5016,6 +5176,8 @@ mod tests {
             fixed_display: true,
             size_bytes: 0,
             revision,
+            min_app_version: None,
+            built_with: None,
         }
     }
 
@@ -5613,6 +5775,8 @@ mod tests {
                 fixed_display: true,
                 size_bytes: 0,
                 revision: Some(APP_REVISION),
+                min_app_version: None,
+                built_with: None,
                 guest: Some(antinomie_monitor_core::GuestProfile {
                     id: "debian-xfce".into(),
                     label: "Debian 13 (Xfce)".into(),
@@ -5691,6 +5855,8 @@ mod tests {
                 fixed_display: true,
                 size_bytes: 0,
                 revision: Some(APP_REVISION),
+                min_app_version: None,
+                built_with: None,
                 guest: Some(antinomie_monitor_core::GuestProfile {
                     id: "debian-xfce".into(),
                     label: "Debian 13 (Xfce)".into(),
@@ -5792,6 +5958,8 @@ mod tests {
                         fixed_display: true,
                         size_bytes: 0,
                         revision: Some(APP_REVISION),
+                        min_app_version: None,
+                        built_with: None,
                         guest: Some(antinomie_monitor_core::GuestProfile {
                             id: "debian-xfce".into(),
                             label: "Debian 13 (Xfce)".into(),
@@ -6913,6 +7081,37 @@ mod tests {
             .find(|(label, _)| label == "Working directory")
             .expect("metadata visible below history rows");
         assert!(metadata.1.bottom() < screen.bottom());
+    }
+
+    #[test]
+    fn trace_categories_hide_and_show_their_rows() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut app = app();
+        app.snapshot.events = vec![event(1, 0), event(2, 0)];
+        let size = egui::vec2(1280.0, 820.0);
+        let row_visible = |app: &mut MonitorApp| {
+            for _ in 0..2 {
+                let _ = render(app, &ctx, size);
+            }
+            texts(&render(app, &ctx, size))
+                .iter()
+                .any(|(text, _)| text == "read (0)")
+        };
+        assert!(row_visible(&mut app));
+        app.settings.hidden_trace_categories = vec![SyscallGroup::File];
+        assert!(!row_visible(&mut app));
+        app.settings.hidden_trace_categories = vec![SyscallGroup::Network];
+        assert!(row_visible(&mut app));
+        let labels: Vec<_> = texts(&render(&mut app, &ctx, size))
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+        assert!(labels.contains(&"All".to_string()));
+        assert!(
+            labels.contains(&"File & filesystem 1".to_string()),
+            "{labels:?}"
+        );
     }
 
     #[test]

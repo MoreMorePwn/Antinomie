@@ -301,7 +301,6 @@ pub struct BackendOptions {
     /// Anonymous base bucket file endpoint (`.../resolve`).
     pub remote_base: String,
     /// Product repository checkout used for local base builds (host Linux).
-    pub build_workspace: Option<PathBuf>,
     /// Shared quota for raw packets, assembled fields and terminal artifacts, in bytes.
     pub capture_quota_size: u64,
     pub shutdown_timeout: Duration,
@@ -321,7 +320,6 @@ impl Default for BackendOptions {
             qemu_img: "qemu-img".into(),
             curl: "curl".into(),
             remote_base: crate::distribution::DEFAULT_REMOTE_BASE.to_string(),
-            build_workspace: None,
             capture_quota_size: 4 * 1024 * 1024 * 1024,
             shutdown_timeout: Duration::from_secs(10),
             bootstrap_gpa: None,
@@ -395,10 +393,81 @@ pub struct BaseSummary {
     pub size_bytes: u64,
     /// Antinomie patch revision the base's kernel was built from.
     pub revision: Option<u32>,
+    /// Oldest Antinomie version that can run the base, when recorded.
+    pub min_app_version: Option<String>,
+    /// Antinomie version that built the base, when recorded.
+    pub built_with: Option<String>,
 }
 
 /// Guest contract revision this app implements.
 pub const APP_REVISION: u32 = crate::control::REVISION;
+
+/// This app's version (semantic versioning: a fix bumps the patch number, a
+/// feature the minor number, the first release is 1.0.0).
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// A parsed `major.minor.patch` version.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Version(pub u32, pub u32, pub u32);
+impl Version {
+    pub fn parse(text: &str) -> Option<Self> {
+        let mut parts = text.split('.');
+        let mut next = || -> Option<u32> {
+            let part = parts.next()?;
+            (!part.is_empty()
+                && part.len() <= 9
+                && part.bytes().all(|b| b.is_ascii_digit())
+                && (part == "0" || !part.starts_with('0')))
+            .then(|| part.parse().ok())
+            .flatten()
+        };
+        let version = Self(next()?, next()?, next()?);
+        parts.next().is_none().then_some(version)
+    }
+    pub fn app() -> Self {
+        Self::parse(APP_VERSION).expect("workspace version is major.minor.patch")
+    }
+}
+impl std::fmt::Display for Version {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.0, self.1, self.2)
+    }
+}
+
+/// `protocol/revisions.json`: each guest contract revision and the first app
+/// version that shipped it. The build recipes read the same file.
+const REVISION_TABLE: &str = include_str!("../../../protocol/revisions.json");
+
+/// (revision, first app version), oldest first.
+pub fn revision_history() -> Vec<(u32, Version)> {
+    #[derive(Deserialize)]
+    struct Table {
+        revisions: Vec<Entry>,
+    }
+    #[derive(Deserialize)]
+    struct Entry {
+        revision: u32,
+        first_app_version: String,
+    }
+    let table: Table = serde_json::from_str(REVISION_TABLE).expect("revisions.json is valid");
+    table
+        .revisions
+        .into_iter()
+        .map(|entry| {
+            let version = Version::parse(&entry.first_app_version)
+                .expect("revisions.json versions are major.minor.patch");
+            (entry.revision, version)
+        })
+        .collect()
+}
+
+/// The first app version that can run a kernel of `revision`, if known.
+pub fn first_app_version(revision: u32) -> Option<Version> {
+    revision_history()
+        .into_iter()
+        .find(|(known, _)| *known == revision)
+        .map(|(_, version)| version)
+}
 
 /// Split a `CONFIG_ANTINOMIE_SOURCE_ID` value, `"<revision>:<series sha256>"`.
 pub fn parse_source_id(value: &str) -> Option<(u32, String)> {
@@ -434,20 +503,61 @@ impl RevisionStatus {
             Some(_) => Self::NeedsNewerApp,
         }
     }
-    /// Short text for lists, e.g. "revision 9" or "revision 8, outdated".
-    pub fn describe(revision: Option<u32>) -> String {
-        match (Self::of(revision), revision) {
-            (Self::Current, Some(revision)) => format!("revision {revision}"),
-            (Self::Outdated, Some(revision)) => format!("revision {revision}, outdated"),
-            (Self::NeedsNewerApp, Some(revision)) => {
-                format!("revision {revision}, needs a newer app")
+    /// Short text for lists, in app versions: "for Antinomie 0.1.0",
+    /// "for Antinomie 0.1.0, outdated", "needs Antinomie 0.2.0 or newer".
+    /// `min_app_version` is the base's record; without it the revision table
+    /// is used, and a revision this app does not know is a newer one.
+    pub fn describe(revision: Option<u32>, min_app_version: Option<&str>) -> String {
+        let version = min_app_version
+            .and_then(Version::parse)
+            .or_else(|| revision.and_then(first_app_version));
+        let version = |fallback: String| version.map_or(fallback, |v| format!("Antinomie {v}"));
+        match (Self::of_base(revision, min_app_version), revision) {
+            (Self::Current, Some(revision)) => {
+                format!("for {}", version(format!("revision {revision}")))
             }
-            _ => "no revision (built before revision 9)".into(),
+            (Self::Outdated, Some(revision)) => {
+                format!("for {}, outdated", version(format!("revision {revision}")))
+            }
+            (Self::NeedsNewerApp, revision) => {
+                match (min_app_version.and_then(Version::parse), revision) {
+                    (Some(needed), _) => format!("needs Antinomie {needed} or newer"),
+                    (None, Some(revision)) => match first_app_version(revision) {
+                        Some(needed) => format!("needs Antinomie {needed} or newer"),
+                        None => format!("needs a newer Antinomie (revision {revision})"),
+                    },
+                    (None, None) => "needs a newer Antinomie".into(),
+                }
+            }
+            _ => "built before versioning".into(),
         }
     }
+    /// Like `of`, but a recorded minimum app version newer than this app also
+    /// means the base needs a newer app.
+    pub fn of_base(revision: Option<u32>, min_app_version: Option<&str>) -> Self {
+        if min_app_version
+            .and_then(Version::parse)
+            .is_some_and(|needed| needed > Version::app())
+        {
+            return Self::NeedsNewerApp;
+        }
+        Self::of(revision)
+    }
 }
-/// Refuse a base this app cannot fully interpret.
-pub(crate) fn require_supported_revision(revision: Option<u32>) -> Result<(), String> {
+/// Refuse a base this app cannot fully interpret: one that names a newer
+/// minimum app version, or (older records) a newer kernel revision.
+pub(crate) fn require_supported(
+    revision: Option<u32>,
+    min_app_version: Option<&str>,
+) -> Result<(), String> {
+    if let Some(needed) = min_app_version.and_then(Version::parse)
+        && needed > Version::app()
+    {
+        return Err(format!(
+            "this base needs Antinomie {needed} or newer; this is Antinomie {APP_VERSION}; \
+             update Antinomie first"
+        ));
+    }
     match revision {
         Some(revision) if revision > APP_REVISION => Err(format!(
             "this base was built from patch revision {revision}; this app supports up to \
@@ -479,6 +589,8 @@ pub struct RemoteBase {
     pub min_disk_gib: u32,
     pub total_size: u64,
     pub revision: Option<u32>,
+    pub min_app_version: Option<String>,
+    pub built_with: Option<String>,
 }
 
 /// Progress of the single active remote base download.
@@ -497,10 +609,15 @@ pub struct DownloadStatus {
 pub struct BuildStatus {
     pub profile: String,
     pub label: String,
-    /// Current step label (`kernel`, `image`) or `done`.
+    /// Where the build runs (never `Automatic` once started).
+    pub mode: crate::build::BuildMode,
+    /// Current stage: `prepare`, `builder`, `source`, `kernel`, `image`,
+    /// `install` or `done`.
     pub stage: String,
     /// Bounded tail of the combined build output.
     pub log: Vec<String>,
+    /// Full build log, kept after the build.
+    pub log_path: Option<PathBuf>,
     pub finished: bool,
     pub error: Option<String>,
 }
@@ -517,6 +634,8 @@ impl From<&crate::distribution::CatalogBase> for RemoteBase {
             min_disk_gib: base.min_disk_gib,
             total_size: base.total_size,
             revision: base.antinomie_revision,
+            min_app_version: base.min_app_version.clone(),
+            built_with: base.built_with.clone(),
         }
     }
 }
@@ -606,10 +725,12 @@ pub enum Command {
     DownloadBase {
         identity: String,
     },
-    /// Build a base locally (host Linux) from the configured workspace.
+    /// Build a base with the app's kit, natively or in the QEMU builder VM.
     BuildBase {
-        profile: String,
+        request: crate::build::BuildRequest,
     },
+    /// Cancel the running base build.
+    CancelBuild,
     /// Delete an installed base; blocked while any VM references it.
     DeleteBase {
         identity: String,
@@ -639,7 +760,6 @@ pub enum Command {
         bundle_dir: PathBuf,
         capture_quota_size: u64,
         shutdown_timeout_secs: u64,
-        build_workspace: Option<PathBuf>,
     },
     Upload {
         source: PathBuf,
@@ -925,10 +1045,72 @@ mod tests {
             RevisionStatus::of(Some(APP_REVISION + 1)),
             RevisionStatus::NeedsNewerApp
         );
-        assert!(require_supported_revision(None).is_ok());
-        assert!(require_supported_revision(Some(APP_REVISION)).is_ok());
-        let error = require_supported_revision(Some(APP_REVISION + 1)).unwrap_err();
+        assert!(require_supported(None, None).is_ok());
+        assert!(require_supported(Some(APP_REVISION), Some(APP_VERSION)).is_ok());
+        let error = require_supported(Some(APP_REVISION + 1), None).unwrap_err();
         assert!(error.contains("update Antinomie"), "{error}");
+        let app = Version::app();
+        let newer = Version(app.0, app.1 + 1, 0).to_string();
+        let error = require_supported(Some(APP_REVISION), Some(&newer)).unwrap_err();
+        assert!(
+            error.contains(&format!("needs Antinomie {newer}")),
+            "{error}"
+        );
+        assert_eq!(
+            RevisionStatus::of_base(Some(APP_REVISION), Some(&newer)),
+            RevisionStatus::NeedsNewerApp
+        );
+    }
+    #[test]
+    fn versions_parse_compare_and_describe_bases() {
+        assert_eq!(Version::parse("0.1.0"), Some(Version(0, 1, 0)));
+        assert_eq!(Version::parse("1.10.2"), Some(Version(1, 10, 2)));
+        for bad in [
+            "", "1", "1.2", "1.2.3.4", "01.2.3", "1.2.x", "v1.2.3", "1.2.-3",
+        ] {
+            assert_eq!(Version::parse(bad), None, "{bad}");
+        }
+        assert!(Version(0, 10, 0) > Version(0, 9, 9));
+        assert!(Version(1, 0, 0) > Version(0, 99, 99));
+        assert_eq!(Version::app().to_string(), APP_VERSION);
+        let current = first_app_version(APP_REVISION).unwrap().to_string();
+        assert_eq!(
+            RevisionStatus::describe(Some(APP_REVISION), None),
+            format!("for Antinomie {current}")
+        );
+        assert_eq!(
+            RevisionStatus::describe(Some(APP_REVISION + 1), None),
+            format!("needs a newer Antinomie (revision {})", APP_REVISION + 1)
+        );
+        assert_eq!(
+            RevisionStatus::describe(Some(APP_REVISION + 1), Some("9.0.0")),
+            "needs Antinomie 9.0.0 or newer"
+        );
+        assert_eq!(
+            RevisionStatus::describe(None, None),
+            "built before versioning"
+        );
+    }
+    #[test]
+    fn revision_changes_only_with_feature_or_major_releases() {
+        let history = revision_history();
+        assert!(!history.is_empty());
+        for pair in history.windows(2) {
+            assert!(pair[1].0 > pair[0].0 && pair[1].1 > pair[0].1, "{pair:?}");
+        }
+        for (revision, version) in &history {
+            // A revision ships with x.y.0, never with a fix release.
+            assert_eq!(version.2, 0, "revision {revision} introduced by {version}");
+        }
+        let (latest, introduced) = *history.last().unwrap();
+        assert_eq!(
+            latest, APP_REVISION,
+            "add ANTC_REVISION {APP_REVISION} to protocol/revisions.json with its release"
+        );
+        assert!(
+            introduced <= Version::app(),
+            "revision {latest} is recorded for {introduced}, newer than this app ({APP_VERSION})"
+        );
     }
     #[test]
     fn lifecycle_cannot_replace_syscall_entry_or_invent_missing_entry() {

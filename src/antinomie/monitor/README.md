@@ -111,19 +111,26 @@ failure and resource limits remain explicit report states.
 
 ## Debian desktop base
 
-The Debian builder additionally requires `virt-builder`, `guestfish`,
-`virt-customize`, `openssl`, and a usable libguestfs appliance. It runs without
-host root, authenticates the template catalog and Debian apt repositories, and
-preserves package ownership, attributes and license files. Build-time Internet
-access does not enable networking in created VMs.
+**Build base…** builds this base without a repository checkout (ANT-T0028).
+Natively it needs the kernel tool suite plus `mmdebstrap`, `uidmap` (and a
+subordinate UID range), `dwarves`, e2fsprogs 1.47.1 or newer and `qemu-utils`;
+the QEMU builder needs only QEMU and curl and downloads Debian's cloud image
+once. Either way the root filesystem is bootstrapped with `mmdebstrap` from
+authenticated Debian repositories (trixie, trixie-updates, trixie-security),
+runs without host root, and preserves package ownership, extended attributes
+and license files. Build-time Internet access does not enable networking in
+created VMs. From a checkout the same orchestrator runs directly:
 
 ```bash
-scripts/build-debian-image.py --kernel work/monitor-build/arch/x86/boot/bzImage
+printf '{"format":1,"profile":"debian-xfce","options":{}}\n' > job.json
+scripts/build-base.py --job job.json --inputs src/debian --work work/build \
+    --output work/debian-xfce-base
 work/monitor-host/antinomie-monitor --install-base work/debian-xfce-base
-scripts/run-monitor.sh
 ```
 
 Alternatively use **File > Import base** with the completed bundle directory.
+Creating a Debian VM still provisions its account with `virt-customize`
+(libguestfs).
 In **New VM**, choose **Debian 13 (Xfce)**, then enter a username, password and
 confirmation. Minimum resources are 2048 MiB RAM and 16 GiB disk; the RAM
 ceiling is 8192 MiB. Creation provisions the disk offline and

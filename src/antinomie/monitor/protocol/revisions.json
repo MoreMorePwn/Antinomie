@@ -1,0 +1,7 @@
+{
+  "format": 1,
+  "comment": "Guest contract revisions (ANTC_REVISION) and the first Antinomie version that shipped each. A revision changes only with a minor or major release (x.y.0); bases record the matching version as min_app_version. Bases from before revision 9 carry no revision.",
+  "revisions": [
+    {"revision": 9, "first_app_version": "0.1.0"}
+  ]
+}

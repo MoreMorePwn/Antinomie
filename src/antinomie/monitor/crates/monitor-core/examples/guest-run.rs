@@ -14,7 +14,8 @@
 //!  "uploads": [{"source": "work/probe", "destination": "/tmp/probe"}],
 //!  "runs": [{"path": "/tmp/probe", "args": [], "uid": 1000, "gid": 1000,
 //!            "release_after": "READY", "release": "ping\n",
-//!            "done": "NATIVE PASS", "timeout": 120}]}
+//!            "done": "NATIVE PASS", "timeout": 120}],
+//!  "screenshot": "/tmp/screen.png", "screenshot_after": 20}
 //! ```
 use antinomie_monitor_core::{
     Backend, BackendOptions, Command, ExecRequest, GuestCredentials, Notification, Snapshot,
@@ -379,6 +380,14 @@ fn run() -> Result<Value, String> {
             "terminal": String::from_utf8_lossy(session.terminals.get(&run_id).map_or(&[][..], |d| d)),
         }));
     }
+    let screenshot = match text(&plan, "screenshot") {
+        Some(path) => {
+            // Give the display manager time to show its greeter.
+            thread::sleep(Duration::from_secs(number(&plan, "screenshot_after", 20)));
+            Some(screendump(&session.snapshot, &path)?)
+        }
+        None => None,
+    };
     let recorder = session.command(Command::RecorderStats, 20)?;
     let health = session.snapshot.health.clone();
     session.command(Command::Stop, 60)?;
@@ -386,8 +395,53 @@ fn run() -> Result<Value, String> {
     session.backend.shutdown()?;
     Ok(
         json!({"vm_id": vm_id, "base": base, "boot_seconds": boot_seconds,
-              "runs": runs, "recorder": recorder, "health": health}),
+              "runs": runs, "recorder": recorder, "health": health,
+              "screenshot": screenshot}),
     )
+}
+
+/// Save the VM screen as PNG through QEMU's QMP socket, which sits next to
+/// the serial log in the VM's runtime directory.
+fn screendump(snapshot: &Snapshot, path: &str) -> Result<String, String> {
+    use std::io::{BufRead, BufReader, Write};
+    let socket = snapshot
+        .serial_log
+        .as_ref()
+        .and_then(|log| log.parent())
+        .map(|dir| dir.join("qmp.sock"))
+        .ok_or("no VM runtime directory for the screenshot")?;
+    let stream = std::os::unix::net::UnixStream::connect(&socket)
+        .map_err(|e| format!("QMP {}: {e}", socket.display()))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(20)))
+        .map_err(|e| e.to_string())?;
+    let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
+    let mut greeting = String::new();
+    reader.read_line(&mut greeting).map_err(|e| e.to_string())?;
+    let mut writer = stream;
+    let mut reply = |request: &str| -> Result<Value, String> {
+        writer
+            .write_all(request.as_bytes())
+            .map_err(|e| format!("QMP write: {e}"))?;
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).map_err(|e| e.to_string())? == 0 {
+                return Err("QMP closed".into());
+            }
+            let value: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+            if value.get("return").is_some() || value.get("error").is_some() {
+                return Ok(value);
+            }
+        }
+    };
+    reply("{\"execute\":\"qmp_capabilities\"}\n")?;
+    let request = json!({"execute": "screendump",
+                         "arguments": {"filename": path, "format": "png"}});
+    let result = reply(&format!("{request}\n"))?;
+    if let Some(error) = result.get("error") {
+        return Err(format!("screendump: {error}"));
+    }
+    Ok(path.to_string())
 }
 
 fn main() {

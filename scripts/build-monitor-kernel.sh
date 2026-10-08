@@ -4,6 +4,12 @@
 #
 #   usage: scripts/build-monitor-kernel.sh [minimal|debian]
 #
+# Environment: ANTINOMIE_SOURCE_TREE, ANTINOMIE_BUILD_TREE, ANTINOMIE_DEBIAN_CONFIG
+# and ANTINOMIE_SERIES_DIR replace the repository work-tree defaults.
+# ANTINOMIE_SOURCE_PREPARED=1 states that the caller (scripts/build-base.py)
+# created the source tree itself from the pinned inputs and ANTINOMIE_SERIES_DIR,
+# so the author-tree git check is skipped.
+#
 # minimal (default): upstream x86_64_defconfig plus the symbols below, all
 #   built in; output in work/monitor-build. Used by the BusyBox base.
 # debian: the pinned Debian amd64 configuration (debian/config/config, then
@@ -14,39 +20,49 @@
 set -euo pipefail
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 profile=${1:-minimal}
-source_tree="$repo/work/debian-6.12.94-1-trixie/core"
-debian_config="$repo/work/debian-6.12.94-1-trixie/linux-6.12.94/debian/config"
+source_tree=${ANTINOMIE_SOURCE_TREE:-"$repo/work/debian-6.12.94-1-trixie/core"}
+debian_config=${ANTINOMIE_DEBIAN_CONFIG:-"$repo/work/debian-6.12.94-1-trixie/linux-6.12.94/debian/config"}
+series_dir=${ANTINOMIE_SERIES_DIR:-"$repo/src/antinomie/core/6.12"}
+prepared=${ANTINOMIE_SOURCE_PREPARED:-0}
 jobs=${JOBS:-8}
 case "$profile" in
-    minimal) build_tree="$repo/work/monitor-build" ;;
-    debian) build_tree="$repo/work/monitor-build-debian" ;;
+    minimal) build_tree=${ANTINOMIE_BUILD_TREE:-"$repo/work/monitor-build"} ;;
+    debian) build_tree=${ANTINOMIE_BUILD_TREE:-"$repo/work/monitor-build-debian"} ;;
     *) echo "usage: $0 [minimal|debian]" >&2; exit 2 ;;
 esac
 if [[ ! -f "$source_tree/kernel/antinomie/recorder.c" ]]; then
     echo "Guest recorder source missing from author tree" >&2
     exit 1
 fi
-bash "$repo/tests/monitor/check-contracts.sh"
+if [[ $prepared != 1 ]]; then
+    bash "$repo/tests/monitor/check-contracts.sh"
+fi
 mkdir -p "$build_tree"
 config="$source_tree/scripts/config"
 
 # The kernel states its source as CONFIG_ANTINOMIE_SOURCE_ID
 # "<revision>:<series sha256>": the contract revision from the control header
 # and a hash of the committed core patch list. Only a clean author tree that is
-# exactly the pinned baseline plus that series gets one; ANTINOMIE_DEV_BUILD=1
-# builds an unversioned development kernel instead.
-series_dir="$repo/src/antinomie/core/6.12"
+# exactly the pinned baseline plus that series, or a tree build-base.py created
+# from them, gets one; ANTINOMIE_DEV_BUILD=1 builds an unversioned development
+# kernel instead.
 revision=$(awk '$1 == "#define" && $2 == "ANTC_REVISION" { print $3 }' \
     "$source_tree/kernel/antinomie/control_wire.h")
 [[ $revision =~ ^[1-9][0-9]*$ ]] || { echo "ANTC_REVISION missing from control_wire.h" >&2; exit 1; }
 source_id=""
+shopt -s nullglob
+patches=("$series_dir"/*.patch)
+shopt -u nullglob
 if [[ ${ANTINOMIE_DEV_BUILD:-0} == 1 ]]; then
     echo "development build: source not verified, kernel is unversioned" >&2
+elif [[ ${#patches[@]} -eq 0 ]]; then
+    echo "no core patches in $series_dir" >&2
+    exit 1
+elif [[ $prepared == 1 ]]; then
+    series=$(cd "$series_dir" && sha256sum -- *.patch | sha256sum | cut -d' ' -f1)
+    source_id="$revision:$series"
+    echo "kernel source id $source_id (prepared tree)" >&2
 else
-    shopt -s nullglob
-    patches=("$series_dir"/*.patch)
-    shopt -u nullglob
-    [[ ${#patches[@]} -gt 0 ]] || { echo "no core patches in $series_dir" >&2; exit 1; }
     if [[ -n $(git -C "$source_tree" status --porcelain --untracked-files=no) ]]; then
         echo "author tree has uncommitted changes; commit and export them with" \
             "scripts/commit.sh, or set ANTINOMIE_DEV_BUILD=1" >&2

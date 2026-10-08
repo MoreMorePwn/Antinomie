@@ -374,6 +374,7 @@ mod tests {
             Some(WaitStatus::Exited { code: 7 })
         );
         drop(run);
+        crate::storage::settle_json_under(&directory);
         std::fs::remove_dir_all(directory).unwrap();
     }
     #[test]
@@ -410,6 +411,7 @@ mod tests {
             "2 terminal read replies never arrived; consumed output may be missing"
         );
         drop(run);
+        crate::storage::settle_json_under(&directory);
         std::fs::remove_dir_all(directory).unwrap();
     }
     #[test]
@@ -468,6 +470,7 @@ mod tests {
             journal_len
         );
         assert_eq!(recording.terminal_replay(0, 3).unwrap().records.len(), 3);
+        crate::storage::settle_json_under(&directory);
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

@@ -56,6 +56,10 @@ pub struct CatalogBase {
     pub antinomie_revision: Option<u32>,
     /// Patch-series SHA-256, present together with the revision.
     pub antinomie_source: Option<String>,
+    /// Antinomie version that built the base.
+    pub built_with: Option<String>,
+    /// Oldest Antinomie version that can run the base.
+    pub min_app_version: Option<String>,
     pub files: Vec<CatalogFile>,
 }
 
@@ -116,6 +120,17 @@ pub fn validate_catalog(catalog: &Catalog) -> Result<(), String> {
             _ => {
                 return Err(format!(
                     "base {} has an invalid Antinomie revision or source",
+                    base.identity
+                ));
+            }
+        }
+        for version in [&base.built_with, &base.min_app_version]
+            .into_iter()
+            .flatten()
+        {
+            if crate::api::Version::parse(version).is_none() {
+                return Err(format!(
+                    "base {} has an invalid Antinomie version {version:?}",
                     base.identity
                 ));
             }
@@ -198,13 +213,30 @@ fn sha256_file(path: &Path) -> Result<String, String> {
 /// Fetch a URL to `destination` with retries, following redirects. `curl -C -`
 /// resumes an existing partial file. Returns the child so callers can poll
 /// progress; the caller must wait on it.
-fn spawn_download(
+pub(crate) fn spawn_download(
     curl: &Path,
     url: &str,
     destination: &Path,
 ) -> Result<std::process::Child, String> {
     ProcessCommand::new(curl)
-        .args(["-fL", "--retry", "3", "--retry-delay", "2", "-C", "-", "-o"])
+        // A stalled mirror (under 1 KiB/s for a minute) fails over to a retry.
+        .args([
+            "-fL",
+            "--retry",
+            "3",
+            "--retry-delay",
+            "2",
+            "--retry-all-errors",
+            "--connect-timeout",
+            "30",
+            "--speed-limit",
+            "1024",
+            "--speed-time",
+            "60",
+            "-C",
+            "-",
+            "-o",
+        ])
         .arg(destination)
         .arg(url)
         .stdin(Stdio::null())
@@ -487,11 +519,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed.bases[0].antinomie_revision, Some(9));
+        let versioned =
+            parse_catalog(catalog(r#""min_app_version":"0.2.0","built_with":"0.2.1","#).as_bytes())
+                .unwrap();
+        assert_eq!(versioned.bases[0].min_app_version.as_deref(), Some("0.2.0"));
         for extra in [
             r#""antinomie_revision":9,"#.to_string(),
             format!(r#""antinomie_source":"{source}","#),
             format!(r#""antinomie_revision":0,"antinomie_source":"{source}","#),
             r#""antinomie_revision":9,"antinomie_source":"xyz","#.to_string(),
+            r#""min_app_version":"0.2","#.to_string(),
+            r#""built_with":"v0.1.0","#.to_string(),
         ] {
             assert!(
                 parse_catalog(catalog(&extra).as_bytes()).is_err(),

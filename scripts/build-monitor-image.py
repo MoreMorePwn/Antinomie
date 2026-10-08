@@ -98,8 +98,40 @@ def source_identity(kernel):
     return int(match[1]), match[2]
 
 
-def stamp_revision(manifest, kernel, allow_unversioned):
-    """Record the patch revision and series the kernel was built from."""
+REVISIONS = REPO / "src/antinomie/monitor/protocol/revisions.json"
+VERSION = re.compile(r"(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})")
+
+
+def first_app_version(revision):
+    """The first Antinomie version that shipped a guest contract revision."""
+    for entry in json.loads(REVISIONS.read_text())["revisions"]:
+        if entry["revision"] == revision:
+            return entry["first_app_version"]
+    raise RuntimeError(f"revision {revision} is missing from {REVISIONS.name}; "
+                       "add it with the release that introduces it")
+
+
+def workspace_version():
+    """The app version of a repository checkout, if this is one."""
+    cargo = REPO / "src/antinomie/monitor/Cargo.toml"
+    if not cargo.is_file():
+        return None
+    match = re.search(r'^\[workspace\.package\][^\[]*?^version = "([^"]+)"', cargo.read_text(),
+                      re.M | re.S)
+    return match[1] if match else None
+
+
+def valid_name(name):
+    """A base's display name: up to 64 printable characters (empty: automatic)."""
+    name = name.strip()
+    if len(name) > 64 or any(not character.isprintable() for character in name):
+        raise RuntimeError("base name must be at most 64 printable characters")
+    return name
+
+
+def stamp_revision(manifest, kernel, allow_unversioned, app_version=None):
+    """Record the patch revision and series the kernel was built from, the
+    oldest app version that can run it and the app version that built it."""
     identity = source_identity(kernel)
     if identity is None:
         if not allow_unversioned:
@@ -107,6 +139,12 @@ def stamp_revision(manifest, kernel, allow_unversioned):
                                "pass --allow-unversioned to build an unversioned base")
         return
     manifest["antinomie_revision"], manifest["antinomie_source"] = identity
+    manifest["min_app_version"] = first_app_version(identity[0])
+    built_with = app_version or workspace_version()
+    if built_with is not None:
+        if not VERSION.fullmatch(built_with):
+            raise RuntimeError(f"invalid app version {built_with!r}")
+        manifest["built_with"] = built_with
 
 
 def fixed_display_config(config, kernel=None):
@@ -147,7 +185,17 @@ def write_file(root, path, content, mode=0o644):
     target.chmod(mode)
 
 
-def base_tree(root):
+HOSTNAME = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+
+
+def valid_hostname(name):
+    """One lowercase RFC 1123 label, as the installer's hostname question takes."""
+    if not HOSTNAME.fullmatch(name):
+        raise RuntimeError(f"invalid hostname {name!r}: use 1-63 of a-z, 0-9 and '-'")
+    return name
+
+
+def base_tree(root, hostname="localhost"):
     for directory in ("bin", "sbin", "usr/bin", "usr/sbin", "etc", "dev", "proc", "sys", "run", "tmp", "root", "home/analyst", "var/log"):
         (root / directory).mkdir(parents=True, exist_ok=True)
     (root / "tmp").chmod(0o1777)
@@ -160,7 +208,7 @@ def base_tree(root):
     (root / "sbin/init").symlink_to("../bin/busybox")
     write_file(root, "/etc/passwd", "root:x:0:0:root:/root:/bin/sh\nanalyst:x:1000:1000:Analyst:/home/analyst:/bin/sh\n")
     write_file(root, "/etc/group", "root:x:0:\nanalyst:x:1000:\n")
-    write_file(root, "/etc/hostname", "localhost\n")
+    write_file(root, "/etc/hostname", hostname + "\n")
     write_file(root, "/etc/resolv.conf", "nameserver 10.0.2.3\n")
     write_file(root, "/etc/inittab", "::sysinit:/etc/init.d/rcS\ntty1::respawn:/bin/getty -n -l /bin/sh 0 tty1\nttyS0::respawn:/bin/getty -n -l /bin/sh 115200 ttyS0\n::ctrlaltdel:/bin/reboot\n::shutdown:/bin/sync\n::shutdown:/bin/umount -a -r\n")
     write_file(root, "/etc/init.d/rcS", """#!/bin/sh
@@ -170,7 +218,7 @@ mount -t sysfs sysfs /sys
 mkdir -p /dev/pts /run
 mount -t devpts devpts /dev/pts
 chmod 1777 /tmp
-hostname localhost
+hostname "$(cat /etc/hostname)"
 ip link set lo up
 if ip link show eth0 >/dev/null 2>&1; then
     ip link set eth0 up
@@ -216,7 +264,17 @@ def main():
     parser.add_argument("--base-size-mib", type=int, default=256)
     parser.add_argument("--allow-unversioned", action="store_true",
                         help="accept a development kernel without a source id")
+    parser.add_argument("--hostname", default="localhost")
+    parser.add_argument("--app-version", help="Antinomie version building this base")
+    parser.add_argument("--name", default="", help="display name of the base")
+    parser.add_argument("--work", type=Path, default=REPO / "work",
+                        help="directory for temporary build files")
     args = parser.parse_args()
+    try:
+        valid_hostname(args.hostname)
+        name = valid_name(args.name)
+    except RuntimeError as error:
+        parser.error(str(error))
     fixed_display = fixed_display_config(args.kernel_config, args.kernel)
     try:
         stamp_revision({}, args.kernel, args.allow_unversioned)
@@ -225,11 +283,12 @@ def main():
     if not args.kernel.is_file() or args.base_size_mib < 128:
         parser.error("existing kernel and base size of at least 128 MiB required")
     args.output.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="monitor-image-", dir=REPO / "work") as temporary:
+    args.work.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="monitor-image-", dir=args.work) as temporary:
         staging = Path(temporary)
         root = staging / "root"
         root.mkdir()
-        base_tree(root)
+        base_tree(root, args.hostname)
         raw = staging / "base.raw"
         with raw.open("wb") as image:
             image.truncate(args.base_size_mib << 20)
@@ -259,7 +318,9 @@ def main():
                 "kernel_append": "console=tty0 console=ttyS0 panic=-1",
                 "sha256": {name: checksum(args.output / name)
                            for name in ("kernel", "initrd.gz", "base.qcow2")}}
-    stamp_revision(manifest, args.output / "kernel", args.allow_unversioned)
+    stamp_revision(manifest, args.output / "kernel", args.allow_unversioned, args.app_version)
+    if name:
+        manifest["name"] = name
     if fixed_display:
         manifest["fixed_display"] = True
         shutil.copy2(args.kernel_config, args.output / "kernel.config")
