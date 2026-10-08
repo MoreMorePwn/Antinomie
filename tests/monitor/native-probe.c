@@ -169,9 +169,25 @@ static long report(void)
                             pending.observed);
 }
 
+/* syscall() is variadic: an int literal fills only half of a 64-bit slot, and
+ * arguments past the sixth register are on the stack, so the other half is
+ * stale. Every argument is widened to long before the call.
+ */
+#define ANT_L(x) ((long)(x))
+#define ANT_LONG1(a) ANT_L(a)
+#define ANT_LONG2(a, b) ANT_L(a), ANT_L(b)
+#define ANT_LONG3(a, b, c) ANT_L(a), ANT_L(b), ANT_L(c)
+#define ANT_LONG4(a, b, c, d) ANT_L(a), ANT_L(b), ANT_L(c), ANT_L(d)
+#define ANT_LONG5(a, b, c, d, e) ANT_L(a), ANT_L(b), ANT_L(c), ANT_L(d), ANT_L(e)
+#define ANT_LONG6(a, b, c, d, e, f) ANT_L(a), ANT_L(b), ANT_L(c), ANT_L(d), ANT_L(e), ANT_L(f)
+#define ANT_COUNT(...) ANT_COUNT_(__VA_ARGS__, 6, 5, 4, 3, 2, 1, 0)
+#define ANT_COUNT_(a, b, c, d, e, f, n, ...) n
+#define ANT_JOIN(a, b) ANT_JOIN_(a, b)
+#define ANT_JOIN_(a, b) a##b
+#define ANT_LONGS(...) ANT_JOIN(ANT_LONG, ANT_COUNT(__VA_ARGS__))(__VA_ARGS__)
 #define OBSERVE(name, expected, ...) ({ \
     uint64_t ant_case_internal_start = monotonic_ns(); \
-    long ant_case_internal_result = syscall(SYS_##name, __VA_ARGS__); \
+    long ant_case_internal_result = syscall(SYS_##name, ANT_LONGS(__VA_ARGS__)); \
     int ant_case_internal_errno = errno; \
     uint64_t ant_case_internal_end = monotonic_ns(); \
     errno = ant_case_internal_errno; \
@@ -182,7 +198,7 @@ static long report(void)
     pending.label = case_label; pending.name = #sys; pending.nr = SYS_##sys; \
     pending.expected = expected_errno; pending.used = 0; pending.observed[0] = 0; \
     pending.started_ns = monotonic_ns(); \
-    pending.value = syscall(SYS_##sys, __VA_ARGS__); \
+    pending.value = syscall(SYS_##sys, ANT_LONGS(__VA_ARGS__)); \
     pending.error = errno; \
     pending.finished_ns = monotonic_ns(); \
     pending.value; \
@@ -1727,11 +1743,11 @@ static int async_stress_mode(void)
         sqe->addr = (uintptr_t)&ten; sqe->len = 1;
         __atomic_store_n(r.sq_tail, *r.sq_tail + 1, __ATOMIC_RELEASE);
     }
-    require(syscall(SYS_io_uring_enter, r.fd, 300, 0, 0, NULL, 0) == 300, "stress submit");
+    require(syscall(SYS_io_uring_enter, (long)r.fd, 300L, 0L, 0L, NULL, 0L) == 300, "stress submit");
     sqe = ring_sqe(&r, IORING_OP_ASYNC_CANCEL, 0x2f57ffffffffffffULL);
     sqe->cancel_flags = IORING_ASYNC_CANCEL_ANY;
     __atomic_store_n(r.sq_tail, *r.sq_tail + 1, __ATOMIC_RELEASE);
-    require(syscall(SYS_io_uring_enter, r.fd, 1, 301, IORING_ENTER_GETEVENTS, NULL, 0) == 1,
+    require(syscall(SYS_io_uring_enter, (long)r.fd, 1L, 301L, (long)IORING_ENTER_GETEVENTS, NULL, 0L) == 1,
             "stress cancel");
     while (*r.cq_head != __atomic_load_n(r.cq_tail, __ATOMIC_ACQUIRE)) {
         __atomic_store_n(r.cq_head, *r.cq_head + 1, __ATOMIC_RELEASE);

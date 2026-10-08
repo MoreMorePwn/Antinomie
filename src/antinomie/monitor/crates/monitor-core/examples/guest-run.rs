@@ -10,7 +10,7 @@
 //!  "import": "work/bundle",
 //!  "vm": {"name": "Debian", "cpus": 4, "ram_mib": 4096, "disk_gib": 20,
 //!         "username": "analyst", "password": "analyst1"},
-//!  "boot_timeout": 240,
+//!  "recreate": false, "boot_timeout": 240,
 //!  "uploads": [{"source": "work/probe", "destination": "/tmp/probe"}],
 //!  "runs": [{"path": "/tmp/probe", "args": [], "uid": 1000, "gid": 1000,
 //!            "release_after": "READY", "release": "ping\n",
@@ -82,8 +82,10 @@ impl Session {
             match self.command(make(), 60) {
                 Ok(message) => return Ok(message),
                 Err(error) if Instant::now() < deadline => {
+                    // Let a busy command worker drain before asking again.
                     eprintln!("guest not ready yet: {error}");
-                    thread::sleep(Duration::from_secs(2));
+                    thread::sleep(Duration::from_secs(5));
+                    self.pump();
                 }
                 Err(error) => return Err(error),
             }
@@ -210,12 +212,27 @@ fn run() -> Result<Value, String> {
 
     let vm_spec = plan.get("vm").cloned().unwrap_or(Value::Null);
     let name = text(&vm_spec, "name").ok_or("plan.vm.name is required")?;
-    let existing = session
+    let mut existing = session
         .snapshot
         .vms
         .iter()
         .find(|vm| vm.name == name)
         .map(|vm| vm.id.clone());
+    // "recreate": replace an existing VM of that name, with its run history.
+    if let Some(id) = existing.take_if(|_| {
+        plan.get("recreate")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }) {
+        session.command(
+            Command::Delete {
+                vm_id: id.clone(),
+                confirmed: true,
+            },
+            120,
+        )?;
+        session.settle(|s| s.vms.iter().all(|vm| vm.id != id), 30)?;
+    }
     let vm_id = match existing {
         Some(id) => id,
         None => {
@@ -239,7 +256,7 @@ fn run() -> Result<Value, String> {
                         vm: config,
                         credentials: GuestCredentials::new(username, password)?,
                     },
-                    300,
+                    900,
                 )?,
                 _ => session.command(Command::Create(config), 60)?,
             };
@@ -258,7 +275,8 @@ fn run() -> Result<Value, String> {
         Command::Start {
             vm_id: vm_id.clone(),
         },
-        60,
+        // Start verifies the installed base's hashes; a large base takes minutes.
+        900,
     )?;
     let boot = number(&plan, "boot_timeout", 60);
     let started = Instant::now();
