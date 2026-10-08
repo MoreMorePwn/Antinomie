@@ -6653,10 +6653,37 @@ mod tests {
         struct QaApp {
             app: MonitorApp,
             deadline: Instant,
+            updates: usize,
+            held_updates: usize,
+            releases: usize,
+            reported: bool,
         }
         impl eframe::App for QaApp {
             fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+                self.updates += 1;
+                ctx.input(|input| {
+                    self.held_updates += usize::from(input.pointer.primary_down());
+                    self.releases += input
+                        .events
+                        .iter()
+                        .filter(|event| {
+                            matches!(
+                                event,
+                                egui::Event::PointerButton {
+                                    button: egui::PointerButton::Primary,
+                                    pressed: false,
+                                    ..
+                                }
+                            )
+                        })
+                        .count();
+                });
                 if Instant::now() >= self.deadline {
+                    if !self.reported {
+                        eprintln!("native section QA: root_updates={} held_updates={} root_primary_releases={}",
+                            self.updates, self.held_updates, self.releases);
+                        self.reported = true;
+                    }
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
                 eframe::App::update(&mut self.app, ctx, frame);
@@ -6708,6 +6735,10 @@ mod tests {
                 Ok(Box::new(QaApp {
                     app,
                     deadline: Instant::now() + Duration::from_secs(seconds),
+                    updates: 0,
+                    held_updates: 0,
+                    releases: 0,
+                    reported: false,
                 }))
             }),
         )
