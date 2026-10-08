@@ -11,6 +11,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     fs::{self, File},
     io::Read,
+    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -780,6 +781,129 @@ struct BuildJob {
     cancel: Arc<AtomicBool>,
     done: Receiver<Result<(), String>>,
 }
+/// One base build on its worker thread: kit, inputs, then native or QEMU.
+struct BuildRun {
+    kind: build::Kind,
+    profile: &'static str,
+    mode: build::BuildMode,
+    options: build::BuildOptions,
+    data_dir: PathBuf,
+    curl: PathBuf,
+    output: PathBuf,
+    log_path: PathBuf,
+    stage: Arc<Mutex<String>>,
+    log: Arc<Mutex<VecDeque<String>>>,
+    cancel: Arc<AtomicBool>,
+}
+impl BuildRun {
+    fn run(&self) -> Result<(), String> {
+        let mut file = File::create(&self.log_path)
+            .map_err(|e| format!("{}: {e}", self.log_path.display()))?;
+        let mut line = |text: &str| {
+            use std::io::Write;
+            let _ = writeln!(file, "{text}");
+            // The orchestrator's own "done" precedes the install; only the
+            // worker's completion marks the build done.
+            if let Some(stage) = text.strip_prefix("::stage ")
+                && stage.trim() != "done"
+                && let Ok(mut guard) = self.stage.lock()
+            {
+                *guard = stage.trim().to_string();
+            }
+            if let Ok(mut guard) = self.log.lock() {
+                if guard.len() >= 400 {
+                    guard.pop_front();
+                }
+                guard.push_back(text.to_string());
+            }
+        };
+        let result = self.steps(&mut line);
+        if let Err(error) = &result {
+            line(&format!("::error {error}"));
+        }
+        result.map_err(|error| format!("{error} (log: {})", self.log_path.display()))
+    }
+    fn steps(&self, line: &mut impl FnMut(&str)) -> Result<(), String> {
+        let root = self.data_dir.join("build");
+        storage::private_dir(&root).map_err(|e| e.to_string())?;
+        line("::stage prepare");
+        let kit = crate::kit::materialize(&root)?;
+        line(&format!("build kit {}", kit.display()));
+        let mut reported = 0;
+        let orig = crate::kit::fetch_orig(
+            &self.curl,
+            &root.join("inputs"),
+            &self.cancel,
+            |received, total| {
+                let percent = (received * 100).checked_div(total).unwrap_or(0);
+                if percent >= reported + 10 {
+                    reported = percent - percent % 10;
+                    line(&format!("kernel source download {reported}%"));
+                }
+            },
+        )?;
+        let job = serde_json::json!({
+            "format": 1,
+            "profile": self.profile,
+            "options": self.options.job_options(self.kind),
+        });
+        let kernel_cache = crate::kit::kernel_cache(&root, build::kernel_profile(self.kind))?;
+        if kernel_cache.is_file() {
+            line("the kernel for this revision is cached; only the image is built");
+        }
+        match self.mode {
+            build::BuildMode::Qemu => {
+                line("::stage builder");
+                let output = &self.output;
+                fs::create_dir_all(output).map_err(|e| format!("{}: {e}", output.display()))?;
+                let qemu =
+                    build::which("qemu-system-x86_64").ok_or("qemu-system-x86_64 not found")?;
+                let qemu_img = build::which("qemu-img").ok_or("qemu-img not found")?;
+                crate::builder_vm::QemuBuild {
+                    curl: &self.curl,
+                    qemu: &qemu,
+                    qemu_img: &qemu_img,
+                    root: &root,
+                    kit: &kit,
+                    orig: &orig,
+                    job: &job,
+                    mirror: &self.options.mirror,
+                    proxy: &self.options.proxy,
+                    kernel_cache: &kernel_cache,
+                    output,
+                    cancel: &self.cancel,
+                }
+                .run(&mut *line)
+            }
+            _ => {
+                let job_path = root.join("job.json");
+                fs::write(
+                    &job_path,
+                    serde_json::to_vec_pretty(&job).map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| e.to_string())?;
+                let python = build::which("python3").ok_or("python3 not found")?;
+                let mut command = std::process::Command::new(python);
+                command
+                    .arg(kit.join("scripts/build-base.py"))
+                    .arg("--job")
+                    .arg(&job_path)
+                    .arg("--inputs")
+                    .arg(root.join("inputs"))
+                    .arg("--work")
+                    .arg(root.join("work"))
+                    .arg("--output")
+                    .arg(&self.output)
+                    .arg("--kernel-cache")
+                    .arg(&kernel_cache);
+                build::run_streaming(&mut command, "native build", &self.cancel, &mut *line)
+            }
+        }?;
+        crate::kit::prune_kernel_cache(&kernel_cache);
+        line("::stage install");
+        Ok(())
+    }
+}
 impl Worker {
     fn refresh_locations(&mut self) -> Result<(), String> {
         self.snapshot.bases = crate::locations::installed_bases(&self.options)?;
@@ -1163,89 +1287,49 @@ impl Worker {
                 });
                 Ok("base download started".into())
             }
-            Command::BuildBase { profile } => {
+            Command::BuildBase { request } => {
                 if self.build.is_some() {
                     return Err("a base build is already in progress".into());
                 }
-                let spec = build::profile(&profile).ok_or("unknown build profile")?;
-                let missing = build::missing(spec.kind);
-                if !missing.is_empty() {
-                    let hint = build::install_hint(spec.kind);
-                    return Err(format!(
-                        "missing host tools: {}{}",
-                        missing
-                            .iter()
-                            .map(|tool| tool.tool)
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                        if hint.is_empty() {
-                            String::new()
-                        } else {
-                            format!(" (install with: {hint})")
-                        }
-                    ));
-                }
-                let workspace = self
-                    .options
-                    .build_workspace
-                    .clone()
-                    .ok_or("no build workspace configured; set it in Settings")?;
-                if !workspace.join("scripts").is_dir() {
-                    return Err(format!(
-                        "build workspace {} is not a repository checkout",
-                        workspace.display()
-                    ));
-                }
-                let output = self.options.data_dir.join("builds").join(format!(
-                    "{}-{}",
-                    spec.id,
-                    crate::storage::unique_id()
-                ));
-                let steps = build::plan(&workspace, spec.kind, &output);
-                let stage = Arc::new(Mutex::new("kernel".to_string()));
+                let spec = build::profile(&request.profile).ok_or("unknown build profile")?;
+                request.options.validate(spec.kind)?;
+                let mode = build::resolve_mode(spec.kind, request.mode)?;
+                let id = crate::storage::unique_id();
+                let builds = self.options.data_dir.join("builds");
+                storage::private_dir(&builds).map_err(|e| e.to_string())?;
+                let output = builds.join(format!("{}-{id}", spec.id));
+                let log_path = builds.join(format!("{}-{id}.log", spec.id));
+                let stage = Arc::new(Mutex::new("prepare".to_string()));
                 let log = Arc::new(Mutex::new(VecDeque::<String>::new()));
                 let cancel = Arc::new(AtomicBool::new(false));
                 let (sender, receiver) = mpsc::channel();
-                let worker_stage = stage.clone();
-                let worker_log = log.clone();
-                let worker_cancel = cancel.clone();
+                let job = BuildRun {
+                    kind: spec.kind,
+                    profile: spec.id,
+                    mode,
+                    options: request.options,
+                    data_dir: self.options.data_dir.clone(),
+                    curl: self.options.curl.clone(),
+                    output,
+                    log_path: log_path.clone(),
+                    stage: stage.clone(),
+                    log: log.clone(),
+                    cancel: cancel.clone(),
+                };
                 let options = self.options.clone();
-                let output_thread = output.clone();
                 thread::Builder::new()
                     .name("antinomie-build".into())
                     .spawn(move || {
-                        let mut step_index = 0usize;
-                        let result = build::run(&steps, &workspace, &worker_cancel, |line| {
-                            if line.starts_with("$ ") {
-                                step_index += 1;
-                                let name = match step_index {
-                                    1 => "kernel",
-                                    2 => "image",
-                                    _ => "stage",
-                                };
-                                if let Ok(mut guard) = worker_stage.lock() {
-                                    *guard = name.to_string();
-                                }
-                            }
-                            if let Ok(mut guard) = worker_log.lock() {
-                                if guard.len() >= 200 {
-                                    guard.pop_front();
-                                }
-                                guard.push_back(line.to_string());
-                            }
-                        })
-                        .and_then(|()| {
-                            let bundle = Bundle::load(&output_thread)?;
+                        let output = job.output.clone();
+                        let result = job.run().and_then(|()| {
+                            let bundle = Bundle::load(&output)?;
                             require_supported_revision(bundle.antinomie_revision)?;
                             storage::validate_disk_chain(&options, &bundle.base_disk, None)?;
                             bundle.install(&options)?;
                             Ok(())
                         });
-                        let ok = result.is_ok();
+                        let _ = fs::remove_dir_all(&output);
                         let _ = sender.send(result);
-                        if ok {
-                            let _ = fs::remove_dir_all(&output_thread);
-                        }
                     })
                     .map_err(|e| e.to_string())?;
                 self.build = Some(BuildJob {
@@ -1258,12 +1342,22 @@ impl Worker {
                 self.snapshot.build = Some(BuildStatus {
                     profile: spec.id.to_string(),
                     label: spec.label.to_string(),
-                    stage: "kernel".into(),
+                    mode,
+                    stage: "prepare".into(),
                     log: Vec::new(),
+                    log_path: Some(log_path),
                     finished: false,
                     error: None,
                 });
-                Ok("base build started".into())
+                Ok(match mode {
+                    build::BuildMode::Qemu => "base build started in the QEMU builder VM".into(),
+                    _ => "base build started on this host".into(),
+                })
+            }
+            Command::CancelBuild => {
+                let job = self.build.as_ref().ok_or("no base build is running")?;
+                job.cancel.store(true, Ordering::Relaxed);
+                Ok("cancelling the base build".into())
             }
             Command::DeleteBase {
                 identity,
@@ -1442,7 +1536,6 @@ impl Worker {
                 bundle_dir,
                 capture_quota_size,
                 shutdown_timeout_secs,
-                build_workspace,
             } => {
                 if self.session.is_some() {
                     return Err("stop VM before changing settings".into());
@@ -1456,7 +1549,6 @@ impl Worker {
                 self.options.bundle_dir = bundle_dir;
                 self.options.capture_quota_size = capture_quota_size;
                 self.options.shutdown_timeout = Duration::from_secs(shutdown_timeout_secs);
-                self.options.build_workspace = build_workspace;
                 Ok("settings updated".into())
             }
             Command::OpenRecording { directory } => Err(format!(
@@ -2667,6 +2759,8 @@ mod tests {
         assert_eq!(health.persistence_error.as_deref(), Some(error.as_str()));
         drop(runs);
         drop(capture);
+        // Run summaries are written in the background; settle them first.
+        storage::settle_json_under(&root);
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

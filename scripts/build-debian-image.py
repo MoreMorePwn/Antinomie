@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Build a rootless Debian 13 Xfce bundle for the pinned Antinomie kernel."""
+"""Build the Debian 13 Xfce bundle for the pinned Antinomie kernel with mmdebstrap.
+
+The root filesystem is bootstrapped into a tarball (rootless with
+--mode=unshare, or as root inside the QEMU builder) and turned into an ext4
+image with mkfs.ext4 -d; no libguestfs appliance and no mounted host
+filesystems are used.
+"""
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 MikiMiku (MoreMorePwn)
 import argparse
@@ -13,6 +19,7 @@ import shlex
 import shutil
 import struct
 import subprocess
+import tarfile
 import tempfile
 
 REPO = Path(__file__).resolve().parent.parent
@@ -21,6 +28,9 @@ PROFILE = {"id": "debian-xfce", "label": "Debian 13 (Xfce)",
            "min_ram_mib": 2048, "min_disk_gib": 16,
            "requires_credentials": True, "graphical": True}
 APPEND = "root=/dev/vda rw rootwait console=tty0 console=ttyS0 panic=-1"
+SUITE = "trixie"
+SECURITY_MIRROR = "http://security.debian.org/debian-security"
+IMAGE_SIZE = 16 << 30
 NETWORK_INTERFACES = """source /etc/network/interfaces.d/*
 
 auto lo
@@ -34,7 +44,19 @@ PACKAGES = ("systemd-sysv", "task-xfce-desktop", "lightdm-gtk-greeter",
             "xserver-xorg-input-libinput", "iproute2", "iputils-ping",
             "procps", "psmisc", "less", "vim-tiny", "curl", "wget",
             "ca-certificates", "file", "bash-completion", "locales",
-            "fonts-dejavu-core", "e2fsprogs")
+            "fonts-dejavu-core", "e2fsprogs", "keyboard-configuration",
+            "console-setup", "tzdata")
+# Installer-style answers. Values are checked again inside the new system
+# against its locale, keyboard and time zone data.
+DEFAULTS = {"hostname": "antinomie", "locale": "en_US.UTF-8", "keyboard_layout": "us",
+            "keyboard_variant": "", "timezone": "Etc/UTC", "standard": False,
+            "mirror": "http://deb.debian.org/debian", "proxy": ""}
+PATTERNS = {"locale": r"[a-z]{2,3}(?:_[A-Z]{2})?(?:@[a-z]+)?\.UTF-8",
+            "keyboard_layout": r"[a-z]{2,8}", "keyboard_variant": r"[a-z0-9_-]{0,32}",
+            "timezone": r"[A-Z][A-Za-z_+-]*(?:/[A-Za-z0-9_+-]+){0,2}",
+            "mirror": r"https?://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+",
+            "proxy": r"(?:https?://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+)?"}
+MIN_E2FSPROGS = (1, 47, 1)
 
 
 def monitor_helpers():
@@ -43,91 +65,6 @@ def monitor_helpers():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
-
-def appliance_environment():
-    env = os.environ.copy()
-    env["LIBGUESTFS_BACKEND"] = "direct"
-    # Honor neither inherited tracing nor a libvirt backend for this build.
-    env.pop("LIBGUESTFS_DEBUG", None)
-    env.pop("LIBGUESTFS_TRACE", None)
-    return env
-
-
-def customization_script():
-    return """#!/bin/sh
-set -eu
-export DEBIAN_FRONTEND=noninteractive
-test "$(. /etc/os-release; printf '%s' "$ID:$VERSION_ID")" = debian:13
-test "$(dpkg --print-architecture)" = amd64
-# The direct libguestfs backend owns this temporary slirp network namespace.
-# Some host appliances omit their DHCP client; no network config is persisted.
-ip link set eth0 up
-ip addr replace 169.254.2.15/16 dev eth0
-ip route replace default via 169.254.2.2 dev eth0
-resolver_backup=/etc/resolv.conf.antinomie-build
-test ! -e "$resolver_backup" && test ! -L "$resolver_backup"
-if [ -e /etc/resolv.conf ] || [ -L /etc/resolv.conf ]; then
-    mv /etc/resolv.conf "$resolver_backup"
-fi
-cleanup() {
-    status=$?
-    if [ "$status" -ne 0 ]; then
-        printf 'Customization failed; isolated appliance kernel diagnostics follow.\\n' >&2
-        dmesg --level=err,warn | tail -n 80 >&2 || true
-        cat /proc/meminfo >&2 || true
-    fi
-    rm -f /usr/sbin/policy-rc.d /etc/resolv.conf
-    if [ -e "$resolver_backup" ] || [ -L "$resolver_backup" ]; then
-        mv "$resolver_backup" /etc/resolv.conf
-    fi
-    exit "$status"
-}
-trap cleanup EXIT
-printf 'nameserver 169.254.2.3\\n' > /etc/resolv.conf
-printf '#!/bin/sh\\nexit 101\\n' > /usr/sbin/policy-rc.d
-chmod 755 /usr/sbin/policy-rc.d
-apt-get -o APT::Get::AllowUnauthenticated=false -o Acquire::AllowInsecureRepositories=false -o APT::Update::Error-Mode=any -o Acquire::Retries=1 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
-apt-get -o APT::Get::AllowUnauthenticated=false -o Acquire::AllowInsecureRepositories=false -o Acquire::Retries=1 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -y install """ + " ".join(PACKAGES) + """
-remove=$(dpkg-query -W -f='${binary:Package} ${db:Status-Status}\\n' | awk '$2 == "installed" && ($1 ~ /^openssh-server(:|$)/ || $1 ~ /^qemu-guest-agent(:|$)/ || $1 ~ /^spice-vdagent(:|$)/ || $1 ~ /^cloud-init/ || $1 ~ /^cloud-guest-utils(:|$)/ || $1 ~ /^linux-image-/) {print $1}')
-if [ -n "$remove" ]; then
-    apt-get -o APT::Get::AllowUnauthenticated=false -y purge $remove
-fi
-for unit in ssh.service sshd.service ssh.socket qemu-guest-agent.service spice-vdagentd.service cloud-init-local.service cloud-init.service cloud-config.service cloud-final.service; do
-    systemctl mask "$unit"
-done
-for name in $(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd); do
-    userdel -r "$name"
-done
-for name in $(awk -F: '$3 == 1000 {print $1}' /etc/group); do
-    groupdel "$name"
-done
-passwd -l root
-rm -f /etc/ssh/ssh_host_* /var/lib/dbus/machine-id
-truncate -s 0 /etc/machine-id
-rm -rf /var/lib/cloud /var/lib/guestfs
-mkdir -p /etc/lightdm/lightdm.conf.d /var/lib/antinomie-image
-printf '[Seat:*]\\ngreeter-session=lightdm-gtk-greeter\\nuser-session=xfce\\nautologin-user=\\nautologin-guest=false\\nallow-guest=false\\n' > /etc/lightdm/lightdm.conf.d/99-antinomie.conf
-systemctl set-default graphical.target
-printf '/dev/vda / ext4 defaults 0 1\\n' > /etc/fstab
-printf '%s' """ + shlex.quote(NETWORK_INTERFACES) + """ > /etc/network/interfaces
-audit=$(dpkg --audit)
-if [ -n "$audit" ]; then
-    printf '%s\\n' "$audit" >&2
-    exit 1
-fi
-apt-get -o APT::Get::AllowUnauthenticated=false -o Acquire::AllowInsecureRepositories=false check
-dpkg-query -W -f='${binary:Package}\\t${Version}\\t${Architecture}\\t${source:Package}\\t${source:Version}\\t${db:Status-Status}\\n' > /var/lib/antinomie-image/packages.tsv
-apt-get clean
-"""
-
-
-def builder_command(source, customization, cache):
-    return ["virt-builder", "debian-13", "--arch", "x86_64",
-            "--check-signature", "--format", "raw", "--size", "16G",
-            "--output", str(source), "--cache", str(cache), "--memsize", "2048",
-            "--smp", "4", "--network", "--root-password", "disabled",
-            "--hostname", "antinomie", "--run", str(customization), "--no-logfile"]
 
 
 def kernel_release(kernel):
@@ -140,47 +77,6 @@ def kernel_release(kernel):
     if not re.match(r"6\.12\.94(?:[- ]|$)", release):
         raise RuntimeError("kernel must retain pinned Linux 6.12.94")
     return release
-
-
-class Guestfish:
-    """Own one isolated appliance; remote commands use argv, never a shell."""
-    def __init__(self, images, log):
-        command = ["guestfish", "--listen"]
-        for image in images:
-            command.extend(["--format=raw", "-a", str(image)])
-        result = subprocess.run(command, env=appliance_environment(), check=True,
-                                stdout=subprocess.PIPE, stderr=log, text=True)
-        match = re.search(r"GUESTFISH_PID=(\d+)", result.stdout)
-        if not match:
-            raise RuntimeError("guestfish did not report its owned appliance PID")
-        self.pid = match.group(1)
-        self.log = log
-
-    def __enter__(self):
-        try:
-            self.command("run")
-        except BaseException:
-            self.command("exit")
-            raise
-        return self
-
-    def command(self, *args):
-        result = subprocess.run(["guestfish", "--remote=" + self.pid, *args],
-                                env=appliance_environment(), check=True,
-                                stdout=subprocess.PIPE, stderr=self.log, text=True)
-        return result.stdout.strip()
-
-    def __exit__(self, kind, value, traceback):
-        self.command("exit")
-
-
-def validate_root(guest, root):
-    if (guest.command("inspect-get-distro", root) != "debian"
-            or guest.command("inspect-get-major-version", root) != "13"
-            or guest.command("inspect-get-arch", root) != "x86_64"):
-        raise RuntimeError("template must contain Debian 13 amd64")
-    if guest.command("vfs-type", root) != "ext4":
-        raise RuntimeError("template root filesystem must be ext4")
 
 
 def module_tree(modules, release):
@@ -196,60 +92,6 @@ def module_tree(modules, release):
 def kernel_uses_modules(config):
     return config is not None and any(line.endswith("=m")
                                       for line in config.read_text().splitlines())
-
-
-def convert_root(source, raw, provenance, log, modules=None):
-    with raw.open("xb") as target:
-        target.truncate(16 << 30)
-    with Guestfish([source, raw], log) as guest:
-        roots = guest.command("inspect-os").splitlines()
-        if len(roots) != 1:
-            raise RuntimeError("template must have exactly one inspected OS root")
-        root = roots[0]
-        validate_root(guest, root)
-        source_size = int(guest.command("blockdev-getsize64", root))
-        if source_size > 16 << 30:
-            raise RuntimeError("template root exceeds the 16 GiB whole-disk layout")
-        guest.command("mount-ro", root, "/")
-        guest.command("download", "/var/lib/antinomie-image/packages.tsv",
-                      str(provenance / "packages.tsv"))
-        guest.command("download", "/etc/os-release", str(provenance / "os-release"))
-        guest.command("tar-out", "/usr/share/doc", str(provenance / "package-docs.tar.gz"),
-                      "compress:gzip")
-        guest.command("tar-out", "/var/lib/apt/lists", str(provenance / "apt-lists.tar.gz"),
-                      "compress:gzip")
-        guest.command("umount-all")
-        # Exact ext4 block copy preserves inode owners, ACLs, xattrs and capabilities.
-        guest.command("copy-device-to-device", root, "/dev/sdb", "sparse:true")
-        guest.command("e2fsck", "/dev/sdb", "correct:true")
-        guest.command("resize2fs", "/dev/sdb")
-        guest.command("mount", "/dev/sdb", "/")
-        if guest.command("cat", "/etc/fstab") != "/dev/vda / ext4 defaults 0 1":
-            raise RuntimeError("converted root has unexpected fstab")
-        if modules is not None:
-            # Debian 13 is merged-/usr; /lib/modules resolves to /usr/lib/modules.
-            archive = raw.parent / "modules.tar"
-            subprocess.run(["tar", "--create", "--file", str(archive), "--owner=0",
-                            "--group=0", "--numeric-owner", "--directory",
-                            str(modules.parent), modules.name], check=True)
-            guest.command("mkdir-p", "/usr/lib/modules")
-            guest.command("tar-in", str(archive), "/usr/lib/modules")
-            archive.unlink()
-            if not guest.command("exists", f"/usr/lib/modules/{modules.name}/modules.dep") == "true":
-                raise RuntimeError("kernel modules did not reach the converted root")
-        shadow = guest.command("cat", "/etc/shadow").splitlines()
-        if not any(line.startswith(("root:!", "root:*")) for line in shadow):
-            raise RuntimeError("base root password must be locked")
-        passwd = guest.command("cat", "/etc/passwd").splitlines()
-        if any(1000 <= int(line.split(":")[2]) < 65534 for line in passwd):
-            raise RuntimeError("base must not contain preset ordinary user accounts")
-        groups = guest.command("cat", "/etc/group").splitlines()
-        if any(int(line.split(":")[2]) == 1000 for line in groups):
-            raise RuntimeError("base must leave GID 1000 free for per-VM credentials")
-        guest.command("umount-all")
-    return {"root_device": root, "root_filesystem": "ext4", "root_size": source_size,
-            "copy": "libguestfs copy-device-to-device; exact filesystem blocks",
-            "kernel_modules": None if modules is None else f"/usr/lib/modules/{modules.name}"}
 
 
 def initrd_provenance(root, provenance):
@@ -306,107 +148,268 @@ def make_initrd(output, staging, provenance):
     output.write_bytes(gzip.stdout)
 
 
-def assemble_bundle(kernel, output, staging, template_entry, cache, kernel_config=None,
-                    modules=None, allow_unversioned=False):
-    if output.exists():
-        raise RuntimeError("output already exists; choose a new unpublished bundle path")
-    helpers = monitor_helpers()
-    bundle = staging / "bundle"
-    provenance = bundle / "provenance"
-    release = kernel_release(bundle / "kernel")
-    raw = staging / "root.raw"
-    conversion_log = output.parent / (output.name + "-conversion.log")
-    with conversion_log.open("w") as log:
-        conversion = convert_root(staging / "template.raw", raw, provenance, log,
-                                  module_tree(modules, release))
-    shutil.copy2(conversion_log, provenance / "conversion.log")
-    subprocess.run(["qemu-img", "convert", "-f", "raw", "-O", "qcow2",
-                    str(raw), str(bundle / "base.qcow2")], check=True)
-    make_initrd(bundle / "initrd.gz", staging, provenance)
-    hashes = {item: helpers.checksum(bundle / item)
-              for item in ("kernel", "initrd.gz", "base.qcow2")}
-    record = {"built_at": datetime.now(timezone.utc).isoformat(),
-              "template": template_entry, "template_signatures": "required",
-              "template_checksums": "virt-builder signed catalog SHA-512 verification",
-              "apt_authentication": "Debian signed indexes; insecure repositories disallowed",
-              "package_install_recommends": False,
-              "requested_packages": list(PACKAGES), "package_inventory": "packages.tsv",
-              "package_upgrade_policy": "Install explicit package closure; no blanket distro upgrade",
-              "conversion": conversion,
-              "kernel_input": str(kernel.resolve()), "kernel_sha256": hashes["kernel"],
-              "kernel_release": release,
-              "template_cache_sha256": {p.name: helpers.checksum(p)
-                  for p in sorted(cache.iterdir()) if p.is_file()},
-              "tools": {tool: subprocess.check_output([tool, "--version"], text=True).strip()
-                        for tool in ("virt-builder", "guestfish", "qemu-img")}}
-    record["provenance_sha256"] = {str(p.relative_to(provenance)): helpers.checksum(p)
-        for p in sorted(provenance.rglob("*")) if p.is_file()}
-    (provenance / "build.json").write_text(json.dumps(record, indent=2) + "\n")
-    manifest = {"format": 1, "kernel_version": "6.12.94", "schema_id": 1,
-                "kernel": "kernel", "initrd": "initrd.gz", "base_disk": "base.qcow2",
-                "kernel_append": APPEND, "guest": PROFILE, "sha256": hashes}
-    helpers.stamp_revision(manifest, bundle / "kernel", allow_unversioned)
-    if helpers.fixed_display_config(kernel_config, bundle / "kernel"):
-        manifest["fixed_display"] = True
-        shutil.copy2(kernel_config, provenance / "kernel.config")
-        helpers.fixed_display_config(provenance / "kernel.config", bundle / "kernel")
-        manifest["kernel_config_sha256"] = helpers.checksum(provenance / "kernel.config")
-        manifest["build_provenance"] = {"parent_identity": None,
-            "kernel_sha256": hashes["kernel"], "base_disk_sha256": hashes["base.qcow2"],
-            "initrd_sha256": hashes["initrd.gz"],
-            "kernel_config_sha256": manifest["kernel_config_sha256"]}
-    (bundle / "bundle.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    # Publish only a completed bundle, never overwrite an existing base.
-    bundle.rename(output)
+def options(values):
+    """Validate installer answers; unknown keys are rejected."""
+    unknown = set(values) - set(DEFAULTS)
+    if unknown:
+        raise RuntimeError("unknown image options: " + ", ".join(sorted(unknown)))
+    result = {**DEFAULTS, **values}
+    monitor_helpers().valid_hostname(result["hostname"])
+    for key, pattern in PATTERNS.items():
+        if not isinstance(result[key], str) or not re.fullmatch(pattern, result[key]):
+            raise RuntimeError(f"invalid {key.replace('_', ' ')} {result[key]!r}")
+    if ".." in result["timezone"]:
+        raise RuntimeError("invalid time zone")
+    if not isinstance(result["standard"], bool):
+        raise RuntimeError("standard must be true or false")
+    return result
 
 
-def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=False):
+def customization_script():
+    """Run inside the new root: arguments hostname locale layout variant timezone."""
+    return """#!/bin/sh
+set -eu
+hostname=$1 locale=$2 layout=$3 variant=$4 zone=$5
+export DEBIAN_FRONTEND=noninteractive
+test "$(. /etc/os-release; printf '%s' "$ID:$VERSION_ID")" = debian:13
+test "$(dpkg --print-architecture)" = amd64
+grep -qx "$locale UTF-8" /usr/share/i18n/SUPPORTED || { echo "unsupported locale $locale" >&2; exit 1; }
+test -f "/usr/share/zoneinfo/$zone" || { echo "unknown time zone $zone" >&2; exit 1; }
+awk -v l="$layout" '/^! layout/ {s = 1; next} /^!/ {s = 0} s && $1 == l {f = 1} END {exit !f}' \\
+    /usr/share/X11/xkb/rules/evdev.lst || { echo "unknown keyboard layout $layout" >&2; exit 1; }
+if [ -n "$variant" ]; then
+    awk -v v="$variant" -v l="$layout:" '/^! variant/ {s = 1; next} /^!/ {s = 0} s && $1 == v && $2 == l {f = 1} END {exit !f}' \\
+        /usr/share/X11/xkb/rules/evdev.lst || { echo "unknown keyboard variant $variant for $layout" >&2; exit 1; }
+fi
+remove=$(dpkg-query -W -f='${binary:Package} ${db:Status-Status}\\n' | awk '$2 == "installed" && ($1 ~ /^openssh-server(:|$)/ || $1 ~ /^qemu-guest-agent(:|$)/ || $1 ~ /^spice-vdagent(:|$)/ || $1 ~ /^cloud-init/ || $1 ~ /^cloud-guest-utils(:|$)/ || $1 ~ /^linux-image-/) {print $1}')
+if [ -n "$remove" ]; then
+    apt-get -o APT::Get::AllowUnauthenticated=false -y purge $remove
+fi
+for unit in ssh.service sshd.service ssh.socket qemu-guest-agent.service spice-vdagentd.service cloud-init-local.service cloud-init.service cloud-config.service cloud-final.service; do
+    systemctl mask "$unit"
+done
+for name in $(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd); do
+    userdel -r "$name"
+done
+for name in $(awk -F: '$3 == 1000 {print $1}' /etc/group); do
+    groupdel "$name"
+done
+passwd -l root
+rm -f /etc/ssh/ssh_host_* /var/lib/dbus/machine-id
+truncate -s 0 /etc/machine-id
+mkdir -p /etc/lightdm/lightdm.conf.d /var/lib/antinomie-image
+printf '[Seat:*]\\ngreeter-session=lightdm-gtk-greeter\\nuser-session=xfce\\nautologin-user=\\nautologin-guest=false\\nallow-guest=false\\n' > /etc/lightdm/lightdm.conf.d/99-antinomie.conf
+systemctl set-default graphical.target
+printf '/dev/vda / ext4 defaults 0 1\\n' > /etc/fstab
+printf '%s' """ + shlex.quote(NETWORK_INTERFACES) + """ > /etc/network/interfaces
+printf '%s\\n' "$hostname" > /etc/hostname
+printf '127.0.0.1\\tlocalhost\\n127.0.1.1\\t%s\\n\\n::1\\tlocalhost ip6-localhost ip6-loopback\\nff02::1\\tip6-allnodes\\nff02::2\\tip6-allrouters\\n' "$hostname" > /etc/hosts
+printf '%s UTF-8\\n' "$locale" > /etc/locale.gen
+locale-gen
+printf 'LANG=%s\\n' "$locale" > /etc/default/locale
+printf 'XKBMODEL="pc105"\\nXKBLAYOUT="%s"\\nXKBVARIANT="%s"\\nXKBOPTIONS=""\\n\\nBACKSPACE="guess"\\n' "$layout" "$variant" > /etc/default/keyboard
+ln -sf "/usr/share/zoneinfo/$zone" /etc/localtime
+printf '%s\\n' "$zone" > /etc/timezone
+# Build-time apt settings (recommends, proxy) are not part of the image.
+rm -f /etc/apt/apt.conf.d/99mmdebstrap
+audit=$(dpkg --audit)
+if [ -n "$audit" ]; then
+    printf '%s\\n' "$audit" >&2
+    exit 1
+fi
+apt-get -o APT::Get::AllowUnauthenticated=false -o Acquire::AllowInsecureRepositories=false check
+dpkg-query -W -f='${binary:Package}\\t${Version}\\t${Architecture}\\t${source:Package}\\t${source:Version}\\t${db:Status-Status}\\n' > /var/lib/antinomie-image/packages.tsv
+apt-get clean
+"""
+
+
+def bootstrap_mode():
+    return "root" if os.geteuid() == 0 else "unshare"
+
+
+def mmdebstrap_command(values, tarball, script, provenance, modules=None):
+    """The mmdebstrap invocation; hooks run as (namespace) root with "$1" the new root."""
+    q = shlex.quote
+    command = ["mmdebstrap", "--mode=" + bootstrap_mode(),
+               "--variant=" + ("standard" if values["standard"] else "important"),
+               "--architectures=amd64", "--format=tar", "--include=" + ",".join(PACKAGES),
+               "--aptopt=APT::Install-Recommends \"true\"",
+               "--aptopt=APT::Get::AllowUnauthenticated \"false\"",
+               "--aptopt=Acquire::AllowInsecureRepositories \"false\"",
+               "--aptopt=Acquire::Retries \"3\""]
+    if values["proxy"]:
+        command.append(f'--aptopt=Acquire::http::Proxy "{values["proxy"]}"')
+        command.append(f'--aptopt=Acquire::https::Proxy "{values["proxy"]}"')
+    command.append(f'--customize-hook=cp {q(str(script))} "$1/tmp/antinomie-customize.sh"')
+    if modules is not None:
+        command.append('--customize-hook=mkdir -p "$1/usr/lib/modules"')
+        command.append(f'--customize-hook=cp -a {q(str(modules))} "$1/usr/lib/modules/"')
+        command.append(f'--customize-hook=chown -R 0:0 "$1/usr/lib/modules/{modules.name}"')
+    arguments = " ".join(q(values[key]) for key in
+                         ("hostname", "locale", "keyboard_layout", "keyboard_variant", "timezone"))
+    command.append(f'--customize-hook=chroot "$1" sh /tmp/antinomie-customize.sh {arguments}')
+    command.append('--customize-hook=rm -f "$1/tmp/antinomie-customize.sh"')
+    for path in ("/var/lib/antinomie-image/packages.tsv", "/etc/os-release"):
+        command.append(f'--customize-hook=cp "$1{path}" {q(str(provenance / Path(path).name))}')
+    for path, name in (("usr/share/doc", "package-docs.tar.gz"), ("var/lib/apt/lists", "apt-lists.tar.gz")):
+        command.append(f'--customize-hook=tar -C "$1" -czf {q(str(provenance / name))} {path}')
+    mirror = values["mirror"].rstrip("/")
+    command += [SUITE, str(tarball),
+                f"deb {mirror} {SUITE} main", f"deb {mirror} {SUITE}-updates main",
+                f"deb {SECURITY_MIRROR} {SUITE}-security main"]
+    return command
+
+
+def e2fsprogs_version():
+    output = subprocess.run(["mke2fs", "-V"], capture_output=True, text=True).stderr
+    match = re.search(r"mke2fs (\d+)\.(\d+)(?:\.(\d+))?", output)
+    if not match:
+        raise RuntimeError("cannot read the mke2fs version")
+    return tuple(int(part or 0) for part in match.groups())
+
+
+def apply_xattrs(tarball, raw, staging, log):
+    """mkfs.ext4 -d drops extended attributes from a tarball; set them again (capabilities)."""
+    commands = []
+    values = staging / "xattr-values"
+    values.mkdir()
+    with tarfile.open(tarball) as archive:
+        for member in archive:
+            for key, value in member.pax_headers.items():
+                if not key.startswith("SCHILY.xattr."):
+                    continue
+                name = key[len("SCHILY.xattr."):]
+                name_in_tar = member.name[2:] if member.name.startswith("./") else member.name
+                path = "/" + name_in_tar.strip("/") if name_in_tar not in ("", ".") else "/"
+                if any(c in path for c in '"\n') or any(c in name for c in '" \n'):
+                    raise RuntimeError(f"unsupported extended attribute entry {path!r}")
+                data = values / str(len(commands))
+                data.write_bytes(value.encode("utf-8", "surrogateescape"))
+                commands.append(f'ea_set -f {data} "{path}" {name}')
+    if commands:
+        script = staging / "xattrs.debugfs"
+        script.write_text("\n".join(commands) + "\n")
+        subprocess.run(["debugfs", "-w", "-f", str(script), str(raw)], check=True,
+                       stdout=log, stderr=subprocess.STDOUT)
+    shutil.rmtree(values)
+    return len(commands)
+
+
+def debugfs_cat(raw, path):
+    return subprocess.run(["debugfs", "-R", f"cat {path}", str(raw)], check=True,
+                          capture_output=True, text=True).stdout
+
+
+def validate_image(raw):
+    if debugfs_cat(raw, "/etc/fstab") != "/dev/vda / ext4 defaults 0 1\n":
+        raise RuntimeError("image has unexpected fstab")
+    shadow = debugfs_cat(raw, "/etc/shadow").splitlines()
+    if not any(line.startswith(("root:!", "root:*")) for line in shadow):
+        raise RuntimeError("base root password must be locked")
+    passwd = debugfs_cat(raw, "/etc/passwd").splitlines()
+    if any(1000 <= int(line.split(":")[2]) < 65534 for line in passwd):
+        raise RuntimeError("base must not contain preset ordinary user accounts")
+    groups = debugfs_cat(raw, "/etc/group").splitlines()
+    if any(int(line.split(":")[2]) == 1000 for line in groups):
+        raise RuntimeError("base must leave GID 1000 free for per-VM credentials")
+
+
+def root_image(values, raw, staging, provenance, log, modules=None):
+    tarball = staging / "rootfs.tar"
+    script = staging / "customize.sh"
+    script.write_text(customization_script())
+    shutil.copy2(script, provenance / "customize.sh")
+    command = mmdebstrap_command(values, tarball, script, provenance, modules)
+    (provenance / "mmdebstrap.json").write_text(json.dumps(command, indent=2) + "\n")
+    # mmdebstrap assembles the system in $TMPDIR; /tmp is a small tmpfs on
+    # Debian 13 (and in the cloud builder), far too small for a desktop.
+    subprocess.run(command, check=True, stdout=log, stderr=subprocess.STDOUT,
+                   env=os.environ | {"TMPDIR": str(staging)})
+    with raw.open("xb") as target:
+        target.truncate(IMAGE_SIZE)
+    subprocess.run(["mkfs.ext4", "-q", "-F", "-L", "antinomie", "-d", str(tarball), str(raw)],
+                   check=True, stdout=log, stderr=subprocess.STDOUT)
+    xattrs = apply_xattrs(tarball, raw, staging, log)
+    tarball.unlink()
+    validate_image(raw)
+    return {"bootstrap": "mmdebstrap", "mode": bootstrap_mode(),
+            "variant": "standard" if values["standard"] else "important",
+            "suite": SUITE, "mirror": values["mirror"], "security_mirror": SECURITY_MIRROR,
+            "root_filesystem": "ext4", "root_size": IMAGE_SIZE,
+            "conversion": "mkfs.ext4 -d tarball; extended attributes set with debugfs",
+            "extended_attributes": xattrs,
+            "kernel_modules": None if modules is None else f"/usr/lib/modules/{modules.name}"}
+
+
+def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=False,
+          values=None, work=None):
     if output.exists():
         raise RuntimeError("output already exists; choose a new unpublished bundle path")
+    values = options(values or {})
     release = kernel_release(kernel)
     if kernel_uses_modules(kernel_config) and modules is None:
         raise RuntimeError("kernel config builds modules; pass --modules with its install root")
-    module_tree(modules, release)
-    monitor_helpers().fixed_display_config(kernel_config, kernel)
-    monitor_helpers().stamp_revision({}, kernel, allow_unversioned)
+    tree = module_tree(modules, release)
+    helpers = monitor_helpers()
+    helpers.fixed_display_config(kernel_config, kernel)
+    helpers.stamp_revision({}, kernel, allow_unversioned)
+    if e2fsprogs_version() < MIN_E2FSPROGS:
+        raise RuntimeError("mkfs.ext4 from e2fsprogs 1.47.1 or newer is required (tarball input)")
     output.parent.mkdir(parents=True, exist_ok=True)
-    env = appliance_environment()
-    with tempfile.TemporaryDirectory(prefix="debian-image-", dir=output.parent) as name:
+    work = work or output.parent
+    work.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="debian-image-", dir=work) as name:
         staging = Path(name)
         bundle = staging / "bundle"
         provenance = bundle / "provenance"
         provenance.mkdir(parents=True)
         shutil.copy2(kernel, bundle / "kernel")
-        kernel_release(bundle / "kernel")
-        script = staging / "customize.sh"
-        script.write_text(customization_script())
-        script.chmod(0o700)
-        shutil.copy2(script, provenance / "customize.sh")
-        catalog = subprocess.run(["virt-builder", "--list", "--list-format=json",
-                                  "--check-signature"], env=env, capture_output=True,
-                                 check=True, text=True)
-        catalog_data = json.loads(catalog.stdout)
-        entries = [entry for entry in catalog_data["templates"]
-                   if entry["os-version"] == "debian-13" and entry["arch"] == "x86_64"]
-        if len(entries) != 1:
-            raise RuntimeError("authenticated catalog must list one Debian 13 amd64 template")
-        (provenance / "catalog.json").write_text(catalog.stdout)
-        (provenance / "catalog-verification.log").write_text(catalog.stderr)
-        configs = provenance / "virt-builder-repos"
-        configs.mkdir()
-        for config in sorted(Path("/etc/virt-builder/repos.d").glob("*")):
-            if config.is_file():
-                shutil.copy2(config, configs / config.name)
-        cache = REPO / "work/debian-template-cache"
-        cache.mkdir(parents=True, exist_ok=True)
-        source = staging / "template.raw"
-        command = builder_command(source, script, cache)
-        builder_log = output.parent / (output.name + "-builder.log")
-        with builder_log.open("w") as log:
-            subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
-        shutil.copy2(builder_log, provenance / "builder.log")
-        assemble_bundle(kernel, output, staging, entries[0], cache, kernel_config, modules,
-                        allow_unversioned)
+        raw = staging / "root.raw"
+        log_path = staging / "bootstrap.log"
+        try:
+            with log_path.open("w") as log:
+                root = root_image(values, raw, staging, provenance, log, tree)
+        except (RuntimeError, subprocess.CalledProcessError):
+            # The log dies with the staging directory; show why it failed.
+            lines = log_path.read_text(errors="replace").splitlines()
+            print("--- last bootstrap log lines ---", flush=True)
+            print("\n".join(lines[-80:]), flush=True)
+            raise
+        shutil.copy2(log_path, provenance / "bootstrap.log")
+        subprocess.run(["qemu-img", "convert", "-f", "raw", "-O", "qcow2",
+                        str(raw), str(bundle / "base.qcow2")], check=True)
+        raw.unlink()
+        make_initrd(bundle / "initrd.gz", staging, provenance)
+        hashes = {item: helpers.checksum(bundle / item)
+                  for item in ("kernel", "initrd.gz", "base.qcow2")}
+        record = {"built_at": datetime.now(timezone.utc).isoformat(),
+                  "options": values, "root": root,
+                  "apt_authentication": "Debian signed indexes; insecure repositories disallowed",
+                  "package_install_recommends": True,
+                  "requested_packages": list(PACKAGES), "package_inventory": "packages.tsv",
+                  "kernel_sha256": hashes["kernel"], "kernel_release": release,
+                  "tools": {tool: subprocess.run([tool, "--version"], capture_output=True,
+                                                 text=True).stdout.strip().splitlines()[0]
+                            for tool in ("mmdebstrap", "qemu-img")}}
+        record["provenance_sha256"] = {str(p.relative_to(provenance)): helpers.checksum(p)
+            for p in sorted(provenance.rglob("*")) if p.is_file()}
+        (provenance / "build.json").write_text(json.dumps(record, indent=2) + "\n")
+        manifest = {"format": 1, "kernel_version": "6.12.94", "schema_id": 1,
+                    "kernel": "kernel", "initrd": "initrd.gz", "base_disk": "base.qcow2",
+                    "kernel_append": APPEND, "guest": PROFILE, "sha256": hashes}
+        helpers.stamp_revision(manifest, bundle / "kernel", allow_unversioned)
+        if helpers.fixed_display_config(kernel_config, bundle / "kernel"):
+            manifest["fixed_display"] = True
+            shutil.copy2(kernel_config, provenance / "kernel.config")
+            helpers.fixed_display_config(provenance / "kernel.config", bundle / "kernel")
+            manifest["kernel_config_sha256"] = helpers.checksum(provenance / "kernel.config")
+            manifest["build_provenance"] = {"parent_identity": None,
+                "kernel_sha256": hashes["kernel"], "base_disk_sha256": hashes["base.qcow2"],
+                "initrd_sha256": hashes["initrd.gz"],
+                "kernel_config_sha256": manifest["kernel_config_sha256"]}
+        (bundle / "bundle.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        # Publish only a completed bundle, never overwrite an existing base.
+        bundle.rename(output)
 
 
 def main():
@@ -419,16 +422,24 @@ def main():
                         help="modules_install root (INSTALL_MOD_PATH) matching the kernel")
     parser.add_argument("--allow-unversioned", action="store_true",
                         help="accept a development kernel without a source id")
+    parser.add_argument("--options", type=Path,
+                        help="JSON object of installer answers (hostname, locale, keyboard_layout, "
+                             "keyboard_variant, timezone, standard, mirror, proxy)")
+    parser.add_argument("--work", type=Path, help="directory for temporary build files")
     args = parser.parse_args()
     if not args.kernel.is_file():
         parser.error("an existing patched Linux 6.12.94 kernel is required")
-    for tool in ("virt-builder", "guestfish", "qemu-img", "cpio", "gzip", "busybox", "resize2fs", "dpkg-query"):
+    for tool in ("mmdebstrap", "mkfs.ext4", "mke2fs", "debugfs", "qemu-img", "cpio", "gzip",
+                 "busybox", "resize2fs", "dpkg-query", "tar"):
         if shutil.which(tool) is None:
             parser.error("required installed tool missing: " + tool)
     try:
+        values = json.loads(args.options.read_text()) if args.options else {}
+        if not isinstance(values, dict):
+            raise RuntimeError("options must be a JSON object")
         build(args.kernel, args.output, args.kernel_config, args.modules,
-              args.allow_unversioned)
-    except (RuntimeError, subprocess.CalledProcessError) as error:
+              args.allow_unversioned, values, args.work)
+    except (RuntimeError, OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.exit(1, "Debian image build failed: " + str(error) + "\n")
     print(args.output)
 

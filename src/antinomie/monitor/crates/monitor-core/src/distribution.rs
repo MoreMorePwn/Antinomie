@@ -198,13 +198,30 @@ fn sha256_file(path: &Path) -> Result<String, String> {
 /// Fetch a URL to `destination` with retries, following redirects. `curl -C -`
 /// resumes an existing partial file. Returns the child so callers can poll
 /// progress; the caller must wait on it.
-fn spawn_download(
+pub(crate) fn spawn_download(
     curl: &Path,
     url: &str,
     destination: &Path,
 ) -> Result<std::process::Child, String> {
     ProcessCommand::new(curl)
-        .args(["-fL", "--retry", "3", "--retry-delay", "2", "-C", "-", "-o"])
+        // A stalled mirror (under 1 KiB/s for a minute) fails over to a retry.
+        .args([
+            "-fL",
+            "--retry",
+            "3",
+            "--retry-delay",
+            "2",
+            "--retry-all-errors",
+            "--connect-timeout",
+            "30",
+            "--speed-limit",
+            "1024",
+            "--speed-time",
+            "60",
+            "-C",
+            "-",
+            "-o",
+        ])
         .arg(destination)
         .arg(url)
         .stdin(Stdio::null())

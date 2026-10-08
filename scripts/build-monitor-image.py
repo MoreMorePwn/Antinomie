@@ -147,7 +147,17 @@ def write_file(root, path, content, mode=0o644):
     target.chmod(mode)
 
 
-def base_tree(root):
+HOSTNAME = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+
+
+def valid_hostname(name):
+    """One lowercase RFC 1123 label, as the installer's hostname question takes."""
+    if not HOSTNAME.fullmatch(name):
+        raise RuntimeError(f"invalid hostname {name!r}: use 1-63 of a-z, 0-9 and '-'")
+    return name
+
+
+def base_tree(root, hostname="localhost"):
     for directory in ("bin", "sbin", "usr/bin", "usr/sbin", "etc", "dev", "proc", "sys", "run", "tmp", "root", "home/analyst", "var/log"):
         (root / directory).mkdir(parents=True, exist_ok=True)
     (root / "tmp").chmod(0o1777)
@@ -160,7 +170,7 @@ def base_tree(root):
     (root / "sbin/init").symlink_to("../bin/busybox")
     write_file(root, "/etc/passwd", "root:x:0:0:root:/root:/bin/sh\nanalyst:x:1000:1000:Analyst:/home/analyst:/bin/sh\n")
     write_file(root, "/etc/group", "root:x:0:\nanalyst:x:1000:\n")
-    write_file(root, "/etc/hostname", "localhost\n")
+    write_file(root, "/etc/hostname", hostname + "\n")
     write_file(root, "/etc/resolv.conf", "nameserver 10.0.2.3\n")
     write_file(root, "/etc/inittab", "::sysinit:/etc/init.d/rcS\ntty1::respawn:/bin/getty -n -l /bin/sh 0 tty1\nttyS0::respawn:/bin/getty -n -l /bin/sh 115200 ttyS0\n::ctrlaltdel:/bin/reboot\n::shutdown:/bin/sync\n::shutdown:/bin/umount -a -r\n")
     write_file(root, "/etc/init.d/rcS", """#!/bin/sh
@@ -170,7 +180,7 @@ mount -t sysfs sysfs /sys
 mkdir -p /dev/pts /run
 mount -t devpts devpts /dev/pts
 chmod 1777 /tmp
-hostname localhost
+hostname "$(cat /etc/hostname)"
 ip link set lo up
 if ip link show eth0 >/dev/null 2>&1; then
     ip link set eth0 up
@@ -216,7 +226,14 @@ def main():
     parser.add_argument("--base-size-mib", type=int, default=256)
     parser.add_argument("--allow-unversioned", action="store_true",
                         help="accept a development kernel without a source id")
+    parser.add_argument("--hostname", default="localhost")
+    parser.add_argument("--work", type=Path, default=REPO / "work",
+                        help="directory for temporary build files")
     args = parser.parse_args()
+    try:
+        valid_hostname(args.hostname)
+    except RuntimeError as error:
+        parser.error(str(error))
     fixed_display = fixed_display_config(args.kernel_config, args.kernel)
     try:
         stamp_revision({}, args.kernel, args.allow_unversioned)
@@ -225,11 +242,12 @@ def main():
     if not args.kernel.is_file() or args.base_size_mib < 128:
         parser.error("existing kernel and base size of at least 128 MiB required")
     args.output.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="monitor-image-", dir=REPO / "work") as temporary:
+    args.work.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="monitor-image-", dir=args.work) as temporary:
         staging = Path(temporary)
         root = staging / "root"
         root.mkdir()
-        base_tree(root)
+        base_tree(root, args.hostname)
         raw = staging / "base.raw"
         with raw.open("wb") as image:
             image.truncate(args.base_size_mib << 20)

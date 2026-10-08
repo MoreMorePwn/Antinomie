@@ -301,7 +301,6 @@ pub struct BackendOptions {
     /// Anonymous base bucket file endpoint (`.../resolve`).
     pub remote_base: String,
     /// Product repository checkout used for local base builds (host Linux).
-    pub build_workspace: Option<PathBuf>,
     /// Shared quota for raw packets, assembled fields and terminal artifacts, in bytes.
     pub capture_quota_size: u64,
     pub shutdown_timeout: Duration,
@@ -321,7 +320,6 @@ impl Default for BackendOptions {
             qemu_img: "qemu-img".into(),
             curl: "curl".into(),
             remote_base: crate::distribution::DEFAULT_REMOTE_BASE.to_string(),
-            build_workspace: None,
             capture_quota_size: 4 * 1024 * 1024 * 1024,
             shutdown_timeout: Duration::from_secs(10),
             bootstrap_gpa: None,
@@ -493,10 +491,15 @@ pub struct DownloadStatus {
 pub struct BuildStatus {
     pub profile: String,
     pub label: String,
-    /// Current step label (`kernel`, `image`) or `done`.
+    /// Where the build runs (never `Automatic` once started).
+    pub mode: crate::build::BuildMode,
+    /// Current stage: `prepare`, `builder`, `source`, `kernel`, `image`,
+    /// `install` or `done`.
     pub stage: String,
     /// Bounded tail of the combined build output.
     pub log: Vec<String>,
+    /// Full build log, kept after the build.
+    pub log_path: Option<PathBuf>,
     pub finished: bool,
     pub error: Option<String>,
 }
@@ -601,10 +604,12 @@ pub enum Command {
     DownloadBase {
         identity: String,
     },
-    /// Build a base locally (host Linux) from the configured workspace.
+    /// Build a base with the app's kit, natively or in the QEMU builder VM.
     BuildBase {
-        profile: String,
+        request: crate::build::BuildRequest,
     },
+    /// Cancel the running base build.
+    CancelBuild,
     /// Delete an installed base; blocked while any VM references it.
     DeleteBase {
         identity: String,
@@ -634,7 +639,6 @@ pub enum Command {
         bundle_dir: PathBuf,
         capture_quota_size: u64,
         shutdown_timeout_secs: u64,
-        build_workspace: Option<PathBuf>,
     },
     Upload {
         source: PathBuf,

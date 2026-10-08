@@ -1,5 +1,6 @@
 mod app;
 mod archive;
+mod build_wizard;
 mod folders;
 mod runs;
 mod terminal;
@@ -57,7 +58,10 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Antinomie Monitor",
         eframe::NativeOptions {
+            // Matches the desktop entry (assets/antinomie.desktop) so the menu
+            // icon applies to the running window.
             viewport: eframe::egui::ViewportBuilder::default()
+                .with_app_id("antinomie")
                 .with_inner_size([1280.0, 820.0])
                 .with_min_inner_size([800.0, 600.0]),
             ..Default::default()

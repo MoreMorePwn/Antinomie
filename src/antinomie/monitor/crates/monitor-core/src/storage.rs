@@ -250,6 +250,25 @@ fn settle_json(path: &Path) {
     queue.errors.remove(path);
 }
 
+/// Before a test removes `directory`: drops background writes queued below it
+/// and waits for one in progress there, so none recreates a file meanwhile.
+#[cfg(test)]
+pub(crate) fn settle_json_under(directory: &Path) {
+    let Some((lock, ready)) = JSON_QUEUE.get() else {
+        return;
+    };
+    let mut queue = lock.lock().unwrap_or_else(|e| e.into_inner());
+    queue.pending.retain(|path, _| !path.starts_with(directory));
+    while queue
+        .writing
+        .as_deref()
+        .is_some_and(|path| path.starts_with(directory))
+    {
+        queue = ready.wait(queue).unwrap_or_else(|e| e.into_inner());
+    }
+    queue.errors.retain(|path, _| !path.starts_with(directory));
+}
+
 /// Waits until every queued JSON write has reached the disk.
 pub(crate) fn flush_json() {
     let Some((lock, ready)) = JSON_QUEUE.get() else {

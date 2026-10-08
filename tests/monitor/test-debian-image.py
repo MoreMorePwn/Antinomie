@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Focused image contract and rollback tests; no network or appliance required."""
+"""Focused image contract and rollback tests; no network or mmdebstrap run required."""
 # SPDX-License-Identifier: MIT
 import importlib.util
+import io
 from pathlib import Path
-import tempfile
+import shutil
 import struct
+import tarfile
+import tempfile
 import subprocess
 import unittest
 from unittest.mock import patch
@@ -15,30 +18,81 @@ image = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(image)
 
 
-class FakeGuest:
-    def __init__(self, distro="debian", version="13", arch="x86_64", filesystem="ext4"):
-        self.values = {"inspect-get-distro": distro, "inspect-get-major-version": version,
-                       "inspect-get-arch": arch, "vfs-type": filesystem}
-
-    def command(self, command, root):
-        return self.values[command]
-
-
 class DebianImageTests(unittest.TestCase):
-    def test_authenticated_locked_builder(self):
-        command = image.builder_command(Path("/tmp/source"), Path("/tmp/script"), Path("/tmp/cache"))
-        self.assertIn("--check-signature", command)
-        self.assertNotIn("--no-check-signature", command)
-        self.assertEqual(command[command.index("--root-password") + 1], "disabled")
-        self.assertNotIn("--firstboot", command)
-        self.assertEqual(command[command.index("--size") + 1], "16G")
+    def test_mmdebstrap_is_authenticated_and_carries_the_answers(self):
+        values = image.options({"hostname": "lab", "locale": "de_DE.UTF-8",
+                                "keyboard_layout": "de", "keyboard_variant": "nodeadkeys",
+                                "timezone": "Europe/Berlin", "standard": True,
+                                "mirror": "http://mirror.example/debian/",
+                                "proxy": "http://proxy.example:3128"})
+        with patch.object(image.os, "geteuid", return_value=1000):
+            command = image.mmdebstrap_command(values, Path("/w/rootfs.tar"), Path("/w/c.sh"),
+                                               Path("/w/prov"), Path("/m/lib/modules/6.12.94"))
+        self.assertEqual(command[0], "mmdebstrap")
+        self.assertIn("--mode=unshare", command)
+        self.assertIn("--variant=standard", command)
+        self.assertIn("--format=tar", command)
+        self.assertIn('--aptopt=APT::Get::AllowUnauthenticated "false"', command)
+        self.assertIn('--aptopt=Acquire::AllowInsecureRepositories "false"', command)
+        self.assertIn('--aptopt=APT::Install-Recommends "true"', command)
+        self.assertIn('--aptopt=Acquire::http::Proxy "http://proxy.example:3128"', command)
+        include = next(arg for arg in command if arg.startswith("--include="))
+        self.assertIn("task-xfce-desktop", include)
+        self.assertNotIn("openssh-server", include)
+        self.assertEqual(command[-5:], ["trixie", "/w/rootfs.tar",
+            "deb http://mirror.example/debian trixie main",
+            "deb http://mirror.example/debian trixie-updates main",
+            "deb http://security.debian.org/debian-security trixie-security main"])
+        hooks = [arg for arg in command if arg.startswith("--customize-hook=")]
+        self.assertTrue(any("antinomie-customize.sh lab de_DE.UTF-8 de nodeadkeys Europe/Berlin" in h
+                            for h in hooks), hooks)
+        self.assertTrue(any("chown -R 0:0" in h and "6.12.94" in h for h in hooks))
+        with patch.object(image.os, "geteuid", return_value=0):
+            root = image.mmdebstrap_command(image.options({}), Path("/w/r.tar"), Path("/w/c.sh"),
+                                            Path("/w/p"))
+        self.assertIn("--mode=root", root)
+        self.assertIn("--variant=important", root)
+        self.assertFalse(any("Proxy" in arg for arg in root))
+        self.assertFalse(any("modules" in arg for arg in root))
 
-    def test_foreign_or_non_ext4_template_rejected(self):
-        image.validate_root(FakeGuest(), "/dev/sda1")
-        for values in ({"distro": "ubuntu"}, {"version": "12"},
-                       {"arch": "aarch64"}, {"filesystem": "xfs"}):
-            with self.subTest(values=values), self.assertRaises(RuntimeError):
-                image.validate_root(FakeGuest(**values), "/dev/sda1")
+    def test_options_are_validated(self):
+        self.assertEqual(image.options({})["hostname"], "antinomie")
+        for bad in ({"hostname": "Bad_Name"}, {"locale": "en_US.ISO-8859-1"},
+                    {"keyboard_layout": "US"}, {"keyboard_variant": "a b"},
+                    {"timezone": "../etc/passwd"}, {"timezone": "Europe/../../x"},
+                    {"mirror": "ftp://x"}, {"proxy": "http://a b"}, {"standard": "yes"},
+                    {"unknown": 1}):
+            with self.subTest(bad=bad), self.assertRaises(RuntimeError):
+                image.options(bad)
+
+    def test_tarball_extended_attributes_survive_into_ext4(self):
+        if image.e2fsprogs_version() < image.MIN_E2FSPROGS or not shutil.which("debugfs"):
+            self.skipTest("needs mkfs.ext4 1.47.1 with tarball input and debugfs")
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            capability = bytes([1, 0, 0, 2, 0, 32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+            tarball = root / "rootfs.tar"
+            with tarfile.open(tarball, "w", format=tarfile.PAX_FORMAT) as archive:
+                for path in ("./usr", "./usr/bin"):
+                    directory = tarfile.TarInfo(path)
+                    directory.type = tarfile.DIRTYPE
+                    directory.mode = 0o755
+                    archive.addfile(directory)
+                entry = tarfile.TarInfo("./usr/bin/ping")
+                entry.size = 2
+                entry.mode = 0o755
+                entry.pax_headers = {"SCHILY.xattr.security.capability":
+                                     capability.decode("utf-8", "surrogateescape")}
+                archive.addfile(entry, io.BytesIO(b"hi"))
+            raw = root / "root.raw"
+            with raw.open("wb") as target:
+                target.truncate(64 << 20)
+            subprocess.run(["mkfs.ext4", "-q", "-F", "-d", str(tarball), str(raw)], check=True)
+            with (root / "log").open("w") as log:
+                self.assertEqual(image.apply_xattrs(tarball, raw, root, log), 1)
+            listing = subprocess.run(["debugfs", "-R", "ea_list /usr/bin/ping", str(raw)],
+                                     capture_output=True, text=True, check=True).stdout
+            self.assertIn("security.capability", listing)
 
     def test_existing_output_preserved(self):
         with tempfile.TemporaryDirectory() as name:
@@ -50,13 +104,17 @@ class DebianImageTests(unittest.TestCase):
                 image.build(Path("kernel"), output)
             self.assertEqual(marker.read_text(), "unchanged")
 
-    def test_catalog_failure_cleans_unpublished_state(self):
+    def test_bootstrap_failure_cleans_unpublished_state(self):
         with tempfile.TemporaryDirectory() as name:
             output = Path(name) / "new"
             kernel = Path(name) / "kernel"
             kernel.write_bytes(b"kernel")
+            helpers = image.monitor_helpers()
             with patch.object(image, "kernel_release", return_value="6.12.94"), \
-                    patch.object(image.subprocess, "run", side_effect=RuntimeError("catalog failed")):
+                    patch.object(helpers, "stamp_revision"), \
+                    patch.object(image, "monitor_helpers", return_value=helpers), \
+                    patch.object(image, "e2fsprogs_version", return_value=(1, 47, 2)), \
+                    patch.object(image.subprocess, "run", side_effect=RuntimeError("mirror down")):
                 with self.assertRaises(RuntimeError):
                     image.build(kernel, output)
             self.assertFalse(output.exists())
@@ -100,19 +158,19 @@ class DebianImageTests(unittest.TestCase):
             "min_ram_mib": 2048, "min_disk_gib": 16, "requires_credentials": True, "graphical": True})
         self.assertEqual(image.APPEND, "root=/dev/vda rw rootwait console=tty0 console=ttyS0 panic=-1")
 
-    def test_customization_has_valid_shell_and_authenticated_full_desktop_apt(self):
+    def test_customization_has_valid_shell_and_installer_answers(self):
         script = image.customization_script()
         subprocess.run(["sh", "-n"], input=script, text=True, check=True)
-        self.assertNotIn("--no-install-recommends install", script)
-        self.assertIn(" -y install ", script)
-        self.assertIn("APT::Update::Error-Mode=any", script)
         self.assertIn("Acquire::AllowInsecureRepositories=false", script)
-        self.assertIn("APT::Get::AllowUnauthenticated=false", script)
         self.assertIn("dpkg --audit", script)
         self.assertIn("passwd -l root", script)
         self.assertIn("auto lo", script)
-        self.assertIn("task-xfce-desktop", script)
         self.assertIn("spice-vdagent", script)
+        self.assertIn("/usr/share/i18n/SUPPORTED", script)
+        self.assertIn("/etc/default/keyboard", script)
+        self.assertIn("/etc/localtime", script)
+        self.assertIn("/etc/hostname", script)
+        self.assertIn("rm -f /etc/apt/apt.conf.d/99mmdebstrap", script)
 
 
 if __name__ == "__main__":

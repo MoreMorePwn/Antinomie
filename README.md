@@ -38,8 +38,9 @@ read, and anything the app could not decode or lost is marked as such.
 ```bash
 git clone https://github.com/MoreMorePwn/Antinomie.git ~/src/antinomie
 cd ~/src/antinomie
-scripts/build-monitor-host.sh   # build the app (once, or after updates)
-scripts/run-monitor.sh          # start it
+./run.sh        # build if anything changed, then start the app
+./install.sh    # or install it for this user: `antinomie` command and menu entry
+                # (./install.sh --uninstall removes it; application data stays)
 ```
 
 Your bases, VM disks and recordings are kept in `~/antinomie`.
@@ -51,7 +52,10 @@ The **Base images** section in the left sidebar lists installed bases. Use
 **Add base** to get one:
 - **Download base…**: fetch a published, checksum-verified base.
 - **Import base…**: install a bundle folder you already have.
-- **Build base…**: build one locally from the repository scripts.
+- **Build base…**: build one with the app's own build kit. A short wizard asks
+  installer-style questions (hostname; for Debian also language, keyboard, time
+  zone, software and mirror), then builds on this Linux host when the tool suite
+  is installed or inside a QEMU builder VM otherwise, and installs the result.
 
 Bases are read-only templates. Right-click a base to make a **New VM from this
 base** or to **Delete base**. Deleting is refused while any VM still uses it.
