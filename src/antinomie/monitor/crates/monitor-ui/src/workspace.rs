@@ -43,9 +43,13 @@ pub(crate) struct WorkspaceLayout {
     /// Outer/chrome origin plus inner/content size, in egui points.
     geometry: BTreeMap<usize, Rect>,
     #[serde(skip)]
+    native_builders: BTreeMap<usize, egui::ViewportBuilder>,
+    #[serde(skip)]
     drag: Option<(Panel, SurfaceIndex)>,
     #[serde(skip)]
     targets: Vec<(SurfaceIndex, NodeIndex, Rect)>,
+    #[serde(skip)]
+    target_headers: Vec<(SurfaceIndex, NodeIndex, Rect)>,
     #[serde(skip)]
     released: Option<(SurfaceIndex, egui::Pos2)>,
     #[serde(skip)]
@@ -71,8 +75,10 @@ impl Default for WorkspaceLayout {
             version: LAYOUT_VERSION,
             dock,
             geometry: BTreeMap::new(),
+            native_builders: BTreeMap::new(),
             drag: None,
             targets: Vec::new(),
+            target_headers: Vec::new(),
             released: None,
             detach: None,
             dock_back: None,
@@ -122,12 +128,16 @@ impl WorkspaceLayout {
 
     pub(crate) fn show(&mut self, app: &mut MonitorApp, ctx: &egui::Context) {
         self.targets.clear();
+        self.target_headers.clear();
+        self.native_builders
+            .retain(|index, _| self.dock.is_surface_valid(SurfaceIndex(*index)));
         self.cancel_drag = false;
         for (id, open) in app.terminal_views() {
             let panel = Panel::Terminal(id);
             if open && self.dock.find_tab(&panel).is_none() {
                 let surface = self.dock.add_window(vec![panel]);
                 self.geometry.remove(&surface.0);
+                self.native_builders.remove(&surface.0);
             } else if !open {
                 if let Some(location) = self.dock.find_tab(&panel) {
                     self.dock.remove_tab(location);
@@ -177,10 +187,15 @@ impl WorkspaceLayout {
         }
         if let Some(panel) = self.detach.take() {
             if let Some(location) = self.dock.find_tab(&panel) {
-                self.dock.detach_tab(
+                let surface = self.dock.detach_tab(
                     location,
                     Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(820.0, 520.0)),
                 );
+                self.geometry.insert(
+                    surface.0,
+                    Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(820.0, 520.0)),
+                );
+                self.native_builders.remove(&surface.0);
             }
         }
         if let Some(panel) = self.dock_back.take() {
@@ -189,15 +204,18 @@ impl WorkspaceLayout {
         self.finish_drag();
     }
 
-    fn native_builder(&self, index: usize, title: String) -> egui::ViewportBuilder {
-        let mut builder = egui::ViewportBuilder::default()
-            .with_title(title)
-            .with_inner_size([820.0, 520.0])
-            .with_min_inner_size([360.0, 220.0]);
-        if let Some(rect) = self.geometry.get(&index) {
-            builder = builder.with_position(rect.min).with_inner_size(rect.size());
-        }
-        builder
+    fn native_builder(&mut self, index: usize, title: String) -> egui::ViewportBuilder {
+        // Observed geometry is persistence data, not a placement command every frame.
+        let builder = self.native_builders.entry(index).or_insert_with(|| {
+            let mut builder = egui::ViewportBuilder::default()
+                .with_inner_size([820.0, 520.0])
+                .with_min_inner_size([360.0, 220.0]);
+            if let Some(rect) = self.geometry.get(&index) {
+                builder = builder.with_position(rect.min).with_inner_size(rect.size());
+            }
+            builder
+        });
+        builder.clone().with_title(title)
     }
 
     fn remember_geometry(&mut self, index: usize, viewport: &egui::ViewportInfo) {
@@ -248,6 +266,15 @@ impl WorkspaceLayout {
                         NodeIndex(index),
                         rect.translate(origin.to_vec2()),
                     ));
+                    if let egui_dock::Node::Leaf { viewport, .. } = node {
+                        let header =
+                            Rect::from_min_max(rect.min, egui::pos2(rect.max.x, viewport.min.y));
+                        self.target_headers.push((
+                            surface,
+                            NodeIndex(index),
+                            header.translate(origin.to_vec2()),
+                        ));
+                    }
                 }
             }
         }
@@ -295,7 +322,21 @@ impl WorkspaceLayout {
                 return;
             }
             let rel = (position - rect.min) / rect.size();
-            let insert = if rel.x < 0.2 {
+            let on_header =
+                self.target_headers
+                    .iter()
+                    .any(|(header_surface, header_node, header)| {
+                        *header_surface == surface
+                            && *header_node == node
+                            && header.contains(position)
+                    });
+            if on_header && location.0 == surface && location.1 == node {
+                self.focus(panel.clone());
+                return;
+            }
+            let insert = if on_header {
+                TabInsert::Append
+            } else if rel.x < 0.2 {
                 TabInsert::Split(egui_dock::Split::Left)
             } else if rel.x > 0.8 {
                 TabInsert::Split(egui_dock::Split::Right)
@@ -307,6 +348,20 @@ impl WorkspaceLayout {
                 TabInsert::Append
             };
             self.dock.move_tab(location, (surface, node, insert));
+        } else if !location.0.is_main() && self.dock[location.0].num_tabs() == 1 {
+            let size = self
+                .geometry
+                .get(&location.0 .0)
+                .map(Rect::size)
+                .unwrap_or(egui::vec2(820.0, 520.0));
+            self.geometry
+                .insert(location.0 .0, Rect::from_min_size(position, size));
+            if let Some(builder) = self.native_builders.get_mut(&location.0 .0) {
+                builder.position = Some(position);
+            }
+            if let Some(window) = self.dock.get_window_state_mut(location.0) {
+                window.set_position(position);
+            }
         } else {
             let surface = self.dock.detach_tab(
                 location,
@@ -316,9 +371,11 @@ impl WorkspaceLayout {
                 surface.0,
                 Rect::from_min_size(position, egui::vec2(820.0, 520.0)),
             );
+            self.native_builders.remove(&surface.0);
         }
         if !self.dock.is_surface_valid(source) {
             self.geometry.remove(&source.0);
+            self.native_builders.remove(&source.0);
         }
     }
 
@@ -359,6 +416,7 @@ impl WorkspaceLayout {
         self.focus(panel);
         if !self.dock.is_surface_valid(location.0) {
             self.geometry.remove(&location.0 .0);
+            self.native_builders.remove(&location.0 .0);
         }
     }
 
@@ -413,6 +471,7 @@ impl WorkspaceLayout {
         let panels: Vec<_> = self.dock[surface].tabs().cloned().collect();
         self.dock.remove_surface(surface);
         self.geometry.remove(&surface.0);
+        self.native_builders.remove(&surface.0);
         for panel in panels {
             if let Panel::Terminal(id) = panel {
                 app.close_terminal_view(&id);
@@ -493,6 +552,170 @@ fn primary_release(input: &egui::InputState) -> Option<egui::Pos2> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn observed_geometry_does_not_drive_live_placement() {
+        let mut layout = WorkspaceLayout::default();
+        let source = layout
+            .dock
+            .add_window(vec![Panel::Terminal("placement".into())]);
+        let initial = Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(650.0, 450.0));
+        layout.geometry.insert(source.0, initial);
+        let first = layout.native_builder(source.0, "First".into());
+        let observed = Rect::from_min_size(egui::pos2(200.0, 200.0), egui::vec2(700.0, 500.0));
+        layout.remember_geometry(
+            source.0,
+            &egui::ViewportInfo {
+                outer_rect: Some(observed),
+                inner_rect: Some(observed),
+                ..Default::default()
+            },
+        );
+        let next = layout.native_builder(source.0, "Updated title".into());
+        assert_eq!(next.position, first.position);
+        assert_eq!(next.inner_size, first.inner_size);
+        assert_eq!(next.title.as_deref(), Some("Updated title"));
+        assert_eq!(layout.geometry[&source.0], observed);
+        #[derive(Default)]
+        struct LayoutStorage(Option<String>);
+        impl eframe::Storage for LayoutStorage {
+            fn get_string(&self, _: &str) -> Option<String> {
+                self.0.clone()
+            }
+            fn set_string(&mut self, _: &str, value: String) {
+                self.0 = Some(value);
+            }
+            fn flush(&mut self) {}
+        }
+        let mut storage = LayoutStorage::default();
+        eframe::set_value(&mut storage, "workspace_layout", &layout);
+        let mut restored: WorkspaceLayout =
+            eframe::get_value(&storage, "workspace_layout").unwrap();
+        assert!(restored.native_builders.is_empty());
+        let reopened = restored.native_builder(source.0, "Reopened".into());
+        assert_eq!(reopened.position, Some(observed.min));
+        assert_eq!(reopened.inner_size, Some(observed.size()));
+    }
+
+    #[test]
+    fn stale_move_observation_cannot_rewind_requested_position() {
+        let mut layout = WorkspaceLayout::default();
+        let panel = Panel::Terminal("move-ack".into());
+        let source = layout.dock.add_window(vec![panel.clone()]);
+        let old = Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(650.0, 450.0));
+        layout.geometry.insert(source.0, old);
+        layout.native_builder(source.0, "Terminal".into());
+        let requested = egui::pos2(1100.0, 500.0);
+        layout.drop_panel(&panel, source, requested);
+        for _ in 0..5 {
+            layout.remember_geometry(
+                source.0,
+                &egui::ViewportInfo {
+                    outer_rect: Some(old),
+                    inner_rect: Some(old),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(
+                layout.native_builder(source.0, "Terminal".into()).position,
+                Some(requested)
+            );
+        }
+    }
+
+    #[test]
+    fn own_header_drop_preserves_the_tab_group() {
+        for x in [30.0, 400.0, 780.0] {
+            let mut layout = WorkspaceLayout::default();
+            let node = layout.dock.find_main_surface_tab(&Panel::Trace).unwrap().0;
+            let before = leaf_tabs(&layout, node);
+            let count = layout.dock.main_surface().len();
+            layout.targets.push((
+                SurfaceIndex::main(),
+                node,
+                Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 500.0)),
+            ));
+            layout.target_headers.push((
+                SurfaceIndex::main(),
+                node,
+                Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 40.0)),
+            ));
+            layout.drop_panel(&Panel::Trace, SurfaceIndex::main(), egui::pos2(x, 20.0));
+            assert_eq!(leaf_tabs(&layout, node), before);
+            assert_eq!(layout.dock.main_surface().len(), count);
+        }
+    }
+
+    #[test]
+    fn another_header_drop_appends_instead_of_splitting() {
+        let mut layout = WorkspaceLayout::default();
+        let node = layout
+            .dock
+            .find_main_surface_tab(&Panel::Details)
+            .unwrap()
+            .0;
+        let count = layout.dock.main_surface().len();
+        layout.targets.push((
+            SurfaceIndex::main(),
+            node,
+            Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 500.0)),
+        ));
+        layout.target_headers.push((
+            SurfaceIndex::main(),
+            node,
+            Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 40.0)),
+        ));
+        layout.drop_panel(&Panel::Trace, SurfaceIndex::main(), egui::pos2(30.0, 20.0));
+        assert_eq!(
+            leaf_tabs(&layout, node),
+            [Panel::Details, Panel::Activity, Panel::Trace]
+        );
+        assert_eq!(layout.dock.main_surface().len(), count);
+    }
+
+    #[test]
+    fn body_edge_drop_still_splits_a_group() {
+        let mut layout = WorkspaceLayout::default();
+        let node = layout.dock.find_main_surface_tab(&Panel::Trace).unwrap().0;
+        layout.targets.push((
+            SurfaceIndex::main(),
+            node,
+            Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 500.0)),
+        ));
+        layout.target_headers.push((
+            SurfaceIndex::main(),
+            node,
+            Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 40.0)),
+        ));
+        layout.drop_panel(&Panel::Trace, SurfaceIndex::main(), egui::pos2(400.0, 80.0));
+        assert_ne!(
+            layout.dock.find_main_surface_tab(&Panel::Trace).unwrap().0,
+            node
+        );
+        assert!(layout.dock.main_surface()[node].is_parent());
+    }
+
+    #[test]
+    fn moving_a_lone_detached_tab_preserves_its_surface_and_size() {
+        let mut layout = WorkspaceLayout::default();
+        let panel = Panel::Terminal("stable-window".into());
+        let source = layout.dock.add_window(vec![panel.clone()]);
+        let size = egui::vec2(650.0, 450.0);
+        layout.geometry.insert(
+            source.0,
+            Rect::from_min_size(egui::pos2(100.0, 100.0), size),
+        );
+        let count = layout.dock.surfaces_count();
+        for position in [egui::pos2(1400.0, 200.0), egui::pos2(1500.0, 300.0)] {
+            layout.drop_panel(&panel, source, position);
+            assert_eq!(layout.dock.find_tab(&panel).unwrap().0, source);
+            assert_eq!(layout.dock.surfaces_count(), count);
+            assert_eq!(
+                layout.geometry[&source.0],
+                Rect::from_min_size(position, size)
+            );
+        }
+    }
 
     #[test]
     fn only_an_explicit_primary_release_can_commit_a_tab_drop() {
@@ -646,16 +869,18 @@ mod tests {
             };
             layout.remember_geometry(1, &viewport);
             let next = layout.native_builder(1, "Terminal".into());
-            assert_eq!(next.position, Some(outer_origin));
-            assert_eq!(next.inner_size, Some(inner_size));
+            assert_eq!(next.position, Some(egui::pos2(100.0, 80.0)));
+            assert_eq!(next.inner_size, Some(egui::vec2(820.0, 520.0)));
+            assert_eq!(
+                layout.geometry[&1],
+                Rect::from_min_size(outer_origin, inner_size)
+            );
             let (commands, recreate) = builder.patch(next);
             assert!(!recreate);
-            if frame != 32 {
-                assert!(!commands.iter().any(|command| matches!(
-                    command,
-                    egui::ViewportCommand::OuterPosition(_) | egui::ViewportCommand::InnerSize(_)
-                )));
-            }
+            assert!(!commands.iter().any(|command| matches!(
+                command,
+                egui::ViewportCommand::OuterPosition(_) | egui::ViewportCommand::InnerSize(_)
+            )));
         }
     }
 
@@ -685,7 +910,7 @@ mod tests {
         layout.geometry.insert(surface.0, rect);
         let encoded = serde_json::to_vec(&layout.geometry).unwrap();
         layout.geometry = serde_json::from_slice(&encoded).unwrap();
-        let restored = WorkspaceLayout::restore(Some(layout));
+        let mut restored = WorkspaceLayout::restore(Some(layout));
         let builder = restored.native_builder(surface.0, "Terminal".into());
         assert_eq!(builder.position, Some(rect.min));
         assert_eq!(builder.inner_size, Some(rect.size()));
