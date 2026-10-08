@@ -4,6 +4,15 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version names the guest
 contract revision its kernel patches implement.
 
+## 0.2.0 — in development
+
+Guest contract revision 11 (kernel patch series `0001`–`0016`).
+
+- Opt-in static analysis of guest executables with a structured analysis
+  workspace.
+- Independent guest process attachment, process tree and global capture.
+- Revamped interface (in progress).
+
 ## 0.1.0 — 2026-10-08
 
 Guest contract revision 9 (kernel patch series `0001`–`0013`).
