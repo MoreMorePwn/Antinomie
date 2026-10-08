@@ -190,32 +190,41 @@ fn valid_url(value: &str, what: &str) -> Result<(), String> {
     }
 }
 
-/// This host's locale, keyboard and time zone, when they are in the lists.
-#[derive(Default)]
-struct HostLocale {
-    locale: Option<String>,
-    layout: Option<String>,
-    variant: Option<String>,
-    timezone: Option<String>,
+/// This host's locale, keyboard and time zone, when they are in the lists:
+/// what the Debian installer would guess for this user.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HostLocale {
+    pub locale: Option<String>,
+    pub layout: Option<String>,
+    pub variant: Option<String>,
+    pub timezone: Option<String>,
 }
 impl HostLocale {
-    fn detect() -> Self {
-        let locale = std::env::var("LANG").ok().and_then(|lang| {
-            let (base, _) = lang.split_once('.')?;
-            let code = format!("{base}.UTF-8");
-            LOCALES.iter().any(|(c, _)| *c == code).then_some(code)
-        });
+    pub fn detect() -> Self {
+        // The session's language first (a menu launch may lack it), then the
+        // system default.
+        let locale = ["LC_ALL", "LC_MESSAGES", "LANG"]
+            .iter()
+            .filter_map(|name| std::env::var(name).ok())
+            .chain(
+                ["/etc/locale.conf", "/etc/default/locale"]
+                    .iter()
+                    .filter_map(|path| std::fs::read_to_string(path).ok())
+                    .filter_map(|text| shell_value(&text, "LANG")),
+            )
+            .find_map(|value| Self::locale_code(&value));
+        // The system keyboard setting, else the live X keyboard layout.
         let keyboard = std::fs::read_to_string("/etc/default/keyboard").unwrap_or_default();
-        let value = |key: &str| {
-            keyboard.lines().find_map(|line| {
-                let rest = line.strip_prefix(key)?.strip_prefix('=')?;
-                let first = rest.trim().trim_matches('"').split(',').next()?.trim();
-                (!first.is_empty()).then(|| first.to_string())
-            })
+        let (layout, variant) = match first_item(shell_value(&keyboard, "XKBLAYOUT")) {
+            Some(layout) => (
+                Some(layout),
+                first_item(shell_value(&keyboard, "XKBVARIANT")),
+            ),
+            None => Self::x_keyboard(),
         };
-        let layout = value("XKBLAYOUT")
-            .filter(|layout| KEYBOARD_LAYOUTS.iter().any(|(code, _)| code == layout));
-        let variant = value("XKBVARIANT").filter(|variant| {
+        let layout =
+            layout.filter(|layout| KEYBOARD_LAYOUTS.iter().any(|(code, _)| code == layout));
+        let variant = variant.filter(|variant| {
             KEYBOARD_VARIANTS
                 .iter()
                 .any(|(l, v, _)| Some(*l) == layout.as_deref() && v == variant)
@@ -223,6 +232,7 @@ impl HostLocale {
         let timezone = std::fs::read_to_string("/etc/timezone")
             .ok()
             .map(|zone| zone.trim().to_string())
+            .filter(|zone| TIMEZONES.contains(&zone.as_str()))
             .or_else(|| {
                 let link = std::fs::read_link("/etc/localtime").ok()?;
                 let text = link.to_string_lossy().into_owned();
@@ -237,6 +247,52 @@ impl HostLocale {
             timezone,
         }
     }
+    /// `de_DE.utf8`, `de_DE.UTF-8@euro` or `de_DE` → `de_DE.UTF-8` when offered.
+    fn locale_code(value: &str) -> Option<String> {
+        let base = value.split(['.', '@']).next()?.trim();
+        if base.is_empty() || base == "C" || base == "POSIX" {
+            return None;
+        }
+        let code = format!("{base}.UTF-8");
+        LOCALES.iter().any(|(c, _)| *c == code).then_some(code)
+    }
+    fn x_keyboard() -> (Option<String>, Option<String>) {
+        let Ok(output) = std::process::Command::new("setxkbmap")
+            .arg("-query")
+            .stderr(std::process::Stdio::null())
+            .output()
+        else {
+            return (None, None);
+        };
+        let text = String::from_utf8_lossy(&output.stdout);
+        let field = |name: &str| {
+            text.lines().find_map(|line| {
+                let value = line.strip_prefix(name)?.trim_start().strip_prefix(':')?;
+                first_item(Some(value.trim().to_string()))
+            })
+        };
+        (field("layout"), field("variant"))
+    }
+}
+
+/// `KEY=value` or `KEY="value"` from a shell-style file.
+fn shell_value(text: &str, key: &str) -> Option<String> {
+    text.lines().find_map(|line| {
+        let value = line.trim().strip_prefix(key)?.strip_prefix('=')?;
+        Some(
+            value
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string(),
+        )
+    })
+}
+
+/// The first of a comma-separated list, if not empty.
+fn first_item(value: Option<String>) -> Option<String> {
+    let first = value?.split(',').next()?.trim().to_string();
+    (!first.is_empty()).then_some(first)
 }
 
 /// The kernel build profile a base kind uses (`build-monitor-kernel.sh`).
@@ -588,6 +644,30 @@ mod tests {
                 .unwrap()
                 .len(),
             8
+        );
+    }
+
+    #[test]
+    fn host_locale_values_are_normalised() {
+        assert_eq!(
+            HostLocale::locale_code("de_DE.utf8").as_deref(),
+            Some("de_DE.UTF-8")
+        );
+        assert_eq!(
+            HostLocale::locale_code("en_GB@euro").as_deref(),
+            Some("en_GB.UTF-8")
+        );
+        assert_eq!(HostLocale::locale_code("C.UTF-8"), None);
+        assert_eq!(HostLocale::locale_code("xx_YY.UTF-8"), None);
+        let file = "XKBMODEL=\"pc105\"\nXKBLAYOUT=\"de,us\"\nXKBVARIANT=\"\"\n";
+        assert_eq!(
+            first_item(shell_value(file, "XKBLAYOUT")).as_deref(),
+            Some("de")
+        );
+        assert_eq!(first_item(shell_value(file, "XKBVARIANT")), None);
+        assert_eq!(
+            shell_value("LANG='fr_FR.UTF-8'", "LANG").as_deref(),
+            Some("fr_FR.UTF-8")
         );
     }
 

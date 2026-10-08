@@ -71,6 +71,10 @@ pub struct BuildWizard {
     search: String,
     /// Show the last build's progress instead of the questions.
     show_status: bool,
+    /// What this computer uses, offered as the defaults and marked in lists.
+    detected: build::HostLocale,
+    /// The page whose list was last scrolled to its selection.
+    scrolled: Option<Page>,
 }
 impl Default for BuildWizard {
     fn default() -> Self {
@@ -84,6 +88,8 @@ impl Default for BuildWizard {
             ],
             search: String::new(),
             show_status: true,
+            detected: build::HostLocale::detect(),
+            scrolled: None,
         }
     }
 }
@@ -269,8 +275,16 @@ impl BuildWizard {
         }
     }
 
+    /// Scroll a page's list to its selection the first time the page shows.
+    fn take_scroll(&mut self, page: Page) -> bool {
+        let first = self.scrolled != Some(page);
+        self.scrolled = Some(page);
+        first
+    }
+
     fn language(&mut self, ui: &mut egui::Ui) -> bool {
         ui.label("Choose the language and locale of the installed system.");
+        let scroll = self.take_scroll(Page::Language);
         let options = &mut self.options[self.profile];
         pick_list(
             ui,
@@ -280,12 +294,15 @@ impl BuildWizard {
                 .iter()
                 .map(|(code, label)| (*code, format!("{label} — {code}"))),
             &mut options.locale,
+            scroll,
+            self.detected.locale.as_deref(),
         );
         true
     }
 
     fn keyboard(&mut self, ui: &mut egui::Ui) -> bool {
         ui.label("Choose the keyboard layout.");
+        let scroll = self.take_scroll(Page::Keyboard);
         let options = &mut self.options[self.profile];
         let before = options.keyboard_layout.clone();
         pick_list(
@@ -296,6 +313,8 @@ impl BuildWizard {
                 .iter()
                 .map(|(code, label)| (*code, format!("{label} — {code}"))),
             &mut options.keyboard_layout,
+            scroll,
+            self.detected.layout.as_deref(),
         );
         if options.keyboard_layout != before {
             options.keyboard_variant.clear();
@@ -325,6 +344,7 @@ impl BuildWizard {
 
     fn time_zone(&mut self, ui: &mut egui::Ui) -> bool {
         ui.label("Choose the time zone of the installed system.");
+        let scroll = self.take_scroll(Page::TimeZone);
         let options = &mut self.options[self.profile];
         pick_list(
             ui,
@@ -332,6 +352,8 @@ impl BuildWizard {
             &mut self.search,
             TIMEZONES.iter().map(|zone| (*zone, zone.replace('_', " "))),
             &mut options.timezone,
+            scroll,
+            self.detected.timezone.as_deref(),
         );
         true
     }
@@ -556,14 +578,30 @@ impl BuildWizard {
     }
 }
 
-/// Searchable single-choice list: `items` are (value, label).
+/// Searchable single-choice list: `items` are (value, label). The current
+/// choice is named above the list (marked when it is what this computer
+/// uses), and the list scrolls to it when `scroll` is set.
 fn pick_list<'a>(
     ui: &mut egui::Ui,
     id: &str,
     search: &mut String,
     items: impl Iterator<Item = (&'a str, String)>,
     selected: &mut String,
+    scroll: bool,
+    detected: Option<&str>,
 ) {
+    let items: Vec<_> = items.collect();
+    let current = items
+        .iter()
+        .find(|(value, _)| *value == selected.as_str())
+        .map_or(selected.clone(), |(_, label)| label.clone());
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new("Selected:").color(theme::MUTED));
+        ui.label(RichText::new(current).strong());
+        if detected == Some(selected.as_str()) {
+            ui.colored_label(theme::GOOD, "detected from this computer");
+        }
+    });
     ui.horizontal(|ui| {
         ui.label("Search");
         ui.add(egui::TextEdit::singleline(search).desired_width(240.0));
@@ -578,8 +616,17 @@ fn pick_list<'a>(
                 if !needle.is_empty() && !label.to_lowercase().contains(&needle) {
                     continue;
                 }
-                if ui.selectable_label(selected == value, label).clicked() {
+                let label = if detected == Some(value) {
+                    format!("{label}  (this computer)")
+                } else {
+                    label
+                };
+                let response = ui.selectable_label(selected == value, label);
+                if response.clicked() {
                     *selected = value.to_string();
+                }
+                if scroll && selected == value {
+                    response.scroll_to_me(Some(egui::Align::Center));
                 }
             }
         });
