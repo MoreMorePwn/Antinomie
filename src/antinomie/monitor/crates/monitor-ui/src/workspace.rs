@@ -42,6 +42,7 @@ pub(crate) struct WorkspaceLayout {
     #[serde(default)]
     version: u32,
     dock: DockState<Panel>,
+    /// Outer/chrome origin plus inner/content size, in egui points.
     geometry: BTreeMap<usize, Rect>,
     #[serde(skip)]
     drag: Option<(Panel, SurfaceIndex)>,
@@ -121,7 +122,8 @@ impl WorkspaceLayout {
         for (id, open) in app.terminal_views() {
             let panel = Panel::Terminal(id);
             if open && self.dock.find_tab(&panel).is_none() {
-                self.dock.add_window(vec![panel]);
+                let surface = self.dock.add_window(vec![panel]);
+                self.geometry.remove(&surface.0);
             } else if !open {
                 if let Some(location) = self.dock.find_tab(&panel) {
                     self.dock.remove_tab(location);
@@ -141,13 +143,7 @@ impl WorkspaceLayout {
                 .next()
                 .map(|panel| app.panel_title(panel))
                 .unwrap_or_else(|| "Workspace".into());
-            let mut builder = egui::ViewportBuilder::default()
-                .with_title(title)
-                .with_inner_size([820.0, 520.0])
-                .with_min_inner_size([360.0, 220.0]);
-            if let Some(rect) = self.geometry.get(&index) {
-                builder = builder.with_position(rect.min).with_inner_size(rect.size());
-            }
+            let builder = self.native_builder(index, title);
             let mut closed = false;
             ctx.show_viewport_immediate(
                 egui::ViewportId::from_hash_of(("workspace", index)),
@@ -157,8 +153,8 @@ impl WorkspaceLayout {
                     if closed {
                         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                     }
-                    if let Some(rect) = ctx.input(|input| input.viewport().inner_rect) {
-                        self.geometry.insert(index, rect);
+                    if class != egui::ViewportClass::Embedded {
+                        ctx.input(|input| self.remember_geometry(index, input.viewport()));
                     }
                     if class == egui::ViewportClass::Embedded {
                         egui::Window::new("Workspace")
@@ -186,6 +182,27 @@ impl WorkspaceLayout {
         if let Some(position) = self.released.take() {
             if let Some((panel, source)) = self.drag.take() {
                 self.drop_panel(&panel, source, position);
+            }
+        }
+    }
+
+    fn native_builder(&self, index: usize, title: String) -> egui::ViewportBuilder {
+        let mut builder = egui::ViewportBuilder::default()
+            .with_title(title)
+            .with_inner_size([820.0, 520.0])
+            .with_min_inner_size([360.0, 220.0]);
+        if let Some(rect) = self.geometry.get(&index) {
+            builder = builder.with_position(rect.min).with_inner_size(rect.size());
+        }
+        builder
+    }
+
+    fn remember_geometry(&mut self, index: usize, viewport: &egui::ViewportInfo) {
+        if let (Some(outer), Some(inner)) = (viewport.outer_rect, viewport.inner_rect) {
+            // with_position sets the outer origin; reusing the inner origin drifts.
+            let rect = Rect::from_min_size(outer.min, inner.size());
+            if rect.is_finite() && rect.width() >= 200.0 && rect.height() >= 100.0 {
+                self.geometry.insert(index, rect);
             }
         }
     }
@@ -351,6 +368,7 @@ impl WorkspaceLayout {
     fn close_surface(&mut self, app: &mut MonitorApp, surface: SurfaceIndex) {
         let panels: Vec<_> = self.dock[surface].tabs().cloned().collect();
         self.dock.remove_surface(surface);
+        self.geometry.remove(&surface.0);
         for panel in panels {
             if let Panel::Terminal(id) = panel {
                 app.close_terminal_view(&id);
@@ -412,6 +430,78 @@ impl TabViewer for Viewer<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decorated_viewport_updates_do_not_move_or_grow_the_window() {
+        let mut layout = WorkspaceLayout::default();
+        let mut outer_origin = egui::pos2(100.0, 80.0);
+        let mut inner_size = egui::vec2(820.0, 520.0);
+        let mut builder = egui::ViewportBuilder::default()
+            .with_title("Terminal")
+            .with_position(outer_origin)
+            .with_inner_size(inner_size);
+        for frame in 0..64 {
+            if frame == 32 {
+                outer_origin = egui::pos2(-240.0, 160.0);
+                inner_size = egui::vec2(740.0, 460.0);
+            }
+            let viewport = egui::ViewportInfo {
+                outer_rect: Some(Rect::from_min_size(
+                    outer_origin,
+                    inner_size + egui::vec2(16.0, 36.0),
+                )),
+                inner_rect: Some(Rect::from_min_size(
+                    outer_origin + egui::vec2(8.0, 28.0),
+                    inner_size,
+                )),
+                ..Default::default()
+            };
+            layout.remember_geometry(1, &viewport);
+            let next = layout.native_builder(1, "Terminal".into());
+            assert_eq!(next.position, Some(outer_origin));
+            assert_eq!(next.inner_size, Some(inner_size));
+            let (commands, recreate) = builder.patch(next);
+            assert!(!recreate);
+            if frame != 32 {
+                assert!(!commands.iter().any(|command| matches!(
+                    command,
+                    egui::ViewportCommand::OuterPosition(_) | egui::ViewportCommand::InnerSize(_)
+                )));
+            }
+        }
+    }
+
+    #[test]
+    fn missing_outer_position_never_substitutes_the_inner_origin() {
+        let mut layout = WorkspaceLayout::default();
+        let inner = Rect::from_min_size(egui::pos2(108.0, 108.0), egui::vec2(820.0, 520.0));
+        layout.remember_geometry(
+            1,
+            &egui::ViewportInfo {
+                inner_rect: Some(inner),
+                ..Default::default()
+            },
+        );
+        assert!(!layout.geometry.contains_key(&1));
+        let previous = Rect::from_min_size(egui::pos2(100.0, 80.0), inner.size());
+        layout.geometry.insert(1, previous);
+        layout.remember_geometry(1, &egui::ViewportInfo::default());
+        assert_eq!(layout.geometry[&1], previous);
+    }
+
+    #[test]
+    fn saved_geometry_preserves_outer_origin_and_inner_size() {
+        let mut layout = WorkspaceLayout::default();
+        let surface = layout.dock.add_window(vec![Panel::Terminal("test".into())]);
+        let rect = Rect::from_min_size(egui::pos2(-240.0, 160.0), egui::vec2(740.0, 460.0));
+        layout.geometry.insert(surface.0, rect);
+        let encoded = serde_json::to_vec(&layout.geometry).unwrap();
+        layout.geometry = serde_json::from_slice(&encoded).unwrap();
+        let restored = WorkspaceLayout::restore(Some(layout));
+        let builder = restored.native_builder(surface.0, "Terminal".into());
+        assert_eq!(builder.position, Some(rect.min));
+        assert_eq!(builder.inner_size, Some(rect.size()));
+    }
 
     fn leaf_tabs(layout: &WorkspaceLayout, node: NodeIndex) -> Vec<Panel> {
         layout.dock.main_surface()[node]
@@ -552,12 +642,14 @@ mod tests {
             Rect::from_min_size(egui::pos2(200.0, 100.0), egui::vec2(800.0, 500.0)),
         ));
         layout.drop_panel(&trace, detached, egui::pos2(600.0, 350.0));
-        assert!(layout
-            .dock
-            .find_tab(&trace)
-            .expect("trace docked")
-            .0
-            .is_main());
+        assert!(
+            layout
+                .dock
+                .find_tab(&trace)
+                .expect("trace docked")
+                .0
+                .is_main()
+        );
         for panel in [
             Panel::Trace,
             Panel::RunHistory,
@@ -650,12 +742,14 @@ mod tests {
             detached_analysis,
             egui::pos2(400.0, 250.0),
         );
-        assert!(restored
-            .dock
-            .find_tab(&Panel::StaticAnalysis)
-            .unwrap()
-            .0
-            .is_main());
+        assert!(
+            restored
+                .dock
+                .find_tab(&Panel::StaticAnalysis)
+                .unwrap()
+                .0
+                .is_main()
+        );
         assert_eq!(
             restored.dock.find_tab(&Panel::Trace).unwrap().0,
             detached_trace
