@@ -1,0 +1,114 @@
+Description: antinomie: recycle retained capture records without a per-boot limit
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-09
+
+Capture cookies count up for the whole boot and are never reused; a ring of the 64 most recent records stays addressable for STOP and STATUS, and a slot is reused only after its capture stopped and an RCU grace period passed. Contract revision 12.
+
+---
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index a8b8518d2..1dc9b5a89 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -11,7 +11,7 @@
+  */
+ #define ANTC_VERSION 1
+ /* Contract revision of the guest's observable behaviour (native-schema-slices). */
+-#define ANTC_REVISION 11
++#define ANTC_REVISION 12
+ #define ANTC_HEADER_SIZE 8
+ #define ANTC_UPLOAD_BEGIN 0x1001
+ #define ANTC_UPLOAD_CHUNK 0x1002
+@@ -42,7 +42,7 @@
+ #define ANTC_PROCESS_PAGE_MAX 64
+ #define ANTC_PROCESS_ENTRY_SIZE 64
+ #define ANTC_CAPTURE_STATUS_SIZE 32
+-#define ANTC_CAPTURE_MAX_COUNT 64
++#define ANTC_CAPTURE_RETAINED 64
+ #define ANTC_CAPTURE_ACTIVE 1
+ #define ANTC_CAPTURE_STOPPED 2
+ #define ANTC_CAPTURE_TAILS_POSSIBLE 4
+@@ -130,7 +130,10 @@
+  * Validates live identity, includes current thread group and future descendants
+  * only. CAPTURE_ALL: header only; existing/future userspace observations.
+  * Both reply with u64 capture_cookie at 0 and u64 stream_id at 8 (16 bytes).
+- * One active observer per boot; at most 64 non-reused capture IDs per boot.
++ * One active observer at a time. Capture IDs count up from 1 and are never
++ * reused within a boot; there is no per-boot capture limit (revision 12).
++ * STOP and STATUS address the 64 most recent captures; an older cookie
++ * returns -ESRCH like an unknown one (such a capture has necessarily stopped).
+  * Existing launched-run root ownership and PTYs remain unchanged.
+  * CAPTURE_STOP / STATUS: header flags=0, u64 capture_cookie at 8.
+  * STATUS cookie=0 queries the active observer (all-zero reply if none).
+diff --git a/kernel/antinomie/observer.c b/kernel/antinomie/observer.c
+index 31ced31aa..acf19c99d 100644
+--- a/kernel/antinomie/observer.c
++++ b/kernel/antinomie/observer.c
+@@ -17,13 +17,21 @@ struct ant_observer {
+ 	u32 mode;
+ };
+ 
+-/* The control owner serializes writes. RCU readers retain immutable admission
+- * fields; boot-lifetime slots are never freed or reused, including after stop.
++/* The control owner serializes writes. A ring keeps the most recent captures
++ * addressable; cookies count up for the whole boot and are never reused, so a
++ * recycled slot cannot alias an older capture. A slot is recycled only after
++ * its capture stopped and an RCU grace period passed, so admission readers
++ * never see its immutable fields change under them.
+  */
+-static struct ant_observer observers[ANTC_CAPTURE_MAX_COUNT];
+-static unsigned int observer_count;
++static struct ant_observer observers[ANTC_CAPTURE_RETAINED];
++static u64 last_cookie;
+ static struct ant_observer __rcu *active_observer;
+ 
++static struct ant_observer *slot(u64 cookie)
++{
++	return &observers[(cookie - 1) % ANTC_CAPTURE_RETAINED];
++}
++
+ u64 ant_observer_admit(struct task_struct *task)
+ {
+ 	struct ant_observer *observer;
+@@ -138,8 +146,14 @@ static int start(u32 opcode, const u8 *args, size_t args_len, u8 *reply,
+ 		return -EMSGSIZE;
+ 	if (rcu_access_pointer(active_observer))
+ 		return -EBUSY;
+-	if (observer_count == ANTC_CAPTURE_MAX_COUNT)
++	if (last_cookie == U64_MAX)
+ 		return -ENOSPC;
++	observer = slot(last_cookie + 1);
++	/* The slot's previous capture stopped (only one is ever active); wait out
++	 * admission readers that loaded it before the stop.
++	 */
++	if (observer->cookie)
++		synchronize_rcu();
+ 
+ 	/* Fork copies the marker before publication under this same lock. An
+ 	 * attach therefore includes exactly the threads present at this boundary.
+@@ -159,8 +173,8 @@ static int start(u32 opcode, const u8 *args, size_t args_len, u8 *reply,
+ 			return -ESRCH;
+ 		}
+ 	}
+-	observer = &observers[observer_count++];
+-	observer->cookie = observer_count;
++	observer->cookie = ++last_cookie;
++	observer->stop_ns = 0;
+ 	observer->mode = opcode == ANTC_CAPTURE_ATTACH ?
+ 		ANTC_CAPTURE_PROCESS : ANTC_CAPTURE_USERSPACE;
+ 	observer->start_ns = ktime_get_ns();
+@@ -197,9 +211,11 @@ int ant_observer_command(u32 opcode, const u8 *args, size_t args_len,
+ 	if (!cookie && opcode == ANTC_CAPTURE_STATUS) {
+ 		observer = rcu_access_pointer(active_observer);
+ 	} else {
+-		if (!cookie || cookie > observer_count)
++		if (!cookie || cookie > last_cookie)
++			return -ESRCH;
++		observer = slot(cookie);
++		if (observer->cookie != cookie)
+ 			return -ESRCH;
+-		observer = &observers[cookie - 1];
+ 	}
+ 	if (opcode == ANTC_CAPTURE_STOP && !observer->stop_ns) {
+ 		observer->stop_ns = ktime_get_ns();

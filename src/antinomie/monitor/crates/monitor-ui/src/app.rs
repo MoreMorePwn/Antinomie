@@ -1598,7 +1598,7 @@ impl MonitorApp {
                         if self.running() && !self.observer_supported() {
                             ui.colored_label(
                                 theme::MUTED,
-                                "Capture unavailable: guest revision 11 required",
+                                "Capture unavailable: needs a base for Antinomie 0.2.0 or newer",
                             );
                         }
                         if ui

@@ -3,7 +3,13 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 pub const PROCESS_PAGE_MAX_COUNT: u32 = 64;
+/// Captures per boot on guests before revision 12, which never reuse a slot.
 pub const OBSERVATION_MAX_COUNT: usize = 64;
+/// Capture archives kept open per boot for late tails; matches the guest's
+/// retained capture records (revision 12 recycles them, IDs never repeat).
+pub const OBSERVATION_RETAINED: usize = 64;
+/// First guest revision without a per-boot capture limit.
+pub const UNLIMITED_CAPTURE_REVISION: u32 = 12;
 
 /// Boot and task identity own selection; PID alone never authorizes attachment.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

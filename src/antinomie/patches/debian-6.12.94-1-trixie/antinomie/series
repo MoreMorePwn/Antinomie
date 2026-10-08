@@ -18,3 +18,4 @@
 0014-antinomie-capture-bounded-initial-executable-specimens-for-static-analysis.patch
 0015-antinomie-keep-specimen-reservations-until-memory-is-freed.patch
 0016-antinomie-add-independent-process-tree-and-userspace-capture-sessions.patch
+0017-antinomie-recycle-retained-capture-records-without-a-per-boot-limit.patch

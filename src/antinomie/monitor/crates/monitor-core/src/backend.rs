@@ -3,7 +3,10 @@ use crate::{
     build,
     capture::CaptureSession,
     control, distribution,
-    observation::{CaptureScope, CaptureState, CaptureSummary, OBSERVATION_MAX_COUNT},
+    observation::{
+        CaptureScope, CaptureState, CaptureSummary, OBSERVATION_MAX_COUNT, OBSERVATION_RETAINED,
+        UNLIMITED_CAPTURE_REVISION,
+    },
     parser::{Assembler, u32_at, u64_at},
     run::ProgramRun,
     storage::{self, Bundle, RawCapture},
@@ -280,12 +283,18 @@ impl Session {
         {
             return Err("stop the active capture before starting another".into());
         }
-        if self.captures.len() >= OBSERVATION_MAX_COUNT {
-            return Err(
-                "this VM boot reached the 64-capture limit; restart the VM before another capture"
-                    .into(),
-            );
+        let revision = self
+            .capture
+            .guest_kernel
+            .as_ref()
+            .and_then(|kernel| kernel.revision)
+            .unwrap_or(0);
+        if revision < UNLIMITED_CAPTURE_REVISION && self.captures.len() >= OBSERVATION_MAX_COUNT {
+            return Err(format!(
+                "this guest kernel (revision {revision}) allows {OBSERVATION_MAX_COUNT} captures per boot; restart the VM, or use a base for Antinomie 0.2.0 or newer, which has no limit"
+            ));
         }
+        self.retire_captures(snapshot);
         let (opcode, args) = match &scope {
             CaptureScope::Process { root } => {
                 if root.boot_id != self.boot_id {
@@ -389,6 +398,34 @@ impl Session {
                 Err(format!(
                     "{error}; capture start outcome unknown; no automatic retry"
                 ))
+            }
+        }
+    }
+    /// Keep at most `OBSERVATION_RETAINED` capture archives open: close the
+    /// oldest stopped ones, whose late tails then stay in canonical history
+    /// only. Active or unacknowledged captures are never closed here.
+    fn retire_captures(&mut self, snapshot: &mut Snapshot) {
+        while self.captures.len() >= OBSERVATION_RETAINED {
+            let Some(id) = self
+                .captures
+                .iter()
+                .filter(|(_, capture)| capture.summary.state == CaptureState::Stopped)
+                .min_by_key(|(id, capture)| (capture.summary.capture_cookie, (*id).clone()))
+                .map(|(id, _)| id.clone())
+            else {
+                break;
+            };
+            if let Some(mut capture) = self.captures.remove(&id) {
+                let note = format!(
+                    "archive closed after {OBSERVATION_RETAINED} newer captures in this boot; later tails are kept in the VM history only"
+                );
+                capture.summary.incomplete_reason = Some(match capture.summary.incomplete_reason.take() {
+                    Some(reason) => format!("{reason}; {note}"),
+                    None => note,
+                });
+                if let Err(error) = capture.finalize(&snapshot.health) {
+                    snapshot.last_error = Some(format!("capture finalization: {error}"));
+                }
             }
         }
     }
@@ -2303,7 +2340,7 @@ impl Worker {
             .and_then(|kernel| kernel.revision)
             .is_some_and(|revision| revision >= 11)
         {
-            return Err("process attachment and Capture All are unavailable; running guest requires revision 11".into());
+            return Err("process attachment and Capture All are unavailable; running guest requires a base for Antinomie 0.2.0 or newer".into());
         }
         match command {
             Command::ListProcesses { after_pid } => {

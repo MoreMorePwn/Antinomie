@@ -11,7 +11,7 @@
  */
 #define ANTC_VERSION 1
 /* Contract revision of the guest's observable behaviour (native-schema-slices). */
-#define ANTC_REVISION 11
+#define ANTC_REVISION 12
 #define ANTC_HEADER_SIZE 8
 #define ANTC_UPLOAD_BEGIN 0x1001
 #define ANTC_UPLOAD_CHUNK 0x1002
@@ -42,7 +42,7 @@
 #define ANTC_PROCESS_PAGE_MAX 64
 #define ANTC_PROCESS_ENTRY_SIZE 64
 #define ANTC_CAPTURE_STATUS_SIZE 32
-#define ANTC_CAPTURE_MAX_COUNT 64
+#define ANTC_CAPTURE_RETAINED 64
 #define ANTC_CAPTURE_ACTIVE 1
 #define ANTC_CAPTURE_STOPPED 2
 #define ANTC_CAPTURE_TAILS_POSSIBLE 4
@@ -130,7 +130,10 @@
  * Validates live identity, includes current thread group and future descendants
  * only. CAPTURE_ALL: header only; existing/future userspace observations.
  * Both reply with u64 capture_cookie at 0 and u64 stream_id at 8 (16 bytes).
- * One active observer per boot; at most 64 non-reused capture IDs per boot.
+ * One active observer at a time. Capture IDs count up from 1 and are never
+ * reused within a boot; there is no per-boot capture limit (revision 12).
+ * STOP and STATUS address the 64 most recent captures; an older cookie
+ * returns -ESRCH like an unknown one (such a capture has necessarily stopped).
  * Existing launched-run root ownership and PTYs remain unchanged.
  * CAPTURE_STOP / STATUS: header flags=0, u64 capture_cookie at 8.
  * STATUS cookie=0 queries the active observer (all-zero reply if none).

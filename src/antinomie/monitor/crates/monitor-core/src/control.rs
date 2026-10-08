@@ -14,7 +14,7 @@ pub(crate) const INFO: u32 = 0x1021;
 pub(crate) const INFO_SIZE: usize = 160;
 pub(crate) const SHUTDOWN: u32 = 0x1030;
 /// Guest contract revision this host implements (`ANTC_REVISION`).
-pub const REVISION: u32 = 11;
+pub const REVISION: u32 = 12;
 pub(crate) const PROCESS_LIST: u32 = 0x1050;
 pub(crate) const CAPTURE_ATTACH: u32 = 0x1051;
 pub(crate) const CAPTURE_ALL: u32 = 0x1052;
@@ -441,6 +441,14 @@ mod tests {
             ("ANTC_CAPTURE_ALL", CAPTURE_ALL),
             ("ANTC_CAPTURE_STOP", CAPTURE_STOP),
             ("ANTC_CAPTURE_STATUS", CAPTURE_STATUS),
+            (
+                "ANTC_CAPTURE_RETAINED",
+                crate::observation::OBSERVATION_RETAINED as u32,
+            ),
+            (
+                "ANTC_PROCESS_PAGE_MAX",
+                crate::observation::PROCESS_PAGE_MAX_COUNT,
+            ),
         ] {
             assert_eq!(define(name), value, "{name}");
         }
