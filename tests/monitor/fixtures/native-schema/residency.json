@@ -1,0 +1,67 @@
+{
+  "contract": "native-schema-slices.md revision 8",
+  "slice": "residency",
+  "setup": {
+    "notes": [
+      "Main run (UID 1000). The probe writes two pages to the file 'residency': page 0 starts with 'missing-ant-residency' and a NUL, page 1 with 'ANTINOMIE-RESIDE'",
+      "Each page is mapped PROT_READ, MAP_PRIVATE in its own mapping and never touched, so neither has a page-table entry; a third page is mapped and unmapped",
+      "openat_not_resident opens the path in page 0 (ENOENT, the kernel faults the page in); pwrite_not_resident writes 16 bytes from page 1 to the file at offset 2 pages; pwrite_unmapped passes the unmapped page (EFAULT)"
+    ]
+  },
+  "cases": [
+    {
+      "label": "residency.openat_not_resident",
+      "syscall": "openat",
+      "result": "errno:ENOENT",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.path",
+          "layout": "",
+          "size": "max",
+          "captured": 0,
+          "declared": 4096,
+          "status": "NOT_RESIDENT",
+          "data": null
+        }
+      ]
+    },
+    {
+      "label": "residency.pwrite_not_resident",
+      "syscall": "pwrite64",
+      "result": "positive",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.data",
+          "layout": "",
+          "size": 16,
+          "captured": 0,
+          "declared": 16,
+          "status": "NOT_RESIDENT",
+          "data": null
+        }
+      ]
+    },
+    {
+      "label": "residency.pwrite_unmapped",
+      "syscall": "pwrite64",
+      "result": "errno:EFAULT",
+      "fields": [
+        {
+          "phase": "entry",
+          "arg": 1,
+          "key": "arg1.data",
+          "layout": "",
+          "size": 16,
+          "captured": 0,
+          "declared": 16,
+          "status": "COPY_FAULT",
+          "data": null
+        }
+      ]
+    }
+  ]
+}

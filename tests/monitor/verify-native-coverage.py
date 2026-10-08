@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 INVENTORY = ROOT / "src/antinomie/monitor/protocol/native-syscalls.json"
 STATUS_NAMES = ["COMPLETE", "COPY_FAULT", "INVALID_EXTENT", "UNKNOWN_EXTENT", "NO_DECODER",
                 "NULL_POINTER", "ADDRESS_ONLY", "ASYNC_UNOBSERVED", "RESOURCE_EXHAUSTED",
-                "ABORTED_ON_LOSS", "CONTEXT_MISSING", "NOT_WRITTEN"]
+                "ABORTED_ON_LOSS", "CONTEXT_MISSING", "NOT_WRITTEN", "NOT_RESIDENT"]
 U64_MAX = (1 << 64) - 1
 FIELD_DATA_BUDGET = 1 << 20
 

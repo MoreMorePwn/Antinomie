@@ -1,10 +1,11 @@
 {
-  "contract": "native-schema-slices.md revision 7",
+  "contract": "native-schema-slices.md revision 8",
   "slice": "2f",
   "setup": {
     "notes": [
       "Main run (UID 1000). user_data values 0x2f000000000000NN identify each case",
       "uring_read_iowq reads 32 bytes from a pipe with IOSQE_ASYNC, forcing an io-wq worker",
+      "aio_direct_readv_reaped reads two 4096-byte blocks with O_DIRECT through one IOCB_CMD_PREADV whose iovec lists the second buffer first; the probe clears its iovec array after io_submit, and the reap reads the buffers the kernel imported",
       "aio_direct_read_reaped reads one 4096-byte block with O_DIRECT through io_submit; its interrupt completion is observed when io_getevents reaps it",
       "sqpoll_write submits a 16-byte pipe write on an IORING_SETUP_SQPOLL ring",
       "bind binds an AF_UNIX socket to an abstract name; files_update replaces two registered file slots; waitid reaps a forked child that exited with status 0",
@@ -51,6 +52,34 @@
           "key": "async.payload.output",
           "layout": "",
           "size": 4096,
+          "status": "COMPLETE",
+          "data": "observed"
+        }
+      ]
+    },
+    {
+      "label": "2f.aio_direct_readv_reaped",
+      "user_data": "0x2f0000000000000e",
+      "stages": [
+        1,
+        2,
+        4,
+        7
+      ],
+      "fields": [
+        {
+          "stage": 7,
+          "key": "async.payload.iov",
+          "layout": "linux-6.12.94/x86_64/iovec[]",
+          "size": 32,
+          "status": "COMPLETE",
+          "data": null
+        },
+        {
+          "stage": 7,
+          "key": "async.payload.output",
+          "layout": "",
+          "size": 8192,
           "status": "COMPLETE",
           "data": "observed"
         }

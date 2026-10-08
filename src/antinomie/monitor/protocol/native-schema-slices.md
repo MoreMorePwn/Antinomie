@@ -1,6 +1,6 @@
 # Native Schema Slice Contract: 2A, 2B, 2G
 
-ANT-T0009 producer/consumer contract, revision 3, 2026-10-07. Section 9 and the 2B fixtures were approved by the user on 2026-10-07.
+ANT-T0009 producer/consumer contract, revision 8, 2026-10-08 (Sections 8–15 record revisions 2–8). Section 9 and the 2B fixtures were approved by the user on 2026-10-07.
 Status: approved by the user on 2026-10-07, including choice (a) for unknown
 socket options (raw `optval` up to `optlen`, capped at 128 KiB). Revision 2
 records corrections found while implementing and testing slice 2A; see Section 8.
@@ -272,7 +272,7 @@ The user also chose a root-run step inside the disposable VM for the slice 2H `b
 | `dir_name` | `arg1.dir_name` string, ceiling `PATH_MAX` |
 | `type` | `arg2.type` string, ceiling `PATH_MAX` |
 | `flags` | scalar; the host decodes `MS_*` names |
-| `data` | `arg4.data`, layout `mount_options`: the readable prefix of one page (`PAGE_SIZE`), as `copy_mount_options()` reads it. If the page has an unreadable part, `arg4.data.tail` records the remainder with `ANT_COPY_FAULT`; this can also mean a non-resident page the kernel would have faulted in. NULL `data` records no field. The UI shows the bytes up to the first NUL as text when they are printable |
+| `data` | `arg4.data`, layout `mount_options`: the readable prefix of one page (`PAGE_SIZE`), as `copy_mount_options()` reads it. If the page has an unreadable part, `arg4.data.tail` records the remainder with `ANT_COPY_FAULT`; a page that is mapped but not resident records `ANT_NOT_RESIDENT` instead (revision 8, Section 15.1). NULL `data` records no field. The UI shows the bytes up to the first NUL as text when they are printable |
 
 ### 10.2 quotactl(cmd, special, id, addr) and quotactl_fd(fd, cmd, id, addr)
 
@@ -581,4 +581,48 @@ These follow the rules above; no fixture changes.
   `FILES_UPDATE` count above the kernel's fixed-file limit is recorded the same way.
 - **semctl (13.2).** `GETALL` records its array only when the copy to the caller
   succeeds (13.5); an array above 1 MiB is `ANT_RESOURCE_EXHAUSTED`.
+
+## 15. Revision 8: ANT-T0009 follow-up fixes (2026-10-08)
+
+The user asked for the problems found during ANT-T0009 to be fixed on
+2026-10-08 and chose, for 15.1, to label such fields rather than have the
+recorder fault pages in. Fixtures: `fixtures/native-schema/residency.json` and
+the case `2f.aio_direct_readv_reaped` in `fixtures/native-schema-async/2f.json`.
+
+### 15.1 Non-resident pages
+
+The recorder copies user memory without faulting. A page that is mapped but has
+no page-table entry yet (for example a string in a freshly forked child's
+`.rodata`, or an untouched file mapping) fails that copy, although the kernel
+faults the page in for the syscall itself. When a copy fails, the recorder
+checks the failed range under `mmap_read_trylock`:
+
+| Range | Status |
+|---|---|
+| Wholly inside readable mappings of the caller | `ANT_NOT_RESIDENT` (12): no bytes, `captured` 0 |
+| Not wholly mapped readable, or `mmap_lock` not immediately available, or not task context | `ANT_COPY_FAULT`, as before |
+
+`ANT_NOT_RESIDENT` marks the invocation incomplete like `ANT_COPY_FAULT` and is
+counted in the recorder's `copy faults` statistic. Fields read through an
+iterator keep `ANT_COPY_FAULT`. The recorder never faults pages in, so a
+non-resident value is not recorded even though the syscall used it.
+
+### 15.2 Async publication pacing
+
+Queued async records are published by one worker. Before each record it waits,
+up to 10 ms, until the telemetry ring of the CPU it runs on is at most half
+full (`ant_send_room()`, a guest-only addition to the V7 transport API; the wire
+format is unchanged). After the wait it publishes anyway and drops are counted
+as before. The probe no longer pauses after async cases.
+
+### 15.3 Vectored AIO reads at reap (14.2)
+
+`IOCB_CMD_PREADV` reads are now deferred like `IOCB_CMD_PREAD`. A vectored read
+with more than one segment keeps a copy of the iovec array the kernel imported
+(at most 1,024 entries) in its reap entry, so later changes to the process's
+own array cannot redirect the capture. Its stage 7 event carries the iterator
+fields of a stage 4 read: `async.payload.direction`, `async.payload.requested_size`,
+`async.payload.result_offset`, `async.payload.iov` (layout `iovec[]`, the kernel
+copy) and `async.payload.output` with the `res` bytes in iovec order. A
+one-segment `PREADV` is imported as a single buffer and is recorded like `PREAD`.
 

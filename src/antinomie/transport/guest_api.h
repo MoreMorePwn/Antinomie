@@ -8,6 +8,11 @@
  * A zero-length message is valid. Maximum payload length is ring capacity minus framing.
  */
 int ant_send(const void *data, size_t payload_len);
+/* Bytes free in the telemetry ring of the CPU the caller runs on, as of the
+ * consumer's last published tail; U32_MAX when sends would fail regardless.
+ * Advisory: a caller that can sleep uses it to pace bulk publication.
+ */
+u32 ant_send_room(void);
 
 /* Handlers run in sleepable worker context. No recursive registration changes.
  * reply is transport-owned, valid only during the callback.

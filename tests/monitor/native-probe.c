@@ -226,6 +226,36 @@ static void require(int condition, const char *what)
     }
 }
 
+/* A pointer into a mapped page that is not resident records NOT_RESIDENT:
+ * the recorder never faults, but the kernel faults the page in for the call.
+ * An unmapped pointer still records COPY_FAULT. Each page has its own mapping,
+ * so fault-around on one cannot make the other resident.
+ */
+static void residency_cases(void)
+{
+    static const char path[] = "missing-ant-residency";
+    long page = sysconf(_SC_PAGESIZE);
+    char *content = calloc(2, page), *name, *bytes, *gone;
+    int fd = TEST(openat, AT_FDCWD, "residency", O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+
+    require(content && page >= 4096, "residency buffer");
+    memcpy(content, path, sizeof(path));
+    memcpy(content + page, "ANTINOMIE-RESIDE", 16);
+    require(fd >= 0 && TEST(pwrite64, fd, content, 2 * page, 0) == 2 * page, "residency file");
+    name = mmap(NULL, page, PROT_READ, MAP_PRIVATE, fd, 0);
+    bytes = mmap(NULL, page, PROT_READ, MAP_PRIVATE, fd, page);
+    gone = mmap(NULL, page, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    require(name != MAP_FAILED && bytes != MAP_FAILED && gone != MAP_FAILED &&
+            munmap(gone, page) == 0, "residency mappings");
+    CASE("residency.openat_not_resident", openat, ENOENT, AT_FDCWD, name, O_RDONLY, 0);
+    CASE("residency.pwrite_not_resident", pwrite64, 0, fd, bytes, 16, 2 * page);
+    CASE("residency.pwrite_unmapped", pwrite64, EFAULT, fd, gone, 16, 2 * page);
+    require(munmap(name, page) == 0 && munmap(bytes, page) == 0, "residency unmap");
+    TEST(close, fd);
+    TEST(unlink, "residency");
+    free(content);
+}
+
 static void file_cases(void)
 {
     char data[128] = {0}, cwd[4096], names[4096];
@@ -1509,11 +1539,7 @@ static void async_report(const char *label, uint64_t user_data, long result)
     printf("ANT_ASYNC {\"label\":\"%s\",\"user_data\":\"0x%016llx\",\"result\":%ld,"
            "\"observed\":{%s}}\n", label, (unsigned long long)user_data, result,
            pending.observed);
-    pthread_mutex_unlock(&output_lock);    /* Each request queues several async records; pace like the syscall cases
-     * so the kernel publishes them before the next request adds more.
-     */
-    struct timespec pause = {0, 20000000};
-    nanosleep(&pause, NULL);
+    pthread_mutex_unlock(&output_lock);
 }
 
 static int uring_case(struct ring *r, const char *label, uint64_t user_data,
@@ -1584,6 +1610,53 @@ static void slice_2f_cases(void)
             async_report("2f.aio_direct_read_reaped", UD(2), completion.res);
             TEST(close, fd);
             TEST(unlink, "aio-2f");
+            TEST(io_destroy, context);
+            free(data);
+        }
+    }
+
+    /* Vectored AIO O_DIRECT read of two blocks. The process clears its own
+     * iovec array after submission; the reap still reads the buffers the
+     * kernel imported (contract 14.2, vectored reads).
+     */
+    {
+        aio_context_t context = 0;
+        struct iocb request = {0}, *requests[] = {&request};
+        struct io_event completion;
+        struct timespec timeout = {5, 0};
+        struct iovec vectors[2];
+        char *data = NULL;
+        int fd;
+
+        if (TEST(io_setup, 4, &context) == 0) {
+            require(posix_memalign((void **)&data, 4096, 8192) == 0, "2F aligned AIO buffers");
+            for (int i = 0; i < 8192; i++) data[i] = "ANTINOMIE-AIOV-2"[i % 16] + i / 4096;
+            fd = TEST(openat, AT_FDCWD, "aiov-2f", O_CREAT | O_RDWR | O_DIRECT, 0600);
+            require(fd >= 0 && TEST(pwrite64, fd, data, 8192, 0) == 8192, "2F AIOV file");
+            memset(data, 0, 8192);
+            vectors[0] = (struct iovec){data + 4096, 4096};
+            vectors[1] = (struct iovec){data, 4096};
+            request.aio_data = UD(14);
+            request.aio_lio_opcode = IOCB_CMD_PREADV;
+            request.aio_fildes = fd;
+            request.aio_buf = (uintptr_t)vectors;
+            request.aio_nbytes = 2;
+            async_begin();
+            require(TEST(io_submit, context, 1, requests) == 1, "2F AIOV submit");
+            memset(vectors, 0, sizeof(vectors));
+            require(TEST(io_getevents, context, 1, 1, &completion, &timeout) == 1 &&
+                    completion.data == UD(14) && completion.res == 8192, "2F AIOV read");
+            /* Output in iovec order: the second half of data, then the first. */
+            {
+                char output[8192];
+
+                memcpy(output, data + 4096, 4096);
+                memcpy(output + 4096, data, 4096);
+                observe("async.payload.output", output, sizeof(output));
+            }
+            async_report("2f.aio_direct_readv_reaped", UD(14), completion.res);
+            TEST(close, fd);
+            TEST(unlink, "aiov-2f");
             TEST(io_destroy, context);
             free(data);
         }
@@ -1816,16 +1889,10 @@ int main(int argc, char **argv)
     require(argc == 1, "known probe mode");
     require(original >= 0 && mkdtemp(directory) && chdir(directory) == 0,
             "isolated working directory");
-    file_cases(); descriptor_cases(); sockopt_cases(); unavailable_cases();
+    file_cases(); residency_cases(); descriptor_cases(); sockopt_cases(); unavailable_cases();
     prctl_cases(); ptrace_cases(); keyctl_cases(); sysfs_cases(); slice_2c_cases();
     bpf_unprivileged_cases(); rt_sigreturn_case(); slice_2d_cases();
     memory_and_process_cases(); aio_cases(); uring_cases(); slice_2f_cases();
-    /* Async records are published later, in one burst, by a kernel worker.
-     * Let it drain before the pinned threads, so the functional run stays
-     * paced; overflow is exercised separately by --async-stress.
-     */
-    struct timespec drain = {0, 500000000};
-    nanosleep(&drain, NULL);
     require(sched_getaffinity(0, sizeof(available), &available) == 0, "available CPUs");
     for (int cpu = 0; cpu < CPU_SETSIZE && count < 4; cpu++)
         if (CPU_ISSET(cpu, &available)) selected[count++] = cpu;

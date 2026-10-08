@@ -46,6 +46,11 @@ It is task-context-only; the caller supplies valid, stable kernel memory.
 The maximum payload is the ring capacity minus its 32-byte frame header:
 262,112 bytes in the current profile. A full ring returns `-ENOSPC`.
 
+`ant_send_room()` returns the bytes free in the calling CPU's ring as of the
+host's last published tail, or `U32_MAX` when a send would fail regardless. It
+is advisory: a producer that can sleep, such as the async record publisher,
+uses it to pace bulk publication and leave room for other events.
+
 Commands are independent registered callbacks. They receive argument bytes and
 a bounded result buffer; they do not manipulate queues or physical addresses.
 Registration/unregistration is sleepable, and unregister waits for an active

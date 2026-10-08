@@ -85,6 +85,27 @@ out:
 }
 EXPORT_SYMBOL_GPL(ant_send);
 
+u32 ant_send_room(void)
+{
+	struct ant_producer *p;
+	struct ant_queue *q;
+	u64 tail;
+	u32 room = U32_MAX;
+
+	/* Pairs with the release that publishes the rings at setup. */
+	if (!smp_load_acquire(&ready))
+		return room;
+	preempt_disable();
+	p = this_cpu_ptr(&producers);
+	q = &directory[p->index];
+	tail = ANT_ACQ(&q->tail);
+	if (!p->fault && tail <= p->head && p->head - tail <= ANT_TELEMETRY_RING_SIZE)
+		room = ANT_TELEMETRY_RING_SIZE - (p->head - tail);
+	preempt_enable();
+	return room;
+}
+EXPORT_SYMBOL_GPL(ant_send_room);
+
 int ant_register_command(u32 opcode, ant_command_handler fn, void *context)
 {
 	int i, free_slot = -1, error = -ENOSPC;
