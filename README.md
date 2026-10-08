@@ -10,6 +10,15 @@ It is built for malware analysis and reverse engineering: run untrusted code in 
 disposable guest, then read exactly which files, sockets, processes and kernel
 features it touched.
 
+## Demo
+
+[![Watch the Antinomie 0.1.0 workflow demo](assets/demo/antinomie-0.1.0-preview.png)](assets/demo/antinomie-0.1.0.mp4)
+
+[Watch the video](assets/demo/antinomie-0.1.0.mp4): create and boot a BusyBox VM,
+upload and run a harmless program, inspect syscall flags and captured bytes,
+then reopen its saved trace and terminal output. Recorded with **0.1.0** on
+main; pauses are trimmed. [Recording details](assets/demo/README.md).
+
 ## How it works
 
 - **Guest kernel.** The guests run Linux 6.12.94 with a small patch that records
