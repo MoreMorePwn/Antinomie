@@ -43,7 +43,7 @@ def publish_new(source, target):
         raise OSError(code, os.strerror(code), str(target))
 
 
-def refresh(source, kernel, config, output):
+def refresh(source, kernel, config, output, allow_unversioned=False):
     source = source.resolve(strict=True)
     output = output.absolute()
     if output.exists() or output.is_symlink():
@@ -51,6 +51,7 @@ def refresh(source, kernel, config, output):
     helper = helpers()
     image = helper.monitor_helpers()
     image.fixed_display_config(config, kernel)
+    image.stamp_revision({}, kernel, allow_unversioned)
     helper.kernel_release(kernel)
     manifest_path = source / "bundle.json"
     manifest = json.loads(manifest_path.read_text())
@@ -110,6 +111,7 @@ def refresh(source, kernel, config, output):
                         "initrd": "initrd" if "initrd" in artifacts else None,
                         "fixed_display": True, "sha256": hashes,
                         "build_provenance": build_provenance})
+        image.stamp_revision(updated, publish / "kernel", allow_unversioned)
         (publish / "bundle.json").write_text(json.dumps(updated, indent=2) + "\n")
         for path in publish.rglob("*"):
             if path.is_file():
@@ -136,9 +138,12 @@ def main():
     parser.add_argument("--kernel", type=Path, required=True)
     parser.add_argument("--kernel-config", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--allow-unversioned", action="store_true",
+                        help="accept a development kernel without a source id")
     args = parser.parse_args()
     try:
-        print(refresh(args.source, args.kernel, args.kernel_config, args.output))
+        print(refresh(args.source, args.kernel, args.kernel_config, args.output,
+                      args.allow_unversioned))
     except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
         parser.exit(1, "bundle refresh failed: " + str(error) + "\n")
 

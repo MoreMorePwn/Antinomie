@@ -417,6 +417,8 @@ mod tests {
             }),
             fixed_display: true,
             build_provenance: None,
+            antinomie_revision: None,
+            antinomie_source: None,
         }
     }
 

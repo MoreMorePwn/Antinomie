@@ -82,6 +82,33 @@ def embedded_config(kernel):
         raise RuntimeError("fixed display requires the pinned gzip bzImage compression") from error
 
 
+def source_identity(kernel):
+    """The kernel's CONFIG_ANTINOMIE_SOURCE_ID as (revision, series sha256), or None."""
+    for line in embedded_config(kernel).decode().splitlines():
+        if line.startswith("CONFIG_ANTINOMIE_SOURCE_ID="):
+            value = line.split("=", 1)[1].strip('"')
+            break
+    else:
+        return None
+    if not value:
+        return None
+    match = re.fullmatch(r"([1-9][0-9]{0,8}):([0-9a-f]{64})", value)
+    if not match:
+        raise RuntimeError("invalid CONFIG_ANTINOMIE_SOURCE_ID " + repr(value))
+    return int(match[1]), match[2]
+
+
+def stamp_revision(manifest, kernel, allow_unversioned):
+    """Record the patch revision and series the kernel was built from."""
+    identity = source_identity(kernel)
+    if identity is None:
+        if not allow_unversioned:
+            raise RuntimeError("kernel has no Antinomie source id (development build); "
+                               "pass --allow-unversioned to build an unversioned base")
+        return
+    manifest["antinomie_revision"], manifest["antinomie_source"] = identity
+
+
 def fixed_display_config(config, kernel=None):
     """Validate the matching build configuration supplied by the image builder."""
     if config is None:
@@ -187,8 +214,14 @@ def main():
                         help="matching kernel .config; validates built-in fixed-display support")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--base-size-mib", type=int, default=256)
+    parser.add_argument("--allow-unversioned", action="store_true",
+                        help="accept a development kernel without a source id")
     args = parser.parse_args()
     fixed_display = fixed_display_config(args.kernel_config, args.kernel)
+    try:
+        stamp_revision({}, args.kernel, args.allow_unversioned)
+    except RuntimeError as error:
+        parser.error(str(error))
     if not args.kernel.is_file() or args.base_size_mib < 128:
         parser.error("existing kernel and base size of at least 128 MiB required")
     args.output.mkdir(parents=True, exist_ok=True)
@@ -226,6 +259,7 @@ def main():
                 "kernel_append": "console=tty0 console=ttyS0 panic=-1",
                 "sha256": {name: checksum(args.output / name)
                            for name in ("kernel", "initrd.gz", "base.qcow2")}}
+    stamp_revision(manifest, args.output / "kernel", args.allow_unversioned)
     if fixed_display:
         manifest["fixed_display"] = True
         shutil.copy2(args.kernel_config, args.output / "kernel.config")

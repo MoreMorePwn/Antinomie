@@ -1,5 +1,5 @@
 use antinomie_monitor_core::{
-    Backend, BackendOptions, Command, ExecRequest, Notification, Snapshot, VmConfig,
+    APP_REVISION, Backend, BackendOptions, Command, ExecRequest, Notification, Snapshot, VmConfig,
     VmLaunchOptions, VmState, recording::open_recording,
 };
 use std::{
@@ -215,6 +215,36 @@ fn run() -> Result<(), String> {
             ));
         }
         thread::sleep(Duration::from_millis(50));
+    }
+    // Revision 9: the guest identifies its kernel; the harness requires this
+    // app's revision so a gate never passes against a stale kernel.
+    let identified = Instant::now() + Duration::from_secs(10);
+    let kernel = loop {
+        while let Some(n) = backend.try_recv() {
+            if let Notification::Snapshot(s) = n {
+                snapshot = s;
+            }
+        }
+        if let Some(kernel) = &snapshot.guest_kernel {
+            break kernel.clone();
+        }
+        if Instant::now() > identified {
+            return Err("guest kernel did not answer the INFO probe".into());
+        }
+        thread::sleep(Duration::from_millis(50));
+    };
+    println!(
+        "GUEST KERNEL revision {:?} source {} release {}",
+        kernel.revision,
+        kernel.source.as_deref().unwrap_or("none"),
+        kernel.release.as_deref().unwrap_or("unknown")
+    );
+    if kernel.revision != Some(APP_REVISION) {
+        return Err(format!(
+            "guest kernel revision {:?} differs from this app's {APP_REVISION}; last error: {}",
+            kernel.revision,
+            snapshot.last_error.as_deref().unwrap_or("none")
+        ));
     }
     let id = backend.send(Command::Upload {
         source: PathBuf::from(&args[2]),

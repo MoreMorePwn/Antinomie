@@ -14,3 +14,4 @@
 0010-antinomie-observe-async-requests-in-their-address-space-and-at-aio-reap.patch
 0011-antinomie-address-review-of-async-reap-and-operand-capture.patch
 0012-antinomie-label-non-resident-pages-pace-async-publication-reap-vectored-aio.patch
+0013-antinomie-report-the-contract-revision-and-patch-series-identity.patch

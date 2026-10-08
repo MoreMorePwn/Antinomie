@@ -8,8 +8,9 @@ use crate::{
 };
 use antinomie_monitor_core::{
     pair_events, Backend, BackendOptions, BaseSummary, Command, DisplayResolution, ExecRequest,
-    GuestCredentials, InvocationSummary, Notification, RunState, RunSummary, Snapshot,
-    TerminalRecord, VmAcceleration, VmConfig, VmCpuModel, VmLaunchOptions, VmState, WaitStatus,
+    GuestCredentials, InvocationSummary, Notification, RevisionStatus, RunState, RunSummary,
+    Snapshot, TerminalRecord, VmAcceleration, VmConfig, VmCpuModel, VmLaunchOptions, VmState,
+    WaitStatus, APP_REVISION,
 };
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
@@ -1506,8 +1507,18 @@ impl MonitorApp {
                                 .guest
                                 .as_ref()
                                 .map_or("Linux 6.12.94".to_string(), |guest| guest.id.clone());
-                            let label =
-                                format!("{}  {}", egui_phosphor::regular::HARD_DRIVE, base.label);
+                            let label = if RevisionStatus::of(base.revision)
+                                == RevisionStatus::Current
+                            {
+                                format!("{}  {}", egui_phosphor::regular::HARD_DRIVE, base.label)
+                            } else {
+                                format!(
+                                    "{}  {}  {}",
+                                    egui_phosphor::regular::HARD_DRIVE,
+                                    base.label,
+                                    egui_phosphor::regular::WARNING
+                                )
+                            };
                             // min_size keeps the text on the sidebar's left alignment;
                             // add_sized would centre it.
                             let response = ui
@@ -1525,11 +1536,12 @@ impl MonitorApp {
                                 )
                                 .on_hover_text(format!(
                                     "{}\n{}\n{:.1} GiB on disk · guest {guest} · used by {} VM(s)\n\
-                                     Right-click for actions",
+                                     Patch {}\nRight-click for actions",
                                     base.label,
                                     base.directory.display(),
                                     base.size_bytes as f64 / 1073741824.0,
-                                    dependents
+                                    dependents,
+                                    RevisionStatus::describe(base.revision)
                                 ));
                             if response.clicked() || response.secondary_clicked() {
                                 clicked_base = Some(base.id.clone());
@@ -1637,6 +1649,18 @@ impl MonitorApp {
                 ui.add_space(3.0);
                 ui.horizontal_wrapped(|ui| {
                     ui.label(format!("{:?}", self.snapshot.state));
+                    if let Some(kernel) = &self.snapshot.guest_kernel {
+                        let status = RevisionStatus::of(kernel.revision);
+                        ui.colored_label(
+                            if status == RevisionStatus::Current { theme::GOOD } else { theme::WARN },
+                            format!("Kernel: {}", RevisionStatus::describe(kernel.revision)),
+                        )
+                        .on_hover_text(format!(
+                            "Release: {}\nPatch series: {}\nThis app: revision {APP_REVISION}",
+                            kernel.release.as_deref().unwrap_or("unknown"),
+                            kernel.source.as_deref().unwrap_or("not recorded"),
+                        ));
+                    }
                     ui.separator();
                     ui.colored_label(if health.dropped == 0 { theme::GOOD } else { theme::WARN },
                         format!("Transport loss: {}", health.dropped));
@@ -2233,17 +2257,27 @@ impl MonitorApp {
                                 };
                                 let short = &base.identity[..12.min(base.identity.len())];
                                 ui.small(format!(
-                                    "{} · {} · {} · {}",
+                                    "{} · {} · {} · {} · {}",
                                     base.kernel_version,
+                                    RevisionStatus::describe(base.revision),
                                     kind,
                                     human_bytes(base.total_size),
                                     short
                                 ));
                             });
+                            let newer = RevisionStatus::of(base.revision)
+                                == RevisionStatus::NeedsNewerApp;
                             if installed.contains(&base.identity) {
                                 ui.colored_label(theme::GOOD, "installed");
                             } else if ui
-                                .add_enabled(!busy, egui::Button::new("Download"))
+                                .add_enabled(!busy && !newer, egui::Button::new("Download"))
+                                .on_disabled_hover_text(if newer {
+                                    format!(
+                                        "Built for a newer Antinomie (this app is revision {APP_REVISION})"
+                                    )
+                                } else {
+                                    "Another download is in progress".to_string()
+                                })
                                 .clicked()
                             {
                                 request = Some(base.identity.clone());
@@ -3010,10 +3044,15 @@ fn base_selector(
 }
 
 fn base_choice_label(base: &BaseSummary) -> String {
-    if base.fixed_display {
+    let label = if base.fixed_display {
         base.label.clone()
     } else {
         format!("{} (legacy)", base.label)
+    };
+    if RevisionStatus::of(base.revision) == RevisionStatus::Current {
+        label
+    } else {
+        format!("{label} · {}", RevisionStatus::describe(base.revision))
     }
 }
 
@@ -3775,6 +3814,33 @@ mod tests {
             min_disk_gib: 1,
             fixed_display,
             size_bytes: 0,
+            revision: Some(APP_REVISION),
+        }
+    }
+
+    #[test]
+    fn base_labels_name_outdated_newer_and_unrecorded_revisions() {
+        let mut base = base_summary_for_revision(Some(APP_REVISION));
+        assert_eq!(base_choice_label(&base), "Debian");
+        base.revision = Some(APP_REVISION - 1);
+        assert!(base_choice_label(&base).ends_with(", outdated"));
+        base.revision = Some(APP_REVISION + 1);
+        assert!(base_choice_label(&base).ends_with("needs a newer app"));
+        base.revision = None;
+        assert!(base_choice_label(&base).contains("no revision"));
+    }
+
+    fn base_summary_for_revision(revision: Option<u32>) -> BaseSummary {
+        BaseSummary {
+            id: "b".repeat(64),
+            label: "Debian".into(),
+            directory: PathBuf::from("/bases/b"),
+            guest: None,
+            min_ram_mib: 256,
+            min_disk_gib: 1,
+            fixed_display: true,
+            size_bytes: 0,
+            revision,
         }
     }
 
@@ -4371,6 +4437,7 @@ mod tests {
                 min_disk_gib: 8,
                 fixed_display: true,
                 size_bytes: 0,
+                revision: Some(APP_REVISION),
                 guest: Some(antinomie_monitor_core::GuestProfile {
                     id: "debian-xfce".into(),
                     label: "Debian 13 (Xfce)".into(),
@@ -4448,6 +4515,7 @@ mod tests {
                 min_disk_gib: 8,
                 fixed_display: true,
                 size_bytes: 0,
+                revision: Some(APP_REVISION),
                 guest: Some(antinomie_monitor_core::GuestProfile {
                     id: "debian-xfce".into(),
                     label: "Debian 13 (Xfce)".into(),
@@ -4548,6 +4616,7 @@ mod tests {
                         min_disk_gib: 8,
                         fixed_display: true,
                         size_bytes: 0,
+                        revision: Some(APP_REVISION),
                         guest: Some(antinomie_monitor_core::GuestProfile {
                             id: "debian-xfce".into(),
                             label: "Debian 13 (Xfce)".into(),

@@ -30,6 +30,44 @@ bash "$repo/tests/monitor/check-contracts.sh"
 mkdir -p "$build_tree"
 config="$source_tree/scripts/config"
 
+# The kernel states its source as CONFIG_ANTINOMIE_SOURCE_ID
+# "<revision>:<series sha256>": the contract revision from the control header
+# and a hash of the committed core patch list. Only a clean author tree that is
+# exactly the pinned baseline plus that series gets one; ANTINOMIE_DEV_BUILD=1
+# builds an unversioned development kernel instead.
+series_dir="$repo/src/antinomie/core/6.12"
+revision=$(awk '$1 == "#define" && $2 == "ANTC_REVISION" { print $3 }' \
+    "$source_tree/kernel/antinomie/control_wire.h")
+[[ $revision =~ ^[1-9][0-9]*$ ]] || { echo "ANTC_REVISION missing from control_wire.h" >&2; exit 1; }
+source_id=""
+if [[ ${ANTINOMIE_DEV_BUILD:-0} == 1 ]]; then
+    echo "development build: source not verified, kernel is unversioned" >&2
+else
+    shopt -s nullglob
+    patches=("$series_dir"/*.patch)
+    shopt -u nullglob
+    [[ ${#patches[@]} -gt 0 ]] || { echo "no core patches in $series_dir" >&2; exit 1; }
+    if [[ -n $(git -C "$source_tree" status --porcelain --untracked-files=no) ]]; then
+        echo "author tree has uncommitted changes; commit and export them with" \
+            "scripts/commit.sh, or set ANTINOMIE_DEV_BUILD=1" >&2
+        exit 1
+    fi
+    index=$(mktemp)
+    trap 'rm -f "$index"' EXIT
+    GIT_INDEX_FILE=$index git -C "$source_tree" read-tree baseline/debian-6.12.94-1-trixie
+    GIT_INDEX_FILE=$index git -C "$source_tree" apply --cached "${patches[@]}"
+    expected=$(GIT_INDEX_FILE=$index git -C "$source_tree" write-tree)
+    actual=$(git -C "$source_tree" rev-parse 'HEAD^{tree}')
+    if [[ $expected != "$actual" ]]; then
+        echo "author tree $actual is not baseline + core patch series ($expected);" \
+            "export it with scripts/commit.sh or rebuild it with scripts/bootstrap.sh" >&2
+        exit 1
+    fi
+    series=$(cd "$series_dir" && sha256sum -- *.patch | sha256sum | cut -d' ' -f1)
+    source_id="$revision:$series"
+    echo "kernel source id $source_id" >&2
+fi
+
 # Symbols pinned Debian 13 enables that syscall coverage and realism depend on.
 DEBIAN_PARITY="BPF_SYSCALL BPF_JIT CHECKPOINT_RESTORE KEYS KEY_DH_OPERATIONS
     SECURITY_YAMA USER_NS"
@@ -52,6 +90,13 @@ require_symbols() {
     return "$missing"
 }
 
+require_source_id() {
+    if ! grep -qxF "CONFIG_ANTINOMIE_SOURCE_ID=\"$source_id\"" "$build_tree/.config"; then
+        echo "CONFIG_ANTINOMIE_SOURCE_ID did not survive olddefconfig" >&2
+        return 1
+    fi
+}
+
 if [[ $profile == minimal ]]; then
     if [[ ! -f "$build_tree/.config" ]]; then
         make -C "$source_tree" O="$build_tree" x86_64_defconfig
@@ -71,9 +116,11 @@ if [[ $profile == minimal ]]; then
     done
     "$config" --file "$build_tree/.config" --disable IKCONFIG_PROC
     "$config" --file "$build_tree/.config" --set-str INITRAMFS_SOURCE ""
+    "$config" --file "$build_tree/.config" --set-str ANTINOMIE_SOURCE_ID "$source_id"
     make -C "$source_tree" O="$build_tree" olddefconfig
     # shellcheck disable=SC2086
     require_symbols ANTINOMIE IKCONFIG $DEBIAN_PARITY $MINIMAL_EXTRA
+    require_source_id
     make -C "$source_tree" O="$build_tree" -j"$jobs" bzImage
     echo "$build_tree/arch/x86/boot/bzImage"
     exit 0
@@ -103,9 +150,11 @@ done
 "$config" --file "$build_tree/.config" --set-str MODULE_SIG_KEY "certs/signing_key.pem"
 "$config" --file "$build_tree/.config" --set-str SYSTEM_TRUSTED_KEYS ""
 "$config" --file "$build_tree/.config" --set-str SYSTEM_REVOCATION_KEYS ""
+"$config" --file "$build_tree/.config" --set-str ANTINOMIE_SOURCE_ID "$source_id"
 make -C "$source_tree" O="$build_tree" olddefconfig
 # shellcheck disable=SC2086
 require_symbols $DEBIAN_BUILTIN $DEBIAN_PARITY KERNEL_GZIP
+require_source_id
 "$source_tree/scripts/diffconfig" "$reference/.config" "$build_tree/.config" \
     > "$build_tree/antinomie-config-deviations.txt"
 # LOCALVERSION= keeps the release exactly 6.12.94 (no "+" for an untagged tree).

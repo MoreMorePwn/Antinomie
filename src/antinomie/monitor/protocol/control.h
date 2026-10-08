@@ -10,6 +10,8 @@
  * have no payload. Successful replies have the opcode-specific payload below.
  */
 #define ANTC_VERSION 1
+/* Contract revision of the guest's observable behaviour (native-schema-slices). */
+#define ANTC_REVISION 9
 #define ANTC_HEADER_SIZE 8
 #define ANTC_UPLOAD_BEGIN 0x1001
 #define ANTC_UPLOAD_CHUNK 0x1002
@@ -29,6 +31,8 @@
 #define ANTC_RUN_ASYNC_COMPLETE 8
 #define ANTC_RUN_OBSERVATION_INCOMPLETE 16
 #define ANTC_STATS 0x1020
+#define ANTC_INFO 0x1021
+#define ANTC_INFO_SIZE 160
 #define ANTC_SHUTDOWN 0x1030
 #define ANTC_UPLOAD_OVERWRITE 1
 #define ANTC_UPLOAD_EXECUTABLE 2
@@ -73,6 +77,13 @@
  * tasks_created, tasks_live, calls_entered, events_attempted,
  * packets_attempted, packets_failed, copy_faults, schema_gaps,
  * context_failures (80 bytes). Counters persist despite telemetry loss.
+ * INFO: header only. Reply (160 bytes): u32 revision at 0 (ANTC_REVISION),
+ * u32 reserved=0 at 4, source id at 8 (80 bytes), kernel release at 88
+ * (64 bytes), reserved zero at 152. Strings are NUL terminated and padded.
+ * The source id is CONFIG_ANTINOMIE_SOURCE_ID, "<revision>:<series sha256>",
+ * or empty for an unversioned build. Kernels before revision 9 return
+ * -EOPNOTSUPP. INFO is registered before every other opcode, so INFO
+ * unsupported while STATS succeeds identifies such a kernel.
  * SHUTDOWN: header only; empty success reply, delayed kernel_power_off.
  */
 #endif

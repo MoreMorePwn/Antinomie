@@ -52,6 +52,10 @@ pub struct CatalogBase {
     pub min_disk_gib: u32,
     pub total_size: u64,
     pub created: String,
+    /// Antinomie patch revision of the base's kernel; absent for older bases.
+    pub antinomie_revision: Option<u32>,
+    /// Patch-series SHA-256, present together with the revision.
+    pub antinomie_source: Option<String>,
     pub files: Vec<CatalogFile>,
 }
 
@@ -104,6 +108,17 @@ pub fn validate_catalog(catalog: &Catalog) -> Result<(), String> {
         }
         if base.label.trim().is_empty() {
             return Err(format!("base {} has no label", base.identity));
+        }
+        match (&base.antinomie_revision, &base.antinomie_source) {
+            (None, None) => {}
+            (Some(revision), Some(source))
+                if crate::api::parse_source_id(&format!("{revision}:{source}")).is_some() => {}
+            _ => {
+                return Err(format!(
+                    "base {} has an invalid Antinomie revision or source",
+                    base.identity
+                ));
+            }
         }
         if base.files.is_empty() {
             return Err(format!("base {} lists no files", base.identity));
@@ -450,6 +465,39 @@ mod tests {
         let catalog = parse_catalog(text.as_bytes()).unwrap();
         assert_eq!(catalog.bases.len(), 1);
         assert_eq!(catalog.bases[0].files[0].name, "kernel");
+        assert_eq!(catalog.bases[0].antinomie_revision, None);
+    }
+
+    #[test]
+    fn catalog_revision_and_source_come_together() {
+        let catalog = |extra: &str| {
+            format!(
+                r#"{{"schema":1,"bases":[{{"identity":"{}","label":"T",{extra}
+                "files":[{{"name":"kernel","size":1,"sha256":"{}"}}]}}]}}"#,
+                "0".repeat(64),
+                "a".repeat(64)
+            )
+        };
+        let source = "c".repeat(64);
+        let parsed = parse_catalog(
+            catalog(&format!(
+                r#""antinomie_revision":9,"antinomie_source":"{source}","#
+            ))
+            .as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(parsed.bases[0].antinomie_revision, Some(9));
+        for extra in [
+            r#""antinomie_revision":9,"#.to_string(),
+            format!(r#""antinomie_source":"{source}","#),
+            format!(r#""antinomie_revision":0,"antinomie_source":"{source}","#),
+            r#""antinomie_revision":9,"antinomie_source":"xyz","#.to_string(),
+        ] {
+            assert!(
+                parse_catalog(catalog(&extra).as_bytes()).is_err(),
+                "{extra}"
+            );
+        }
     }
 
     #[test]

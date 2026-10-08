@@ -372,6 +372,13 @@ pub struct Bundle {
     pub fixed_display: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_provenance: Option<BundleBuildProvenance>,
+    /// Antinomie patch revision of the kernel (from its embedded source id).
+    /// Advisory: not part of the identity; the running kernel is checked at attach.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antinomie_revision: Option<u32>,
+    /// SHA-256 of the core patch series the kernel was built from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antinomie_source: Option<String>,
 }
 fn is_false(value: &bool) -> bool {
     !value
@@ -383,6 +390,7 @@ impl Bundle {
         if let Some(guest) = &b.guest {
             guest.validate()?;
         }
+        b.validate_revision()?;
         let resolve = |p: &Path| -> Result<PathBuf, String> {
             let path = fs::canonicalize(root.join(p))
                 .map_err(|e| format!("artifact {}: {e}", p.display()))?;
@@ -395,6 +403,17 @@ impl Bundle {
         b.base_disk = resolve(&b.base_disk)?;
         b.initrd = b.initrd.as_ref().map(|p| resolve(p)).transpose()?;
         Ok(b)
+    }
+    fn validate_revision(&self) -> Result<(), String> {
+        match (&self.antinomie_revision, &self.antinomie_source) {
+            (None, None) => Ok(()),
+            (Some(revision), Some(source))
+                if crate::api::parse_source_id(&format!("{revision}:{source}")).is_some() =>
+            {
+                Ok(())
+            }
+            _ => Err("bundle has an invalid Antinomie revision or source".into()),
+        }
     }
     fn identity(&self) -> Result<String, String> {
         let mut digest = Sha256::new();
@@ -503,6 +522,8 @@ impl Bundle {
                     guest: self.guest.clone(),
                     fixed_display: self.fixed_display,
                     build_provenance: self.build_provenance.clone(),
+                    antinomie_revision: self.antinomie_revision,
+                    antinomie_source: self.antinomie_source.clone(),
                 };
                 if copied.identity()? != identity {
                     return Err("bundle changed during import; copies rejected".into());
@@ -535,6 +556,8 @@ impl Bundle {
             guest: self.guest,
             fixed_display: self.fixed_display,
             build_provenance: self.build_provenance,
+            antinomie_revision: self.antinomie_revision,
+            antinomie_source: self.antinomie_source,
         };
         installed.verify_installed()?;
         atomic_json(&target.join("bundle.json"), &installed)?;
@@ -1257,6 +1280,8 @@ struct CaptureManifest<'a> {
     persistence_error: &'a Option<String>,
     final_state: &'a str,
     health: &'a Option<Health>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    guest_kernel: &'a Option<crate::api::GuestKernel>,
 }
 pub struct RawCapture {
     pub directory: PathBuf,
@@ -1266,6 +1291,8 @@ pub struct RawCapture {
     pub bytes: u64,
     pub error: Option<String>,
     pub final_health: Option<Health>,
+    /// The guest kernel's INFO answer, recorded in the manifest.
+    pub guest_kernel: Option<crate::api::GuestKernel>,
 }
 impl RawCapture {
     pub(crate) fn sync(&mut self) -> Result<(), String> {
@@ -1294,6 +1321,7 @@ impl RawCapture {
             bytes: 0,
             error: None,
             final_health: None,
+            guest_kernel: None,
         })
     }
     pub fn append(&mut self, packet: &[u8]) -> bool {
@@ -1367,6 +1395,7 @@ impl RawCapture {
                 persistence_error: &self.error,
                 final_state: state,
                 health: &self.final_health,
+                guest_kernel: &self.guest_kernel,
             },
         )
     }
@@ -1412,6 +1441,8 @@ mod tests {
             }),
             fixed_display: false,
             build_provenance: None,
+            antinomie_revision: None,
+            antinomie_source: None,
         }
         .install(&options)
         .unwrap();
@@ -1443,6 +1474,42 @@ mod tests {
             1,
             "temporary files left behind"
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn revision_metadata_is_validated_preserved_and_outside_the_identity() {
+        let (root, options, mut bundle, _) = guest_fixture();
+        let identity = bundle.identity().unwrap();
+        bundle.antinomie_revision = Some(9);
+        bundle.antinomie_source = Some("d".repeat(64));
+        assert_eq!(bundle.identity().unwrap(), identity);
+        let source = bundle.kernel.parent().unwrap().to_path_buf();
+        let write = |bundle: &Bundle| {
+            let mut manifest = serde_json::to_value(bundle).unwrap();
+            manifest["kernel"] = "kernel".into();
+            manifest["base_disk"] = "base.qcow2".into();
+            fs::write(
+                source.join("bundle.json"),
+                serde_json::to_vec(&manifest).unwrap(),
+            )
+            .unwrap();
+        };
+        write(&bundle);
+        let installed = Bundle::load(&source).unwrap().install(&options).unwrap();
+        assert_eq!(installed.antinomie_revision, Some(9));
+        let reloaded = Bundle::load(installed.kernel.parent().unwrap()).unwrap();
+        assert_eq!(reloaded.antinomie_source, bundle.antinomie_source);
+        for (revision, source_id) in [
+            (Some(9), None),
+            (None, Some("d".repeat(64))),
+            (Some(0), Some("d".repeat(64))),
+            (Some(9), Some("D".repeat(64))),
+        ] {
+            bundle.antinomie_revision = revision;
+            bundle.antinomie_source = source_id;
+            write(&bundle);
+            assert!(Bundle::load(&source).is_err());
+        }
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
@@ -1632,6 +1699,8 @@ mod tests {
             guest: None,
             fixed_display: false,
             build_provenance: None,
+            antinomie_revision: None,
+            antinomie_source: None,
         };
         bundle.base_identity = Some(bundle.identity().unwrap());
         let vm = source.join("vms/old-id");
@@ -1818,6 +1887,8 @@ mod tests {
             guest: None,
             fixed_display: false,
             build_provenance: Some(provenance),
+            antinomie_revision: None,
+            antinomie_source: None,
         };
         let options = BackendOptions {
             data_dir: directory.join("data"),

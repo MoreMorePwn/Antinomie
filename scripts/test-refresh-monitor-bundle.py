@@ -17,6 +17,9 @@ refresh = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(refresh)
 
 
+SERIES = "ab" * 32
+
+
 class RefreshTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -26,8 +29,9 @@ class RefreshTests(unittest.TestCase):
         self.source.mkdir()
         self.kernel = self.root / "bzImage"
         self.config = self.root / "config"
-        self.config.write_text("\n".join("CONFIG_" + name + "=y" for name in
-            ("DRM", "DRM_VIRTIO_GPU", "DRM_VIRTIO_GPU_KMS", "DRM_FBDEV_EMULATION", "FRAMEBUFFER_CONSOLE")))
+        self.config.write_text("\n".join(["CONFIG_" + name + "=y" for name in
+            ("DRM", "DRM_VIRTIO_GPU", "DRM_VIRTIO_GPU_KMS", "DRM_FBDEV_EMULATION", "FRAMEBUFFER_CONSOLE")]
+            + [f'CONFIG_ANTINOMIE_SOURCE_ID="9:{SERIES}"']))
         self.write_kernel()
         for name in ("kernel", "disk", "initrd"):
             (self.source / name).write_bytes(name.encode())
@@ -50,9 +54,41 @@ class RefreshTests(unittest.TestCase):
         struct.pack_into("<II", data, 0x248, 0, len(compressed))
         self.kernel.write_bytes(data + compressed)
 
-    def run_refresh(self):
+    def run_refresh(self, allow_unversioned=False):
         with patch.object(refresh.subprocess, "check_output", return_value='{"format":"qcow2"}'):
-            return refresh.refresh(self.source, self.kernel, self.config, self.output)
+            return refresh.refresh(self.source, self.kernel, self.config, self.output,
+                                   allow_unversioned)
+
+    def set_source_id(self, line):
+        lines = [entry for entry in self.config.read_text().splitlines()
+                 if not entry.startswith("CONFIG_ANTINOMIE_SOURCE_ID=")]
+        self.config.write_text("\n".join(lines + ([line] if line else [])))
+        self.write_kernel()
+
+    def test_stamps_revision_from_embedded_source_id(self):
+        self.manifest.update(antinomie_revision=8, antinomie_source="cd" * 32)
+        self.save_manifest()
+        self.run_refresh()
+        manifest = json.loads((self.output / "bundle.json").read_text())
+        self.assertEqual(manifest["antinomie_revision"], 9)
+        self.assertEqual(manifest["antinomie_source"], SERIES)
+
+    def test_unversioned_kernel_needs_explicit_consent(self):
+        for line in ('CONFIG_ANTINOMIE_SOURCE_ID=""', None):
+            self.set_source_id(line)
+            with self.assertRaisesRegex(RuntimeError, "no Antinomie source id"):
+                self.run_refresh()
+            self.assertFalse(self.output.exists())
+        self.run_refresh(allow_unversioned=True)
+        manifest = json.loads((self.output / "bundle.json").read_text())
+        self.assertNotIn("antinomie_revision", manifest)
+        self.assertNotIn("antinomie_source", manifest)
+
+    def test_rejects_malformed_source_id(self):
+        for value in ("9", "0:" + SERIES, "9:" + SERIES.upper(), "9:" + SERIES[:-1]):
+            self.set_source_id(f'CONFIG_ANTINOMIE_SOURCE_ID="{value}"')
+            with self.assertRaisesRegex(RuntimeError, "invalid CONFIG_ANTINOMIE_SOURCE_ID"):
+                self.run_refresh(allow_unversioned=True)
 
     def test_preserves_disk_initrd_and_source(self):
         self.run_refresh()

@@ -159,7 +159,21 @@ struct Session {
     status_cursor: usize,
     last_status_query: Instant,
     persisted_packets: u64,
+    kernel_probe: KernelProbe,
 }
+/// Progress of the INFO probe that identifies the running guest kernel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KernelProbe {
+    /// Send INFO at this instant.
+    Due(Instant),
+    /// INFO request in flight.
+    Info(u64),
+    /// INFO was unsupported; STATS tells a pre-INFO kernel from one still booting.
+    Stats(u64),
+    Done,
+}
+/// Retry interval while the guest control service is not yet registered.
+const KERNEL_PROBE_RETRY: Duration = Duration::from_secs(1);
 impl Session {
     fn stored_len(&self) -> u64 {
         self.capture
@@ -382,6 +396,9 @@ impl Session {
         snapshot: &mut Snapshot,
         sender: &SyncSender<Notification>,
     ) {
+        if self.kernel_probe_reply(reply_id, status, payload, snapshot) {
+            return;
+        }
         if let Some(cookie) = self.late_reads.remove(&reply_id) {
             if let Err(error) = self.apply_terminal_reply(cookie, status, payload, snapshot, sender)
             {
@@ -393,6 +410,94 @@ impl Session {
                 None => format!("unmatched command reply {reply_id}"),
             });
         }
+    }
+    /// Advance the kernel probe: send INFO when due and apply waiting replies.
+    fn probe_kernel(
+        &mut self,
+        snapshot: &mut Snapshot,
+        sender: &SyncSender<Notification>,
+    ) -> Result<(), String> {
+        match self.kernel_probe {
+            KernelProbe::Done => Ok(()),
+            KernelProbe::Due(when) => {
+                if Instant::now() >= when {
+                    // A full request ring only delays identification.
+                    self.kernel_probe =
+                        match self.transport.send(control::INFO, &control::header(0)) {
+                            Ok(id) => KernelProbe::Info(id),
+                            Err(_) => KernelProbe::Due(Instant::now() + KERNEL_PROBE_RETRY),
+                        };
+                }
+                Ok(())
+            }
+            KernelProbe::Info(_) | KernelProbe::Stats(_) => self.drain_replies(snapshot, sender),
+        }
+    }
+    /// Consume a reply that belongs to the kernel probe; false for any other reply.
+    fn kernel_probe_reply(
+        &mut self,
+        reply_id: u64,
+        status: i32,
+        payload: &[u8],
+        snapshot: &mut Snapshot,
+    ) -> bool {
+        const EOPNOTSUPP: i32 = 95;
+        let retry = KernelProbe::Due(Instant::now() + KERNEL_PROBE_RETRY);
+        match self.kernel_probe {
+            KernelProbe::Info(id) if id == reply_id => {
+                self.kernel_probe = if status == 0 {
+                    match control::info(payload) {
+                        Ok(kernel) => self.kernel_identified(kernel, snapshot),
+                        Err(error) => snapshot.last_error = Some(format!("guest info: {error}")),
+                    }
+                    KernelProbe::Done
+                } else if status == -EOPNOTSUPP {
+                    match self.transport.send(control::STATS, &control::header(0)) {
+                        Ok(id) => KernelProbe::Stats(id),
+                        Err(_) => retry,
+                    }
+                } else {
+                    retry
+                };
+                true
+            }
+            KernelProbe::Stats(id) if id == reply_id => {
+                // INFO is registered before every other opcode: a kernel that
+                // answers STATS but not INFO predates revision 9.
+                self.kernel_probe = if status == 0 {
+                    self.kernel_identified(GuestKernel::default(), snapshot);
+                    KernelProbe::Done
+                } else {
+                    retry
+                };
+                true
+            }
+            _ => false,
+        }
+    }
+    fn kernel_identified(&mut self, kernel: GuestKernel, snapshot: &mut Snapshot) {
+        let claimed = (
+            self.bundle.antinomie_revision,
+            self.bundle.antinomie_source.as_deref(),
+        );
+        let running = (kernel.revision, kernel.source.as_deref());
+        if claimed.0.is_some() && claimed != running {
+            snapshot.last_error = Some(format!(
+                "base records patch {} but the running kernel reports {}",
+                describe_source(claimed),
+                describe_source(running)
+            ));
+        } else if kernel
+            .revision
+            .is_some_and(|revision| revision > APP_REVISION)
+        {
+            snapshot.last_error = Some(format!(
+                "guest kernel {} is newer than this app (revision {APP_REVISION}); update Antinomie",
+                describe_source(running)
+            ));
+        }
+        self.capture.guest_kernel = Some(kernel.clone());
+        snapshot.guest_kernel = Some(kernel);
     }
     /// Apply replies already available without sending a command.
     fn drain_replies(
@@ -878,6 +983,9 @@ impl Worker {
                         {
                             self.snapshot.last_error = Some(error);
                         }
+                        if let Err(error) = session.probe_kernel(&mut self.snapshot, &self.sender) {
+                            self.snapshot.last_error = Some(format!("guest info: {error}"));
+                        }
                     }
                     Err(e) => {
                         self.snapshot.last_error = Some(e.to_string());
@@ -949,6 +1057,7 @@ impl Worker {
                 if !bundle.kernel_version.starts_with("6.12.94") {
                     return Err("boot bundle must use Linux 6.12.94".into());
                 }
+                require_supported_revision(bundle.antinomie_revision)?;
                 storage::validate_disk_chain(&self.options, &bundle.base_disk, None)?;
                 bundle.install(&self.options)?;
                 self.refresh_locations()?;
@@ -985,6 +1094,7 @@ impl Worker {
                     .find(|base| base.identity == identity)
                     .cloned()
                     .ok_or("unknown base; refresh the catalog first")?;
+                require_supported_revision(base.antinomie_revision)?;
                 if self
                     .snapshot
                     .bases
@@ -1021,6 +1131,7 @@ impl Worker {
                             },
                         )
                         .and_then(|bundle| {
+                            require_supported_revision(bundle.antinomie_revision)?;
                             storage::validate_disk_chain(&options, &bundle.base_disk, None)?;
                             bundle.install(&options)?;
                             Ok(())
@@ -1125,6 +1236,7 @@ impl Worker {
                         })
                         .and_then(|()| {
                             let bundle = Bundle::load(&output_thread)?;
+                            require_supported_revision(bundle.antinomie_revision)?;
                             storage::validate_disk_chain(&options, &bundle.base_disk, None)?;
                             bundle.install(&options)?;
                             Ok(())
@@ -1462,9 +1574,11 @@ impl Worker {
         if !bundle.kernel_version.is_empty() && !bundle.kernel_version.starts_with("6.12.94") {
             return Err("boot bundle must use the approved Linux 6.12.94 baseline".into());
         }
+        require_supported_revision(bundle.antinomie_revision)?;
         self.snapshot.state = VmState::Starting;
         self.snapshot.active_vm = Some(id.into());
         self.snapshot.health = Health::default();
+        self.snapshot.guest_kernel = None;
         self.snapshot.events.clear();
         self.publish();
         self.stopping.store(false, Ordering::Relaxed);
@@ -1515,6 +1629,7 @@ impl Worker {
                 status_cursor: 0,
                 last_status_query: Instant::now(),
                 persisted_packets: 0,
+                kernel_probe: KernelProbe::Due(Instant::now()),
             })
         })();
         match result {
@@ -2057,6 +2172,20 @@ fn refresh_storage_health(
     });
 }
 
+/// "revision 9 (series 0164…)", "revision 9, unversioned source" or "no revision".
+fn describe_source((revision, source): (Option<u32>, Option<&str>)) -> String {
+    match (revision, source) {
+        (Some(revision), Some(source)) => {
+            format!(
+                "revision {revision} (series {}…)",
+                &source[..12.min(source.len())]
+            )
+        }
+        (Some(revision), None) => format!("revision {revision}, unversioned source"),
+        (None, _) => "no revision (before revision 9)".into(),
+    }
+}
+
 fn decode_stats(reply: &[u8]) -> Result<[u64; 10], String> {
     if reply.len() != 80 {
         return Err("invalid recorder stats length".into());
@@ -2317,12 +2446,29 @@ mod tests {
                 }),
                 fixed_display: false,
                 build_provenance: None,
+                antinomie_revision: None,
+                antinomie_source: None,
             };
             storage::atomic_json(&source.join("bundle.json"), &bundle).unwrap();
             worker
                 .command(Command::ImportBase { directory: source })
                 .unwrap();
         }
+        assert_eq!(worker.snapshot.bases.len(), 2);
+        let newer = root.join("busybox");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(newer.join("bundle.json")).unwrap()).unwrap();
+        manifest["antinomie_revision"] = (APP_REVISION + 1).into();
+        manifest["antinomie_source"] = "e".repeat(64).into();
+        fs::write(
+            newer.join("bundle.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        let error = worker
+            .command(Command::ImportBase { directory: newer })
+            .unwrap_err();
+        assert!(error.contains("update Antinomie"), "{error}");
         assert_eq!(worker.snapshot.bases.len(), 2);
         assert!(
             crate::locations::boot_bundle(&worker.options, None)
@@ -2691,6 +2837,8 @@ mod tests {
             guest: None,
             fixed_display: false,
             build_provenance: None,
+            antinomie_revision: None,
+            antinomie_source: None,
         };
         capture
             .manifest(&VmConfig::default(), &bundle, &bundle, "clean")

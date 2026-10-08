@@ -289,6 +289,7 @@ pub(crate) fn installed_bases(options: &BackendOptions) -> Result<Vec<BaseSummar
             guest: bundle.guest,
             fixed_display: bundle.fixed_display,
             size_bytes: fs::metadata(&bundle.base_disk).map_or(0, |meta| meta.len()),
+            revision: bundle.antinomie_revision,
         });
         if bases.len() > 128 {
             return Err("installed base catalog exceeds limit".into());
@@ -369,6 +370,8 @@ mod tests {
                 guest: None,
                 fixed_display: true,
                 build_provenance: None,
+                antinomie_revision: None,
+                antinomie_source: None,
             }
             .install(&options)
             .unwrap();

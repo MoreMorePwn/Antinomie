@@ -1,6 +1,6 @@
 # Native Schema Slice Contract: 2A, 2B, 2G
 
-ANT-T0009 producer/consumer contract, revision 8, 2026-10-08 (Sections 8–15 record revisions 2–8). Section 9 and the 2B fixtures were approved by the user on 2026-10-07.
+ANT-T0009 producer/consumer contract, revision 9, 2026-10-08 (Sections 8–16 record revisions 2–9). Section 9 and the 2B fixtures were approved by the user on 2026-10-07.
 Status: approved by the user on 2026-10-07, including choice (a) for unknown
 socket options (raw `optval` up to `optlen`, capped at 128 KiB). Revision 2
 records corrections found while implementing and testing slice 2A; see Section 8.
@@ -625,4 +625,20 @@ fields of a stage 4 read: `async.payload.direction`, `async.payload.requested_si
 `async.payload.result_offset`, `async.payload.iov` (layout `iovec[]`, the kernel
 copy) and `async.payload.output` with the `res` bytes in iovec order. A
 one-segment `PREADV` is imported as a single buffer and is recorded like `PREAD`.
+
+## 16. Revision 9: kernel revision and source identity (ANT-T0027, 2026-10-08)
+
+From this revision the contract revision is part of the protocol, not only of
+this document. `ANTC_REVISION` in the shared control header (`control.h`, the
+kernel's `control_wire.h`) is the revision the kernel implements and the host
+understands; it is raised with every guest-visible behaviour change recorded
+here. The wire layout, record schema 1 and control version 1 are unchanged.
+
+| Part | Rule |
+|---|---|
+| Source id | `CONFIG_ANTINOMIE_SOURCE_ID` = `"<revision>:<series sha256>"`, embedded with IKCONFIG. The series hash is the SHA-256 of `sha256sum` output over `src/antinomie/core/6.12/*.patch` in name order. `build-monitor-kernel.sh` sets it only when the author tree is clean and its tree equals baseline + series; `ANTINOMIE_DEV_BUILD=1` leaves it empty |
+| `ANTC_INFO` (0x1021) | Header only. 160-byte reply: u32 revision, u32 zero, source id (80 bytes, NUL terminated and padded), kernel release (64 bytes, same), 8 zero bytes. Registered before every other opcode |
+| Old kernels | Answer `ANTC_INFO` with `-EOPNOTSUPP`. The host then sends `ANTC_STATS`: success means a kernel before revision 9; `-EOPNOTSUPP` means control is not registered yet and the probe repeats after 1 s |
+| Bundles and catalog | `antinomie_revision` and `antinomie_source`, both or neither, written by the image builders from the kernel's embedded configuration; not part of the base identity (the configuration hash already is). Builders refuse a kernel without a source id unless `--allow-unversioned` |
+| Host | Refuses to import, download, install a build of or start a base whose revision is newer than its own. Labels bases current, outdated, needs a newer app, or no revision. Reports a running kernel whose revision or series differs from its base's record, or that is newer than the host. The boot capture manifest records the kernel's answer as `guest_kernel` |
 

@@ -307,7 +307,7 @@ def make_initrd(output, staging, provenance):
 
 
 def assemble_bundle(kernel, output, staging, template_entry, cache, kernel_config=None,
-                    modules=None):
+                    modules=None, allow_unversioned=False):
     if output.exists():
         raise RuntimeError("output already exists; choose a new unpublished bundle path")
     helpers = monitor_helpers()
@@ -345,6 +345,7 @@ def assemble_bundle(kernel, output, staging, template_entry, cache, kernel_confi
     manifest = {"format": 1, "kernel_version": "6.12.94", "schema_id": 1,
                 "kernel": "kernel", "initrd": "initrd.gz", "base_disk": "base.qcow2",
                 "kernel_append": APPEND, "guest": PROFILE, "sha256": hashes}
+    helpers.stamp_revision(manifest, bundle / "kernel", allow_unversioned)
     if helpers.fixed_display_config(kernel_config, bundle / "kernel"):
         manifest["fixed_display"] = True
         shutil.copy2(kernel_config, provenance / "kernel.config")
@@ -359,7 +360,7 @@ def assemble_bundle(kernel, output, staging, template_entry, cache, kernel_confi
     bundle.rename(output)
 
 
-def build(kernel, output, kernel_config=None, modules=None):
+def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=False):
     if output.exists():
         raise RuntimeError("output already exists; choose a new unpublished bundle path")
     release = kernel_release(kernel)
@@ -367,6 +368,7 @@ def build(kernel, output, kernel_config=None, modules=None):
         raise RuntimeError("kernel config builds modules; pass --modules with its install root")
     module_tree(modules, release)
     monitor_helpers().fixed_display_config(kernel_config, kernel)
+    monitor_helpers().stamp_revision({}, kernel, allow_unversioned)
     output.parent.mkdir(parents=True, exist_ok=True)
     env = appliance_environment()
     with tempfile.TemporaryDirectory(prefix="debian-image-", dir=output.parent) as name:
@@ -403,7 +405,8 @@ def build(kernel, output, kernel_config=None, modules=None):
         with builder_log.open("w") as log:
             subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
         shutil.copy2(builder_log, provenance / "builder.log")
-        assemble_bundle(kernel, output, staging, entries[0], cache, kernel_config, modules)
+        assemble_bundle(kernel, output, staging, entries[0], cache, kernel_config, modules,
+                        allow_unversioned)
 
 
 def main():
@@ -414,6 +417,8 @@ def main():
     parser.add_argument("--output", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--modules", type=Path,
                         help="modules_install root (INSTALL_MOD_PATH) matching the kernel")
+    parser.add_argument("--allow-unversioned", action="store_true",
+                        help="accept a development kernel without a source id")
     args = parser.parse_args()
     if not args.kernel.is_file():
         parser.error("an existing patched Linux 6.12.94 kernel is required")
@@ -421,7 +426,8 @@ def main():
         if shutil.which(tool) is None:
             parser.error("required installed tool missing: " + tool)
     try:
-        build(args.kernel, args.output, args.kernel_config, args.modules)
+        build(args.kernel, args.output, args.kernel_config, args.modules,
+              args.allow_unversioned)
     except (RuntimeError, subprocess.CalledProcessError) as error:
         parser.exit(1, "Debian image build failed: " + str(error) + "\n")
     print(args.output)

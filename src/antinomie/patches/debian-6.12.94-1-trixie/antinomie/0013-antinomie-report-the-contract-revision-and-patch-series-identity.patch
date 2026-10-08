@@ -1,0 +1,110 @@
+Description: antinomie: report the contract revision and patch-series identity
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-08
+
+
+---
+diff --git a/kernel/antinomie/Kconfig b/kernel/antinomie/Kconfig
+index faae29aee..bc4d01a59 100644
+--- a/kernel/antinomie/Kconfig
++++ b/kernel/antinomie/Kconfig
+@@ -5,3 +5,13 @@ config ANTINOMIE
+ 	  Host control, PTY sessions and observational syscall telemetry over
+ 	  the Antinomie V7 memory transport. Only host-launched tasks and their
+ 	  descendants are traced. Host access includes guest execution authority.
++
++config ANTINOMIE_SOURCE_ID
++	string "Antinomie patch-series identity"
++	depends on ANTINOMIE
++	default ""
++	help
++	  "<revision>:<series sha256>", set by the Antinomie kernel build
++	  script after it verifies that the tree is the pinned baseline plus
++	  the committed patch series. Reported to the host by the INFO
++	  command. Leave empty for development builds.
+diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
+index 4775c236d..96f92c448 100644
+--- a/kernel/antinomie/control.c
++++ b/kernel/antinomie/control.c
+@@ -18,6 +18,7 @@
+ #include <linux/syscalls.h>
+ #include <linux/tty_driver.h>
+ #include <linux/umh.h>
++#include <linux/utsname.h>
+ #include <linux/unaligned.h>
+ #include <linux/workqueue.h>
+ #include "control_wire.h"
+@@ -534,6 +535,15 @@ static int command(const void *data, size_t args_len, void *reply,
+ 		ant_monitor_stats(reply);
+ 		*reply_len = 80;
+ 		return 0;
++	case ANTC_INFO:
++		if (args_len != 8 || capacity < ANTC_INFO_SIZE)
++			return -EINVAL;
++		memset(reply, 0, ANTC_INFO_SIZE);
++		put_unaligned_le32(ANTC_REVISION, reply);
++		strscpy_pad((char *)reply + 8, CONFIG_ANTINOMIE_SOURCE_ID, 80);
++		strscpy_pad((char *)reply + 88, init_utsname()->release, 64);
++		*reply_len = ANTC_INFO_SIZE;
++		return 0;
+ 	case ANTC_SHUTDOWN:
+ 		if (args_len != 8)
+ 			return -EINVAL;
+@@ -546,10 +556,15 @@ static int command(const void *data, size_t args_len, void *reply,
+ 
+ static int __init ant_control_init(void)
+ {
+-	static const u32 opcodes[] = { ANTC_UPLOAD_BEGIN, ANTC_UPLOAD_CHUNK,
+-		ANTC_UPLOAD_COMMIT, ANTC_UPLOAD_ABORT, ANTC_EXEC, ANTC_TERMINAL_INPUT,
+-		ANTC_TERMINAL_READ, ANTC_TERMINAL_RESIZE, ANTC_SIGNAL, ANTC_STOP_RUN,
+-		ANTC_RUN_STATUS, ANTC_STATS, ANTC_SHUTDOWN };
++	/*
++	 * INFO first: a host that finds INFO unsupported while another opcode
++	 * works knows the kernel predates INFO rather than still booting.
++	 */
++	static const u32 opcodes[] = { ANTC_INFO, ANTC_UPLOAD_BEGIN,
++		ANTC_UPLOAD_CHUNK, ANTC_UPLOAD_COMMIT, ANTC_UPLOAD_ABORT, ANTC_EXEC,
++		ANTC_TERMINAL_INPUT, ANTC_TERMINAL_READ, ANTC_TERMINAL_RESIZE,
++		ANTC_SIGNAL, ANTC_STOP_RUN, ANTC_RUN_STATUS, ANTC_STATS,
++		ANTC_SHUTDOWN };
+ 	int i, error;
+ 
+ 	for (i = 0; i < ARRAY_SIZE(opcodes); i++) {
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index 6f5caecff..d7c62aff8 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -10,6 +10,8 @@
+  * have no payload. Successful replies have the opcode-specific payload below.
+  */
+ #define ANTC_VERSION 1
++/* Contract revision of the guest's observable behaviour (native-schema-slices). */
++#define ANTC_REVISION 9
+ #define ANTC_HEADER_SIZE 8
+ #define ANTC_UPLOAD_BEGIN 0x1001
+ #define ANTC_UPLOAD_CHUNK 0x1002
+@@ -29,6 +31,8 @@
+ #define ANTC_RUN_ASYNC_COMPLETE 8
+ #define ANTC_RUN_OBSERVATION_INCOMPLETE 16
+ #define ANTC_STATS 0x1020
++#define ANTC_INFO 0x1021
++#define ANTC_INFO_SIZE 160
+ #define ANTC_SHUTDOWN 0x1030
+ #define ANTC_UPLOAD_OVERWRITE 1
+ #define ANTC_UPLOAD_EXECUTABLE 2
+@@ -73,6 +77,13 @@
+  * tasks_created, tasks_live, calls_entered, events_attempted,
+  * packets_attempted, packets_failed, copy_faults, schema_gaps,
+  * context_failures (80 bytes). Counters persist despite telemetry loss.
++ * INFO: header only. Reply (160 bytes): u32 revision at 0 (ANTC_REVISION),
++ * u32 reserved=0 at 4, source id at 8 (80 bytes), kernel release at 88
++ * (64 bytes), reserved zero at 152. Strings are NUL terminated and padded.
++ * The source id is CONFIG_ANTINOMIE_SOURCE_ID, "<revision>:<series sha256>",
++ * or empty for an unversioned build. Kernels before revision 9 return
++ * -EOPNOTSUPP. INFO is registered before every other opcode, so INFO
++ * unsupported while STATS succeeds identifies such a kernel.
+  * SHUTDOWN: header only; empty success reply, delayed kernel_power_off.
+  */
+ #endif

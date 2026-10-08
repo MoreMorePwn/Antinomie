@@ -389,6 +389,78 @@ pub struct BaseSummary {
     pub fixed_display: bool,
     /// Size of the base disk image on disk, in bytes.
     pub size_bytes: u64,
+    /// Antinomie patch revision the base's kernel was built from.
+    pub revision: Option<u32>,
+}
+
+/// Guest contract revision this app implements.
+pub const APP_REVISION: u32 = crate::control::REVISION;
+
+/// Split a `CONFIG_ANTINOMIE_SOURCE_ID` value, `"<revision>:<series sha256>"`.
+pub fn parse_source_id(value: &str) -> Option<(u32, String)> {
+    let (revision, series) = value.split_once(':')?;
+    let revision = (!revision.starts_with('0') && revision.len() <= 9)
+        .then(|| revision.parse::<u32>().ok())
+        .flatten()?;
+    (series.len() == 64
+        && series
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+    .then(|| (revision, series.to_string()))
+}
+
+/// How a base's or kernel's patch revision relates to this app.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RevisionStatus {
+    /// Built from this app's patch revision.
+    Current,
+    /// Built from an earlier revision; it works but lacks later behaviour.
+    Outdated,
+    /// Built from a later revision than this app understands.
+    NeedsNewerApp,
+    /// Built before revisions were recorded (revision 8 or earlier).
+    Legacy,
+}
+impl RevisionStatus {
+    pub fn of(revision: Option<u32>) -> Self {
+        match revision {
+            None => Self::Legacy,
+            Some(revision) if revision == APP_REVISION => Self::Current,
+            Some(revision) if revision < APP_REVISION => Self::Outdated,
+            Some(_) => Self::NeedsNewerApp,
+        }
+    }
+    /// Short text for lists, e.g. "revision 9" or "revision 8, outdated".
+    pub fn describe(revision: Option<u32>) -> String {
+        match (Self::of(revision), revision) {
+            (Self::Current, Some(revision)) => format!("revision {revision}"),
+            (Self::Outdated, Some(revision)) => format!("revision {revision}, outdated"),
+            (Self::NeedsNewerApp, Some(revision)) => {
+                format!("revision {revision}, needs a newer app")
+            }
+            _ => "no revision (built before revision 9)".into(),
+        }
+    }
+}
+/// Refuse a base this app cannot fully interpret.
+pub(crate) fn require_supported_revision(revision: Option<u32>) -> Result<(), String> {
+    match revision {
+        Some(revision) if revision > APP_REVISION => Err(format!(
+            "this base was built from patch revision {revision}; this app supports up to \
+             revision {APP_REVISION}; update Antinomie first"
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// The running guest kernel as reported over the control channel.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuestKernel {
+    /// `None`: the kernel predates the INFO command (revision 8 or earlier).
+    pub revision: Option<u32>,
+    /// Patch-series SHA-256; `None` for a development or legacy kernel.
+    pub source: Option<String>,
+    pub release: Option<String>,
 }
 
 /// One base advertised by the remote catalog, flattened for the UI.
@@ -402,6 +474,7 @@ pub struct RemoteBase {
     pub min_ram_mib: u32,
     pub min_disk_gib: u32,
     pub total_size: u64,
+    pub revision: Option<u32>,
 }
 
 /// Progress of the single active remote base download.
@@ -439,6 +512,7 @@ impl From<&crate::distribution::CatalogBase> for RemoteBase {
             min_ram_mib: base.min_ram_mib,
             min_disk_gib: base.min_disk_gib,
             total_size: base.total_size,
+            revision: base.antinomie_revision,
         }
     }
 }
@@ -650,6 +724,8 @@ pub struct Snapshot {
     pub runs: Vec<RunSummary>,
     pub capture_dir: Option<PathBuf>,
     pub serial_log: Option<PathBuf>,
+    /// The running guest kernel, once it has answered the INFO probe.
+    pub guest_kernel: Option<GuestKernel>,
     pub last_error: Option<String>,
 }
 
@@ -782,6 +858,44 @@ pub fn pair_events(events: &[EventSummary]) -> Vec<InvocationSummary> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn source_ids_and_revision_status() {
+        let series = "0f".repeat(32);
+        assert_eq!(
+            parse_source_id(&format!("9:{series}")),
+            Some((9, series.clone()))
+        );
+        for bad in [
+            String::new(),
+            series.clone(),
+            format!("0:{series}"),
+            format!("09:{series}"),
+            format!("-9:{series}"),
+            format!("9:{}", series.to_uppercase()),
+            format!("9:{}", &series[1..]),
+            format!("9:{series}0"),
+            format!("1234567890:{series}"),
+        ] {
+            assert_eq!(parse_source_id(&bad), None, "{bad}");
+        }
+        assert_eq!(RevisionStatus::of(None), RevisionStatus::Legacy);
+        assert_eq!(
+            RevisionStatus::of(Some(APP_REVISION)),
+            RevisionStatus::Current
+        );
+        assert_eq!(
+            RevisionStatus::of(Some(APP_REVISION - 1)),
+            RevisionStatus::Outdated
+        );
+        assert_eq!(
+            RevisionStatus::of(Some(APP_REVISION + 1)),
+            RevisionStatus::NeedsNewerApp
+        );
+        assert!(require_supported_revision(None).is_ok());
+        assert!(require_supported_revision(Some(APP_REVISION)).is_ok());
+        let error = require_supported_revision(Some(APP_REVISION + 1)).unwrap_err();
+        assert!(error.contains("update Antinomie"), "{error}");
+    }
     #[test]
     fn lifecycle_cannot_replace_syscall_entry_or_invent_missing_entry() {
         let entry = EventSummary {
