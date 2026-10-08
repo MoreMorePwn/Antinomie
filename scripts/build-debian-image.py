@@ -24,9 +24,30 @@ import tempfile
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_OUT = REPO / "work/debian-xfce-base"
-PROFILE = {"id": "debian-xfce", "label": "Debian 13 (Xfce)",
-           "min_ram_mib": 2048, "min_disk_gib": 16,
-           "requires_credentials": True, "graphical": True}
+# The Debian installer's desktop choices: tasksel task, display manager,
+# default session (an xsessions or wayland-sessions entry), label, minimum RAM.
+DESKTOPS = {
+    "xfce": ("task-xfce-desktop", "lightdm", "xfce", "Xfce", 2048),
+    "gnome": ("task-gnome-desktop", "gdm3", "gnome", "GNOME", 4096),
+    "gnome-flashback": ("task-gnome-flashback-desktop", "gdm3",
+                        "gnome-flashback-metacity", "GNOME Flashback", 2048),
+    "kde": ("task-kde-desktop", "sddm", "plasma", "KDE Plasma", 4096),
+    "cinnamon": ("task-cinnamon-desktop", "lightdm", "cinnamon", "Cinnamon", 2048),
+    "mate": ("task-mate-desktop", "lightdm", "mate", "MATE", 2048),
+    "lxde": ("task-lxde-desktop", "lightdm", "LXDE", "LXDE", 2048),
+    "lxqt": ("task-lxqt-desktop", "sddm", "lxqt", "LXQt", 2048),
+}
+
+
+def profile(desktop):
+    """Guest profile of the base: one per desktop."""
+    label, ram = DESKTOPS[desktop][3], DESKTOPS[desktop][4]
+    return {"id": "debian-" + desktop, "label": f"Debian 13 ({label})",
+            "min_ram_mib": ram, "min_disk_gib": 16,
+            "requires_credentials": True, "graphical": True}
+
+
+PROFILE = profile("xfce")
 APPEND = "root=/dev/vda rw rootwait console=tty0 console=ttyS0 panic=-1"
 SUITE = "trixie"
 SECURITY_MIRROR = "http://security.debian.org/debian-security"
@@ -36,11 +57,11 @@ NETWORK_INTERFACES = """source /etc/network/interfaces.d/*
 auto lo
 iface lo inet loopback
 """
-# task-xfce-desktop plus its recommends mirrors a Debian ISO Xfce install
-# (desktop-base, xfce4-goodies, power-manager, notifyd, locker, apps, fonts).
-# Guest integration packages stay excluded per the kernel-only control contract.
-PACKAGES = ("systemd-sysv", "task-xfce-desktop", "lightdm-gtk-greeter",
-            "sudo", "dbus-x11", "dbus-user-session", "network-manager",
+# The desktop's task plus its recommends mirrors a Debian ISO desktop install
+# (for Xfce: desktop-base, xfce4-goodies, power-manager, notifyd, locker, apps,
+# fonts). Guest integration packages stay excluded per the kernel-only control
+# contract.
+PACKAGES = ("systemd-sysv", "sudo", "dbus-x11", "dbus-user-session", "network-manager",
             "xserver-xorg-input-libinput", "iproute2", "iputils-ping",
             "procps", "psmisc", "less", "vim-tiny", "curl", "wget",
             "ca-certificates", "file", "bash-completion", "locales",
@@ -48,7 +69,8 @@ PACKAGES = ("systemd-sysv", "task-xfce-desktop", "lightdm-gtk-greeter",
             "console-setup", "tzdata")
 # Installer-style answers. Values are checked again inside the new system
 # against its locale, keyboard and time zone data.
-DEFAULTS = {"hostname": "antinomie", "locale": "en_US.UTF-8", "keyboard_layout": "us",
+DEFAULTS = {"desktop": "xfce", "hostname": "antinomie", "locale": "en_US.UTF-8",
+            "keyboard_layout": "us",
             "keyboard_variant": "", "timezone": "Etc/UTC", "standard": False,
             "mirror": "http://deb.debian.org/debian", "proxy": ""}
 PATTERNS = {"locale": r"[a-z]{2,3}(?:_[A-Z]{2})?(?:@[a-z]+)?\.UTF-8",
@@ -162,19 +184,33 @@ def options(values):
         raise RuntimeError("invalid time zone")
     if not isinstance(result["standard"], bool):
         raise RuntimeError("standard must be true or false")
+    if result["desktop"] not in DESKTOPS:
+        raise RuntimeError(f"unknown desktop {result['desktop']!r}")
     return result
 
 
+def packages(desktop):
+    """Packages to install: the common set plus the desktop's task."""
+    task = DESKTOPS[desktop][0]
+    extra = ("lightdm-gtk-greeter",) if desktop == "xfce" else ()
+    return PACKAGES + (task,) + extra
+
+
 def customization_script():
-    """Run inside the new root: arguments hostname locale layout variant timezone."""
+    """Run inside the new root: arguments hostname locale layout variant timezone
+    display-manager session."""
     return """#!/bin/sh
 set -eu
-hostname=$1 locale=$2 layout=$3 variant=$4 zone=$5
+hostname=$1 locale=$2 layout=$3 variant=$4 zone=$5 manager=$6 session=$7
 export DEBIAN_FRONTEND=noninteractive
 test "$(. /etc/os-release; printf '%s' "$ID:$VERSION_ID")" = debian:13
 test "$(dpkg --print-architecture)" = amd64
 grep -qx "$locale UTF-8" /usr/share/i18n/SUPPORTED || { echo "unsupported locale $locale" >&2; exit 1; }
 test -f "/usr/share/zoneinfo/$zone" || { echo "unknown time zone $zone" >&2; exit 1; }
+test -f "/usr/share/xsessions/$session.desktop" || test -f "/usr/share/wayland-sessions/$session.desktop" || \\
+    { echo "desktop session $session is not installed" >&2; exit 1; }
+test "$(cat /etc/X11/default-display-manager)" = "/usr/sbin/$manager" || \\
+    { echo "display manager is not $manager" >&2; exit 1; }
 awk -v l="$layout" '/^! layout/ {s = 1; next} /^!/ {s = 0} s && $1 == l {f = 1} END {exit !f}' \\
     /usr/share/X11/xkb/rules/evdev.lst || { echo "unknown keyboard layout $layout" >&2; exit 1; }
 if [ -n "$variant" ]; then
@@ -197,8 +233,23 @@ done
 passwd -l root
 rm -f /etc/ssh/ssh_host_* /var/lib/dbus/machine-id
 truncate -s 0 /etc/machine-id
-mkdir -p /etc/lightdm/lightdm.conf.d /var/lib/antinomie-image
-printf '[Seat:*]\\ngreeter-session=lightdm-gtk-greeter\\nuser-session=xfce\\nautologin-user=\\nautologin-guest=false\\nallow-guest=false\\n' > /etc/lightdm/lightdm.conf.d/99-antinomie.conf
+mkdir -p /var/lib/antinomie-image
+# No automatic or guest login; the chosen desktop is the default session.
+case $manager in
+lightdm)
+    mkdir -p /etc/lightdm/lightdm.conf.d
+    greeter=
+    if [ "$session" = xfce ]; then greeter='greeter-session=lightdm-gtk-greeter\\n'; fi
+    printf "[Seat:*]\\n${greeter}user-session=%s\\nautologin-user=\\nautologin-guest=false\\nallow-guest=false\\n" "$session" > /etc/lightdm/lightdm.conf.d/99-antinomie.conf
+    ;;
+gdm3)
+    sed -i 's/^#*\\s*AutomaticLoginEnable\\s*=.*/AutomaticLoginEnable = false/' /etc/gdm3/daemon.conf
+    ;;
+sddm)
+    mkdir -p /etc/sddm.conf.d
+    printf '[Autologin]\\nUser=\\nSession=%s\\n' "$session" > /etc/sddm.conf.d/99-antinomie.conf
+    ;;
+esac
 systemctl set-default graphical.target
 printf '/dev/vda / ext4 defaults 0 1\\n' > /etc/fstab
 printf '%s' """ + shlex.quote(NETWORK_INTERFACES) + """ > /etc/network/interfaces
@@ -232,7 +283,8 @@ def mmdebstrap_command(values, tarball, script, provenance, modules=None):
     q = shlex.quote
     command = ["mmdebstrap", "--mode=" + bootstrap_mode(),
                "--variant=" + ("standard" if values["standard"] else "important"),
-               "--architectures=amd64", "--format=tar", "--include=" + ",".join(PACKAGES),
+               "--architectures=amd64", "--format=tar",
+               "--include=" + ",".join(packages(values["desktop"])),
                "--aptopt=APT::Install-Recommends \"true\"",
                "--aptopt=APT::Get::AllowUnauthenticated \"false\"",
                "--aptopt=Acquire::AllowInsecureRepositories \"false\"",
@@ -245,8 +297,10 @@ def mmdebstrap_command(values, tarball, script, provenance, modules=None):
         command.append('--customize-hook=mkdir -p "$1/usr/lib/modules"')
         command.append(f'--customize-hook=cp -a {q(str(modules))} "$1/usr/lib/modules/"')
         command.append(f'--customize-hook=chown -R 0:0 "$1/usr/lib/modules/{modules.name}"')
-    arguments = " ".join(q(values[key]) for key in
-                         ("hostname", "locale", "keyboard_layout", "keyboard_variant", "timezone"))
+    manager, session = DESKTOPS[values["desktop"]][1:3]
+    arguments = " ".join([q(values[key]) for key in
+                          ("hostname", "locale", "keyboard_layout", "keyboard_variant", "timezone")]
+                         + [q(manager), q(session)])
     command.append(f'--customize-hook=chroot "$1" sh /tmp/antinomie-customize.sh {arguments}')
     command.append('--customize-hook=rm -f "$1/tmp/antinomie-customize.sh"')
     for path in ("/var/lib/antinomie-image/packages.tsv", "/etc/os-release"):
@@ -386,7 +440,8 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
                   "options": values, "root": root,
                   "apt_authentication": "Debian signed indexes; insecure repositories disallowed",
                   "package_install_recommends": True,
-                  "requested_packages": list(PACKAGES), "package_inventory": "packages.tsv",
+                  "requested_packages": list(packages(values["desktop"])),
+                  "package_inventory": "packages.tsv",
                   "kernel_sha256": hashes["kernel"], "kernel_release": release,
                   "tools": {tool: subprocess.run([tool, "--version"], capture_output=True,
                                                  text=True).stdout.strip().splitlines()[0]
@@ -396,7 +451,8 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
         (provenance / "build.json").write_text(json.dumps(record, indent=2) + "\n")
         manifest = {"format": 1, "kernel_version": "6.12.94", "schema_id": 1,
                     "kernel": "kernel", "initrd": "initrd.gz", "base_disk": "base.qcow2",
-                    "kernel_append": APPEND, "guest": PROFILE, "sha256": hashes}
+                    "kernel_append": APPEND, "guest": profile(values["desktop"]),
+                    "sha256": hashes}
         helpers.stamp_revision(manifest, bundle / "kernel", allow_unversioned)
         if helpers.fixed_display_config(kernel_config, bundle / "kernel"):
             manifest["fixed_display"] = True

@@ -42,7 +42,7 @@ pub const BUILD_PROFILES: &[BuildProfile] = &[
     },
     BuildProfile {
         id: "debian-xfce",
-        label: "Debian 13 (Xfce)",
+        label: "Debian 13 (desktop)",
         kind: Kind::DebianXfce,
     },
 ];
@@ -64,9 +64,80 @@ pub enum BuildMode {
     Qemu,
 }
 
+/// A Debian installer desktop choice.
+pub struct Desktop {
+    pub id: &'static str,
+    pub label: &'static str,
+    /// Built and booted with its login setup (ANT-T0028); the others are
+    /// offered as untested.
+    pub verified: bool,
+    /// `XDG_CURRENT_DESKTOP` names that identify it on the host.
+    pub host_names: &'static [&'static str],
+}
+
+/// The desktops the Debian installer offers, in its order (the recipe's
+/// `DESKTOPS` table in `build-debian-image.py` must match).
+pub const DESKTOPS: &[Desktop] = &[
+    Desktop {
+        id: "gnome",
+        label: "GNOME",
+        verified: false,
+        host_names: &["GNOME", "ubuntu:GNOME"],
+    },
+    Desktop {
+        id: "xfce",
+        label: "Xfce",
+        verified: true,
+        host_names: &["XFCE"],
+    },
+    Desktop {
+        id: "gnome-flashback",
+        label: "GNOME Flashback",
+        verified: false,
+        host_names: &["GNOME-Flashback:GNOME", "GNOME-Flashback"],
+    },
+    Desktop {
+        id: "kde",
+        label: "KDE Plasma",
+        verified: false,
+        host_names: &["KDE"],
+    },
+    Desktop {
+        id: "cinnamon",
+        label: "Cinnamon",
+        verified: false,
+        host_names: &["X-Cinnamon", "Cinnamon"],
+    },
+    Desktop {
+        id: "mate",
+        label: "MATE",
+        verified: false,
+        host_names: &["MATE"],
+    },
+    Desktop {
+        id: "lxde",
+        label: "LXDE",
+        verified: false,
+        host_names: &["LXDE"],
+    },
+    Desktop {
+        id: "lxqt",
+        label: "LXQt",
+        verified: false,
+        host_names: &["LXQt"],
+    },
+];
+
+fn default_desktop() -> String {
+    "xfce".into()
+}
+
 /// Installer answers. Debian uses all of them; BusyBox only the hostname.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BuildOptions {
+    /// Debian desktop environment (`DESKTOPS` id).
+    #[serde(default = "default_desktop")]
+    pub desktop: String,
     pub hostname: String,
     pub locale: String,
     pub keyboard_layout: String,
@@ -87,6 +158,7 @@ impl BuildOptions {
     pub fn defaults(kind: Kind) -> Self {
         let host = HostLocale::detect();
         Self {
+            desktop: host.desktop.unwrap_or_else(default_desktop),
             hostname: match kind {
                 Kind::BusyBox => "localhost".into(),
                 Kind::DebianXfce => "antinomie".into(),
@@ -105,6 +177,9 @@ impl BuildOptions {
         valid_hostname(&self.hostname)?;
         if kind == Kind::BusyBox {
             return Ok(());
+        }
+        if !DESKTOPS.iter().any(|desktop| desktop.id == self.desktop) {
+            return Err(format!("unknown desktop {:?}", self.desktop));
         }
         if !LOCALES.iter().any(|(code, _)| *code == self.locale) {
             return Err(format!("unsupported locale {:?}", self.locale));
@@ -142,6 +217,7 @@ impl BuildOptions {
         match kind {
             Kind::BusyBox => serde_json::json!({ "hostname": self.hostname }),
             Kind::DebianXfce => serde_json::json!({
+                "desktop": self.desktop,
                 "hostname": self.hostname,
                 "locale": self.locale,
                 "keyboard_layout": self.keyboard_layout,
@@ -194,6 +270,8 @@ fn valid_url(value: &str, what: &str) -> Result<(), String> {
 /// what the Debian installer would guess for this user.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HostLocale {
+    /// The desktop this computer runs (`DESKTOPS` id).
+    pub desktop: Option<String>,
     pub locale: Option<String>,
     pub layout: Option<String>,
     pub variant: Option<String>,
@@ -241,11 +319,45 @@ impl HostLocale {
             })
             .filter(|zone| TIMEZONES.contains(&zone.as_str()));
         Self {
+            desktop: Self::desktop(
+                &std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default(),
+                &std::env::var("DESKTOP_SESSION").unwrap_or_default(),
+            ),
             locale,
             layout,
             variant,
             timezone,
         }
+    }
+    /// Map `XDG_CURRENT_DESKTOP` (or, without it, `DESKTOP_SESSION`) to a desktop.
+    fn desktop(current: &str, session: &str) -> Option<String> {
+        let by_name = DESKTOPS.iter().find(|desktop| {
+            desktop
+                .host_names
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(current))
+                || current.split(':').next().is_some_and(|first| {
+                    desktop
+                        .host_names
+                        .iter()
+                        .any(|n| n.eq_ignore_ascii_case(first))
+                })
+        });
+        let by_session = || {
+            let session = session.to_ascii_lowercase();
+            DESKTOPS.iter().find(|desktop| {
+                !session.is_empty()
+                    && (session == desktop.id
+                        || (desktop.id == "kde" && session.starts_with("plasma"))
+                        || (desktop.id == "gnome"
+                            && session.starts_with("gnome")
+                            && !session.contains("flashback")))
+            })
+        };
+        by_name
+            .filter(|_| !current.is_empty())
+            .or_else(by_session)
+            .map(|desktop| desktop.id.to_string())
     }
     /// `de_DE.utf8`, `de_DE.UTF-8@euro` or `de_DE` → `de_DE.UTF-8` when offered.
     fn locale_code(value: &str) -> Option<String> {
@@ -643,8 +755,37 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .len(),
-            8
+            9
         );
+    }
+
+    #[test]
+    fn host_desktop_is_recognised() {
+        let desktop = |current, session| HostLocale::desktop(current, session);
+        assert_eq!(desktop("XFCE", "").as_deref(), Some("xfce"));
+        assert_eq!(desktop("ubuntu:GNOME", "").as_deref(), Some("gnome"));
+        assert_eq!(
+            desktop("GNOME-Flashback:GNOME", "").as_deref(),
+            Some("gnome-flashback")
+        );
+        assert_eq!(desktop("KDE", "plasma").as_deref(), Some("kde"));
+        assert_eq!(desktop("X-Cinnamon", "").as_deref(), Some("cinnamon"));
+        assert_eq!(desktop("", "plasmawayland").as_deref(), Some("kde"));
+        assert_eq!(desktop("", "lxqt").as_deref(), Some("lxqt"));
+        assert_eq!(desktop("", ""), None);
+        assert_eq!(desktop("Hyprland", ""), None);
+    }
+
+    #[test]
+    fn recipe_offers_the_same_desktops() {
+        let recipe = include_str!("../../../../../../scripts/build-debian-image.py");
+        for desktop in DESKTOPS {
+            assert!(
+                recipe.contains(&format!("\"{}\": (\"task-", desktop.id)),
+                "{}",
+                desktop.id
+            );
+        }
     }
 
     #[test]

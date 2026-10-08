@@ -194,7 +194,7 @@ impl BuildWizard {
         for (index, profile) in BUILD_PROFILES.iter().enumerate() {
             let detail = match profile.kind {
                 Kind::BusyBox => "Small console guest, fast to build",
-                Kind::DebianXfce => "Debian 13 with the Xfce desktop, as from the installer",
+                Kind::DebianXfce => "Debian 13 with the desktop you choose, as from the installer",
             };
             ui.radio_value(&mut self.profile, index, profile.label)
                 .on_hover_text(detail);
@@ -373,12 +373,23 @@ impl BuildWizard {
 
     fn software(&mut self, ui: &mut egui::Ui) -> bool {
         ui.label("Choose software to install.");
-        ui.add_enabled(
-            false,
-            egui::Checkbox::new(&mut true, "Debian desktop environment: Xfce"),
-        )
-        .on_disabled_hover_text("Other desktops need their own verification pass first");
-        ui.checkbox(&mut self.options().standard, "Standard system utilities");
+        ui.label(RichText::new("Debian desktop environment").strong());
+        let detected = self.detected.desktop.clone();
+        let options = &mut self.options[self.profile];
+        for desktop in build::DESKTOPS {
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut options.desktop, desktop.id.to_string(), desktop.label);
+                if detected.as_deref() == Some(desktop.id) {
+                    ui.colored_label(theme::GOOD, "this computer");
+                }
+                if !desktop.verified {
+                    ui.colored_label(theme::WARN, "untested")
+                        .on_hover_text("Offered like the Debian installer, but not yet built and checked to reach its login screen");
+                }
+            });
+        }
+        ui.add_space(4.0);
+        ui.checkbox(&mut options.standard, "Standard system utilities");
         ui.add_space(6.0);
         ui.small(
             "Not offered, by design: SSH server, guest agents and cloud-init (the monitor uses \
@@ -438,11 +449,18 @@ impl BuildWizard {
                 ("Time zone", options.timezone.clone()),
                 (
                     "Software",
-                    if options.standard {
-                        "Xfce desktop, standard system utilities".into()
-                    } else {
-                        "Xfce desktop".into()
-                    },
+                    format!(
+                        "{} desktop{}",
+                        build::DESKTOPS
+                            .iter()
+                            .find(|desktop| desktop.id == options.desktop)
+                            .map_or(options.desktop.as_str(), |desktop| desktop.label),
+                        if options.standard {
+                            ", standard system utilities"
+                        } else {
+                            ""
+                        }
+                    ),
                 ),
                 ("Mirror", options.mirror.clone()),
                 (

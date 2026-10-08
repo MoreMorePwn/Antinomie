@@ -38,7 +38,7 @@ SERIES = KIT / "src/antinomie/core/6.12"
 PROFILES = {
     "busybox": ("minimal", "build-monitor-image.py", {"hostname"}, (5, 2)),
     "debian-xfce": ("debian", "build-debian-image.py",
-                    {"hostname", "locale", "keyboard_layout", "keyboard_variant",
+                    {"desktop", "hostname", "locale", "keyboard_layout", "keyboard_variant",
                      "timezone", "standard", "mirror", "proxy"}, (30, 20)),
 }
 

@@ -55,6 +55,29 @@ class DebianImageTests(unittest.TestCase):
         self.assertFalse(any("Proxy" in arg for arg in root))
         self.assertFalse(any("modules" in arg for arg in root))
 
+    def test_desktops_follow_the_installer_and_set_their_display_manager(self):
+        self.assertEqual(set(image.DESKTOPS), {"xfce", "gnome", "gnome-flashback", "kde",
+                                               "cinnamon", "mate", "lxde", "lxqt"})
+        self.assertEqual(image.options({})["desktop"], "xfce")
+        xfce = image.packages("xfce")
+        self.assertIn("task-xfce-desktop", xfce)
+        self.assertIn("lightdm-gtk-greeter", xfce)
+        gnome = image.packages("gnome")
+        self.assertIn("task-gnome-desktop", gnome)
+        self.assertFalse(any("xfce" in package or "lightdm" in package for package in gnome))
+        self.assertEqual(image.profile("kde")["label"], "Debian 13 (KDE Plasma)")
+        self.assertEqual(image.profile("kde")["id"], "debian-kde")
+        self.assertEqual(image.profile("gnome")["min_ram_mib"], 4096)
+        self.assertEqual(image.profile("xfce"), image.PROFILE)
+        with patch.object(image.os, "geteuid", return_value=0):
+            command = image.mmdebstrap_command(image.options({"desktop": "kde"}),
+                                               Path("/w/r.tar"), Path("/w/c.sh"), Path("/w/p"))
+        include = next(arg for arg in command if arg.startswith("--include="))
+        self.assertIn("task-kde-desktop", include)
+        self.assertTrue(any(arg.endswith("Etc/UTC sddm plasma") for arg in command), command)
+        with self.assertRaises(RuntimeError):
+            image.options({"desktop": "windows"})
+
     def test_options_are_validated(self):
         self.assertEqual(image.options({})["hostname"], "antinomie")
         for bad in ({"hostname": "Bad_Name"}, {"locale": "en_US.ISO-8859-1"},
@@ -171,6 +194,9 @@ class DebianImageTests(unittest.TestCase):
         self.assertIn("/etc/localtime", script)
         self.assertIn("/etc/hostname", script)
         self.assertIn("rm -f /etc/apt/apt.conf.d/99mmdebstrap", script)
+        self.assertIn("/etc/X11/default-display-manager", script)
+        self.assertIn("allow-guest=false", script)
+        self.assertIn("AutomaticLoginEnable = false", script)
 
 
 if __name__ == "__main__":
