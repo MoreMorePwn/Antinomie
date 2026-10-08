@@ -121,6 +121,14 @@ def workspace_version():
     return match[1] if match else None
 
 
+def valid_name(name):
+    """A base's display name: up to 64 printable characters (empty: automatic)."""
+    name = name.strip()
+    if len(name) > 64 or any(not character.isprintable() for character in name):
+        raise RuntimeError("base name must be at most 64 printable characters")
+    return name
+
+
 def stamp_revision(manifest, kernel, allow_unversioned, app_version=None):
     """Record the patch revision and series the kernel was built from, the
     oldest app version that can run it and the app version that built it."""
@@ -258,11 +266,13 @@ def main():
                         help="accept a development kernel without a source id")
     parser.add_argument("--hostname", default="localhost")
     parser.add_argument("--app-version", help="Antinomie version building this base")
+    parser.add_argument("--name", default="", help="display name of the base")
     parser.add_argument("--work", type=Path, default=REPO / "work",
                         help="directory for temporary build files")
     args = parser.parse_args()
     try:
         valid_hostname(args.hostname)
+        name = valid_name(args.name)
     except RuntimeError as error:
         parser.error(str(error))
     fixed_display = fixed_display_config(args.kernel_config, args.kernel)
@@ -309,6 +319,8 @@ def main():
                 "sha256": {name: checksum(args.output / name)
                            for name in ("kernel", "initrd.gz", "base.qcow2")}}
     stamp_revision(manifest, args.output / "kernel", args.allow_unversioned, args.app_version)
+    if name:
+        manifest["name"] = name
     if fixed_display:
         manifest["fixed_display"] = True
         shutil.copy2(args.kernel_config, args.output / "kernel.config")

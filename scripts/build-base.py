@@ -37,9 +37,9 @@ SERIES = KIT / "src/antinomie/core/6.12"
 # Kernel profile, image recipe, accepted options, and free space (GiB) the
 # kernel build and the image build need.
 PROFILES = {
-    "busybox": ("minimal", "build-monitor-image.py", {"hostname"}, (5, 2)),
+    "busybox": ("minimal", "build-monitor-image.py", {"hostname", "name"}, (5, 2)),
     "debian-xfce": ("debian", "build-debian-image.py",
-                    {"desktop", "hostname", "locale", "keyboard_layout", "keyboard_variant",
+                    {"name", "desktop", "hostname", "locale", "keyboard_layout", "keyboard_variant",
                      "timezone", "standard", "mirror", "proxy"}, (30, 20)),
 }
 
@@ -230,7 +230,8 @@ def build_image(profile, values, build, work, output, app_version=None):
     if app_version:
         command += ["--app-version", app_version]
     if profile == "busybox":
-        command += ["--hostname", values.get("hostname", "localhost")]
+        command += ["--hostname", values.get("hostname", "localhost"),
+                    "--name", values.get("name", "")]
     else:
         answers = work / "options.json"
         answers.write_text(json.dumps(values) + "\n")

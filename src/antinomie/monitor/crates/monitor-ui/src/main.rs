@@ -16,7 +16,11 @@ use std::{
 };
 
 #[derive(Parser)]
-#[command(name = "antinomie", version, about = "Native Antinomie VM and syscall monitor")]
+#[command(
+    name = "antinomie",
+    version,
+    about = "Native Antinomie VM and syscall monitor"
+)]
 struct Arguments {
     #[arg(long)]
     bundle: Option<PathBuf>,

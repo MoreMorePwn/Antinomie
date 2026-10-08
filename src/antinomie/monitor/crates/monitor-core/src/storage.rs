@@ -404,6 +404,9 @@ pub struct Bundle {
     /// Oldest Antinomie version that can run the base (its kernel revision).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_app_version: Option<String>,
+    /// Display name chosen when the base was built; not part of the identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 fn is_false(value: &bool) -> bool {
     !value
@@ -448,6 +451,9 @@ impl Bundle {
                     "bundle has an invalid Antinomie version {version:?}"
                 ));
             }
+        }
+        if let Some(name) = &self.name {
+            crate::build::valid_base_name(name)?;
         }
         Ok(())
     }
@@ -562,6 +568,7 @@ impl Bundle {
                     antinomie_source: self.antinomie_source.clone(),
                     built_with: self.built_with.clone(),
                     min_app_version: self.min_app_version.clone(),
+                    name: self.name.clone(),
                 };
                 if copied.identity()? != identity {
                     return Err("bundle changed during import; copies rejected".into());
@@ -598,6 +605,7 @@ impl Bundle {
             antinomie_source: self.antinomie_source,
             built_with: self.built_with,
             min_app_version: self.min_app_version,
+            name: self.name,
         };
         installed.verify_installed()?;
         atomic_json(&target.join("bundle.json"), &installed)?;
@@ -1485,6 +1493,7 @@ mod tests {
             antinomie_source: None,
             built_with: None,
             min_app_version: None,
+            name: None,
         }
         .install(&options)
         .unwrap();
@@ -1559,6 +1568,17 @@ mod tests {
         }
         bundle.antinomie_revision = Some(9);
         bundle.antinomie_source = Some("d".repeat(64));
+        bundle.min_app_version = Some("0.1.0".into());
+        bundle.name = Some("Lab base".into());
+        write(&bundle);
+        assert_eq!(
+            Bundle::load(&source).unwrap().name.as_deref(),
+            Some("Lab base")
+        );
+        bundle.name = Some("bad\nname".into());
+        write(&bundle);
+        assert!(Bundle::load(&source).is_err());
+        bundle.name = None;
         for version in ["0.1", "v0.1.0", "01.0.0"] {
             bundle.min_app_version = Some(version.into());
             write(&bundle);
@@ -1757,6 +1777,7 @@ mod tests {
             antinomie_source: None,
             built_with: None,
             min_app_version: None,
+            name: None,
         };
         bundle.base_identity = Some(bundle.identity().unwrap());
         let vm = source.join("vms/old-id");
@@ -1947,6 +1968,7 @@ mod tests {
             antinomie_source: None,
             built_with: None,
             min_app_version: None,
+            name: None,
         };
         let options = BackendOptions {
             data_dir: directory.join("data"),

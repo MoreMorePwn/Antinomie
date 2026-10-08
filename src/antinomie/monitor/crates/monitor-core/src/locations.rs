@@ -279,10 +279,12 @@ pub(crate) fn installed_bases(options: &BackendOptions) -> Result<Vec<BaseSummar
         }
         bases.push(BaseSummary {
             id,
-            label: bundle
-                .guest
-                .as_ref()
-                .map_or_else(|| "Linux 6.12.94".into(), |guest| guest.label.clone()),
+            label: bundle.name.clone().unwrap_or_else(|| {
+                bundle
+                    .guest
+                    .as_ref()
+                    .map_or_else(|| "Linux 6.12.94".into(), |guest| guest.label.clone())
+            }),
             directory: entry.path(),
             min_ram_mib: bundle.guest.as_ref().map_or(256, |guest| guest.min_ram_mib),
             min_disk_gib: bundle.guest.as_ref().map_or(1, |guest| guest.min_disk_gib),
@@ -376,6 +378,7 @@ mod tests {
                 antinomie_source: None,
                 built_with: None,
                 min_app_version: None,
+                name: None,
             }
             .install(&options)
             .unwrap();

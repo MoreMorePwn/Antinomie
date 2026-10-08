@@ -69,7 +69,7 @@ PACKAGES = ("systemd-sysv", "sudo", "dbus-x11", "dbus-user-session", "network-ma
             "console-setup", "tzdata")
 # Installer-style answers. Values are checked again inside the new system
 # against its locale, keyboard and time zone data.
-DEFAULTS = {"desktop": "xfce", "hostname": "antinomie", "locale": "en_US.UTF-8",
+DEFAULTS = {"name": "", "desktop": "xfce", "hostname": "antinomie", "locale": "en_US.UTF-8",
             "keyboard_layout": "us",
             "keyboard_variant": "", "timezone": "Etc/UTC", "standard": False,
             "mirror": "http://deb.debian.org/debian", "proxy": ""}
@@ -177,6 +177,9 @@ def options(values):
         raise RuntimeError("unknown image options: " + ", ".join(sorted(unknown)))
     result = {**DEFAULTS, **values}
     monitor_helpers().valid_hostname(result["hostname"])
+    if not isinstance(result["name"], str):
+        raise RuntimeError("base name must be text")
+    result["name"] = monitor_helpers().valid_name(result["name"])
     for key, pattern in PATTERNS.items():
         if not isinstance(result[key], str) or not re.fullmatch(pattern, result[key]):
             raise RuntimeError(f"invalid {key.replace('_', ' ')} {result[key]!r}")
@@ -454,6 +457,8 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
                     "kernel_append": APPEND, "guest": profile(values["desktop"]),
                     "sha256": hashes}
         helpers.stamp_revision(manifest, bundle / "kernel", allow_unversioned, app_version)
+        if values["name"]:
+            manifest["name"] = values["name"]
         if helpers.fixed_display_config(kernel_config, bundle / "kernel"):
             manifest["fixed_display"] = True
             shutil.copy2(kernel_config, provenance / "kernel.config")

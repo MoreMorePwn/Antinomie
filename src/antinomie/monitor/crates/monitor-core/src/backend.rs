@@ -1298,6 +1298,10 @@ impl Worker {
                 let spec = build::profile(&request.profile).ok_or("unknown build profile")?;
                 request.options.validate(spec.kind)?;
                 let mode = build::resolve_mode(spec.kind, request.mode)?;
+                let label = match request.options.name.trim() {
+                    "" => build::automatic_base_name(spec.kind, &request.options.desktop),
+                    name => name.to_string(),
+                };
                 let id = crate::storage::unique_id();
                 let builds = self.options.data_dir.join("builds");
                 storage::private_dir(&builds).map_err(|e| e.to_string())?;
@@ -1340,7 +1344,7 @@ impl Worker {
                     })
                     .map_err(|e| e.to_string())?;
                 self.build = Some(BuildJob {
-                    label: spec.label.to_string(),
+                    label: label.clone(),
                     stage,
                     log,
                     cancel,
@@ -1348,7 +1352,7 @@ impl Worker {
                 });
                 self.snapshot.build = Some(BuildStatus {
                     profile: spec.id.to_string(),
-                    label: spec.label.to_string(),
+                    label: label.clone(),
                     mode,
                     stage: "prepare".into(),
                     log: Vec::new(),
@@ -2549,6 +2553,7 @@ mod tests {
                 antinomie_source: None,
                 built_with: None,
                 min_app_version: None,
+                name: None,
             };
             storage::atomic_json(&source.join("bundle.json"), &bundle).unwrap();
             worker
@@ -2944,6 +2949,7 @@ mod tests {
             antinomie_source: None,
             built_with: None,
             min_app_version: None,
+            name: None,
         };
         capture
             .manifest(&VmConfig::default(), &bundle, &bundle, "clean")

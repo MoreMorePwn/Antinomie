@@ -424,6 +424,17 @@ impl BuildWizard {
 
     fn summary(&mut self, ui: &mut egui::Ui, kernel_cached: bool) -> bool {
         let kind = self.kind();
+        let automatic = build::automatic_base_name(kind, &self.options[self.profile].desktop);
+        ui.horizontal(|ui| {
+            ui.label("Base name");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.options[self.profile].name)
+                    .desired_width(320.0)
+                    .hint_text(&automatic),
+            );
+        });
+        ui.small("Shown in the base list; leave empty for the automatic name.");
+        ui.add_space(6.0);
         let options = self.options[self.profile].clone();
         let mode = match build::resolve_mode(kind, self.mode) {
             Ok(BuildMode::Native) => "on this host".to_string(),
@@ -432,6 +443,14 @@ impl BuildWizard {
         };
         let mut rows = vec![
             ("Base", BUILD_PROFILES[self.profile].label.to_string()),
+            (
+                "Name",
+                if options.name.trim().is_empty() {
+                    automatic.clone()
+                } else {
+                    options.name.trim().to_string()
+                },
+            ),
             ("Build", mode),
             ("Hostname", options.hostname.clone()),
         ];
@@ -569,15 +588,29 @@ impl BuildWizard {
             ui.colored_label(theme::ERROR, error);
         } else if status.finished {
             ui.colored_label(theme::GOOD, "Base built and installed.");
+        } else if let Some((_, label)) = stages.get(current) {
+            ui.label(format!("{label}…"));
         }
-        egui::ScrollArea::vertical()
-            .max_height(260.0)
-            .stick_to_bottom(true)
-            .auto_shrink([false, true])
+        ui.add_space(6.0);
+        // The build output stays inside its own scrolling panel; the lines above
+        // carry the progress.
+        let footer = ui.spacing().interact_size.y * 2.0 + 24.0;
+        let height = (ui.available_height() - footer).max(160.0);
+        egui::Frame::new()
+            .fill(theme::TERMINAL)
+            .stroke(egui::Stroke::new(1.0_f32, theme::LINE))
+            .inner_margin(egui::Margin::same(6))
             .show(ui, |ui| {
-                for line in &status.log {
-                    ui.small(line);
-                }
+                ui.set_min_height(height);
+                egui::ScrollArea::both()
+                    .max_height(height)
+                    .stick_to_bottom(true)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for line in &status.log {
+                            ui.label(RichText::new(line).monospace().small().color(theme::MUTED));
+                        }
+                    });
             });
         if let Some(path) = &status.log_path {
             ui.small(format!("Full log: {}", path.display()));
@@ -627,7 +660,7 @@ fn pick_list<'a>(
     let needle = search.to_lowercase();
     egui::ScrollArea::vertical()
         .id_salt(id)
-        .max_height(240.0)
+        .max_height(360.0)
         .auto_shrink([false, true])
         .show(ui, |ui| {
             for (value, label) in items {

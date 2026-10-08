@@ -2156,12 +2156,16 @@ impl MonitorApp {
             egui::Window::new("Import base")
                 .open(&mut open)
                 .collapsible(false)
-                .resizable(false)
-                .default_width(420.0)
+                .resizable(true)
+                .default_width(680.0)
+                .min_width(520.0)
                 .show(ctx, |ui| {
+                    ui.label(
+                        "Folder of a built base (it contains bundle.json, kernel and base.qcow2)",
+                    );
                     ui.add(
                         egui::TextEdit::singleline(&mut self.import_directory)
-                            .desired_width(360.0)
+                            .desired_width(ui.available_width())
                             .hint_text("Bundle directory"),
                     );
                     ui.horizontal(|ui| {
@@ -2215,7 +2219,8 @@ impl MonitorApp {
                 .open(&mut open)
                 .collapsible(false)
                 .resizable(true)
-                .default_width(560.0)
+                .default_size([820.0, 540.0])
+                .min_width(600.0)
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         if ui.button("Refresh catalog").clicked() {
@@ -2255,6 +2260,7 @@ impl MonitorApp {
                         );
                     }
                     let busy = download.as_ref().is_some_and(|status| !status.finished);
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     for base in &remote {
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
@@ -2298,6 +2304,7 @@ impl MonitorApp {
                             }
                         });
                     }
+                    });
                 });
             self.download_open = open;
             if refresh {
@@ -2335,13 +2342,6 @@ impl MonitorApp {
                             ui.label("Linux 6.12.94 (Debian 6.12.94-1 source)");
                             ui.end_row();
                         });
-                    ui.add_space(6.0);
-                    ui.small(
-                        "Versions: a fix raises the last number (0.1.0 → 0.1.1), a feature the \
-                              middle one (0.1.1 → 0.2.0); 1.0.0 is the first release. Bases record \
-                              the oldest version that can run them.",
-                    );
-                    ui.small("Licensing: see LICENSING.md in the source repository.");
                 });
             self.about_open = open;
         }
@@ -2353,7 +2353,8 @@ impl MonitorApp {
                 .open(&mut open)
                 .collapsible(false)
                 .resizable(true)
-                .default_width(680.0)
+                .default_size([900.0, 640.0])
+                .min_size([720.0, 480.0])
                 .show(ctx, |ui| {
                     action = self
                         .build_wizard

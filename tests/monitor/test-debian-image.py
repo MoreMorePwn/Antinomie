@@ -80,10 +80,12 @@ class DebianImageTests(unittest.TestCase):
 
     def test_options_are_validated(self):
         self.assertEqual(image.options({})["hostname"], "antinomie")
+        self.assertEqual(image.options({"name": "  Lab desktop  "})["name"], "Lab desktop")
         for bad in ({"hostname": "Bad_Name"}, {"locale": "en_US.ISO-8859-1"},
                     {"keyboard_layout": "US"}, {"keyboard_variant": "a b"},
                     {"timezone": "../etc/passwd"}, {"timezone": "Europe/../../x"},
                     {"mirror": "ftp://x"}, {"proxy": "http://a b"}, {"standard": "yes"},
+                    {"name": "x" * 65}, {"name": "bad\nname"}, {"name": 3},
                     {"unknown": 1}):
             with self.subTest(bad=bad), self.assertRaises(RuntimeError):
                 image.options(bad)

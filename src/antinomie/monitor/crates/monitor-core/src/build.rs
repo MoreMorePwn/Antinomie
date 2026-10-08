@@ -68,8 +68,10 @@ pub enum BuildMode {
 pub struct Desktop {
     pub id: &'static str,
     pub label: &'static str,
-    /// Built and booted with its login setup (ANT-T0028); the others are
-    /// offered as untested.
+    /// Checked to build and boot with its login setup. All installer desktops
+    /// are accepted (ANT-T0028: Xfce built and booted, GNOME built by the
+    /// user, the rest accepted by the user without a test build); a desktop
+    /// added later starts unverified and is offered as untested.
     pub verified: bool,
     /// `XDG_CURRENT_DESKTOP` names that identify it on the host.
     pub host_names: &'static [&'static str],
@@ -81,7 +83,7 @@ pub const DESKTOPS: &[Desktop] = &[
     Desktop {
         id: "gnome",
         label: "GNOME",
-        verified: false,
+        verified: true,
         host_names: &["GNOME", "ubuntu:GNOME"],
     },
     Desktop {
@@ -93,37 +95,37 @@ pub const DESKTOPS: &[Desktop] = &[
     Desktop {
         id: "gnome-flashback",
         label: "GNOME Flashback",
-        verified: false,
+        verified: true,
         host_names: &["GNOME-Flashback:GNOME", "GNOME-Flashback"],
     },
     Desktop {
         id: "kde",
         label: "KDE Plasma",
-        verified: false,
+        verified: true,
         host_names: &["KDE"],
     },
     Desktop {
         id: "cinnamon",
         label: "Cinnamon",
-        verified: false,
+        verified: true,
         host_names: &["X-Cinnamon", "Cinnamon"],
     },
     Desktop {
         id: "mate",
         label: "MATE",
-        verified: false,
+        verified: true,
         host_names: &["MATE"],
     },
     Desktop {
         id: "lxde",
         label: "LXDE",
-        verified: false,
+        verified: true,
         host_names: &["LXDE"],
     },
     Desktop {
         id: "lxqt",
         label: "LXQt",
-        verified: false,
+        verified: true,
         host_names: &["LXQt"],
     },
 ];
@@ -135,6 +137,9 @@ fn default_desktop() -> String {
 /// Installer answers. Debian uses all of them; BusyBox only the hostname.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BuildOptions {
+    /// Display name of the built base; empty for the automatic name.
+    #[serde(default)]
+    pub name: String,
     /// Debian desktop environment (`DESKTOPS` id).
     #[serde(default = "default_desktop")]
     pub desktop: String,
@@ -158,6 +163,7 @@ impl BuildOptions {
     pub fn defaults(kind: Kind) -> Self {
         let host = HostLocale::detect();
         Self {
+            name: String::new(),
             desktop: host.desktop.unwrap_or_else(default_desktop),
             hostname: match kind {
                 Kind::BusyBox => "localhost".into(),
@@ -174,6 +180,7 @@ impl BuildOptions {
     }
     /// Check the answers before a build; the build checks them again in the guest.
     pub fn validate(&self, kind: Kind) -> Result<(), String> {
+        valid_base_name(&self.name)?;
         valid_hostname(&self.hostname)?;
         if kind == Kind::BusyBox {
             return Ok(());
@@ -215,8 +222,12 @@ impl BuildOptions {
     /// The orchestrator's job options for a profile (only the options it offers).
     pub(crate) fn job_options(&self, kind: Kind) -> serde_json::Value {
         match kind {
-            Kind::BusyBox => serde_json::json!({ "hostname": self.hostname }),
+            Kind::BusyBox => serde_json::json!({
+                "name": self.name.trim(),
+                "hostname": self.hostname,
+            }),
             Kind::DebianXfce => serde_json::json!({
+                "name": self.name.trim(),
                 "desktop": self.desktop,
                 "hostname": self.hostname,
                 "locale": self.locale,
@@ -228,6 +239,30 @@ impl BuildOptions {
                 "proxy": self.proxy,
             }),
         }
+    }
+}
+
+/// A base's display name: at most 64 printable characters (empty: automatic).
+pub fn valid_base_name(name: &str) -> Result<(), String> {
+    let name = name.trim();
+    if name.chars().count() > 64 || name.chars().any(char::is_control) {
+        Err("base name must be at most 64 printable characters".into())
+    } else {
+        Ok(())
+    }
+}
+
+/// The name a base gets when none is chosen.
+pub fn automatic_base_name(kind: Kind, desktop: &str) -> String {
+    match kind {
+        Kind::BusyBox => "Linux 6.12.94".into(),
+        Kind::DebianXfce => format!(
+            "Debian 13 ({})",
+            DESKTOPS
+                .iter()
+                .find(|d| d.id == desktop)
+                .map_or(desktop, |d| d.label)
+        ),
     }
 }
 
@@ -749,7 +784,7 @@ mod tests {
         busybox.validate(Kind::BusyBox).unwrap();
         assert_eq!(
             busybox.job_options(Kind::BusyBox),
-            serde_json::json!({"hostname": "localhost"})
+            serde_json::json!({"name": "", "hostname": "localhost"})
         );
         let mut variant = good.clone();
         variant.keyboard_layout = "us".into();
@@ -760,7 +795,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .len(),
-            9
+            10
         );
     }
 
@@ -815,6 +850,23 @@ mod tests {
             shell_value("LANG='fr_FR.UTF-8'", "LANG").as_deref(),
             Some("fr_FR.UTF-8")
         );
+    }
+
+    #[test]
+    fn base_names_are_optional_and_bounded() {
+        valid_base_name("").unwrap();
+        valid_base_name("Malware lab — Debian GNOME").unwrap();
+        assert!(valid_base_name(&"x".repeat(65)).is_err());
+        assert!(valid_base_name("bad\nname").is_err());
+        assert_eq!(
+            automatic_base_name(Kind::DebianXfce, "kde"),
+            "Debian 13 (KDE Plasma)"
+        );
+        assert_eq!(automatic_base_name(Kind::BusyBox, "xfce"), "Linux 6.12.94");
+        assert!(DESKTOPS.iter().all(|desktop| desktop.verified));
+        let mut options = BuildOptions::defaults(Kind::DebianXfce);
+        options.name = "  Lab  ".into();
+        assert_eq!(options.job_options(Kind::DebianXfce)["name"], "Lab");
     }
 
     #[test]
