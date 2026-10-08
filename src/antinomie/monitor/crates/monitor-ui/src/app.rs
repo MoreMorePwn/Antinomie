@@ -8,10 +8,10 @@ use crate::{
     workspace::{Panel, WorkspaceLayout},
 };
 use antinomie_monitor_core::{
-    pair_events, Backend, BackendOptions, BaseSummary, Command, DisplayResolution, ExecRequest,
-    GuestCredentials, InvocationSummary, Notification, RevisionStatus, RunState, RunSummary,
-    Snapshot, TerminalRecord, VmAcceleration, VmConfig, VmCpuModel, VmLaunchOptions, VmState,
-    WaitStatus, APP_REVISION, APP_VERSION,
+    pair_events, syscall_groups::SyscallGroup, Backend, BackendOptions, BaseSummary, Command,
+    DisplayResolution, ExecRequest, GuestCredentials, InvocationSummary, Notification,
+    RevisionStatus, RunState, RunSummary, Snapshot, TerminalRecord, VmAcceleration, VmConfig,
+    VmCpuModel, VmLaunchOptions, VmState, WaitStatus, APP_REVISION, APP_VERSION,
 };
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
@@ -29,6 +29,10 @@ struct Settings {
     quota_gib: u32,
     timeout: u64,
     font_size: f32,
+    /// Tint syscall trace rows by syscall group.
+    trace_colors: bool,
+    /// Groups whose tint is switched off.
+    hidden_trace_groups: Vec<SyscallGroup>,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -37,6 +41,8 @@ impl Default for Settings {
             quota_gib: 4,
             timeout: 10,
             font_size: 16.0,
+            trace_colors: true,
+            hidden_trace_groups: Vec::new(),
         }
     }
 }
@@ -1959,6 +1965,7 @@ impl MonitorApp {
             ui.add(egui::Label::new(RichText::new(error).color(theme::WARN)).truncate())
                 .on_hover_text(error);
         }
+        self.trace_legend(ui);
         let filter = self.filter.to_lowercase();
         let invocations: Vec<_> = self
             .invocations()
@@ -2069,7 +2076,20 @@ impl MonitorApp {
                                 }
                                 _ => event.event_seq.to_string(),
                             };
-                            for text in [
+                            let group = SyscallGroup::of(&event.syscall_name);
+                            let tint = group
+                                .filter(|group| {
+                                    self.settings.trace_colors
+                                        && !self.settings.hidden_trace_groups.contains(group)
+                                })
+                                .and_then(theme::syscall_tint)
+                                .filter(|_| self.selected_event != Some(key));
+                            let failed = invocation
+                                .exit
+                                .as_ref()
+                                .and_then(|event| event.result)
+                                .is_some_and(|result| result < 0);
+                            for (column, text) in [
                                 format!("{:.6}", event.timestamp_ns as f64 / 1_000_000_000.0),
                                 sequence,
                                 event.tid.to_string(),
@@ -2082,15 +2102,41 @@ impl MonitorApp {
                                     .map(|result| result.to_string())
                                     .unwrap_or_else(|| "missing Exit".into()),
                                 trace::info(invocation),
-                            ] {
+                            ]
+                            .into_iter()
+                            .enumerate()
+                            {
                                 row.col(|ui| {
+                                    // Paint the cell and half of each gap so a tinted
+                                    // row reads as one band, as in Wireshark.
+                                    let cell = ui.max_rect().expand2(egui::vec2(
+                                        ui.spacing().item_spacing.x / 2.0,
+                                        0.0,
+                                    ));
+                                    if let Some(tint) = tint {
+                                        ui.painter().rect_filled(cell, 0.0, tint);
+                                    }
+                                    if failed && column == 0 {
+                                        let mut bar = cell;
+                                        bar.set_width(3.0);
+                                        ui.painter().rect_filled(bar, 0.0, theme::ERROR);
+                                    }
+                                    let mut label = RichText::new(&text);
+                                    if failed && column == 5 {
+                                        label = label.color(theme::ERROR);
+                                    }
                                     ui.add(
-                                        egui::Label::new(&text)
+                                        egui::Label::new(label)
                                             .truncate()
                                             .selectable(false)
                                             .sense(egui::Sense::hover()),
                                     )
-                                    .on_hover_text(&text);
+                                    .on_hover_text(match group {
+                                        Some(group) if column == 4 => {
+                                            format!("{text}\n{}", group.label())
+                                        }
+                                        _ => text.clone(),
+                                    });
                                 });
                             }
                             if row.response().clicked() {
@@ -2100,6 +2146,49 @@ impl MonitorApp {
                         });
                     });
             });
+    }
+
+    /// Coloring legend above the trace: a master switch and one toggle per
+    /// syscall group, saved with the settings.
+    fn trace_legend(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut self.settings.trace_colors, "Color rows")
+                .on_hover_text("Tint each syscall by its group, like Wireshark's coloring rules");
+            if !self.settings.trace_colors {
+                return;
+            }
+            for group in SyscallGroup::ALL {
+                let Some(tint) = theme::syscall_tint(group) else {
+                    continue;
+                };
+                let shown = !self.settings.hidden_trace_groups.contains(&group);
+                let text = RichText::new(group.label()).small().color(if shown {
+                    theme::TEXT
+                } else {
+                    theme::MUTED
+                });
+                let button = egui::Button::new(text)
+                    .fill(if shown { tint } else { theme::PANEL })
+                    .stroke(egui::Stroke::new(1.0_f32, tint));
+                if ui
+                    .add(button)
+                    .on_hover_text(if shown {
+                        "Click to stop tinting this group"
+                    } else {
+                        "Click to tint this group"
+                    })
+                    .clicked()
+                {
+                    if shown {
+                        self.settings.hidden_trace_groups.push(group);
+                    } else {
+                        self.settings
+                            .hidden_trace_groups
+                            .retain(|hidden| *hidden != group);
+                    }
+                }
+            }
+        });
     }
 
     fn details(&mut self, ui: &mut egui::Ui) {
@@ -3817,6 +3906,18 @@ mod tests {
             min_app_version: None,
             built_with: None,
         }
+    }
+
+    #[test]
+    fn trace_coloring_is_on_by_default_and_old_settings_still_load() {
+        let settings = Settings::default();
+        assert!(settings.trace_colors);
+        assert!(settings.hidden_trace_groups.is_empty());
+        let old: Settings = serde_json::from_str(
+            r#"{"bundle": "", "quota_gib": 4, "timeout": 10, "font_size": 16.0}"#,
+        )
+        .unwrap();
+        assert!(old.trace_colors);
     }
 
     #[test]

@@ -90,6 +90,27 @@ pub(crate) fn text_size(ctx: &egui::Context, size: f32) {
     });
 }
 
+/// Row tint of a syscall group in the trace (Wireshark-style coloring): dark
+/// shades that keep the normal text readable. Info queries stay untinted.
+pub fn syscall_tint(
+    group: antinomie_monitor_core::syscall_groups::SyscallGroup,
+) -> Option<Color32> {
+    use antinomie_monitor_core::syscall_groups::SyscallGroup as G;
+    Some(match group {
+        G::Process => Color32::from_rgb(70, 50, 96),
+        G::File => Color32::from_rgb(38, 58, 92),
+        G::Network => Color32::from_rgb(36, 78, 52),
+        G::Memory => Color32::from_rgb(30, 74, 68),
+        G::Ipc => Color32::from_rgb(84, 76, 32),
+        G::Signal => Color32::from_rgb(98, 62, 30),
+        G::Polling => Color32::from_rgb(28, 76, 98),
+        G::Security => Color32::from_rgb(110, 40, 46),
+        G::System => Color32::from_rgb(78, 28, 38),
+        G::Time => Color32::from_rgb(58, 58, 64),
+        G::Info => return None,
+    })
+}
+
 pub fn frame(fill: Color32) -> egui::Frame {
     egui::Frame::new()
         .fill(fill)
@@ -100,6 +121,23 @@ pub fn frame(fill: Color32) -> egui::Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn syscall_groups_have_distinct_dark_tints_except_info() {
+        use antinomie_monitor_core::syscall_groups::SyscallGroup;
+        let tints: Vec<_> = SyscallGroup::ALL
+            .iter()
+            .filter_map(|group| syscall_tint(*group))
+            .collect();
+        assert_eq!(tints.len(), SyscallGroup::ALL.len() - 1);
+        assert_eq!(syscall_tint(SyscallGroup::Info), None);
+        let distinct: std::collections::HashSet<_> = tints.iter().collect();
+        assert_eq!(distinct.len(), tints.len());
+        // Dark enough that TEXT stays readable on every tint.
+        for tint in tints {
+            assert!(tint.r().max(tint.g()).max(tint.b()) <= 120, "{tint:?}");
+        }
+    }
 
     #[test]
     fn compact_native_theme_installs_readable_dark_controls() {

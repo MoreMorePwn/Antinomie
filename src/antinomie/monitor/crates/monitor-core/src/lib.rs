@@ -15,6 +15,7 @@ pub mod parser;
 pub mod recording;
 mod run;
 pub mod storage;
+pub mod syscall_groups;
 pub mod syscalls;
 mod transport;
 mod vm;
