@@ -31,8 +31,8 @@ struct Settings {
     font_size: f32,
     /// Tint syscall trace rows by syscall group.
     trace_colors: bool,
-    /// Groups whose tint is switched off.
-    hidden_trace_groups: Vec<SyscallGroup>,
+    /// Syscall groups hidden from the trace.
+    hidden_trace_categories: Vec<SyscallGroup>,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -42,7 +42,7 @@ impl Default for Settings {
             timeout: 10,
             font_size: 16.0,
             trace_colors: true,
-            hidden_trace_groups: Vec::new(),
+            hidden_trace_categories: Vec::new(),
         }
     }
 }
@@ -1965,15 +1965,21 @@ impl MonitorApp {
             ui.add(egui::Label::new(RichText::new(error).color(theme::WARN)).truncate())
                 .on_hover_text(error);
         }
-        self.trace_legend(ui);
         let filter = self.filter.to_lowercase();
-        let invocations: Vec<_> = self
-            .invocations()
+        let all = self.invocations();
+        self.trace_categories(ui, &all);
+        let hidden = self.settings.hidden_trace_categories.clone();
+        let invocations: Vec<_> = all
             .into_iter()
             .filter(|invocation| {
                 let Some(event) = trace::representative(invocation) else {
                     return false;
                 };
+                if SyscallGroup::of(&event.syscall_name)
+                    .is_some_and(|group| hidden.contains(&group))
+                {
+                    return false;
+                }
                 filter.is_empty()
                     || format!(
                         "{} {} {} {}",
@@ -2078,10 +2084,7 @@ impl MonitorApp {
                             };
                             let group = SyscallGroup::of(&event.syscall_name);
                             let tint = group
-                                .filter(|group| {
-                                    self.settings.trace_colors
-                                        && !self.settings.hidden_trace_groups.contains(group)
-                                })
+                                .filter(|_| self.settings.trace_colors)
                                 .and_then(theme::syscall_tint)
                                 .filter(|_| self.selected_event != Some(key));
                             let failed = invocation
@@ -2148,47 +2151,91 @@ impl MonitorApp {
             });
     }
 
-    /// Coloring legend above the trace: a master switch and one toggle per
-    /// syscall group, saved with the settings.
-    fn trace_legend(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut self.settings.trace_colors, "Color rows")
-                .on_hover_text("Tint each syscall by its group, like Wireshark's coloring rules");
-            if !self.settings.trace_colors {
-                return;
+    /// Category filter above the trace: one button per syscall group (with
+    /// its row count) shows or hides that group's rows, and "All" shows or
+    /// hides every group. The choice is saved with the settings; row colors
+    /// are switched in Settings.
+    fn trace_categories(&mut self, ui: &mut egui::Ui, invocations: &[InvocationSummary]) {
+        let mut counts = std::collections::BTreeMap::<SyscallGroup, usize>::new();
+        for invocation in invocations {
+            if let Some(group) = trace::representative(invocation)
+                .and_then(|event| SyscallGroup::of(&event.syscall_name))
+            {
+                *counts.entry(group).or_default() += 1;
             }
-            for group in SyscallGroup::ALL {
-                let Some(tint) = theme::syscall_tint(group) else {
-                    continue;
-                };
-                let shown = !self.settings.hidden_trace_groups.contains(&group);
-                let text = RichText::new(group.label()).small().color(if shown {
-                    theme::TEXT
-                } else {
-                    theme::MUTED
-                });
-                let button = egui::Button::new(text)
-                    .fill(if shown { tint } else { theme::PANEL })
-                    .stroke(egui::Stroke::new(1.0_f32, tint));
-                if ui
-                    .add(button)
-                    .on_hover_text(if shown {
-                        "Click to stop tinting this group"
-                    } else {
-                        "Click to tint this group"
-                    })
-                    .clicked()
-                {
-                    if shown {
-                        self.settings.hidden_trace_groups.push(group);
-                    } else {
-                        self.settings
-                            .hidden_trace_groups
-                            .retain(|hidden| *hidden != group);
+        }
+        let hidden = &mut self.settings.hidden_trace_categories;
+        // One row that scrolls sideways, so the buttons never push the trace
+        // table down in a narrow panel or at large text sizes.
+        egui::ScrollArea::horizontal()
+            .id_salt("trace_categories")
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let all_shown = hidden.is_empty();
+                    let all = egui::Button::new(RichText::new("All").small().strong())
+                        .fill(if all_shown {
+                            theme::PRIMARY
+                        } else {
+                            theme::PANEL
+                        })
+                        .stroke(egui::Stroke::new(1.0_f32, theme::LINE));
+                    if ui
+                        .add(all)
+                        .on_hover_text(if all_shown {
+                            "Hide every category"
+                        } else {
+                            "Show every category"
+                        })
+                        .clicked()
+                    {
+                        if all_shown {
+                            *hidden = SyscallGroup::ALL.to_vec();
+                        } else {
+                            hidden.clear();
+                        }
                     }
-                }
-            }
-        });
+                    for group in SyscallGroup::ALL {
+                        let shown = !hidden.contains(&group);
+                        let swatch = theme::syscall_tint(group).unwrap_or(theme::RAISED);
+                        let text = RichText::new(format!(
+                            "{} {}",
+                            group.label(),
+                            counts.get(&group).copied().unwrap_or(0)
+                        ))
+                        .small()
+                        .color(if shown {
+                            theme::TEXT
+                        } else {
+                            theme::MUTED
+                        });
+                        let button = egui::Button::new(text)
+                            .fill(if shown { swatch } else { theme::PANEL })
+                            .stroke(egui::Stroke::new(1.0_f32, swatch.gamma_multiply(1.6)));
+                        if ui
+                            .add(button)
+                            .on_hover_text(if shown {
+                                "Click to hide these syscalls"
+                            } else {
+                                "Click to show these syscalls"
+                            })
+                            .clicked()
+                        {
+                            if shown {
+                                hidden.push(group);
+                            } else {
+                                hidden.retain(|other| *other != group);
+                            }
+                        }
+                    }
+                })
+            });
+        if self.settings.hidden_trace_categories.len() == SyscallGroup::ALL.len() {
+            ui.colored_label(
+                theme::MUTED,
+                "All categories are hidden; click All to show them.",
+            );
+        }
     }
 
     fn details(&mut self, ui: &mut egui::Ui) {
@@ -2739,6 +2786,13 @@ impl MonitorApp {
                                 }
                             }
                         });
+                        ui.checkbox(
+                            &mut self.settings.trace_colors,
+                            "Color syscall trace rows by category",
+                        )
+                        .on_hover_text(
+                            "Tint each syscall by its category, like Wireshark's coloring rules",
+                        );
                         ui.separator();
                         ui.add_enabled_ui(self.snapshot.active_vm.is_none(), |ui| {
                             ui.label("Installed base");
@@ -3912,7 +3966,11 @@ mod tests {
     fn trace_coloring_is_on_by_default_and_old_settings_still_load() {
         let settings = Settings::default();
         assert!(settings.trace_colors);
-        assert!(settings.hidden_trace_groups.is_empty());
+        assert!(settings.hidden_trace_categories.is_empty());
+        // Groups hidden from the earlier color legend are not carried over.
+        let earlier: Settings =
+            serde_json::from_str(r#"{"hidden_trace_groups": ["File"]}"#).unwrap();
+        assert!(earlier.hidden_trace_categories.is_empty());
         let old: Settings = serde_json::from_str(
             r#"{"bundle": "", "quota_gib": 4, "timeout": 10, "font_size": 16.0}"#,
         )
@@ -5848,6 +5906,37 @@ mod tests {
             .find(|(label, _)| label == "Working directory")
             .expect("metadata visible below history rows");
         assert!(metadata.1.bottom() < screen.bottom());
+    }
+
+    #[test]
+    fn trace_categories_hide_and_show_their_rows() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut app = app();
+        app.snapshot.events = vec![event(1, 0), event(2, 0)];
+        let size = egui::vec2(1280.0, 820.0);
+        let row_visible = |app: &mut MonitorApp| {
+            for _ in 0..2 {
+                let _ = render(app, &ctx, size);
+            }
+            texts(&render(app, &ctx, size))
+                .iter()
+                .any(|(text, _)| text == "read (0)")
+        };
+        assert!(row_visible(&mut app));
+        app.settings.hidden_trace_categories = vec![SyscallGroup::File];
+        assert!(!row_visible(&mut app));
+        app.settings.hidden_trace_categories = vec![SyscallGroup::Network];
+        assert!(row_visible(&mut app));
+        let labels: Vec<_> = texts(&render(&mut app, &ctx, size))
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+        assert!(labels.contains(&"All".to_string()));
+        assert!(
+            labels.contains(&"File & filesystem 1".to_string()),
+            "{labels:?}"
+        );
     }
 
     #[test]
