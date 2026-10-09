@@ -3,6 +3,7 @@ mod app;
 mod archive;
 mod build_wizard;
 mod folders;
+mod network_view;
 mod runs;
 mod terminal;
 mod theme;

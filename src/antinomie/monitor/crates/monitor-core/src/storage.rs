@@ -742,6 +742,7 @@ pub const MIN_RAM_MIB: u32 = 256;
 pub const MAX_RAM_MIB: u32 = 8192;
 pub(crate) fn validate_vm(vm: &VmConfig) -> Result<(), String> {
     vm.launch.validate()?;
+    vm.transport.validate()?;
     if vm.id.is_empty()
         || vm.id.len() > 96
         || !vm
@@ -1446,15 +1447,19 @@ struct CaptureManifest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     guest_kernel: &'a Option<crate::api::GuestKernel>,
 }
-/// Packets are buffered in memory and written in large blocks: the transport
-/// thread calls [`RawCapture::flush`] after every drain pass, and `sync`,
-/// `manifest` and drop flush too, so the file trails by at most one pass.
+/// Packets are buffered in memory and handed to the recording writer thread
+/// in large blocks: the transport thread calls [`RawCapture::flush`] after
+/// every drain pass, and `sync`, `manifest` and drop flush too. `sync` and
+/// `manifest` also wait until the writer has written everything.
 pub struct RawCapture {
     pub directory: PathBuf,
-    file: File,
+    file: std::sync::Arc<File>,
     buffer: Vec<u8>,
-    /// File length and packet count covered by completed writes.
+    /// File length and packet count handed to the writer thread.
     written: (u64, u64),
+    /// The writer thread's first error for this file, reported once.
+    write_error: crate::writer::ErrorSlot,
+    write_error_seen: bool,
     quota: u64,
     pub packets: u64,
     pub bytes: u64,
@@ -1472,11 +1477,13 @@ impl Drop for RawCapture {
 }
 impl RawCapture {
     pub(crate) fn sync(&mut self) -> Result<(), String> {
-        if !self.flush() {
-            return Err(self
-                .error
-                .clone()
-                .unwrap_or_else(|| "capture write failed".into()));
+        self.flush();
+        crate::writer::barrier();
+        self.flush();
+        if let Some(error) = &self.error
+            && error.starts_with("capture write failed")
+        {
+            return Err(error.clone());
         }
         self.file.sync_all().map_err(|error| {
             let message = format!("raw capture sync failed: {error}");
@@ -1497,9 +1504,11 @@ impl RawCapture {
             .map_err(|e| e.to_string())?;
         Ok(Self {
             directory,
-            file,
+            file: std::sync::Arc::new(file),
             buffer: Vec::new(),
             written: (0, 0),
+            write_error: crate::writer::error_slot(),
+            write_error_seen: false,
             quota,
             packets: 0,
             bytes: 0,
@@ -1542,23 +1551,31 @@ impl RawCapture {
         self.packets += 1;
         self.buffer.len() < RAW_BUFFER || self.flush()
     }
-    /// Write buffered packets; false when that write fails. The file is then
-    /// cut back to the last complete write and the counters follow it, so the
-    /// raw file stays a whole number of packets.
+    /// Hand buffered packets to the writer thread. False once, when an
+    /// earlier write of this file has failed: the writer then cut the file
+    /// back to the last complete block, so it stays whole packets, and
+    /// nothing more is written.
     pub fn flush(&mut self) -> bool {
-        if self.buffer.is_empty() {
-            return true;
-        }
-        if let Err(e) = self.file.write_all(&self.buffer) {
-            self.error
-                .get_or_insert_with(|| format!("capture write failed: {e}"));
-            let _ = self.file.set_len(self.written.0);
-            (self.bytes, self.packets) = self.written;
+        if !self.write_error_seen
+            && let Some(error) = crate::writer::error_of(&self.write_error)
+        {
+            self.write_error_seen = true;
+            self.error.get_or_insert(error);
             self.buffer.clear();
+            if let Ok(metadata) = self.file.metadata() {
+                self.bytes = metadata.len();
+            }
             return false;
         }
-        self.buffer.clear();
-        self.written = (self.bytes, self.packets);
+        if !self.buffer.is_empty() && !self.write_error_seen {
+            crate::writer::submit(crate::writer::Op::Append {
+                file: self.file.clone(),
+                data: std::mem::take(&mut self.buffer),
+                rollback: self.written.0,
+                error: self.write_error.clone(),
+            });
+            self.written = (self.bytes, self.packets);
+        }
         true
     }
     pub(crate) fn manifest(
@@ -1568,6 +1585,8 @@ impl RawCapture {
         disk_bundle: &Bundle,
         state: &str,
     ) -> Result<(), String> {
+        self.flush();
+        crate::writer::barrier();
         if self.flush()
             && let Err(e) = self.file.sync_all()
         {
@@ -2072,9 +2091,11 @@ mod tests {
         assert!(c.append(b"two"));
         assert_eq!(fs::metadata(path.join("telemetry.raw")).unwrap().len(), 0);
         assert!(c.flush());
+        crate::writer::barrier();
         assert_eq!(fs::metadata(path.join("telemetry.raw")).unwrap().len(), 14);
         assert!(c.append(b"three"));
         drop(c);
+        crate::writer::barrier();
         assert_eq!(
             fs::read(path.join("telemetry.raw")).unwrap()[14..],
             [5, 0, 0, 0, b't', b'h', b'r', b'e', b'e']
@@ -2089,6 +2110,7 @@ mod tests {
         assert!(!c.append(b"lost"));
         assert!(c.error.is_some());
         assert!(c.flush());
+        crate::writer::barrier();
         assert_eq!(
             fs::read(path.join("telemetry.raw")).unwrap(),
             [4, 0, 0, 0, b't', b'e', b's', b't']

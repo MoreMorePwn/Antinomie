@@ -5,12 +5,11 @@ use crate::{
     storage::private_dir,
 };
 use sha2::{Digest, Sha256};
-use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::{
     collections::{BTreeMap, VecDeque},
-    fs::{File, OpenOptions},
+    fs::File,
     io::{Read, Seek, SeekFrom},
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 #[derive(Default)]
@@ -82,6 +81,8 @@ pub struct Header {
     pub event_seq: u64,
     pub packet_seq: u64,
     pub timestamp_ns: u64,
+    /// Thread group (process) ID.
+    pub pid: u32,
     pub tid: u32,
     pub cpu: u32,
     pub syscall_nr: u64,
@@ -135,6 +136,7 @@ pub fn parse_packet(packet: &[u8]) -> Result<(Header, &[u8])> {
         event_seq: u64_at(packet, 48)?,
         packet_seq: u64_at(packet, 56)?,
         timestamp_ns: u64_at(packet, 64)?,
+        pid: u32_at(packet, 72)?,
         tid: u32_at(packet, 76)?,
         cpu: u32_at(packet, 80)?,
         syscall_nr: u64_at(packet, 88)?,
@@ -293,6 +295,8 @@ struct Event {
     fields: BTreeMap<u32, Field>,
     packets: BTreeMap<u64, [u8; 32]>,
     issues: Issues,
+    /// Queued for retirement: its END and every field's end have arrived.
+    finished: bool,
 }
 impl Event {
     fn new(h: &Header) -> Self {
@@ -306,6 +310,7 @@ impl Event {
                 phase: h.phase,
                 syscall_nr: h.syscall_nr,
                 syscall_name: crate::syscalls::name(h.syscall_nr),
+                pid: h.pid,
                 tid: h.tid,
                 cpu: h.cpu,
                 timestamp_ns: h.timestamp_ns,
@@ -321,6 +326,7 @@ impl Event {
             fields: BTreeMap::new(),
             packets: BTreeMap::new(),
             issues: Issues::default(),
+            finished: false,
         }
     }
     fn summary(&self) -> EventSummary {
@@ -397,37 +403,12 @@ pub struct Assembler {
     field_count: usize,
     chunk_count: usize,
     evicted: VecDeque<EventSummary>,
-    /// Recently written object files, most recent first; an object's chunks
-    /// usually arrive together, so this saves an open and close per chunk.
-    open_objects: VecDeque<(PathBuf, File)>,
-}
-/// Object files an assembler keeps open between chunks.
-const OPEN_OBJECTS: usize = 8;
-fn write_object(
-    open_objects: &mut VecDeque<(PathBuf, File)>,
-    path: &Path,
-    offset: u64,
-    data: &[u8],
-) -> std::io::Result<()> {
-    let file = match open_objects.iter().position(|(open, _)| open == path) {
-        Some(at) => {
-            let entry = open_objects.remove(at).expect("position is in range");
-            open_objects.push_front(entry);
-            &open_objects[0].1
-        }
-        None => {
-            let file = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .mode(0o600)
-                .open(path)?;
-            open_objects.truncate(OPEN_OBJECTS - 1);
-            open_objects.push_front((path.to_path_buf(), file));
-            &open_objects[0].1
-        }
-    };
-    file.write_all_at(data, offset)
+    /// Finished events, oldest first: they leave the table before unfinished ones.
+    finished: VecDeque<Key>,
+    /// Events the table holds before it retires or evicts one.
+    capacity: usize,
+    /// The recording writer thread's first object write error.
+    write_error: crate::writer::ErrorSlot,
 }
 impl Assembler {
     pub fn new(directory: PathBuf, quota: u64) -> Result<Self> {
@@ -450,13 +431,24 @@ impl Assembler {
             field_count: 0,
             chunk_count: 0,
             evicted: VecDeque::new(),
-            open_objects: VecDeque::new(),
+            finished: VecDeque::new(),
+            capacity: 2048,
+            write_error: crate::writer::error_slot(),
         }
     }
     pub fn stop_saving(&mut self) {
         self.enabled = false;
     }
-    pub(crate) fn saving_error(&self) -> Option<&str> {
+    /// The first saving failure, including object writes the recording
+    /// writer thread has failed since the last packet.
+    pub(crate) fn saving_error(&mut self) -> Option<&str> {
+        if self.saving_error.is_none()
+            && !self.read_only
+            && let Some(error) = crate::writer::error_of(&self.write_error)
+        {
+            self.saving_error = Some(error);
+            self.enabled = false;
+        }
         self.saving_error.as_deref()
     }
     pub(crate) fn open_archive(directory: PathBuf) -> Result<Self> {
@@ -480,15 +472,38 @@ impl Assembler {
     pub fn set_storage_limit(&mut self, quota: u64) {
         self.quota = quota;
     }
+    /// Size the table of events still being assembled (VM transport settings).
+    /// Packet, field and chunk limits scale with it in the original ratios.
+    pub fn set_event_table(&mut self, events: usize) {
+        self.capacity = events.max(64);
+    }
+    fn over_limits(&self) -> bool {
+        self.packet_count >= self.capacity * 32
+            || self.field_count >= self.capacity * 2
+            || self.chunk_count >= self.capacity * 8
+    }
+    /// Make room: retire the oldest finished event, which loses nothing but
+    /// its place in the live list; only without one evict an unfinished event.
     fn evict_oldest(&mut self) {
-        if let Some(old) = self.order.pop_front()
-            && let Some(event) = self.events.remove(&old)
-        {
-            self.packet_count = self.packet_count.saturating_sub(event.packets.len());
-            self.field_count = self.field_count.saturating_sub(event.fields.len());
-            self.chunk_count = self
-                .chunk_count
-                .saturating_sub(event.fields.values().map(|f| f.chunks.len()).sum());
+        while let Some(key) = self.finished.pop_front() {
+            if let Some(event) = self.events.remove(&key) {
+                self.forget(&event);
+                if self.evicted.len() >= 64 {
+                    self.evicted.pop_front();
+                }
+                self.evicted.push_back(event.summary());
+                if self.order.len() > self.capacity * 4 {
+                    let events = &self.events;
+                    self.order.retain(|key| events.contains_key(key));
+                }
+                return;
+            }
+        }
+        while let Some(old) = self.order.pop_front() {
+            let Some(event) = self.events.remove(&old) else {
+                continue;
+            };
+            self.forget(&event);
             let mut summary = event.summary();
             summary.complete = false;
             summary
@@ -499,9 +514,39 @@ impl Assembler {
             }
             self.evicted.push_back(summary);
             self.evicted_count += 1;
+            return;
         }
     }
+    fn forget(&mut self, event: &Event) {
+        self.packet_count = self.packet_count.saturating_sub(event.packets.len());
+        self.field_count = self.field_count.saturating_sub(event.fields.len());
+        self.chunk_count = self
+            .chunk_count
+            .saturating_sub(event.fields.values().map(|f| f.chunks.len()).sum());
+    }
     pub fn ingest(&mut self, packet: &[u8]) -> Result<Option<EventSummary>> {
+        let result = self.ingest_packet(packet);
+        if let Ok((h, _)) = parse_packet(packet) {
+            let key = (h.stream_id, h.task_cookie, h.call_id, h.phase, h.event_seq);
+            if let Some(event) = self.events.get_mut(&key)
+                && !event.finished
+                && event.end.is_some()
+                && event.fields.values().all(|field| field.end.is_some())
+            {
+                event.finished = true;
+                self.finished.push_back(key);
+            }
+        }
+        result
+    }
+    fn ingest_packet(&mut self, packet: &[u8]) -> Result<Option<EventSummary>> {
+        if self.enabled
+            && !self.read_only
+            && let Some(error) = crate::writer::error_of(&self.write_error)
+        {
+            self.saving_error.get_or_insert(error);
+            self.enabled = false;
+        }
         let (h, b) = match parse_packet(packet) {
             Ok(v) => v,
             Err(e) => {
@@ -513,13 +558,11 @@ impl Assembler {
             return Ok(None);
         }
         let key = (h.stream_id, h.task_cookie, h.call_id, h.phase, h.event_seq);
-        while !self.order.is_empty()
-            && (self.packet_count >= 65536 || self.field_count >= 4096 || self.chunk_count >= 16384)
-        {
+        while !self.events.is_empty() && self.over_limits() {
             self.evict_oldest();
         }
         if !self.events.contains_key(&key) {
-            if self.events.len() >= 2048 {
+            if self.events.len() >= self.capacity {
                 self.evict_oldest();
             }
             self.events.insert(key, Event::new(&h));
@@ -661,6 +704,8 @@ impl Assembler {
                                 let result = (if self.read_only {
                                     archive_io::open_regular(&self.directory, path)
                                 } else {
+                                    // The first copy may still be queued for writing.
+                                    crate::writer::barrier();
                                     File::open(path)
                                 })
                                 .and_then(|mut file| {
@@ -729,7 +774,15 @@ impl Assembler {
                                 }
                             })
                         } else {
-                            write_object(&mut self.open_objects, &path, h.object_offset, b)
+                            {
+                                crate::writer::submit(crate::writer::Op::Object {
+                                    path: path.clone(),
+                                    offset: h.object_offset,
+                                    data: b.to_vec(),
+                                    error: self.write_error.clone(),
+                                });
+                                Ok(())
+                            }
                         };
                         if let Err(err) = result {
                             let message = format!("host object persistence: {err}");
@@ -756,6 +809,23 @@ impl Assembler {
             _ => {}
         }
         Ok(Some(e.summary()))
+    }
+    /// The newest `limit` events (table and recently retired), oldest first,
+    /// without summarizing the whole table.
+    pub fn recent(&self, limit: usize) -> Vec<EventSummary> {
+        let mut seen = std::collections::HashSet::new();
+        let mut newest: Vec<EventSummary> = self
+            .order
+            .iter()
+            .rev()
+            .filter(|key| seen.insert(**key))
+            .filter_map(|key| self.events.get(key).map(Event::summary))
+            .take(limit)
+            .collect();
+        let room = limit - newest.len();
+        newest.extend(self.evicted.iter().rev().take(room).cloned());
+        newest.reverse();
+        newest
     }
     pub fn history(&self) -> Vec<EventSummary> {
         self.evicted
@@ -980,7 +1050,10 @@ mod tests {
                 .ingest(&packet(3, 2, 0, b"not saved", 2))
                 .unwrap()
                 .unwrap();
-            assert!(event.fields[1].ranges.is_empty());
+            // A quota refusal is immediate; a write failure is reported once
+            // the writer thread has tried, so the range was already listed.
+            assert_eq!(event.fields[1].ranges.is_empty(), !io_failure);
+            crate::writer::barrier();
             let failure = assembler.saving_error().unwrap().to_owned();
             assert!(failure.contains(if io_failure { "persistence" } else { "quota" }));
             assembler.set_storage_limit(1024);
@@ -990,7 +1063,7 @@ mod tests {
                 .unwrap();
             assert!(event.fields[2].ranges.is_empty());
             assert_eq!(assembler.saving_error(), Some(failure.as_str()));
-            assert_eq!(assembler.stored_len(), 5);
+            assert_eq!(assembler.stored_len(), if io_failure { 14 } else { 5 });
             assert_eq!(std::fs::read(retained_path).unwrap(), b"saved");
             std::fs::remove_dir_all(path).unwrap();
         }
@@ -1026,6 +1099,7 @@ mod tests {
         assert!(event.complete);
         assert_eq!(event.fields[0].preview.len(), 256);
         assert_eq!(event.fields[0].ranges.len(), 160);
+        crate::writer::barrier();
         let mut file = File::open(event.fields[0].raw_path.as_ref().unwrap()).unwrap();
         file.seek(SeekFrom::Start(159 * 65536)).unwrap();
         let mut sample = [0; 32];

@@ -168,7 +168,7 @@ fn raw_identity(path: &Path) -> Result<String, RecordingError> {
     )?
     .metadata()?;
     Ok(format!(
-        "index-v5:{}:{}:{}:{}:{}",
+        "index-v6:{}:{}:{}:{}:{}",
         m.dev(),
         m.ino(),
         m.len(),
@@ -198,7 +198,7 @@ fn archive_index(
     let mut connection = rusqlite::Connection::open(&index_path)?;
     fs::set_permissions(&index_path, fs::Permissions::from_mode(0o600))?;
     connection.busy_timeout(std::time::Duration::from_secs(1))?;
-    connection.execute_batch("PRAGMA trusted_schema=OFF; PRAGMA page_size=4096; PRAGMA cache_size=-2048; PRAGMA temp_store=FILE; CREATE TABLE IF NOT EXISTS metadata(identity TEXT); CREATE TABLE IF NOT EXISTS invocations(key BLOB PRIMARY KEY, first_offset INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS invocation_order ON invocations(first_offset); CREATE TABLE IF NOT EXISTS packets(key BLOB NOT NULL, offset INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS packet_keys ON packets(key,offset);")?;
+    connection.execute_batch("PRAGMA trusted_schema=OFF; PRAGMA page_size=4096; PRAGMA cache_size=-2048; PRAGMA temp_store=FILE; CREATE TABLE IF NOT EXISTS metadata(identity TEXT);")?;
     let budget = fs::metadata(&raw)?
         .len()
         .checked_mul(2)
@@ -213,11 +213,19 @@ fn archive_index(
         .ok();
     if cached.as_deref() != Some(&identity) {
         let transaction = connection.transaction()?;
-        transaction
-            .execute_batch("DELETE FROM metadata; DELETE FROM invocations; DELETE FROM packets;")?;
+        // Rebuilt from scratch: an index from an older version has another schema.
+        transaction.execute_batch(
+            "DELETE FROM metadata; DROP TABLE IF EXISTS invocations; DROP TABLE IF EXISTS packets; \
+             CREATE TABLE invocations(key BLOB PRIMARY KEY, first_offset INTEGER NOT NULL, pid INTEGER NOT NULL); \
+             CREATE INDEX invocation_order ON invocations(first_offset); \
+             CREATE INDEX invocation_process ON invocations(pid, first_offset); \
+             CREATE TABLE packets(key BLOB NOT NULL, offset INTEGER NOT NULL); \
+             CREATE INDEX packet_keys ON packets(key,offset);",
+        )?;
         {
-            let mut invocation = transaction
-                .prepare("INSERT OR IGNORE INTO invocations(key,first_offset) VALUES(?1,?2)")?;
+            let mut invocation = transaction.prepare(
+                "INSERT OR IGNORE INTO invocations(key,first_offset,pid) VALUES(?1,?2,?3)",
+            )?;
             let mut packets =
                 transaction.prepare("INSERT INTO packets(key,offset) VALUES(?1,?2)")?;
             let mut reader = BufReader::new(archive_io::open_regular(directory, &raw)?);
@@ -236,7 +244,7 @@ fn archive_index(
                     // Assembly/pairing excludes known lifecycle-only observations.
                     let async_parent = header.phase == 3 && header.call_id != 0;
                     if matches!(header.phase, 1 | 2) || async_parent {
-                        invocation.execute(rusqlite::params![key, offset])?;
+                        invocation.execute(rusqlite::params![key, offset, header.pid])?;
                     }
                     packets.execute(rusqlite::params![key, offset])?;
                 }
@@ -270,6 +278,17 @@ impl Recording {
         limit: usize,
         cancel: &AtomicBool,
     ) -> Result<InvocationPage, RecordingError> {
+        self.process_page_cancellable(offset, limit, None, cancel)
+    }
+    /// Like [`Self::invocation_page_cancellable`], limited to one guest process
+    /// (thread group ID) when `pid` is set.
+    pub fn process_page_cancellable(
+        &self,
+        offset: u64,
+        limit: usize,
+        pid: Option<u32>,
+        cancel: &AtomicBool,
+    ) -> Result<InvocationPage, RecordingError> {
         if cancel.load(Ordering::Relaxed) {
             return Err(RecordingError::Limit("archive read cancelled"));
         }
@@ -281,12 +300,16 @@ impl Recording {
             return Err(RecordingError::Limit("cursor beyond raw archive"));
         }
         let (connection, identity) = archive_index(&self.directory, cancel)?;
-        let mut query=connection.prepare("SELECT key,first_offset FROM invocations WHERE first_offset>=?1 ORDER BY first_offset LIMIT ?2")?;
+        let mut query = connection.prepare(
+            "SELECT key,first_offset FROM invocations WHERE first_offset>=?1 \
+             AND (?3 IS NULL OR pid=?3) ORDER BY first_offset LIMIT ?2",
+        )?;
         let selected = query
             .query_map(
                 rusqlite::params![
                     i64::try_from(offset).map_err(|_| RecordingError::Limit("cursor too large"))?,
-                    (limit + 1) as i64
+                    (limit + 1) as i64,
+                    pid
                 ],
                 |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?)),
             )?

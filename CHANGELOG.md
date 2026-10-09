@@ -4,6 +4,33 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
+## 0.3.0 — unreleased
+
+Needs new bases for the transport settings and Never drop mode (BusyBox and
+Debian 13 (GNOME) for Antinomie 0.3.0). Bases for 0.2.0 and 0.1.0 still run,
+with 256 KiB buffers that drop when full.
+
+- **Capture All by process.** A capture lists the processes it observed as a
+  tree, named after the program each one executed (or its command name when
+  it was already running), with call counts and exit codes. Selecting one
+  shows only its calls, live and in saved captures (`processes.json`).
+- **Telemetry transport settings** (VM **Settings → Telemetry transport…**):
+  guest buffer per vCPU (256 KiB to 4 MiB, default 1 MiB), **Never drop** mode
+  (a system call waits up to the set time for the host instead of losing its
+  record) and the host event table size (default 16,384).
+- Recording writes go to a background writer thread with a 256 MiB queue, so
+  a slow disk no longer stalls telemetry draining; in Never drop mode a disk
+  that stays too slow slows the guest instead of losing data.
+- The host event table retires finished calls first; only calls still in
+  progress count as evicted.
+- **Network capture.** With NAT on, QEMU records every packet of the VM's
+  network interface to `network.pcap` in the boot recording, outside the
+  guest. The new **Network** panel lists packets live (DNS, TCP, UDP, ICMP,
+  ARP, DHCP, HTTP request lines, TLS server names) with a byte view and opens
+  the capture in Wireshark when it is installed.
+- Commands queued while the transport thread is busy are handled together
+  instead of one per pass.
+
 ## 0.2.3 — 2026-10-09
 
 Runs bases for Antinomie 0.2.0 and 0.1.0; no new bases.

@@ -4,7 +4,7 @@
 //!
 //! Replays every packet of a saved `telemetry.raw` (LE32 length + packet)
 //! through the same raw append and assembler the backend uses on its
-//! transport thread, `COPIES` times per packet (2 = a launched run or boot
+//! transport thread (disk writes go to the recording writer thread), `COPIES` times per packet (2 = a launched run or boot
 //! recording plus a Capture All observer copy), and prints packets/s and
 //! the slowest single packets, which bound how long the guest rings wait.
 
@@ -53,6 +53,9 @@ fn main() -> Result<(), String> {
         packets += 1;
         bytes += len as u64;
     }
+    let queued = started.elapsed();
+    drop(sinks);
+    antinomie_monitor_core::writer::barrier();
     let total = started.elapsed();
     slow.sort_unstable();
     let pct = |p: f64| slow[((slow.len() as f64 * p) as usize).min(slow.len() - 1)];
@@ -64,6 +67,7 @@ fn main() -> Result<(), String> {
         packets as f64 / total.as_secs_f64(),
         bytes as f64 / 1e6 / total.as_secs_f64()
     );
+    println!("transport thread done after {queued:.2?}; the writer thread finished at {total:.2?}");
     println!(
         "per packet: p50 {:?}, p99 {:?}, p99.9 {:?}, max {:?}; {over_1ms} packets over 1 ms",
         pct(0.5),

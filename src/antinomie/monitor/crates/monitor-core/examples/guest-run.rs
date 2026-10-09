@@ -18,6 +18,10 @@
 //!  "screenshot": "/tmp/screen.png", "screenshot_after": 20}
 //! ```
 //!
+//! `"vm": {"nat": true}` gives the VM NAT networking (and a network.pcap).
+//! `"vm": {"transport": {"ring_kib": 4096, "lossless": true, "max_wait_ms": 100,
+//! "event_table": 16384}}` sets the VM's transport settings (any subset).
+//!
 //! `"capture_all": true` starts Capture All once the guest is up, before the
 //! runs, and stops it after them; the report then includes its summary.
 use antinomie_monitor_core::{
@@ -139,9 +143,11 @@ impl Session {
                     .is_some_and(|data| data.windows(marker.len()).any(|w| w == marker.as_bytes()));
                 return Ok(found);
             }
-            self.backend.send(Command::TerminalRead {
+            // A full command queue (the backend waiting on the disk) only
+            // delays this read.
+            let _ = self.backend.send(Command::TerminalRead {
                 run_id: run_id.into(),
-            })?;
+            });
             let until = Instant::now() + Duration::from_millis(100);
             while Instant::now() < until {
                 self.pump();
@@ -252,6 +258,13 @@ fn run() -> Result<Value, String> {
                 ram_mib: number(&vm_spec, "ram_mib", 1024) as u32,
                 disk_gib: number(&vm_spec, "disk_gib", 1) as u32,
                 base_identity: base.clone(),
+                nat: vm_spec.get("nat").and_then(Value::as_bool).unwrap_or(false),
+                transport: vm_spec
+                    .get("transport")
+                    .map(|value| serde_json::from_value(value.clone()))
+                    .transpose()
+                    .map_err(|e| format!("plan.vm.transport: {e}"))?
+                    .unwrap_or_default(),
                 ..VmConfig::default()
             };
             match (text(&vm_spec, "username"), text(&vm_spec, "password")) {
@@ -406,11 +419,12 @@ fn run() -> Result<Value, String> {
             .first()
             .map(|c| c.id.clone())
             .ok_or("Capture All capture missing")?;
+        // Finalizing waits for the capture's queued writes.
         session.command(
             Command::StopCapture {
                 capture_id: id.clone(),
             },
-            60,
+            600,
         )?;
         thread::sleep(Duration::from_secs(1));
         session.pump();
@@ -421,9 +435,11 @@ fn run() -> Result<Value, String> {
             .find(|c| c.id == id)
             .and_then(|c| serde_json::to_value(c).ok());
     }
-    let recorder = session.command(Command::RecorderStats, 20)?;
+    let recorder = session.command(Command::RecorderStats, 120)?;
     let health = session.snapshot.health.clone();
-    session.command(Command::Stop, 60)?;
+    // Stopping waits for queued recording writes, which a long never-drop
+    // run can leave in the hundreds of megabytes.
+    session.command(Command::Stop, 600)?;
     session.settle(|s| s.state == VmState::Stopped, 60)?;
     session.backend.shutdown()?;
     Ok(

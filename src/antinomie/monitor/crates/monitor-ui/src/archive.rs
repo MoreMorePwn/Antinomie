@@ -28,7 +28,10 @@ pub(crate) enum Request {
         directory: PathBuf,
         offset: u64,
         capture: bool,
+        /// Only this guest process (thread group ID).
+        pid: Option<u32>,
     },
+
     Terminal {
         run_id: String,
         generation: u64,
@@ -157,6 +160,7 @@ impl ArchiveWorker {
                             directory,
                             offset,
                             capture,
+                            pid,
                         } => Answer::Invocations {
                             generation,
                             offset,
@@ -169,7 +173,7 @@ impl ArchiveWorker {
                                 recording::open_recording_cancellable(&directory, &worker_cancelled)
                             })
                             .and_then(|r| {
-                                r.invocation_page_cancellable(offset, 256, &worker_cancelled)
+                                r.process_page_cancellable(offset, 256, pid, &worker_cancelled)
                             })
                             .map_err(|e| e.to_string()),
                         },

@@ -486,6 +486,11 @@ int ant_set_host_timeout(struct ant_client *c, uint32_t timeout_ms)
 	return 0;
 }
 
+int ant_heartbeat(struct ant_client *c)
+{
+	return tick(c);
+}
+
 int ant_set_send_wait(struct ant_client *c, uint32_t wait_us)
 {
 	int error;

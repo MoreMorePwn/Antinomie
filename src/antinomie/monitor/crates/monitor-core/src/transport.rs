@@ -99,6 +99,24 @@ unsafe extern "C" {
     fn ant_get_limits(client: *mut c_void, limits: *mut Limits) -> c_int;
     fn ant_set_send_wait(client: *mut c_void, wait_us: u32) -> c_int;
     fn ant_set_host_timeout(client: *mut c_void, timeout_ms: u32) -> c_int;
+    fn ant_heartbeat(client: *mut c_void) -> c_int;
+}
+
+thread_local! {
+    /// The client the current (transport owner) thread holds, for heartbeats
+    /// while it waits elsewhere.
+    static OWNED: std::cell::Cell<*mut c_void> = const { std::cell::Cell::new(std::ptr::null_mut()) };
+}
+
+/// Keep the guest seeing a live host while this thread waits on something
+/// else (the recording writer). Does nothing on other threads.
+pub(crate) fn heartbeat_on_this_thread() {
+    let client = OWNED.with(std::cell::Cell::get);
+    if !client.is_null() {
+        // SAFETY: Only the owner thread registers its live client, and it calls
+        // this between its own transport calls, never during one.
+        let _ = unsafe { ant_heartbeat(client) };
+    }
 }
 fn check(code: i32) -> Result<i32, String> {
     if code < 0 {
@@ -173,6 +191,7 @@ impl Transport {
             unsafe { ant_close(ptr.as_ptr()) };
             return Err("transport limits exceed host bound".into());
         }
+        OWNED.with(|owned| owned.set(ptr.as_ptr()));
         Ok(Self {
             ptr,
             message: vec![0; limits.max_message_len],
@@ -269,6 +288,11 @@ impl Transport {
 }
 impl Drop for Transport {
     fn drop(&mut self) {
+        OWNED.with(|owned| {
+            if owned.get() == self.ptr.as_ptr() {
+                owned.set(std::ptr::null_mut());
+            }
+        });
         // SAFETY: Rc marker and private pointer guarantee close happens on the owner after all calls.
         unsafe { ant_close(self.ptr.as_ptr()) };
     }

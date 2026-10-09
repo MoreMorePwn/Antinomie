@@ -57,7 +57,9 @@ impl Backend {
             .iter()
             .map(|vm| crate::locations::locations(&options, &vm.id))
             .collect::<Result<Vec<_>, _>>()?;
-        let (commands, receiver) = mpsc::sync_channel(32);
+        // Commands are small; room for many keeps a burst (terminal reads
+        // during a long disk backpressure wait) from being refused.
+        let (commands, receiver) = mpsc::sync_channel(1024);
         let (sender, notifications) = mpsc::sync_channel(64);
         let closing = Arc::new(AtomicBool::new(false));
         let stopping = Arc::new(AtomicBool::new(false));
@@ -153,6 +155,8 @@ impl Drop for Backend {
     }
 }
 
+/// Guest host-liveness timeout in never-drop mode (the default is 250 ms).
+const LOSSLESS_HOST_TIMEOUT_MS: u32 = 10_000;
 /// Longest a drain pass runs before the transport thread handles commands.
 const PUMP_BUDGET: Duration = Duration::from_millis(20);
 /// Packets per drain pass above which the next pass follows without a wait.
@@ -178,6 +182,8 @@ struct Session {
     /// keyed by request id. The guest answers commands in submission order and
     /// has already consumed the PTY bytes, so a late reply still belongs to its run.
     late_reads: BTreeMap<u64, u64>,
+    /// When capture process trees were last queued for saving.
+    last_process_save: Instant,
     /// The last drain pass found enough telemetry that the next one should
     /// follow without waiting.
     telemetry_busy: bool,
@@ -277,7 +283,7 @@ impl Session {
         if let Some(capture) = preview {
             snapshot.capture_events.insert(
                 capture.summary.id.clone(),
-                bounded_live_history(capture.assembler.history()),
+                bounded_live_history(capture.assembler.recent(LIVE_HISTORY)),
             );
         }
     }
@@ -330,6 +336,9 @@ impl Session {
             incomplete_reason: Some("start not acknowledged; capture begins with new admissions only and delivery may be incomplete".into()),
         };
         let mut capture = CaptureSession::new(summary, self.capture.quota())?;
+        capture
+            .assembler
+            .set_event_table(self.vm.transport.event_table as usize);
         if let Some(error) = self.capture.error.clone() {
             capture.storage_error(error);
         }
@@ -548,6 +557,45 @@ impl Session {
         }
         self.analysis_updates(snapshot, sender);
     }
+    /// Every guest process from `after_pid` on, read page by page and
+    /// bounded so a fork storm cannot keep the enumeration going.
+    fn list_processes(
+        &mut self,
+        after_pid: u32,
+        snapshot: &mut Snapshot,
+        sender: &SyncSender<Notification>,
+        timeout: Duration,
+    ) -> Result<crate::GuestProcessPage, String> {
+        /// Processes listed at most, across pages.
+        const PROCESS_LIST_MAX: usize = 4096;
+        let mut page: Option<crate::GuestProcessPage> = None;
+        let mut next = after_pid;
+        loop {
+            let reply = self.request(
+                control::PROCESS_LIST,
+                &control::process_list(next),
+                snapshot,
+                sender,
+                timeout,
+            )?;
+            let part = control::process_page(&reply, &self.boot_id, next)?;
+            next = part.next_pid;
+            match page.as_mut() {
+                None => page = Some(part),
+                Some(page) => {
+                    page.next_pid = part.next_pid;
+                    page.processes.extend(part.processes);
+                }
+            }
+            if next == 0
+                || page
+                    .as_ref()
+                    .is_some_and(|page| page.processes.len() >= PROCESS_LIST_MAX)
+            {
+                return page.ok_or_else(|| "empty process list".into());
+            }
+        }
+    }
     fn query_run_status(
         &mut self,
         snapshot: &mut Snapshot,
@@ -599,8 +647,10 @@ impl Session {
     }
     fn history(&self) -> Vec<EventSummary> {
         canonical_live_history(
-            self.assembler.history(),
-            self.runs.values().map(|run| run.assembler.history()),
+            self.assembler.recent(LIVE_HISTORY),
+            self.runs
+                .values()
+                .map(|run| run.assembler.recent(LIVE_HISTORY)),
         )
     }
     fn pump(
@@ -724,10 +774,25 @@ impl Session {
                                 )),
                             ),
                         );
-                        if let Err(error) = observer.assembler.ingest(&packet) {
-                            snapshot.health.parser_errors =
-                                snapshot.health.parser_errors.saturating_add(1);
-                            snapshot.last_error = Some(error.to_string());
+                        match observer.assembler.ingest(&packet) {
+                            Ok(Some(event)) => observer.processes.event(&event),
+                            Ok(None) => {}
+                            Err(error) => {
+                                snapshot.health.parser_errors =
+                                    snapshot.health.parser_errors.saturating_add(1);
+                                snapshot.last_error = Some(error.to_string());
+                            }
+                        }
+                        if let Some(header) = &header {
+                            observer.processes.packet(header);
+                            if observer.processes.unnamed(header.pid)
+                                && let Some(run) = self.runs.get(&root)
+                                && run.summary.pid == header.pid
+                            {
+                                observer
+                                    .processes
+                                    .name_launched(header.pid, &run.summary.request.path);
+                            }
                         }
                         if let Some(error) = observer.assembler.saving_error().map(str::to_owned) {
                             observer.storage_error(error);
@@ -770,12 +835,23 @@ impl Session {
         }
         self.telemetry_busy = drained >= BUSY_PACKETS;
         self.flush_raw();
+        if self.last_process_save.elapsed() >= Duration::from_secs(2) {
+            self.last_process_save = Instant::now();
+            for capture in self.captures.values_mut() {
+                capture.persist_processes();
+            }
+        }
         let stats = self.transport.stats()?;
         snapshot.health.attempted = stats.attempted;
         snapshot.health.dropped = stats.dropped;
         snapshot.health.bad_commands = stats.bad_commands;
         snapshot.health.reply_stalls = stats.reply_stalls;
         snapshot.health.transport_health = stats.health;
+        snapshot.health.transport_waits = stats.waits;
+        snapshot.health.transport_wait_ns = stats.wait_ns;
+        snapshot.health.ring_size = stats.ring_size;
+        snapshot.health.send_wait_us = stats.send_wait_us;
+        snapshot.health.write_backlog = crate::writer::backlog() as u64;
         snapshot.health.persisted_packets = self.persisted_packets;
         self.refresh_storage_health(&mut snapshot.health);
         snapshot.health.parser_evicted_count = self.assembler.evicted_count
@@ -1187,10 +1263,12 @@ impl Session {
     }
 }
 
+/// Events a live view (and a boot's events.json) shows.
+const LIVE_HISTORY: usize = 2048;
 fn bounded_live_history(mut events: Vec<EventSummary>) -> Vec<EventSummary> {
     events.sort_by_key(|event| event.timestamp_ns);
-    if events.len() > 2048 {
-        events.drain(..events.len() - 2048);
+    if events.len() > LIVE_HISTORY {
+        events.drain(..events.len() - LIVE_HISTORY);
     }
     events
 }
@@ -1434,6 +1512,12 @@ impl Worker {
         if let Some(session) = &self.session {
             self.snapshot.events = session.history();
             session.update_runs(&mut self.snapshot);
+            self.snapshot.capture_processes = session
+                .captures
+                .iter()
+                .filter(|(_, capture)| capture.summary.state != CaptureState::Finalized)
+                .map(|(id, capture)| (id.clone(), capture.processes.list()))
+                .collect();
         }
         if let Ok(mut latest) = self.latest_snapshot.lock() {
             *latest = Some(self.snapshot.clone());
@@ -1628,11 +1712,12 @@ impl Worker {
                 }
                 self.publish();
                 storage::flush_json();
+                crate::writer::barrier();
                 break;
             }
-            // While telemetry is flowing, take a waiting command without
+            // While telemetry is flowing, take waiting commands without
             // sleeping so the next drain pass follows at once.
-            let received = if self
+            let mut received = if self
                 .session
                 .as_ref()
                 .is_some_and(|session| session.telemetry_busy)
@@ -1644,32 +1729,60 @@ impl Worker {
             } else {
                 self.receiver.recv_timeout(Duration::from_millis(10))
             };
-            match received {
-                Ok((id, command)) => {
-                    let quiet = matches!(
-                        command,
-                        Command::TerminalRead { .. } | Command::TerminalResize { .. }
-                    );
-                    let result = self.command(command);
-                    let success = result.is_ok();
-                    let message = result.unwrap_or_else(|e| e);
-                    if !success {
-                        self.snapshot.last_error = Some(message.clone());
+            // Handle every queued command (up to a bound), not one per pass: a
+            // busy guest makes each pass slow and the bounded queue would fill.
+            // Repeated terminal reads of one run in a batch are answered once.
+            let mut handled = 0;
+            let mut terminal_reads = std::collections::BTreeSet::new();
+            let mut disconnected = false;
+            loop {
+                match received {
+                    Ok((id, command)) => {
+                        let quiet = matches!(
+                            command,
+                            Command::TerminalRead { .. } | Command::TerminalResize { .. }
+                        );
+                        let repeated = matches!(&command, Command::TerminalRead { run_id }
+                            if !terminal_reads.insert(run_id.clone()));
+                        let result = if repeated {
+                            Ok(String::new())
+                        } else {
+                            self.command(command)
+                        };
+                        let success = result.is_ok();
+                        let message = result.unwrap_or_else(|e| e);
+                        if !success {
+                            self.snapshot.last_error = Some(message.clone());
+                        }
+                        if !quiet || !success {
+                            self.emit(Notification::CommandResult {
+                                id,
+                                success,
+                                message,
+                            });
+                        }
+                        handled += 1;
                     }
-                    if !quiet || !success {
-                        self.emit(Notification::CommandResult {
-                            id,
-                            success,
-                            message,
-                        });
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        disconnected = true;
+                        break;
                     }
-                    self.publish();
+                    Err(mpsc::RecvTimeoutError::Timeout) => break,
                 }
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    self.closing.store(true, Ordering::Relaxed);
-                    continue;
+                if handled >= 64 {
+                    break;
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                received = self.receiver.try_recv().map_err(|error| match error {
+                    mpsc::TryRecvError::Empty => mpsc::RecvTimeoutError::Timeout,
+                    mpsc::TryRecvError::Disconnected => mpsc::RecvTimeoutError::Disconnected,
+                });
+            }
+            if handled > 0 {
+                self.publish();
+            }
+            if disconnected {
+                self.closing.store(true, Ordering::Relaxed);
+                continue;
             }
             let mut exited = false;
             if let Some(session) = self.session.as_mut() {
@@ -2369,30 +2482,38 @@ impl Worker {
         self.snapshot.capture_events.clear();
         self.snapshot.process_page = None;
         self.snapshot.boot_id = None;
+        self.snapshot.network_pcap = None;
         self.publish();
         self.stopping.store(false, Ordering::Relaxed);
         let result = (|| -> Result<Session, String> {
-            let process = VmProcess::launch(&self.options, &vm, &bundle)?;
-            self.snapshot.serial_log = Some(process.runtime_dir.join("serial.log"));
             let boot_id = storage::unique_id();
-            self.snapshot.boot_id = Some(boot_id.clone());
-            let capture_dir = crate::locations::locations(&self.options, id)?
+            let boot_dir = crate::locations::locations(&self.options, id)?
                 .recording_directory
                 .join("boots")
-                .join(&boot_id)
-                .join("unassigned");
+                .join(&boot_id);
+            // QEMU records the VM's network traffic into the boot recording.
+            let network_pcap = vm.nat.then(|| boot_dir.join(crate::network::PCAP_FILE));
+            if network_pcap.is_some() {
+                storage::private_dir(&boot_dir).map_err(|e| e.to_string())?;
+            }
+            let process = VmProcess::launch(&self.options, &vm, &bundle, network_pcap.as_deref())?;
+            self.snapshot.serial_log = Some(process.runtime_dir.join("serial.log"));
+            self.snapshot.boot_id = Some(boot_id.clone());
+            self.snapshot.network_pcap = network_pcap;
+            let capture_dir = boot_dir.join("unassigned");
             let mut capture =
                 RawCapture::new(capture_dir.clone(), self.options.capture_quota_size)?;
             capture.manifest(&vm, &bundle, &disk_bundle, "starting")?;
             self.snapshot.capture_dir = Some(capture_dir.clone());
-            let assembler =
+            let mut assembler =
                 Assembler::new(capture_dir.join("objects"), self.options.capture_quota_size)
                     .map_err(|e| e.to_string())?;
+            assembler.set_event_table(vm.transport.event_table as usize);
             if let Err(e) = process.verify_ram_layout() {
                 capture.manifest(&vm, &bundle, &disk_bundle, "start-failed")?;
                 return Err(e);
             }
-            let transport =
+            let mut transport =
                 match Transport::open(&process.ram_path, process.ram_size, process.bootstrap) {
                     Ok(t) => t,
                     Err(e) => {
@@ -2400,6 +2521,17 @@ impl Worker {
                         return Err(e);
                     }
                 };
+            // Bases before 0.3.0 cannot wait for room; they keep dropping.
+            if let Err(error) = transport.set_send_wait(vm.transport.send_wait_us()) {
+                self.snapshot.last_error = Some(format!(
+                    "never-drop mode needs a base for Antinomie 0.3.0 or newer ({error})"
+                ));
+            } else if vm.transport.lossless {
+                // The transport thread can pause for seconds while the disk
+                // catches up; the guest must keep waiting through that
+                // instead of taking the host for gone and dropping.
+                let _ = transport.set_host_timeout(LOSSLESS_HOST_TIMEOUT_MS);
+            }
             capture.manifest(&vm, &bundle, &disk_bundle, "running")?;
             Ok(Session {
                 analysis: crate::analysis::jobs::Jobs::with_tools(
@@ -2422,6 +2554,7 @@ impl Worker {
                 terminal_cursor: 0,
                 late_reads: BTreeMap::new(),
                 telemetry_busy: false,
+                last_process_save: Instant::now(),
                 status_cursor: 0,
                 last_status_query: Instant::now(),
                 persisted_packets: 0,
@@ -2449,6 +2582,10 @@ impl Worker {
         };
         self.snapshot.state = VmState::Stopping;
         self.publish();
+        // Never-drop mode ends with the run: a guest shutting down must not
+        // wait on a host that is busy finalizing its recordings.
+        let _ = session.transport.set_send_wait(0);
+        let _ = session.transport.set_host_timeout(0);
         let deadline = Instant::now() + self.options.shutdown_timeout;
         let mut issues = Vec::new();
         let terminal_ids: Vec<_> = session
@@ -2579,8 +2716,6 @@ impl Worker {
         Ok(())
     }
     fn guest_command(&mut self, command: Command) -> Result<String, String> {
-        /// Processes listed at most, across pages.
-        const PROCESS_LIST_MAX: usize = 4096;
         let session = self.session.as_mut().ok_or("VM is stopped")?;
         let timeout = Duration::from_secs(10);
         if matches!(
@@ -2600,35 +2735,12 @@ impl Worker {
         }
         match command {
             Command::ListProcesses { after_pid } => {
-                // Read every page into one list, bounded so a fork storm
-                // cannot keep the enumeration going.
-                let mut page: Option<crate::GuestProcessPage> = None;
-                let mut next = after_pid;
-                loop {
-                    let reply = session.request(
-                        control::PROCESS_LIST,
-                        &control::process_list(next),
-                        &mut self.snapshot,
-                        &self.sender,
-                        timeout,
-                    )?;
-                    let part = control::process_page(&reply, &session.boot_id, next)?;
-                    next = part.next_pid;
-                    match page.as_mut() {
-                        None => page = Some(part),
-                        Some(page) => {
-                            page.next_pid = part.next_pid;
-                            page.processes.extend(part.processes);
-                        }
-                    }
-                    if next == 0
-                        || page
-                            .as_ref()
-                            .is_some_and(|p| p.processes.len() >= PROCESS_LIST_MAX)
-                    {
-                        break;
-                    }
-                }
+                let page = Some(session.list_processes(
+                    after_pid,
+                    &mut self.snapshot,
+                    &self.sender,
+                    timeout,
+                )?);
                 let count = page.as_ref().map_or(0, |p| p.processes.len());
                 self.snapshot.process_page = page;
                 Ok(format!("{count} guest processes listed"))
@@ -2639,12 +2751,29 @@ impl Worker {
                 &mut self.snapshot,
                 &self.sender,
             ),
-            Command::CaptureAll => session.start_capture(
-                &self.options,
-                CaptureScope::AllUserspace,
-                &mut self.snapshot,
-                &self.sender,
-            ),
+            Command::CaptureAll => {
+                let id = session.start_capture(
+                    &self.options,
+                    CaptureScope::AllUserspace,
+                    &mut self.snapshot,
+                    &self.sender,
+                )?;
+                // Name the processes already running; the capture's fork and
+                // exec records name the rest. A failed list only leaves
+                // early processes unnamed.
+                match session.list_processes(0, &mut self.snapshot, &self.sender, timeout) {
+                    Ok(page) => {
+                        if let Some(capture) = session.captures.get_mut(&id) {
+                            capture.processes.seed(&page.processes);
+                        }
+                    }
+                    Err(error) => {
+                        self.snapshot.last_error =
+                            Some(format!("Capture All process names: {error}"));
+                    }
+                }
+                Ok(id)
+            }
             Command::StopCapture { capture_id } => {
                 let capture = session
                     .captures
@@ -2722,6 +2851,8 @@ impl Worker {
                     }),
                 };
                 let mut run = ProgramRun::new(summary, session.capture.quota())?;
+                run.assembler
+                    .set_event_table(session.vm.transport.event_table as usize);
                 run.summary.recording_error = None;
                 run.boot_bundle_identity = session.bundle.base_identity.clone();
                 run.disk_base_identity = session.disk_bundle.base_identity.clone();
@@ -3132,7 +3263,7 @@ fn propagate_object_saving_failure(
     runs: &mut BTreeMap<u64, ProgramRun>,
 ) {
     let error = assembler.saving_error().map(str::to_owned).or_else(|| {
-        runs.values()
+        runs.values_mut()
             .find_map(|run| run.assembler.saving_error().map(str::to_owned))
     });
     if let Some(error) = error {
@@ -3358,6 +3489,7 @@ mod tests {
             phase: 1,
             syscall_nr: 1,
             syscall_name: "write".into(),
+            pid: 7,
             tid: 7,
             cpu: 0,
             timestamp_ns: sequence,
@@ -3953,13 +4085,16 @@ mod tests {
                     fs::create_dir(directory.join("objects/0-0-0-1-0-1.raw")).unwrap();
                 }
                 let event = target.ingest(&packet).unwrap().unwrap();
-                assert!(event.fields[0].ranges.is_empty());
+                // Write failures surface once the writer thread has tried.
+                assert_eq!(event.fields[0].ranges.is_empty(), !io_failure);
+                crate::writer::barrier();
                 propagate_object_saving_failure(&mut capture, &mut assembler, &mut runs);
                 let error = capture.error.clone().unwrap();
                 assert!(error.contains(if io_failure { "persistence" } else { "quota" }));
                 let mut health = Health::default();
                 refresh_storage_health(&mut health, &capture, assembler.stored_len(), &runs);
-                assert_eq!(health.persisted_len, 940);
+                // A chunk whose write failed was counted when it was queued.
+                assert_eq!(health.persisted_len, if io_failure { 1040 } else { 940 });
                 assert_eq!(health.persistence_error.as_deref(), Some(error.as_str()));
                 for run in runs.values_mut() {
                     assert_eq!(run.summary.recording_error.as_deref(), Some(error.as_str()));
@@ -3980,6 +4115,7 @@ mod tests {
                 }
                 assert!(!capture.append_with_reserved(b"later", 0));
                 assert!(capture.flush());
+                crate::writer::barrier();
                 assert_eq!(
                     capture.bytes + runs.values().map(|run| run.capture.bytes).sum::<u64>(),
                     940

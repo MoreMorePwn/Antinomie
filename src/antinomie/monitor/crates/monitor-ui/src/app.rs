@@ -8,10 +8,11 @@ use crate::{
     workspace::{Panel, WorkspaceLayout},
 };
 use antinomie_monitor_core::{
-    pair_events, syscall_groups::SyscallGroup, Backend, BackendOptions, BaseSummary, CaptureState,
-    CaptureSummary, Command, DisplayResolution, ExecRequest, GuestCredentials, InvocationSummary,
-    Notification, RevisionStatus, RunState, RunSummary, Snapshot, TerminalRecord, VmAcceleration,
-    VmConfig, VmCpuModel, VmLaunchOptions, VmState, WaitStatus, APP_REVISION, APP_VERSION,
+    capture_processes::CaptureProcess, pair_events, syscall_groups::SyscallGroup, Backend,
+    BackendOptions, BaseSummary, CaptureState, CaptureSummary, Command, DisplayResolution,
+    ExecRequest, GuestCredentials, InvocationSummary, Notification, RevisionStatus, RunState,
+    RunSummary, Snapshot, TerminalRecord, TransportSettings, VmAcceleration, VmConfig, VmCpuModel,
+    VmLaunchOptions, VmState, WaitStatus, APP_REVISION, APP_VERSION,
 };
 #[path = "captures.rs"]
 mod captures;
@@ -164,6 +165,13 @@ pub struct MonitorApp {
     selected_event: Option<InvocationKey>,
     selected_run: Option<String>,
     selected_capture: Option<String>,
+    /// Guest process (thread group ID) the selected capture's trace shows.
+    selected_process: Option<u32>,
+    /// The VM dialog's Telemetry transport window is open.
+    transport_open: bool,
+    network_view: crate::network_view::NetworkView,
+    /// Process tree of a selected capture that is not live (processes.json).
+    archived_processes: Option<(String, Result<Vec<CaptureProcess>, String>)>,
     capture_history: Vec<CaptureSummary>,
     capture_tab: bool,
     process_picker: captures::ProcessPicker,
@@ -267,6 +275,10 @@ impl MonitorApp {
             selected_event: None,
             selected_run: None,
             selected_capture: None,
+            selected_process: None,
+            transport_open: false,
+            network_view: Default::default(),
+            archived_processes: None,
             capture_history: Vec::new(),
             capture_tab: false,
             process_picker: captures::ProcessPicker::default(),
@@ -900,6 +912,7 @@ impl MonitorApp {
 
     fn select_run(&mut self, id: Option<String>) {
         self.selected_capture = None;
+        self.selected_process = None;
         self.archive_selected = false;
         self.selected_analysis = None;
         self.analysis_views.remove("workspace");
@@ -943,6 +956,9 @@ impl MonitorApp {
             directory,
             offset,
             capture: self.selected_capture.is_some(),
+            pid: self
+                .selected_process
+                .filter(|_| self.selected_capture.is_some()),
         };
         self.queue_archive(request);
         self.archive_pending = true;
@@ -1220,6 +1236,21 @@ impl MonitorApp {
     fn select_capture(&mut self, id: String, archive: bool) {
         self.selected_run = None;
         self.reset_trace_selection();
+        if self.selected_capture.as_ref() != Some(&id) {
+            self.selected_process = None;
+        }
+        if !self.snapshot.capture_processes.contains_key(&id)
+            && self
+                .archived_processes
+                .as_ref()
+                .is_none_or(|(loaded, _)| *loaded != id)
+        {
+            if let Some(capture) = self.capture(&id) {
+                let processes =
+                    antinomie_monitor_core::capture::capture_processes(&capture.directory);
+                self.archived_processes = Some((id.clone(), processes));
+            }
+        }
         self.selected_capture = Some(id);
         self.archive_selected = archive;
         if self.trace_archive_directory().is_some() {
@@ -1271,6 +1302,65 @@ impl MonitorApp {
             self.settings.font_size,
         ) {
             self.select_capture(id, archive);
+        }
+        let Some(id) = self.selected_capture.clone() else {
+            return;
+        };
+        let processes = match self.snapshot.capture_processes.get(&id) {
+            Some(live) => Ok(live.as_slice()),
+            None => match &self.archived_processes {
+                Some((loaded, result)) if *loaded == id => {
+                    result.as_ref().map(Vec::as_slice).map_err(String::as_str)
+                }
+                _ => Ok(&[][..]),
+            },
+        };
+        ui.separator();
+        match processes {
+            Err(error) => {
+                ui.colored_label(theme::WARN, format!("Process tree unavailable: {error}"));
+            }
+            Ok([]) => {
+                ui.colored_label(
+                    theme::MUTED,
+                    "No process tree (captures before Antinomie 0.3.0 keep one combined trace)",
+                );
+            }
+            Ok(processes) => {
+                let selection = captures::process_tree(
+                    ui,
+                    processes,
+                    self.selected_process,
+                    self.settings.font_size,
+                );
+                if let Some(selection) = selection {
+                    self.select_process(selection);
+                    self.focus_trace();
+                }
+            }
+        }
+    }
+
+    fn select_process(&mut self, selection: captures::ProcessSelection) {
+        self.selected_process = match selection {
+            captures::ProcessSelection::All => None,
+            captures::ProcessSelection::Process(pid) => Some(pid),
+        };
+        self.reset_trace_selection();
+        if self.trace_archive_directory().is_some() {
+            self.request_page(0);
+        }
+    }
+
+    /// The selected capture's process tree: live, or as saved.
+    fn capture_process_list(&self) -> Option<Vec<CaptureProcess>> {
+        let id = self.selected_capture.as_ref()?;
+        if let Some(live) = self.snapshot.capture_processes.get(id) {
+            return Some(live.clone());
+        }
+        match &self.archived_processes {
+            Some((loaded, Ok(list))) if loaded == id => Some(list.clone()),
+            _ => None,
         }
     }
 
@@ -1664,6 +1754,7 @@ impl MonitorApp {
                     ui.menu_button("View", |ui| {
                         for view in [
                             Panel::Trace,
+                            Panel::Network,
                             Panel::StaticAnalysis,
                             Panel::RunHistory,
                             Panel::Details,
@@ -2437,7 +2528,16 @@ impl MonitorApp {
                 .snapshot
                 .capture_events
                 .get(id)
-                .map(|events| pair_events(events))
+                .map(|events| match self.selected_process {
+                    Some(pid) => pair_events(
+                        &events
+                            .iter()
+                            .filter(|event| event.pid == pid)
+                            .cloned()
+                            .collect::<Vec<_>>(),
+                    ),
+                    None => pair_events(events),
+                })
                 .unwrap_or_default();
         }
         let events: Vec<_> = self
@@ -2472,6 +2572,13 @@ impl MonitorApp {
             if let Some(capture) = self.selected_capture_summary() {
                 ui.add(egui::Label::new(captures::scope(&capture.scope)).truncate())
                     .on_hover_text(&capture.id);
+            }
+            if let Some(processes) = self.capture_process_list().filter(|list| !list.is_empty()) {
+                if let Some(selection) =
+                    captures::process_menu(ui, &processes, self.selected_process)
+                {
+                    self.select_process(selection);
+                }
             }
             ui.add(
                 egui::TextEdit::singleline(&mut self.filter)
@@ -3097,12 +3204,22 @@ impl MonitorApp {
                             }
                             ui.label("Recording parent changes apply to future recordings. Earlier recordings are retained.");
                         }
-                        if ui.checkbox(&mut self.draft.nat, "NAT network").changed()
-                            && self.draft.nat
-                        {
-                            self.draft.nat = false;
-                            nat = true;
-                        }
+                        ui.horizontal(|ui| {
+                            if ui.checkbox(&mut self.draft.nat, "NAT network").changed()
+                                && self.draft.nat
+                            {
+                                self.draft.nat = false;
+                                nat = true;
+                            }
+                            ui.add_space(12.0);
+                            if ui
+                                .button("Telemetry transport…")
+                                .on_hover_text("Guest buffers, never-drop mode and the host event table")
+                                .clicked()
+                            {
+                                self.transport_open = !self.transport_open;
+                            }
+                        });
                         if self.draft.nat {
                             ui.colored_label(
                                 theme::WARN,
@@ -3114,6 +3231,10 @@ impl MonitorApp {
                             form_error = self.create_validation_error(credentials_required);
                         } else {
                             form_error = self.save_validation_error(&self.draft);
+                        }
+                        // Above the button, so it stays in view in a tall dialog.
+                        if let Some(error) = &form_error {
+                            ui.add(egui::Label::new(egui::RichText::new(error).color(theme::WARN)).wrap());
                         }
                         ui.horizontal(|ui| {
                             save = ui
@@ -3149,12 +3270,32 @@ impl MonitorApp {
                         } else {
                             self.save_validation_error(&self.draft)
                         };
-                    }
-                    if let Some(error) = &form_error {
-                        ui.add(egui::Label::new(egui::RichText::new(error).color(theme::WARN)).wrap());
+                        if let Some(error) = &form_error {
+                            ui.add(egui::Label::new(egui::RichText::new(error).color(theme::WARN)).wrap());
+                        }
                     }
                 });
             });
+            if self.transport_open && open {
+                let tunable = self
+                    .snapshot
+                    .bases
+                    .iter()
+                    .find(|base| Some(&base.id) == self.draft.base_identity.as_ref())
+                    .is_some_and(|base| base.revision.is_some_and(|revision| revision >= 13));
+                let editable = creating || self.snapshot.active_vm.as_ref() != Some(&self.draft.id);
+                transport_window(
+                    ctx,
+                    &mut self.transport_open,
+                    &mut self.draft.transport,
+                    self.draft.cpus,
+                    tunable,
+                    editable,
+                );
+            }
+            if !open {
+                self.transport_open = false;
+            }
             self.create_open = creating && open;
             self.config_open = !creating && open;
             if !open {
@@ -3842,6 +3983,32 @@ impl MonitorApp {
         ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
         match panel {
             Panel::Trace => self.events(ui),
+            Panel::Network => {
+                let vm = self.selected.clone();
+                let live = self
+                    .snapshot
+                    .network_pcap
+                    .clone()
+                    .filter(|_| vm.is_some() && vm == self.snapshot.active_vm);
+                let recordings = self
+                    .snapshot
+                    .vm_locations
+                    .iter()
+                    .find(|location| Some(&location.vm_id) == vm.as_ref())
+                    .map(|location| location.recording_directory.clone());
+                let nat = self
+                    .snapshot
+                    .vms
+                    .iter()
+                    .any(|config| Some(&config.id) == vm.as_ref() && config.nat);
+                self.network_view.show(
+                    ui,
+                    live.as_deref(),
+                    recordings.as_deref(),
+                    nat,
+                    self.settings.font_size,
+                );
+            }
             Panel::AnalysisSection { report_id, kind } => {
                 let key = format!("section:{report_id}:{kind:?}");
                 let report = self.analysis_windows.get(report_id);
@@ -4307,6 +4474,110 @@ fn launch_options(ui: &mut egui::Ui, launch: &mut VmLaunchOptions) {
     ui.end_row();
 }
 
+/// VM settings > Telemetry transport: how telemetry travels from the guest.
+/// Edits the VM draft; Save or Create in the VM dialog applies them.
+fn transport_window(
+    ctx: &egui::Context,
+    open: &mut bool,
+    transport: &mut TransportSettings,
+    cpus: u16,
+    tunable: bool,
+    editable: bool,
+) {
+    egui::Window::new("Telemetry transport")
+        .id(egui::Id::new("vm_transport"))
+        .open(open)
+        .collapsible(false)
+        .resizable(false)
+        .default_width(440.0)
+        .show(ctx, |ui| {
+            ui.add_enabled_ui(editable, |ui| {
+                transport_options(ui, transport, cpus, tunable)
+            });
+            if !editable {
+                ui.colored_label(theme::WARN, "Stop the VM to change these settings.");
+            }
+            ui.weak("Save the VM configuration to apply.");
+        });
+}
+
+fn transport_options(
+    ui: &mut egui::Ui,
+    transport: &mut TransportSettings,
+    cpus: u16,
+    tunable: bool,
+) {
+    if !tunable {
+        ui.colored_label(
+            theme::WARN,
+            "This base predates Antinomie 0.3.0: it always uses 256 KiB buffers \
+             and drops telemetry when they are full. These settings apply to \
+             newer bases.",
+        );
+    }
+    egui::Grid::new("vm_transport_grid")
+        .num_columns(2)
+        .spacing([12.0, 6.0])
+        .show(ui, |ui| {
+            ui.label("Guest buffer per vCPU");
+            egui::ComboBox::from_id_salt("vm_ring_kib")
+                .selected_text(ring_label(transport.ring_kib))
+                .show_ui(ui, |ui| {
+                    for &kib in &TransportSettings::RING_KIB {
+                        ui.selectable_value(&mut transport.ring_kib, kib, ring_label(kib));
+                    }
+                });
+            ui.end_row();
+            ui.label("");
+            ui.weak(format!(
+                "{} of guest memory for {cpus} vCPU{}",
+                ring_label(transport.ring_kib.saturating_mul(u32::from(cpus))),
+                if cpus == 1 { "" } else { "s" }
+            ));
+            ui.end_row();
+            ui.label("When buffers fill");
+            ui.vertical(|ui| {
+                ui.radio_value(&mut transport.lossless, false, "Drop new telemetry");
+                ui.radio_value(
+                    &mut transport.lossless,
+                    true,
+                    "Never drop: slow the guest down",
+                );
+            });
+            ui.end_row();
+            ui.label("Longest wait per event");
+            ui.add_enabled(
+                transport.lossless,
+                egui::DragValue::new(&mut transport.max_wait_ms)
+                    .range(1..=10_000)
+                    .suffix(" ms"),
+            );
+            ui.end_row();
+            ui.label("Host event table");
+            ui.add(
+                egui::DragValue::new(&mut transport.event_table)
+                    .range(TransportSettings::EVENT_TABLE)
+                    .speed(256.0)
+                    .suffix(" events"),
+            );
+            ui.end_row();
+        });
+    ui.weak(
+        "Never drop makes a guest system call wait while the host saves \
+         telemetry, so heavy tracing runs slower but nothing is lost. The \
+         event table holds calls still being assembled; finished calls \
+         leave it first. Settings apply at the next VM start.",
+    );
+}
+
+fn ring_label(kib: u32) -> String {
+    if kib >= 1024 && kib.is_multiple_of(1024) {
+        format!("{} MiB", kib / 1024)
+    } else {
+        format!("{kib} KiB")
+    }
+}
+
 fn password_input(ui: &mut egui::Ui, text: &mut String, salt: &str) {
     let mut output = egui::TextEdit::singleline(text)
         .id(egui::Id::new(salt))
@@ -4700,6 +4971,10 @@ mod tests {
             selected_event: None,
             selected_run: None,
             selected_capture: None,
+            selected_process: None,
+            transport_open: false,
+            network_view: Default::default(),
+            archived_processes: None,
             capture_history: Vec::new(),
             capture_tab: false,
             process_picker: captures::ProcessPicker::default(),
@@ -4754,6 +5029,7 @@ mod tests {
             phase,
             syscall_nr: 0,
             syscall_name: "read".into(),
+            pid: 42,
             tid: 42,
             cpu,
             timestamp_ns: 1000,
@@ -5478,7 +5754,7 @@ mod tests {
         let visible = texts(&render(&mut app, &ctx, size));
         assert!(visible
             .iter()
-            .any(|(text, _)| text == "current · Antinomie 0.2.0"));
+            .any(|(text, _)| text == "current · Antinomie 0.3.0"));
         assert!(!visible
             .iter()
             .any(|(text, _)| text.starts_with("old ·") || text == "legacy"));
@@ -5496,7 +5772,7 @@ mod tests {
             .any(|(text, _)| text == "old · Antinomie 0.1.0"));
         assert!(visible.iter().any(|(text, _)| text == "legacy"));
         assert_eq!(
-            RevisionStatus::of_base(Some(APP_REVISION), Some("0.2.0")),
+            RevisionStatus::of_base(Some(APP_REVISION), Some("0.3.0")),
             RevisionStatus::Current
         );
     }
@@ -5579,7 +5855,7 @@ mod tests {
     #[test]
     fn base_labels_name_outdated_newer_and_unrecorded_revisions() {
         let mut base = base_summary_for_revision(Some(APP_REVISION));
-        assert_eq!(base_choice_label(&base), "Debian · Antinomie 0.2.0");
+        assert_eq!(base_choice_label(&base), "Debian · Antinomie 0.3.0");
         base.revision = Some(APP_REVISION - 1);
         assert!(base_choice_label(&base).ends_with(", outdated"));
         base.revision = Some(APP_REVISION + 1);
@@ -5617,7 +5893,7 @@ mod tests {
         let texts = texts(&render(&mut app, &ctx, size));
         let rows: Vec<_> = texts
             .iter()
-            .filter(|(text, _)| text.contains("Linux 6.12.94 · Antinomie 0.2.0"))
+            .filter(|(text, _)| text.contains("Linux 6.12.94 · Antinomie 0.3.0"))
             .map(|(_, rect)| *rect)
             .collect();
         let title = texts
@@ -5904,12 +6180,12 @@ mod tests {
         assert_eq!(app.draft.base_identity.as_deref(), Some("legacy"));
         assert_eq!(
             base_choice_label(&app.snapshot.bases[0]),
-            "Linux 6.12.94 · Antinomie 0.2.0 (legacy)"
+            "Linux 6.12.94 · Antinomie 0.3.0 (legacy)"
         );
         app.snapshot.bases[1].fixed_display = true;
         assert_eq!(
             base_choice_label(&app.snapshot.bases[1]),
-            "Linux 6.12.94 · Antinomie 0.2.0"
+            "Linux 6.12.94 · Antinomie 0.3.0"
         );
     }
 

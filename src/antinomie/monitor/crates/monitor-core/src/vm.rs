@@ -248,10 +248,13 @@ pub(crate) struct VmProcess {
     pub qmp_path: PathBuf,
 }
 impl VmProcess {
+    /// `network_pcap`: with NAT, QEMU writes every frame of the VM's network
+    /// interface to this pcap file (filter-dump), outside the guest.
     pub fn launch(
         options: &BackendOptions,
         vm: &VmConfig,
         bundle: &Bundle,
+        network_pcap: Option<&Path>,
     ) -> Result<Self, String> {
         vm.launch.validate_for(options)?;
         crate::storage::validate_boot_display(vm, bundle)?;
@@ -319,12 +322,33 @@ impl VmProcess {
             .stdin(Stdio::null())
             .stdout(Stdio::from(serial))
             .stderr(Stdio::from(stderr));
-        apply_launch_settings(&mut cmd, options, &vm.launch, bundle, bootstrap)?;
+        // Guests from revision 13 (Antinomie 0.3.0) size their telemetry rings
+        // from the kernel command line; older guests keep 256 KiB rings.
+        let mut boot = bundle.clone();
+        if bundle
+            .antinomie_revision
+            .is_some_and(|revision| revision >= 13)
+        {
+            boot.kernel_append
+                .push_str(&format!(" antinomie_ring_kib={}", vm.transport.ring_kib));
+        }
+        apply_launch_settings(&mut cmd, options, &vm.launch, &boot, bootstrap)?;
         if let Some(initrd) = &bundle.initrd {
             cmd.arg("-initrd").arg(initrd);
         }
         if vm.nat {
-            cmd.args(["-nic", "user,model=virtio-net-pci"]);
+            cmd.args([
+                "-netdev",
+                "user,id=net0",
+                "-device",
+                "virtio-net-pci,netdev=net0",
+            ]);
+            if let Some(pcap) = network_pcap {
+                cmd.arg("-object").arg(format!(
+                    "filter-dump,id=netdump,netdev=net0,maxlen=65535,file={}",
+                    qemu_path(pcap)?
+                ));
+            }
         } else {
             cmd.args(["-nic", "none"]);
         }

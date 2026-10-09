@@ -58,6 +58,9 @@ int ant_get_stats(struct ant_client *client, struct ant_stats *stats);
 int ant_get_limits(struct ant_client *client, struct ant_limits *limits);
 /* Local configuration publication, not acknowledgement of guest application. */
 int ant_set_host_timeout(struct ant_client *client, uint32_t timeout_ms);
+/* Refresh the host heartbeat and check the guest, like any other call, for an
+ * owner that is busy elsewhere (for example waiting on its disk). */
+int ant_heartbeat(struct ant_client *client);
 /* How long (0..10000000 us) a guest send may wait for room in a full ring
  * instead of dropping; 0 drops at once. ABI 7 guests: -EOPNOTSUPP unless 0. */
 int ant_set_send_wait(struct ant_client *client, uint32_t wait_us);

@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum Panel {
     Trace,
+    Network,
     StaticAnalysis,
     AnalysisSection {
         report_id: String,
@@ -27,6 +28,7 @@ impl Panel {
     pub(crate) fn title(&self) -> &str {
         match self {
             Self::Trace => "Syscall Trace",
+            Self::Network => "Network",
             Self::StaticAnalysis => "Static Analysis",
             Self::AnalysisSection { kind, .. } => kind.label(),
             Self::RunHistory => "Run History",
@@ -72,7 +74,12 @@ impl Default for WorkspaceLayout {
     fn default() -> Self {
         // Run History is the first (leftmost) tab, next to the trace; the trace
         // stays the open tab so the startup view is unchanged.
-        let mut dock = DockState::new(vec![Panel::RunHistory, Panel::Trace, Panel::StaticAnalysis]);
+        let mut dock = DockState::new(vec![
+            Panel::RunHistory,
+            Panel::Trace,
+            Panel::Network,
+            Panel::StaticAnalysis,
+        ]);
         dock.set_active_tab((SurfaceIndex::main(), NodeIndex::root(), TabIndex(1)));
         // The work area gets most of the height; details sit below.
         dock.main_surface_mut().split_below(
@@ -119,6 +126,7 @@ impl WorkspaceLayout {
         for panel in [
             Panel::RunHistory,
             Panel::Trace,
+            Panel::Network,
             Panel::StaticAnalysis,
             Panel::Details,
             Panel::Activity,
@@ -477,11 +485,21 @@ impl WorkspaceLayout {
         let (own, other) = if lower {
             (
                 vec![Panel::Details, Panel::Activity],
-                vec![Panel::RunHistory, Panel::Trace, Panel::StaticAnalysis],
+                vec![
+                    Panel::RunHistory,
+                    Panel::Trace,
+                    Panel::Network,
+                    Panel::StaticAnalysis,
+                ],
             )
         } else {
             (
-                vec![Panel::RunHistory, Panel::Trace, Panel::StaticAnalysis],
+                vec![
+                    Panel::RunHistory,
+                    Panel::Trace,
+                    Panel::Network,
+                    Panel::StaticAnalysis,
+                ],
                 vec![Panel::Details, Panel::Activity],
             )
         };
@@ -984,7 +1002,12 @@ mod tests {
         let top = NodeIndex::root().left();
         assert_eq!(
             leaf_tabs(&layout, top),
-            [Panel::RunHistory, Panel::Trace, Panel::StaticAnalysis]
+            [
+                Panel::RunHistory,
+                Panel::Trace,
+                Panel::Network,
+                Panel::StaticAnalysis
+            ]
         );
         let egui_dock::Node::Leaf { tabs, active, .. } = &layout.dock.main_surface()[top] else {
             panic!("top node must hold tabs");
@@ -1007,7 +1030,12 @@ mod tests {
         let restored = WorkspaceLayout::restore(Some(saved));
         assert_eq!(
             leaf_tabs(&restored, NodeIndex::root().left()),
-            [Panel::RunHistory, Panel::Trace, Panel::StaticAnalysis]
+            [
+                Panel::RunHistory,
+                Panel::Trace,
+                Panel::Network,
+                Panel::StaticAnalysis
+            ]
         );
         // A current-version layout the user rearranged is kept as saved.
         let custom = WorkspaceLayout {
@@ -1044,7 +1072,12 @@ mod tests {
         assert_ne!(top, bottom, "Details must not join the trace's tab bar");
         assert_eq!(
             leaf_tabs(&layout, top),
-            [Panel::RunHistory, Panel::Trace, Panel::StaticAnalysis]
+            [
+                Panel::RunHistory,
+                Panel::Trace,
+                Panel::Network,
+                Panel::StaticAnalysis
+            ]
         );
         assert_eq!(
             leaf_tabs(&layout, bottom),
@@ -1065,7 +1098,12 @@ mod tests {
             .0;
         assert_eq!(
             leaf_tabs(&empty, top),
-            [Panel::RunHistory, Panel::Trace, Panel::StaticAnalysis]
+            [
+                Panel::RunHistory,
+                Panel::Trace,
+                Panel::Network,
+                Panel::StaticAnalysis
+            ]
         );
         assert_eq!(leaf_tabs(&empty, bottom), [Panel::Details, Panel::Activity]);
     }
@@ -1085,7 +1123,12 @@ mod tests {
         let restored = WorkspaceLayout::restore(Some(flattened));
         assert_eq!(
             leaf_tabs(&restored, NodeIndex::root().left()),
-            [Panel::RunHistory, Panel::Trace, Panel::StaticAnalysis]
+            [
+                Panel::RunHistory,
+                Panel::Trace,
+                Panel::Network,
+                Panel::StaticAnalysis
+            ]
         );
         assert_eq!(
             leaf_tabs(&restored, NodeIndex::root().right()),
@@ -1165,7 +1208,7 @@ mod tests {
             .dock
             .add_window(vec![Panel::Trace, Panel::Terminal("past".into())]);
         layout.validate();
-        assert_eq!(layout.dock.iter_all_tabs().count(), 5);
+        assert_eq!(layout.dock.iter_all_tabs().count(), 6);
         assert_eq!(
             layout
                 .dock

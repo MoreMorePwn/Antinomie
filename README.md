@@ -24,8 +24,9 @@ main; pauses are trimmed. [Recording details](assets/demo/README.md).
 - **Guest kernel.** The guests run Linux 6.12.94 with a small patch that records
   system calls. The kernel itself runs your programs and terminals, so no helper
   program sits inside the guest for malware to spot or tamper with.
-- **Transport.** Records reach the host over shared memory. If the host cannot keep
-  up, the loss is counted and shown, never hidden.
+- **Transport.** Records reach the host over shared memory, through a buffer per
+  virtual CPU. If the host cannot keep up, the loss is counted and shown, never
+  hidden; in **Never drop** mode the guest waits for the host instead.
 - **Host app.** A native Linux desktop application (Rust, egui) manages VMs and
   shows live and saved traces.
 - **Guests.** Two base images:
@@ -86,6 +87,16 @@ Right-click a VM for **Rename**, **Duplicate** (the VM must be stopped),
 **Open Directory**, **Settings** (resolution, fullscreen or fit to window,
 acceleration, CPU model) and **Delete**.
 
+**Settings → Telemetry transport…** tunes how records leave the guest (bases
+for Antinomie 0.3.0 and newer):
+
+| Setting | Effect |
+|---|---|
+| Guest buffer per vCPU | 256 KiB to 4 MiB of guest memory per virtual CPU (default 1 MiB); bigger buffers ride out longer bursts |
+| When buffers fill | **Drop new telemetry** (default; the guest never waits) or **Never drop**: a system call waits until the host has room, so heavy tracing slows the guest but nothing is lost |
+| Longest wait per event | In Never drop mode, how long one call may wait (default 5 s) before its record is dropped after all |
+| Host event table | How many calls the host keeps assembling at once (default 16,384) |
+
 ### 3. Start it and run a program
 1. Select the VM and press **Start VM**. Only one VM runs at a time, and its
    network is disconnected by default.
@@ -100,7 +111,11 @@ acceleration, CPU model) and **Delete**.
    it runs; pick the categories, from triage to disassembly and decompilation.
 6. **Attach to process** traces a process that is already running in the guest
    (and its future children); **Capture all** traces all of userspace. Neither
-   stops or signals anything.
+   stops or signals anything. A capture lists the processes it saw as a tree
+   (named after the program each one ran); select one to see only its calls.
+7. With **NAT network** on, every packet of the VM's network interface is
+   recorded by QEMU, outside the guest, as `network.pcap` in the boot's
+   recording.
 
 ### 4. Read the results
 - **Syscall Trace**: every recorded call with its arguments, return value and
@@ -110,6 +125,11 @@ acceleration, CPU model) and **Delete**.
 - **Run History**: every run on the selected VM, including earlier boots, with
   its command line, user, status and exit code. Double-click a run to open its
   saved trace.
+- **Network**: the packets of the running boot (followed live) or an earlier
+  one: source, destination, protocol and a summary (DNS names and answers, TCP
+  flags, HTTP request lines, TLS server names), with the bytes of the selected
+  packet. **Open in Wireshark** hands the capture to Wireshark when it is
+  installed.
 - **Static Analysis**: the selected run's report: an overview, then each
   category; disassembly and decompilation are full listings with search.
 - **Details** and **Activity**: the selected call or run, and VM events.

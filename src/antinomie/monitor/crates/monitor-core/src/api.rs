@@ -272,6 +272,8 @@ pub struct VmConfig {
     pub base_identity: Option<String>,
     #[serde(default)]
     pub launch: VmLaunchOptions,
+    #[serde(default)]
+    pub transport: TransportSettings,
 }
 impl Default for VmConfig {
     fn default() -> Self {
@@ -286,6 +288,57 @@ impl Default for VmConfig {
             recording_root: None,
             base_identity: None,
             launch: VmLaunchOptions::default(),
+            transport: TransportSettings::default(),
+        }
+    }
+}
+
+/// Telemetry transport tuning (VM settings > Advanced). Bases for Antinomie
+/// 0.2.0 and older always use 256 KiB rings and cannot wait.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct TransportSettings {
+    /// Guest telemetry ring per vCPU, KiB: a power of two, 256..=4096.
+    pub ring_kib: u32,
+    /// Never drop: a guest send waits up to `max_wait_ms` for room in a full
+    /// ring instead of dropping, which slows the guest under heavy load.
+    pub lossless: bool,
+    /// Longest one send may wait in lossless mode, 1..=10000 ms.
+    pub max_wait_ms: u32,
+    /// Host table of events still being assembled, 2048..=131072.
+    pub event_table: u32,
+}
+impl TransportSettings {
+    pub const RING_KIB: [u32; 5] = [256, 512, 1024, 2048, 4096];
+    pub const EVENT_TABLE: std::ops::RangeInclusive<u32> = 2048..=131_072;
+    pub fn validate(&self) -> Result<(), String> {
+        if !Self::RING_KIB.contains(&self.ring_kib) {
+            return Err("transport ring must be 256, 512, 1024, 2048 or 4096 KiB".into());
+        }
+        if !(1..=10_000).contains(&self.max_wait_ms) {
+            return Err("never-drop wait must be 1..10000 ms".into());
+        }
+        if !Self::EVENT_TABLE.contains(&self.event_table) {
+            return Err("event table must hold 2048..131072 events".into());
+        }
+        Ok(())
+    }
+    /// Guest send wait to publish, in microseconds (0 drops).
+    pub fn send_wait_us(&self) -> u32 {
+        if self.lossless {
+            self.max_wait_ms * 1000
+        } else {
+            0
+        }
+    }
+}
+impl Default for TransportSettings {
+    fn default() -> Self {
+        Self {
+            ring_kib: 1024,
+            lossless: false,
+            max_wait_ms: 5000,
+            event_table: 16_384,
         }
     }
 }
@@ -866,6 +919,20 @@ pub struct Health {
     pub persisted_len: u64,
     pub persistence_error: Option<String>,
     pub recorder_stats: Option<[u64; 10]>,
+    /// Guest sends that found their ring full and waited (never-drop mode),
+    /// and their total wait.
+    #[serde(default)]
+    pub transport_waits: u64,
+    #[serde(default)]
+    pub transport_wait_ns: u64,
+    /// Per-vCPU guest ring bytes and the published send wait.
+    #[serde(default)]
+    pub ring_size: u32,
+    #[serde(default)]
+    pub send_wait_us: u32,
+    /// Recording bytes queued for the disk writer thread.
+    #[serde(default)]
+    pub write_backlog: u64,
 }
 #[derive(Clone, Debug, PartialEq, Default)]
 pub enum VmState {
@@ -879,6 +946,11 @@ pub enum VmState {
 
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
+    /// The running boot's network capture (pcap), when the VM has NAT.
+    pub network_pcap: Option<PathBuf>,
+    /// Process trees of this boot's captures that are still open, by capture id.
+    pub capture_processes:
+        std::collections::BTreeMap<String, Vec<crate::capture_processes::CaptureProcess>>,
     pub vms: Vec<VmConfig>,
     pub bases: Vec<BaseSummary>,
     /// The installed bases are still being listed (and, the first time,
@@ -928,6 +1000,9 @@ pub struct EventSummary {
     pub phase: u8,
     pub syscall_nr: u64,
     pub syscall_name: String,
+    /// Thread group (process) ID; 0 in summaries saved before 0.3.0.
+    #[serde(default)]
+    pub pid: u32,
     pub tid: u32,
     pub cpu: u32,
     pub timestamp_ns: u64,
@@ -1161,6 +1236,7 @@ mod tests {
             phase: 1,
             syscall_nr: 59,
             syscall_name: "execve".into(),
+            pid: 5,
             tid: 5,
             cpu: 0,
             timestamp_ns: 6,
@@ -1292,6 +1368,7 @@ mod tests {
             phase: 1,
             syscall_nr: 426,
             syscall_name: "io_uring_enter".into(),
+            pid: 5,
             tid: 5,
             cpu: 0,
             timestamp_ns: 6,

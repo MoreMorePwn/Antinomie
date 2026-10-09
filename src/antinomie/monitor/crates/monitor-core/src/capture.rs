@@ -2,6 +2,7 @@
 use crate::{
     api::{BackendOptions, Health},
     archive_io,
+    capture_processes::{CaptureProcess, ProcessTracker},
     observation::{CaptureState, CaptureSummary},
     parser::Assembler,
     recording::RecordingError,
@@ -15,6 +16,8 @@ pub(crate) struct CaptureSession {
     pub capture: RawCapture,
     pub assembler: Assembler,
     pub stream_id: Option<u64>,
+    /// Observed processes as a tree (saved as processes.json).
+    pub processes: ProcessTracker,
 }
 
 impl CaptureSession {
@@ -27,6 +30,7 @@ impl CaptureSession {
             capture,
             assembler,
             stream_id: None,
+            processes: ProcessTracker::default(),
         };
         session.persist_summary()?;
         Ok(session)
@@ -74,12 +78,27 @@ impl CaptureSession {
             "tail_status": "stopping admission does not fence delivery; admitted observations may remain unresolved"
         })
     }
+    /// Queue processes.json when the process tree changed.
+    pub fn persist_processes(&mut self) {
+        if self.processes.take_changed()
+            && let Err(error) = storage::queue_json(
+                &self.summary.directory.join(PROCESSES_FILE),
+                &self.processes.list(),
+            )
+        {
+            self.storage_error(error);
+        }
+    }
     pub fn finalize(&mut self, health: &Health) -> Result<(), String> {
         self.summary.state = CaptureState::Finalized;
         let sync = self.capture.sync();
         if let Err(error) = &sync {
             self.storage_error(error.clone());
         }
+        storage::atomic_json(
+            &self.summary.directory.join(PROCESSES_FILE),
+            &self.processes.list(),
+        )?;
         storage::atomic_json(&self.summary.directory.join("capture.json"), &self.summary)?;
         storage::atomic_json(
             &self.summary.directory.join("manifest.json"),
@@ -87,6 +106,21 @@ impl CaptureSession {
         )?;
         sync
     }
+}
+
+const PROCESSES_FILE: &str = "processes.json";
+
+/// The process tree a capture saved; empty for captures before Antinomie 0.3.0.
+pub fn capture_processes(directory: &Path) -> Result<Vec<CaptureProcess>, String> {
+    let path = directory.join(PROCESSES_FILE);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let file = archive_io::open_regular(directory, &path).map_err(|e| e.to_string())?;
+    if file.metadata().map_err(|e| e.to_string())?.len() > 64 * 1024 * 1024 {
+        return Err("processes.json exceeds 64 MiB".into());
+    }
+    serde_json::from_reader(std::io::BufReader::new(file)).map_err(|e| e.to_string())
 }
 
 /// Read bounded observation history from all recording locations for one VM.
