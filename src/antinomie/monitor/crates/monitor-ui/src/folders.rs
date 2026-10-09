@@ -108,3 +108,38 @@ impl Drop for FolderPicker {
         }
     }
 }
+
+/// A path the user typed: surrounding spaces removed and a leading `~`
+/// expanded to the home directory, as a shell would.
+pub(crate) fn user_path(text: &str) -> PathBuf {
+    let text = text.trim();
+    let home = || std::env::var_os("HOME").map(PathBuf::from);
+    if text == "~" {
+        if let Some(home) = home() {
+            return home;
+        }
+    } else if let Some(rest) = text.strip_prefix("~/") {
+        if let Some(home) = home() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(text)
+}
+
+#[cfg(test)]
+mod path_tests {
+    #[test]
+    fn typed_paths_expand_the_home_directory() {
+        let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+        assert_eq!(super::user_path(" ~/bases/x "), home.join("bases/x"));
+        assert_eq!(super::user_path("~"), home);
+        assert_eq!(
+            super::user_path("/abs/~x"),
+            std::path::PathBuf::from("/abs/~x")
+        );
+        assert_eq!(
+            super::user_path("~other/x"),
+            std::path::PathBuf::from("~other/x")
+        );
+    }
+}

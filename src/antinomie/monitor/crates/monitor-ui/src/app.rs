@@ -224,7 +224,7 @@ impl MonitorApp {
         }
         settings.font_size = settings.font_size.clamp(12.0, 24.0);
         theme::text_size(&cc.egui_ctx, settings.font_size);
-        options.bundle_dir = PathBuf::from(&settings.bundle);
+        options.bundle_dir = crate::folders::user_path(&settings.bundle);
         options.capture_quota_size = u64::from(settings.quota_gib) * 1024 * 1024 * 1024;
         options.shutdown_timeout = Duration::from_secs(settings.timeout);
         let (backend, status) = match Backend::new(options.clone()) {
@@ -2350,7 +2350,7 @@ impl MonitorApp {
             {
                 if self.overwrite {
                     self.confirm = Some(Confirm::Upload {
-                        source: PathBuf::from(&self.source),
+                        source: crate::folders::user_path(&self.source),
                         destination: self.destination.clone(),
                         executable: self.executable,
                         vm_id: self.snapshot.active_vm.clone(),
@@ -2364,7 +2364,7 @@ impl MonitorApp {
 
     fn upload(&mut self) {
         self.send(Command::Upload {
-            source: PathBuf::from(&self.source),
+            source: crate::folders::user_path(&self.source),
             destination: self.destination.clone(),
             overwrite: self.overwrite,
             executable: self.executable,
@@ -2838,7 +2838,7 @@ impl MonitorApp {
             self.import_open = open;
             if import {
                 self.send(Command::ImportBase {
-                    directory: PathBuf::from(&self.import_directory),
+                    directory: crate::folders::user_path(&self.import_directory),
                 });
                 self.import_open = false;
             }
@@ -3880,9 +3880,9 @@ impl MonitorApp {
     }
 
     fn update_options(&mut self) {
-        self.options.bundle_dir = PathBuf::from(&self.settings.bundle);
+        self.options.bundle_dir = crate::folders::user_path(&self.settings.bundle);
         self.send(Command::UpdateOptions {
-            bundle_dir: PathBuf::from(&self.settings.bundle),
+            bundle_dir: crate::folders::user_path(&self.settings.bundle),
             capture_quota_size: u64::from(self.settings.quota_gib) * 1073741824,
             shutdown_timeout_secs: self.settings.timeout,
         });
@@ -4149,7 +4149,7 @@ fn directory_input(
             .on_hover_text(text.clone())
             .changed()
         {
-            *path = (!text.trim().is_empty()).then(|| PathBuf::from(&text));
+            *path = (!text.trim().is_empty()).then(|| crate::folders::user_path(&text));
         }
         if icon(
             ui,
