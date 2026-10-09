@@ -45,6 +45,14 @@ pub(crate) struct Stats {
     pub queue_count: u32,
     pub live: u32,
     pub host_timeout_ms: u32,
+    /// Sends that found their ring full and waited, and the total wait.
+    pub waits: u64,
+    pub wait_ns: u64,
+    /// Transport ABI of the guest (7 or 8), per-CPU ring bytes, send wait.
+    pub abi: u32,
+    pub ring_size: u32,
+    pub send_wait_us: u32,
+    reserved: u32,
 }
 #[derive(Default)]
 #[repr(C)]
@@ -62,7 +70,8 @@ const _: () = {
     assert!(std::mem::offset_of!(Options, bootstrap_gpa) == 40);
     assert!(std::mem::offset_of!(Options, init_timeout_ms) == 48);
     assert!(std::mem::offset_of!(Options, poll_mode) == 60);
-    assert!(std::mem::size_of::<Stats>() == 48);
+    assert!(std::mem::size_of::<Stats>() == 80);
+    assert!(std::mem::offset_of!(Stats, waits) == 48);
     assert!(std::mem::offset_of!(Stats, health) == 32);
     assert!(std::mem::size_of::<Limits>() == 24);
 };
@@ -88,6 +97,8 @@ unsafe extern "C" {
     ) -> c_int;
     fn ant_get_stats(client: *mut c_void, stats: *mut Stats) -> c_int;
     fn ant_get_limits(client: *mut c_void, limits: *mut Limits) -> c_int;
+    fn ant_set_send_wait(client: *mut c_void, wait_us: u32) -> c_int;
+    fn ant_set_host_timeout(client: *mut c_void, timeout_ms: u32) -> c_int;
 }
 fn check(code: i32) -> Result<i32, String> {
     if code < 0 {
@@ -243,6 +254,17 @@ impl Transport {
         // SAFETY: Stats has the C ABI layout and client remains live and exclusively owned.
         check(unsafe { ant_get_stats(self.ptr.as_ptr(), &mut stats) })?;
         Ok(stats)
+    }
+    /// Let guest sends wait up to `wait_us` for room in a full ring instead
+    /// of dropping (0 drops). Older guests support only 0.
+    pub fn set_send_wait(&mut self, wait_us: u32) -> Result<(), String> {
+        // SAFETY: Client remains live and exclusively owned by this thread.
+        check(unsafe { ant_set_send_wait(self.ptr.as_ptr(), wait_us) }).map(|_| ())
+    }
+    /// How long the guest keeps treating a silent host as live (1..=60000 ms).
+    pub fn set_host_timeout(&mut self, timeout_ms: u32) -> Result<(), String> {
+        // SAFETY: Client remains live and exclusively owned by this thread.
+        check(unsafe { ant_set_host_timeout(self.ptr.as_ptr(), timeout_ms) }).map(|_| ())
     }
 }
 impl Drop for Transport {

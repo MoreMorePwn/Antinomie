@@ -5,9 +5,15 @@
 
 /* Task context only. data is valid kernel memory; copied before return.
  * Zero means local acceptance, not delivery. No allocation or sleep on send.
- * A zero-length message is valid. Maximum payload length is ring capacity minus framing.
+ * A full ring returns -ENOSPC at once, unless the host set a send wait: then
+ * the sender spins, preemption off, until room appears, the wait ends or the
+ * host stops being live. A zero-length message is valid. Maximum payload
+ * length is the smallest ring capacity minus framing (ANT_MAX_MESSAGE_LEN).
  */
 int ant_send(const void *data, size_t payload_len);
+/* Bytes in each CPU's telemetry ring (antinomie_ring_kib=, or smaller when
+ * the requested size could not be allocated at boot). */
+u32 ant_ring_size(void);
 /* Bytes free in the telemetry ring of the CPU the caller runs on, as of the
  * consumer's last published tail; U32_MAX when sends would fail regardless.
  * Advisory: a caller that can sleep uses it to pace bulk publication.

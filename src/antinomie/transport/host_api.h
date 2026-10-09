@@ -35,6 +35,10 @@ enum { ANT_EVENT_TELEMETRY = 1, ANT_EVENT_RESULT = 2 };
 struct ant_stats {
 	uint64_t attempted, dropped, bad_commands, reply_stalls;
 	uint32_t health, queue_count, live, host_timeout_ms;
+	/* ABI 8: sends that waited for room, their total wait, the per-CPU ring
+	 * size and the published send wait (ABI 7 guests: 0, 0, 256 KiB, 0). */
+	uint64_t waits, wait_ns;
+	uint32_t abi, ring_size, send_wait_us, reserved;
 };
 struct ant_limits { size_t max_message_len, max_command_len, max_result_len; };
 
@@ -54,6 +58,9 @@ int ant_get_stats(struct ant_client *client, struct ant_stats *stats);
 int ant_get_limits(struct ant_client *client, struct ant_limits *limits);
 /* Local configuration publication, not acknowledgement of guest application. */
 int ant_set_host_timeout(struct ant_client *client, uint32_t timeout_ms);
+/* How long (0..10000000 us) a guest send may wait for room in a full ring
+ * instead of dropping; 0 drops at once. ABI 7 guests: -EOPNOTSUPP unless 0. */
+int ant_set_send_wait(struct ant_client *client, uint32_t wait_us);
 /* Only this function may run concurrently with the owner; cancellation is sticky.
  * Join the owner before ant_close. No calls, including cancel, may race close.
  */

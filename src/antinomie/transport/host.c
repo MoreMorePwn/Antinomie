@@ -15,6 +15,7 @@
 struct reader {
 	struct ant_queue *q;
 	void *data;
+	__u32 size;
 	__u64 tail, seen_head;
 };
 struct backing {
@@ -35,6 +36,7 @@ struct ant_client {
 	enum ant_poll_mode poll_mode;
 	unsigned poll_sleep_us, poll_spin_us;
 	__u64 session, command_head, command_tail_seen, sequence;
+	__u32 abi;
 	__u64 guest_hb, guest_changed, heartbeat_at;
 };
 
@@ -160,7 +162,7 @@ void ant_close(struct ant_client *c)
 	unsigned i;
 	if (!c) return;
 	for (i = 0; i < c->count; i++)
-		if (c->readers && c->readers[i].data) munmap(c->readers[i].data, ANT_TELEMETRY_RING_SIZE);
+		if (c->readers && c->readers[i].data) munmap(c->readers[i].data, c->readers[i].size);
 	free(c->readers);
 	if (c->region) munmap(c->region, ANT_CONTROL_SIZE);
 	if (c->boot) munmap(c->boot, ANT_BOOT_SIZE);
@@ -218,12 +220,14 @@ int ant_init(const struct ant_options *options, struct ant_client **out)
 	}
 	memcpy(&boot, c->boot, sizeof(boot));
 	error = -EPROTO;
-	if (boot.magic != ANT_MAGIC || boot.version != ANT_ABI || boot.profile != 1 ||
+	/* ABI 7 guests (fixed 256 KiB rings, no send wait) remain supported. */
+	if (boot.magic != ANT_MAGIC || (boot.version != ANT_ABI && boot.version != 7) || boot.profile != 1 ||
 	    !boot.session || boot.control_size != ANT_CONTROL_SIZE ||
 	    boot.control_gpa > UINT64_MAX - ANT_CONTROL_SIZE ||
 	    overlap(boot.control_gpa, ANT_CONTROL_SIZE, c->bootstrap_gpa, ANT_BOOT_SIZE)) goto fail;
 	if (boot.owner) { error = -EALREADY; goto fail; }
 	c->session = boot.session;
+	c->abi = boot.version;
 	error = map_gpa(c, boot.control_gpa, ANT_CONTROL_SIZE, PROT_READ | PROT_WRITE, &mapping);
 	if (error) goto fail;
 	c->region = mapping;
@@ -231,7 +235,7 @@ int ant_init(const struct ant_options *options, struct ant_client **out)
 	error = -EPROTO;
 	if (ANT_ACQ(&c->control->geometry.magic) != ANT_MAGIC) goto fail;
 	memcpy(&geometry, &c->control->geometry, sizeof(geometry));
-	if (geometry.magic != ANT_MAGIC || geometry.version != ANT_ABI || geometry.session != c->session ||
+	if (geometry.magic != ANT_MAGIC || geometry.version != c->abi || geometry.session != c->session ||
 	    geometry.size != ANT_CONTROL_SIZE || geometry.max_message_len != ANT_MAX_MESSAGE_LEN ||
 	    geometry.max_command_len != ANT_MAX_COMMAND_LEN || geometry.max_result_len != ANT_MAX_RESULT_LEN || !geometry.queue_count ||
 	    geometry.queue_count > ANT_MAX_CPUS) goto fail;
@@ -246,16 +250,20 @@ int ant_init(const struct ant_options *options, struct ant_client **out)
 	for (i = 0; i < c->count; i++) {
 		struct ant_queue *d = &descriptors[i];
 		memcpy(d, &directory[i], offsetof(struct ant_queue, head));
+		__u32 size = d->data_size;
 		error = -EPROTO;
-		if (d->data_size != ANT_TELEMETRY_RING_SIZE || d->data_gpa > UINT64_MAX - ANT_TELEMETRY_RING_SIZE ||
-		    overlap(d->data_gpa, ANT_TELEMETRY_RING_SIZE, c->bootstrap_gpa, ANT_BOOT_SIZE) ||
-		    overlap(d->data_gpa, ANT_TELEMETRY_RING_SIZE, boot.control_gpa, ANT_CONTROL_SIZE) ||
+		if (size < ANT_TELEMETRY_RING_MIN || size > ANT_TELEMETRY_RING_MAX || (size & (size - 1)) ||
+		    (c->abi == 7 && size != ANT_TELEMETRY_RING_MIN) ||
+		    (i && size != descriptors[0].data_size) || d->data_gpa > UINT64_MAX - size ||
+		    overlap(d->data_gpa, size, c->bootstrap_gpa, ANT_BOOT_SIZE) ||
+		    overlap(d->data_gpa, size, boot.control_gpa, ANT_CONTROL_SIZE) ||
 		    (i && d->cpu_id <= descriptors[i - 1].cpu_id) || ANT_ACQ(&directory[i].tail)) goto fail;
 		for (j = 0; j < i; j++)
-			if (overlap(d->data_gpa, ANT_TELEMETRY_RING_SIZE, descriptors[j].data_gpa, ANT_TELEMETRY_RING_SIZE)) goto fail;
-		error = map_gpa(c, d->data_gpa, ANT_TELEMETRY_RING_SIZE, PROT_READ, &mapping);
+			if (overlap(d->data_gpa, size, descriptors[j].data_gpa, size)) goto fail;
+		error = map_gpa(c, d->data_gpa, size, PROT_READ, &mapping);
 		if (error) goto fail;
 		c->readers[i].data = mapping;
+		c->readers[i].size = size;
 		c->readers[i].q = &directory[i];
 	}
 	if (ANT_ACQ(&c->control->requests.head) || ANT_ACQ(&c->control->requests.tail) ||
@@ -279,7 +287,7 @@ fail:
 
 static int peek_telemetry(struct ant_client *c, struct reader *r, struct ant_message *msg)
 {
-	int error = ant_peek(r->q, r->data, ANT_TELEMETRY_RING_SIZE, ANT_MAX_MESSAGE_LEN,
+	int error = ant_peek(r->q, r->data, r->size, ANT_MAX_MESSAGE_LEN,
 		r->tail, &r->seen_head, msg);
 	if (error) return failed(c, error);
 	if (msg->opcode) return failed(c, -EPROTO);
@@ -374,7 +382,7 @@ int ant_read(struct ant_client *c, void *dst, size_t capacity, size_t *payload_l
 			c->next = index;
 			return -ENOBUFS;
 		}
-		ant_copy_out(r->data, ANT_TELEMETRY_RING_SIZE, r->tail + sizeof(msg), dst, msg.payload_len);
+		ant_copy_out(r->data, r->size, r->tail + sizeof(msg), dst, msg.payload_len);
 		r->tail += ant_span(msg.payload_len);
 		ANT_REL(&r->q->tail, r->tail);
 		c->next = (index + 1) % c->count;
@@ -437,7 +445,12 @@ int ant_get_stats(struct ant_client *c, struct ant_stats *stats)
 	for (i = 0; i < c->count; i++) {
 		stats->attempted += ANT_ACQ(&c->readers[i].q->attempted);
 		stats->dropped += ANT_ACQ(&c->readers[i].q->dropped);
+		stats->waits += ANT_ACQ(&c->readers[i].q->waits);
+		stats->wait_ns += ANT_ACQ(&c->readers[i].q->wait_ns);
 	}
+	stats->abi = c->abi;
+	stats->ring_size = c->count ? c->readers[0].size : 0;
+	stats->send_wait_us = c->abi >= 8 ? ANT_ACQ(&c->control->send_wait_us) : 0;
 	stats->queue_count = c->count;
 	stats->bad_commands = ANT_ACQ(&c->control->bad_commands);
 	stats->reply_stalls = ANT_ACQ(&c->control->reply_stalls);
@@ -470,5 +483,16 @@ int ant_set_host_timeout(struct ant_client *c, uint32_t timeout_ms)
 	if (error) return error;
 	if (!timeout_ms) timeout_ms = ANT_HOST_TIMEOUT_DEFAULT_MS;
 	ANT_REL(&c->control->host_timeout_ms, timeout_ms);
+	return 0;
+}
+
+int ant_set_send_wait(struct ant_client *c, uint32_t wait_us)
+{
+	int error;
+	if (wait_us > ANT_SEND_WAIT_MAX_US) return -EINVAL;
+	error = tick(c);
+	if (error) return error;
+	if (c->abi < 8) return wait_us ? -EOPNOTSUPP : 0;
+	ANT_REL(&c->control->send_wait_us, wait_us);
 	return 0;
 }

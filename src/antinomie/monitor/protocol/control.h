@@ -11,7 +11,8 @@
  */
 #define ANTC_VERSION 1
 /* Contract revision of the guest's observable behaviour (native-schema-slices). */
-#define ANTC_REVISION 12
+/* Revision 13: transport ABI 8 (antinomie_ring_kib= ring size, host send wait). */
+#define ANTC_REVISION 13
 #define ANTC_HEADER_SIZE 8
 #define ANTC_UPLOAD_BEGIN 0x1001
 #define ANTC_UPLOAD_CHUNK 0x1002

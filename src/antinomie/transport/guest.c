@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include <linux/antinomie.h>
 #include <linux/cpu.h>
+#include <linux/delay.h>
 #include <linux/export.h>
 #include <linux/init.h>
 #include <linux/io.h>
 #include <linux/jiffies.h>
+#include <linux/log2.h>
 #include <linux/mm.h>
+#include <linux/sched/clock.h>
 #include <linux/random.h>
+#include <linux/rcupdate.h>
 #include <linux/rwsem.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
@@ -17,7 +21,7 @@ struct ant_cpu {
 	void *data;
 };
 struct ant_producer {
-	u64 head, cached_tail, attempted, dropped;
+	u64 head, cached_tail, attempted, dropped, waits, wait_ns;
 	u32 index;
 	bool fault;
 };
@@ -27,6 +31,7 @@ static struct ant_control *control;
 static struct ant_queue *directory;
 static struct ant_region *region;
 static u32 queue_count;
+static u32 ring_size = ANT_TELEMETRY_RING_DEFAULT;
 static bool ready, broken;
 static struct workqueue_struct *worker;
 static void control_tick(struct work_struct *work);
@@ -46,11 +51,34 @@ static u64 last_heartbeat;
 static unsigned long host_seen;
 static bool host_attached;
 
+/* antinomie_ring_kib=<KiB>: per-CPU telemetry ring size, a power of two. */
+static int __init ant_ring_param(char *arg)
+{
+	u32 kib;
+
+	if (kstrtou32(arg, 0, &kib) || !is_power_of_2(kib) ||
+	    kib < ANT_TELEMETRY_RING_MIN / 1024 || kib > ANT_TELEMETRY_RING_MAX / 1024) {
+		pr_warn("antinomie: ignoring antinomie_ring_kib=%s\n", arg);
+		return 0;
+	}
+	ring_size = kib * 1024;
+	return 0;
+}
+early_param("antinomie_ring_kib", ant_ring_param);
+
+u32 ant_ring_size(void)
+{
+	return ring_size;
+}
+EXPORT_SYMBOL_GPL(ant_ring_size);
+
 int ant_send(const void *data, size_t payload_len)
 {
 	struct ant_producer *p;
 	struct ant_queue *q;
 	struct ant_message msg = { .payload_len = payload_len };
+	u64 waited_from = 0, now;
+	u32 wait_us;
 	int error;
 
 	if (!in_task()) return -EWOULDBLOCK;
@@ -65,7 +93,47 @@ int ant_send(const void *data, size_t payload_len)
 		error = -EPROTO;
 		goto drop;
 	}
-	error = ant_space(q, ANT_TELEMETRY_RING_SIZE, p->head, &p->cached_tail, ant_span(payload_len));
+	for (;;) {
+		error = ant_space(q, ring_size, p->head, &p->cached_tail, ant_span(payload_len));
+		if (error != -ENOSPC)
+			break;
+		/* The host may ask senders to wait for room instead of dropping,
+		 * bounded and only while it is live. A sender that may sleep
+		 * sleeps, so the control worker and other tasks keep running;
+		 * one in atomic context spins. */
+		wait_us = min_t(u32, READ_ONCE(control->send_wait_us), ANT_SEND_WAIT_MAX_US);
+		if (!wait_us || !READ_ONCE(control->live))
+			break;
+		now = local_clock();
+		if (!waited_from) {
+			waited_from = now;
+			p->waits++;
+		} else if (now - waited_from >= (u64)wait_us * NSEC_PER_USEC) {
+			break;
+		}
+		if (preempt_count() == 1 && !irqs_disabled() && !rcu_preempt_depth()) {
+			/* Only our own preempt_disable is held: sleep, then take this
+			 * CPU's producer again (the task may have moved). */
+			WRITE_ONCE(q->attempted, p->attempted);
+			WRITE_ONCE(q->waits, p->waits);
+			preempt_enable();
+			usleep_range(50, 100);
+			preempt_disable();
+			p = this_cpu_ptr(&producers);
+			q = &directory[p->index];
+			if (p->fault) {
+				error = -EPROTO;
+				break;
+			}
+			continue;
+		}
+		cpu_relax();
+	}
+	if (waited_from) {
+		p->wait_ns += local_clock() - waited_from;
+		WRITE_ONCE(q->waits, p->waits);
+		WRITE_ONCE(q->wait_ns, p->wait_ns);
+	}
 	if (error) {
 		if (error != -ENOSPC) {
 			p->fault = true;
@@ -73,7 +141,7 @@ int ant_send(const void *data, size_t payload_len)
 		}
 		goto drop;
 	}
-	ant_publish(q, cpus[p->index].data, ANT_TELEMETRY_RING_SIZE, &p->head, &msg, data);
+	ant_publish(q, cpus[p->index].data, ring_size, &p->head, &msg, data);
 	goto out;
 drop:
 	p->dropped++;
@@ -99,8 +167,8 @@ u32 ant_send_room(void)
 	p = this_cpu_ptr(&producers);
 	q = &directory[p->index];
 	tail = ANT_ACQ(&q->tail);
-	if (!p->fault && tail <= p->head && p->head - tail <= ANT_TELEMETRY_RING_SIZE)
-		room = ANT_TELEMETRY_RING_SIZE - (p->head - tail);
+	if (!p->fault && tail <= p->head && p->head - tail <= ring_size)
+		room = ring_size - (p->head - tail);
 	preempt_enable();
 	return room;
 }
@@ -271,12 +339,25 @@ static int __init ant_guest_init(void)
 	directory = region->directory;
 	cpus = kcalloc(queue_count, sizeof(*cpus), GFP_KERNEL);
 	if (!cpus) goto free_control;
+	/* Every ring has the same size; when memory is short, try a smaller one. */
+retry:
+	index = 0;
 	for_each_possible_cpu(cpu) {
-		cpus[index].pages = alloc_pages(GFP_KERNEL | __GFP_ZERO, get_order(ANT_TELEMETRY_RING_SIZE));
-		if (!cpus[index].pages) goto free_rings;
+		cpus[index].pages = alloc_pages(GFP_KERNEL | __GFP_ZERO | __GFP_NOWARN,
+						get_order(ring_size));
+		if (!cpus[index].pages) {
+			while (index) {
+				__free_pages(cpus[--index].pages, get_order(ring_size));
+				cpus[index].pages = NULL;
+			}
+			if (ring_size == ANT_TELEMETRY_RING_MIN)
+				goto free_rings;
+			ring_size /= 2;
+			goto retry;
+		}
 		cpus[index].data = page_address(cpus[index].pages);
 		directory[index].data_gpa = page_to_phys(cpus[index].pages);
-		directory[index].data_size = ANT_TELEMETRY_RING_SIZE;
+		directory[index].data_size = ring_size;
 		directory[index].cpu_id = cpu;
 		per_cpu(producers, cpu).index = index++;
 	}
@@ -307,7 +388,7 @@ static int __init ant_guest_init(void)
 	return 0;
 free_rings:
 	for (index = 0; index < queue_count; index++)
-		if (cpus[index].pages) __free_pages(cpus[index].pages, get_order(ANT_TELEMETRY_RING_SIZE));
+		if (cpus[index].pages) __free_pages(cpus[index].pages, get_order(ring_size));
 	kfree(cpus);
 free_control:
 	__free_pages(pages, get_order(ANT_CONTROL_SIZE));

@@ -11,15 +11,21 @@
 
 /* Wire profile: x86-64, little endian. Memory translation is supplied by host. */
 #define ANT_MAGIC 0x354e5441U
-#define ANT_ABI 7U
+#define ANT_ABI 8U
 #define ANT_MAX_CPUS 256U
 #define ANT_CONTROL_SIZE 1048576U
 #define ANT_REQUEST_OFFSET 4096U
 #define ANT_RESPONSE_OFFSET (ANT_REQUEST_OFFSET + ANT_COMMAND_RING_SIZE)
 #define ANT_DIRECTORY_OFFSET (ANT_RESPONSE_OFFSET + ANT_COMMAND_RING_SIZE)
 #define ANT_COMMAND_RING_SIZE 262144U
-#define ANT_TELEMETRY_RING_SIZE 262144U
-#define ANT_MAX_MESSAGE_LEN (ANT_TELEMETRY_RING_SIZE - 32U)
+/* Per-CPU telemetry rings are a power of two in this range; the boot option
+ * antinomie_ring_kib= selects the size (the default when absent). */
+#define ANT_TELEMETRY_RING_MIN 262144U
+#define ANT_TELEMETRY_RING_DEFAULT 1048576U
+#define ANT_TELEMETRY_RING_MAX 4194304U
+#define ANT_MAX_MESSAGE_LEN (ANT_TELEMETRY_RING_MIN - 32U)
+/* Longest a full ring may hold a sender when the host asks senders to wait. */
+#define ANT_SEND_WAIT_MAX_US 10000000U
 #define ANT_MAX_COMMAND_LEN 16352U
 #define ANT_MAX_RESULT_LEN 16352U
 #define ANT_POLL_MS 10U
@@ -48,7 +54,10 @@ struct ant_queue {
 	__u8 descriptor_pad[48];
 	__u64 head, attempted, dropped;
 	__u32 fault;
-	__u8 producer_pad[36];
+	__u32 producer_reserved;
+	/* Sends that found the ring full and waited, and the total wait. */
+	__u64 waits, wait_ns;
+	__u8 producer_pad[16];
 	__u64 tail;
 	__u8 consumer_pad[56];
 } __attribute__((aligned(64)));
@@ -68,7 +77,10 @@ struct ant_control {
 	__u8 guest_pad[28];
 	__u64 host_heartbeat;
 	__u32 host_timeout_ms;
-	__u8 host_pad[316];
+	/* Zero: a send to a full ring drops. Otherwise a sender spins up to this
+	 * long (at most ANT_SEND_WAIT_MAX_US) while the host is live. */
+	__u32 send_wait_us;
+	__u8 host_pad[312];
 	struct ant_queue requests, responses;
 } __attribute__((aligned(64)));
 
