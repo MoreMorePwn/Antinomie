@@ -469,6 +469,20 @@ pub fn first_app_version(revision: u32) -> Option<Version> {
         .map(|(_, version)| version)
 }
 
+/// The Antinomie version a base is for: its recorded minimum app version,
+/// or the first version of its kernel's revision.
+///
+/// | Argument / return | Meaning |
+/// |---|---|
+/// | `revision` | Recorded guest contract revision, if available. |
+/// | `min_app_version` | Recorded minimum app version, preferred when valid. |
+/// | Return | Version for the label; `None` when neither source is known. |
+pub fn base_app_version(revision: Option<u32>, min_app_version: Option<&str>) -> Option<Version> {
+    min_app_version
+        .and_then(Version::parse)
+        .or_else(|| revision.and_then(first_app_version))
+}
+
 /// Split a `CONFIG_ANTINOMIE_SOURCE_ID` value, `"<revision>:<series sha256>"`.
 pub fn parse_source_id(value: &str) -> Option<(u32, String)> {
     let (revision, series) = value.split_once(':')?;
@@ -600,6 +614,9 @@ pub struct DownloadStatus {
     pub label: String,
     pub received: u64,
     pub total: u64,
+    /// Download and verification finished; publishing the installed base.
+    /// This phase must finish atomically and cannot be cancelled.
+    pub installing: bool,
     pub finished: bool,
     pub error: Option<String>,
 }
@@ -725,6 +742,8 @@ pub enum Command {
     DownloadBase {
         identity: String,
     },
+    /// Stop the running base download; finished files stay for a resume.
+    CancelDownload,
     /// Build a base with the app's kit, natively or in the QEMU builder VM.
     BuildBase {
         request: crate::build::BuildRequest,
@@ -862,6 +881,9 @@ pub enum VmState {
 pub struct Snapshot {
     pub vms: Vec<VmConfig>,
     pub bases: Vec<BaseSummary>,
+    /// The installed bases are still being listed (and, the first time,
+    /// checked); `bases` is empty until then.
+    pub bases_checking: bool,
     /// Bases advertised by the remote catalog, if it has been fetched.
     pub remote_bases: Vec<RemoteBase>,
     /// Last remote catalog error (tool alert or fetch failure).

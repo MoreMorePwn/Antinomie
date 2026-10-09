@@ -152,6 +152,8 @@ pub struct MonitorApp {
     build_open: bool,
     about_open: bool,
     tools_open: bool,
+    /// Download base: also list bases for earlier Antinomie versions.
+    show_older_bases: bool,
     build_wizard: build_wizard::BuildWizard,
     confirm: Option<Confirm>,
     name_action: Option<(String, bool, String)>,
@@ -255,6 +257,7 @@ impl MonitorApp {
             build_open: false,
             about_open: false,
             tools_open: false,
+            show_older_bases: false,
             build_wizard: build_wizard::BuildWizard::default(),
             confirm: None,
             name_action: None,
@@ -1704,7 +1707,7 @@ impl MonitorApp {
                             ui.close_menu();
                         }
                     });
-                    if self.snapshot.bases.is_empty() {
+                    if self.snapshot.bases.is_empty() && !self.snapshot.bases_checking {
                         ui.separator();
                         if ui
                             .add(egui::Button::new(
@@ -1858,6 +1861,7 @@ impl MonitorApp {
         let mut action = None;
         let mut base_action: Option<(String, String)> = None;
         let mut clicked_base: Option<String> = None;
+        let mut open_downloads = false;
         egui::SidePanel::left("vms")
             .default_width(210.0)
             .min_width(190.0)
@@ -1983,7 +1987,17 @@ impl MonitorApp {
                     .id_salt("base_list")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        if self.snapshot.bases.is_empty() {
+                        if self.snapshot.bases_checking {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(
+                                    RichText::new("Checking base images…").color(theme::MUTED),
+                                )
+                                .on_hover_text(
+                                    "The first start after an update or import checks each base once",
+                                );
+                            });
+                        } else if self.snapshot.bases.is_empty() {
                             ui.label(RichText::new("No base images").color(theme::MUTED));
                             if ui.button("Add base…").clicked() {
                                 self.download_open = true;
@@ -2003,19 +2017,24 @@ impl MonitorApp {
                                 .guest
                                 .as_ref()
                                 .map_or("Linux 6.12.94".to_string(), |guest| guest.id.clone());
-                            let label = if RevisionStatus::of_base(
+                            let base_status = RevisionStatus::of_base(
                                 base.revision,
                                 base.min_app_version.as_deref(),
-                            ) == RevisionStatus::Current
-                            {
-                                format!("{}  {}", egui_phosphor::regular::HARD_DRIVE, base.label)
-                            } else {
+                            );
+                            let outdated = base_status != RevisionStatus::Current;
+                            let name = versioned_label(
+                                &base.label,
+                                base.revision,
+                                base.min_app_version.as_deref(),
+                            );
+                            let label = if outdated {
                                 format!(
-                                    "{}  {}  {}",
+                                    "{}  {name}  {}",
                                     egui_phosphor::regular::HARD_DRIVE,
-                                    base.label,
                                     egui_phosphor::regular::WARNING
                                 )
+                            } else {
+                                format!("{}  {name}", egui_phosphor::regular::HARD_DRIVE)
                             };
                             // min_size keeps the text on the sidebar's left alignment;
                             // add_sized would centre it.
@@ -2034,8 +2053,8 @@ impl MonitorApp {
                                 )
                                 .on_hover_text(format!(
                                     "{}\n{}\n{:.1} GiB on disk · guest {guest} · used by {} VM(s)\n\
-                                     Patch {}\nRight-click for actions",
-                                    base.label,
+                                     {}\nRight-click for actions",
+                                    name,
                                     base.directory.display(),
                                     base.size_bytes as f64 / 1073741824.0,
                                     dependents,
@@ -2043,6 +2062,32 @@ impl MonitorApp {
                                 ));
                             if response.clicked() || response.secondary_clicked() {
                                 clicked_base = Some(base.id.clone());
+                            }
+                            if outdated {
+                                let hint = match base_status {
+                                    RevisionStatus::NeedsNewerApp => "Needs a newer Antinomie",
+                                    _ if newer_base(&self.snapshot, base).is_some() => {
+                                        "Outdated · newer base available"
+                                    }
+                                    _ => "Outdated · built for an earlier Antinomie",
+                                };
+                                ui.horizontal(|ui| {
+                                    ui.add_space(24.0);
+                                    if ui
+                                        .add(
+                                            egui::Label::new(
+                                                RichText::new(hint).small().color(theme::WARN),
+                                            )
+                                            .sense(egui::Sense::click()),
+                                        )
+                                        .on_hover_text(
+                                            "Open Add base > Download base for the base made for this version",
+                                        )
+                                        .clicked()
+                                    {
+                                        open_downloads = true;
+                                    }
+                                });
                             }
                             response.context_menu(|ui| {
                                 if ui.button("New VM from this base").clicked() {
@@ -2068,6 +2113,12 @@ impl MonitorApp {
                         }
                     });
             });
+        if open_downloads {
+            self.download_open = true;
+            if !self.snapshot.remote_refreshing {
+                self.send(Command::RefreshRemoteBases);
+            }
+        }
         if let Some(identity) = clicked_base {
             self.selected_base = Some(identity);
         }
@@ -2845,116 +2896,10 @@ impl MonitorApp {
         }
         if self.download_open {
             let mut open = true;
-            let remote = self.snapshot.remote_bases.clone();
-            let installed: Vec<String> = self
-                .snapshot
-                .bases
-                .iter()
-                .map(|base| base.id.clone())
-                .collect();
-            let refreshing = self.snapshot.remote_refreshing;
-            let remote_error = self.snapshot.remote_error.clone();
-            let download = self.snapshot.download.clone();
-            let mut request: Option<String> = None;
-            let mut refresh = false;
-            egui::Window::new("Download base")
-                .open(&mut open)
-                .collapsible(false)
-                .resizable(true)
-                .default_size([820.0, 540.0])
-                .min_width(600.0)
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        if ui.button("Refresh catalog").clicked() {
-                            refresh = true;
-                        }
-                        if refreshing {
-                            ui.spinner();
-                            ui.label("Fetching catalog…");
-                        }
-                    });
-                    if let Some(error) = &remote_error {
-                        ui.colored_label(theme::ERROR, error);
-                    }
-                    if let Some(status) = &download {
-                        let fraction = if status.total > 0 {
-                            status.received as f32 / status.total as f32
-                        } else {
-                            0.0
-                        };
-                        ui.add(egui::ProgressBar::new(fraction).text(format!(
-                            "{} — {} / {}",
-                            status.label,
-                            human_bytes(status.received),
-                            human_bytes(status.total)
-                        )));
-                        if let Some(error) = &status.error {
-                            ui.colored_label(theme::ERROR, error);
-                        } else if status.finished {
-                            ui.colored_label(theme::GOOD, format!("{} installed", status.label));
-                        }
-                    }
-                    ui.separator();
-                    if remote.is_empty() {
-                        ui.colored_label(
-                            theme::MUTED,
-                            "No bases listed yet — refresh the catalog.",
-                        );
-                    }
-                    let busy = download.as_ref().is_some_and(|status| !status.finished);
-                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    for base in &remote {
-                        ui.horizontal(|ui| {
-                            ui.vertical(|ui| {
-                                ui.label(RichText::new(&base.label).strong());
-                                let kind = if base.kind.is_empty() {
-                                    "base"
-                                } else {
-                                    &base.kind
-                                };
-                                let short = &base.identity[..12.min(base.identity.len())];
-                                ui.small(format!(
-                                    "{} · {} · {} · {} · {}",
-                                    base.kernel_version,
-                                    RevisionStatus::describe(
-                                        base.revision,
-                                        base.min_app_version.as_deref()
-                                    ),
-                                    kind,
-                                    human_bytes(base.total_size),
-                                    short
-                                ));
-                            });
-                            let newer = RevisionStatus::of_base(
-                                base.revision,
-                                base.min_app_version.as_deref(),
-                            ) == RevisionStatus::NeedsNewerApp;
-                            if installed.contains(&base.identity) {
-                                ui.colored_label(theme::GOOD, "installed");
-                            } else if ui
-                                .add_enabled(!busy && !newer, egui::Button::new("Download"))
-                                .on_disabled_hover_text(if newer {
-                                    format!(
-                                        "Built for a newer Antinomie (this is Antinomie {APP_VERSION})"
-                                    )
-                                } else {
-                                    "Another download is in progress".to_string()
-                                })
-                                .clicked()
-                            {
-                                request = Some(base.identity.clone());
-                            }
-                        });
-                    }
-                    });
-                });
+            if let Some(command) = self.download_window(ctx, &mut open) {
+                self.send(command);
+            }
             self.download_open = open;
-            if refresh {
-                self.send(Command::RefreshRemoteBases);
-            }
-            if let Some(identity) = request {
-                self.send(Command::DownloadBase { identity });
-            }
         }
         if self.tools_open {
             let mut open = true;
@@ -3671,6 +3616,144 @@ impl MonitorApp {
         }
     }
 
+    /// Add base > Download base: bases for this version first, older ones
+    /// behind a toggle; one row per base with its action on the right and
+    /// persistent progress and Cancel above the scrollable catalog.
+    fn download_window(&mut self, ctx: &egui::Context, open: &mut bool) -> Option<Command> {
+        let mut command = None;
+        let installed: Vec<String> = self.snapshot.bases.iter().map(|b| b.id.clone()).collect();
+        let download = self.snapshot.download.clone();
+        let busy = download.as_ref().is_some_and(|status| !status.finished);
+        let (current, rest): (Vec<_>, Vec<_>) = self
+            .snapshot
+            .remote_bases
+            .iter()
+            .cloned()
+            .partition(remote_is_current);
+        let (older, other): (Vec<_>, Vec<_>) = rest.into_iter().partition(|base| {
+            matches!(
+                RevisionStatus::of_base(base.revision, base.min_app_version.as_deref()),
+                RevisionStatus::Outdated | RevisionStatus::Legacy
+            )
+        });
+        let show_older = &mut self.show_older_bases;
+        egui::Window::new("Download base")
+            .open(open)
+            .collapsible(false)
+            .resizable(true)
+            .default_size([760.0, 520.0])
+            .min_width(520.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            !self.snapshot.remote_refreshing,
+                            egui::Button::new("Refresh catalog"),
+                        )
+                        .clicked()
+                    {
+                        command = Some(Command::RefreshRemoteBases);
+                    }
+                    if self.snapshot.remote_refreshing {
+                        ui.spinner();
+                        ui.label("Fetching catalog…");
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add_enabled(
+                            !older.is_empty(),
+                            egui::Checkbox::new(
+                                show_older,
+                                format!("Show older bases ({})", older.len()),
+                            ),
+                        )
+                        .on_hover_text("Bases built for earlier Antinomie versions");
+                    });
+                });
+                if let Some(error) = &self.snapshot.remote_error {
+                    ui.colored_label(theme::ERROR, error);
+                }
+                if let Some(status) = download.as_ref().filter(|status| !status.finished) {
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(!status.installing, egui::Button::new("Cancel"))
+                            .on_disabled_hover_text("Finishing the base installation")
+                            .clicked()
+                        {
+                            command = Some(Command::CancelDownload);
+                        }
+                        ui.label(if status.installing {
+                            format!("{}: installing…", status.label)
+                        } else {
+                            status.label.clone()
+                        });
+                    });
+                    let fraction = if status.total > 0 {
+                        (status.received as f32 / status.total as f32).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    ui.add(egui::ProgressBar::new(fraction).text(format!(
+                        "{} of {}",
+                        human_bytes(status.received),
+                        human_bytes(status.total)
+                    )));
+                }
+                if let Some(status) = download.as_ref().filter(|status| status.finished) {
+                    match &status.error {
+                        Some(error) if error.contains("cancelled") => {
+                            ui.colored_label(
+                                theme::MUTED,
+                                format!(
+                                    "{}: download cancelled; it resumes where it stopped",
+                                    status.label
+                                ),
+                            );
+                        }
+                        Some(error) => {
+                            ui.colored_label(theme::ERROR, format!("{}: {error}", status.label));
+                        }
+                        None => {
+                            ui.colored_label(theme::GOOD, format!("{} installed", status.label));
+                        }
+                    }
+                }
+                ui.separator();
+                if current.is_empty() && older.is_empty() && other.is_empty() {
+                    ui.colored_label(theme::MUTED, "No bases listed yet: refresh the catalog.");
+                }
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let rows = current
+                            .iter()
+                            .chain(other.iter())
+                            .chain(older.iter().filter(|_| *show_older));
+                        for (index, base) in rows.enumerate() {
+                            if index == current.len() && !other.is_empty() {
+                                ui.add_space(6.0);
+                                ui.label(RichText::new("Other bases").strong().color(theme::MUTED));
+                            }
+                            if index == current.len() + other.len() && *show_older {
+                                ui.add_space(6.0);
+                                ui.label(RichText::new("Older bases").strong().color(theme::MUTED));
+                            }
+                            egui::Frame::group(ui.style())
+                                .inner_margin(egui::Margin::symmetric(10, 8))
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    if let Some(next) =
+                                        download_row(ui, base, &installed, download.as_ref(), busy)
+                                    {
+                                        command = Some(next);
+                                    }
+                                });
+                        }
+                    });
+            });
+        command
+    }
+
     fn open_analysis_section(
         &mut self,
         report_id: String,
@@ -4018,11 +4101,117 @@ fn base_selector(
         });
 }
 
+/// One catalog base: name and facts on the left; installed, Download, or
+/// the running download's state on the right. Cancel stays above the list.
+fn download_row(
+    ui: &mut egui::Ui,
+    base: &antinomie_monitor_core::RemoteBase,
+    installed: &[String],
+    download: Option<&antinomie_monitor_core::DownloadStatus>,
+    busy: bool,
+) -> Option<Command> {
+    let mut command = None;
+    let status = RevisionStatus::of_base(base.revision, base.min_app_version.as_deref());
+    let running = download.filter(|d| d.identity == base.identity && !d.finished);
+    ui.horizontal(|ui| {
+        let action_width = 150.0;
+        ui.allocate_ui_with_layout(
+            egui::vec2((ui.available_width() - action_width).max(200.0), 0.0),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.label(
+                    RichText::new(versioned_label(
+                        &base.label,
+                        base.revision,
+                        base.min_app_version.as_deref(),
+                    ))
+                    .strong(),
+                );
+                let short = &base.identity[..12.min(base.identity.len())];
+                let mut facts = vec![
+                    format!("Linux {}", base.kernel_version),
+                    human_bytes(base.total_size),
+                    format!(
+                        "{} MiB RAM, {} GiB disk minimum",
+                        base.min_ram_mib, base.min_disk_gib
+                    ),
+                    short.to_string(),
+                ];
+                if status == RevisionStatus::Outdated {
+                    facts.insert(0, "Outdated".into());
+                }
+                ui.label(
+                    RichText::new(facts.join("  ·  "))
+                        .small()
+                        .color(theme::MUTED),
+                );
+            },
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if installed.contains(&base.identity) {
+                ui.colored_label(
+                    theme::GOOD,
+                    format!("{} Installed", egui_phosphor::regular::CHECK),
+                );
+            } else if running.is_some() {
+                ui.label(if running.is_some_and(|status| status.installing) {
+                    "Installing…"
+                } else {
+                    "Downloading…"
+                });
+            } else if status == RevisionStatus::NeedsNewerApp {
+                ui.add_enabled(false, egui::Button::new("Download"))
+                    .on_disabled_hover_text(format!(
+                        "Built for a newer Antinomie (this is Antinomie {APP_VERSION})"
+                    ));
+            } else if ui
+                .add_enabled(!busy, egui::Button::new("Download"))
+                .on_disabled_hover_text("Another download is in progress")
+                .clicked()
+            {
+                command = Some(Command::DownloadBase {
+                    identity: base.identity.clone(),
+                });
+            }
+        });
+    });
+    command
+}
+
+/// A base's name with the Antinomie version it is for, e.g.
+/// "Debian 13 (GNOME) · Antinomie 0.2.0".
+fn versioned_label(label: &str, revision: Option<u32>, min_app_version: Option<&str>) -> String {
+    match antinomie_monitor_core::base_app_version(revision, min_app_version) {
+        Some(version) => format!("{label} · Antinomie {version}"),
+        None => label.to_string(),
+    }
+}
+
+/// Whether a remote base is for this app version (not an older one, and
+/// not one this app is too old for).
+fn remote_is_current(base: &antinomie_monitor_core::RemoteBase) -> bool {
+    RevisionStatus::of_base(base.revision, base.min_app_version.as_deref())
+        == RevisionStatus::Current
+}
+
+/// The catalog base that replaces an outdated installed one: same name,
+/// built for this app version.
+fn newer_base<'a>(
+    snapshot: &'a Snapshot,
+    base: &BaseSummary,
+) -> Option<&'a antinomie_monitor_core::RemoteBase> {
+    snapshot
+        .remote_bases
+        .iter()
+        .find(|remote| remote.label == base.label && remote_is_current(remote))
+}
+
 fn base_choice_label(base: &BaseSummary) -> String {
+    let name = versioned_label(&base.label, base.revision, base.min_app_version.as_deref());
     let label = if base.fixed_display {
-        base.label.clone()
+        name
     } else {
-        format!("{} (legacy)", base.label)
+        format!("{name} (legacy)")
     };
     if RevisionStatus::of_base(base.revision, base.min_app_version.as_deref())
         == RevisionStatus::Current
@@ -4503,6 +4692,7 @@ mod tests {
             build_open: false,
             about_open: false,
             tools_open: false,
+            show_older_bases: false,
             build_wizard: build_wizard::BuildWizard::default(),
             name_action: None,
             filter: String::new(),
@@ -5270,9 +5460,126 @@ mod tests {
     }
 
     #[test]
+    fn download_catalog_prioritizes_current_bases_and_hides_older_ones() {
+        let mut app = app();
+        app.download_open = true;
+        app.snapshot.remote_bases = vec![
+            catalog_base("old", Some(9)),
+            catalog_base("future", Some(APP_REVISION + 1)),
+            catalog_base("current", Some(APP_REVISION)),
+            catalog_base("legacy", None),
+        ];
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 900.0);
+        for _ in 0..3 {
+            render(&mut app, &ctx, size);
+        }
+        let visible = texts(&render(&mut app, &ctx, size));
+        assert!(visible
+            .iter()
+            .any(|(text, _)| text == "current · Antinomie 0.2.0"));
+        assert!(!visible
+            .iter()
+            .any(|(text, _)| text.starts_with("old ·") || text == "legacy"));
+        let current = visible
+            .iter()
+            .find(|(text, _)| text.starts_with("current ·"))
+            .unwrap()
+            .1;
+        let future = visible.iter().find(|(text, _)| text == "future").unwrap().1;
+        assert!(current.top() < future.top());
+        click_label(&mut app, &ctx, size, "Show older bases (2)");
+        let visible = texts(&render(&mut app, &ctx, size));
+        assert!(visible
+            .iter()
+            .any(|(text, _)| text == "old · Antinomie 0.1.0"));
+        assert!(visible.iter().any(|(text, _)| text == "legacy"));
+        assert_eq!(
+            RevisionStatus::of_base(Some(APP_REVISION), Some("0.2.0")),
+            RevisionStatus::Current
+        );
+    }
+
+    fn catalog_base(label: &str, revision: Option<u32>) -> antinomie_monitor_core::RemoteBase {
+        antinomie_monitor_core::RemoteBase {
+            identity: format!("{label:0<64}"),
+            label: label.into(),
+            kind: "busybox".into(),
+            kernel_version: "6.12.94".into(),
+            fixed_display: true,
+            min_ram_mib: 256,
+            min_disk_gib: 1,
+            total_size: 1024 * 1024,
+            revision,
+            min_app_version: None,
+            built_with: None,
+        }
+    }
+
+    #[test]
+    fn cancel_remains_reachable_when_the_active_base_is_hidden_or_removed() {
+        for size in [egui::vec2(800.0, 600.0), egui::vec2(1440.0, 900.0)] {
+            let mut app = app();
+            app.download_open = true;
+            let old = catalog_base("old", Some(APP_REVISION - 1));
+            app.snapshot.download = Some(antinomie_monitor_core::DownloadStatus {
+                identity: old.identity.clone(),
+                label: old.label.clone(),
+                received: 128,
+                total: old.total_size,
+                ..Default::default()
+            });
+            app.snapshot.remote_bases = vec![old, catalog_base("current", Some(APP_REVISION))];
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            click_label(&mut app, &ctx, size, "Cancel");
+            assert!(matches!(
+                app.submitted.last(),
+                Some(Command::CancelDownload)
+            ));
+            app.snapshot.remote_bases.clear();
+            app.submitted.clear();
+            click_label(&mut app, &ctx, size, "Cancel");
+            assert!(matches!(
+                app.submitted.last(),
+                Some(Command::CancelDownload)
+            ));
+            app.snapshot.download.as_mut().unwrap().installing = true;
+            app.submitted.clear();
+            click_label(&mut app, &ctx, size, "Cancel");
+            assert!(
+                app.submitted.is_empty(),
+                "installation must finish before another action"
+            );
+        }
+    }
+
+    #[test]
+    fn startup_checking_does_not_show_a_missing_base_warning() {
+        let mut app = app();
+        app.snapshot.bases_checking = true;
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 900.0);
+        for _ in 0..3 {
+            render(&mut app, &ctx, size);
+        }
+        let visible = texts(&render(&mut app, &ctx, size));
+        assert!(visible
+            .iter()
+            .any(|(text, _)| text == "Checking base images…"));
+        assert!(!visible.iter().any(|(text, _)| text == "No base images"));
+        app.snapshot.bases_checking = false;
+        assert!(texts(&render(&mut app, &ctx, size))
+            .iter()
+            .any(|(text, _)| text == "No base images"));
+    }
+
+    #[test]
     fn base_labels_name_outdated_newer_and_unrecorded_revisions() {
         let mut base = base_summary_for_revision(Some(APP_REVISION));
-        assert_eq!(base_choice_label(&base), "Debian");
+        assert_eq!(base_choice_label(&base), "Debian · Antinomie 0.2.0");
         base.revision = Some(APP_REVISION - 1);
         assert!(base_choice_label(&base).ends_with(", outdated"));
         base.revision = Some(APP_REVISION + 1);
@@ -5310,7 +5617,7 @@ mod tests {
         let texts = texts(&render(&mut app, &ctx, size));
         let rows: Vec<_> = texts
             .iter()
-            .filter(|(text, _)| text.ends_with("Linux 6.12.94"))
+            .filter(|(text, _)| text.contains("Linux 6.12.94 · Antinomie 0.2.0"))
             .map(|(_, rect)| *rect)
             .collect();
         let title = texts
@@ -5597,10 +5904,13 @@ mod tests {
         assert_eq!(app.draft.base_identity.as_deref(), Some("legacy"));
         assert_eq!(
             base_choice_label(&app.snapshot.bases[0]),
-            "Linux 6.12.94 (legacy)"
+            "Linux 6.12.94 · Antinomie 0.2.0 (legacy)"
         );
         app.snapshot.bases[1].fixed_display = true;
-        assert_eq!(base_choice_label(&app.snapshot.bases[1]), "Linux 6.12.94");
+        assert_eq!(
+            base_choice_label(&app.snapshot.bases[1]),
+            "Linux 6.12.94 · Antinomie 0.2.0"
+        );
     }
 
     #[test]

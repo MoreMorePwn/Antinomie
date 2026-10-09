@@ -283,7 +283,7 @@ pub(crate) fn installed_bases(options: &BackendOptions) -> Result<Vec<BaseSummar
                 bundle
                     .guest
                     .as_ref()
-                    .map_or_else(|| "Linux 6.12.94".into(), |guest| guest.label.clone())
+                    .map_or_else(|| "BusyBox".into(), |guest| guest.label.clone())
             }),
             directory: entry.path(),
             min_ram_mib: bundle.guest.as_ref().map_or(256, |guest| guest.min_ram_mib),
@@ -779,7 +779,7 @@ mod tests {
         assert!(!fixture.options.bundle_dir.exists());
         let bases = installed_bases(&fixture.options).unwrap();
         assert_eq!(bases.len(), 1);
-        assert_eq!(bases[0].label, "Linux 6.12.94");
+        assert_eq!(bases[0].label, "BusyBox");
         boot_bundle(&fixture.options, Some(&bases[0].id))
             .unwrap()
             .verify_installed()

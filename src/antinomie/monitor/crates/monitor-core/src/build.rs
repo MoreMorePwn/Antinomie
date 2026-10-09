@@ -255,7 +255,7 @@ pub fn valid_base_name(name: &str) -> Result<(), String> {
 /// The name a base gets when none is chosen.
 pub fn automatic_base_name(kind: Kind, desktop: &str) -> String {
     match kind {
-        Kind::BusyBox => "Linux 6.12.94".into(),
+        Kind::BusyBox => "BusyBox".into(),
         Kind::DebianXfce => format!(
             "Debian 13 ({})",
             DESKTOPS
@@ -862,7 +862,7 @@ mod tests {
             automatic_base_name(Kind::DebianXfce, "kde"),
             "Debian 13 (KDE Plasma)"
         );
-        assert_eq!(automatic_base_name(Kind::BusyBox, "xfce"), "Linux 6.12.94");
+        assert_eq!(automatic_base_name(Kind::BusyBox, "xfce"), "BusyBox");
         assert!(DESKTOPS.iter().all(|desktop| desktop.verified));
         let mut options = BuildOptions::defaults(Kind::DebianXfce);
         options.name = "  Lab  ".into();

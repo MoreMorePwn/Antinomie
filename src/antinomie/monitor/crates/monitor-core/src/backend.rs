@@ -43,11 +43,6 @@ impl Backend {
         storage::private_dir(&options.data_dir).map_err(|e| e.to_string())?;
         options.data_dir = fs::canonicalize(&options.data_dir).map_err(|e| e.to_string())?;
         let vms = storage::load_vms(&options)?;
-        let mut bases = crate::locations::installed_bases(&options)?;
-        if bases.is_empty() && options.bundle_dir.join("bundle.json").is_file() {
-            crate::locations::boot_bundle(&options, None)?;
-            bases = crate::locations::installed_bases(&options)?;
-        }
         let vm_locations = vms
             .iter()
             .map(|vm| crate::locations::locations(&options, &vm.id))
@@ -67,7 +62,7 @@ impl Backend {
                     options,
                     snapshot: Snapshot {
                         vms,
-                        bases,
+                        bases_checking: true,
                         vm_locations,
                         analysis_tools,
                         ..Snapshot::default()
@@ -1213,8 +1208,22 @@ struct DownloadJob {
     identity: String,
     label: String,
     total: u64,
+    /// Received octets and whether atomic installation has started.
     progress: Arc<Mutex<(u64, bool)>>,
+    cancel: Arc<AtomicBool>,
     done: Receiver<Result<(), String>>,
+    thread: JoinHandle<()>,
+}
+
+fn begin_base_install(progress: &Mutex<(u64, bool)>, cancel: &AtomicBool) -> Result<(), String> {
+    let mut progress = progress
+        .lock()
+        .map_err(|_| "download progress lock poisoned")?;
+    if cancel.load(Ordering::Relaxed) {
+        return Err("download cancelled".into());
+    }
+    progress.1 = true;
+    Ok(())
 }
 
 struct BuildJob {
@@ -1426,25 +1435,31 @@ impl Worker {
                 }
             }
         }
-        if let Some(job) = self.download.as_ref() {
-            let received = job.progress.lock().map(|guard| guard.0).unwrap_or(0);
-            if let Some(status) = self.snapshot.download.as_mut() {
-                status.received = received;
-            }
+        if let Some(job) = self.download.as_ref()
+            && let (Ok(progress), Some(status)) =
+                (job.progress.lock(), self.snapshot.download.as_mut())
+        {
+            status.received = progress.0;
+            status.installing = progress.1;
         }
-        let finished = self.download.as_ref().and_then(|job| {
-            job.done.try_recv().ok().or_else(|| {
-                if matches!(job.done.try_recv(), Err(mpsc::TryRecvError::Disconnected)) {
+        let finished = self
+            .download
+            .as_ref()
+            .and_then(|job| match job.done.try_recv() {
+                Ok(result) => Some(result),
+                Err(mpsc::TryRecvError::Empty) => None,
+                Err(mpsc::TryRecvError::Disconnected) => {
                     Some(Err("download worker disconnected".into()))
-                } else {
-                    None
                 }
-            })
-        });
+            });
         if let Some(result) = finished {
             let job = self.download.take().expect("download job present");
             let error = result.err();
-            if let Some(error) = &error {
+            if job.thread.join().is_err() {
+                self.snapshot.last_error = Some("download worker panicked".into());
+            }
+            // A cancel is the user's own action, not an error to flag.
+            if let Some(error) = error.as_ref().filter(|e| !e.contains("cancelled")) {
                 self.snapshot.last_error = Some(error.clone());
             }
             if let Err(error) = self.refresh_locations() {
@@ -1464,6 +1479,7 @@ impl Worker {
                 label: job.label,
                 received,
                 total: job.total,
+                installing: false,
                 finished: true,
                 error,
             });
@@ -1514,16 +1530,44 @@ impl Worker {
             self.publish();
         }
     }
+    /// List the installed bases, installing a configured bundle directory
+    /// when there are none. A base is fully checked the first time only,
+    /// which can take seconds, so this runs here and not before the UI.
+    fn load_bases(&mut self) {
+        let result = (|| -> Result<Vec<BaseSummary>, String> {
+            let mut bases = crate::locations::installed_bases(&self.options)?;
+            if bases.is_empty() && self.options.bundle_dir.join("bundle.json").is_file() {
+                crate::locations::boot_bundle(&self.options, None)?;
+                bases = crate::locations::installed_bases(&self.options)?;
+            }
+            Ok(bases)
+        })();
+        match result {
+            Ok(bases) => self.snapshot.bases = bases,
+            Err(error) => self.snapshot.last_error = Some(format!("base images: {error}")),
+        }
+        self.snapshot.bases_checking = false;
+    }
     fn run(mut self) {
+        self.publish();
+        self.load_bases();
         self.publish();
         loop {
             if self.closing.load(Ordering::Relaxed) {
+                if let Some(job) = self.download.as_ref() {
+                    job.cancel.store(true, Ordering::Relaxed);
+                }
                 if let Some(job) = self.build.as_ref() {
                     job.cancel.store(true, Ordering::Relaxed);
                 }
                 let result = self.stop();
                 if let Err(e) = result {
                     self.snapshot.last_error = Some(e);
+                }
+                if let Some(job) = self.download.take()
+                    && job.thread.join().is_err()
+                {
+                    self.snapshot.last_error = Some("download worker panicked".into());
                 }
                 self.publish();
                 storage::flush_json();
@@ -1706,15 +1750,24 @@ impl Worker {
                 let curl = self.options.curl.clone();
                 let remote = self.options.remote_base.clone();
                 let total: u64 = base.files.iter().map(|file| file.size).sum();
+                let label = match base_app_version(
+                    base.antinomie_revision,
+                    base.min_app_version.as_deref(),
+                ) {
+                    Some(version) => format!("{} · Antinomie {version}", base.label),
+                    None => base.label.clone(),
+                };
                 let progress = Arc::new(Mutex::new((0u64, false)));
                 let worker_progress = progress.clone();
                 let (sender, receiver) = mpsc::channel();
                 let requested = base.clone();
                 let staging_thread = staging.clone();
-                thread::Builder::new()
+                let cancel = Arc::new(AtomicBool::new(false));
+                let worker_cancel = cancel.clone();
+                let thread = thread::Builder::new()
                     .name("antinomie-download".into())
                     .spawn(move || {
-                        let cancel = AtomicBool::new(false);
+                        let cancel = worker_cancel;
                         let result = distribution::download_base(
                             &curl,
                             &remote,
@@ -1728,18 +1781,19 @@ impl Worker {
                             },
                         )
                         .and_then(|bundle| {
+                            if cancel.load(Ordering::Relaxed) {
+                                return Err("download cancelled".into());
+                            }
                             require_supported(
                                 bundle.antinomie_revision,
                                 bundle.min_app_version.as_deref(),
                             )?;
                             storage::validate_disk_chain(&options, &bundle.base_disk, None)?;
+                            begin_base_install(&worker_progress, &cancel)?;
                             bundle.install(&options)?;
                             Ok(())
                         });
                         let ok = result.is_ok();
-                        if let Ok(mut guard) = worker_progress.lock() {
-                            guard.1 = true;
-                        }
                         let _ = sender.send(result);
                         if ok {
                             let _ = fs::remove_dir_all(&staging_thread);
@@ -1748,20 +1802,38 @@ impl Worker {
                     .map_err(|e| e.to_string())?;
                 self.download = Some(DownloadJob {
                     identity: base.identity.clone(),
-                    label: base.label.clone(),
+                    label: label.clone(),
                     total,
                     progress,
+                    cancel,
                     done: receiver,
+                    thread,
                 });
                 self.snapshot.download = Some(DownloadStatus {
                     identity: base.identity,
-                    label: base.label,
+                    label,
                     received: 0,
                     total,
+                    installing: false,
                     finished: false,
                     error: None,
                 });
                 Ok("base download started".into())
+            }
+            Command::CancelDownload => {
+                let job = self
+                    .download
+                    .as_ref()
+                    .ok_or("no base download is running")?;
+                let progress = job
+                    .progress
+                    .lock()
+                    .map_err(|_| "download progress lock poisoned")?;
+                if progress.1 {
+                    return Err("base download finished; installation is in progress".into());
+                }
+                job.cancel.store(true, Ordering::Relaxed);
+                Ok("cancelling the base download".into())
             }
             Command::BuildBase { request } => {
                 if self.build.is_some() {
@@ -3050,6 +3122,160 @@ fn remaining_request_budget(deadline: Instant, maximum: Duration) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn download_worker(root: PathBuf) -> Worker {
+        let (_commands, receiver) = mpsc::sync_channel(1);
+        let (sender, _notifications) = mpsc::sync_channel(1);
+        Worker {
+            options: BackendOptions {
+                bundle_dir: root.join("missing-bundle"),
+                data_dir: root,
+                ..BackendOptions::default()
+            },
+            snapshot: Snapshot::default(),
+            receiver,
+            sender,
+            closing: Arc::new(AtomicBool::new(false)),
+            stopping: Arc::new(AtomicBool::new(false)),
+            session: None,
+            catalog: distribution::Catalog::default(),
+            refresh: None,
+            download: None,
+            build: None,
+            tool: None,
+            last_publish: Instant::now(),
+            latest_snapshot: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    fn attach_waiting_download(worker: &mut Worker) -> Arc<AtomicBool> {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let worker_stopped = stopped.clone();
+        let (sender, done) = mpsc::channel();
+        let thread = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !worker_cancel.load(Ordering::Relaxed) && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(5));
+            }
+            assert!(
+                worker_cancel.load(Ordering::Relaxed),
+                "download was never cancelled"
+            );
+            worker_stopped.store(true, Ordering::Relaxed);
+            sender.send(Err("download cancelled".into())).unwrap();
+        });
+        worker.download = Some(DownloadJob {
+            identity: "test".into(),
+            label: "Test".into(),
+            total: 100,
+            progress: Arc::new(Mutex::new((20, false))),
+            cancel,
+            done,
+            thread,
+        });
+        worker.snapshot.download = Some(DownloadStatus {
+            identity: "test".into(),
+            label: "Test".into(),
+            received: 20,
+            total: 100,
+            ..DownloadStatus::default()
+        });
+        stopped
+    }
+
+    #[test]
+    fn cancel_download_finishes_without_an_error_alert() {
+        let root = std::env::temp_dir().join(format!("ant-cancel-{}", storage::unique_id()));
+        let mut worker = download_worker(root);
+        attach_waiting_download(&mut worker);
+        worker.command(Command::CancelDownload).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while worker.download.is_some() && Instant::now() < deadline {
+            worker.poll_remote();
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(worker.download.is_none());
+        let status = worker.snapshot.download.unwrap();
+        assert!(status.finished);
+        assert_eq!(status.error.as_deref(), Some("download cancelled"));
+        assert!(worker.snapshot.last_error.is_none());
+    }
+
+    #[test]
+    fn shutdown_cancels_and_joins_the_download_worker() {
+        let root =
+            std::env::temp_dir().join(format!("ant-close-download-{}", storage::unique_id()));
+        let mut worker = download_worker(root);
+        let stopped = attach_waiting_download(&mut worker);
+        worker.closing.store(true, Ordering::Relaxed);
+        worker.run();
+        assert!(stopped.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn cancellation_and_installation_have_an_exclusive_transition() {
+        let progress = Mutex::new((100, false));
+        let cancel = AtomicBool::new(true);
+        assert_eq!(
+            begin_base_install(&progress, &cancel).unwrap_err(),
+            "download cancelled"
+        );
+        assert!(!progress.lock().unwrap().1);
+        cancel.store(false, Ordering::Relaxed);
+        begin_base_install(&progress, &cancel).unwrap();
+        assert!(progress.lock().unwrap().1);
+        let root = std::env::temp_dir().join(format!("ant-install-gate-{}", storage::unique_id()));
+        let mut worker = download_worker(root);
+        attach_waiting_download(&mut worker);
+        let job = worker.download.as_ref().unwrap();
+        begin_base_install(&job.progress, &job.cancel).unwrap();
+        assert!(
+            worker
+                .command(Command::CancelDownload)
+                .unwrap_err()
+                .contains("installation")
+        );
+        assert!(
+            !worker
+                .download
+                .as_ref()
+                .unwrap()
+                .cancel
+                .load(Ordering::Relaxed)
+        );
+        worker.closing.store(true, Ordering::Relaxed);
+        worker.run();
+    }
+
+    #[test]
+    fn startup_base_error_is_published_after_backend_construction() {
+        let root = std::env::temp_dir().join(format!("ant-base-startup-{}", storage::unique_id()));
+        fs::create_dir_all(root.join("bases/bad")).unwrap();
+        fs::write(root.join("bases/bad/bundle.json"), b"invalid json").unwrap();
+        let mut backend = Backend::new(BackendOptions {
+            data_dir: root.clone(),
+            bundle_dir: root.join("missing"),
+            ..BackendOptions::default()
+        })
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let snapshot = loop {
+            if let Some(Notification::Snapshot(snapshot)) = backend.try_recv()
+                && !snapshot.bases_checking
+            {
+                break snapshot;
+            }
+            assert!(Instant::now() < deadline, "base check never completed");
+            thread::sleep(Duration::from_millis(5));
+        };
+        assert!(snapshot.bases.is_empty());
+        assert!(snapshot.last_error.unwrap().starts_with("base images:"));
+        backend.shutdown().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn history_event(sequence: u64, path: &str) -> EventSummary {
         EventSummary {
             root_task_cookie: 99,

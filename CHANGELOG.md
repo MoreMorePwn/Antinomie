@@ -4,6 +4,21 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
+## 0.2.2 — 2026-10-09
+
+Runs bases for Antinomie 0.2.0 and 0.1.0; no new bases.
+
+- **Download base**: clearer rows, current bases first, older bases behind
+  **Show older bases**, versioned names and persistent progress with Cancel.
+  Cancelled downloads retain their files for resume; closing the app stops
+  its download worker.
+- Installed older bases show an outdated hint and link to the download dialog;
+  a matching current catalog base adds **newer base available**.
+- Base checks run after the window opens, with **Checking base images…** status.
+- Unchanged installed bases reuse their verified checksums. Large-file hashing
+  releases Linux file cache as it reads, reducing WSL memory use on startup.
+- Typed paths expand a leading `~` to the user's home directory.
+
 ## 0.2.1 — 2026-10-09
 
 Runs bases for Antinomie 0.2.0 and 0.1.0, like 0.2.0; no new bases.

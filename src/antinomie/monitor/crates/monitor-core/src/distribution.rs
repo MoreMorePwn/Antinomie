@@ -353,6 +353,9 @@ pub fn download_base(
             total,
         );
     }
+    if cancel.load(Ordering::Relaxed) {
+        return Err("download cancelled".into());
+    }
     progress(total, total);
     let bundle = Bundle::load(staging)?;
     Ok(bundle)
@@ -568,6 +571,72 @@ mod tests {
                 .unwrap()
                 .sha256
         );
+    }
+
+    #[test]
+    fn cancelled_download_keeps_verified_files_and_resumes() {
+        let source = staging("cancel-source");
+        let catalog = parse_catalog(sample_catalog(&source).as_bytes()).unwrap();
+        let remote = format!("file://{}", source.display());
+        let target = staging("cancel-target");
+        let cancel = AtomicBool::new(false);
+        let error = download_base(
+            Path::new("curl"),
+            &remote,
+            &catalog.bases[0],
+            &target,
+            &cancel,
+            |received, _| {
+                if received >= catalog.bases[0].files[0].size {
+                    cancel.store(true, Ordering::Relaxed);
+                }
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error, "download cancelled");
+        let kernel = target.join("kernel");
+        assert_eq!(sha256(&kernel), catalog.bases[0].files[0].sha256);
+        let modified = fs::metadata(&kernel).unwrap().modified().unwrap();
+        cancel.store(false, Ordering::Relaxed);
+        download_base(
+            Path::new("curl"),
+            &remote,
+            &catalog.bases[0],
+            &target,
+            &cancel,
+            |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(fs::metadata(&kernel).unwrap().modified().unwrap(), modified);
+        assert!(target.join("bundle.json").is_file());
+        fs::remove_dir_all(source).unwrap();
+        fs::remove_dir_all(target).unwrap();
+    }
+
+    #[test]
+    fn cancellation_during_final_verification_prevents_completion() {
+        let source = staging("final-cancel-source");
+        let catalog = parse_catalog(sample_catalog(&source).as_bytes()).unwrap();
+        let remote = format!("file://{}", source.display());
+        let target = staging("final-cancel-target");
+        let cancel = AtomicBool::new(false);
+        let error = download_base(
+            Path::new("curl"),
+            &remote,
+            &catalog.bases[0],
+            &target,
+            &cancel,
+            |received, total| {
+                if received == total {
+                    cancel.store(true, Ordering::Relaxed);
+                }
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error, "download cancelled");
+        assert!(target.join("bundle.json").is_file());
+        fs::remove_dir_all(source).unwrap();
+        fs::remove_dir_all(target).unwrap();
     }
 
     #[test]
