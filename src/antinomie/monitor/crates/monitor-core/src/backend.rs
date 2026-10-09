@@ -2745,12 +2745,21 @@ impl Worker {
                 self.snapshot.process_page = page;
                 Ok(format!("{count} guest processes listed"))
             }
-            Command::AttachProcess { identity } => session.start_capture(
-                &self.options,
-                CaptureScope::Process { root: identity },
-                &mut self.snapshot,
-                &self.sender,
-            ),
+            Command::AttachProcess { identity } => {
+                let id = session.start_capture(
+                    &self.options,
+                    CaptureScope::Process { root: identity },
+                    &mut self.snapshot,
+                    &self.sender,
+                )?;
+                // The picker's list names the attached process and its ancestors.
+                if let (Some(page), Some(capture)) =
+                    (&self.snapshot.process_page, session.captures.get_mut(&id))
+                {
+                    capture.processes.seed(&page.processes);
+                }
+                Ok(id)
+            }
             Command::CaptureAll => {
                 let id = session.start_capture(
                     &self.options,
