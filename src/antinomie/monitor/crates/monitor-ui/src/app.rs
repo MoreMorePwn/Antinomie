@@ -2303,7 +2303,26 @@ impl MonitorApp {
                     }
                     ui.separator();
                     ui.colored_label(if health.dropped == 0 { theme::GOOD } else { theme::WARN },
-                        format!("Transport loss: {}", health.dropped));
+                        format!("Transport loss: {}", health.dropped))
+                        .on_hover_text(format!(
+                            "Records the guest could not hand over: {} of {}\nGuest buffer per vCPU: {}\nWhen buffers fill: {}",
+                            health.dropped,
+                            health.attempted,
+                            if health.ring_size == 0 { "unknown".to_owned() } else { ring_label(health.ring_size / 1024) },
+                            if health.send_wait_us == 0 { "drop".to_owned() } else { format!("wait up to {} ms", health.send_wait_us / 1000) },
+                        ));
+                    if health.transport_waits > 0 {
+                        // Never-drop mode: how much the guest was slowed down.
+                        ui.label(format!("Guest waited: {:.1} s", health.transport_wait_ns as f64 / 1e9))
+                            .on_hover_text(format!(
+                                "{} system calls waited for the host to make room",
+                                health.transport_waits
+                            ));
+                    }
+                    if health.write_backlog > 64 * 1024 * 1024 {
+                        ui.colored_label(theme::WARN, format!("Disk backlog: {} MB", health.write_backlog / 1_000_000))
+                            .on_hover_text("Recording data waiting for the disk; when the queue is full the transport waits");
+                    }
                     ui.colored_label(if health.ui_dropped == 0 { theme::GOOD } else { theme::WARN },
                         format!("UI loss: {}", health.ui_dropped));
                     ui.colored_label(if health.storage_dropped_packets == 0 && health.persistence_error.is_none() { theme::GOOD } else { theme::WARN },

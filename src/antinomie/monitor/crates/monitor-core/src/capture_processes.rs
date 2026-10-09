@@ -331,6 +331,19 @@ mod tests {
     }
 
     #[test]
+    fn launched_programs_are_named_after_their_path_once() {
+        let mut tracker = ProcessTracker::default();
+        tracker.packet(&header(300, 1, 1));
+        assert!(tracker.unnamed(300));
+        tracker.name_launched(300, "/tmp/sample");
+        tracker.name_launched(300, "/bin/other");
+        let process = &tracker.list()[0];
+        assert_eq!(process.name, "sample");
+        assert_eq!(process.exe.as_deref(), Some("/tmp/sample"));
+        assert!(!tracker.unnamed(300));
+    }
+
+    #[test]
     fn idle_processes_are_listed_only_as_ancestors() {
         let mut tracker = ProcessTracker::default();
         let process = |tgid, parent| GuestProcess {

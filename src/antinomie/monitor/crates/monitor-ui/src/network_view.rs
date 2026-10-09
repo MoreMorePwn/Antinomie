@@ -178,11 +178,20 @@ impl NetworkView {
                     .on_hover_text(path.display().to_string())
                     .clicked();
                 if let (true, Some(wireshark)) = (clicked, wireshark) {
-                    if let Err(error) = std::process::Command::new(wireshark)
-                        .arg("-r")
-                        .arg(&path)
-                        .spawn()
-                    {
+                    // A live capture streams into Wireshark as it grows; an
+                    // earlier boot's file opens as it is.
+                    let spawned = if is_live {
+                        std::process::Command::new("sh")
+                            .arg("-c")
+                            .arg("tail -c +1 -f \"$1\" | \"$2\" -k -i -")
+                            .arg("antinomie-wireshark")
+                            .arg(&path)
+                            .arg(&wireshark)
+                            .spawn()
+                    } else {
+                        std::process::Command::new(wireshark).arg("-r").arg(&path).spawn()
+                    };
+                    if let Err(error) = spawned {
                         self.error = Some(format!("Wireshark: {error}"));
                     }
                 }
