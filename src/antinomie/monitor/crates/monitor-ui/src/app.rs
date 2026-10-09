@@ -151,6 +151,7 @@ pub struct MonitorApp {
     download_open: bool,
     build_open: bool,
     about_open: bool,
+    tools_open: bool,
     build_wizard: build_wizard::BuildWizard,
     confirm: Option<Confirm>,
     name_action: Option<(String, bool, String)>,
@@ -253,6 +254,7 @@ impl MonitorApp {
             download_open: false,
             build_open: false,
             about_open: false,
+            tools_open: false,
             build_wizard: build_wizard::BuildWizard::default(),
             confirm: None,
             name_action: None,
@@ -1680,6 +1682,10 @@ impl MonitorApp {
                             self.settings_open = true;
                             ui.close_menu();
                         }
+                        if ui.button("Analysis tools…").clicked() {
+                            self.tools_open = true;
+                            ui.close_menu();
+                        }
                         ui.separator();
                         if ui
                             .add_enabled(
@@ -2148,10 +2154,9 @@ impl MonitorApp {
                             format!("Kernel: {}", RevisionStatus::describe(kernel.revision, None)),
                         )
                         .on_hover_text(format!(
-                            "Release: {}\nPatch series: {}\nGuest contract revision: {}\nThis app: Antinomie {APP_VERSION} (revision {APP_REVISION})",
+                            "Release: {}\nKernel: {}\nThis app: Antinomie {APP_VERSION}",
                             kernel.release.as_deref().unwrap_or("unknown"),
-                            kernel.source.as_deref().unwrap_or("not recorded"),
-                            kernel.revision.map_or("none".into(), |r| r.to_string()),
+                            RevisionStatus::describe(kernel.revision, None),
                         ));
                     }
                     ui.separator();
@@ -2271,12 +2276,15 @@ impl MonitorApp {
                 .max_height((ui.available_height() - footer).max(80.0))
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    crate::analysis::launch_fields(
+                    if crate::analysis::launch_fields(
                         ui,
                         &mut self.exec,
                         &mut self.args,
                         &mut self.env,
-                    );
+                        &self.snapshot.analysis_tools,
+                    ) {
+                        self.tools_open = true;
+                    }
                 });
             ui.separator();
             if let Some(reason) = selection_error {
@@ -2948,6 +2956,19 @@ impl MonitorApp {
                 self.send(Command::DownloadBase { identity });
             }
         }
+        if self.tools_open {
+            let mut open = true;
+            if let Some(command) = crate::tools_window::show(
+                ctx,
+                &mut open,
+                &self.snapshot.analysis_tools,
+                self.snapshot.tool_install.as_ref(),
+                !self.closing,
+            ) {
+                self.send(command);
+            }
+            self.tools_open = open;
+        }
         if self.about_open {
             let mut open = true;
             egui::Window::new("About Antinomie")
@@ -2966,14 +2987,14 @@ impl MonitorApp {
                         .num_columns(2)
                         .spacing([16.0, 4.0])
                         .show(ui, |ui| {
-                            ui.label(RichText::new("Guest contract revision").color(theme::MUTED));
-                            ui.label(APP_REVISION.to_string());
-                            ui.end_row();
-                            ui.label(RichText::new("Kernel patch series").color(theme::MUTED));
-                            ui.label(antinomie_monitor_core::build::series_short());
-                            ui.end_row();
                             ui.label(RichText::new("Guest kernel").color(theme::MUTED));
                             ui.label("Linux 6.12.94 (Debian 6.12.94-1 source)");
+                            ui.end_row();
+                            ui.label(RichText::new("Bases").color(theme::MUTED));
+                            ui.label(format!(
+                                "{} or newer",
+                                RevisionStatus::describe(Some(APP_REVISION), None)
+                            ));
                             ui.end_row();
                         });
                 });
@@ -3575,6 +3596,7 @@ impl MonitorApp {
             Some(crate::analysis::ReportAction::Cancel(analysis_id)) => {
                 self.send(Command::CancelAnalysis { analysis_id })
             }
+            Some(crate::analysis::ReportAction::OpenAnalysisTools) => self.tools_open = true,
             Some(crate::analysis::ReportAction::OpenSection { report_id, kind }) => {
                 if let Err(reason) = self.open_analysis_section(report_id, kind) {
                     self.status = reason;
@@ -4480,6 +4502,7 @@ mod tests {
             download_open: false,
             build_open: false,
             about_open: false,
+            tools_open: false,
             build_wizard: build_wizard::BuildWizard::default(),
             name_action: None,
             filter: String::new(),
@@ -4903,7 +4926,9 @@ mod tests {
             }
             let output = render(&mut app, &ctx, size);
             assert_eq!(
-                texts(&output).iter().any(|(text, _)| text == "guest-target"),
+                texts(&output)
+                    .iter()
+                    .any(|(text, _)| text == "guest-target"),
                 shown,
                 "{filter}"
             );

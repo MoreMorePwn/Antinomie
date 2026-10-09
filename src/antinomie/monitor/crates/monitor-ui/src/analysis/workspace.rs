@@ -250,6 +250,12 @@ fn results(
         }
     });
     ui.add(egui::Label::new(&section.summary).wrap());
+    if section.summary.contains("Tools > Analysis tools")
+        && section.state != antinomie_monitor_core::AnalysisSectionState::Complete
+        && ui.button("Install analysis tools…").clicked()
+    {
+        action = Some(ReportAction::OpenAnalysisTools);
+    }
     let tools = tools(section);
     if !tools.is_empty() {
         ui.add(
@@ -696,10 +702,7 @@ fn detail(
             if view.detail_tab != 2 {
                 copy_value(ui, &entry.label, &entry.value);
                 if let Some(record) = &entry.record {
-                    ui.label(format!(
-                        "Record {} / revision {}",
-                        record.id, record.revision
-                    ));
+                    ui.label(format!("Record {}", record.id));
                     if let Some(location) = &record.location {
                         ui.monospace(format!("{:?}: 0x{:x}", location.kind, location.value));
                         if let Some(range) = location.file_range {

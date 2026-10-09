@@ -4,7 +4,7 @@ use super::tools;
 use super::*;
 use std::{fs, time::Duration};
 
-const CAPA: &[&str] = &["/usr/bin/capa", "/usr/local/bin/capa", "/opt/capa/capa"];
+const MANAGED: &str = "/opt/antinomie-tools/capa/capa";
 const RULES: &[u8] = include_bytes!("../../assets/rules/capa-rules-v9.4.0.tar.gz");
 pub(super) const RULES_RELEASE: &str = "capa-rules v9.4.0";
 
@@ -29,10 +29,10 @@ fn mapping(value: &serde_json::Value) -> Option<String> {
 }
 
 pub(super) fn capabilities(section: &mut AnalysisSection) {
-    let Some(capa) = tools::find(CAPA) else {
+    let Some(capa) = tools::find_tool(crate::analysis_tools::CAPA_SYSTEM, MANAGED) else {
         section.state = AnalysisSectionState::Unavailable;
         section.summary = format!(
-            "capa is not installed; install the standalone capa binary to /usr/local/bin (https://github.com/mandiant/capa/releases) and Antinomie runs it with the bundled {RULES_RELEASE}"
+            "capa is not installed; install it from Tools > Analysis tools (or on the system) and Antinomie runs it with the bundled {RULES_RELEASE}"
         );
         return;
     };
@@ -59,12 +59,13 @@ pub(super) fn capabilities(section: &mut AnalysisSection) {
         section.summary = format!("capa rules unavailable: {error}");
         return;
     }
-    let run = match tools::run(
+    let run = match tools::run_with(
         capa,
         &["--json", "-r", "/tmp/capa-rules", "/input/specimen"],
         &[("HOME", "/tmp")],
         Duration::from_secs(240),
         32 * 1024 * 1024,
+        true,
     ) {
         Ok(run) => run,
         Err(error) => {
@@ -75,6 +76,12 @@ pub(super) fn capabilities(section: &mut AnalysisSection) {
     };
     section.tools = vec![tools::version(capa, &["--version"]), RULES_RELEASE.into()];
     let Ok(json) = serde_json::from_str::<serde_json::Value>(&run.stdout) else {
+        eprintln!(
+            "capa output did not parse ({} octets, success {}): {}",
+            run.stdout.len(),
+            run.success,
+            run.stdout.chars().take(300).collect::<String>()
+        );
         section.state = AnalysisSectionState::Unavailable;
         section.summary = if run.timed_out {
             "capa ran out of time (4 minutes) before reporting".into()

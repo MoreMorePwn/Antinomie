@@ -505,7 +505,7 @@ impl BuildWizard {
         ui.add_space(6.0);
         ui.small(match (kind, kernel_cached) {
             (Kind::BusyBox, true) => {
-                "The kernel for this revision is already built: only the image is made (a few minutes)."
+                "The kernel for this app version is already built: only the image is made (a few minutes)."
             }
             (Kind::BusyBox, false) => {
                 "The kernel is compiled first (about 10 minutes); later builds reuse it."

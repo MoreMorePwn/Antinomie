@@ -1,5 +1,7 @@
 //! Opt-in launch selection and retained, run-addressed analysis evidence.
-use antinomie_monitor_core::{AnalysisKind, AnalysisSelection, ExecRequest};
+use antinomie_monitor_core::{
+    analysis_tools::ToolStatus, AnalysisKind, AnalysisSelection, ExecRequest,
+};
 use eframe::egui;
 mod entropy;
 mod listing_view;
@@ -7,24 +9,29 @@ mod records;
 mod workspace;
 pub(crate) use workspace::{workspace, workspace_section, WorkspaceState};
 
+/// Program fields and the analysis selection; true when the user asked to
+/// install a missing analysis tool.
 pub(crate) fn launch_fields(
     ui: &mut egui::Ui,
     request: &mut ExecRequest,
     args: &mut String,
     env: &mut String,
-) {
+    tools: &[ToolStatus],
+) -> bool {
+    let mut install = false;
     let spacing = ui.spacing().item_spacing.x;
     let min_pane = ui.text_style_height(&egui::TextStyle::Body) * 22.0;
     if ui.available_width() >= min_pane * 2.0 + spacing {
         ui.columns(2, |columns| {
             fields(&mut columns[0], request, args, env);
-            selection(&mut columns[1], &mut request.analysis);
+            selection(&mut columns[1], &mut request.analysis, tools, &mut install);
         });
     } else {
         fields(ui, request, args, env);
         ui.separator();
-        selection(ui, &mut request.analysis);
+        selection(ui, &mut request.analysis, tools, &mut install);
     }
+    install
 }
 
 fn fields(ui: &mut egui::Ui, request: &mut ExecRequest, args: &mut String, env: &mut String) {
@@ -57,7 +64,12 @@ fn fields(ui: &mut egui::Ui, request: &mut ExecRequest, args: &mut String, env: 
     });
 }
 
-pub(crate) fn selection(ui: &mut egui::Ui, selection: &mut AnalysisSelection) -> egui::Response {
+pub(crate) fn selection(
+    ui: &mut egui::Ui,
+    selection: &mut AnalysisSelection,
+    tools: &[ToolStatus],
+    install: &mut bool,
+) -> egui::Response {
     let (_, master, _) = egui::collapsing_header::CollapsingState::load_with_default_open(
         ui.ctx(),
         ui.make_persistent_id("analysis-tree"),
@@ -79,6 +91,7 @@ pub(crate) fn selection(ui: &mut egui::Ui, selection: &mut AnalysisSelection) ->
                     .show(ui, |ui| {
                         for &kind in kinds {
                             check(ui, selection, kind);
+                            needs_tool(ui, selection, kind, tools, install);
                         }
                     });
             }
@@ -88,6 +101,37 @@ pub(crate) fn selection(ui: &mut egui::Ui, selection: &mut AnalysisSelection) ->
         ui.colored_label(crate::theme::ERROR, reason);
     }
     master.inner
+}
+
+/// Under a selected category whose tool is missing: what it needs and a way
+/// to install it.
+fn needs_tool(
+    ui: &mut egui::Ui,
+    selection: &AnalysisSelection,
+    kind: AnalysisKind,
+    tools: &[ToolStatus],
+    install: &mut bool,
+) {
+    let (id, name) = match kind {
+        AnalysisKind::Capabilities => ("capa", "capa"),
+        AnalysisKind::Decompilation => ("ghidra", "Ghidra"),
+        _ => return,
+    };
+    if !selection.checks.contains(&kind)
+        || tools
+            .iter()
+            .find(|tool| tool.id == id)
+            .is_none_or(ToolStatus::available)
+    {
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.add_space(24.0);
+        ui.colored_label(crate::theme::WARN, format!("Needs {name}, not installed"));
+        if ui.small_button("Install…").clicked() {
+            *install = true;
+        }
+    });
 }
 
 fn check(ui: &mut egui::Ui, selection: &mut AnalysisSelection, kind: AnalysisKind) {
@@ -129,6 +173,8 @@ pub(crate) enum ReportAction {
         offset: u64,
         data_len: usize,
     },
+    /// Open Tools > Analysis tools to install a missing tool.
+    OpenAnalysisTools,
     /// Read a page of a category's full listing, filtered by `query`.
     ReadListing {
         report_id: String,
@@ -178,7 +224,7 @@ mod tests {
         let mut choices = AnalysisSelection::default();
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                selection(ui, &mut choices).request_focus();
+                selection(ui, &mut choices, &[], &mut false).request_focus();
             });
         });
         for enabled in [true, false] {
@@ -195,7 +241,7 @@ mod tests {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        selection(ui, &mut choices);
+                        selection(ui, &mut choices, &[], &mut false);
                     });
                 },
             );
@@ -214,7 +260,7 @@ mod tests {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        selection(ui, &mut choices);
+                        selection(ui, &mut choices, &[], &mut false);
                     });
                 },
             );
@@ -241,7 +287,7 @@ mod tests {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        selection(ui, choices);
+                        selection(ui, choices, &[], &mut false);
                     });
                 },
             )

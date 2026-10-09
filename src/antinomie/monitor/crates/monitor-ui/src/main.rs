@@ -6,6 +6,7 @@ mod folders;
 mod runs;
 mod terminal;
 mod theme;
+mod tools_window;
 mod trace;
 mod workspace;
 

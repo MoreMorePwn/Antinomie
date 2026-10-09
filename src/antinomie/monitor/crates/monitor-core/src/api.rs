@@ -513,18 +513,18 @@ impl RevisionStatus {
             .or_else(|| revision.and_then(first_app_version));
         let version = |fallback: String| version.map_or(fallback, |v| format!("Antinomie {v}"));
         match (Self::of_base(revision, min_app_version), revision) {
-            (Self::Current, Some(revision)) => {
-                format!("for {}", version(format!("revision {revision}")))
+            (Self::Current, Some(_)) => {
+                format!("for {}", version("this Antinomie".into()))
             }
-            (Self::Outdated, Some(revision)) => {
-                format!("for {}, outdated", version(format!("revision {revision}")))
+            (Self::Outdated, Some(_)) => {
+                format!("for {}, outdated", version("an earlier Antinomie".into()))
             }
             (Self::NeedsNewerApp, revision) => {
                 match (min_app_version.and_then(Version::parse), revision) {
                     (Some(needed), _) => format!("needs Antinomie {needed} or newer"),
                     (None, Some(revision)) => match first_app_version(revision) {
                         Some(needed) => format!("needs Antinomie {needed} or newer"),
-                        None => format!("needs a newer Antinomie (revision {revision})"),
+                        None => "needs a newer Antinomie".into(),
                     },
                     (None, None) => "needs a newer Antinomie".into(),
                 }
@@ -560,8 +560,8 @@ pub(crate) fn require_supported(
     }
     match revision {
         Some(revision) if revision > APP_REVISION => Err(format!(
-            "this base was built from patch revision {revision}; this app supports up to \
-             revision {APP_REVISION}; update Antinomie first"
+            "this base is for a newer Antinomie than this one ({APP_VERSION}); update \
+             Antinomie first"
         )),
         _ => Ok(()),
     }
@@ -731,6 +731,17 @@ pub enum Command {
     },
     /// Cancel the running base build.
     CancelBuild,
+    /// Download and install an optional analysis tool (capa, Detect It Easy,
+    /// Ghidra) under `<data>/tools`.
+    InstallTool {
+        id: String,
+    },
+    /// Cancel the running tool installation.
+    CancelToolInstall,
+    /// Remove an analysis tool Antinomie installed.
+    RemoveTool {
+        id: String,
+    },
     /// Delete an installed base; blocked while any VM references it.
     DeleteBase {
         identity: String,
@@ -860,6 +871,11 @@ pub struct Snapshot {
     pub download: Option<DownloadStatus>,
     /// Progress and log tail of the single active local build, if any.
     pub build: Option<BuildStatus>,
+    /// Optional static-analysis tools: on the system, installed by
+    /// Antinomie, or missing.
+    pub analysis_tools: Vec<crate::analysis_tools::ToolStatus>,
+    /// Progress of the single active tool installation, if any.
+    pub tool_install: Option<crate::analysis_tools::ToolInstall>,
     pub vm_locations: Vec<VmLocations>,
     pub active_vm: Option<String>,
     pub state: VmState,
@@ -1080,7 +1096,7 @@ mod tests {
         );
         assert_eq!(
             RevisionStatus::describe(Some(APP_REVISION + 1), None),
-            format!("needs a newer Antinomie (revision {})", APP_REVISION + 1)
+            "needs a newer Antinomie".to_string()
         );
         assert_eq!(
             RevisionStatus::describe(Some(APP_REVISION + 1), Some("9.0.0")),

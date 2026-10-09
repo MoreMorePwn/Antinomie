@@ -26,6 +26,19 @@ pub(super) fn find(candidates: &[&'static str]) -> Option<&'static str> {
         .find(|path| Path::new(path).is_file())
 }
 
+/// A tool: the system's copy first, then the one Antinomie installed
+/// (mounted at `analysis_tools::SANDBOX_DIR`).
+/// `ANTINOMIE_ANALYSIS_TOOLS=managed` (passed in from the host) prefers the
+/// copy Antinomie installed over the system's.
+pub(super) fn find_tool(system: &[&'static str], managed: &'static str) -> Option<&'static str> {
+    let managed = Path::new(managed).is_file().then_some(managed);
+    if std::env::var("ANTINOMIE_ANALYSIS_TOOLS").as_deref() == Ok("managed") {
+        managed.or_else(|| find(system))
+    } else {
+        find(system).or(managed)
+    }
+}
+
 /// Run `path` with `args`; `env` adds to a cleared environment with
 /// `LC_ALL=C` and a standard `PATH`.
 pub(super) fn run(
@@ -54,6 +67,10 @@ pub(super) fn run_with(
         .env("LC_ALL", "C")
         .env("PATH", "/usr/local/bin:/usr/bin:/bin")
         .env("HOME", "/nonexistent")
+        // The sandbox has no passwd database; tools that ask for the user
+        // name (Python's getpass) take it from here.
+        .env("USER", "analysis")
+        .env("LOGNAME", "analysis")
         .current_dir("/tmp")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

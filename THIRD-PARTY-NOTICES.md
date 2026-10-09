@@ -18,7 +18,13 @@ engines. The rule files keep every rule's author, license and source meta.
 | `iced-x86 1.21` | MIT |
 
 Ghidra, radare2, capa, Detect It Easy, objdump, readelf and file are not
-bundled: the worker runs them only when they are installed on the host.
+bundled: the worker runs them when they are installed on the host. On the
+user's request (**Tools > Analysis tools**) the app downloads capa 9.4.0
+(Apache-2.0), Detect It Easy 3.21 (MIT, with Qt under LGPL-3.0) plus Ubuntu's
+ICU 66 libraries (Unicode license), and Ghidra 12.1.4 (Apache-2.0) with the
+Eclipse Temurin 21 JDK (GPL-2.0 with Classpath exception) directly from their
+upstream releases into the user's data folder; Antinomie does not
+redistribute them. Their license files arrive with each download.
 
 ## Embedded UI assets
 

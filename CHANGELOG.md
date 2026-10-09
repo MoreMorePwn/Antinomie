@@ -1,13 +1,29 @@
 # Changelog
 
 All notable changes to Antinomie. Versions follow semantic versioning; see
-[CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version names the guest
-contract revision its kernel patches implement.
+[CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
+it runs.
+
+## 0.2.1 — 2026-10-09
+
+Runs bases for Antinomie 0.2.0 and 0.1.0, like 0.2.0; no new bases.
+
+- **Tools > Analysis tools**: when capa, Detect It Easy or Ghidra is not
+  installed on the system, Antinomie can download it from its upstream
+  release (checked by SHA-256) into its data folder; static analysis then
+  uses it, read-only, inside the sandbox. A tool installed on the system
+  still comes first. The launch dialog and unavailable analysis categories
+  offer the install when a needed tool is missing.
+- Static analysis sandbox: tools that start from `/bin/sh` scripts and tools
+  that ask for the user name (capa, Detect It Easy) now run; the sandbox has
+  a neutral host name.
+- Messages and the About window name app versions for bases and kernels.
+- Release executables no longer contain the build machine's file paths.
 
 ## 0.2.0 — 2026-10-09
 
-Guest contract revision 12 (kernel patch series `0001`–`0017`). Bases for
-0.1.0 (revision 9) still run, without process attachment.
+Runs bases for Antinomie 0.2.0; bases for 0.1.0 still run, without process
+attachment and capture.
 
 - Static analysis of the guest executable, opt-in per run, in an isolated
   sandbox: metadata, structures, all strings (ASCII and UTF-16LE), entropy,
@@ -35,7 +51,7 @@ Guest contract revision 12 (kernel patch series `0001`–`0017`). Bases for
 
 ## 0.1.0 — 2026-10-08
 
-Guest contract revision 9 (kernel patch series `0001`–`0013`).
+Runs bases for Antinomie 0.1.0.
 
 - QEMU VM monitor with a patched Linux 6.12.94 guest kernel that records
   native x86-64 system calls, their arguments and asynchronous I/O over a
@@ -45,11 +61,10 @@ Guest contract revision 9 (kernel patch series `0001`–`0013`).
 - Bases: download (checksum-verified catalog), import, and the **Build base**
   wizard: installer-style questions (base, build mode, language, keyboard,
   time zone, hostname, Debian desktop, software, mirror and proxy), built on
-  this Linux host or in a QEMU builder VM, with a cached kernel per patch
-  series.
-- Bases record their kernel's contract revision, the app version that built
-  them and the oldest app version that can run them; the running guest
-  kernel is checked against its base.
+  this Linux host or in a QEMU builder VM, with a cached kernel per app
+  version.
+- Bases record the app version that built them and the oldest app version
+  that can run them; the running guest kernel is checked against its base.
 - Guest RAM up to 8 GiB (regions above 4 GiB mapped).
 - `./run.sh` and per-user `./install.sh` (command, menu entry, icon).
 - Syscall trace rows colored by category (eleven groups covering all 375

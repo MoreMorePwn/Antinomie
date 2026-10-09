@@ -17,6 +17,10 @@ rustix = { version = "1", features = ["event", "fs", "net", "process"] }
 object = { version = "0.40", default-features = false, features = ["read", "std"] }
 iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "intel", "instr_info"] }
 yara-x = "1.21.0"
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
+flate2 = "1"
+tar = "0.4"
+lzma-rs = "0.3"
 
 [build-dependencies]
 cc = "1"

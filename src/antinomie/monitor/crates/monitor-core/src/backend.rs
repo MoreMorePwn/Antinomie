@@ -59,6 +59,7 @@ impl Backend {
         let (worker_closing, worker_stopping) = (closing.clone(), stopping.clone());
         let latest_snapshot = Arc::new(Mutex::new(None));
         let worker_snapshot = latest_snapshot.clone();
+        let analysis_tools = crate::analysis_tools::statuses(&options.data_dir);
         let thread = thread::Builder::new()
             .name("antinomie-transport".into())
             .spawn(move || {
@@ -68,6 +69,7 @@ impl Backend {
                         vms,
                         bases,
                         vm_locations,
+                        analysis_tools,
                         ..Snapshot::default()
                     },
                     receiver,
@@ -79,6 +81,7 @@ impl Backend {
                     refresh: None,
                     download: None,
                     build: None,
+                    tool: None,
                     last_publish: Instant::now(),
                     latest_snapshot: worker_snapshot,
                 }
@@ -291,7 +294,7 @@ impl Session {
             .unwrap_or(0);
         if revision < UNLIMITED_CAPTURE_REVISION && self.captures.len() >= OBSERVATION_MAX_COUNT {
             return Err(format!(
-                "this guest kernel (revision {revision}) allows {OBSERVATION_MAX_COUNT} captures per boot; restart the VM, or use a base for Antinomie 0.2.0 or newer, which has no limit"
+                "this base allows {OBSERVATION_MAX_COUNT} captures per VM boot; restart the VM, or use a base for Antinomie 0.2.0 or newer, which has no limit"
             ));
         }
         self.retire_captures(snapshot);
@@ -885,7 +888,7 @@ impl Session {
         let running = (kernel.revision, kernel.source.as_deref());
         if claimed.0.is_some() && claimed != running {
             snapshot.last_error = Some(format!(
-                "base records patch {} but the running kernel reports {}",
+                "the running kernel does not match its base: the base was built {}, the kernel is {}",
                 describe_source(claimed),
                 describe_source(running)
             ));
@@ -894,7 +897,7 @@ impl Session {
             .is_some_and(|revision| revision > APP_REVISION)
         {
             snapshot.last_error = Some(format!(
-                "guest kernel {} is newer than this app (revision {APP_REVISION}); update Antinomie",
+                "the guest kernel is {}, newer than this app; update Antinomie",
                 describe_source(running)
             ));
         }
@@ -1193,8 +1196,17 @@ struct Worker {
     download: Option<DownloadJob>,
     /// In-flight local build.
     build: Option<BuildJob>,
+    /// In-flight analysis tool installation.
+    tool: Option<ToolJob>,
     last_publish: Instant,
     latest_snapshot: Arc<Mutex<Option<Snapshot>>>,
+}
+
+struct ToolJob {
+    /// Stage, received and total octets.
+    progress: Arc<Mutex<(String, u64, u64)>>,
+    cancel: Arc<AtomicBool>,
+    done: Receiver<Result<(), String>>,
 }
 
 struct DownloadJob {
@@ -1281,7 +1293,7 @@ impl BuildRun {
         });
         let kernel_cache = crate::kit::kernel_cache(&root, build::kernel_profile(self.kind))?;
         if kernel_cache.is_file() {
-            line("the kernel for this revision is cached; only the image is built");
+            line("the kernel for this app version is cached; only the image is built");
         }
         match self.mode {
             build::BuildMode::Qemu => {
@@ -1361,6 +1373,33 @@ impl Worker {
             *latest = Some(self.snapshot.clone());
         }
         self.last_publish = Instant::now();
+    }
+    fn poll_tool(&mut self) {
+        let Some(job) = self.tool.as_ref() else {
+            return;
+        };
+        if let (Ok(progress), Some(status)) =
+            (job.progress.lock(), self.snapshot.tool_install.as_mut())
+        {
+            status.stage = progress.0.clone();
+            status.received = progress.1;
+            status.total = progress.2;
+        }
+        let finished = match job.done.try_recv() {
+            Ok(result) => Some(result),
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => Some(Err("tool installer stopped".into())),
+        };
+        if let Some(result) = finished {
+            self.tool = None;
+            if let Some(status) = self.snapshot.tool_install.as_mut() {
+                status.finished = true;
+                status.stage = if result.is_ok() { "done" } else { "failed" }.into();
+                status.error = result.err();
+            }
+            self.snapshot.analysis_tools = crate::analysis_tools::statuses(&self.options.data_dir);
+            self.publish();
+        }
     }
     fn poll_remote(&mut self) {
         if let Some(receiver) = self.refresh.as_ref() {
@@ -1588,6 +1627,7 @@ impl Worker {
             }
             self.poll_remote();
             self.poll_build();
+            self.poll_tool();
             if self.last_publish.elapsed() >= Duration::from_millis(250) {
                 self.publish();
             }
@@ -1796,6 +1836,73 @@ impl Worker {
                     build::BuildMode::Qemu => "base build started in the QEMU builder VM".into(),
                     _ => "base build started on this host".into(),
                 })
+            }
+            Command::InstallTool { id } => {
+                if self.tool.is_some() {
+                    return Err("a tool installation is already in progress".into());
+                }
+                let package = crate::analysis_tools::package(&id).ok_or("unknown analysis tool")?;
+                distribution::curl_version(&self.options.curl)?;
+                let progress = Arc::new(Mutex::new(("download".to_string(), 0, package.size())));
+                let cancel = Arc::new(AtomicBool::new(false));
+                let (sender, receiver) = mpsc::channel();
+                let (curl, data_dir) = (self.options.curl.clone(), self.options.data_dir.clone());
+                let (worker_progress, worker_cancel) = (progress.clone(), cancel.clone());
+                thread::Builder::new()
+                    .name("antinomie-tool-install".into())
+                    .spawn(move || {
+                        let result = crate::analysis_tools::install(
+                            &curl,
+                            &data_dir,
+                            package.id,
+                            &worker_cancel,
+                            |stage, received, total| {
+                                if let Ok(mut guard) = worker_progress.lock() {
+                                    *guard = (stage.to_string(), received, total);
+                                }
+                            },
+                        );
+                        let _ = sender.send(result);
+                    })
+                    .map_err(|e| e.to_string())?;
+                self.tool = Some(ToolJob {
+                    progress,
+                    cancel,
+                    done: receiver,
+                });
+                self.snapshot.tool_install = Some(crate::analysis_tools::ToolInstall {
+                    id: package.id.into(),
+                    name: package.name.into(),
+                    stage: "download".into(),
+                    received: 0,
+                    total: package.size(),
+                    finished: false,
+                    error: None,
+                });
+                Ok(format!("installing {}", package.name))
+            }
+            Command::CancelToolInstall => {
+                let job = self
+                    .tool
+                    .as_ref()
+                    .ok_or("no tool installation is running")?;
+                job.cancel.store(true, Ordering::Relaxed);
+                Ok("cancelling tool installation".into())
+            }
+            Command::RemoveTool { id } => {
+                if self.tool.as_ref().is_some()
+                    && self
+                        .snapshot
+                        .tool_install
+                        .as_ref()
+                        .is_some_and(|t| t.id == id)
+                {
+                    return Err("the tool is being installed".into());
+                }
+                crate::analysis_tools::remove(&self.options.data_dir, &id)?;
+                self.snapshot.analysis_tools =
+                    crate::analysis_tools::statuses(&self.options.data_dir);
+                Ok("analysis tool removed".into())
             }
             Command::CancelBuild => {
                 let job = self.build.as_ref().ok_or("no base build is running")?;
@@ -2152,7 +2259,9 @@ impl Worker {
                 };
             capture.manifest(&vm, &bundle, &disk_bundle, "running")?;
             Ok(Session {
-                analysis: crate::analysis::jobs::Jobs::default(),
+                analysis: crate::analysis::jobs::Jobs::with_tools(
+                    crate::analysis_tools::tools_dir(&self.options.data_dir),
+                ),
                 transport,
                 process,
                 capture,
@@ -2509,7 +2618,7 @@ impl Worker {
                         control::acquisition(&reply[24..])
                     } else {
                         Err(
-                            "guest predates revision 10; execution continued without acquisition"
+                            "this base does not support static analysis (it needs a base for Antinomie 0.2.0 or newer); the program ran without it"
                                 .into(),
                         )
                     };
@@ -2612,7 +2721,7 @@ impl Worker {
                         )
                         .and_then(|reply| control::acquisition(&reply))
                 } else {
-                    Err("guest predates revision 10; Analyze Only unavailable".into())
+                    Err("this base does not support static analysis; use a base for Antinomie 0.2.0 or newer".into())
                 };
                 let available = session.available();
                 session
@@ -2903,17 +3012,21 @@ fn refresh_storage_health(
     });
 }
 
-/// "revision 9 (series 0164…)", "revision 9, unversioned source" or "no revision".
+/// A kernel named by app version for messages: "for Antinomie 0.2.0 (build
+/// 0164…)", "for Antinomie 0.2.0, unversioned build", "for a newer
+/// Antinomie" or "from before Antinomie 0.1.0". Revisions stay internal.
 fn describe_source((revision, source): (Option<u32>, Option<&str>)) -> String {
-    match (revision, source) {
-        (Some(revision), Some(source)) => {
+    let version = revision.and_then(crate::api::first_app_version);
+    match (revision, version, source) {
+        (None, _, _) => "from before Antinomie 0.1.0".into(),
+        (Some(_), None, _) => "for a newer Antinomie".into(),
+        (Some(_), Some(version), Some(source)) => {
             format!(
-                "revision {revision} (series {}…)",
+                "for Antinomie {version} (build {}…)",
                 &source[..12.min(source.len())]
             )
         }
-        (Some(revision), None) => format!("revision {revision}, unversioned source"),
-        (None, _) => "no revision (before revision 9)".into(),
+        (Some(_), Some(version), None) => format!("for Antinomie {version}, unversioned build"),
     }
 }
 
@@ -3037,6 +3150,7 @@ mod tests {
             refresh: None,
             download: None,
             build: None,
+            tool: None,
             last_publish: Instant::now(),
             latest_snapshot: Arc::new(Mutex::new(None)),
         };
@@ -3117,6 +3231,7 @@ mod tests {
             refresh: None,
             download: None,
             build: None,
+            tool: None,
             last_publish: Instant::now(),
             latest_snapshot: Arc::new(Mutex::new(None)),
         };
@@ -3208,6 +3323,7 @@ mod tests {
             refresh: None,
             download: None,
             build: None,
+            tool: None,
             last_publish: Instant::now(),
             latest_snapshot: Arc::new(Mutex::new(None)),
         };
@@ -3348,6 +3464,7 @@ mod tests {
             refresh: None,
             download: None,
             build: None,
+            tool: None,
             last_publish: Instant::now(),
             latest_snapshot: Arc::new(Mutex::new(None)),
         };

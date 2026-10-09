@@ -8,12 +8,9 @@ use super::*;
 use object::{Object, ObjectSegment};
 use std::{collections::BTreeMap, fs, path::Path, time::Duration};
 
-const GHIDRA: &[&str] = &[
-    "/usr/share/ghidra/support/analyzeHeadless",
-    "/usr/local/share/ghidra/support/analyzeHeadless",
-    "/opt/ghidra/support/analyzeHeadless",
-];
-const RADARE2: &[&str] = &["/usr/bin/r2", "/usr/local/bin/r2", "/usr/bin/radare2"];
+const GHIDRA_MANAGED: &str = "/opt/antinomie-tools/ghidra/ghidra/support/analyzeHeadless";
+/// The JDK installed next to an Antinomie-installed Ghidra.
+const MANAGED_JDK: &str = "/opt/antinomie-tools/ghidra/jdk";
 const MARK_FUNCTION: &str = "@@ANTINOMIE-FUNCTION\t";
 const MARK_BASE: &str = "@@ANTINOMIE-BASE\t";
 const MARK_TIMEOUT: &str = "@@ANTINOMIE-TIMEOUT";
@@ -92,12 +89,14 @@ pub(super) fn decompile(section: &mut AnalysisSection, specimen: &[u8], listings
             "decompilation needs a recognized object format (ELF, PE or Mach-O)".into();
         return;
     }
-    let result = if let Some(ghidra) = tools::find(GHIDRA) {
+    let result = if let Some(ghidra) =
+        tools::find_tool(crate::analysis_tools::GHIDRA_SYSTEM, GHIDRA_MANAGED)
+    {
         ghidra_run(section, specimen, listings, ghidra)
-    } else if let Some(r2) = tools::find(RADARE2) {
+    } else if let Some(r2) = tools::find(crate::analysis_tools::RADARE2_SYSTEM) {
         radare2_run(section, listings, r2)
     } else {
-        Err("no decompiler installed: install Ghidra (apt install ghidra) or radare2; Antinomie runs it locally inside the analysis sandbox".into())
+        Err("no decompiler installed: install Ghidra from Tools > Analysis tools (or with apt install ghidra, or radare2); Antinomie runs it locally inside the analysis sandbox".into())
     };
     if let Err(error) = result {
         section.state = AnalysisSectionState::Unavailable;
@@ -142,7 +141,15 @@ fn ghidra_run(
             "-max-cpu",
             "4",
         ],
-        &[("HOME", "/tmp/ghidra-home")],
+        &if ghidra == GHIDRA_MANAGED {
+            vec![
+                ("HOME", "/tmp/ghidra-home"),
+                ("JAVA_HOME", MANAGED_JDK),
+                ("PATH", "/opt/antinomie-tools/ghidra/jdk/bin:/usr/bin:/bin"),
+            ]
+        } else {
+            vec![("HOME", "/tmp/ghidra-home")]
+        },
         Duration::from_secs(budget),
         1024 * 1024,
         true,

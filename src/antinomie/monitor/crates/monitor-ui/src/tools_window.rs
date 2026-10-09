@@ -1,0 +1,135 @@
+//! Tools > Analysis tools: the optional static-analysis tools, whether the
+//! system has them, and installing Antinomie's own copy when it does not.
+use crate::theme;
+use antinomie_monitor_core::{
+    analysis_tools::{ToolInstall, ToolStatus},
+    Command,
+};
+use eframe::egui::{self, RichText};
+
+fn size(octets: u64) -> String {
+    format!("{:.0} MB", octets as f64 / 1_000_000.0)
+}
+
+/// Draw the window; returns a command to send.
+pub(crate) fn show(
+    ctx: &egui::Context,
+    open: &mut bool,
+    tools: &[ToolStatus],
+    install: Option<&ToolInstall>,
+    enabled: bool,
+) -> Option<Command> {
+    let mut command = None;
+    let running = install.is_some_and(|install| !install.finished);
+    egui::Window::new("Analysis tools")
+        .open(open)
+        .collapsible(false)
+        .resizable(true)
+        .default_width(620.0)
+        .show(ctx, |ui| {
+            ui.label(
+                "Static analysis uses these tools when they are installed on this system. \
+                 When one is missing, Antinomie can download it from its upstream release \
+                 (checked by SHA-256) into its data folder; the analysis sandbox uses it \
+                 read-only.",
+            );
+            ui.add_space(6.0);
+            for tool in tools {
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.strong(&tool.name);
+                    ui.weak(&tool.purpose);
+                });
+                ui.horizontal_wrapped(|ui| {
+                    match (&tool.system, &tool.installed) {
+                        (Some(path), installed) => {
+                            ui.colored_label(theme::GOOD, "On this system");
+                            ui.weak(path);
+                            if let Some(version) = installed {
+                                ui.weak(format!("(Antinomie's {version} also installed; unused)"));
+                            }
+                        }
+                        (None, Some(version)) => {
+                            ui.colored_label(
+                                theme::GOOD,
+                                format!("Installed by Antinomie ({version})"),
+                            );
+                        }
+                        (None, None) => {
+                            ui.colored_label(theme::WARN, "Not installed");
+                        }
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let this = install.filter(|install| install.id == tool.id);
+                        if this.is_some_and(|install| !install.finished) {
+                            if ui.button("Cancel").clicked() {
+                                command = Some(Command::CancelToolInstall);
+                            }
+                        } else if tool.installed.is_some() {
+                            if ui
+                                .add_enabled(enabled && !running, egui::Button::new("Remove"))
+                                .on_hover_text("Delete Antinomie's copy")
+                                .clicked()
+                            {
+                                command = Some(Command::RemoveTool {
+                                    id: tool.id.clone(),
+                                });
+                            }
+                        } else if tool.system.is_none()
+                            && ui
+                                .add_enabled(
+                                    enabled && !running,
+                                    egui::Button::new(format!(
+                                        "Install {} ({})",
+                                        tool.version,
+                                        size(tool.size)
+                                    )),
+                                )
+                                .clicked()
+                        {
+                            command = Some(Command::InstallTool {
+                                id: tool.id.clone(),
+                            });
+                        }
+                    });
+                });
+                if let Some(install) = install.filter(|install| install.id == tool.id) {
+                    if install.finished {
+                        if let Some(error) = &install.error {
+                            ui.colored_label(theme::ERROR, error);
+                        }
+                    } else {
+                        let fraction = if install.total > 0 {
+                            install.received as f32 / install.total as f32
+                        } else {
+                            0.0
+                        };
+                        ui.add(egui::ProgressBar::new(fraction).text(
+                            match install.stage.as_str() {
+                                "download" => format!(
+                                    "Downloading {} of {}",
+                                    size(install.received),
+                                    size(install.total)
+                                ),
+                                "verify" => "Checking SHA-256".into(),
+                                "unpack" => "Unpacking".into(),
+                                stage => stage.to_owned(),
+                            },
+                        ));
+                    }
+                }
+            }
+            ui.separator();
+            ui.label(
+                RichText::new(
+                    "Licenses: capa Apache-2.0; Detect It Easy MIT (with Qt LGPL-3.0 and ICU); \
+                     Ghidra Apache-2.0 with the Eclipse Temurin JDK (GPL-2.0 with Classpath \
+                     exception). Set ANTINOMIE_ANALYSIS_TOOLS=managed to prefer Antinomie's \
+                     copies over the system's.",
+                )
+                .small()
+                .weak(),
+            );
+        });
+    command
+}

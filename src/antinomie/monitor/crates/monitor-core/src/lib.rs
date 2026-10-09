@@ -1,4 +1,5 @@
 pub mod analysis;
+pub mod analysis_tools;
 pub mod api;
 mod archive_io;
 mod backend;

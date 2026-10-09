@@ -7,11 +7,11 @@ Total size on disk after cleanup: about **156 MB**.
 
 ---
 
-## Warning - this volume is case-insensitive
+## Warning - Windows drives are case-insensitive
 
-`/mnt/<drive>` is a WSL2 mount of an NTFS volume. It was verified as
-case-insensitive: creating `CaseTest.tmp` made `casetest.tmp` resolve to the
-same file.
+Under WSL2, a Windows drive (mounted as `/mnt/<letter>`) is an NTFS volume and
+is case-insensitive by default: creating `CaseTest.tmp` makes `casetest.tmp`
+resolve to the same file.
 
 The Linux kernel source tree contains 13 pairs of files whose names differ only
 by case. On a case-insensitive filesystem, one member of each pair can silently
@@ -36,7 +36,7 @@ The remaining Debian 6.12.94 source archive was checked directly:
 | 12 | `net/netfilter/xt_TCPMSS.c` <-> `xt_tcpmss.c` |
 | 13 | `tools/memory-model/litmus-tests/Z6.0+pooncelock+poonceLock+pombonce.litmus` <-> `...+pooncelock+pooncelock+pombonce.litmus` |
 
-Therefore, under `/mnt/<drive>`:
+Therefore, on a Windows drive:
 
 - Do not extract `linux_6.12.94.orig.tar.xz` here.
 - Do not put a Linux kernel Git checkout or worktree here.
@@ -148,12 +148,12 @@ gpg --verify linux_6.12.94-1.dsc
 
 ## How to get a working tree
 
-Always work on ext4, not under `/mnt/<drive>`:
+Always work on a Linux file system (ext4), not on a mounted Windows drive:
 
 ```bash
 mkdir -p ~/src/antinomie/debian-source
 cd ~/src/antinomie/debian-source
-cp $REPO/src/debian/linux_6.12.94* .
+cp "$REPO/src/debian/"linux_6.12.94* .   # $REPO: this checkout
 dpkg-source -x linux_6.12.94-1.dsc
 cd linux-6.12.94
 ```
@@ -163,7 +163,7 @@ package files and applies the main Quilt patch series. That reconstructed tree
 is the correct place to build, patch, test, and generate `.deb` artifacts.
 
 If you need upstream Git history for research or cherry-picking, clone it
-outside this workspace and outside `/mnt/<drive>`, for example:
+outside this workspace and off any Windows drive, for example:
 
 ```bash
 git clone https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git \

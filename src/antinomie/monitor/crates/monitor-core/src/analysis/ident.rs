@@ -7,7 +7,7 @@ use object::{Object, ObjectSection};
 use std::time::Duration;
 
 pub(super) const SIGNATURES: &str = "Antinomie identification signatures 1";
-const DIE: &[&str] = &["/usr/bin/diec", "/usr/local/bin/diec", "/opt/die/diec"];
+const DIE_MANAGED: &str = "/opt/antinomie-tools/die/diec.sh";
 
 /// Find `needle` and return the printable run around it (for versions).
 fn printable_around(data: &[u8], needle: &[u8], max: usize) -> Option<(usize, String)> {
@@ -338,16 +338,24 @@ pub(super) fn identify(section: &mut AnalysisSection, specimen: &[u8]) {
         section.tools.push(tools::version(file, &["--version"]));
         sources.push("file magic");
     }
-    let die = tools::find(DIE);
+    let die = tools::find_tool(crate::analysis_tools::DIE_SYSTEM, DIE_MANAGED);
     if let Some(die) = die
-        && let Ok(run) = tools::run(
+        && let Ok(run) = tools::run_with(
             die,
             &["--json", "/input/specimen"],
             &[("HOME", "/tmp")],
             Duration::from_secs(120),
             1024 * 1024,
+            true,
         )
-        && let Ok(json) = serde_json::from_str::<serde_json::Value>(&run.stdout)
+        && let Ok(json) = serde_json::from_str::<serde_json::Value>(&run.stdout).inspect_err(|_| {
+            eprintln!(
+                "Detect It Easy output did not parse ({} octets, success {}): {}",
+                run.stdout.len(),
+                run.success,
+                run.stdout.chars().take(300).collect::<String>()
+            )
+        })
     {
         let values = json
             .pointer("/detects/0/values")
@@ -399,7 +407,7 @@ pub(super) fn identify(section: &mut AnalysisSection, specimen: &[u8]) {
         section.entries.len(),
         sources.join(", "),
         if die.is_none() {
-            "; install Detect It Easy (diec) for its signature database"
+            "; install Detect It Easy from Tools > Analysis tools for its signature database"
         } else {
             ""
         }

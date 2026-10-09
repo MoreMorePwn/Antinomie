@@ -42,10 +42,9 @@ read, and anything the app could not decode or lost is marked as such.
 - Rust to build the app; building kernels and bases needs the tools listed in
   [CONTRIBUTING.md](CONTRIBUTING.md)
 - Static analysis runs in a bubblewrap sandbox (`bwrap`). Disassembly, rules
-  and identification are built in; decompilation uses an installed Ghidra
-  (`apt install ghidra`) or radare2, capabilities an installed
-  [capa](https://github.com/mandiant/capa/releases), and Detect It Easy
-  (`diec`) adds its signatures when present
+  and identification are built in. Decompilation (Ghidra), capabilities
+  (capa) and Detect It Easy use the system's copy when installed; otherwise
+  **Tools > Analysis tools** downloads them for Antinomie
 
 ## Quick start
 

@@ -42,6 +42,8 @@ pub(crate) struct Jobs {
     release: VecDeque<u64>,
     retained_len: u64,
     updates: Vec<(Option<String>, AnalysisReport)>,
+    /// `<data>/tools`, mounted read-only into the worker sandbox.
+    tools_dir: Option<PathBuf>,
 }
 pub(crate) enum Action {
     Read {
@@ -93,6 +95,11 @@ pub(crate) fn fail(report: &mut AnalysisReport, state: AnalysisState, reason: im
     }
 }
 impl Jobs {
+    pub fn with_tools(tools_dir: PathBuf) -> Self {
+        let mut jobs = Self::default();
+        jobs.tools_dir = Some(tools_dir);
+        jobs
+    }
     pub fn stored_len(&self) -> u64 {
         self.retained_len
             .saturating_add(self.active.as_ref().map_or(0, |j| j.reserved_len))
@@ -360,7 +367,7 @@ impl Jobs {
         job.report.state = AnalysisState::Queued;
         job.report.specimen_len = Some(job.total_len);
         job.report.specimen_sha256 = Some(format!("{:x}", job.digest.clone().finalize()));
-        match spawn_worker(&job) {
+        match spawn_worker(&job, self.tools_dir.as_deref()) {
             Ok(child) => {
                 job.disk_len = job.disk_len.saturating_add(
                     fs::metadata(job.directory.join("request.json")).map_or(0, |m| m.len()),
@@ -598,11 +605,15 @@ fn directory_len(path: &Path) -> Result<u64, String> {
     }
     Ok(total)
 }
-fn spawn_worker(job: &Job) -> Result<Child, String> {
+fn spawn_worker(job: &Job, tools: Option<&Path>) -> Result<Child, String> {
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-    spawn_worker_binary(job, &executable)
+    spawn_worker_binary(job, &executable, tools)
 }
-fn spawn_worker_binary(job: &Job, executable: &Path) -> Result<Child, String> {
+fn spawn_worker_binary(
+    job: &Job,
+    executable: &Path,
+    tools: Option<&Path>,
+) -> Result<Child, String> {
     if CLEANUP_PENDING.load(Ordering::Acquire) {
         return Err("a previous worker still awaits reap; isolation worker unavailable".into());
     }
@@ -611,11 +622,16 @@ fn spawn_worker_binary(job: &Job, executable: &Path) -> Result<Child, String> {
     let listings = output.join("listings");
     fs::create_dir(&listings).map_err(|e| e.to_string())?;
     fs::set_permissions(&listings, fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
-    let decompiler = job
-        .report
-        .sections
-        .iter()
-        .any(|s| s.kind == AnalysisKind::Decompilation);
+    let has = |kind| job.report.sections.iter().any(|s| s.kind == kind);
+    let decompiler = has(AnalysisKind::Decompilation);
+    // capa unpacks itself into /tmp before it runs.
+    let tmp_size = if decompiler {
+        "2147483648"
+    } else if has(AnalysisKind::Capabilities) {
+        "1073741824"
+    } else {
+        "33554432"
+    };
     OpenOptions::new()
         .create_new(true)
         .write(true)
@@ -632,6 +648,9 @@ fn spawn_worker_binary(job: &Job, executable: &Path) -> Result<Child, String> {
     let mut cmd = Command::new("/usr/bin/bwrap");
     cmd.args([
         "--unshare-all",
+        // A neutral host name: tools log it, and logs are kept.
+        "--hostname",
+        "analysis",
         "--unshare-user",
         "--disable-userns",
         "--die-with-parent",
@@ -645,6 +664,13 @@ fn spawn_worker_binary(job: &Job, executable: &Path) -> Result<Child, String> {
     ]);
     // Read-only system configuration the optional tools need: the Java
     // runtime of a decompiler resolves itself through these.
+    // Merged-/usr systems keep /bin, /sbin and /lib as links into /usr; tool
+    // scripts start with #!/bin/sh, so recreate the links.
+    for path in ["/bin", "/sbin", "/lib", "/lib64"] {
+        if let Ok(target) = fs::read_link(path) {
+            cmd.arg("--symlink").arg(target).arg(path);
+        }
+    }
     for path in [
         "/lib",
         "/lib64",
@@ -653,7 +679,7 @@ fn spawn_worker_binary(job: &Job, executable: &Path) -> Result<Child, String> {
         "/etc/java-21-openjdk",
         "/etc/ld.so.cache",
     ] {
-        if Path::new(path).exists() {
+        if Path::new(path).exists() && fs::read_link(path).is_err() {
             cmd.arg("--ro-bind").arg(path).arg(path);
         }
     }
@@ -695,7 +721,7 @@ fn spawn_worker_binary(job: &Job, executable: &Path) -> Result<Child, String> {
         "--size",
     ])
     // A decompiler keeps its project database in /tmp.
-    .arg(if decompiler { "2147483648" } else { "33554432" })
+    .arg(tmp_size)
     .args([
         "--tmpfs",
         "/tmp",
@@ -720,8 +746,17 @@ fn spawn_worker_binary(job: &Job, executable: &Path) -> Result<Child, String> {
     .arg("/output/report.json")
     .arg("--bind")
     .arg(&listings)
-    .arg("/output/listings")
-    .args([
+    .arg("/output/listings");
+    // Analysis tools Antinomie installed, read-only.
+    if let Some(tools) = tools.filter(|tools| tools.is_dir()) {
+        cmd.arg("--ro-bind")
+            .arg(tools)
+            .arg(crate::analysis_tools::SANDBOX_DIR);
+    }
+    if std::env::var("ANTINOMIE_ANALYSIS_TOOLS").as_deref() == Ok("managed") {
+        cmd.args(["--setenv", "ANTINOMIE_ANALYSIS_TOOLS", "managed"]);
+    }
+    cmd.args([
         "--remount-ro",
         "/",
         "--setenv",
@@ -1111,7 +1146,14 @@ mod tests {
             report_len: 0,
         };
         let started = Instant::now();
-        let mut child = spawn_worker_binary(&job, &executable).unwrap();
+        let mut child = spawn_worker_binary(
+            &job,
+            &executable,
+            std::env::var_os("ANTINOMIE_TEST_TOOLS_DIR")
+                .map(PathBuf::from)
+                .as_deref(),
+        )
+        .unwrap();
         let status = loop {
             if let Some(status) = child.try_wait().unwrap() {
                 break status;
@@ -1221,7 +1263,14 @@ mod tests {
             worker_len: 0,
             report_len: 0,
         };
-        let mut child = spawn_worker_binary(&job, &executable).unwrap();
+        let mut child = spawn_worker_binary(
+            &job,
+            &executable,
+            std::env::var_os("ANTINOMIE_TEST_TOOLS_DIR")
+                .map(PathBuf::from)
+                .as_deref(),
+        )
+        .unwrap();
         let status = loop {
             if let Some(status) = child.try_wait().unwrap() {
                 break status;

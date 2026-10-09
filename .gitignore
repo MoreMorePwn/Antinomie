@@ -32,3 +32,8 @@ target/
 .DS_Store
 __pycache__/
 *.pyc
+
+# Agent tool state and local settings; never committed
+.codex/
+.claude/
+.claude.json

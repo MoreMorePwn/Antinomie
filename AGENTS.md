@@ -1,10 +1,9 @@
 # Antinomie engineering conventions
 
 The enduring project guide is the documentation checkout's `Agents/README.md`.
-Current local path:
-`$ANTINOMIE_GUIDE_DIR/README.md`.
-On another machine use `$ANTINOMIE_GUIDE_DIR/README.md` if configured, or locate
-the existing documentation checkout; do not duplicate policy or auto-clone it.
+Use `$ANTINOMIE_GUIDE_DIR/README.md` if configured, or locate the existing
+documentation checkout; do not duplicate policy or auto-clone it. Never record
+machine-specific paths, user names or agent tool directories in this repository.
 Read the index and applicable workflow/delegation/engineering/skills chapters
 before writing. Report missing guidance before risky changes. Higher-priority
 instructions and explicit user scope prevail over the project guide.
@@ -47,10 +46,12 @@ contract changes instead of independently redesigning a neighboring module.
 
 ## Skills
 
-- Host Rust and UI workers: the `rust-skills` skill; read
-  relevant rules only (API, ownership, errors, unsafe, concurrency, tests).
-- UI worker also: the `frontend-design` skill. Apply native
-  operational-tool design; web hero guidance is irrelevant to this application.
+Skills are named here; agents find them in their own installed skills.
+
+- Host Rust and UI workers: the `rust-skills` skill; read relevant rules only
+  (API, ownership, errors, unsafe, concurrency, tests).
+- UI worker also: the `frontend-design` skill. Apply native operational-tool
+  design; web hero guidance is irrelevant to this application.
 - Explicit threat-model requests: the `security-threat-model` skill.
   Do not invoke for generic code review/design; keep models grounded in actual
   implemented boundaries. Ordinary boundary review still follows project rules.
