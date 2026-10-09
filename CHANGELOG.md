@@ -29,8 +29,9 @@ Guest contract revision 12 (kernel patch series `0001`–`0017`). Bases for
   userspace, independent of launched programs. No per-boot capture limit
   (earlier guests allowed 64); the process picker lists every process with a
   filter.
-- Prebuilt bases for this version: BusyBox and Debian 13 (GNOME) on the
-  Hugging Face bucket `MoreMorePwn/antinomie-bases`.
+- Prebuilt bases for this version: BusyBox `aaf26eed…` and Debian 13
+  (GNOME) `a12b52ab…` on the Hugging Face bucket
+  `MoreMorePwn/antinomie-bases`.
 
 ## 0.1.0 — 2026-10-08
 

@@ -610,10 +610,12 @@ mod tests {
         }
         let catalog = fetch_catalog(Path::new("curl"), DEFAULT_REMOTE_BASE).expect("catalog");
         assert!(validate_catalog(&catalog).is_ok());
+        // The newest BusyBox: the one for the current contract revision.
         let base = catalog
             .bases
             .iter()
-            .find(|base| base.kind == "busybox")
+            .filter(|base| base.kind == "busybox")
+            .max_by_key(|base| base.antinomie_revision)
             .expect("busybox base present");
         let target = staging("real");
         let bundle = download_base(
