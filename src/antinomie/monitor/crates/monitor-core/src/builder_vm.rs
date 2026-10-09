@@ -55,6 +55,7 @@ const TOOL_PACKAGES: &[&str] = &[
     "busybox-static",
     "mmdebstrap",
     "debian-archive-keyring",
+    "ccache",
 ];
 /// Bundle files the guest may upload; `provenance.tar` is unpacked on the host.
 const OUTPUT_FILES: &[&str] = &[
@@ -65,6 +66,8 @@ const OUTPUT_FILES: &[&str] = &[
     "base.qcow2",
     "provenance.tar",
     "kernel.tar",
+    "rootfs.tar",
+    "ccache.tar",
 ];
 const TOOLS_TIMEOUT: Duration = Duration::from_secs(90 * 60);
 const BUILD_TIMEOUT: Duration = Duration::from_secs(10 * 60 * 60);
@@ -83,6 +86,10 @@ pub(crate) struct QemuBuild<'a> {
     pub proxy: &'a str,
     /// Cached kernel to reuse if present; a kernel built in the VM is stored here.
     pub kernel_cache: &'a Path,
+    /// Cached Debian root filesystem to offer the VM; a new one comes back here.
+    pub image_cache: Option<&'a Path>,
+    /// Kernel compiler cache tarball, unpacked in the VM and returned updated.
+    pub ccache: &'a Path,
     /// Empty directory that receives the bundle.
     pub output: &'a Path,
     pub cancel: &'a AtomicBool,
@@ -314,6 +321,12 @@ impl QemuBuild<'_> {
         if self.kernel_cache.is_file() {
             server.add_file("kernel.tar", self.kernel_cache.to_path_buf());
         }
+        if let Some(cache) = self.image_cache.filter(|cache| cache.is_file()) {
+            server.add_file("rootfs.tar", cache.to_path_buf());
+        }
+        if self.ccache.is_file() {
+            server.add_file("ccache.tar", self.ccache.to_path_buf());
+        }
         server.accept_uploads(self.output);
         let script = format!(
             r#"{proxy}
@@ -323,11 +336,25 @@ curl -fsS -o "/build/inputs/{orig}" "$base/inputs/{orig}"
 curl -fsS -o /build/job.json "$base/job.json"
 cached=0
 if curl -fsS -o /build/kernel.tar "$base/kernel.tar" 2>/dev/null; then cached=1; else rm -f /build/kernel.tar; fi
+image_args=()
+{image_download}
+mkdir -p /build/ccache
+curl -fsS "$base/ccache.tar" 2>/dev/null | tar -x -C /build/ccache || true
+touch /build/ccache.started
 python3 /build/kit/scripts/build-base.py --job /build/job.json --inputs /build/inputs \
-    --work /build/work --output /build/out --jobs "$(nproc)" --kernel-cache /build/kernel.tar
+    --work /build/work --output /build/out --jobs "$(nproc)" --kernel-cache /build/kernel.tar \
+    --ccache /build/ccache "${{image_args[@]}}"
 cd /build/out
 if [ -d provenance ]; then tar -cf provenance.tar provenance; fi
 if [ "$cached" = 0 ] && [ -f /build/kernel.tar ]; then mv /build/kernel.tar kernel.tar; fi
+# Return the caches only when this build changed them.
+if [ ${{#image_args[@]}} -gt 0 ] && [ -f /build/rootfs.tar ] && \
+    [ "$(stat -c %s:%Y /build/rootfs.tar)" != "$rootfs_before" ]; then
+    mv /build/rootfs.tar rootfs.tar
+fi
+if [ -n "$(find /build/ccache -newer /build/ccache.started -type f -print -quit)" ]; then
+    tar -C /build/ccache -cf ccache.tar .
+fi
 for name in {outputs}; do
     if [ -f "$name" ]; then
         curl -fsS -H 'Expect:' -T "$name" "$base/out/$name"
@@ -336,6 +363,13 @@ done
 "#,
             proxy = apt_proxy(self.proxy),
             orig = orig_name,
+            image_download = if self.image_cache.is_some() {
+                "if ! curl -fsS -o /build/rootfs.tar \"$base/rootfs.tar\" 2>/dev/null; then rm -f /build/rootfs.tar; fi\n\
+                 rootfs_before=$(stat -c %s:%Y /build/rootfs.tar 2>/dev/null || echo none)\n\
+                 image_args=(--image-cache /build/rootfs.tar)"
+            } else {
+                ""
+            },
             outputs = OUTPUT_FILES.join(" ")
         );
         server.add_text("user-data", user_data(&server.base(), &script));
@@ -364,6 +398,17 @@ done
             fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
             fs::rename(&built_kernel, self.kernel_cache).map_err(|e| e.to_string())?;
             on_line("kernel stored in the cache for later builds");
+        }
+        let built_rootfs = self.output.join("rootfs.tar");
+        if let (true, Some(cache)) = (built_rootfs.is_file(), self.image_cache) {
+            let parent = cache.parent().ok_or("image cache has no parent")?;
+            fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+            fs::rename(&built_rootfs, cache).map_err(|e| e.to_string())?;
+            on_line("root filesystem stored in the cache for later builds");
+        }
+        let built_ccache = self.output.join("ccache.tar");
+        if built_ccache.is_file() {
+            fs::rename(&built_ccache, self.ccache).map_err(|e| e.to_string())?;
         }
         let provenance = self.output.join("provenance.tar");
         if provenance.is_file() {

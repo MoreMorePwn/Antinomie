@@ -8,7 +8,8 @@
 # and ANTINOMIE_SERIES_DIR replace the repository work-tree defaults.
 # ANTINOMIE_SOURCE_PREPARED=1 states that the caller (scripts/build-base.py)
 # created the source tree itself from the pinned inputs and ANTINOMIE_SERIES_DIR,
-# so the author-tree git check is skipped.
+# so the author-tree git check is skipped. ANTINOMIE_CCACHE_DIR compiles through
+# ccache with that cache directory, when ccache is installed.
 #
 # minimal (default): upstream x86_64_defconfig plus the symbols below, all
 #   built in; output in work/monitor-build. Used by the BusyBox base.
@@ -39,6 +40,17 @@ if [[ $prepared != 1 ]]; then
 fi
 mkdir -p "$build_tree"
 config="$source_tree/scripts/config"
+# A new patch series changes the source id in every object's configuration
+# header but not their preprocessed code: ccache's preprocessor mode still
+# hits, so only the files the series touched are compiled again.
+compiler=()
+if [[ -n ${ANTINOMIE_CCACHE_DIR:-} ]] && command -v ccache >/dev/null; then
+    export CCACHE_DIR=$ANTINOMIE_CCACHE_DIR CCACHE_MAXSIZE=${CCACHE_MAXSIZE:-8G}
+    export CCACHE_BASEDIR=$source_tree CCACHE_NOHASHDIR=1 CCACHE_COMPILERCHECK=content
+    mkdir -p "$CCACHE_DIR"
+    compiler=(CC="ccache gcc" HOSTCC="ccache gcc")
+    ccache --zero-stats >/dev/null
+fi
 
 # The kernel states its source as CONFIG_ANTINOMIE_SOURCE_ID
 # "<revision>:<series sha256>": the contract revision from the control header
@@ -137,7 +149,8 @@ if [[ $profile == minimal ]]; then
     # shellcheck disable=SC2086
     require_symbols ANTINOMIE IKCONFIG $DEBIAN_PARITY $MINIMAL_EXTRA
     require_source_id
-    make -C "$source_tree" O="$build_tree" -j"$jobs" bzImage
+    make -C "$source_tree" O="$build_tree" "${compiler[@]}" -j"$jobs" bzImage
+    [[ ${#compiler[@]} -eq 0 ]] || ccache --show-stats >&2
     echo "$build_tree/arch/x86/boot/bzImage"
     exit 0
 fi
@@ -174,7 +187,8 @@ require_source_id
 "$source_tree/scripts/diffconfig" "$reference/.config" "$build_tree/.config" \
     > "$build_tree/antinomie-config-deviations.txt"
 # LOCALVERSION= keeps the release exactly 6.12.94 (no "+" for an untagged tree).
-make -C "$source_tree" O="$build_tree" LOCALVERSION= -j"$jobs" bzImage modules
+make -C "$source_tree" O="$build_tree" "${compiler[@]}" LOCALVERSION= -j"$jobs" bzImage modules
+[[ ${#compiler[@]} -eq 0 ]] || ccache --show-stats >&2
 rm -rf "$build_tree/modules-install"
 make -C "$source_tree" O="$build_tree" LOCALVERSION= INSTALL_MOD_PATH="$build_tree/modules-install" \
     INSTALL_MOD_STRIP=1 modules_install >/dev/null

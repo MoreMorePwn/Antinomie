@@ -119,6 +119,23 @@ pub(crate) fn kernel_cache(root: &Path, kernel_profile: &str) -> Result<PathBuf,
         .join(format!("kernel-{kernel_profile}-{}.tar", &key[..16])))
 }
 
+/// Where the Debian root filesystem bootstrapped for `desktop` is cached; the
+/// image recipe checks inside that it matches the recipe and answers and is
+/// recent enough.
+pub(crate) fn image_cache(root: &Path, desktop: &str) -> PathBuf {
+    root.join("images")
+        .join(format!("rootfs-debian-{desktop}.tar"))
+}
+
+/// The kernel compiler cache: a directory for builds on this host, a tarball
+/// that the builder VM unpacks and returns.
+pub(crate) fn ccache_dir(root: &Path) -> PathBuf {
+    root.join("ccache")
+}
+pub(crate) fn ccache_archive(root: &Path) -> PathBuf {
+    root.join("ccache.tar")
+}
+
 /// Keep only `current` among the cached kernels of its profile.
 pub(crate) fn prune_kernel_cache(current: &Path) {
     let (Some(directory), Some(name)) = (current.parent(), current.file_name()) else {

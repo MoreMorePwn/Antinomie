@@ -8,12 +8,18 @@ natively on a Linux host or as root inside the QEMU builder VM and prints
 "::stage NAME" lines for the app.
 
     build-base.py --job JOB.json --inputs DIR --work DIR --output DIR
-                  [--kernel-cache FILE]
+                  [--kernel-cache FILE] [--image-cache FILE] [--ccache DIR]
 
 The kernel depends only on the patch series, the kernel build script and the
 profile, never on the image answers. With --kernel-cache, a matching cached
 kernel (bzImage, .config and modules) is reused; otherwise the kernel is built
 and the cache file is written for the next build.
+
+With --image-cache, the Debian recipe reuses a root filesystem it bootstrapped
+earlier with the same recipe and answers (and not too old): only the kernel
+and its modules change, which skips installing the desktop. With --ccache, the
+kernel compiler output is cached there, so a new patch series recompiles only
+what it touched.
 
 JOB.json: {"format": 1, "profile": "busybox" | "debian-xfce", "options": {...},
            "app_version": "0.1.0"}   (app_version optional: recorded as built_with)
@@ -137,9 +143,9 @@ def prepare_source(inputs, work):
     return tree
 
 
-def build_kernel(kernel_profile, tree, work, jobs):
+def build_kernel(kernel_profile, tree, work, jobs, ccache=None):
     build = work / f"kernel-{kernel_profile}"
-    env = os.environ | {"ANTINOMIE_SOURCE_TREE": str(tree), "ANTINOMIE_BUILD_TREE": str(build),
+    env = os.environ | ({"ANTINOMIE_CCACHE_DIR": str(ccache)} if ccache else {}) | {"ANTINOMIE_SOURCE_TREE": str(tree), "ANTINOMIE_BUILD_TREE": str(build),
                         "ANTINOMIE_DEBIAN_CONFIG": str(tree / "debian/config"),
                         "ANTINOMIE_SERIES_DIR": str(SERIES), "ANTINOMIE_SOURCE_PREPARED": "1",
                         "JOBS": str(jobs)}
@@ -223,7 +229,7 @@ def save_cached_kernel(cache, kept, kernel_profile):
     print(f"kernel cached in {cache}", flush=True)
 
 
-def build_image(profile, values, build, work, output, app_version=None):
+def build_image(profile, values, build, work, output, app_version=None, image_cache=None):
     recipe = KIT / "scripts" / PROFILES[profile][1]
     command = [sys.executable, recipe, "--kernel", build / "arch/x86/boot/bzImage",
                "--kernel-config", build / ".config", "--output", output, "--work", work]
@@ -236,6 +242,8 @@ def build_image(profile, values, build, work, output, app_version=None):
         answers = work / "options.json"
         answers.write_text(json.dumps(values) + "\n")
         command += ["--modules", build / "modules-install", "--options", answers]
+        if image_cache is not None:
+            command += ["--rootfs-cache", image_cache]
     run(*command)
 
 
@@ -251,6 +259,10 @@ def main():
                         help="keep the kernel build tree for a faster next build")
     parser.add_argument("--kernel-cache", type=Path,
                         help="reuse this cached kernel if it matches, else write it")
+    parser.add_argument("--image-cache", type=Path,
+                        help="reuse this cached root filesystem if it matches, else write it")
+    parser.add_argument("--ccache", type=Path,
+                        help="compiler cache directory for the kernel build")
     args = parser.parse_args()
     try:
         profile, values, app_version = load_job(args.job)
@@ -265,7 +277,7 @@ def main():
             stage("source")
             tree = prepare_source(args.inputs, args.work)
             stage("kernel")
-            build = build_kernel(kernel_profile, tree, args.work, args.jobs)
+            build = build_kernel(kernel_profile, tree, args.work, args.jobs, args.ccache)
             if not args.keep_kernel_build:
                 build = keep_artifacts(build, args.work)
             if args.kernel_cache is not None:
@@ -274,7 +286,8 @@ def main():
             stage("kernel")
             require_space(args.work, image_space)
         stage("image")
-        build_image(profile, values, build, args.work, args.output, app_version)
+        build_image(profile, values, build, args.work, args.output, app_version,
+                    args.image_cache)
         if not args.keep_kernel_build:
             shutil.rmtree(build)
         stage("done")

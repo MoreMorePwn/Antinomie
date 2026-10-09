@@ -1439,6 +1439,13 @@ impl BuildRun {
         if kernel_cache.is_file() {
             line("the kernel for this app version is cached; only the image is built");
         }
+        // Debian images reuse a recent root filesystem with the same answers.
+        let image_cache = job["options"]["desktop"]
+            .as_str()
+            .map(|desktop| crate::kit::image_cache(&root, desktop));
+        if image_cache.as_ref().is_some_and(|cache| cache.is_file()) {
+            line("a root filesystem for these answers is cached; it is reused if recent");
+        }
         match self.mode {
             build::BuildMode::Qemu => {
                 line("::stage builder");
@@ -1458,6 +1465,8 @@ impl BuildRun {
                     mirror: &self.options.mirror,
                     proxy: &self.options.proxy,
                     kernel_cache: &kernel_cache,
+                    image_cache: image_cache.as_deref(),
+                    ccache: &crate::kit::ccache_archive(&root),
                     output,
                     cancel: &self.cancel,
                 }
@@ -1483,7 +1492,12 @@ impl BuildRun {
                     .arg("--output")
                     .arg(&self.output)
                     .arg("--kernel-cache")
-                    .arg(&kernel_cache);
+                    .arg(&kernel_cache)
+                    .arg("--ccache")
+                    .arg(crate::kit::ccache_dir(&root));
+                if let Some(cache) = &image_cache {
+                    command.arg("--image-cache").arg(cache);
+                }
                 build::run_streaming(&mut command, "native build", &self.cancel, &mut *line)
             }
         }?;

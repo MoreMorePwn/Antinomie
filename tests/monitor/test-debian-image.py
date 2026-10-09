@@ -27,7 +27,7 @@ class DebianImageTests(unittest.TestCase):
                                 "proxy": "http://proxy.example:3128"})
         with patch.object(image.os, "geteuid", return_value=1000):
             command = image.mmdebstrap_command(values, Path("/w/rootfs.tar"), Path("/w/c.sh"),
-                                               Path("/w/prov"), Path("/m/lib/modules/6.12.94"))
+                                               Path("/w/prov"))
         self.assertEqual(command[0], "mmdebstrap")
         self.assertIn("--mode=unshare", command)
         self.assertIn("--variant=standard", command)
@@ -46,7 +46,8 @@ class DebianImageTests(unittest.TestCase):
         hooks = [arg for arg in command if arg.startswith("--customize-hook=")]
         self.assertTrue(any("antinomie-customize.sh lab de_DE.UTF-8 de nodeadkeys Europe/Berlin" in h
                             for h in hooks), hooks)
-        self.assertTrue(any("chown -R 0:0" in h and "6.12.94" in h for h in hooks))
+        # Kernel modules are appended to the tarball later, not bootstrapped.
+        self.assertFalse(any("modules" in h for h in hooks))
         with patch.object(image.os, "geteuid", return_value=0):
             root = image.mmdebstrap_command(image.options({}), Path("/w/r.tar"), Path("/w/c.sh"),
                                             Path("/w/p"))
@@ -128,6 +129,57 @@ class DebianImageTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 image.build(Path("kernel"), output)
             self.assertEqual(marker.read_text(), "unchanged")
+
+    def test_root_filesystem_cache_is_reused_only_for_the_same_recipe_and_answers(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            staging, provenance = root / "staging", root / "provenance"
+            staging.mkdir()
+            provenance.mkdir()
+            rootfs = staging / "rootfs.tar"
+            with tarfile.open(rootfs, "w", format=tarfile.PAX_FORMAT) as archive:
+                for directory in ("./", "./etc", "./usr", "./usr/lib"):
+                    entry = tarfile.TarInfo(directory)
+                    entry.type = tarfile.DIRTYPE
+                    archive.addfile(entry)
+                data = b"debian\n"
+                entry = tarfile.TarInfo("./etc/hostname")
+                entry.size = len(data)
+                archive.addfile(entry, io.BytesIO(data))
+            for file in image.ROOTFS_PROVENANCE:
+                (provenance / file).write_text(file)
+            values = image.options({"desktop": "gnome"})
+            record = {"bootstrap": "mmdebstrap", "root_built_at": "2026-10-09T00:00:00+00:00",
+                      "reused_from_cache": False}
+            cache = root / "cache/rootfs.tar"
+            now = image.datetime(2026, 10, 10, tzinfo=image.timezone.utc)
+            image.save_rootfs_cache(cache, rootfs, provenance, record, values)
+            rootfs.unlink()
+            shutil.rmtree(provenance)
+            provenance.mkdir()
+            log = io.StringIO()
+            with patch.object(image, "datetime", wraps=image.datetime) as clock:
+                clock.now.return_value = now
+                clock.fromisoformat = image.datetime.fromisoformat
+                reused = image.load_rootfs_cache(cache, values, staging, provenance, log)
+                self.assertTrue(reused["reused_from_cache"])
+                self.assertEqual((provenance / "packages.tsv").read_text(), "packages.tsv")
+                with tarfile.open(rootfs) as archive:
+                    self.assertIn("./etc/hostname", archive.getnames())
+                other = image.options({"desktop": "xfce"})
+                self.assertIsNone(image.load_rootfs_cache(cache, other, staging, provenance, log))
+                clock.now.return_value = now + image.timedelta(days=image.ROOTFS_CACHE_DAYS)
+                self.assertIsNone(image.load_rootfs_cache(cache, values, staging, provenance, log))
+            # Modules are appended, owned by root, under /usr/lib/modules.
+            modules = root / "lib/modules/6.12.94"
+            (modules / "kernel").mkdir(parents=True)
+            (modules / "modules.dep").write_text("")
+            image.add_modules(rootfs, modules)
+            with tarfile.open(rootfs) as archive:
+                names = archive.getnames()
+                self.assertIn("./usr/lib/modules", names)
+                dep = archive.getmember("./usr/lib/modules/6.12.94/modules.dep")
+                self.assertEqual((dep.uid, dep.gid, dep.uname), (0, 0, "root"))
 
     def test_bootstrap_failure_cleans_unpublished_state(self):
         with tempfile.TemporaryDirectory() as name:

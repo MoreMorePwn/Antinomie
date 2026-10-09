@@ -9,8 +9,10 @@ filesystems are used.
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 MikiMiku (MoreMorePwn)
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -277,12 +279,101 @@ apt-get clean
 """
 
 
+# What the bootstrap writes into provenance/; a cached root filesystem keeps them.
+ROOTFS_PROVENANCE = ("packages.tsv", "os-release", "package-docs.tar.gz", "apt-lists.tar.gz",
+                     "customize.sh", "mmdebstrap.json", "bootstrap.log")
+# A cached root filesystem older than this is bootstrapped again, so package
+# updates (security fixes) still arrive.
+ROOTFS_CACHE_DAYS = int(os.environ.get("ANTINOMIE_ROOTFS_CACHE_DAYS", "30"))
+
+
+def rootfs_identity(values):
+    """What the root filesystem depends on: this recipe and the answers that
+    shape it (the base name and the apt proxy do not)."""
+    keys = ("desktop", "hostname", "locale", "keyboard_layout", "keyboard_variant",
+            "timezone", "standard", "mirror")
+    return {"format": 1,
+            "recipe_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "options": {key: values[key] for key in keys}}
+
+
+def load_rootfs_cache(cache, values, staging, provenance, log):
+    """Unpack a cached root filesystem tarball that matches this recipe and is
+    recent enough; return its record, or None to bootstrap."""
+    if cache is None or not cache.is_file():
+        return None
+    try:
+        with tarfile.open(cache) as archive:
+            manifest = json.load(archive.extractfile("rootfs-cache.json"))
+            if manifest.get("identity") != rootfs_identity(values):
+                print("cached root filesystem is from another recipe or answers; bootstrapping",
+                      flush=True)
+                return None
+            built = datetime.fromisoformat(manifest["built_at"])
+            if datetime.now(timezone.utc) - built > timedelta(days=ROOTFS_CACHE_DAYS):
+                print(f"cached root filesystem is older than {ROOTFS_CACHE_DAYS} days; "
+                      "bootstrapping for current packages", flush=True)
+                return None
+            for name in ROOTFS_PROVENANCE:
+                member = archive.getmember("provenance/" + name)
+                with archive.extractfile(member) as source, (provenance / name).open("wb") as target:
+                    shutil.copyfileobj(source, target)
+            with archive.extractfile("rootfs.tar") as source, \
+                    (staging / "rootfs.tar").open("wb") as target:
+                shutil.copyfileobj(source, target, 1 << 20)
+    except (tarfile.TarError, KeyError, ValueError, OSError, TypeError) as error:
+        print(f"cached root filesystem unusable ({error}); bootstrapping", flush=True)
+        for name in ("rootfs.tar",):
+            (staging / name).unlink(missing_ok=True)
+        return None
+    print(f"using the root filesystem bootstrapped {manifest['built_at']}", flush=True)
+    log.write(f"root filesystem reused from the cache, bootstrapped {manifest['built_at']}\n")
+    return manifest["root"] | {"reused_from_cache": True}
+
+
+def save_rootfs_cache(cache, tarball, provenance, root, values):
+    """Store the bootstrapped root filesystem (before kernel modules) atomically."""
+    partial = cache.with_name(cache.name + ".part")
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    manifest = json.dumps({"identity": rootfs_identity(values), "root": root,
+                           "built_at": root["root_built_at"]}).encode()
+    with tarfile.open(partial, "w") as archive:
+        entry = tarfile.TarInfo("rootfs-cache.json")
+        entry.size = len(manifest)
+        archive.addfile(entry, io.BytesIO(manifest))
+        for name in ROOTFS_PROVENANCE:
+            archive.add(provenance / name, arcname="provenance/" + name)
+        archive.add(tarball, arcname="rootfs.tar")
+    os.replace(partial, cache)
+    print(f"root filesystem cached in {cache}", flush=True)
+
+
+def add_modules(tarball, modules):
+    """Append the kernel's modules (owned by root) to the root filesystem tarball."""
+    def owned_by_root(info):
+        info.uid = info.gid = 0
+        info.uname = info.gname = "root"
+        return info
+
+    with tarfile.open(tarball, "a", format=tarfile.PAX_FORMAT) as archive:
+        names = set(archive.getnames())
+        for directory in ("./usr", "./usr/lib", "./usr/lib/modules"):
+            if directory not in names and directory[2:] not in names:
+                entry = tarfile.TarInfo(directory)
+                entry.type = tarfile.DIRTYPE
+                entry.mode = 0o755
+                archive.addfile(owned_by_root(entry))
+        archive.add(modules, arcname=f"./usr/lib/modules/{modules.name}", filter=owned_by_root)
+
+
 def bootstrap_mode():
     return "root" if os.geteuid() == 0 else "unshare"
 
 
-def mmdebstrap_command(values, tarball, script, provenance, modules=None):
-    """The mmdebstrap invocation; hooks run as (namespace) root with "$1" the new root."""
+def mmdebstrap_command(values, tarball, script, provenance):
+    """The mmdebstrap invocation; hooks run as (namespace) root with "$1" the new root.
+    Kernel modules are added to the tarball afterwards (add_modules), so the
+    bootstrapped system can be cached and reused with another kernel."""
     q = shlex.quote
     command = ["mmdebstrap", "--mode=" + bootstrap_mode(),
                "--variant=" + ("standard" if values["standard"] else "important"),
@@ -296,10 +387,6 @@ def mmdebstrap_command(values, tarball, script, provenance, modules=None):
         command.append(f'--aptopt=Acquire::http::Proxy "{values["proxy"]}"')
         command.append(f'--aptopt=Acquire::https::Proxy "{values["proxy"]}"')
     command.append(f'--customize-hook=cp {q(str(script))} "$1/tmp/antinomie-customize.sh"')
-    if modules is not None:
-        command.append('--customize-hook=mkdir -p "$1/usr/lib/modules"')
-        command.append(f'--customize-hook=cp -a {q(str(modules))} "$1/usr/lib/modules/"')
-        command.append(f'--customize-hook=chown -R 0:0 "$1/usr/lib/modules/{modules.name}"')
     manager, session = DESKTOPS[values["desktop"]][1:3]
     arguments = " ".join([q(values[key]) for key in
                           ("hostname", "locale", "keyboard_layout", "keyboard_variant", "timezone")]
@@ -371,17 +458,30 @@ def validate_image(raw):
         raise RuntimeError("base must leave GID 1000 free for per-VM credentials")
 
 
-def root_image(values, raw, staging, provenance, log, modules=None):
+def root_image(values, raw, staging, provenance, log, modules=None, cache=None):
     tarball = staging / "rootfs.tar"
-    script = staging / "customize.sh"
-    script.write_text(customization_script())
-    shutil.copy2(script, provenance / "customize.sh")
-    command = mmdebstrap_command(values, tarball, script, provenance, modules)
-    (provenance / "mmdebstrap.json").write_text(json.dumps(command, indent=2) + "\n")
-    # mmdebstrap assembles the system in $TMPDIR; /tmp is a small tmpfs on
-    # Debian 13 (and in the cloud builder), far too small for a desktop.
-    subprocess.run(command, check=True, stdout=log, stderr=subprocess.STDOUT,
-                   env=os.environ | {"TMPDIR": str(staging)})
+    root = load_rootfs_cache(cache, values, staging, provenance, log)
+    if root is None:
+        script = staging / "customize.sh"
+        script.write_text(customization_script())
+        shutil.copy2(script, provenance / "customize.sh")
+        command = mmdebstrap_command(values, tarball, script, provenance)
+        (provenance / "mmdebstrap.json").write_text(json.dumps(command, indent=2) + "\n")
+        # mmdebstrap assembles the system in $TMPDIR; /tmp is a small tmpfs on
+        # Debian 13 (and in the cloud builder), far too small for a desktop.
+        subprocess.run(command, check=True, stdout=log, stderr=subprocess.STDOUT,
+                       env=os.environ | {"TMPDIR": str(staging)})
+        root = {"bootstrap": "mmdebstrap", "mode": bootstrap_mode(),
+                "variant": "standard" if values["standard"] else "important",
+                "suite": SUITE, "mirror": values["mirror"], "security_mirror": SECURITY_MIRROR,
+                "root_built_at": datetime.now(timezone.utc).isoformat(),
+                "reused_from_cache": False}
+        if cache is not None:
+            log.flush()
+            shutil.copy2(log.name, provenance / "bootstrap.log")
+            save_rootfs_cache(cache, tarball, provenance, root, values)
+    if modules is not None:
+        add_modules(tarball, modules)
     with raw.open("xb") as target:
         target.truncate(IMAGE_SIZE)
     subprocess.run(["mkfs.ext4", "-q", "-F", "-L", "antinomie", "-d", str(tarball), str(raw)],
@@ -389,9 +489,7 @@ def root_image(values, raw, staging, provenance, log, modules=None):
     xattrs = apply_xattrs(tarball, raw, staging, log)
     tarball.unlink()
     validate_image(raw)
-    return {"bootstrap": "mmdebstrap", "mode": bootstrap_mode(),
-            "variant": "standard" if values["standard"] else "important",
-            "suite": SUITE, "mirror": values["mirror"], "security_mirror": SECURITY_MIRROR,
+    return root | {
             "root_filesystem": "ext4", "root_size": IMAGE_SIZE,
             "conversion": "mkfs.ext4 -d tarball; extended attributes set with debugfs",
             "extended_attributes": xattrs,
@@ -399,7 +497,7 @@ def root_image(values, raw, staging, provenance, log, modules=None):
 
 
 def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=False,
-          values=None, work=None, app_version=None):
+          values=None, work=None, app_version=None, rootfs_cache=None):
     if output.exists():
         raise RuntimeError("output already exists; choose a new unpublished bundle path")
     values = options(values or {})
@@ -425,14 +523,15 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
         log_path = staging / "bootstrap.log"
         try:
             with log_path.open("w") as log:
-                root = root_image(values, raw, staging, provenance, log, tree)
+                root = root_image(values, raw, staging, provenance, log, tree, rootfs_cache)
         except (RuntimeError, subprocess.CalledProcessError):
             # The log dies with the staging directory; show why it failed.
             lines = log_path.read_text(errors="replace").splitlines()
             print("--- last bootstrap log lines ---", flush=True)
             print("\n".join(lines[-80:]), flush=True)
             raise
-        shutil.copy2(log_path, provenance / "bootstrap.log")
+        if not root.get("reused_from_cache"):
+            shutil.copy2(log_path, provenance / "bootstrap.log")
         subprocess.run(["qemu-img", "convert", "-f", "raw", "-O", "qcow2",
                         str(raw), str(bundle / "base.qcow2")], check=True)
         raw.unlink()
@@ -488,6 +587,9 @@ def main():
                              "keyboard_variant, timezone, standard, mirror, proxy)")
     parser.add_argument("--work", type=Path, help="directory for temporary build files")
     parser.add_argument("--app-version", help="Antinomie version building this base")
+    parser.add_argument("--rootfs-cache", type=Path,
+                        help="reuse this bootstrapped root filesystem if it matches the recipe "
+                             "and answers and is recent, else bootstrap and write it")
     args = parser.parse_args()
     if not args.kernel.is_file():
         parser.error("an existing patched Linux 6.12.94 kernel is required")
@@ -500,7 +602,7 @@ def main():
         if not isinstance(values, dict):
             raise RuntimeError("options must be a JSON object")
         build(args.kernel, args.output, args.kernel_config, args.modules,
-              args.allow_unversioned, values, args.work, args.app_version)
+              args.allow_unversioned, values, args.work, args.app_version, args.rootfs_cache)
     except (RuntimeError, OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.exit(1, "Debian image build failed: " + str(error) + "\n")
     print(args.output)
