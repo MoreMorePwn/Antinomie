@@ -70,12 +70,16 @@ fn fixture() -> AnalysisReport {
         kind: AnalysisKind::Structures,
         state: AnalysisSectionState::Complete,
         summary: "Synthetic headers, section flags and import".into(),
+        tools: Vec::new(),
+        listing: None,
         entries: structures,
     });
     report.sections.push(AnalysisSection {
         kind: AnalysisKind::Strings,
         state: AnalysisSectionState::Partial,
         summary: "1024 retained synthetic strings; text bounded".into(),
+        tools: Vec::new(),
+        listing: None,
         entries: (0..1024)
             .map(|index| AnalysisEntry {
                 label: format!("String {index}"),
@@ -105,6 +109,8 @@ fn fixture() -> AnalysisReport {
         kind: AnalysisKind::Rules,
         state: AnalysisSectionState::Unavailable,
         summary: "No rule engine is installed".into(),
+        tools: Vec::new(),
+        listing: None,
         entries: Vec::new(),
     });
     report
@@ -149,7 +155,14 @@ fn render(
         },
         |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                action = workspace_section(ui, Some(report), AnalysisKind::Strings, state, preview);
+                action = workspace_section(
+                    ui,
+                    Some(report),
+                    AnalysisKind::Strings,
+                    state,
+                    preview,
+                    None,
+                );
             });
         },
     );
@@ -300,6 +313,7 @@ fn native_analysis_workspace_fixture() {
                     Some(&self.report),
                     &mut self.state,
                     self.preview.as_ref(),
+                    None,
                 ) {
                     match action {
                         ReportAction::ReadSpecimen {

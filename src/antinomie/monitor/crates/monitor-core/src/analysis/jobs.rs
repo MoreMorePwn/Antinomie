@@ -67,6 +67,8 @@ pub(crate) fn new_report(path: &str, selection: &AnalysisSelection) -> AnalysisR
                 kind,
                 state: AnalysisSectionState::Pending,
                 summary: "pending acquisition".into(),
+                tools: Vec::new(),
+                listing: None,
                 entries: Vec::new(),
             })
             .collect(),
@@ -128,7 +130,12 @@ impl Jobs {
                 return Err("analysis queue is full (eight waiting jobs)".into());
             }
             let reserved_len = total_len
-                .checked_add(REPORT_MAX_SIZE as u64 + 64 * 1024 * 1024 + 8192)
+                .checked_add(
+                    REPORT_MAX_SIZE as u64
+                        + 64 * 1024 * 1024
+                        + super::listing::LISTINGS_MAX_TOTAL
+                        + 8192,
+                )
                 .ok_or("analysis quota overflow")?;
             if reserved_len > available {
                 return Err("recording quota cannot reserve specimen, report and bounded worker scratch/logs".into());
@@ -263,7 +270,8 @@ impl Jobs {
         job.worker_len = ["worker.log", "output/report.json"]
             .into_iter()
             .map(|name| fs::metadata(job.directory.join(name)).map_or(0, |m| m.len()))
-            .sum();
+            .sum::<u64>()
+            .saturating_add(directory_len(&job.directory.join("output/listings")).unwrap_or(0));
         if matches!(
             job.report.state,
             AnalysisState::Cancelled | AnalysisState::Partial | AnalysisState::Unavailable
@@ -287,7 +295,10 @@ impl Jobs {
                     job.child = None;
                     if status.success() {
                         match read_report(&job.directory.join("output/report.json"), &job.report) {
-                            Ok(report) => job.report = report,
+                            Ok(report) => {
+                                job.report = report;
+                                adopt_listings(&job.directory, &mut job.report);
+                            }
                             Err(error) => fail(&mut job.report, AnalysisState::Unavailable, error),
                         }
                     } else {
@@ -356,19 +367,7 @@ impl Jobs {
                 );
                 job.child = Some(child);
                 job.report.state = AnalysisState::Running;
-                job.deadline = Instant::now()
-                    + Duration::from_secs(
-                        if job
-                            .report
-                            .sections
-                            .iter()
-                            .any(|s| AnalysisKind::DEEP.contains(&s.kind))
-                        {
-                            120
-                        } else {
-                            30
-                        },
-                    );
+                job.deadline = Instant::now() + worker_deadline(&job.report);
                 self.updates.push((job.run_id.clone(), job.report.clone()));
                 self.active = Some(job);
             }
@@ -530,6 +529,52 @@ impl Drop for Jobs {
         self.shutdown();
     }
 }
+/// Wall-clock budget of one worker: decompilers analyze the whole program.
+pub(crate) fn worker_deadline(report: &AnalysisReport) -> Duration {
+    let has = |kind| report.sections.iter().any(|s| s.kind == kind);
+    Duration::from_secs(if has(AnalysisKind::Decompilation) {
+        super::worker::DECOMPILER_SECONDS + 120
+    } else if has(AnalysisKind::Disassembly) || has(AnalysisKind::Capabilities) {
+        300
+    } else {
+        60
+    })
+}
+/// Move validated worker listings next to the report; a listing that fails
+/// validation is dropped and its category marked partial.
+fn adopt_listings(directory: &Path, report: &mut AnalysisReport) {
+    let output = directory.join("output/listings");
+    let target = directory.join("listings");
+    let mut total = 0u64;
+    let total_len = report.specimen_len;
+    for section in &mut report.sections {
+        let Some(listing) = section.listing.clone() else {
+            continue;
+        };
+        let name = super::listing::file_name(section.kind);
+        total = total.saturating_add(listing.bytes);
+        let result = if total > super::listing::LISTINGS_MAX_TOTAL {
+            Err("listings exceed their combined bound".to_string())
+        } else {
+            super::listing::validate(&output.join(name), section.kind, &listing, total_len)
+                .and_then(|()| {
+                    fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+                    fs::set_permissions(&target, fs::Permissions::from_mode(0o700))
+                        .map_err(|e| e.to_string())?;
+                    fs::rename(output.join(name), target.join(name)).map_err(|e| e.to_string())
+                })
+        };
+        if let Err(error) = result {
+            section.listing = None;
+            section.state = AnalysisSectionState::Partial;
+            section.summary = format!("{}; full listing rejected: {error}", section.summary);
+            if section.summary.len() > 4096 {
+                section.summary.truncate(4000);
+            }
+        }
+    }
+    let _ = fs::remove_dir_all(&output);
+}
 fn persist_report(directory: &Path, report: &AnalysisReport) -> Result<(), String> {
     let encoded = serde_json::to_vec(report).map_err(|e| e.to_string())?;
     if encoded.len() > REPORT_MAX_SIZE {
@@ -563,6 +608,14 @@ fn spawn_worker_binary(job: &Job, executable: &Path) -> Result<Child, String> {
     }
     let output = job.directory.join("output");
     fs::create_dir(&output).map_err(|e| e.to_string())?;
+    let listings = output.join("listings");
+    fs::create_dir(&listings).map_err(|e| e.to_string())?;
+    fs::set_permissions(&listings, fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
+    let decompiler = job
+        .report
+        .sections
+        .iter()
+        .any(|s| s.kind == AnalysisKind::Decompilation);
     OpenOptions::new()
         .create_new(true)
         .write(true)
@@ -590,7 +643,16 @@ fn spawn_worker_binary(job: &Job, executable: &Path) -> Result<Child, String> {
         "/usr",
         "/usr",
     ]);
-    for path in ["/lib", "/lib64"] {
+    // Read-only system configuration the optional tools need: the Java
+    // runtime of a decompiler resolves itself through these.
+    for path in [
+        "/lib",
+        "/lib64",
+        "/etc/alternatives",
+        "/etc/java-17-openjdk",
+        "/etc/java-21-openjdk",
+        "/etc/ld.so.cache",
+    ] {
         if Path::new(path).exists() {
             cmd.arg("--ro-bind").arg(path).arg(path);
         }
@@ -617,8 +679,24 @@ fn spawn_worker_binary(job: &Job, executable: &Path) -> Result<Child, String> {
         "--dev-bind",
         "/dev/random",
         "/dev/random",
+        // Shell process substitution (the decompiler's launcher) needs these.
+        "--symlink",
+        "/proc/self/fd",
+        "/dev/fd",
+        "--symlink",
+        "/proc/self/fd/0",
+        "/dev/stdin",
+        "--symlink",
+        "/proc/self/fd/1",
+        "/dev/stdout",
+        "--symlink",
+        "/proc/self/fd/2",
+        "/dev/stderr",
         "--size",
-        "33554432",
+    ])
+    // A decompiler keeps its project database in /tmp.
+    .arg(if decompiler { "2147483648" } else { "33554432" })
+    .args([
         "--tmpfs",
         "/tmp",
         "--dir",
@@ -640,6 +718,9 @@ fn spawn_worker_binary(job: &Job, executable: &Path) -> Result<Child, String> {
     .arg("--bind")
     .arg(output.join("report.json"))
     .arg("/output/report.json")
+    .arg("--bind")
+    .arg(&listings)
+    .arg("/output/listings")
     .args([
         "--remount-ro",
         "/",
@@ -738,6 +819,11 @@ pub(crate) fn validate_report(report: &AnalysisReport) -> Result<(), String> {
             .is_some_and(|hash| hash.len() != 64 || !hash.bytes().all(|c| c.is_ascii_hexdigit()))
         || report.sections.iter().any(|s| {
             s.entries.len() > 2048
+                || s.tools.len() > 16
+                || s.tools.iter().any(|t| t.len() > 256)
+                || s.listing
+                    .as_ref()
+                    .is_some_and(|l| l.bytes > super::listing::LISTING_MAX_SIZE)
                 || s.summary.len() > 4096
                 || s.entries
                     .iter()
@@ -785,7 +871,7 @@ fn validate_range(range: AnalysisRange, total_len: Option<u64>) -> Result<(), St
     }
     Ok(())
 }
-fn validate_record(
+pub(super) fn validate_record(
     kind: AnalysisKind,
     entry: &AnalysisEntry,
     record: &AnalysisRecord,
@@ -907,6 +993,70 @@ fn validate_record(
                 && bounded(observed)
                 && bounded(evidence)
         }
+        AnalysisData::Instruction {
+            address,
+            bytes,
+            mnemonic,
+            operands,
+            function,
+        } => {
+            kind == AnalysisKind::Disassembly
+                && bytes.len() <= 64
+                && bytes.bytes().all(|c| c.is_ascii_hexdigit() || c == b' ')
+                && bounded(mnemonic)
+                && bounded(operands)
+                && function.as_deref().is_none_or(bounded)
+                && address_location(Some(*address))
+        }
+        AnalysisData::Function { name, address, .. } => {
+            matches!(
+                kind,
+                AnalysisKind::Disassembly | AnalysisKind::Decompilation
+            ) && bounded(name)
+                && address_location(Some(*address))
+        }
+        AnalysisData::SourceLine {
+            function, address, ..
+        } => kind == AnalysisKind::Decompilation && bounded(function) && address_location(*address),
+        AnalysisData::RuleMatch {
+            rule,
+            namespace,
+            tags,
+            ruleset,
+        } => {
+            matches!(kind, AnalysisKind::Rules | AnalysisKind::Identification)
+                && bounded(rule)
+                && !rule.is_empty()
+                && bounded(namespace)
+                && bounded(ruleset)
+                && tags.len() <= 64
+                && tags.iter().all(|t| bounded(t))
+        }
+        AnalysisData::Capability {
+            name,
+            namespace,
+            attack,
+            mbc,
+        } => {
+            kind == AnalysisKind::Capabilities
+                && bounded(name)
+                && !name.is_empty()
+                && bounded(namespace)
+                && attack.len() <= 64
+                && mbc.len() <= 64
+                && attack.iter().chain(mbc.iter()).all(|t| bounded(t))
+        }
+        AnalysisData::Identification {
+            category,
+            name,
+            version,
+        } => {
+            kind == AnalysisKind::Identification
+                && bounded(category)
+                && bounded(name)
+                && !name.is_empty()
+                && version.as_deref().is_none_or(bounded)
+        }
     };
     if !valid {
         return Err("structured analysis record violates kind, text or evidence bounds".into());
@@ -916,6 +1066,116 @@ fn validate_record(
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Every category in the real sandbox, listings adopted and paged.
+    /// ANTINOMIE_TEST_SPECIMEN picks the program (default /usr/bin/true).
+    #[test]
+    #[ignore = "requires the app ELF in ANTINOMIE_TEST_WORKER_BINARY, bubblewrap and minutes of CPU"]
+    fn production_worker_all_categories_with_listings() {
+        let executable = PathBuf::from(
+            std::env::var_os("ANTINOMIE_TEST_WORKER_BINARY").expect("set the app ELF path"),
+        );
+        let source = std::env::var("ANTINOMIE_TEST_SPECIMEN").unwrap_or("/usr/bin/true".into());
+        let directory =
+            std::env::temp_dir().join(format!("ant-deep-smoke-{}", storage::unique_id()));
+        fs::create_dir(&directory).unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        let specimen = fs::read(&source).unwrap();
+        fs::write(directory.join("specimen"), &specimen).unwrap();
+        let selection = AnalysisSelection {
+            enabled: true,
+            checks: AnalysisKind::TRIAGE
+                .iter()
+                .chain(AnalysisKind::DEEP)
+                .copied()
+                .collect(),
+        };
+        let mut report = new_report(&source, &selection);
+        report.state = AnalysisState::Queued;
+        report.specimen_len = Some(specimen.len() as u64);
+        report.specimen_sha256 = Some(format!("{:x}", Sha256::digest(&specimen)));
+        let deadline = Instant::now() + worker_deadline(&report);
+        let job = Job {
+            run_id: None,
+            report,
+            directory: directory.clone(),
+            handle: None,
+            total_len: specimen.len() as u64,
+            received_len: specimen.len() as u64,
+            file: None,
+            deadline,
+            child: None,
+            reserved_len: 0,
+            digest: Sha256::new(),
+            disk_len: 0,
+            worker_len: 0,
+            report_len: 0,
+        };
+        let started = Instant::now();
+        let mut child = spawn_worker_binary(&job, &executable).unwrap();
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if Instant::now() >= job.deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("worker exceeded its deadline; see {}", directory.display());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        assert!(
+            status.success(),
+            "worker failed; see {}/worker.log",
+            directory.display()
+        );
+        let mut report = read_report(&directory.join("output/report.json"), &job.report).unwrap();
+        adopt_listings(&directory, &mut report);
+        persist_report(&directory, &report).unwrap();
+        for section in &report.sections {
+            eprintln!(
+                "{:?}: {:?}, {} rows, listing {:?}, tools {:?}\n    {}",
+                section.kind,
+                section.state,
+                section.entries.len(),
+                section.listing,
+                section.tools,
+                section.summary
+            );
+            assert!(!section.entries.iter().any(|row| row.label == "Engine"));
+        }
+        let disassembly = report
+            .sections
+            .iter()
+            .find(|s| s.kind == AnalysisKind::Disassembly)
+            .unwrap();
+        assert!(disassembly.listing.as_ref().is_some_and(|l| l.rows > 0));
+        let page = super::super::read_listing_page(
+            &directory,
+            &report.id,
+            AnalysisKind::Disassembly,
+            0,
+            8,
+            "",
+        )
+        .unwrap();
+        assert_eq!(page.rows.len(), 8);
+        let found = super::super::read_listing_page(
+            &directory,
+            &report.id,
+            AnalysisKind::Disassembly,
+            0,
+            4,
+            "call",
+        )
+        .unwrap();
+        assert!(found.total > 0 && found.rows.iter().all(|(_, row)| row.value.contains("call")));
+        eprintln!(
+            "all categories in {:?}; report {} octets; kept at {}",
+            started.elapsed(),
+            fs::metadata(directory.join("report.json")).unwrap().len(),
+            directory.display()
+        );
+    }
     #[test]
     #[ignore = "requires rebuilt feature ELF in ANTINOMIE_TEST_WORKER_BINARY and working bubblewrap"]
     fn production_worker_structured_report_and_verified_preview_smoke() {
@@ -1227,7 +1487,7 @@ mod tests {
             report,
             root.join("cancel"),
             Ok((2, 3)),
-            128 * 1024 * 1024,
+            512 * 1024 * 1024,
         );
         assert_eq!(jobs.pending_count(), 1);
         jobs.cancel(&id).unwrap();
@@ -1254,7 +1514,7 @@ mod tests {
             new_report("/tmp/sample", &selection),
             root.clone(),
             Ok((1, 3)),
-            128 * 1024 * 1024,
+            512 * 1024 * 1024,
         );
         assert!(matches!(jobs.next(), Some(Action::Read { .. })));
         jobs.chunk(Ok(vec![0; 4]), 0, 3, 3);

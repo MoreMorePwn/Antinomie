@@ -86,6 +86,8 @@ mod tests {
             kind: AnalysisKind::Entropy,
             state: AnalysisSectionState::Complete,
             summary: String::new(),
+            tools: Vec::new(),
+            listing: None,
             entries: [
                 (0, 100, 4000),
                 (0, 10, 8000),

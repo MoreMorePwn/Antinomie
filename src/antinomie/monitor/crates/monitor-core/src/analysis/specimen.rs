@@ -180,6 +180,8 @@ mod tests {
                     kind: AnalysisKind::Metadata,
                     state: AnalysisSectionState::Complete,
                     summary: "saved".into(),
+                    tools: Vec::new(),
+                    listing: None,
                     entries: Vec::new(),
                 }],
             };

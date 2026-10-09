@@ -2,6 +2,7 @@
 use antinomie_monitor_core::{AnalysisKind, AnalysisSelection, ExecRequest};
 use eframe::egui;
 mod entropy;
+mod listing_view;
 mod records;
 mod workspace;
 pub(crate) use workspace::{workspace, workspace_section, WorkspaceState};
@@ -127,6 +128,13 @@ pub(crate) enum ReportAction {
         report_id: String,
         offset: u64,
         data_len: usize,
+    },
+    /// Read a page of a category's full listing, filtered by `query`.
+    ReadListing {
+        report_id: String,
+        kind: AnalysisKind,
+        start: u64,
+        query: String,
     },
 }
 

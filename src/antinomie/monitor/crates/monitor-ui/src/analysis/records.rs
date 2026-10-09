@@ -64,6 +64,11 @@ pub(super) enum Column {
     Scope,
     Kind,
     Defined,
+    Tags,
+    Source,
+    Category,
+    Version,
+    Attack,
 }
 impl Column {
     pub fn label(self) -> &'static str {
@@ -84,6 +89,11 @@ impl Column {
             Self::Scope => "Scope",
             Self::Kind => "Kind",
             Self::Defined => "Defined",
+            Self::Tags => "Tags",
+            Self::Source => "Rule set",
+            Self::Category => "Category",
+            Self::Version => "Version",
+            Self::Attack => "ATT&CK",
         }
     }
     pub fn number(self, entry: &AnalysisEntry) -> Option<u64> {
@@ -138,8 +148,13 @@ impl Column {
             Self::Name => {
                 return match entry.record.as_ref().map(|r| &r.data) {
                     Some(
-                        AnalysisData::Section { name, .. } | AnalysisData::Symbol { name, .. },
+                        AnalysisData::Section { name, .. }
+                        | AnalysisData::Symbol { name, .. }
+                        | AnalysisData::Capability { name, .. }
+                        | AnalysisData::Identification { name, .. }
+                        | AnalysisData::Function { name, .. },
                     ) => name.clone(),
+                    Some(AnalysisData::RuleMatch { rule, .. }) => rule.clone(),
                     Some(
                         AnalysisData::Import {
                             name: Some(name), ..
@@ -176,6 +191,18 @@ impl Column {
             (AnalysisData::Symbol { undefined, .. }, Self::Defined) => {
                 if *undefined { "Undefined" } else { "Defined" }.into()
             }
+            (AnalysisData::RuleMatch { tags, .. }, Self::Tags) => tags.join(", "),
+            (AnalysisData::RuleMatch { ruleset, .. }, Self::Source) => ruleset.clone(),
+            (AnalysisData::Capability { namespace, .. }, Self::Scope) => namespace.clone(),
+            (AnalysisData::Capability { attack, .. }, Self::Attack) => attack.join(", "),
+            (AnalysisData::Identification { category, .. }, Self::Category) => category.clone(),
+            (
+                AnalysisData::Identification {
+                    version: Some(version),
+                    ..
+                },
+                Self::Version,
+            ) => version.clone(),
             _ => "-".into(),
         }
     }
@@ -205,13 +232,10 @@ pub(super) fn columns(kind: AnalysisKind, filter: Structure, legacy: bool) -> &'
         }
         (AnalysisKind::Strings, _) => &[Offset, Encoding, Size, Retained, Value],
         (AnalysisKind::Entropy, _) => &[Name, Offset, Size, Entropy],
-        (
-            AnalysisKind::Hardening
-            | AnalysisKind::Identification
-            | AnalysisKind::Capabilities
-            | AnalysisKind::Rules,
-            _,
-        ) => &[Name, Scope, Value],
+        (AnalysisKind::Rules, _) => &[Name, Tags, Value, Source],
+        (AnalysisKind::Identification, _) => &[Category, Name, Version, Value],
+        (AnalysisKind::Capabilities, _) => &[Name, Scope, Attack, Value],
+        (AnalysisKind::Hardening, _) => &[Name, Scope, Value],
         _ => &[Name, Value, Offset],
     }
 }

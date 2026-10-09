@@ -50,6 +50,15 @@ pub(crate) enum Request {
         offset: u64,
         data_len: usize,
     },
+    Listing {
+        view_key: String,
+        generation: u64,
+        directory: PathBuf,
+        report_id: String,
+        kind: antinomie_monitor_core::AnalysisKind,
+        start: u64,
+        query: String,
+    },
 }
 
 pub(crate) struct TerminalReplay {
@@ -92,6 +101,11 @@ pub(crate) enum Answer {
         offset: u64,
         data_len: usize,
         result: Result<antinomie_monitor_core::AnalysisSpecimenPage, String>,
+    },
+    Listing {
+        view_key: String,
+        generation: u64,
+        result: Result<antinomie_monitor_core::AnalysisListingPage, String>,
     },
 }
 
@@ -223,6 +237,26 @@ impl ArchiveWorker {
                             report_id,
                             offset,
                             data_len,
+                        },
+                        Request::Listing {
+                            view_key,
+                            generation,
+                            directory,
+                            report_id,
+                            kind,
+                            start,
+                            query,
+                        } => Answer::Listing {
+                            result: antinomie_monitor_core::read_listing_page(
+                                &directory,
+                                &report_id,
+                                kind,
+                                start,
+                                antinomie_monitor_core::LISTING_PAGE_MAX_ROWS,
+                                &query,
+                            ),
+                            view_key,
+                            generation,
                         },
                     };
                     if worker_cancelled.load(Ordering::Relaxed) || answers.send(answer).is_err() {

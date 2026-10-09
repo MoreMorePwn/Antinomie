@@ -88,6 +88,9 @@ struct AnalysisView {
     report_id: Option<String>,
     preview: Option<Result<antinomie_monitor_core::AnalysisSpecimenPage, String>>,
     pending: Option<(u64, u64, usize)>,
+    listing: Option<Result<antinomie_monitor_core::AnalysisListingPage, String>>,
+    /// Generation and request of the listing page being read.
+    listing_pending: Option<(u64, antinomie_monitor_core::AnalysisKind, u64, String)>,
 }
 
 impl AnalysisView {
@@ -97,6 +100,8 @@ impl AnalysisView {
             self.state = crate::analysis::WorkspaceState::default();
             self.preview = None;
             self.pending = None;
+            self.listing = None;
+            self.listing_pending = None;
         }
     }
 }
@@ -819,6 +824,12 @@ impl MonitorApp {
                     generation,
                     ..
                 } => self.fail_analysis_read(&view_key, generation, "Read superseded"),
+                // A superseded listing read is simply asked for again.
+                Request::Listing { view_key, .. } => {
+                    if let Some(view) = self.analysis_views.get_mut(&view_key) {
+                        view.listing_pending = None;
+                    }
+                }
                 _ => {}
             }
         }
@@ -832,13 +843,16 @@ impl MonitorApp {
             self.archive_pending = false;
             self.inspector.pending = false;
             self.archive_error = Some("Archive worker unavailable".into());
-            if let Request::Specimen {
-                view_key,
-                generation,
-                ..
-            } = request
-            {
-                self.fail_analysis_read(&view_key, generation, "Archive worker unavailable");
+            match request {
+                Request::Specimen {
+                    view_key,
+                    generation,
+                    ..
+                } => self.fail_analysis_read(&view_key, generation, "Archive worker unavailable"),
+                Request::Listing { view_key, .. } => {
+                    self.fail_listing_read(&view_key, "Archive worker unavailable")
+                }
+                _ => {}
             }
             return;
         };
@@ -852,20 +866,30 @@ impl MonitorApp {
                     self.archive_pending = false;
                     self.inspector.pending = false;
                     self.archive_error = Some("Archive worker disconnected".into());
-                    if let Request::Specimen {
-                        view_key,
-                        generation,
-                        ..
-                    } = request
-                    {
-                        self.fail_analysis_read(
+                    match request {
+                        Request::Specimen {
+                            view_key,
+                            generation,
+                            ..
+                        } => self.fail_analysis_read(
                             &view_key,
                             generation,
                             "Archive worker disconnected",
-                        );
+                        ),
+                        Request::Listing { view_key, .. } => {
+                            self.fail_listing_read(&view_key, "Archive worker disconnected")
+                        }
+                        _ => {}
                     }
                 }
             },
+        }
+    }
+
+    fn fail_listing_read(&mut self, view_key: &str, reason: &str) {
+        if let Some(view) = self.analysis_views.get_mut(view_key) {
+            view.listing_pending = None;
+            view.listing = Some(Err(reason.into()));
         }
     }
 
@@ -1268,6 +1292,29 @@ impl MonitorApp {
                         self.status = format!("Capture History: {error}");
                         self.log("ERROR", self.status.clone());
                     }
+                }
+            }
+            Answer::Listing {
+                view_key,
+                generation,
+                result,
+            } => {
+                let Some(view) = self.analysis_views.get_mut(&view_key) else {
+                    return;
+                };
+                if view
+                    .listing_pending
+                    .as_ref()
+                    .is_some_and(|(pending, ..)| *pending == generation)
+                {
+                    view.listing_pending = None;
+                    let report_id = view.report_id.clone();
+                    view.listing = Some(result.and_then(|page| {
+                        if report_id.as_deref() != Some(page.report_id.as_str()) {
+                            return Err("Listing page identity mismatch".into());
+                        }
+                        Ok(page)
+                    }));
                 }
             }
             Answer::Specimen {
@@ -3563,6 +3610,41 @@ impl MonitorApp {
                     data_len,
                 });
             }
+            Some(crate::analysis::ReportAction::ReadListing {
+                report_id,
+                kind,
+                start,
+                query,
+            }) => {
+                let directory = self.analysis_directory(&report_id);
+                let Some(view) = self.analysis_views.get_mut(view_key) else {
+                    return;
+                };
+                if view.report_id.as_deref() != Some(&report_id)
+                    || view
+                        .listing_pending
+                        .as_ref()
+                        .is_some_and(|(_, k, s, q)| *k == kind && *s == start && *q == query)
+                {
+                    return;
+                }
+                let Some(directory) = directory else {
+                    view.listing = Some(Err("Retained analysis directory unavailable".into()));
+                    return;
+                };
+                self.analysis_generation = self.analysis_generation.wrapping_add(1);
+                let generation = self.analysis_generation;
+                view.listing_pending = Some((generation, kind, start, query.clone()));
+                self.queue_archive(Request::Listing {
+                    view_key: view_key.into(),
+                    generation,
+                    directory,
+                    report_id,
+                    kind,
+                    start,
+                    query,
+                });
+            }
             None => {}
         }
     }
@@ -3666,6 +3748,7 @@ impl MonitorApp {
                     *kind,
                     &mut view.state,
                     view.preview.as_ref(),
+                    view.listing.as_ref(),
                 );
                 self.analysis_action(&key, action);
             }
@@ -3695,6 +3778,7 @@ impl MonitorApp {
                         report,
                         &mut view.state,
                         view.preview.as_ref(),
+                        view.listing.as_ref(),
                     );
                     self.analysis_action("workspace", action);
                     return;
@@ -3714,6 +3798,7 @@ impl MonitorApp {
                         report,
                         &mut view.state,
                         view.preview.as_ref(),
+                        view.listing.as_ref(),
                     );
                     self.analysis_action("workspace", action);
                 } else {
@@ -4770,7 +4855,7 @@ mod tests {
     }
 
     #[test]
-    fn process_picker_click_attaches_the_complete_identity_and_paginates() {
+    fn process_picker_click_attaches_the_complete_identity_and_filters() {
         let ctx = egui::Context::default();
         theme::install(&ctx);
         let mut app = app();
@@ -4809,14 +4894,20 @@ mod tests {
         );
         assert!(!app.process_picker.open);
         assert!(app.terminals.is_empty());
+        // The backend lists every page at once; the picker filters by name or PID.
         app.open_process_picker();
-        click_label(&mut app, &ctx, size, egui_phosphor::regular::ARROW_RIGHT);
-        assert!(matches!(
-            app.submitted.last(),
-            Some(Command::ListProcesses { after_pid: 42 })
-        ));
-        assert_eq!(app.process_picker.after_pid, 42);
-        assert!(app.process_picker.selected.is_none());
+        for (filter, shown) in [("target", true), ("4", true), ("sshd", false)] {
+            app.process_picker.filter = filter.into();
+            for _ in 0..2 {
+                render(&mut app, &ctx, size);
+            }
+            let output = render(&mut app, &ctx, size);
+            assert_eq!(
+                texts(&output).iter().any(|(text, _)| text == "guest-target"),
+                shown,
+                "{filter}"
+            );
+        }
     }
 
     #[test]
@@ -7771,6 +7862,8 @@ mod tests {
                     kind: AnalysisKind::Metadata,
                     state: AnalysisSectionState::Complete,
                     summary: format!("{marker} metadata"),
+                    tools: Vec::new(),
+                    listing: None,
                     entries: vec![AnalysisEntry {
                         label: "Identity".into(),
                         value: marker.into(),
@@ -7782,12 +7875,16 @@ mod tests {
                     kind: AnalysisKind::Structures,
                     state: AnalysisSectionState::Unavailable,
                     summary: format!("{marker} structures unavailable"),
+                    tools: Vec::new(),
+                    listing: None,
                     entries: Vec::new(),
                 },
                 AnalysisSection {
                     kind: AnalysisKind::Strings,
                     state: AnalysisSectionState::Partial,
                     summary: "Bounded synthetic rows".into(),
+                    tools: Vec::new(),
+                    listing: None,
                     entries: (0..2048)
                         .map(|index| AnalysisEntry {
                             label: format!("Row {index}"),
@@ -7910,6 +8007,7 @@ mod tests {
                             ui,
                             Some(&report),
                             &mut crate::analysis::WorkspaceState::default(),
+                            None,
                             None
                         )
                         .is_none());
@@ -7933,6 +8031,7 @@ mod tests {
                         Some(&report),
                         AnalysisKind::Metadata,
                         &mut crate::analysis::WorkspaceState::default(),
+                        None,
                         None,
                     )
                 });

@@ -2,7 +2,6 @@
 use super::{icon, theme};
 use antinomie_monitor_core::{
     CaptureScope, CaptureState, CaptureSummary, GuestProcessIdentity, GuestProcessPage,
-    PROCESS_PAGE_MAX_COUNT,
 };
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
@@ -13,6 +12,8 @@ pub(super) struct ProcessPicker {
     pub after_pid: u32,
     pub selected: Option<GuestProcessIdentity>,
     pub pending: Option<u64>,
+    /// Name or PID text the list is narrowed to.
+    pub filter: String,
 }
 
 pub(super) enum ProcessAction {
@@ -78,25 +79,18 @@ impl ProcessPicker {
                         self.reset();
                         action = Some(ProcessAction::Refresh(0));
                     }
-                    if icon(
-                        ui,
-                        egui_phosphor::regular::ARROW_RIGHT,
-                        "Next process page",
-                        enabled
-                            && self.pending.is_none()
-                            && page.is_some_and(|page| page.next_pid != 0),
-                    ) {
-                        if let Some(page) = page {
-                            self.after_pid = page.next_pid;
-                            self.selected = None;
-                            action = Some(ProcessAction::Refresh(self.after_pid));
-                        }
-                    }
                     ui.label(if self.pending.is_some() {
-                        "Reading processes..."
+                        "Reading processes...".to_owned()
                     } else {
-                        "Guest processes"
+                        page.map_or("Guest processes".into(), |page| {
+                            format!("{} guest processes", page.processes.len())
+                        })
                     });
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.filter)
+                            .desired_width(160.0)
+                            .hint_text("Filter by name or PID"),
+                    );
                 });
                 let height = (viewport.height() - 300.0).clamp(64.0, 360.0);
                 egui::ScrollArea::horizontal()
@@ -122,37 +116,45 @@ impl ProcessPicker {
                                 }
                             })
                             .body(|body| {
-                                let processes = page
+                                let needle = self.filter.trim().to_lowercase();
+                                let processes: Vec<_> = page
                                     .map(|page| page.processes.as_slice())
-                                    .unwrap_or_default();
-                                body.rows(
-                                    font_size + 14.0,
-                                    processes.len().min(PROCESS_PAGE_MAX_COUNT as usize),
-                                    |mut row| {
-                                        let process = &processes[row.index()];
-                                        row.set_selected(
-                                            self.selected.as_ref() == Some(&process.identity),
-                                        );
-                                        for text in [
-                                            process.identity.tgid.to_string(),
-                                            process.command.clone(),
-                                            process.uid.to_string(),
-                                            process.thread_count.to_string(),
-                                        ] {
-                                            row.col(|ui| {
-                                                ui.add(
-                                                    egui::Label::new(&text)
-                                                        .selectable(false)
-                                                        .truncate(),
-                                                )
-                                                .on_hover_text(&text);
-                                            });
-                                        }
-                                        if row.response().clicked() && self.pending.is_none() {
-                                            self.selected = Some(process.identity.clone());
-                                        }
-                                    },
-                                );
+                                    .unwrap_or_default()
+                                    .iter()
+                                    .filter(|process| {
+                                        needle.is_empty()
+                                            || process.command.to_lowercase().contains(&needle)
+                                            || process
+                                                .identity
+                                                .tgid
+                                                .to_string()
+                                                .starts_with(&needle)
+                                    })
+                                    .collect();
+                                body.rows(font_size + 14.0, processes.len(), |mut row| {
+                                    let process = &processes[row.index()];
+                                    row.set_selected(
+                                        self.selected.as_ref() == Some(&process.identity),
+                                    );
+                                    for text in [
+                                        process.identity.tgid.to_string(),
+                                        process.command.clone(),
+                                        process.uid.to_string(),
+                                        process.thread_count.to_string(),
+                                    ] {
+                                        row.col(|ui| {
+                                            ui.add(
+                                                egui::Label::new(&text)
+                                                    .selectable(false)
+                                                    .truncate(),
+                                            )
+                                            .on_hover_text(&text);
+                                        });
+                                    }
+                                    if row.response().clicked() && self.pending.is_none() {
+                                        self.selected = Some(process.identity.clone());
+                                    }
+                                });
                             });
                     });
                 if let Some(identity) = &self.selected {

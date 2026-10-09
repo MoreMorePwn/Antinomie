@@ -15,6 +15,8 @@ rusqlite = "0.40.2"
 x11rb = "0.13.2"
 rustix = { version = "1", features = ["event", "fs", "net", "process"] }
 object = { version = "0.40", default-features = false, features = ["read", "std"] }
+iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "intel", "instr_info"] }
+yara-x = "1.21.0"
 
 [build-dependencies]
 cc = "1"

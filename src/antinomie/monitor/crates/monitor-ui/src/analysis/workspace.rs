@@ -4,8 +4,8 @@ use super::{
     section_title, ReportAction,
 };
 use antinomie_monitor_core::{
-    AnalysisData, AnalysisEntry, AnalysisKind, AnalysisReport, AnalysisSection,
-    AnalysisSpecimenPage, AnalysisState,
+    AnalysisData, AnalysisEntry, AnalysisKind, AnalysisListingPage, AnalysisReport,
+    AnalysisSection, AnalysisSpecimenPage, AnalysisState,
 };
 use eframe::egui;
 use egui_extras::{Column as TableColumn, TableBuilder};
@@ -27,6 +27,7 @@ struct ViewState {
     selected: Option<(bool, u64)>,
     detail_tab: u8,
     requested: Option<(u64, usize)>,
+    listing: super::listing_view::ListingState,
 }
 
 impl WorkspaceState {
@@ -45,8 +46,9 @@ pub(crate) fn workspace(
     report: Option<&AnalysisReport>,
     state: &mut WorkspaceState,
     preview: Option<&Result<AnalysisSpecimenPage, String>>,
+    listing: Option<&Result<AnalysisListingPage, String>>,
 ) -> Option<ReportAction> {
-    render(ui, report, state, preview, None)
+    render(ui, report, state, preview, listing, None)
 }
 
 pub(crate) fn workspace_section(
@@ -55,8 +57,9 @@ pub(crate) fn workspace_section(
     kind: AnalysisKind,
     state: &mut WorkspaceState,
     preview: Option<&Result<AnalysisSpecimenPage, String>>,
+    listing: Option<&Result<AnalysisListingPage, String>>,
 ) -> Option<ReportAction> {
-    render(ui, report, state, preview, Some(kind))
+    render(ui, report, state, preview, listing, Some(kind))
 }
 
 fn render(
@@ -64,6 +67,7 @@ fn render(
     report: Option<&AnalysisReport>,
     state: &mut WorkspaceState,
     preview: Option<&Result<AnalysisSpecimenPage, String>>,
+    listing: Option<&Result<AnalysisListingPage, String>>,
     forced: Option<AnalysisKind>,
 ) -> Option<ReportAction> {
     let Some(report) = report else {
@@ -118,7 +122,7 @@ fn render(
                 egui::vec2(ui.available_width(), height),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
-                    if let Some(next) = results(ui, report, state, preview, None) {
+                    if let Some(next) = results(ui, report, state, preview, listing, None) {
                         action = Some(next);
                     }
                 },
@@ -139,7 +143,7 @@ fn render(
                     }
                 });
         }
-        if let Some(next) = results(ui, report, state, preview, forced) {
+        if let Some(next) = results(ui, report, state, preview, listing, forced) {
             action = Some(next);
         }
     }
@@ -214,6 +218,7 @@ fn results(
     report: &AnalysisReport,
     state: &mut WorkspaceState,
     preview: Option<&Result<AnalysisSpecimenPage, String>>,
+    listing: Option<&Result<AnalysisListingPage, String>>,
     forced: Option<AnalysisKind>,
 ) -> Option<ReportAction> {
     let Some(kind) = forced.or(state.kind) else {
@@ -227,11 +232,11 @@ fn results(
     let mut action = None;
     ui.horizontal(|ui| {
         ui.strong(section_title(kind));
-        ui.label(format!(
-            "{:?} / {} rows",
-            section.state,
-            section.entries.len()
-        ));
+        let rows = section
+            .listing
+            .as_ref()
+            .map_or(section.entries.len() as u64, |listing| listing.rows);
+        ui.label(format!("{} · {rows} rows", state_word(section)));
         if forced.is_none()
             && ui
                 .button(egui_phosphor::regular::ARROW_SQUARE_OUT)
@@ -244,8 +249,79 @@ fn results(
             });
         }
     });
-    ui.add(egui::Label::new(&section.summary).truncate())
-        .on_hover_text(&section.summary);
+    ui.add(egui::Label::new(&section.summary).wrap());
+    let tools = tools(section);
+    if !tools.is_empty() {
+        ui.add(
+            egui::Label::new(egui::RichText::new(format!("Tools: {}", tools.join(", "))).weak())
+                .wrap(),
+        );
+    }
+    if section.listing.is_some() && kind != AnalysisKind::Structures {
+        let view_key = format!("{kind:?}/listing");
+        state.active_view = Some(view_key.clone());
+        let view = state.views.entry(view_key).or_default();
+        let wide = ui.available_width() >= 800.0;
+        if wide {
+            ui.horizontal_top(|ui| {
+                let height = ui.available_height();
+                let width = (ui.available_width() * 0.7).max(300.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(width, height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        if let Some(next) = super::listing_view::show(
+                            ui,
+                            report,
+                            section,
+                            listing,
+                            &mut view.listing,
+                        ) {
+                            action = Some(next);
+                        }
+                    },
+                );
+                ui.separator();
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        let selected = view
+                            .listing
+                            .selected
+                            .as_ref()
+                            .map(|(_, entry)| entry.clone());
+                        if let Some(next) = detail(ui, report, selected.as_ref(), view, preview) {
+                            action = Some(next);
+                        }
+                    },
+                );
+            });
+        } else {
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut view.detail_tab, 0, "Results");
+                ui.selectable_value(&mut view.detail_tab, 1, "Details");
+                ui.selectable_value(&mut view.detail_tab, 2, "Bytes");
+            });
+            if view.detail_tab == 0 {
+                if let Some(next) =
+                    super::listing_view::show(ui, report, section, listing, &mut view.listing)
+                {
+                    action = Some(next);
+                }
+            } else {
+                let selected = view
+                    .listing
+                    .selected
+                    .as_ref()
+                    .map(|(_, entry)| entry.clone());
+                if let Some(next) = detail(ui, report, selected.as_ref(), view, preview) {
+                    action = Some(next);
+                }
+            }
+        }
+        return action;
+    }
     if kind == AnalysisKind::Structures {
         egui::ComboBox::from_id_salt("analysis-structure-filter")
             .selected_text(state.structure.label())
@@ -302,18 +378,6 @@ fn results(
     if view.selected.is_some() && selected.is_none() {
         view.selected = None;
         view.requested = None;
-    }
-    if kind == AnalysisKind::Disassembly {
-        egui::ScrollArea::both()
-            .id_salt("analysis-disassembly")
-            .show(ui, |ui| {
-                for &index in &indices {
-                    let entry = &section.entries[index];
-                    ui.monospace(&entry.label);
-                    ui.monospace(&entry.value);
-                }
-            });
-        return action;
     }
     let wide = ui.available_width() >= 800.0;
     if wide {
@@ -434,7 +498,8 @@ fn visible(section: &AnalysisSection, filter: Structure, view: &ViewState) -> Ve
         .iter()
         .enumerate()
         .filter(|(_, entry)| {
-            filter.accepts(entry)
+            !is_provenance(entry)
+                && filter.accepts(entry)
                 && (query.is_empty() || records::searchable(entry).contains(&query))
         })
         .map(|(index, _)| index)
@@ -447,6 +512,39 @@ fn visible(section: &AnalysisSection, filter: Structure, view: &ViewState) -> Ve
         });
     }
     indices
+}
+
+/// Rows older reports used to name the engine or a tool version; they are
+/// shown as the category's tools instead.
+fn is_provenance(entry: &AnalysisEntry) -> bool {
+    matches!(
+        entry.label.as_str(),
+        "Engine" | "objdump version" | "file version" | "readelf version"
+    ) && entry
+        .record
+        .as_ref()
+        .is_none_or(|record| matches!(record.data, AnalysisData::Field { .. }))
+}
+
+/// The category's tools, including those older reports kept as rows.
+fn tools(section: &AnalysisSection) -> Vec<String> {
+    let mut tools = section.tools.clone();
+    for entry in section.entries.iter().filter(|entry| is_provenance(entry)) {
+        if !tools.contains(&entry.value) {
+            tools.push(entry.value.clone());
+        }
+    }
+    tools
+}
+
+/// A category's state as a word.
+fn state_word(section: &AnalysisSection) -> &'static str {
+    match section.state {
+        antinomie_monitor_core::AnalysisSectionState::Pending => "Pending",
+        antinomie_monitor_core::AnalysisSectionState::Complete => "Complete",
+        antinomie_monitor_core::AnalysisSectionState::Partial => "Partial",
+        antinomie_monitor_core::AnalysisSectionState::Unavailable => "Unavailable",
+    }
 }
 
 fn selected_entry<'a>(section: &'a AnalysisSection, view: &ViewState) -> Option<&'a AnalysisEntry> {
@@ -772,6 +870,8 @@ mod tests {
             kind: AnalysisKind::Strings,
             state: AnalysisSectionState::Partial,
             summary: "Retained text is bounded".into(),
+            tools: Vec::new(),
+            listing: None,
             entries: [16, 2, 32]
                 .into_iter()
                 .map(|offset| AnalysisEntry {

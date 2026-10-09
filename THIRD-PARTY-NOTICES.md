@@ -4,6 +4,22 @@ These materials are not relicensed by the root MIT license. This inventory
 records known embedded UI assets and distribution boundaries; it is not a
 complete transitive-dependency or binary-release compliance audit.
 
+## Embedded analysis rules and engines
+
+The static-analysis worker embeds two rule sets and links two analysis
+engines. The rule files keep every rule's author, license and source meta.
+
+| Component | Terms / retained notice |
+|---|---|
+| Antinomie rules, `crates/monitor-core/assets/rules/antinomie.yar` | MIT (this project) |
+| Community rules from YARA-Forge release 20261004 (core package), `crates/monitor-core/assets/rules/yara-forge-core.yar`, reduced by `scripts/refresh-yara-rules.py` to the 2096 rules whose license meta allows redistribution | Per rule, as its `license` or `malpedia_license` meta states: CC BY-SA 4.0 ([CC-BY-SA-4.0.txt](LICENSES/third-party/rules/CC-BY-SA-4.0.txt); Malpedia rules), Detection Rule License 1.1 ([DRL-1.1.md](LICENSES/third-party/rules/DRL-1.1.md)), BSD 2-Clause ([BSD-2-Clause.txt](LICENSES/third-party/rules/BSD-2-Clause.txt)), Apache License 2.0 ([Apache-2.0.txt](LICENSES/third-party/rules/Apache-2.0.txt)), CC BY 4.0 ([CC-BY-4.0.txt](LICENSES/third-party/rules/CC-BY-4.0.txt)), MIT ([MIT.txt](LICENSES/third-party/rules/MIT.txt)). Rules without a redistributable license are not included |
+| capa-rules v9.4.0 (Mandiant), `crates/monitor-core/assets/rules/capa-rules-v9.4.0.tar.gz` | Apache License 2.0 in [capa-rules-Apache-2.0.txt](LICENSES/third-party/rules/capa-rules-Apache-2.0.txt) |
+| `yara-x 1.21` (VirusTotal) and its dependencies | BSD-3-Clause (yara-x); dependencies under their own licenses |
+| `iced-x86 1.21` | MIT |
+
+Ghidra, radare2, capa, Detect It Easy, objdump, readelf and file are not
+bundled: the worker runs them only when they are installed on the host.
+
 ## Embedded UI assets
 
 The UI uses egui default fonts and the regular egui-phosphor icon font.

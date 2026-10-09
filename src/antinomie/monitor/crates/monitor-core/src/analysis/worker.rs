@@ -2,17 +2,14 @@
 use super::*;
 use object::{Object, ObjectSection, ObjectSymbol};
 use sha2::{Digest, Sha256};
-use std::{
-    fs,
-    io::{Read, Write},
-    path::Path,
-    process::{Command, Stdio},
-};
+use std::{fs, io::Write, path::Path};
 
 pub(crate) const REPORT_MAX_SIZE: usize = 128 * 1024;
 const ENTRY_MAX_COUNT: usize = 2048;
 const VALUE_MAX_SIZE: usize = 4096;
 const TOOL_OUTPUT_MAX_SIZE: usize = 1024 * 1024;
+/// Wall-clock budget of a decompiler run (analysis plus export).
+pub(super) const DECOMPILER_SECONDS: u64 = 840;
 
 /// Dispatch the monitor's private, sandbox-only analysis entry point before CLI parsing.
 /// Returns None for ordinary invocations, or the worker process exit code.
@@ -38,27 +35,52 @@ fn worker_main() -> Result<(), String> {
     {
         return Err("private worker requires the analysis sandbox".into());
     }
-    for (resource, size) in [
-        (Resource::Cpu, 120),
-        (Resource::As, 1024 * 1024 * 1024),
-        (Resource::Fsize, REPORT_MAX_SIZE as u64),
-        (Resource::Nofile, 64),
-        (Resource::Core, 0),
-    ] {
-        setrlimit(
-            resource,
-            Rlimit {
-                current: Some(size),
-                maximum: Some(size),
-            },
-        )
-        .map_err(|e| e.to_string())?;
-    }
     let request = fs::read("/input/request.json").map_err(|e| e.to_string())?;
     if request.len() > REPORT_MAX_SIZE {
         return Err("oversized worker request".into());
     }
     let mut report: AnalysisReport = serde_json::from_slice(&request).map_err(|e| e.to_string())?;
+    let has = |kind| {
+        report
+            .sections
+            .iter()
+            .any(|s: &AnalysisSection| s.kind == kind)
+    };
+    // A decompiler runs a JVM with many threads, a large address space
+    // reservation, hundreds of open jars and a project database in /tmp.
+    let (cpu, address_space, file_size, files) = if has(AnalysisKind::Decompilation) {
+        (6 * DECOMPILER_SECONDS, None, Some(512 * 1024 * 1024), 8192)
+    } else if has(AnalysisKind::Capabilities) {
+        (
+            600,
+            Some(8 * 1024 * 1024 * 1024),
+            Some(super::listing::LISTING_MAX_SIZE),
+            1024,
+        )
+    } else {
+        (
+            300,
+            Some(4 * 1024 * 1024 * 1024),
+            Some(super::listing::LISTING_MAX_SIZE),
+            256,
+        )
+    };
+    for (resource, size) in [
+        (Resource::Cpu, Some(cpu)),
+        (Resource::As, address_space),
+        (Resource::Fsize, file_size),
+        (Resource::Nofile, Some(files)),
+        (Resource::Core, Some(0)),
+    ] {
+        setrlimit(
+            resource,
+            Rlimit {
+                current: size,
+                maximum: size,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+    }
     let specimen = fs::read("/input/specimen").map_err(|e| e.to_string())?;
     if specimen.len() > crate::control::SPECIMEN_MAX_SIZE as usize {
         return Err("oversized specimen".into());
@@ -66,7 +88,7 @@ fn worker_main() -> Result<(), String> {
     report.specimen_sha256 = Some(format!("{:x}", Sha256::digest(&specimen)));
     report.specimen_len = Some(specimen.len() as u64);
     for section in &mut report.sections {
-        analyze_section(section, &specimen);
+        analyze_section(section, &specimen, Path::new("/output/listings"));
     }
     report.state = if report
         .sections
@@ -85,6 +107,20 @@ fn worker_main() -> Result<(), String> {
 }
 fn bounded_report(report: &mut AnalysisReport) -> Result<Vec<u8>, String> {
     let mut encoded = serde_json::to_vec(&report).map_err(|e| e.to_string())?;
+    // Rows of a category with a full listing are only a preview: shorten
+    // those first, without calling anything partial.
+    while encoded.len() > REPORT_MAX_SIZE {
+        let Some(section) = report
+            .sections
+            .iter_mut()
+            .filter(|s| s.listing.is_some() && s.entries.len() > 16)
+            .max_by_key(|s| s.entries.len())
+        else {
+            break;
+        };
+        section.entries.truncate(section.entries.len() / 2);
+        encoded = serde_json::to_vec(&report).map_err(|e| e.to_string())?;
+    }
     if encoded.len() > REPORT_MAX_SIZE {
         report.state = AnalysisState::Partial;
         report.reason = Some("normalized report truncated to 128 KiB live-snapshot limit".into());
@@ -135,7 +171,7 @@ fn entry(
     if let Some(row) = section.entries.last_mut()
         && (section.kind != AnalysisKind::Disassembly || row.label != "Disassembly")
     {
-        let data = if section.kind == AnalysisKind::Hardening && row.label != "Engine" {
+        let data = if section.kind == AnalysisKind::Hardening {
             AnalysisData::Property {
                 scope: "Static file metadata".into(),
                 observed: row.value.clone(),
@@ -154,7 +190,7 @@ fn entry(
         });
     }
 }
-fn structured_entry(
+pub(super) fn structured_entry(
     section: &mut AnalysisSection,
     label: impl Into<String>,
     value: impl Into<String>,
@@ -188,7 +224,7 @@ fn structured_entry(
         });
     }
 }
-fn clip(text: &mut String) -> bool {
+pub(super) fn clip(text: &mut String) -> bool {
     if text.len() <= VALUE_MAX_SIZE {
         return false;
     }
@@ -199,7 +235,7 @@ fn clip(text: &mut String) -> bool {
     text.truncate(end);
     true
 }
-fn bound_data(data: &mut AnalysisData) -> bool {
+pub(super) fn bound_data(data: &mut AnalysisData) -> bool {
     let mut truncated = false;
     let mut bound = |text: &mut String| {
         truncated |= clip(text);
@@ -253,6 +289,64 @@ fn bound_data(data: &mut AnalysisData) -> bool {
             bound(observed);
             bound(evidence);
         }
+        AnalysisData::Instruction {
+            bytes,
+            mnemonic,
+            operands,
+            function,
+            ..
+        } => {
+            bound(bytes);
+            bound(mnemonic);
+            bound(operands);
+            if let Some(function) = function {
+                bound(function);
+            }
+        }
+        AnalysisData::Function { name, .. } => bound(name),
+        AnalysisData::SourceLine { function, .. } => bound(function),
+        AnalysisData::RuleMatch {
+            rule,
+            namespace,
+            tags,
+            ruleset,
+        } => {
+            bound(rule);
+            bound(namespace);
+            bound(ruleset);
+            truncated |= bound_list(tags);
+        }
+        AnalysisData::Capability {
+            name,
+            namespace,
+            attack,
+            mbc,
+        } => {
+            bound(name);
+            bound(namespace);
+            truncated |= bound_list(attack);
+            truncated |= bound_list(mbc);
+        }
+        AnalysisData::Identification {
+            category,
+            name,
+            version,
+        } => {
+            bound(category);
+            bound(name);
+            if let Some(version) = version {
+                bound(version);
+            }
+        }
+    }
+    truncated
+}
+/// Keep at most 64 list items of bounded text.
+fn bound_list(items: &mut Vec<String>) -> bool {
+    let mut truncated = items.len() > 64;
+    items.truncate(64);
+    for item in items.iter_mut() {
+        truncated |= clip(item);
     }
     truncated
 }
@@ -260,15 +354,22 @@ fn unavailable(section: &mut AnalysisSection, reason: impl Into<String>) {
     section.state = AnalysisSectionState::Unavailable;
     section.summary = reason.into();
 }
-fn analyze_section(section: &mut AnalysisSection, specimen: &[u8]) {
+/// The built-in triage engine, named once per category instead of as a row.
+const TRIAGE_ENGINE: &str = "Antinomie byte triage 2 (object 0.40)";
+
+fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Path) {
     section.state = AnalysisSectionState::Complete;
     section.summary = "completed bounded static byte analysis".into();
-    entry(
-        section,
-        "Engine",
-        "Antinomie built-in byte triage v1; object 0.40 read parser",
-        None,
-    );
+    if matches!(
+        section.kind,
+        AnalysisKind::Metadata
+            | AnalysisKind::Structures
+            | AnalysisKind::Strings
+            | AnalysisKind::Entropy
+            | AnalysisKind::Hardening
+    ) {
+        section.tools.push(TRIAGE_ENGINE.into());
+    }
     match section.kind {
         AnalysisKind::Metadata => {
             entry(
@@ -323,48 +424,7 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8]) {
             section.summary =
                 "whole-file and up to 64 measured regions; entropy is not a packing verdict".into();
         }
-        AnalysisKind::Strings => {
-            let mut start = 0;
-            for index in 0..=specimen.len() {
-                if index < specimen.len()
-                    && (specimen[index].is_ascii_graphic() || specimen[index] == b' ')
-                {
-                    continue;
-                }
-                if index - start >= 4 {
-                    let range = AnalysisRange {
-                        offset: start as u64,
-                        len: (index - start) as u64,
-                    };
-                    let retained = &specimen[start..index.min(start + VALUE_MAX_SIZE)];
-                    structured_entry(
-                        section,
-                        "ASCII",
-                        String::from_utf8_lossy(retained).into_owned(),
-                        Some(AnalysisLocation {
-                            kind: AnalysisAddressKind::FileOffset,
-                            value: range.offset,
-                            file_range: Some(range),
-                        }),
-                        AnalysisData::String {
-                            encoding: "ASCII".into(),
-                            byte_len: range.len,
-                            retained_len: retained.len() as u64,
-                        },
-                    );
-                    if range.len > VALUE_MAX_SIZE as u64 {
-                        section.state = AnalysisSectionState::Partial;
-                    }
-                }
-                start = index + 1;
-                if section.entries.len() >= ENTRY_MAX_COUNT {
-                    section.state = AnalysisSectionState::Partial;
-                    break;
-                }
-            }
-            section.summary =
-                "printable ASCII strings, minimum four octets; offsets are file offsets".into();
-        }
+        AnalysisKind::Strings => strings(section, specimen, listings),
         AnalysisKind::Structures | AnalysisKind::Hardening => match object::File::parse(specimen) {
             Ok(file) => {
                 if section.kind == AnalysisKind::Structures {
@@ -583,7 +643,7 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8]) {
                                 ],
                             ) {
                                 Ok((version, output, truncated)) => {
-                                    entry(section, "readelf version", version, None);
+                                    section.tools.push(version);
                                     for line in output.lines().filter(|l| {
                                         l.contains("GNU_STACK")
                                             || l.contains("GNU_RELRO")
@@ -684,79 +744,38 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8]) {
                 format!("structures unsupported for unknown or malformed format: {error}"),
             ),
         },
-        AnalysisKind::Disassembly => {
-            if object::File::parse(specimen).is_err() {
-                unavailable(
-                    section,
-                    "disassembly unsupported for unknown/malformed format",
-                );
-                return;
-            }
-            match tool(
-                "/usr/bin/objdump",
-                &["--disassemble", "--wide", "/input/specimen"],
-            ) {
-                Ok((version, output, truncated)) => {
-                    entry(section, "objdump version", version, None);
-                    for line in output.lines() {
-                        entry(section, "Disassembly", line, None);
-                    }
-                    if truncated {
-                        section.state = AnalysisSectionState::Partial;
-                    }
-                    section.summary="objdump declared sections; printed addresses are object addresses, not observed runtime addresses".into();
-                }
-                Err(error) => unavailable(section, error),
-            }
-        }
-        AnalysisKind::Identification => match tool(
-            "/usr/bin/file",
-            &["--brief", "--no-sandbox", "/input/specimen"],
-        ) {
-            Ok((version, output, truncated)) => {
-                entry(section, "file version", version, None);
-                entry(section, "File identification", output, None);
-                section.state = AnalysisSectionState::Partial;
-                section.summary="file magic identification only; compiler/packer signature adapter and local rules unavailable".into();
-                if truncated {
-                    section.summary.push_str("; output truncated");
-                }
-            }
-            Err(error) => unavailable(section, error),
-        },
-        AnalysisKind::Rules => unavailable(
-            section,
-            "reviewed local rule adapter/rule set unavailable; no rule verdict",
-        ),
-        AnalysisKind::Capabilities => unavailable(
-            section,
-            "reviewed local capability adapter/rule set unavailable; no capability verdict",
-        ),
-        AnalysisKind::Decompilation => unavailable(
-            section,
-            "reviewed decompiler adapter unavailable; installed suites are not automatically invoked",
-        ),
+        AnalysisKind::Disassembly => super::disasm::disassemble(section, specimen, listings),
+        AnalysisKind::Identification => super::ident::identify(section, specimen),
+        AnalysisKind::Rules => super::rules::scan(section, specimen),
+        AnalysisKind::Capabilities => super::capa::capabilities(section),
+        AnalysisKind::Decompilation => super::decompile::decompile(section, specimen, listings),
     }
     if section.state == AnalysisSectionState::Partial {
         section.summary.push_str("; partial/bounded evidence");
     }
 }
 
-fn tool(path: &str, arguments: &[&str]) -> Result<(String, String, bool), String> {
+pub(super) fn tool(path: &str, arguments: &[&str]) -> Result<(String, String, bool), String> {
     if !Path::new(path).is_file() {
         return Err(format!("local tool unavailable: {path}"));
     }
-    let version = bounded_command(path, &["--version"])?;
-    let result = bounded_command(path, arguments)?;
+    let run = super::tools::run(
+        path,
+        arguments,
+        &[],
+        std::time::Duration::from_secs(120),
+        TOOL_OUTPUT_MAX_SIZE,
+    )?;
+    if !run.success && !run.truncated {
+        return Err(format!(
+            "local tool failed: {path}{}",
+            if run.timed_out { " (timed out)" } else { "" }
+        ));
+    }
     Ok((
-        version
-            .0
-            .lines()
-            .next()
-            .unwrap_or("version unavailable")
-            .to_string(),
-        result.0,
-        result.1,
+        super::tools::version(path, &["--version"]),
+        run.stdout,
+        run.truncated || run.timed_out,
     ))
 }
 fn object_name(name: object::NameOrOrdinal<&[u8]>) -> String {
@@ -800,6 +819,112 @@ fn symbol_range<'data, S: ObjectSection<'data>>(
         total_len,
     )
 }
+/// Strings kept in the report itself; the listing holds all of them.
+const REPORT_STRINGS: usize = 256;
+
+/// Printable ASCII (four or more octets) and UTF-16LE strings, in file order.
+fn find_strings(specimen: &[u8]) -> Vec<(usize, usize, &'static str, String)> {
+    let mut found = Vec::new();
+    let mut start = 0;
+    for index in 0..=specimen.len() {
+        if index < specimen.len() && (specimen[index].is_ascii_graphic() || specimen[index] == b' ')
+        {
+            continue;
+        }
+        if index - start >= 4 {
+            let retained = &specimen[start..index.min(start + VALUE_MAX_SIZE)];
+            found.push((
+                start,
+                index - start,
+                "ASCII",
+                String::from_utf8_lossy(retained).into_owned(),
+            ));
+        }
+        start = index + 1;
+    }
+    // UTF-16LE: printable ASCII code units, each followed by a zero octet.
+    let mut index = 0;
+    while index + 1 < specimen.len() {
+        let begin = index;
+        let mut text = String::new();
+        while index + 1 < specimen.len()
+            && specimen[index + 1] == 0
+            && (specimen[index].is_ascii_graphic() || specimen[index] == b' ')
+        {
+            if text.len() < VALUE_MAX_SIZE {
+                text.push(specimen[index] as char);
+            }
+            index += 2;
+        }
+        if index - begin >= 8 {
+            found.push((begin, index - begin, "UTF-16LE", text));
+        } else {
+            index = begin + 1;
+        }
+    }
+    found.sort_by_key(|(offset, ..)| *offset);
+    found
+}
+
+fn strings(section: &mut AnalysisSection, specimen: &[u8], listings: &Path) {
+    let found = find_strings(specimen);
+    let mut writer = super::listing::ListingWriter::create(
+        listings,
+        AnalysisKind::Strings,
+        super::listing::LISTING_MAX_SIZE,
+    )
+    .ok();
+    let mut full = false;
+    for (index, (offset, len, encoding, text)) in found.iter().enumerate() {
+        let range = AnalysisRange {
+            offset: *offset as u64,
+            len: *len as u64,
+        };
+        let location = || {
+            Some(AnalysisLocation {
+                kind: AnalysisAddressKind::FileOffset,
+                value: range.offset,
+                file_range: Some(range),
+            })
+        };
+        let data = || AnalysisData::String {
+            encoding: (*encoding).into(),
+            byte_len: range.len,
+            retained_len: text.len() as u64,
+        };
+        if index < REPORT_STRINGS {
+            structured_entry(section, *encoding, text.clone(), location(), data());
+        }
+        if let Some(writer) = writer.as_mut()
+            && !full
+            && !writer.push(*encoding, text.clone(), location(), data())
+        {
+            full = true;
+        }
+    }
+    // A string longer than the row bound keeps only its start.
+    section.state = if found.iter().any(|(_, len, encoding, text)| {
+        let units = if *encoding == "ASCII" { *len } else { len / 2 };
+        text.len() < units
+    }) {
+        AnalysisSectionState::Partial
+    } else {
+        AnalysisSectionState::Complete
+    };
+    if let Some(listing) = writer.and_then(|w| w.finish(full).ok()) {
+        if listing.truncated {
+            section.state = AnalysisSectionState::Partial;
+        }
+        section.listing = Some(listing);
+    } else if found.len() > REPORT_STRINGS {
+        section.state = AnalysisSectionState::Partial;
+    }
+    section.summary = format!(
+        "{} strings (printable ASCII of four or more octets, UTF-16LE of four or more characters); offsets are file offsets",
+        found.len()
+    );
+}
+
 fn entropy_entry(section: &mut AnalysisSection, label: &str, specimen: &[u8], offset: u64) {
     let mut counts = [0u64; 256];
     for &byte in specimen {
@@ -903,44 +1028,16 @@ fn section_flags(flags: object::SectionFlags) -> (String, Vec<String>) {
         .collect();
     (format!("0x{raw:x}"), decoded)
 }
-fn bounded_command(path: &str, arguments: &[&str]) -> Result<(String, bool), String> {
-    let mut child = Command::new(path)
-        .args(arguments)
-        .env_clear()
-        .env("LC_ALL", "C")
-        .env("HOME", "/nonexistent")
-        .current_dir("/output")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("tool spawn: {e}"))?;
-    let mut output = Vec::new();
-    let read = child
-        .stdout
-        .take()
-        .ok_or("tool stdout unavailable")?
-        .take((TOOL_OUTPUT_MAX_SIZE + 1) as u64)
-        .read_to_end(&mut output);
-    if let Err(error) = read {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(format!("tool read: {error}"));
-    }
-    let truncated = output.len() > TOOL_OUTPUT_MAX_SIZE;
-    if truncated {
-        child.kill().map_err(|e| format!("tool kill: {e}"))?;
-        output.truncate(TOOL_OUTPUT_MAX_SIZE);
-    }
-    let status = child.wait().map_err(|e| format!("tool reap: {e}"))?;
-    if !status.success() && !truncated {
-        return Err(format!("local tool failed: {path}: {status}"));
-    }
-    Ok((String::from_utf8_lossy(&output).into_owned(), truncated))
-}
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// A fresh directory for the listings a test analysis writes.
+    fn listings() -> std::path::PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("ant-listings-{}", crate::storage::unique_id()));
+        fs::create_dir_all(&directory).unwrap();
+        directory
+    }
     #[test]
     fn compressed_elf_section_keeps_storage_range_without_fake_symbol_byte_mapping() {
         let names = b"\0.debug_info\0.shstrtab\0";
@@ -981,14 +1078,14 @@ mod tests {
         );
         assert!(symbol_range(&section, 0x1001, 2, specimen.len() as u64).is_none());
         let mut structures = super::tests::section(AnalysisKind::Structures);
-        analyze_section(&mut structures, &specimen);
+        analyze_section(&mut structures, &specimen, &listings());
         assert!(structures.entries.iter().any(|row|matches!(&row.record.as_ref().unwrap().data,AnalysisData::Section {flags,..} if flags.iter().any(|flag|flag=="COMPRESSED"))));
     }
     #[test]
     fn actual_elf_rows_have_decoded_sections_symbols_strings_and_measured_regions() {
         let specimen = fs::read("/usr/bin/true").unwrap();
         let mut structures = section(AnalysisKind::Structures);
-        analyze_section(&mut structures, &specimen);
+        analyze_section(&mut structures, &specimen, &listings());
         assert!(structures.entries.iter().any(|entry|matches!(&entry.record.as_ref().unwrap().data,AnalysisData::Section {name,flags,..} if name==".text"&&flags.iter().any(|flag|flag=="EXECINSTR"))));
         assert!(structures.entries.iter().any(|entry|matches!(&entry.record.as_ref().unwrap().data,AnalysisData::Section {name,file_size,..} if name==".bss"&&file_size.is_none())&&entry.record.as_ref().unwrap().location.as_ref().unwrap().file_range.is_none()));
         assert!(structures.entries.iter().any(|entry| matches!(
@@ -1002,7 +1099,7 @@ mod tests {
             AnalysisKind::Entropy,
         ] {
             let mut result = section(kind);
-            analyze_section(&mut result, &specimen);
+            analyze_section(&mut result, &specimen, &listings());
             let mut report = crate::analysis::jobs::new_report(
                 "/usr/bin/true",
                 &AnalysisSelection {
@@ -1030,8 +1127,8 @@ mod tests {
     fn string_lengths_entropy_bounds_and_record_ids_survive_report_truncation() {
         let specimen = vec![b'a'; 5000];
         let mut strings = section(AnalysisKind::Strings);
-        analyze_section(&mut strings, &specimen);
-        let row = &strings.entries[1];
+        analyze_section(&mut strings, &specimen, &listings());
+        let row = &strings.entries[0];
         assert_eq!(row.value.len(), 4096);
         assert!(matches!(
             row.record.as_ref().unwrap().data,
@@ -1044,7 +1141,7 @@ mod tests {
         assert_eq!(strings.state, AnalysisSectionState::Partial);
         let mut entropy = section(AnalysisKind::Entropy);
         let specimen: Vec<_> = (0..=255u8).cycle().take(65536).collect();
-        analyze_section(&mut entropy, &specimen);
+        analyze_section(&mut entropy, &specimen, &listings());
         assert!(matches!(
             entropy.entries[1].record.as_ref().unwrap().data,
             AnalysisData::Entropy {
@@ -1078,6 +1175,8 @@ mod tests {
             kind,
             state: AnalysisSectionState::Pending,
             summary: String::new(),
+            tools: Vec::new(),
+            listing: None,
             entries: Vec::new(),
         }
     }
@@ -1090,24 +1189,27 @@ mod tests {
             AnalysisKind::Entropy,
         ] {
             let mut result = section(kind);
-            analyze_section(&mut result, specimen);
+            analyze_section(&mut result, specimen, &listings());
             assert_eq!(result.state, AnalysisSectionState::Complete);
-            assert!(result.entries.len() > 1);
+            assert!(!result.entries.is_empty());
         }
+        // Rules scan any bytes; harmless text matches nothing.
+        let mut rules = section(AnalysisKind::Rules);
+        analyze_section(&mut rules, specimen, &listings());
+        assert_eq!(rules.state, AnalysisSectionState::Complete);
+        assert!(rules.entries.is_empty());
         for kind in [
             AnalysisKind::Structures,
             AnalysisKind::Hardening,
-            AnalysisKind::Rules,
-            AnalysisKind::Capabilities,
             AnalysisKind::Decompilation,
         ] {
             let mut result = section(kind);
-            analyze_section(&mut result, specimen);
+            analyze_section(&mut result, specimen, &listings());
             assert_eq!(result.state, AnalysisSectionState::Unavailable);
         }
         for specimen in [b"\x7fELF".as_slice(), b"MZ", b"\xcf\xfa\xed\xfe", b""] {
             let mut result = section(AnalysisKind::Structures);
-            analyze_section(&mut result, specimen);
+            analyze_section(&mut result, specimen, &listings());
             assert_eq!(result.state, AnalysisSectionState::Unavailable);
         }
     }

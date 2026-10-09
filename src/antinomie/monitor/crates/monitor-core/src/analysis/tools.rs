@@ -1,0 +1,114 @@
+// SPDX-License-Identifier: MIT
+//! Running optional local tools inside the analysis sandbox: bounded output,
+//! a wall-clock timeout and an explicit environment.
+use std::{
+    io::Read,
+    path::Path,
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+
+pub(super) struct Run {
+    pub stdout: String,
+    /// Output reached `max_output` and was cut.
+    pub truncated: bool,
+    /// The tool ran out of time and was stopped.
+    pub timed_out: bool,
+    pub success: bool,
+}
+
+/// First existing executable among `candidates`.
+pub(super) fn find(candidates: &[&'static str]) -> Option<&'static str> {
+    candidates
+        .iter()
+        .copied()
+        .find(|path| Path::new(path).is_file())
+}
+
+/// Run `path` with `args`; `env` adds to a cleared environment with
+/// `LC_ALL=C` and a standard `PATH`.
+pub(super) fn run(
+    path: &str,
+    args: &[&str],
+    env: &[(&str, &str)],
+    timeout: Duration,
+    max_output: usize,
+) -> Result<Run, String> {
+    run_with(path, args, env, timeout, max_output, false)
+}
+
+/// `run`, optionally passing the tool's diagnostics on to worker.log.
+pub(super) fn run_with(
+    path: &str,
+    args: &[&str],
+    env: &[(&str, &str)],
+    timeout: Duration,
+    max_output: usize,
+    log_stderr: bool,
+) -> Result<Run, String> {
+    let mut command = Command::new(path);
+    command
+        .args(args)
+        .env_clear()
+        .env("LC_ALL", "C")
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .env("HOME", "/nonexistent")
+        .current_dir("/tmp")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(if log_stderr {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        });
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let mut child = command.spawn().map_err(|e| format!("{path}: {e}"))?;
+    let mut stdout = child.stdout.take().ok_or("tool stdout unavailable")?;
+    let reader = thread::spawn(move || {
+        let mut output = Vec::new();
+        let _ = (&mut stdout)
+            .take(max_output as u64 + 1)
+            .read_to_end(&mut output);
+        // Drain the rest so the tool never blocks on a full pipe.
+        let _ = std::io::copy(&mut stdout, &mut std::io::sink());
+        output
+    });
+    let deadline = Instant::now() + timeout;
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait().map_err(|e| format!("{path}: {e}"))? {
+            Some(status) => break status,
+            None if Instant::now() >= deadline => {
+                timed_out = true;
+                let _ = child.kill();
+                break child.wait().map_err(|e| format!("{path}: {e}"))?;
+            }
+            None => thread::sleep(Duration::from_millis(50)),
+        }
+    };
+    let mut output = reader.join().map_err(|_| "tool reader failed")?;
+    let truncated = output.len() > max_output;
+    output.truncate(max_output);
+    Ok(Run {
+        stdout: String::from_utf8_lossy(&output).into_owned(),
+        truncated,
+        timed_out,
+        success: status.success(),
+    })
+}
+
+/// The first line a tool prints for `args` (its version), or the tool name.
+pub(super) fn version(path: &str, args: &[&str]) -> String {
+    run(path, args, &[], Duration::from_secs(20), 4096)
+        .ok()
+        .and_then(|run| run.stdout.lines().next().map(|l| l.trim().to_owned()))
+        .filter(|line| !line.is_empty())
+        .unwrap_or_else(|| {
+            Path::new(path)
+                .file_name()
+                .map_or(path.to_owned(), |n| n.to_string_lossy().into_owned())
+        })
+}

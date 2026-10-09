@@ -74,9 +74,10 @@ impl Default for WorkspaceLayout {
         // stays the open tab so the startup view is unchanged.
         let mut dock = DockState::new(vec![Panel::RunHistory, Panel::Trace, Panel::StaticAnalysis]);
         dock.set_active_tab((SurfaceIndex::main(), NodeIndex::root(), TabIndex(1)));
+        // The work area gets most of the height; details sit below.
         dock.main_surface_mut().split_below(
             NodeIndex::root(),
-            0.63,
+            0.72,
             vec![Panel::Details, Panel::Activity],
         );
         Self {

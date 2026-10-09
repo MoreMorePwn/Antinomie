@@ -41,6 +41,11 @@ read, and anything the app could not decode or lost is marked as such.
 - QEMU (`qemu-system-x86_64`); KVM (`/dev/kvm`) strongly recommended
 - Rust to build the app; building kernels and bases needs the tools listed in
   [CONTRIBUTING.md](CONTRIBUTING.md)
+- Static analysis runs in a bubblewrap sandbox (`bwrap`). Disassembly, rules
+  and identification are built in; decompilation uses an installed Ghidra
+  (`apt install ghidra`) or radare2, capabilities an installed
+  [capa](https://github.com/mandiant/capa/releases), and Detect It Easy
+  (`diec`) adds its signatures when present
 
 ## Quick start
 
@@ -92,6 +97,11 @@ acceleration, CPU model) and **Delete**.
    window for input and output.
 4. **Stop** ends a run together with all of its child processes. Closing a
    terminal window does not stop the program.
+5. **Static Analysis** in the launch dialog analyzes the program's file before
+   it runs; pick the categories, from triage to disassembly and decompilation.
+6. **Attach to process** traces a process that is already running in the guest
+   (and its future children); **Capture all** traces all of userspace. Neither
+   stops or signals anything.
 
 ### 4. Read the results
 - **Syscall Trace**: every recorded call with its arguments, return value and
@@ -101,6 +111,8 @@ acceleration, CPU model) and **Delete**.
 - **Run History**: every run on the selected VM, including earlier boots, with
   its command line, user, status and exit code. Double-click a run to open its
   saved trace.
+- **Static Analysis**: the selected run's report: an overview, then each
+  category; disassembly and decompilation are full listings with search.
 - **Details** and **Activity**: the selected call or run, and VM events.
 
 Panels can be dragged out into their own windows and docked back;

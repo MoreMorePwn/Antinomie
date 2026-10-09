@@ -188,6 +188,72 @@ pub enum AnalysisData {
         observed: String,
         evidence: String,
     },
+    /// One decoded machine instruction; `function` names the containing
+    /// symbol when one covers the address.
+    Instruction {
+        address: u64,
+        bytes: String,
+        mnemonic: String,
+        operands: String,
+        function: Option<String>,
+    },
+    /// Start of a function in a disassembly or decompilation listing.
+    Function {
+        name: String,
+        address: u64,
+        size: u64,
+    },
+    /// One line of decompiled source; the entry value is the line text.
+    SourceLine {
+        function: String,
+        address: Option<u64>,
+        line: u32,
+    },
+    /// A rule that matched; the entry value lists the matched strings.
+    RuleMatch {
+        rule: String,
+        namespace: String,
+        tags: Vec<String>,
+        ruleset: String,
+    },
+    /// A capability reported by a capability engine (for example capa).
+    Capability {
+        name: String,
+        namespace: String,
+        attack: Vec<String>,
+        mbc: Vec<String>,
+    },
+    /// A compiler, language, linker, packer or protector identification;
+    /// the entry value is the evidence.
+    Identification {
+        category: String,
+        name: String,
+        version: Option<String>,
+    },
+}
+
+/// A category result too large for the report, kept beside it as JSON lines
+/// of `AnalysisEntry` and read in pages.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnalysisListing {
+    pub rows: u64,
+    pub bytes: u64,
+    /// The tool output or the listing bound cut the result short.
+    pub truncated: bool,
+}
+
+/// One page of a listing, optionally filtered by a case-insensitive query.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnalysisListingPage {
+    pub report_id: String,
+    pub kind: AnalysisKind,
+    pub query: String,
+    /// Index of the first returned row among the matching rows.
+    pub start: u64,
+    /// Matching rows in the whole listing.
+    pub total: u64,
+    /// Listing row index and entry.
+    pub rows: Vec<(u64, AnalysisEntry)>,
 }
 
 /// Bounded read-only specimen preview returned by the host archive API.
@@ -207,6 +273,25 @@ pub struct AnalysisSection {
     pub state: AnalysisSectionState,
     pub summary: String,
     pub entries: Vec<AnalysisEntry>,
+    /// Engines and tools that produced this category, with versions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<String>,
+    /// The complete result when it is kept beside the report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listing: Option<AnalysisListing>,
+}
+
+impl AnalysisSection {
+    pub fn new(kind: AnalysisKind) -> Self {
+        Self {
+            kind,
+            state: AnalysisSectionState::Pending,
+            summary: String::new(),
+            entries: Vec::new(),
+            tools: Vec::new(),
+            listing: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -419,10 +419,11 @@ impl Session {
                 let note = format!(
                     "archive closed after {OBSERVATION_RETAINED} newer captures in this boot; later tails are kept in the VM history only"
                 );
-                capture.summary.incomplete_reason = Some(match capture.summary.incomplete_reason.take() {
-                    Some(reason) => format!("{reason}; {note}"),
-                    None => note,
-                });
+                capture.summary.incomplete_reason =
+                    Some(match capture.summary.incomplete_reason.take() {
+                        Some(reason) => format!("{reason}; {note}"),
+                        None => note,
+                    });
                 if let Err(error) = capture.finalize(&snapshot.health) {
                     snapshot.last_error = Some(format!("capture finalization: {error}"));
                 }
@@ -2325,6 +2326,8 @@ impl Worker {
         Ok(())
     }
     fn guest_command(&mut self, command: Command) -> Result<String, String> {
+        /// Processes listed at most, across pages.
+        const PROCESS_LIST_MAX: usize = 4096;
         let session = self.session.as_mut().ok_or("VM is stopped")?;
         let timeout = Duration::from_secs(10);
         if matches!(
@@ -2344,16 +2347,38 @@ impl Worker {
         }
         match command {
             Command::ListProcesses { after_pid } => {
-                let reply = session.request(
-                    control::PROCESS_LIST,
-                    &control::process_list(after_pid),
-                    &mut self.snapshot,
-                    &self.sender,
-                    timeout,
-                )?;
-                self.snapshot.process_page =
-                    Some(control::process_page(&reply, &session.boot_id, after_pid)?);
-                Ok("guest processes refreshed".into())
+                // Read every page into one list, bounded so a fork storm
+                // cannot keep the enumeration going.
+                let mut page: Option<crate::GuestProcessPage> = None;
+                let mut next = after_pid;
+                loop {
+                    let reply = session.request(
+                        control::PROCESS_LIST,
+                        &control::process_list(next),
+                        &mut self.snapshot,
+                        &self.sender,
+                        timeout,
+                    )?;
+                    let part = control::process_page(&reply, &session.boot_id, next)?;
+                    next = part.next_pid;
+                    match page.as_mut() {
+                        None => page = Some(part),
+                        Some(page) => {
+                            page.next_pid = part.next_pid;
+                            page.processes.extend(part.processes);
+                        }
+                    }
+                    if next == 0
+                        || page
+                            .as_ref()
+                            .is_some_and(|p| p.processes.len() >= PROCESS_LIST_MAX)
+                    {
+                        break;
+                    }
+                }
+                let count = page.as_ref().map_or(0, |p| p.processes.len());
+                self.snapshot.process_page = page;
+                Ok(format!("{count} guest processes listed"))
             }
             Command::AttachProcess { identity } => session.start_capture(
                 &self.options,
