@@ -336,7 +336,9 @@ impl Default for TransportSettings {
     fn default() -> Self {
         Self {
             ring_kib: 1024,
-            lossless: false,
+            // GNOME start-up under Capture All overflows any ring: dropping
+            // lost 52-80 %, waiting lost nothing.
+            lossless: true,
             max_wait_ms: 5000,
             event_table: 16_384,
         }

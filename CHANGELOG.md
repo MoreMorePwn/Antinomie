@@ -15,9 +15,11 @@ with 256 KiB buffers that drop when full.
   it was already running), with call counts and exit codes. Selecting one
   shows only its calls, live and in saved captures (`processes.json`).
 - **Telemetry transport settings** (VM **Settings → Telemetry transport…**):
-  guest buffer per vCPU (256 KiB to 4 MiB, default 1 MiB), **Never drop** mode
-  (a system call waits up to the set time for the host instead of losing its
-  record) and the host event table size (default 16,384).
+  guest buffer per vCPU (256 KiB to 4 MiB, default 1 MiB), **Never drop**
+  (the default: a system call waits up to 5 s for the host instead of losing
+  its record) or **Drop new telemetry**, and the host event table size
+  (default 16,384). Capture All over a GNOME boot lost 52-80 % when dropping
+  and nothing in Never drop mode.
 - Recording writes go to a background writer thread with a 256 MiB queue, so
   a slow disk no longer stalls telemetry draining; in Never drop mode a disk
   that stays too slow slows the guest instead of losing data.

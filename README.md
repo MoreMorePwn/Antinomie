@@ -93,7 +93,7 @@ for Antinomie 0.3.0 and newer):
 | Setting | Effect |
 |---|---|
 | Guest buffer per vCPU | 256 KiB to 4 MiB of guest memory per virtual CPU (default 1 MiB); bigger buffers ride out longer bursts |
-| When buffers fill | **Drop new telemetry** (default; the guest never waits) or **Never drop**: a system call waits until the host has room, so heavy tracing slows the guest but nothing is lost |
+| When buffers fill | **Never drop** (default): a system call waits until the host has room, so heavy tracing slows the guest but nothing is lost; or **Drop new telemetry**: the guest never waits (keeps its timing) and the loss is counted |
 | Longest wait per event | In Never drop mode, how long one call may wait (default 5 s) before its record is dropped after all |
 | Host event table | How many calls the host keeps assembling at once (default 16,384) |
 
