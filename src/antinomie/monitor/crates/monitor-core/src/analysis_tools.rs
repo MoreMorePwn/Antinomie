@@ -5,7 +5,7 @@
 //! `<data>/tools/<id>/` and mounted read-only into the analysis sandbox at
 //! `SANDBOX_DIR`. A tool installed on the system always takes precedence.
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+
 use std::{
     fs::{self, File},
     io::{self, Read},
@@ -229,10 +229,9 @@ pub fn statuses(data_dir: &Path) -> Vec<ToolStatus> {
 }
 
 fn sha256_file(path: &Path) -> Result<String, String> {
-    let mut file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut digest = Sha256::new();
-    io::copy(&mut file, &mut digest).map_err(|e| e.to_string())?;
-    Ok(format!("{:x}", digest.finalize()))
+    let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let checksum = crate::storage::sha256_uncached(file)?;
+    Ok(checksum.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// A relative path inside the tool directory, with `strip` leading

@@ -10,7 +10,7 @@
 
 use crate::storage::Bundle;
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
+
 use std::{
     fs::{self, File},
     io::Read,
@@ -197,17 +197,9 @@ pub fn curl_version(curl: &Path) -> Result<String, String> {
 }
 
 fn sha256_file(path: &Path) -> Result<String, String> {
-    let mut file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut digest = Sha256::new();
-    let mut chunk = [0u8; 65536];
-    loop {
-        let len = file.read(&mut chunk).map_err(|e| e.to_string())?;
-        if len == 0 {
-            break;
-        }
-        digest.update(&chunk[..len]);
-    }
-    Ok(format!("{:x}", digest.finalize()))
+    let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let checksum = crate::storage::sha256_uncached(file)?;
+    Ok(checksum.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// Fetch a URL to `destination` with retries, following redirects. `curl -C -`

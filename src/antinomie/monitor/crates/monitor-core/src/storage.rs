@@ -55,17 +55,92 @@ pub(crate) fn private_dir(path: &Path) -> io::Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
 }
 fn sha256_file(path: &Path) -> Result<[u8; 32], String> {
-    let mut file = File::open(path).map_err(|e| e.to_string())?;
+    let file = File::open(path).map_err(|e| e.to_string())?;
+    sha256_uncached(file)
+}
+
+/// SHA-256 of a whole file, read once and released from the page cache as
+/// it goes: hashing a multi-GiB base must not leave GiBs of cache behind
+/// (under WSL the VM keeps that memory from Windows).
+pub(crate) fn sha256_uncached(mut file: File) -> Result<[u8; 32], String> {
+    use rustix::fs::{Advice, fadvise};
+    let _ = fadvise(&file, 0, None, Advice::Sequential);
     let mut digest = Sha256::new();
-    let mut buffer = [0u8; 65536];
+    let mut buffer = vec![0u8; 1 << 20];
+    let mut done = 0u64;
     loop {
         let used = file.read(&mut buffer).map_err(|e| e.to_string())?;
         if used == 0 {
             break;
         }
         digest.update(&buffer[..used]);
+        done += used as u64;
+        if done % (64 << 20) < used as u64 {
+            let _ = fadvise(&file, 0, std::num::NonZeroU64::new(done), Advice::DontNeed);
+        }
     }
+    let _ = fadvise(&file, 0, None, Advice::DontNeed);
     Ok(digest.finalize().into())
+}
+
+/// What a verified base file looked like: if it still does, its content
+/// checksum from that verification stands.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct FileStamp {
+    name: String,
+    len: u64,
+    modified_ns: i128,
+    changed_ns: i128,
+    inode: u64,
+    device: u64,
+    sha256: String,
+}
+
+impl FileStamp {
+    fn of(path: &Path, sha256: String) -> Result<Self, String> {
+        use std::os::unix::fs::MetadataExt;
+        let meta = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+        Ok(Self {
+            name: path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            len: meta.len(),
+            modified_ns: i128::from(meta.mtime()) * 1_000_000_000 + i128::from(meta.mtime_nsec()),
+            changed_ns: i128::from(meta.ctime()) * 1_000_000_000 + i128::from(meta.ctime_nsec()),
+            inode: meta.ino(),
+            device: meta.dev(),
+            sha256,
+        })
+    }
+}
+
+/// Supplies a base file's SHA-256: hashed, or taken from an earlier check.
+type ChecksumSource<'a> = dyn FnMut(File, &Path) -> Result<[u8; 32], String> + 'a;
+
+/// The checksum a previous verification recorded for `path`, if the file
+/// is unchanged since.
+fn stored_checksum(previous: Option<&Verified>, path: &Path) -> Option<([u8; 32], FileStamp)> {
+    let now = FileStamp::of(path, String::new()).ok()?;
+    let stamp = previous?.files.iter().find(|old| {
+        FileStamp {
+            sha256: String::new(),
+            ..(*old).clone()
+        } == now
+    })?;
+    let mut checksum = [0u8; 32];
+    for (index, byte) in checksum.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(stamp.sha256.get(index * 2..index * 2 + 2)?, 16).ok()?;
+    }
+    Some((checksum, stamp.clone()))
+}
+
+/// `<data>/bases/.<identity>.verified`: the file stamps of the last full
+/// verification of an installed base.
+#[derive(Debug, Serialize, Deserialize)]
+struct Verified {
+    identity: String,
+    files: Vec<FileStamp>,
 }
 #[derive(Debug)]
 pub(crate) struct PublicationError {
@@ -458,6 +533,10 @@ impl Bundle {
         Ok(())
     }
     fn identity(&self) -> Result<String, String> {
+        self.identity_with(&mut |file, _| sha256_uncached(file))
+    }
+    /// The identity, with file checksums from `checksum(file, path)`.
+    fn identity_with(&self, checksum: &mut ChecksumSource) -> Result<String, String> {
         let mut digest = Sha256::new();
         digest.update(
             serde_json::to_vec(&(&self.kernel_append, &self.kernel_version, self.schema_id))
@@ -502,22 +581,14 @@ impl Bundle {
                 {
                     return Err("bundle artifacts must be regular files".into());
                 }
-                let mut file = crate::archive_io::open_regular(
+                let file = crate::archive_io::open_regular(
                     path.parent().ok_or("missing artifact parent")?,
                     path,
                 )
                 .map_err(|e| e.to_string())?;
-                let mut content = Sha256::new();
-                let mut chunk = [0; 65536];
-                loop {
-                    let len = file.read(&mut chunk).map_err(|e| e.to_string())?;
-                    if len == 0 {
-                        break;
-                    }
-                    content.update(&chunk[..len]);
-                }
-                let checksum = content.finalize();
-                if expected.is_some_and(|expected| format!("{checksum:x}") != expected) {
+                let checksum: [u8; 32] = checksum(file, path)?;
+                let hex: String = checksum.iter().map(|b| format!("{b:02x}")).collect();
+                if expected.is_some_and(|expected| hex != expected) {
                     return Err("bundle artifact differs from build provenance".into());
                 }
                 digest.update([1]);
@@ -611,13 +682,57 @@ impl Bundle {
         atomic_json(&target.join("bundle.json"), &installed)?;
         Ok(installed)
     }
+    /// Check an installed base against its identity. The file checksums of
+    /// the last full check are reused while every file is unchanged (same
+    /// size, times, inode and device); otherwise the files are hashed again.
     pub(crate) fn verify_installed(&self) -> Result<(), String> {
         let expected = self
             .base_identity
             .as_ref()
             .ok_or("VM has no installed base identity")?;
-        if &self.identity()? != expected {
+        let stamp_path = self
+            .kernel
+            .parent()
+            .and_then(|dir| dir.parent())
+            .map(|root| root.join(format!(".{expected}.verified")));
+        let previous: Option<Verified> = stamp_path
+            .as_ref()
+            .and_then(|path| fs::read(path).ok())
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .filter(|verified: &Verified| &verified.identity == expected);
+        let mut stamps = Vec::new();
+        let identity = self.identity_with(&mut |file, path| {
+            if let Some((checksum, stamp)) = stored_checksum(previous.as_ref(), path) {
+                stamps.push(stamp);
+                return Ok(checksum);
+            }
+            let checksum = sha256_uncached(file)?;
+            let hex = checksum.iter().map(|b| format!("{b:02x}")).collect();
+            stamps.push(FileStamp::of(path, hex)?);
+            Ok(checksum)
+        });
+        let identity = identity.inspect_err(|_| {
+            if let Some(path) = &stamp_path {
+                let _ = fs::remove_file(path);
+            }
+        })?;
+        if &identity != expected {
+            if let Some(path) = &stamp_path {
+                let _ = fs::remove_file(path);
+            }
             return Err("installed base checksum mismatch".into());
+        }
+        if let Some(path) = &stamp_path {
+            let verified = Verified {
+                identity,
+                files: stamps,
+            };
+            if previous
+                .as_ref()
+                .is_none_or(|old| old.files != verified.files)
+            {
+                let _ = atomic_json(path, &verified);
+            }
         }
         Ok(())
     }
@@ -1976,6 +2091,27 @@ mod tests {
         };
         let installed = bundle.install(&options).unwrap();
         fs::remove_dir_all(source).unwrap();
+        installed.verify_installed().unwrap();
+        // The first check leaves a stamp; later checks reuse its checksums
+        // while the files are unchanged, and a changed file is hashed again.
+        let identity = installed.base_identity.clone().unwrap();
+        let stamp = options
+            .data_dir
+            .join("bases")
+            .join(format!(".{identity}.verified"));
+        let verified: Verified = serde_json::from_slice(&fs::read(&stamp).unwrap()).unwrap();
+        assert_eq!(verified.identity, identity);
+        assert_eq!(verified.files.len(), 2);
+        installed.verify_installed().unwrap();
+        let disk = installed.base_disk.clone();
+        fs::set_permissions(&disk, fs::Permissions::from_mode(0o644)).unwrap();
+        let mut bytes = fs::read(&disk).unwrap();
+        bytes[0] ^= 1;
+        fs::write(&disk, &bytes).unwrap();
+        assert!(installed.verify_installed().is_err());
+        assert!(!stamp.exists());
+        bytes[0] ^= 1;
+        fs::write(&disk, &bytes).unwrap();
         installed.verify_installed().unwrap();
         let loaded = Bundle::load(installed.kernel.parent().unwrap()).unwrap();
         assert_eq!(
