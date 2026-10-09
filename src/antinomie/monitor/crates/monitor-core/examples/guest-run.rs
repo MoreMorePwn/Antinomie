@@ -17,6 +17,9 @@
 //!            "done": "NATIVE PASS", "timeout": 120}],
 //!  "screenshot": "/tmp/screen.png", "screenshot_after": 20}
 //! ```
+//!
+//! `"capture_all": true` starts Capture All once the guest is up, before the
+//! runs, and stops it after them; the report then includes its summary.
 use antinomie_monitor_core::{
     Backend, BackendOptions, Command, ExecRequest, GuestCredentials, Notification, Snapshot,
     VmConfig, VmState,
@@ -299,6 +302,13 @@ fn run() -> Result<Value, String> {
             boot,
         )?;
     }
+    let capture_all = plan
+        .get("capture_all")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if capture_all {
+        session.guest_command(|| Command::CaptureAll, boot)?;
+    }
     let boot_seconds = started.elapsed().as_secs_f64();
 
     let mut runs = Vec::new();
@@ -388,6 +398,29 @@ fn run() -> Result<Value, String> {
         }
         None => None,
     };
+    let mut capture = None;
+    if capture_all {
+        let id = session
+            .snapshot
+            .captures
+            .first()
+            .map(|c| c.id.clone())
+            .ok_or("Capture All capture missing")?;
+        session.command(
+            Command::StopCapture {
+                capture_id: id.clone(),
+            },
+            60,
+        )?;
+        thread::sleep(Duration::from_secs(1));
+        session.pump();
+        capture = session
+            .snapshot
+            .captures
+            .iter()
+            .find(|c| c.id == id)
+            .and_then(|c| serde_json::to_value(c).ok());
+    }
     let recorder = session.command(Command::RecorderStats, 20)?;
     let health = session.snapshot.health.clone();
     session.command(Command::Stop, 60)?;
@@ -395,7 +428,7 @@ fn run() -> Result<Value, String> {
     session.backend.shutdown()?;
     Ok(
         json!({"vm_id": vm_id, "base": base, "boot_seconds": boot_seconds,
-              "runs": runs, "recorder": recorder, "health": health,
+              "runs": runs, "recorder": recorder, "health": health, "capture": capture,
               "screenshot": screenshot}),
     )
 }

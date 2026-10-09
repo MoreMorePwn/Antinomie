@@ -1446,9 +1446,15 @@ struct CaptureManifest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     guest_kernel: &'a Option<crate::api::GuestKernel>,
 }
+/// Packets are buffered in memory and written in large blocks: the transport
+/// thread calls [`RawCapture::flush`] after every drain pass, and `sync`,
+/// `manifest` and drop flush too, so the file trails by at most one pass.
 pub struct RawCapture {
     pub directory: PathBuf,
     file: File,
+    buffer: Vec<u8>,
+    /// File length and packet count covered by completed writes.
+    written: (u64, u64),
     quota: u64,
     pub packets: u64,
     pub bytes: u64,
@@ -1457,8 +1463,21 @@ pub struct RawCapture {
     /// The guest kernel's INFO answer, recorded in the manifest.
     pub guest_kernel: Option<crate::api::GuestKernel>,
 }
+/// Buffered raw packet bytes that trigger a write before the next flush.
+const RAW_BUFFER: usize = 1024 * 1024;
+impl Drop for RawCapture {
+    fn drop(&mut self) {
+        self.flush();
+    }
+}
 impl RawCapture {
     pub(crate) fn sync(&mut self) -> Result<(), String> {
+        if !self.flush() {
+            return Err(self
+                .error
+                .clone()
+                .unwrap_or_else(|| "capture write failed".into()));
+        }
         self.file.sync_all().map_err(|error| {
             let message = format!("raw capture sync failed: {error}");
             self.error.get_or_insert(message.clone());
@@ -1479,6 +1498,8 @@ impl RawCapture {
         Ok(Self {
             directory,
             file,
+            buffer: Vec::new(),
+            written: (0, 0),
             quota,
             packets: 0,
             bytes: 0,
@@ -1515,18 +1536,29 @@ impl RawCapture {
                 return false;
             }
         };
-        let prior = self.bytes;
-        if let Err(e) = self
-            .file
-            .write_all(&length.to_le_bytes())
-            .and_then(|_| self.file.write_all(packet))
-        {
-            self.error = Some(format!("capture write failed: {e}"));
-            let _ = self.file.set_len(prior);
-            return false;
-        }
+        self.buffer.extend_from_slice(&length.to_le_bytes());
+        self.buffer.extend_from_slice(packet);
         self.bytes = total;
         self.packets += 1;
+        self.buffer.len() < RAW_BUFFER || self.flush()
+    }
+    /// Write buffered packets; false when that write fails. The file is then
+    /// cut back to the last complete write and the counters follow it, so the
+    /// raw file stays a whole number of packets.
+    pub fn flush(&mut self) -> bool {
+        if self.buffer.is_empty() {
+            return true;
+        }
+        if let Err(e) = self.file.write_all(&self.buffer) {
+            self.error
+                .get_or_insert_with(|| format!("capture write failed: {e}"));
+            let _ = self.file.set_len(self.written.0);
+            (self.bytes, self.packets) = self.written;
+            self.buffer.clear();
+            return false;
+        }
+        self.buffer.clear();
+        self.written = (self.bytes, self.packets);
         true
     }
     pub(crate) fn manifest(
@@ -1536,7 +1568,9 @@ impl RawCapture {
         disk_bundle: &Bundle,
         state: &str,
     ) -> Result<(), String> {
-        if let Err(e) = self.file.sync_all() {
+        if self.flush()
+            && let Err(e) = self.file.sync_all()
+        {
             self.error
                 .get_or_insert_with(|| format!("capture sync failed: {e}"));
         }
@@ -2031,12 +2065,30 @@ mod tests {
         assert!(validate_vm(&vm).is_err());
     }
     #[test]
+    fn raw_packets_reach_the_file_on_flush_and_drop() {
+        let path = std::env::temp_dir().join(format!("ant-capture-{}", unique_id()));
+        let mut c = RawCapture::new(path.clone(), 1 << 20).unwrap();
+        assert!(c.append(b"one"));
+        assert!(c.append(b"two"));
+        assert_eq!(fs::metadata(path.join("telemetry.raw")).unwrap().len(), 0);
+        assert!(c.flush());
+        assert_eq!(fs::metadata(path.join("telemetry.raw")).unwrap().len(), 14);
+        assert!(c.append(b"three"));
+        drop(c);
+        assert_eq!(
+            fs::read(path.join("telemetry.raw")).unwrap()[14..],
+            [5, 0, 0, 0, b't', b'h', b'r', b'e', b'e']
+        );
+        fs::remove_dir_all(path).unwrap();
+    }
+    #[test]
     fn quota_preserves_prior_packets() {
         let path = std::env::temp_dir().join(format!("ant-capture-{}", unique_id()));
         let mut c = RawCapture::new(path.clone(), 8).unwrap();
         assert!(c.append(b"test"));
         assert!(!c.append(b"lost"));
         assert!(c.error.is_some());
+        assert!(c.flush());
         assert_eq!(
             fs::read(path.join("telemetry.raw")).unwrap(),
             [4, 0, 0, 0, b't', b'e', b's', b't']

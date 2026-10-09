@@ -2,10 +2,14 @@ use crate::{
     api::{BackendOptions, VmAcceleration, VmConfig, VmCpuModel, VmLaunchOptions},
     storage::{Bundle, private_dir, unique_id, vm_dir},
 };
+use rustix::fs::MemfdFlags;
 use std::{
     fs::{File, OpenOptions},
     io::{Read, Write},
-    os::unix::{fs::OpenOptionsExt, net::UnixStream},
+    os::{
+        fd::{AsRawFd, OwnedFd},
+        unix::{fs::OpenOptionsExt, net::UnixStream},
+    },
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::Duration,
@@ -87,6 +91,78 @@ impl RamLayout {
         regions
     }
 }
+/// Delete guest RAM files that no process holds open: an app that exits
+/// without stopping its VM leaves `runtime/<run>/shared-ram` behind, several
+/// GiB each. A running VM's QEMU keeps its file open, so it is kept.
+pub(crate) fn remove_stale_guest_ram(options: &BackendOptions, vm_ids: &[&str]) -> u64 {
+    let open: std::collections::HashSet<PathBuf> = std::fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|process| std::fs::read_dir(process.path().join("fd")).ok())
+        .flat_map(|fds| {
+            fds.flatten()
+                .filter_map(|fd| std::fs::read_link(fd.path()).ok())
+        })
+        .collect();
+    let mut freed = 0;
+    for id in vm_ids {
+        let Ok(runtime) = vm_dir(options, id)
+            .and_then(|dir| std::fs::canonicalize(dir.join("runtime")).map_err(|e| e.to_string()))
+        else {
+            continue;
+        };
+        for run in std::fs::read_dir(runtime).into_iter().flatten().flatten() {
+            let ram = run.path().join("shared-ram");
+            if let Ok(metadata) = std::fs::symlink_metadata(&ram)
+                && metadata.is_file()
+                && !open.contains(&ram)
+                && std::fs::remove_file(&ram).is_ok()
+            {
+                freed += std::os::unix::fs::MetadataExt::blocks(&metadata) * 512;
+            }
+        }
+    }
+    freed
+}
+/// Create guest RAM. It lives in memory (a memfd that QEMU and the transport
+/// open through /proc) unless `ANTINOMIE_GUEST_RAM=file` or it would not fit
+/// in half of memory plus swap. A file on the data disk works too, but the
+/// host then writes guest memory back to disk, which stalls the guest and the
+/// telemetry drain.
+fn guest_ram(file: PathBuf, size: u64) -> Result<(PathBuf, Option<OwnedFd>), String> {
+    let room = std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .map(|meminfo| {
+            meminfo
+                .lines()
+                .filter(|line| line.starts_with("MemTotal:") || line.starts_with("SwapTotal:"))
+                .filter_map(|line| line.split_whitespace().nth(1)?.parse::<u64>().ok())
+                .sum::<u64>()
+                * 1024
+        })
+        .unwrap_or(0);
+    if std::env::var("ANTINOMIE_GUEST_RAM").as_deref() != Ok("file")
+        && size <= room / 2
+        && let Ok(memory) = rustix::fs::memfd_create("antinomie-guest-ram", MemfdFlags::CLOEXEC)
+        && rustix::fs::ftruncate(&memory, size).is_ok()
+    {
+        let path = PathBuf::from(format!(
+            "/proc/{}/fd/{}",
+            std::process::id(),
+            memory.as_raw_fd()
+        ));
+        return Ok((path, Some(memory)));
+    }
+    let ram = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&file)
+        .map_err(|e| e.to_string())?;
+    ram.set_len(size).map_err(|e| e.to_string())?;
+    Ok((file, None))
+}
 fn qemu_path(path: &Path) -> Result<String, String> {
     Ok(path
         .to_str()
@@ -164,6 +240,8 @@ fn apply_launch_settings(
 pub(crate) struct VmProcess {
     pub child: Child,
     pub ram_path: PathBuf,
+    /// Keeps in-memory guest RAM alive; `ram_path` then names it through /proc.
+    _ram_memory: Option<OwnedFd>,
     pub runtime_dir: PathBuf,
     pub bootstrap: u64,
     pub ram_size: u64,
@@ -200,13 +278,7 @@ impl VmProcess {
         {
             return Err("bootstrap GPA must be page aligned and inside VM RAM below 4 GiB".into());
         }
-        let ram = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&ram_path)
-            .map_err(|e| e.to_string())?;
-        ram.set_len(ram_size).map_err(|e| e.to_string())?;
+        let (ram_path, ram_memory) = guest_ram(ram_path, ram_size)?;
         let mut qmp_path = runtime_dir.join("qmp.sock");
         let mut socket_cleanup = None;
         if qmp_path.as_os_str().len() > 100 {
@@ -263,6 +335,7 @@ impl VmProcess {
         let mut process = Self {
             child,
             ram_path,
+            _ram_memory: ram_memory,
             runtime_dir,
             bootstrap,
             ram_size,
@@ -384,7 +457,9 @@ impl VmProcess {
 impl Drop for VmProcess {
     fn drop(&mut self) {
         let _ = self.force_stop();
-        let _ = std::fs::remove_file(&self.ram_path);
+        if self._ram_memory.is_none() {
+            let _ = std::fs::remove_file(&self.ram_path);
+        }
         let _ = std::fs::remove_file(&self.qmp_path);
         if self.qmp_path.parent() != Some(self.runtime_dir.as_path())
             && let Some(parent) = self.qmp_path.parent()
@@ -397,6 +472,34 @@ impl Drop for VmProcess {
 mod tests {
     use super::*;
     use crate::api::{DisplayResolution, GuestProfile};
+
+    #[test]
+    fn stale_guest_ram_is_removed_but_open_ram_is_kept() {
+        let root = std::env::temp_dir().join(format!("ant-stale-ram-{}", unique_id()));
+        let options = BackendOptions {
+            data_dir: root.clone(),
+            ..BackendOptions::default()
+        };
+        let vm = VmConfig {
+            id: "stale_ram_vm".into(),
+            ..VmConfig::default()
+        };
+        let dir = root.join(&vm.id);
+        private_dir(&dir).unwrap();
+        crate::storage::atomic_json(&dir.join("config.json"), &vm).unwrap();
+        let (stale, live) = (dir.join("runtime/a"), dir.join("runtime/b"));
+        for run in [&stale, &live] {
+            private_dir(run).unwrap();
+            std::fs::write(run.join("shared-ram"), vec![1; 8192]).unwrap();
+        }
+        // A running QEMU holds its RAM file open; this test process stands in.
+        let held = File::open(live.join("shared-ram")).unwrap();
+        assert!(remove_stale_guest_ram(&options, &[&vm.id]) >= 8192);
+        assert!(!stale.join("shared-ram").exists());
+        assert!(live.join("shared-ram").exists());
+        drop(held);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn bundle(graphical: bool) -> Bundle {
         Bundle {
@@ -677,6 +780,7 @@ mod tests {
         let process = VmProcess {
             child,
             ram_path: "/nonexistent/ram".into(),
+            _ram_memory: None,
             runtime_dir: "/nonexistent".into(),
             bootstrap: 0,
             ram_size: 0,
@@ -693,6 +797,7 @@ mod tests {
         let mut process = VmProcess {
             child,
             ram_path: "/nonexistent/ram".into(),
+            _ram_memory: None,
             runtime_dir: "/nonexistent".into(),
             bootstrap: 0,
             ram_size: 0,

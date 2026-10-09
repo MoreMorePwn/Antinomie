@@ -5,12 +5,12 @@ use crate::{
     storage::private_dir,
 };
 use sha2::{Digest, Sha256};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::{
     collections::{BTreeMap, VecDeque},
     fs::{File, OpenOptions},
-    io::{Read, Seek, SeekFrom, Write},
-    path::PathBuf,
+    io::{Read, Seek, SeekFrom},
+    path::{Path, PathBuf},
 };
 
 #[derive(Default)]
@@ -397,6 +397,37 @@ pub struct Assembler {
     field_count: usize,
     chunk_count: usize,
     evicted: VecDeque<EventSummary>,
+    /// Recently written object files, most recent first; an object's chunks
+    /// usually arrive together, so this saves an open and close per chunk.
+    open_objects: VecDeque<(PathBuf, File)>,
+}
+/// Object files an assembler keeps open between chunks.
+const OPEN_OBJECTS: usize = 8;
+fn write_object(
+    open_objects: &mut VecDeque<(PathBuf, File)>,
+    path: &Path,
+    offset: u64,
+    data: &[u8],
+) -> std::io::Result<()> {
+    let file = match open_objects.iter().position(|(open, _)| open == path) {
+        Some(at) => {
+            let entry = open_objects.remove(at).expect("position is in range");
+            open_objects.push_front(entry);
+            &open_objects[0].1
+        }
+        None => {
+            let file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .mode(0o600)
+                .open(path)?;
+            open_objects.truncate(OPEN_OBJECTS - 1);
+            open_objects.push_front((path.to_path_buf(), file));
+            &open_objects[0].1
+        }
+    };
+    file.write_all_at(data, offset)
 }
 impl Assembler {
     pub fn new(directory: PathBuf, quota: u64) -> Result<Self> {
@@ -419,6 +450,7 @@ impl Assembler {
             field_count: 0,
             chunk_count: 0,
             evicted: VecDeque::new(),
+            open_objects: VecDeque::new(),
         }
     }
     pub fn stop_saving(&mut self) {
@@ -697,17 +729,7 @@ impl Assembler {
                                 }
                             })
                         } else {
-                            OpenOptions::new()
-                                .read(true)
-                                .write(true)
-                                .create(true)
-                                .truncate(false)
-                                .mode(0o600)
-                                .open(&path)
-                                .and_then(|mut file| {
-                                    file.seek(SeekFrom::Start(h.object_offset))
-                                        .and_then(|_| file.write_all(b))
-                                })
+                            write_object(&mut self.open_objects, &path, h.object_offset, b)
                         };
                         if let Err(err) = result {
                             let message = format!("host object persistence: {err}");

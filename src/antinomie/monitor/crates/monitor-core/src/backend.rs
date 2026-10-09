@@ -43,6 +43,16 @@ impl Backend {
         storage::private_dir(&options.data_dir).map_err(|e| e.to_string())?;
         options.data_dir = fs::canonicalize(&options.data_dir).map_err(|e| e.to_string())?;
         let vms = storage::load_vms(&options)?;
+        let freed = crate::vm::remove_stale_guest_ram(
+            &options,
+            &vms.iter().map(|vm| vm.id.as_str()).collect::<Vec<_>>(),
+        );
+        if freed > 0 {
+            eprintln!(
+                "removed {} MB of guest RAM files left by VMs that were not stopped",
+                freed / 1_000_000
+            );
+        }
         let vm_locations = vms
             .iter()
             .map(|vm| crate::locations::locations(&options, &vm.id))
@@ -143,6 +153,10 @@ impl Drop for Backend {
     }
 }
 
+/// Longest a drain pass runs before the transport thread handles commands.
+const PUMP_BUDGET: Duration = Duration::from_millis(20);
+/// Packets per drain pass above which the next pass follows without a wait.
+const BUSY_PACKETS: usize = 32;
 struct Session {
     analysis: crate::analysis::jobs::Jobs,
     transport: Transport,
@@ -164,6 +178,9 @@ struct Session {
     /// keyed by request id. The guest answers commands in submission order and
     /// has already consumed the PTY bytes, so a late reply still belongs to its run.
     late_reads: BTreeMap<u64, u64>,
+    /// The last drain pass found enough telemetry that the next one should
+    /// follow without waiting.
+    telemetry_busy: bool,
     status_cursor: usize,
     last_status_query: Instant,
     persisted_packets: u64,
@@ -592,11 +609,16 @@ impl Session {
         sender: &SyncSender<Notification>,
     ) -> Result<(), String> {
         self.transport.poll(0)?;
-        // A bounded batch returns control to command handling even under continuous telemetry.
-        for _ in 0..256 {
+        // Drain until the guest's rings are empty: they hold only milliseconds
+        // of busy telemetry. A time budget still returns control to command
+        // handling under continuous telemetry.
+        let started = Instant::now();
+        let mut drained = 0usize;
+        while started.elapsed() < PUMP_BUDGET {
             let Some(packet) = self.transport.read()?.map(<[u8]>::to_vec) else {
                 break;
             };
+            drained += 1;
             snapshot.health.received_packets = snapshot.health.received_packets.saturating_add(1);
             let header = crate::parser::parse_packet(&packet)
                 .ok()
@@ -746,6 +768,8 @@ impl Session {
                 self.persisted_packets = self.persisted_packets.saturating_add(1);
             }
         }
+        self.telemetry_busy = drained >= BUSY_PACKETS;
+        self.flush_raw();
         let stats = self.transport.stats()?;
         snapshot.health.attempted = stats.attempted;
         snapshot.health.dropped = stats.dropped;
@@ -769,6 +793,39 @@ impl Session {
         self.update_captures(snapshot);
         let _ = sender;
         Ok(())
+    }
+    /// Write the packets the raw captures buffered during a drain pass.
+    fn flush_raw(&mut self) {
+        let mut failed = None;
+        if !self.capture.flush() {
+            self.assembler.stop_saving();
+            failed = self.capture.error.clone();
+        }
+        for run in self.runs.values_mut() {
+            if !run.capture.flush() {
+                let error = run
+                    .capture
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "raw saving stopped".into());
+                run.storage_error(error.clone());
+                failed.get_or_insert(error);
+            }
+        }
+        for capture in self.captures.values_mut() {
+            if !capture.capture.flush() {
+                let error = capture
+                    .capture
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "observer raw saving stopped".into());
+                capture.storage_error(error.clone());
+                failed.get_or_insert(error);
+            }
+        }
+        if let Some(error) = failed {
+            self.stop_saving(error);
+        }
     }
     fn request(
         &mut self,
@@ -1573,7 +1630,21 @@ impl Worker {
                 storage::flush_json();
                 break;
             }
-            match self.receiver.recv_timeout(Duration::from_millis(10)) {
+            // While telemetry is flowing, take a waiting command without
+            // sleeping so the next drain pass follows at once.
+            let received = if self
+                .session
+                .as_ref()
+                .is_some_and(|session| session.telemetry_busy)
+            {
+                self.receiver.try_recv().map_err(|error| match error {
+                    mpsc::TryRecvError::Empty => mpsc::RecvTimeoutError::Timeout,
+                    mpsc::TryRecvError::Disconnected => mpsc::RecvTimeoutError::Disconnected,
+                })
+            } else {
+                self.receiver.recv_timeout(Duration::from_millis(10))
+            };
+            match received {
                 Ok((id, command)) => {
                     let quiet = matches!(
                         command,
@@ -2350,6 +2421,7 @@ impl Worker {
                 pending_overflow: false,
                 terminal_cursor: 0,
                 late_reads: BTreeMap::new(),
+                telemetry_busy: false,
                 status_cursor: 0,
                 last_status_query: Instant::now(),
                 persisted_packets: 0,
@@ -3907,6 +3979,7 @@ mod tests {
                     assert_eq!(manifest["health"]["persistence_error"], error);
                 }
                 assert!(!capture.append_with_reserved(b"later", 0));
+                assert!(capture.flush());
                 assert_eq!(
                     capture.bytes + runs.values().map(|run| run.capture.bytes).sum::<u64>(),
                     940

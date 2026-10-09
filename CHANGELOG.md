@@ -4,6 +4,24 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
+## 0.2.3 — 2026-10-09
+
+Runs bases for Antinomie 0.2.0 and 0.1.0; no new bases.
+
+- **Fewer lost telemetry packets.** While telemetry is flowing, the monitor
+  now drains the guest's buffers continuously, instead of reading at most 256
+  packets every 10 ms. On a Capture All stress test it saved 8.5 times as many
+  packets per second.
+- Raw telemetry is written in large blocks and object files stay open between
+  chunks, so saving a packet costs fewer system calls.
+- Guest RAM is now kept in memory instead of in a file in the VM folder. The
+  host no longer writes guest memory back to disk, which used to stall the
+  guest and its telemetry. RAM larger than half of memory plus swap still
+  uses the file; `ANTINOMIE_GUEST_RAM=file` forces it.
+- On startup, the app deletes guest RAM files left behind when the app
+  closed without stopping its VM (several GB each). A running VM's file is
+  kept.
+
 ## 0.2.2 — 2026-10-09
 
 Runs bases for Antinomie 0.2.0 and 0.1.0; no new bases.
