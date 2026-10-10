@@ -2,8 +2,10 @@
 //! of one of them. While a capture runs, QEMU writes every frame of the VM's
 //! network interface to its pcap file, outside the guest; the list follows
 //! that file live.
-use crate::theme::{self, PacketColor};
-use antinomie_monitor_core::network::{self, NetworkCapture, NetworkPacket};
+use crate::theme::{self, PacketColor, ValueKind};
+use antinomie_monitor_core::network::{
+    self, FieldKind, NetworkCapture, NetworkPacket, PacketLayer,
+};
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
 use std::{
@@ -55,6 +57,10 @@ struct PacketList {
     last_read: Option<Instant>,
     selected: Option<usize>,
     frame: Option<(u64, Result<Vec<u8>, String>)>,
+    /// The selected frame's decoded layers, and the chosen layer (and field)
+    /// whose bytes are marked.
+    layers: Vec<PacketLayer>,
+    field: Option<(usize, Option<usize>)>,
     /// Packets matching the filter, and the filter and packet count they were
     /// computed for (new packets are filtered as they arrive).
     rows: Vec<usize>,
@@ -379,7 +385,7 @@ impl NetworkView {
         if !self.hide_list {
             egui::SidePanel::left("network_captures")
                 .resizable(true)
-                .default_width(250.0)
+                .default_width(230.0)
                 .width_range(170.0..=480.0)
                 .frame(egui::Frame::new().inner_margin(egui::Margin {
                     right: 8,
@@ -412,7 +418,6 @@ impl NetworkView {
             {
                 self.hide_list = !self.hide_list;
             }
-            ui.strong("Network");
             let open = self.list.path.as_ref().map(|path| {
                 self.captures
                     .iter()
@@ -422,12 +427,25 @@ impl NetworkView {
                         |capture| capture_title(capture, is_live),
                     )
             });
-            ui.label(open.unwrap_or_else(|| "No capture open".into()));
+            match open {
+                Some(open) => {
+                    if is_live {
+                        ui.colored_label(theme::error(), egui_phosphor::regular::RECORD);
+                    }
+                    ui.label(RichText::new(open).strong().color(theme::heading()));
+                }
+                None => {
+                    ui.colored_label(theme::muted(), "No capture open");
+                }
+            }
             ui.separator();
+            ui.label(RichText::new(egui_phosphor::regular::FUNNEL).color(theme::muted()));
+            let width = (ui.available_width() * 0.4).clamp(180.0, 320.0);
             ui.add(
                 egui::TextEdit::singleline(&mut self.filter)
-                    .hint_text("Filter: port 80, ip 10.0.2.15, proto DNS, text")
-                    .desired_width(210.0),
+                    .hint_text("Filter packets")
+                    .margin(theme::TEXT_EDIT_MARGIN)
+                    .desired_width(width),
             )
             .on_hover_text(
                 "port N: either port\nip ADDRESS: either address\n\
@@ -438,16 +456,20 @@ impl NetworkView {
             if let Some(filter) = self.quick_filters(ui) {
                 self.filter = filter;
             }
-            ui.menu_button("Colors", |ui| {
-                for color in PacketColor::ALL {
-                    ui.horizontal(|ui| {
-                        let (rect, _) =
-                            ui.allocate_exact_size(egui::vec2(28.0, 14.0), egui::Sense::hover());
-                        ui.painter().rect_filled(rect, 2.0, color.tint());
-                        ui.label(color.label());
-                    });
-                }
-            })
+            ui.separator();
+            ui.menu_button(
+                format!("{} Colors", egui_phosphor::regular::PALETTE),
+                |ui| {
+                    for color in PacketColor::ALL {
+                        ui.horizontal(|ui| {
+                            let (rect, _) = ui
+                                .allocate_exact_size(egui::vec2(28.0, 14.0), egui::Sense::hover());
+                            ui.painter().rect_filled(rect, 2.0, color.tint());
+                            ui.label(color.label());
+                        });
+                    }
+                },
+            )
             .response
             .on_hover_text("Row colors by protocol, as in Wireshark");
             if let Some(path) = self.list.path.clone() {
@@ -458,6 +480,7 @@ impl NetworkView {
         if !self.filter.trim().is_empty() || cx.pending {
             ui.horizontal_wrapped(|ui| {
                 if cx.pending {
+                    ui.add(egui::Spinner::new());
                     ui.colored_label(theme::muted(), "Waiting for the VM...");
                 }
                 if !self.filter.trim().is_empty() {
@@ -469,7 +492,7 @@ impl NetworkView {
                             self.list.rows.len()
                         ),
                     );
-                    if ui.button("Clear filter").clicked() {
+                    if ui.small_button("Clear filter").clicked() {
                         self.filter.clear();
                     }
                 }
@@ -482,6 +505,18 @@ impl NetworkView {
     fn quick_filters(&mut self, ui: &mut egui::Ui) -> Option<String> {
         let mut chosen = None;
         let empty = self.list.packets.is_empty();
+        let mono = theme::mono(ui.style().text_styles[&egui::TextStyle::Body].size - 1.0);
+        // A value and its packet count, as one menu entry.
+        let entry = |ui: &mut egui::Ui, value: String, color: egui::Color32, count: usize| {
+            let mut job = egui::text::LayoutJob::default();
+            job.append(&value, 0.0, text_format(mono.clone(), color));
+            job.append(
+                &format!(" ({count})"),
+                0.0,
+                text_format(mono.clone(), theme::muted()),
+            );
+            ui.selectable_label(false, job).clicked()
+        };
         ui.add_enabled_ui(!empty, |ui| {
             egui::ComboBox::from_id_salt("network_ports")
                 .selected_text("Ports")
@@ -489,10 +524,12 @@ impl NetworkView {
                 .height(420.0)
                 .show_ui(ui, |ui| {
                     for (port, count) in self.list.counts().ports.iter().take(QUICK_ENTRIES) {
-                        if ui
-                            .selectable_label(false, format!("Port {port} ({count})"))
-                            .clicked()
-                        {
+                        if entry(
+                            ui,
+                            format!("Port {port}"),
+                            theme::value(ValueKind::Number),
+                            *count,
+                        ) {
                             chosen = Some(format!("port {port}"));
                         }
                     }
@@ -504,10 +541,7 @@ impl NetworkView {
                 .show_ui(ui, |ui| {
                     for (address, count) in self.list.counts().addresses.iter().take(QUICK_ENTRIES)
                     {
-                        if ui
-                            .selectable_label(false, format!("{address} ({count})"))
-                            .clicked()
-                        {
+                        if entry(ui, address.to_string(), theme::text(), *count) {
                             chosen = Some(format!("ip {address}"));
                         }
                     }
@@ -519,10 +553,7 @@ impl NetworkView {
                 .show_ui(ui, |ui| {
                     for (protocol, count) in self.list.counts().protocols.iter().take(QUICK_ENTRIES)
                     {
-                        if ui
-                            .selectable_label(false, format!("{protocol} ({count})"))
-                            .clicked()
-                        {
+                        if entry(ui, protocol.clone(), protocol_color(protocol), *count) {
                             chosen = Some(format!("proto {protocol}"));
                         }
                     }
@@ -534,7 +565,13 @@ impl NetworkView {
     fn wireshark_button(&mut self, ui: &mut egui::Ui, path: &Path, is_live: bool) {
         let wireshark = which("wireshark");
         let clicked = ui
-            .add_enabled(wireshark.is_some(), egui::Button::new("Open in Wireshark"))
+            .add_enabled(
+                wireshark.is_some(),
+                egui::Button::new(format!(
+                    "{} Open in Wireshark",
+                    egui_phosphor::regular::ARROW_SQUARE_OUT
+                )),
+            )
             .on_disabled_hover_text("Wireshark is not installed")
             .on_hover_text(path.display().to_string())
             .clicked();
@@ -569,20 +606,23 @@ impl NetworkView {
     ) -> Option<NetworkAction> {
         let mut action = None;
         ui.horizontal(|ui| {
-            ui.strong("Captures");
-            if ui
-                .add(egui::Button::new(egui_phosphor::regular::ARROW_CLOCKWISE).frame(false))
-                .on_hover_text("Refresh the list")
-                .clicked()
-            {
-                self.scan(cx.recordings, cx.recording_roots);
-            }
+            theme::section(ui, "Captures");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add(egui::Button::new(egui_phosphor::regular::ARROW_CLOCKWISE).frame(false))
+                    .on_hover_text("Refresh the list")
+                    .clicked()
+                {
+                    self.scan(cx.recordings, cx.recording_roots);
+                }
+            });
         });
         if let Some(active) = cx.active {
             let button = ui
                 .add_enabled(
                     !cx.pending,
-                    egui::Button::new(format!("{} Stop capture", egui_phosphor::regular::STOP)),
+                    egui::Button::new(format!("{} Stop capture", egui_phosphor::regular::STOP))
+                        .min_size(egui::vec2(ui.available_width(), 0.0)),
                 )
                 .on_hover_text(format!("Stop writing {}", active.file.display()));
             if button.clicked() {
@@ -599,7 +639,8 @@ impl NetworkView {
             let button = ui
                 .add_enabled(
                     why.is_none() && !cx.pending,
-                    egui::Button::new(format!("{} Start capture", egui_phosphor::regular::RECORD)),
+                    egui::Button::new(format!("{} Start capture", egui_phosphor::regular::RECORD))
+                        .min_size(egui::vec2(ui.available_width(), 0.0)),
                 )
                 .on_hover_text(
                     "Record every packet of the VM's network interface, outside the guest",
@@ -609,29 +650,27 @@ impl NetworkView {
                 action = Some(NetworkAction::Start);
             }
         }
-        ui.separator();
+        ui.add_space(2.0);
         let mut open = None;
+        let font_size = cx.font_size;
         egui::ScrollArea::vertical()
             .id_salt("network_capture_list")
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
                 if let Some(active) = cx.active {
                     let selected = self.list.path.as_ref() == Some(&active.file);
                     let loaded = selected.then_some(self.list.packets.len());
-                    let text = RichText::new(format!(
-                        "{} Live capture\n{}",
-                        egui_phosphor::regular::RECORD,
-                        capture_detail(active, true, loaded)
-                    ))
-                    .color(if selected {
-                        theme::text()
-                    } else {
-                        theme::error()
-                    });
-                    if ui
-                        .selectable_label(selected, text)
-                        .on_hover_text(active.file.display().to_string())
-                        .clicked()
+                    let title = format!("{} Live capture", egui_phosphor::regular::RECORD);
+                    if capture_row(
+                        ui,
+                        selected,
+                        (&title, theme::error()),
+                        &capture_detail(active, true, loaded),
+                        font_size,
+                    )
+                    .on_hover_text(active.file.display().to_string())
+                    .clicked()
                     {
                         open = Some(active.file.clone());
                     }
@@ -643,19 +682,20 @@ impl NetworkView {
                     .collect();
                 for capture in &earlier {
                     let selected = self.list.path.as_ref() == Some(&capture.file);
-                    let text = format!(
-                        "{}\n{}",
-                        capture_title(capture, false),
-                        capture_detail(capture, false, None)
-                    );
-                    if ui
-                        .selectable_label(selected, text)
-                        .on_hover_text(format!(
-                            "Boot {}\n{}",
-                            capture.boot_id,
-                            capture.file.display()
-                        ))
-                        .clicked()
+                    let title = format_date(capture.started_ms / 1000);
+                    if capture_row(
+                        ui,
+                        selected,
+                        (&title, theme::text()),
+                        &capture_detail(capture, false, None),
+                        font_size,
+                    )
+                    .on_hover_text(format!(
+                        "Boot {}\n{}",
+                        capture.boot_id,
+                        capture.file.display()
+                    ))
+                    .clicked()
                     {
                         open = Some(capture.file.clone());
                     }
@@ -672,8 +712,8 @@ impl NetworkView {
 
     fn packets(&mut self, ui: &mut egui::Ui, is_live: bool, cx: &NetworkContext<'_>) {
         if self.list.path.is_none() {
-            ui.colored_label(
-                theme::muted(),
+            empty_state(
+                ui,
                 if !cx.nat {
                     "The VM has no network (NAT is off). With NAT on, a network capture \
                      records every packet of its network interface, outside the guest."
@@ -698,8 +738,11 @@ impl NetworkView {
             );
         }
         let font_size = cx.font_size;
+        let mono = theme::mono(font_size - 1.0);
+        // Data columns fit their monospace contents; Info gets the rest.
+        let char_width = ui.fonts(|fonts| fonts.glyph_width(&mono, '0'));
+        let chars = |count: f32| count * char_width + 8.0;
         let start = self.list.packets.first().map_or(0, |p| p.time_us);
-        let table_height = (ui.available_height() * 0.62).max(80.0);
         let mut clicked = None;
         let mut filter = None;
         let list = &self.list;
@@ -713,26 +756,27 @@ impl NetworkView {
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                     .striped(true)
                     .stick_to_bottom(is_live && list.selected.is_none())
-                    .max_scroll_height(table_height)
+                    .max_scroll_height(f32::INFINITY)
                     .min_scrolled_height(0.0)
-                    .column(Column::exact(70.0))
-                    .column(Column::exact(90.0))
+                    .auto_shrink([false, false])
+                    .column(Column::exact(chars(6.0)))
+                    .column(Column::exact(chars(10.0)))
                     .column(
-                        Column::initial(200.0)
-                            .at_least(80.0)
+                        Column::initial(chars(16.0))
+                            .at_least(chars(6.0))
                             .resizable(true)
                             .clip(true),
                     )
                     .column(
-                        Column::initial(200.0)
-                            .at_least(80.0)
+                        Column::initial(chars(16.0))
+                            .at_least(chars(6.0))
                             .resizable(true)
                             .clip(true),
                     )
-                    .column(Column::exact(76.0).clip(true))
-                    .column(Column::exact(64.0))
-                    .column(Column::remainder().at_least(200.0))
-                    .header(font_size + 12.0, |mut header| {
+                    .column(Column::exact(chars(7.0)).clip(true))
+                    .column(Column::exact(chars(6.0)))
+                    .column(Column::remainder().at_least(chars(12.0)).clip(true))
+                    .header(theme::row_height(font_size) + 4.0, |mut header| {
                         for label in [
                             "No.",
                             "Time",
@@ -743,12 +787,12 @@ impl NetworkView {
                             "Info",
                         ] {
                             header.col(|ui| {
-                                ui.strong(label);
+                                ui.label(RichText::new(label).strong().color(theme::heading()));
                             });
                         }
                     })
                     .body(|body| {
-                        body.rows(font_size + 10.0, list.rows.len(), |mut row| {
+                        body.rows(theme::row_height(font_size), list.rows.len(), |mut row| {
                             let index = list.rows[row.index()];
                             let packet = &list.packets[index];
                             let selected = list.selected == Some(index);
@@ -771,31 +815,51 @@ impl NetworkView {
                                     let set = match column {
                                         2 => address_cell(
                                             ui,
+                                            &mono,
                                             &packet.source,
                                             packet.src_ip,
                                             packet.src_port,
                                         ),
                                         3 => address_cell(
                                             ui,
+                                            &mono,
                                             &packet.destination,
                                             packet.dst_ip,
                                             packet.dst_port,
                                         ),
                                         4 => link(
                                             ui,
-                                            &packet.protocol,
+                                            RichText::new(&packet.protocol)
+                                                .font(mono.clone())
+                                                .color(protocol_color(&packet.protocol)),
                                             &format!("Filter by protocol {}", packet.protocol),
                                         )
                                         .then(|| format!("proto {}", packet.protocol)),
+                                        6 => {
+                                            ui.add(
+                                                egui::Label::new(info_text(packet, font_size))
+                                                    .selectable(false)
+                                                    .truncate(),
+                                            );
+                                            None
+                                        }
                                         _ => {
-                                            let text = match column {
-                                                0 => packet.number.to_string(),
-                                                1 => format!("{elapsed:.6}"),
-                                                5 => packet.length.to_string(),
-                                                _ => packet.info.clone(),
+                                            let (text, color) = match column {
+                                                0 => (packet.number.to_string(), theme::muted()),
+                                                1 => (
+                                                    format!("{elapsed:.6}"),
+                                                    theme::value(ValueKind::Number),
+                                                ),
+                                                _ => (packet.length.to_string(), theme::text()),
                                             };
                                             ui.add(
-                                                egui::Label::new(text).selectable(false).truncate(),
+                                                egui::Label::new(
+                                                    RichText::new(text)
+                                                        .font(mono.clone())
+                                                        .color(color),
+                                                )
+                                                .selectable(false)
+                                                .truncate(),
                                             );
                                             None
                                         }
@@ -818,29 +882,41 @@ impl NetworkView {
                         });
                     });
             });
+        if list.rows.is_empty() {
+            ui.colored_label(
+                theme::muted(),
+                if list.packets.is_empty() {
+                    "No packets yet"
+                } else {
+                    "No packets match the filter"
+                },
+            );
+        }
         if let Some(index) = clicked {
             self.list.selected = Some(index);
         }
         if let Some(set) = filter {
             self.filter = set;
         }
-        ui.separator();
-        self.details(ui, start);
     }
 
-    fn details(&mut self, ui: &mut egui::Ui, start: u64) {
+    /// The selected packet for the Details panel: its decoded layers on the
+    /// left, its bytes on the right with the chosen field's bytes marked.
+    pub(crate) fn details(&mut self, ui: &mut egui::Ui, font_size: f32) {
         let Some(packet) = self
             .list
             .selected
             .and_then(|i| self.list.packets.get(i))
             .cloned()
         else {
-            ui.colored_label(
-                theme::muted(),
+            empty_state(
+                ui,
                 if self.list.packets.is_empty() {
-                    "No packets yet"
+                    "No packet selected. Open a capture in the Network tab, then select a \
+                     packet to see its layers and bytes here."
                 } else {
-                    "Select a packet to see its bytes"
+                    "No packet selected. Select a packet in the Network tab to see its \
+                     layers and bytes here."
                 },
             );
             return;
@@ -852,41 +928,363 @@ impl NetworkView {
             .is_none_or(|(offset, _)| *offset != packet.offset)
         {
             if let Some(path) = &self.list.path {
-                self.list.frame = Some((packet.offset, network::frame(path, packet.offset)));
+                let frame = network::frame(path, packet.offset);
+                self.list.layers = frame
+                    .as_ref()
+                    .map(|bytes| network::dissect(bytes))
+                    .unwrap_or_default();
+                self.list.frame = Some((packet.offset, frame));
+                self.list.field = None;
             }
         }
-        ui.label(
-            RichText::new(format!(
-                "Frame {}: {} bytes on the wire, {} captured · {:.6} s · {}",
-                packet.number,
-                packet.length,
-                packet.captured,
-                packet.time_us.saturating_sub(start) as f64 / 1e6,
-                packet.info
-            ))
-            .strong(),
-        );
-        match self.list.frame.as_ref().map(|(_, frame)| frame) {
-            Some(Ok(bytes)) => {
-                egui::ScrollArea::both()
-                    .id_salt("network_frame")
-                    .show(ui, |ui| {
-                        ui.add(
-                            egui::Label::new(RichText::new(hex_dump(bytes)).monospace())
-                                .selectable(true),
-                        );
-                    });
-            }
+        let start = self.list.packets.first().map_or(0, |p| p.time_us);
+        let mono = theme::mono(font_size - 1.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                RichText::new(format!("Frame {}", packet.number))
+                    .strong()
+                    .color(theme::heading()),
+            );
+            ui.label(
+                RichText::new(&packet.protocol)
+                    .font(mono.clone())
+                    .color(protocol_color(&packet.protocol)),
+            );
+            ui.label(info_text(&packet, font_size));
+            ui.label(
+                RichText::new(format!(
+                    "{} bytes on the wire, {} captured · {:.6} s",
+                    packet.length,
+                    packet.captured,
+                    packet.time_us.saturating_sub(start) as f64 / 1e6
+                ))
+                .color(theme::muted()),
+            );
+        });
+        let bytes = match self.list.frame.as_ref().map(|(_, frame)| frame) {
+            Some(Ok(bytes)) => bytes.clone(),
             Some(Err(error)) => {
                 ui.colored_label(theme::warn(), error);
+                return;
             }
-            None => {}
-        }
+            None => return,
+        };
+        let mut hovered = None;
+        // The bytes get the width of a full hex row; the tree the rest.
+        let char_width = ui.fonts(|fonts| fonts.glyph_width(&mono, '0'));
+        let hex_width = char_width * 74.0 + 28.0;
+        let available = ui.available_width();
+        egui::SidePanel::left("packet_tree")
+            .resizable(true)
+            .default_width((available - hex_width).max(available * 0.45))
+            .width_range(160.0..=(ui.available_width() - 160.0).max(161.0))
+            .frame(egui::Frame::new().inner_margin(egui::Margin {
+                right: 6,
+                ..Default::default()
+            }))
+            .show_inside(ui, |ui| {
+                egui::ScrollArea::both()
+                    .id_salt("packet_tree_scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        hovered = layer_tree(ui, &self.list.layers, &mut self.list.field, &mono);
+                    });
+            });
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().inner_margin(egui::Margin {
+                left: 6,
+                ..Default::default()
+            }))
+            .show_inside(ui, |ui| {
+                let chosen = self.list.field.and_then(|(layer, field)| {
+                    let layer = self.list.layers.get(layer)?;
+                    Some(match field.and_then(|field| layer.fields.get(field)) {
+                        Some(field) => (field.name.clone(), field.start, field.len),
+                        None => (layer.name.clone(), layer.start, layer.len),
+                    })
+                });
+                ui.horizontal(|ui| {
+                    theme::section(ui, "Bytes");
+                    match &chosen {
+                        Some((name, start, len)) if *len > 0 => {
+                            ui.label(
+                                RichText::new(format!("{name}: {len} bytes at 0x{start:04x}"))
+                                    .color(theme::muted()),
+                            );
+                        }
+                        _ => {
+                            ui.colored_label(theme::muted(), format!("{} bytes", bytes.len()));
+                        }
+                    }
+                });
+                let marked = chosen.map(|(_, start, len)| start..start + len);
+                egui::ScrollArea::both()
+                    .id_salt("packet_bytes")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::Label::new(hex_job(&bytes, &mono, marked, hovered))
+                                .selectable(true)
+                                .extend(),
+                        );
+                    });
+            });
     }
 }
 
+/// A two-line entry of the capture list: its title, then muted details.
+fn capture_row(
+    ui: &mut egui::Ui,
+    selected: bool,
+    (title, color): (&str, egui::Color32),
+    detail: &str,
+    font_size: f32,
+) -> egui::Response {
+    let small = (font_size - 2.0).max(11.0);
+    let padding = egui::vec2(8.0, 5.0);
+    let height = font_size + small + padding.y * 2.0 + 6.0;
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::click(),
+    );
+    let fill = if selected {
+        Some(ui.visuals().selection.bg_fill)
+    } else if response.hovered() {
+        Some(ui.visuals().widgets.hovered.weak_bg_fill)
+    } else {
+        None
+    };
+    if let Some(fill) = fill {
+        ui.painter().rect_filled(rect, 4.0, fill);
+    }
+    let width = rect.width() - padding.x * 2.0;
+    let line = |text: &str, font: egui::FontId, color: egui::Color32| {
+        let mut job =
+            egui::text::LayoutJob::single_section(text.to_owned(), text_format(font, color));
+        job.wrap = egui::text::TextWrapping::truncate_at_width(width);
+        ui.fonts(|fonts| fonts.layout_job(job))
+    };
+    let title = line(title, theme::mono(font_size - 1.0), color);
+    let detail = line(detail, egui::FontId::proportional(small), theme::muted());
+    let top = rect.min + padding;
+    let title_height = title.size().y;
+    ui.painter().galley(top, title, color);
+    ui.painter().galley(
+        top + egui::vec2(0.0, title_height + 3.0),
+        detail,
+        theme::muted(),
+    );
+    response
+}
+
+/// A muted hint centered near the top of an empty area.
+fn empty_state(ui: &mut egui::Ui, text: &str) {
+    ui.add_space(12.0);
+    ui.vertical_centered(|ui| {
+        ui.set_max_width(520.0);
+        ui.label(
+            RichText::new(egui_phosphor::regular::NETWORK)
+                .size(28.0)
+                .color(theme::muted()),
+        );
+        ui.add(egui::Label::new(RichText::new(text).color(theme::muted())).wrap());
+    });
+}
+
+fn text_format(font: egui::FontId, color: egui::Color32) -> egui::TextFormat {
+    egui::TextFormat::simple(font, color)
+}
+
+/// The color of a protocol name.
+fn protocol_color(protocol: &str) -> egui::Color32 {
+    match protocol {
+        "DNS" | "DHCP" => theme::info(),
+        "HTTP" => theme::good(),
+        "TLS" => theme::value(ValueKind::Pointer),
+        "TCP" => theme::value(ValueKind::Flags),
+        "UDP" => theme::value(ValueKind::Number),
+        "ARP" => theme::warn(),
+        "ICMP" | "ICMPv6" => theme::value(ValueKind::Name),
+        _ => theme::muted(),
+    }
+}
+
+/// The Info column: TCP flags in brackets get the flag color (a reset the
+/// error color).
+fn info_text(packet: &NetworkPacket, font_size: f32) -> egui::text::LayoutJob {
+    let font = egui::FontId::proportional(font_size);
+    let mut job = egui::text::LayoutJob::default();
+    let info = packet.info.as_str();
+    match (info.find('['), info.find(']')) {
+        (Some(open), Some(close)) if open < close => {
+            let flags = &info[open..=close];
+            let color = if flags.contains("RST") {
+                theme::error()
+            } else {
+                theme::value(ValueKind::Flags)
+            };
+            job.append(&info[..open], 0.0, text_format(font.clone(), theme::text()));
+            job.append(flags, 0.0, text_format(font.clone(), color));
+            job.append(&info[close + 1..], 0.0, text_format(font, theme::text()));
+        }
+        _ => job.append(info, 0.0, text_format(font, theme::text())),
+    }
+    job
+}
+
+/// The color of a decoded field's value.
+fn field_color(kind: FieldKind) -> egui::Color32 {
+    theme::value(match kind {
+        FieldKind::Number => ValueKind::Number,
+        FieldKind::Address => ValueKind::Pointer,
+        FieldKind::Flags => ValueKind::Flags,
+        FieldKind::Name => ValueKind::Name,
+        FieldKind::Text => ValueKind::Text,
+        FieldKind::Bytes => ValueKind::Plain,
+    })
+}
+
+/// The packet's layers as a collapsible tree; a click chooses a layer or a
+/// field (`chosen`). Returns the byte range under the pointer.
+fn layer_tree(
+    ui: &mut egui::Ui,
+    layers: &[PacketLayer],
+    chosen: &mut Option<(usize, Option<usize>)>,
+    mono: &egui::FontId,
+) -> Option<std::ops::Range<usize>> {
+    let mut hovered = None;
+    ui.spacing_mut().item_spacing.y = 1.0;
+    let font_size = mono.size + 1.0;
+    for (index, layer) in layers.iter().enumerate() {
+        let id = ui.make_persistent_id(("packet_layer", &layer.name));
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
+            .show_header(ui, |ui| {
+                let mut job = egui::text::LayoutJob::default();
+                job.append(
+                    &layer.name,
+                    0.0,
+                    text_format(egui::FontId::proportional(font_size), theme::heading()),
+                );
+                if !layer.summary.is_empty() {
+                    job.append(
+                        &format!("  {}", layer.summary),
+                        0.0,
+                        text_format(egui::FontId::proportional(font_size), theme::text()),
+                    );
+                }
+                let response = ui.selectable_label(*chosen == Some((index, None)), job);
+                if response.clicked() {
+                    *chosen = Some((index, None));
+                }
+                if response.hovered() {
+                    hovered = Some(layer.start..layer.start + layer.len);
+                }
+            })
+            .body(|ui| {
+                for (field_index, field) in layer.fields.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        if field.depth > 0 {
+                            ui.add_space(f32::from(field.depth) * 16.0);
+                        }
+                        let mut job = egui::text::LayoutJob::default();
+                        job.append(
+                            &format!("{}: ", field.name),
+                            0.0,
+                            text_format(egui::FontId::proportional(font_size), theme::muted()),
+                        );
+                        let font = match field.kind {
+                            FieldKind::Number | FieldKind::Address | FieldKind::Bytes => {
+                                mono.clone()
+                            }
+                            _ => egui::FontId::proportional(font_size),
+                        };
+                        job.append(
+                            &field.value,
+                            0.0,
+                            text_format(font, field_color(field.kind)),
+                        );
+                        let selected = *chosen == Some((index, Some(field_index)));
+                        let response = ui.selectable_label(selected, job);
+                        if response.clicked() {
+                            *chosen = Some((index, Some(field_index)));
+                        }
+                        if response.hovered() {
+                            hovered = Some(field.start..field.start + field.len);
+                        }
+                    });
+                }
+            });
+    }
+    hovered
+}
+
+/// A hex dump (offset, 16 bytes, text) with `marked` bytes on the selection
+/// color and `hovered` ones on a fainter band.
+fn hex_job(
+    bytes: &[u8],
+    mono: &egui::FontId,
+    marked: Option<std::ops::Range<usize>>,
+    hovered: Option<std::ops::Range<usize>>,
+) -> egui::text::LayoutJob {
+    let selection = theme::palette().selection;
+    let hover = theme::line();
+    let mut job = egui::text::LayoutJob::default();
+    let background = |at: usize| {
+        if marked.as_ref().is_some_and(|range| range.contains(&at)) {
+            Some(selection)
+        } else if hovered.as_ref().is_some_and(|range| range.contains(&at)) {
+            Some(hover)
+        } else {
+            None
+        }
+    };
+    let mut push = |text: &str, color: egui::Color32, fill: Option<egui::Color32>| {
+        let mut format = text_format(mono.clone(), color);
+        if let Some(fill) = fill {
+            format.background = fill;
+        }
+        job.append(text, 0.0, format);
+    };
+    for (row, chunk) in bytes.chunks(16).enumerate() {
+        if row > 0 {
+            push("\n", theme::text(), None);
+        }
+        push(&format!("{:04x}  ", row * 16), theme::muted(), None);
+        for column in 0..16 {
+            let at = row * 16 + column;
+            match chunk.get(column) {
+                Some(byte) => {
+                    let fill = background(at);
+                    push(&format!("{byte:02x}"), theme::text(), fill);
+                    // The gap is marked too when both neighbors are.
+                    let gap = if column == 7 { "  " } else { " " };
+                    let joined = fill.filter(|_| column < 15 && background(at + 1) == fill);
+                    push(gap, theme::text(), joined);
+                }
+                None => push(
+                    if column == 7 { "    " } else { "   " },
+                    theme::text(),
+                    None,
+                ),
+            }
+        }
+        push(" ", theme::text(), None);
+        for (column, &byte) in chunk.iter().enumerate() {
+            let printable = (0x20..0x7f).contains(&byte);
+            let text = if printable { byte as char } else { '.' };
+            let color = if printable {
+                theme::value(ValueKind::Text)
+            } else {
+                theme::muted()
+            };
+            push(&text.to_string(), color, background(row * 16 + column));
+        }
+    }
+    job
+}
+
 /// Text that sets a filter when clicked.
-fn link(ui: &mut egui::Ui, text: &str, hover: &str) -> bool {
+fn link(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, hover: &str) -> bool {
     let response = ui
         .add(
             egui::Label::new(text)
@@ -909,29 +1307,49 @@ fn link(ui: &mut egui::Ui, text: &str, hover: &str) -> bool {
 /// A Source or Destination cell: its address and port filter separately.
 fn address_cell(
     ui: &mut egui::Ui,
+    mono: &egui::FontId,
     text: &str,
     address: Option<IpAddr>,
     port: Option<u16>,
 ) -> Option<String> {
     ui.spacing_mut().item_spacing.x = 0.0;
+    let address_text = |text: String| RichText::new(text).font(mono.clone()).color(theme::text());
     match (address, port) {
         (Some(address), Some(port)) => {
             let shown = match address {
                 IpAddr::V4(_) => address.to_string(),
                 IpAddr::V6(_) => format!("[{address}]"),
             };
-            let by_address = link(ui, &shown, &format!("Filter by address {address}"));
-            let by_port = link(ui, &format!(":{port}"), &format!("Filter by port {port}"));
+            let by_address = link(
+                ui,
+                address_text(shown),
+                &format!("Filter by address {address}"),
+            );
+            let by_port = link(
+                ui,
+                RichText::new(format!(":{port}"))
+                    .font(mono.clone())
+                    .color(theme::value(ValueKind::Number)),
+                &format!("Filter by port {port}"),
+            );
             if by_address {
                 Some(format!("ip {address}"))
             } else {
                 by_port.then(|| format!("port {port}"))
             }
         }
-        (Some(address), None) => {
-            link(ui, text, &format!("Filter by address {address}")).then(|| format!("ip {address}"))
-        }
-        _ if !text.is_empty() => link(ui, text, &format!("Filter by {text}")).then(|| text.into()),
+        (Some(address), None) => link(
+            ui,
+            address_text(text.to_owned()),
+            &format!("Filter by address {address}"),
+        )
+        .then(|| format!("ip {address}")),
+        _ if !text.is_empty() => link(
+            ui,
+            address_text(text.to_owned()),
+            &format!("Filter by {text}"),
+        )
+        .then(|| text.into()),
         _ => None,
     }
 }
@@ -991,6 +1409,9 @@ fn capture_detail(capture: &NetworkCapture, live: bool, loaded: Option<usize>) -
             parts.push(format!("{loaded} packets"));
         }
         return parts.join(" · ");
+    }
+    if capture.whole_boot {
+        parts.push("Whole boot".into());
     }
     if let Some(packets) = capture.packets {
         parts.push(format!("{packets} packets"));
@@ -1059,28 +1480,6 @@ fn format_date(seconds: u64) -> String {
     )
 }
 
-fn hex_dump(bytes: &[u8]) -> String {
-    bytes
-        .chunks(16)
-        .enumerate()
-        .map(|(row, chunk)| {
-            let hex: Vec<_> = chunk.iter().map(|b| format!("{b:02x}")).collect();
-            let text: String = chunk
-                .iter()
-                .map(|&b| {
-                    if (0x20..0x7f).contains(&b) {
-                        b as char
-                    } else {
-                        '.'
-                    }
-                })
-                .collect();
-            format!("{:04x}  {:<47}  {text}", row * 16, hex.join(" "))
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1108,15 +1507,24 @@ mod tests {
     }
 
     #[test]
-    fn hex_dump_pads_short_rows() {
-        let dump = hex_dump(b"GET / HTTP/1.1\r\nHost");
-        let lines: Vec<_> = dump.lines().collect();
+    fn hex_dump_pads_short_rows_and_marks_the_chosen_bytes() {
+        let bytes = b"GET / HTTP/1.1\r\nHost";
+        let job = hex_job(bytes, &theme::mono(14.0), Some(4..6), None);
+        let lines: Vec<_> = job.text.lines().collect();
         assert_eq!(
             lines[0],
-            "0000  47 45 54 20 2f 20 48 54 54 50 2f 31 2e 31 0d 0a  GET / HTTP/1.1.."
+            "0000  47 45 54 20 2f 20 48 54  54 50 2f 31 2e 31 0d 0a  GET / HTTP/1.1.."
         );
         assert!(lines[1].starts_with("0010  48 6f 73 74"));
         assert!(lines[1].ends_with("  Host"));
+        // Bytes 4 and 5 ("2f", "20", the space between, "/", " ") are marked.
+        let marked: String = job
+            .sections
+            .iter()
+            .filter(|section| section.format.background == theme::palette().selection)
+            .map(|section| &job.text[section.byte_range.clone()])
+            .collect();
+        assert_eq!(marked, "2f 20/ ");
         assert_eq!(format_date(1_791_554_943), "2026-10-09 14:09:03 UTC");
         assert_eq!(format_date(951_782_400), "2000-02-29 00:00:00 UTC");
         assert_eq!(format_duration(6_404), "6 s");

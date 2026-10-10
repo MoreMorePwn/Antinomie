@@ -302,6 +302,79 @@ pub(crate) fn progress_banner(ui: &mut egui::Ui, report: &AnalysisReport) {
     }
 }
 
+/// The Static Analysis panel without a report: what it is and how to get one.
+/// `run_selected` tells a run without a report from no run at all.
+pub(crate) fn no_report(ui: &mut egui::Ui, run_selected: bool) {
+    use crate::theme;
+    use egui::RichText;
+    ui.add_space(16.0);
+    ui.vertical_centered(|ui| {
+        ui.set_max_width(560.0);
+        ui.label(
+            RichText::new(egui_phosphor::regular::MAGNIFYING_GLASS)
+                .size(32.0)
+                .color(theme::muted()),
+        );
+        ui.label(
+            RichText::new(if run_selected {
+                "No static analysis report for this run"
+            } else {
+                "Select a run to view its static analysis report."
+            })
+            .strong()
+            .color(theme::heading()),
+        );
+        ui.add_space(4.0);
+        ui.add(
+            egui::Label::new(
+                RichText::new(
+                    "Static analysis examines the program a run starts, without running it: \
+                     metadata, structures, strings, entropy, hardening, rule matches and, \
+                     with the analysis tools installed, disassembly and decompilation.",
+                )
+                .color(theme::muted()),
+            )
+            .wrap(),
+        );
+    });
+    ui.add_space(10.0);
+    ui.vertical_centered(|ui| {
+        ui.set_max_width(560.0);
+        egui::Frame::new()
+            .fill(theme::raised())
+            .stroke(egui::Stroke::new(1.0_f32, theme::line()))
+            .corner_radius(6)
+            .inner_margin(egui::Margin::same(12))
+            .show(ui, |ui| {
+                ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                    theme::section(ui, "To get a report");
+                    for (step, text) in [
+                        ("1", "Start the VM."),
+                        ("2", "Open Run → Launch program."),
+                        ("3", "Tick Static Analysis, choose the analyses, then Run."),
+                        ("4", "Select the run in Run History: its report shows here."),
+                    ] {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(
+                                RichText::new(step)
+                                    .monospace()
+                                    .color(theme::value(theme::ValueKind::Number)),
+                            );
+                            ui.label(text);
+                        });
+                    }
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(
+                            "Reports of earlier runs stay available from the selector above.",
+                        )
+                        .color(theme::muted()),
+                    );
+                });
+            });
+    });
+}
+
 /// Analyses still in progress besides the one shown, each with a spinner.
 pub(crate) fn other_progress<'a>(
     ui: &mut egui::Ui,
