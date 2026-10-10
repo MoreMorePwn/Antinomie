@@ -297,4 +297,13 @@ a newer version and labels older ones as outdated. A patch release therefore
 never makes existing bases outdated.
 
 For a release: update `CHANGELOG.md`, raise the version, commit, and tag the
-commit `vX.Y.Z`.
+commit `vX.Y.Z`. Pushing the tag runs `.github/workflows/release.yml`: it
+checks that the tag matches the version, runs the tests, builds the archive
+with `scripts/build-release.sh` and publishes the GitHub release with the
+version's changelog section as notes. Bases are built and uploaded
+separately (see the base distribution notes).
+
+Every push runs `.github/workflows/ci.yml` (`scripts/check-privacy.sh`,
+`cargo fmt --check`, strict Clippy, the release-mode tests, the build-script
+tests and shellcheck); `.github/workflows/nightly.yml` boots the current
+BusyBox base under KVM every night (`tests/ci/nightly-vm.py`).

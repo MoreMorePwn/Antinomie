@@ -4,7 +4,7 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
-## 0.3.0 — unreleased
+## 0.3.0 — 2026-10-10
 
 Needs new bases for the transport settings and Never drop mode (BusyBox and
 Debian 13 (GNOME) for Antinomie 0.3.0). Bases for 0.2.0 and 0.1.0 still run,
@@ -36,6 +36,8 @@ with 256 KiB buffers that drop when full.
   guest. The **Network** panel offers capture history, protocol colors,
   clickable address/port/protocol filters and counted dropdowns, with a byte
   view and Wireshark integration.
+  Network captures count against the boot's recording quota; a running one
+  stops when the quota is full.
 - Process terminals freely resize and maximize, update the guest terminal
   grid, and retain 10,000 history lines with wheel and scrollbar navigation.
 - **Details** offers common numeric copy formats and captured-data windows
@@ -50,6 +52,14 @@ with 256 KiB buffers that drop when full.
   appear on the VM screen (**Guest desktop**), or in a terminal window on the
   VM screen (**Guest desktop terminal**). The program stays in the run's
   process tree and trace. Run History shows each run's choice.
+- **Faster base builds.** Debian builds reuse a recently bootstrapped root
+  filesystem with the same answers (30 days), so a new kernel only replaces
+  the kernel and its modules; kernel builds go through ccache in the
+  builder.
+- Continuous integration: formatting, lints, tests, build-script tests and a
+  machine-path check on every push; a nightly test boots the current BusyBox
+  base and requires a heavy Capture All run to lose nothing; version tags
+  build and publish the release.
 
 ## 0.2.3 — 2026-10-09
 

@@ -1,0 +1,73 @@
+# Checks for every push and pull request: privacy, formatting, lints, the
+# Rust and build-script tests, and shell scripts.
+name: CI
+
+on:
+  push:
+    branches: [main, "release-*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libsqlite3-dev libxkbcommon-dev libwayland-dev \
+            qemu-utils shellcheck file
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable branch
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src/antinomie/monitor
+      - name: No machine-specific paths
+        run: scripts/check-privacy.sh
+      - name: Formatting
+        working-directory: src/antinomie/monitor
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        working-directory: src/antinomie/monitor
+        run: cargo clippy --release --locked --all-targets -- -D warnings
+      - name: Tests
+        working-directory: src/antinomie/monitor
+        run: cargo test --release --locked --no-fail-fast
+      - name: Build-script tests
+        run: |
+          python3 tests/monitor/test-build-base.py
+          python3 tests/monitor/test-debian-image.py
+          python3 tests/monitor/test-native-coverage.py
+          python3 scripts/test-refresh-monitor-bundle.py
+      - name: Shell scripts
+        run: |
+          shellcheck --severity=error scripts/*.sh tests/monitor/*.sh \
+            src/antinomie/monitor/crates/monitor-core/src/guest_desktop.sh
+
+  audit:
+    # Advisories in dependencies; reported, not blocking.
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2
+        with:
+          tool: cargo-audit
+      - name: cargo audit
+        working-directory: src/antinomie/monitor
+        run: cargo audit

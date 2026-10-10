@@ -1,0 +1,59 @@
+# Release on a version tag (vX.Y.Z): the tag must match the workspace
+# version; the archive is built by scripts/build-release.sh and published
+# with the CHANGELOG section of that version as notes.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libsqlite3-dev libxkbcommon-dev libwayland-dev qemu-utils
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable branch
+        with:
+          toolchain: 1.98.1
+      - name: Tag matches the workspace version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' src/antinomie/monitor/Cargo.toml | head -1)
+          test "v$version" = "$GITHUB_REF_NAME" || {
+            echo "tag $GITHUB_REF_NAME does not match workspace version $version"; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Tests
+        working-directory: src/antinomie/monitor
+        run: cargo test --release --locked
+      - name: Build the release archive
+        run: scripts/build-release.sh dist
+      - name: Release notes from the changelog
+        run: |
+          awk -v v="$VERSION" '
+            $0 ~ "^## " v " " {on = 1; next}
+            on && /^## / {exit}
+            on {print}' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "CHANGELOG.md has no section for $VERSION"; exit 1; }
+          {
+            echo
+            echo 'Linux x86-64 archive: extract it and run `./install.sh` to install or update for the current user, or run `./antinomie-monitor` directly. See the included README for requirements and notices.'
+            echo
+            echo "SHA-256 (\`antinomie-$VERSION-linux-x86_64.tar.gz\`):"
+            echo '```'
+            cut -d' ' -f1 dist/SHA256SUMS
+            echo '```'
+          } >> notes.md
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag
+          --title "Antinomie $VERSION" --notes-file notes.md

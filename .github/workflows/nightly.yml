@@ -1,0 +1,55 @@
+# End to end on a real VM, nightly and on demand: the current BusyBox base
+# from the public bucket boots under KVM; a heavy Capture All run must lose
+# nothing in never-drop mode and parse without errors, and a network capture
+# must record packets. See tests/ci/nightly-vm.py.
+name: Nightly VM
+
+on:
+  schedule:
+    - cron: "0 19 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libsqlite3-dev libxkbcommon-dev libwayland-dev \
+            qemu-system-x86 qemu-utils
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable branch
+        with:
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src/antinomie/monitor
+      - name: Build guest-run
+        working-directory: src/antinomie/monitor
+        run: cargo build --release --locked --example guest-run
+      - name: VM checks
+        run: >-
+          python3 tests/ci/nightly-vm.py
+          src/antinomie/monitor/target/release/examples/guest-run "$RUNNER_TEMP/vm"
+      - name: Logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nightly-vm-logs
+          path: |
+            ${{ runner.temp }}/vm/*.stderr
+            ${{ runner.temp }}/vm/**/serial.log
+          if-no-files-found: ignore
