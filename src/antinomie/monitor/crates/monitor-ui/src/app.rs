@@ -3739,9 +3739,7 @@ impl MonitorApp {
                 .id(Dialog::Import.window_id())
                 .open(&mut open)
                 .collapsible(false)
-                .resizable(true)
-                .default_width(680.0)
-                .min_width(520.0)
+                .resizable(false)
                 .show(ctx, |ui| {
                     dialog_section(ui, "Base folder");
                     ui.label(
@@ -3752,12 +3750,10 @@ impl MonitorApp {
                     );
                     ui.horizontal(|ui| {
                         ui.add(
+                            // A fixed width: "all available" would grow the
+                            // window every frame.
                             text_field(&mut self.import_directory)
-                                .desired_width(
-                                    ui.available_width()
-                                        - ui.spacing().interact_size.y
-                                        - ui.spacing().item_spacing.x,
-                                )
+                                .desired_width(560.0)
                                 .font(egui::TextStyle::Monospace)
                                 .hint_text(RichText::new("Bundle directory").color(theme::muted())),
                         );

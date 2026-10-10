@@ -23,7 +23,7 @@ struct backing {
 	struct stat stat;
 };
 struct ant_client {
-	int cancelled, fatal, health_ms;
+	int cancelled, fatal, health_ms, guest_paused;
 	struct ant_boot *boot;
 	struct ant_control *control;
 	struct ant_region *region;
@@ -74,7 +74,7 @@ static int tick(struct ant_client *c)
 	hb = ANT_ACQ(&c->control->guest_heartbeat);
 	if (hb < c->guest_hb) return failed(c, -ESTALE);
 	if (hb != c->guest_hb) { c->guest_hb = hb; c->guest_changed = t; }
-	if (t - c->guest_changed > (__u64)c->health_ms * 1000000)
+	if (!c->guest_paused && t - c->guest_changed > (__u64)c->health_ms * 1000000)
 		return failed(c, -ETIMEDOUT);
 	if (ANT_ACQ(&c->control->health) & ANT_HEALTH_RING_FAULT)
 		return failed(c, -EPROTO);
@@ -488,6 +488,17 @@ int ant_set_host_timeout(struct ant_client *c, uint32_t timeout_ms)
 
 int ant_heartbeat(struct ant_client *c)
 {
+	return tick(c);
+}
+
+int ant_set_guest_paused(struct ant_client *c, int paused)
+{
+	if (!c) return -EINVAL;
+	if (c->guest_paused && !paused) {
+		c->guest_hb = ANT_ACQ(&c->control->guest_heartbeat);
+		c->guest_changed = now_ns();
+	}
+	c->guest_paused = !!paused;
 	return tick(c);
 }
 

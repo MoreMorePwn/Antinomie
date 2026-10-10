@@ -100,6 +100,7 @@ unsafe extern "C" {
     fn ant_set_send_wait(client: *mut c_void, wait_us: u32) -> c_int;
     fn ant_set_host_timeout(client: *mut c_void, timeout_ms: u32) -> c_int;
     fn ant_heartbeat(client: *mut c_void) -> c_int;
+    fn ant_set_guest_paused(client: *mut c_void, paused: c_int) -> c_int;
 }
 
 thread_local! {
@@ -284,6 +285,12 @@ impl Transport {
     pub fn set_host_timeout(&mut self, timeout_ms: u32) -> Result<(), String> {
         // SAFETY: Client remains live and exclusively owned by this thread.
         check(unsafe { ant_set_host_timeout(self.ptr.as_ptr(), timeout_ms) }).map(|_| ())
+    }
+    /// The guest is paused on purpose (a memory dump): its silence is not a
+    /// dead guest. Resuming restarts the liveness window.
+    pub fn set_guest_paused(&mut self, paused: bool) -> Result<(), String> {
+        // SAFETY: Client remains live and exclusively owned by this thread.
+        check(unsafe { ant_set_guest_paused(self.ptr.as_ptr(), c_int::from(paused)) }).map(|_| ())
     }
 }
 impl Drop for Transport {

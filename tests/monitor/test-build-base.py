@@ -64,6 +64,7 @@ class BuildBaseTests(unittest.TestCase):
             (kept / "arch/x86/boot").mkdir(parents=True)
             (kept / "arch/x86/boot/bzImage").write_bytes(b"kernel")
             (kept / ".config").write_text("CONFIG_X=y\n")
+            (kept / "symbols.json.xz").write_bytes(b"isf")
             modules = kept / "modules-install/lib/modules/6.12.94"
             modules.mkdir(parents=True)
             (modules / "modules.dep").write_text("")
@@ -74,6 +75,7 @@ class BuildBaseTests(unittest.TestCase):
             work.mkdir()
             loaded = base.load_cached_kernel(cache, "debian", work)
             self.assertEqual((loaded / "arch/x86/boot/bzImage").read_bytes(), b"kernel")
+            self.assertEqual((loaded / "symbols.json.xz").read_bytes(), b"isf")
             self.assertTrue((loaded / "modules-install/lib/modules/6.12.94/modules.dep").is_file())
             self.assertFalse((loaded / "modules-install/lib/modules/6.12.94/build").is_symlink())
             self.assertIsNone(base.load_cached_kernel(cache, "minimal", work))
@@ -81,6 +83,10 @@ class BuildBaseTests(unittest.TestCase):
             cache.write_bytes(b"not a tar")
             self.assertIsNone(base.load_cached_kernel(cache, "debian", work))
             self.assertIsNone(base.load_cached_kernel(None, "debian", work))
+            # A kernel cached before bases carried a symbol table is rebuilt.
+            (kept / "symbols.json.xz").unlink()
+            base.save_cached_kernel(cache, kept, "debian")
+            self.assertIsNone(base.load_cached_kernel(cache, "debian", work))
 
 
 if __name__ == "__main__":

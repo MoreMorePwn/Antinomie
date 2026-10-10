@@ -1826,21 +1826,24 @@ impl Worker {
                             self.snapshot.last_error = Some(e);
                             self.snapshot.state = VmState::Failed;
                         }
-                        if let Err(error) =
-                            session.query_run_status(&mut self.snapshot, &self.sender)
-                        {
-                            self.snapshot.last_error = Some(error);
-                        }
-                        if let Err(error) = session.probe_kernel(&mut self.snapshot, &self.sender) {
-                            self.snapshot.last_error = Some(format!("guest info: {error}"));
-                        }
-                        session.analysis_tick(&mut self.snapshot, &self.sender);
                     }
                     Err(e) => {
                         self.snapshot.last_error = Some(e.to_string());
                         exited = true;
                     }
                 }
+            }
+            // While QEMU writes a memory dump the guest is paused: no guest
+            // requests until it runs again.
+            let paused = self.snapshot.memory_dump.is_some();
+            if let Some(session) = self.session.as_mut().filter(|_| !exited && !paused) {
+                if let Err(error) = session.query_run_status(&mut self.snapshot, &self.sender) {
+                    self.snapshot.last_error = Some(error);
+                }
+                if let Err(error) = session.probe_kernel(&mut self.snapshot, &self.sender) {
+                    self.snapshot.last_error = Some(format!("guest info: {error}"));
+                }
+                session.analysis_tick(&mut self.snapshot, &self.sender);
             }
             if exited {
                 if let Some(mut session) = self.session.take()
@@ -1856,21 +1859,26 @@ impl Worker {
                 self.snapshot.state = VmState::Stopped;
                 self.publish();
             }
-            let automatic_read = self.session.as_mut().and_then(|session| {
-                let active: Vec<_> = session
-                    .runs
-                    .values()
-                    .filter(|run| !run.summary.terminal_eof)
-                    .map(|run| run.summary.id.clone())
-                    .collect();
-                if active.is_empty() {
-                    None
-                } else {
-                    let id = active[session.terminal_cursor % active.len()].clone();
-                    session.terminal_cursor = session.terminal_cursor.wrapping_add(1);
-                    Some(id)
-                }
-            });
+            let paused = self.snapshot.memory_dump.is_some();
+            let automatic_read = self
+                .session
+                .as_mut()
+                .filter(|_| !paused)
+                .and_then(|session| {
+                    let active: Vec<_> = session
+                        .runs
+                        .values()
+                        .filter(|run| !run.summary.terminal_eof)
+                        .map(|run| run.summary.id.clone())
+                        .collect();
+                    if active.is_empty() {
+                        None
+                    } else {
+                        let id = active[session.terminal_cursor % active.len()].clone();
+                        session.terminal_cursor = session.terminal_cursor.wrapping_add(1);
+                        Some(id)
+                    }
+                });
             if let Some(run_id) = automatic_read
                 && let Some(session) = self.session.as_mut()
                 && let Err(error) = session.read_terminal(
@@ -1900,6 +1908,29 @@ impl Worker {
         }
     }
     fn command(&mut self, command: Command) -> Result<String, String> {
+        // QEMU keeps the guest paused while it writes a memory dump: a guest
+        // command would only time out.
+        if self.snapshot.memory_dump.is_some()
+            && matches!(
+                command,
+                Command::Execute(_)
+                    | Command::Upload { .. }
+                    | Command::AnalyzeOnly { .. }
+                    | Command::TerminalInput { .. }
+                    | Command::TerminalResize { .. }
+                    | Command::Signal { .. }
+                    | Command::StopRun { .. }
+                    | Command::RecorderStats
+                    | Command::ListProcesses { .. }
+                    | Command::AttachProcess { .. }
+                    | Command::CaptureAll
+                    | Command::StopCapture { .. }
+            )
+        {
+            return Err(
+                "the VM is paused while its memory is written; try again in a moment".into(),
+            );
+        }
         match command {
             Command::Create(vm) => self.create(vm, None),
             Command::CreateWithCredentials { vm, credentials } => {
@@ -2700,9 +2731,12 @@ impl Worker {
             system,
             bundle.symbols.as_deref(),
         )?;
+        // QEMU stops the guest while it writes: a silent guest is expected.
+        session.transport.set_guest_paused(true)?;
         if let Err(error) =
             crate::memory::dump_command(&dump).and_then(|command| session.process.qmp(&command))
         {
+            let _ = session.transport.set_guest_paused(false);
             let _ = crate::memory::delete(&dump);
             return Err(format!("memory dump: {error}"));
         }
@@ -2755,6 +2789,9 @@ impl Worker {
                 format!("memory dump: {error}")
             }
         };
+        if let Err(error) = session.transport.set_guest_paused(false) {
+            self.snapshot.last_error = Some(format!("after the memory dump: {error}"));
+        }
         if let Err(error) = dump.save() {
             self.snapshot.last_error = Some(format!("memory dump summary: {error}"));
         } else if dump.error.is_some() {
