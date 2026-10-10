@@ -4,6 +4,38 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
+## 0.3.1 — 2026-10-11
+
+Interface redesign. Runs the same bases as 0.3.0; no new base is needed.
+
+- **Light theme and table density.** **Tools → Settings** switches between
+  Dark and Light and between Compact and Comfortable table rows; both apply at
+  once and are remembered. Light-theme row colors are pale tints of the dark
+  ones, as in Wireshark.
+- **Values colored by meaning** in the trace, Details and packet views:
+  numbers, strings, pointers, flags, symbolic names and errors each have their
+  own color. Data columns use a monospace font. DejaVu Sans and DejaVu Sans
+  Mono are bundled, so arrows, box-drawing and other symbols render everywhere.
+- **Syscall trace.** Arguments read by meaning (`dfd=AT_FDCWD
+  filename="/etc/passwd" flags=O_RDONLY|O_CLOEXEC`), errors shown by name
+  (`ENOENT`) with the number on hover, failed calls marked at the row edge,
+  columns that adapt to the window, and category filters that wrap to two
+  lines instead of scrolling.
+- **Details, Wireshark-style.** The selected call's decoded tree is on the
+  left and the selected value or captured bytes on the right; the hex dump
+  shows 16 bytes per line when there is room. Selecting a call starts on its
+  captured data. On the Network tab, Details show the selected packet's
+  layers and bytes.
+- **Guidance when there is nothing to show.** A stopped VM's trace offers
+  Start VM, its recent runs and captures; the Static Analysis and Network
+  panels explain what they need.
+- **Fewer, clearer toolbar buttons**, a sidebar that shows each VM's state,
+  base, CPUs and recordings at a glance, a status bar with the loss counters
+  and recording quota, and dialogs laid out in labeled sections. Escape closes
+  the topmost dialog.
+- The capture process tree has more spacing, and earlier network captures
+  are listed by start time (UTC, with boot and file on hover).
+
 ## 0.3.0 — 2026-10-10
 
 Needs new bases for the transport settings and Never drop mode (BusyBox and

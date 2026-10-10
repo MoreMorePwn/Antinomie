@@ -323,7 +323,8 @@ pub fn syscall_tint(
 /// A light-theme version of a dark tint: the same hue as a pale pastel, so
 /// dark text stays readable on it.
 pub fn lighten(tint: Color32) -> Color32 {
-    let mix = |channel: u8| (255.0 - (120.0 - f32::from(channel).min(120.0)) * 0.55) as u8;
+    // Pale, as Wireshark's light rules: hue kept, little chroma.
+    let mix = |channel: u8| (250.0 - (120.0 - f32::from(channel).min(120.0)) * 0.32) as u8;
     let (r, g, b) = (tint.r(), tint.g(), tint.b());
     let max = r.max(g).max(b).max(1);
     // Keep the hue: scale so the strongest channel sits near white.

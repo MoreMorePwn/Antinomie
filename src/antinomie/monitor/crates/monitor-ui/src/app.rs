@@ -5313,6 +5313,11 @@ impl MonitorApp {
 }
 
 impl eframe::App for MonitorApp {
+    /// Seams between panels show the theme, not eframe's near-black default.
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        theme::panel().to_normalized_gamma_f32()
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.dependencies.poll();
         self.drain();
