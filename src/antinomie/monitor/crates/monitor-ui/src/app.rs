@@ -5318,10 +5318,15 @@ impl MonitorApp {
                 }
             }
             Panel::RunHistory => self.run_history(ui),
-            Panel::Details if self.details_follow.network(ui.ctx()) => {
-                self.network_view.details(ui, self.settings.font_size)
-            }
-            Panel::Details => self.details(ui),
+            Panel::Details => match self.details_follow.of(ui.ctx()) {
+                crate::workspace::DetailsOf::Packet => {
+                    self.network_view.details(ui, self.settings.font_size)
+                }
+                crate::workspace::DetailsOf::MemoryRow => {
+                    self.memory_view.details(ui, self.settings.font_size)
+                }
+                crate::workspace::DetailsOf::Syscall => self.details(ui),
+            },
             Panel::Activity => self.activity(ui),
             Panel::Terminal(id) => {
                 let live = self

@@ -26,6 +26,16 @@ Eclipse Temurin 21 JDK (GPL-2.0 with Classpath exception) directly from their
 upstream releases into the user's data folder; Antinomie does not
 redistribute them. Their license files arrive with each download.
 
+For memory analysis, the same dialog (or **Install Volatility 3** in the
+Memory tab) downloads Volatility 3 2.28.2 (Volatility Software License 1.0)
+with pefile 2024.8.26 (MIT), Capstone 5.0.9 (BSD-3-Clause) and PyCryptodome
+3.23.0 (BSD-2-Clause and public domain) as pinned wheels from PyPI; they run
+on the host's Python 3 and are not redistributed either. Base builds download
+Volatility's dwarf2json 0.9.0 (Volatility Software License 1.0) to write each
+kernel's symbol table; the tool is not part of any base. The symbol table
+(`symbols.json.xz`) describes the base's Linux kernel and ships with it under
+the kernel's GPL-2.0.
+
 ## Embedded UI assets
 
 The UI uses the DejaVu fonts (text and data), egui default fonts as fallbacks and the regular egui-phosphor icon font.

@@ -95,6 +95,8 @@ pub(crate) struct MemoryView {
     result: Option<LoadedResult>,
     loading: Option<(String, Receiver<LoadedResult>)>,
     filter: String,
+    /// Index of the selected row in the loaded result.
+    selected_row: Option<usize>,
     show_log: bool,
     import: Option<Import>,
     confirm_delete: Option<String>,
@@ -119,6 +121,7 @@ impl Default for MemoryView {
             result: None,
             loading: None,
             filter: String::new(),
+            selected_row: None,
             show_log: false,
             import: None,
             confirm_delete: None,
@@ -271,6 +274,16 @@ fn filter_rows(result: &mut LoadedResult, filter: &str) {
         .collect();
 }
 
+/// One row as tab-separated text.
+fn row_text(columns: &[ResultColumn], row: &memory::ResultRow) -> String {
+    row.values
+        .iter()
+        .zip(columns)
+        .map(|(value, column)| memory::value_text(column.kind, value))
+        .collect::<Vec<_>>()
+        .join("\t")
+}
+
 /// The result as tab-separated text, with its column names.
 fn result_tsv(columns: &[ResultColumn], table: &ResultTable, rows: &[usize]) -> String {
     let mut text = columns
@@ -344,6 +357,7 @@ impl MemoryView {
 
     fn open_run(&mut self, id: Option<String>) {
         self.selected_run = id.clone();
+        self.selected_row = None;
         self.show_log = false;
         let Some(run) = id.and_then(|id| self.runs.iter().find(|run| run.id == id).cloned()) else {
             self.result = None;
@@ -1296,85 +1310,174 @@ impl MemoryView {
         let char_width = ui.fonts(|fonts| fonts.glyph_width(&mono, '0'));
         let row_height = theme::row_height(font_size);
         let widths = column_widths(table, char_width);
-        let mut builder = TableBuilder::new(ui)
-            .id_salt(("memory_result", &result.run.id))
-            .striped(true)
-            .resizable(true)
-            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .max_scroll_height(f32::INFINITY)
-            .min_scrolled_height(0.0)
-            .auto_shrink([false, false]);
-        for (index, width) in widths.iter().enumerate() {
-            builder = if index + 1 == widths.len() {
-                builder.column(
-                    Column::remainder()
-                        .at_least(width.min(char_width * 12.0))
-                        .clip(true),
-                )
-            } else {
-                builder.column(
-                    Column::initial(*width)
-                        .at_least(char_width * 4.0)
-                        .clip(true),
-                )
-            };
-        }
+        let total: f32 = widths.iter().sum();
+        // Wider than the panel: every column keeps its width and the table
+        // scrolls sideways; otherwise the last column takes the rest.
+        let fits = total <= ui.available_width();
         let indent = 14.0;
-        builder
-            .header(row_height + 4.0, |mut header| {
-                for column in &table.columns {
-                    header.col(|ui| {
-                        ui.label(RichText::new(&column.name).strong().color(theme::heading()));
-                    });
+        let selected_row = self.selected_row;
+        let mut clicked_row = None;
+        egui::ScrollArea::horizontal()
+            .id_salt(("memory_result_wide", &result.run.id))
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                let mut builder = TableBuilder::new(ui)
+                    .id_salt(("memory_result", &result.run.id))
+                    .striped(true)
+                    .resizable(true)
+                    .sense(egui::Sense::click())
+                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                    .max_scroll_height(f32::INFINITY)
+                    .min_scrolled_height(0.0)
+                    .auto_shrink([false, false]);
+                for (index, width) in widths.iter().enumerate() {
+                    builder = if index + 1 == widths.len() && fits {
+                        builder.column(
+                            Column::remainder()
+                                .at_least(width.min(char_width * 12.0))
+                                .clip(true),
+                        )
+                    } else {
+                        builder.column(
+                            Column::initial(*width)
+                                .at_least(char_width * 4.0)
+                                .clip(true),
+                        )
+                    };
                 }
-            })
-            .body(|body| {
-                body.rows(row_height, result.shown.len(), |mut row| {
-                    let data = &table.rows[result.shown[row.index()]];
-                    for (index, (value, column)) in
-                        data.values.iter().zip(&table.columns).enumerate()
-                    {
-                        row.col(|ui| {
-                            if index == 0 && data.depth > 0 {
-                                ui.add_space(f32::from(data.depth) * indent);
+                builder
+                    .header(row_height + 4.0, |mut header| {
+                        for column in &table.columns {
+                            header.col(|ui| {
                                 ui.label(
-                                    RichText::new("└").font(mono.clone()).color(theme::line()),
+                                    RichText::new(&column.name).strong().color(theme::heading()),
                                 );
+                            });
+                        }
+                    })
+                    .body(|body| {
+                        body.rows(row_height, result.shown.len(), |mut row| {
+                            let row_index = result.shown[row.index()];
+                            let data = &table.rows[row_index];
+                            row.set_selected(selected_row == Some(row_index));
+                            for (index, (value, column)) in
+                                data.values.iter().zip(&table.columns).enumerate()
+                            {
+                                row.col(|ui| {
+                                    if index == 0 && data.depth > 0 {
+                                        ui.add_space(f32::from(data.depth) * indent);
+                                        ui.label(
+                                            RichText::new("└")
+                                                .font(mono.clone())
+                                                .color(theme::line()),
+                                        );
+                                    }
+                                    let text = memory::value_text(column.kind, value);
+                                    let mut label = RichText::new(&text)
+                                        .font(mono.clone())
+                                        .color(value_color(column.kind, value));
+                                    if value.get("absent").is_some() {
+                                        label = label.italics();
+                                    }
+                                    let response = ui.add(
+                                        egui::Label::new(label)
+                                            .truncate()
+                                            .sense(egui::Sense::click()),
+                                    );
+                                    if response.clicked() {
+                                        clicked_row = Some(row_index);
+                                    }
+                                    response.context_menu(|ui| {
+                                        if ui.button("Copy value").clicked() {
+                                            ui.ctx().copy_text(text.clone());
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("Copy row").clicked() {
+                                            ui.ctx().copy_text(row_text(&table.columns, data));
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("Filter on this value").clicked() {
+                                            self.filter = text.clone();
+                                            ui.close_menu();
+                                        }
+                                    });
+                                });
                             }
+                            if row.response().clicked() {
+                                clicked_row = Some(row_index);
+                            }
+                        });
+                    });
+            });
+        if clicked_row.is_some() {
+            self.selected_row = clicked_row;
+        }
+    }
+
+    /// The Details panel while it follows the Memory tab: every value of the
+    /// selected result row, in full.
+    pub(crate) fn details(&mut self, ui: &mut egui::Ui, font_size: f32) {
+        let row = self.result.as_ref().and_then(|result| {
+            let table = result.table.as_ref().ok()?;
+            let row = table.rows.get(self.selected_row?)?;
+            Some((
+                result.run.plugin.clone(),
+                table.columns.clone(),
+                row.clone(),
+            ))
+        });
+        let Some((plugin, columns, row)) = row else {
+            ui.add_space(6.0);
+            ui.colored_label(
+                theme::muted(),
+                "Select a row of a Volatility result to see all its values here",
+            );
+            return;
+        };
+        let mono = theme::mono(font_size - 1.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(&plugin)
+                    .font(mono.clone())
+                    .color(theme::heading()),
+            );
+            if ui
+                .button(format!("{} Copy row", egui_phosphor::regular::COPY))
+                .clicked()
+            {
+                ui.ctx().copy_text(row_text(&columns, &row));
+            }
+        });
+        egui::ScrollArea::vertical()
+            .id_salt("memory_row_details")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Grid::new("memory_row_grid")
+                    .num_columns(2)
+                    .spacing([16.0, 4.0])
+                    .striped(true)
+                    .show(ui, |ui| {
+                        for (value, column) in row.values.iter().zip(&columns) {
+                            ui.label(RichText::new(&column.name).color(theme::muted()));
                             let text = memory::value_text(column.kind, value);
-                            let mut label = RichText::new(&text)
-                                .font(mono.clone())
-                                .color(value_color(column.kind, value));
-                            if value.get("absent").is_some() {
-                                label = label.italics();
-                            }
-                            let response = ui.add(egui::Label::new(label).truncate());
+                            let response = ui.add(
+                                egui::Label::new(
+                                    RichText::new(&text)
+                                        .font(mono.clone())
+                                        .color(value_color(column.kind, value)),
+                                )
+                                .wrap()
+                                .sense(egui::Sense::click()),
+                            );
                             response.context_menu(|ui| {
                                 if ui.button("Copy value").clicked() {
                                     ui.ctx().copy_text(text.clone());
                                     ui.close_menu();
                                 }
-                                if ui.button("Copy row").clicked() {
-                                    ui.ctx().copy_text(
-                                        data.values
-                                            .iter()
-                                            .zip(&table.columns)
-                                            .map(|(value, column)| {
-                                                memory::value_text(column.kind, value)
-                                            })
-                                            .collect::<Vec<_>>()
-                                            .join("\t"),
-                                    );
-                                    ui.close_menu();
-                                }
-                                if ui.button("Filter on this value").clicked() {
-                                    self.filter = text.clone();
-                                    ui.close_menu();
-                                }
                             });
-                        });
-                    }
-                });
+                            ui.end_row();
+                        }
+                    });
             });
     }
 

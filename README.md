@@ -44,6 +44,8 @@ read, and anything the app could not decode or lost is marked as such.
   KVM (`/dev/kvm`) strongly recommended; TCG works without it
 - Rust to build the app; building kernels and bases needs the tools listed in
   [CONTRIBUTING.md](CONTRIBUTING.md)
+- Memory analysis runs Volatility 3, which **Tools > Analysis tools** (or the
+  Memory tab) installs for Antinomie; it needs Python 3 (`python3`)
 - Static analysis runs in a bubblewrap sandbox (`bwrap`). Disassembly, rules
   and identification are built in. Decompilation (Ghidra), capabilities
   (capa) and Detect It Easy use the system's copy when installed; otherwise

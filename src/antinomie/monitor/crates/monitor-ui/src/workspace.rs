@@ -41,38 +41,50 @@ impl Panel {
     }
 }
 
-/// Which main tab the bottom Details panel follows: the syscall trace or the
-/// network panel. When only one of them is on screen it wins; when both are
-/// (split or detached), the one clicked last.
+/// Which main tab the bottom Details panel follows: the syscall trace, the
+/// network panel or the memory panel. When only one of them is on screen it
+/// wins; when several are (split or detached), the one clicked last.
 #[derive(Default)]
 pub(crate) struct DetailsFollow {
-    network: bool,
-    /// Pass of the main window in which the trace and the network panel were
-    /// last drawn.
-    drawn: [Option<u64>; 2],
+    followed: usize,
+    /// Pass of the main window in which each followed panel was last drawn.
+    drawn: [Option<u64>; 3],
+}
+
+/// What the Details panel shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DetailsOf {
+    Syscall,
+    Packet,
+    MemoryRow,
 }
 
 impl DetailsFollow {
-    fn side(panel: &Panel) -> Option<bool> {
+    const SIDES: [DetailsOf; 3] = [DetailsOf::Syscall, DetailsOf::Packet, DetailsOf::MemoryRow];
+
+    fn side(panel: &Panel) -> Option<usize> {
         match panel {
-            Panel::Trace => Some(false),
-            Panel::Network => Some(true),
+            Panel::Trace => Some(0),
+            Panel::Network => Some(1),
+            Panel::Memory => Some(2),
             _ => None,
         }
     }
 
     /// `panel` was drawn into `ui` this pass.
     pub(crate) fn drawn(&mut self, ui: &egui::Ui, panel: &Panel) {
-        let Some(network) = Self::side(panel) else {
+        let Some(side) = Self::side(panel) else {
             return;
         };
         let now = ui.ctx().cumulative_pass_nr_for(egui::ViewportId::ROOT);
-        self.drawn[usize::from(network)] = Some(now);
+        self.drawn[side] = Some(now);
         // Alone on screen: it stays followed after it is hidden again (by
         // Run History, say).
-        let other = self.drawn[usize::from(!network)];
+        let alone = (0..self.drawn.len())
+            .filter(|other| *other != side)
+            .all(|other| self.drawn[other].is_none_or(|pass| pass + 1 < now));
         let rect = ui.max_rect();
-        if other.is_none_or(|pass| pass + 1 < now)
+        if alone
             || ui.input(|input| {
                 input.pointer.any_pressed()
                     && input
@@ -81,25 +93,26 @@ impl DetailsFollow {
                         .is_some_and(|pos| rect.contains(pos))
             })
         {
-            self.network = network;
+            self.followed = side;
         }
     }
 
     /// The user chose `panel`'s tab.
     pub(crate) fn chose(&mut self, panel: &Panel) {
-        if let Some(network) = Self::side(panel) {
-            self.network = network;
+        if let Some(side) = Self::side(panel) {
+            self.followed = side;
         }
     }
 
-    /// Details show the selected packet rather than the selected syscall.
-    pub(crate) fn network(&self, ctx: &egui::Context) -> bool {
+    /// What Details show now.
+    pub(crate) fn of(&self, ctx: &egui::Context) -> DetailsOf {
         let now = ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT);
-        let visible = |side: usize| self.drawn[side].is_some_and(|pass| pass + 1 >= now);
-        match (visible(0), visible(1)) {
-            (true, false) => false,
-            (false, true) => true,
-            _ => self.network,
+        let visible: Vec<usize> = (0..self.drawn.len())
+            .filter(|side| self.drawn[*side].is_some_and(|pass| pass + 1 >= now))
+            .collect();
+        match visible.as_slice() {
+            [only] => Self::SIDES[*only],
+            _ => Self::SIDES[self.followed],
         }
     }
 }

@@ -153,11 +153,41 @@ def build_kernel(kernel_profile, tree, work, jobs, ccache=None):
     return build
 
 
+def memory_kib():
+    with open("/proc/meminfo") as meminfo:
+        for line in meminfo:
+            if line.startswith("MemTotal:"):
+                return int(line.split()[1])
+    return 0
+
+
 def make_symbols(build, work):
-    """The kernel's Volatility symbol table, from vmlinux's DWARF and System.map."""
-    run(sys.executable, KIT / "scripts/make-kernel-symbols.py", "--vmlinux", build / "vmlinux",
-        "--system-map", build / "System.map", "--output", build / "symbols.json.xz",
-        "--tools", work / "tools")
+    """The kernel's Volatility symbol table, from vmlinux's DWARF and System.map.
+
+    dwarf2json holds the whole debug information in memory (several GiB for
+    the Debian kernel); in the QEMU builder, a temporary swap file makes up
+    for a small VM."""
+    swap = None
+    if (os.environ.get("ANTINOMIE_BUILDER") == "1" and os.geteuid() == 0
+            and memory_kib() < 12 << 20 and shutil.which("swapon")):
+        swap = work / "symbols.swap"
+        try:
+            run("fallocate", "-l", "10G", swap)
+            swap.chmod(0o600)
+            run("mkswap", swap, stdout=subprocess.DEVNULL)
+            run("swapon", swap)
+        except (OSError, subprocess.CalledProcessError) as error:
+            print(f"no swap for the symbol table ({error}); trying without", flush=True)
+            swap.unlink(missing_ok=True)
+            swap = None
+    try:
+        run(sys.executable, KIT / "scripts/make-kernel-symbols.py", "--vmlinux", build / "vmlinux",
+            "--system-map", build / "System.map", "--output", build / "symbols.json.xz",
+            "--tools", work / "tools")
+    finally:
+        if swap is not None:
+            subprocess.run(["swapoff", swap], check=False)
+            swap.unlink(missing_ok=True)
 
 
 def keep_artifacts(build, work):

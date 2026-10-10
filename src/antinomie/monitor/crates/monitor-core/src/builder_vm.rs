@@ -350,7 +350,7 @@ image_args=()
 mkdir -p /build/ccache
 curl -fsS "$base/ccache.tar" 2>/dev/null | tar -x -C /build/ccache || true
 touch /build/ccache.started
-python3 /build/kit/scripts/build-base.py --job /build/job.json --inputs /build/inputs \
+ANTINOMIE_BUILDER=1 python3 /build/kit/scripts/build-base.py --job /build/job.json --inputs /build/inputs \
     --work /build/work --output /build/out --jobs "$(nproc)" --kernel-cache /build/kernel.tar \
     --ccache /build/ccache "${{image_args[@]}}"
 cd /build/out

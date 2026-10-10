@@ -4,6 +4,41 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
+## 0.4.0 — unreleased
+
+Needs new bases for memory analysis of the VM's own dumps (BusyBox and
+Debian 13 for Antinomie 0.4.0, which carry their kernel's symbol table).
+Bases for 0.3.x still run; their dumps can be analysed by picking a symbol
+table when importing them.
+
+- **Memory tab.** Beside Network: **Dump memory** writes the running VM's RAM
+  to a dump of its recordings (QEMU pauses the guest while it writes, about a
+  second per GiB) and lists every dump of the VM. **Import dump…** adds a
+  dump made elsewhere (raw, LiME, ELF core, crash dump, VMware or VirtualBox
+  memory, hibernation file) for Linux, Windows or macOS; the file stays
+  where it is.
+- **Volatility 3 plugins, as in Volatility Workbench.** Pick any of the
+  plugins for the dump's system (searchable, grouped by area), set its
+  options in a form built from Volatility's own option list (PIDs, dump
+  switches, YARA rules...), and **Run**. Each run is saved with its dump —
+  result, messages and the files a plugin wrote — and listed under
+  **Results**, so earlier results open again at once. Runs show live
+  progress, can be cancelled, and are set up again from their right-click
+  menu.
+- **Results.** Columns colored by type (addresses, numbers, flags, text),
+  process trees indented, a row filter, copy as tab-separated text, sideways
+  scrolling for wide results, and the selected row's full values in Details.
+- **Volatility 3 install.** **Tools → Analysis tools** installs Volatility 3
+  (2.28.2) with its pinned dependencies (about 5 MB) for the system Python 3.
+  The first plugin run builds Volatility's cache (about a minute and a half);
+  later runs take seconds.
+- **Bases carry their kernel's symbol table.** Base builds compile the
+  kernel with DWARF debug information and add its Volatility symbol table
+  (`symbols.json.xz`, about 3 MB for BusyBox) to the base, made by
+  Volatility's dwarf2json (pinned). Dumps of the VM need no symbol download.
+  The builder VM gets a temporary swap file for this step when it has less
+  than 12 GiB of RAM.
+
 ## 0.3.1 — 2026-10-11
 
 Interface redesign. Runs the same bases as 0.3.0; no new base is needed.
