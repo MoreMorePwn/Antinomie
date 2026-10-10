@@ -1,11 +1,11 @@
 //! Paired invocation presentation and inspectors for actually captured content.
 use crate::{
     data_view::{self, OpenData},
-    theme,
+    theme::{self, ValueKind},
+    values,
 };
 use antinomie_monitor_core::{syscalls, FieldSummary, InvocationSummary};
-use eframe::egui::{self, RichText};
-use std::collections::BTreeMap;
+use eframe::egui::{self, Color32, RichText};
 
 pub(crate) type InvocationKey = (u64, u64, u64);
 
@@ -159,6 +159,9 @@ impl Inspector {
             .find(|field| field.object_id == *object_id)
     }
 
+    /// The Details panel of a syscall: the decoded tree on the left, the
+    /// selected value or captured bytes on the right (Wireshark-style).
+    /// Returns a capture read the user asked for.
     pub(crate) fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -166,477 +169,865 @@ impl Inspector {
         can_read: bool,
     ) -> Option<(FieldSummary, u64, usize)> {
         let Some(invocation) = invocation else {
-            ui.label("No invocation selected");
+            ui.add_space(6.0);
+            ui.colored_label(
+                theme::muted(),
+                "Select a syscall in the trace to decode it here",
+            );
             return None;
         };
-        let width = (ui.available_width() * 0.43).clamp(180.0, 460.0);
+        if self.selection.is_none() {
+            self.select_first(invocation);
+        }
+        let width = ui.available_width();
         egui::SidePanel::left("argument_tree")
-            .default_width(width)
-            .min_width(140.0)
-            .max_width((ui.available_width() - 180.0).max(140.0))
+            .default_width((width * 0.5).clamp(220.0, 640.0))
+            .min_width(160.0)
+            .max_width((width - 200.0).max(160.0))
             .resizable(true)
-            .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 0)))
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin {
+                left: 2,
+                right: 6,
+                top: 4,
+                bottom: 4,
+            }))
             .show_inside(ui, |ui| {
                 egui::ScrollArea::both()
                     .id_salt("argument_tree_scroll")
                     .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        for (label, phase, event) in [
-                            ("Entry", 1, invocation.entry.as_ref()),
-                            ("Exit", 2, invocation.exit.as_ref()),
-                        ] {
-                            egui::CollapsingHeader::new(label)
-                                .id_salt((key(invocation), phase))
-                                .default_open(true)
-                                .show(ui, |ui| {
-                                    let Some(event) = event else {
-                                        ui.colored_label(theme::warn(), "Missing phase");
-                                        return;
-                                    };
-                                    if !event.complete {
-                                        ui.colored_label(theme::warn(), "Incomplete capture");
-                                    }
-                                    for issue in &event.issues {
-                                        ui.colored_label(theme::warn(), issue);
-                                    }
-                                    if let Some(result) = event.result {
-                                        let response = ui.selectable_label(
-                                            self.selection == Some(Selection::Return(result)),
-                                            format!("Return: {result}"),
-                                        );
-                                        data_view::number_menu(
-                                            &response,
-                                            result as u64,
-                                            8,
-                                            &result.to_string(),
-                                            &[],
-                                        );
-                                        if response.clicked() {
-                                            self.clear();
-                                            self.selection = Some(Selection::Return(result));
-                                        }
-                                    }
-                                    let args = event.args.or_else(|| {
-                                        invocation.entry.as_ref().and_then(|entry| entry.args)
-                                    });
-                                    if event.args.is_none() && args.is_some() {
-                                        ui.colored_label(theme::muted(), "Saved Entry arguments");
-                                    }
-                                    if let Some(args) = args {
-                                        let arg_count = syscalls::syscall(event.syscall_nr)
-                                            .and_then(|info| info.arg_count)
-                                            .map_or(6, usize::from);
-                                        for (index, value) in
-                                            args.into_iter().enumerate().take(arg_count)
-                                        {
-                                            let selected = self.selection
-                                                == Some(Selection::Argument {
-                                                    phase,
-                                                    index,
-                                                    value,
-                                                });
-                                            let name = argument_name(event.syscall_nr, index);
-                                            let response = egui::CollapsingHeader::new(format!(
-                                                "{name}: {value:#x}"
-                                            ))
-                                            .id_salt((key(invocation), phase, index))
-                                            .default_open(false)
-                                            .show(ui, |ui| {
-                                                show_flags(
-                                                    ui,
-                                                    event.syscall_nr,
-                                                    index,
-                                                    value,
-                                                    Some(args),
-                                                );
-                                                let numeric =
-                                                    ui.selectable_label(selected, "Numeric value");
-                                                data_view::number_menu(
-                                                    &numeric,
-                                                    value,
-                                                    8,
-                                                    &format!("{value:#x}"),
-                                                    &[],
-                                                );
-                                                if numeric.clicked() {
-                                                    self.select_argument(phase, index, value);
-                                                }
-                                                let fields: Vec<_> = event
-                                                    .fields
-                                                    .iter()
-                                                    .filter(|field| {
-                                                        field_argument(event.syscall_nr, &field.key)
-                                                            == Some(index)
-                                                    })
-                                                    .collect();
-                                                field_tree(
-                                                    ui,
-                                                    (invocation, event.syscall_nr, phase),
-                                                    &fields,
-                                                    true,
-                                                    self,
-                                                );
-                                            });
-                                            data_view::number_menu(
-                                                &response.header_response,
-                                                value,
-                                                8,
-                                                &format!("{value:#x}"),
-                                                &[(
-                                                    "Name and value",
-                                                    &format!("{name}: {value:#x}"),
-                                                )],
-                                            );
-                                            if response.header_response.clicked() {
-                                                self.select_argument(phase, index, value);
-                                            }
-                                        }
-                                    } else {
-                                        ui.colored_label(theme::muted(), "Arguments unavailable");
-                                    }
-                                    let fields: Vec<_> = event
-                                        .fields
-                                        .iter()
-                                        .filter(|field| {
-                                            args.is_none()
-                                                || field_argument(event.syscall_nr, &field.key)
-                                                    .is_none()
-                                        })
-                                        .collect();
-                                    if !fields.is_empty() {
-                                        egui::CollapsingHeader::new("Captured objects")
-                                            .id_salt((key(invocation), phase, "objects"))
-                                            .default_open(true)
-                                            .show(ui, |ui| {
-                                                field_tree(
-                                                    ui,
-                                                    (invocation, event.syscall_nr, phase),
-                                                    &fields,
-                                                    false,
-                                                    self,
-                                                )
-                                            });
-                                    }
-                                });
-                        }
-                        egui::CollapsingHeader::new(format!(
-                            "Async ({})",
-                            invocation.async_events.len()
-                        ))
-                        .id_salt((key(invocation), "async"))
-                        .default_open(false)
-                        .show(ui, |ui| {
-                            if invocation.async_events.is_empty() {
-                                ui.colored_label(
-                                    theme::muted(),
-                                    "No correlated async observations",
-                                );
-                            }
-                            for event in &invocation.async_events {
-                                let header = egui::CollapsingHeader::new(format!(
-                                    "{} / {} / TID {} / CPU {}",
-                                    async_stage(event),
-                                    event.event_seq,
-                                    event.tid,
-                                    event.cpu
-                                ))
-                                .id_salt(event.event_seq)
-                                .show(ui, |ui| {
-                                    for issue in &event.issues {
-                                        ui.colored_label(theme::warn(), issue);
-                                    }
-                                    if let Some(result) = async_scalar(event, "async.result")
-                                        .map(|value| value as i64)
-                                        .or(event.result)
-                                    {
-                                        let label = match async_scalar(event, "async.stage") {
-                                            Some(6) => "Observation error",
-                                            Some(4 | 5) => "Operation result",
-                                            Some(3) => "Submission rejection",
-                                            _ => "Reported value",
-                                        };
-                                        let response = ui.add(
-                                            egui::Label::new(format!("{label}: {result}"))
-                                                .sense(egui::Sense::click()),
-                                        );
-                                        data_view::number_menu(
-                                            &response,
-                                            result as u64,
-                                            8,
-                                            &result.to_string(),
-                                            &[],
-                                        );
-                                    }
-                                    for field in &event.fields {
-                                        let response = ui.selectable_label(
-                                            self.selection
-                                                == Some(Selection::AsyncCaptured {
-                                                    event_seq: event.event_seq,
-                                                    object_id: field.object_id,
-                                                }),
-                                            capture_text(
-                                                field,
-                                                format!(
-                                                    "{} / {}",
-                                                    field.key,
-                                                    capture_summary(field)
-                                                ),
-                                            ),
-                                        );
-                                        if field_menu(&response, field) {
-                                            self.request_data(
-                                                invocation,
-                                                event.syscall_nr,
-                                                format!("async{}", event.event_seq),
-                                                field,
-                                            );
-                                        }
-                                        if response.clicked() {
-                                            self.clear();
-                                            self.selection = Some(Selection::AsyncCaptured {
-                                                event_seq: event.event_seq,
-                                                object_id: field.object_id,
-                                            });
-                                            self.data = covered_preview(field).to_vec();
-                                            self.data_offset = 0;
-                                            self.byte_index = 0;
-                                            self.numeric_width = 1;
-                                        }
-                                    }
-                                });
-                                header.header_response.context_menu(|ui| {
-                                    data_view::copy_items(
-                                        ui,
-                                        &[
-                                            ("Stage".into(), async_stage(event)),
-                                            ("Event sequence".into(), event.event_seq.to_string()),
-                                            ("TID".into(), event.tid.to_string()),
-                                            ("CPU".into(), event.cpu.to_string()),
-                                        ],
-                                    );
-                                });
-                            }
-                        });
-                    });
+                    .show(ui, |ui| self.tree(ui, invocation));
             });
         let mut read = None;
         egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(6, 0)))
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin {
+                left: 10,
+                right: 4,
+                top: 4,
+                bottom: 4,
+            }))
             .show_inside(ui, |ui| {
                 egui::ScrollArea::both()
                     .id_salt("value_inspector")
                     .auto_shrink([false, false])
-                    .show(ui, |ui| match self.selection.as_ref() {
-                        Some(Selection::Argument { value, index, .. }) => {
-                            ui.strong("Numeric value");
-                            if let Some(event) =
-                                invocation.entry.as_ref().or(invocation.exit.as_ref())
-                            {
-                                show_flags(
-                                    ui,
-                                    event.syscall_nr,
-                                    *index,
-                                    *value,
-                                    event.args.or_else(|| {
-                                        invocation.entry.as_ref().and_then(|entry| entry.args)
-                                    }),
-                                );
-                            }
-                            numeric(ui, *value, 8);
-                        }
-                        Some(Selection::Return(value)) => {
-                            ui.strong("Return value");
-                            numeric(ui, *value as u64, 8);
-                        }
-                        Some(Selection::Captured { .. } | Selection::AsyncCaptured { .. }) => {
-                            let Some(field) = self.field(invocation) else {
-                                ui.label("Captured field unavailable");
-                                return;
-                            };
-                            let mut open_data = false;
-                            ui.horizontal_wrapped(|ui| {
-                                ui.strong(&field.key);
-                                open_data = ui
-                                    .button(format!(
-                                        "{} Open data…",
-                                        egui_phosphor::regular::ARROW_SQUARE_OUT
-                                    ))
-                                    .on_hover_text(
-                                        "Show all captured bytes as text, hexdump, C array, \
-                                         Base64 and more",
-                                    )
-                                    .clicked();
-                            });
-                            let length = ui.add(
-                                egui::Label::new(capture_text(field, capture_summary(field)))
-                                    .sense(egui::Sense::click()),
-                            );
-                            data_view::number_menu(
-                                &length,
-                                field.captured_len,
-                                8,
-                                &field.captured_len.to_string(),
-                                &[],
-                            );
-                            if let Some(logical) = field.logical_len {
-                                let response = ui.add(
-                                    egui::Label::new(format!("Logical length {logical} bytes"))
-                                        .sense(egui::Sense::click()),
-                                );
-                                data_view::number_menu(
-                                    &response,
-                                    logical,
-                                    8,
-                                    &logical.to_string(),
-                                    &[],
-                                );
-                            } else {
-                                ui.label("Logical length unknown");
-                            }
-                            if field.status.is_some_and(|status| status != 0)
-                                || field.capture_error != 0
-                            {
-                                ui.label(format!(
-                                    "Status {}; error {}",
-                                    field.status.map_or_else(|| "none".into(), status_name),
-                                    field.capture_error
-                                ));
-                            }
-                            if !field.layout.is_empty() {
-                                ui.label(&field.layout);
-                            }
-                            egui::CollapsingHeader::new("Captured ranges").show(ui, |ui| {
-                                for &(offset, len) in &field.ranges {
-                                    let end = offset.saturating_add(len);
-                                    let response = ui.add(
-                                        egui::Label::new(
-                                            RichText::new(format!("{offset:#x}..{end:#x}"))
-                                                .monospace(),
-                                        )
-                                        .sense(egui::Sense::click()),
-                                    );
-                                    response.context_menu(|ui| {
-                                        data_view::copy_items(
-                                            ui,
-                                            &[
-                                                ("Range".into(), format!("{offset:#x}..{end:#x}")),
-                                                ("Start".into(), format!("{offset:#x}")),
-                                                ("End".into(), format!("{end:#x}")),
-                                                ("Length".into(), len.to_string()),
-                                            ],
-                                        );
-                                    });
-                                }
-                            });
-                            if open_data {
-                                self.open_selected_data(invocation, field);
-                            }
-                            if let Some(error) = &self.error {
-                                ui.colored_label(theme::warn(), error);
-                            }
-                            if self.pending {
-                                ui.label("Reading capture...");
-                            }
-                            let offset = next_range(
-                                field,
-                                self.data_offset.saturating_add(self.data.len() as u64),
-                            );
-                            if let Some((offset, len)) = offset {
-                                if ui
-                                    .add_enabled(
-                                        can_read && !self.pending,
-                                        egui::Button::new(format!(
-                                            "{} Read capture at {offset:#x}",
-                                            egui_phosphor::regular::ARROW_RIGHT
-                                        )),
-                                    )
-                                    .clicked()
-                                {
-                                    read = Some((field.clone(), offset, len.min(4096) as usize));
-                                }
-                            }
-                            if self.data.is_empty() {
-                                ui.colored_label(theme::muted(), "No captured bytes in this view");
-                            }
-                            for (line, data) in self.data.chunks(16).enumerate() {
-                                ui.horizontal(|ui| {
-                                    ui.monospace(format!(
-                                        "{:08x}",
-                                        self.data_offset + (line * 16) as u64
-                                    ));
-                                    ui.spacing_mut().item_spacing.x = 3.0;
-                                    for (column, byte) in data.iter().enumerate() {
-                                        let index = line * 16 + column;
-                                        let response = ui.selectable_label(
-                                            self.byte_index == index,
-                                            RichText::new(format!("{byte:02x}")).monospace(),
-                                        );
-                                        let offset = self.data_offset + index as u64;
-                                        data_view::number_menu(
-                                            &response,
-                                            u64::from(*byte),
-                                            1,
-                                            &format!("{byte:02x}"),
-                                            &[("Offset", &format!("{offset:#x}"))],
-                                        );
-                                        if response.clicked() {
-                                            self.byte_index = index;
-                                        }
-                                    }
-                                    ui.monospace(ascii(data));
-                                });
-                            }
-                            if !self.data.is_empty() {
-                                ui.separator();
-                                ui.horizontal(|ui| {
-                                    for width in [1, 2, 4, 8] {
-                                        ui.selectable_value(
-                                            &mut self.numeric_width,
-                                            width,
-                                            format!("{width} B"),
-                                        );
-                                    }
-                                });
-                                let width = self.numeric_width.max(1);
-                                if let Some(slice) = self
-                                    .data
-                                    .get(self.byte_index..self.byte_index.saturating_add(width))
-                                {
-                                    let mut data = [0; 8];
-                                    data[..width].copy_from_slice(slice);
-                                    numeric(ui, u64::from_le_bytes(data), width);
-                                } else {
-                                    ui.colored_label(
-                                        theme::muted(),
-                                        "Selection needs more contiguous captured bytes",
-                                    );
-                                }
-                            }
-                        }
-                        None => {
-                            ui.label("No value selected");
-                        }
-                    });
+                    .show(ui, |ui| read = self.value_pane(ui, invocation, can_read));
             });
         read
+    }
+
+    /// Select what the right side starts with: the first captured data in
+    /// argument order (data an exit returned before data an entry passed),
+    /// then other captured objects, else the return value.
+    fn select_first(&mut self, invocation: &InvocationSummary) {
+        let Some(event) = representative(invocation) else {
+            return;
+        };
+        let nr = event.syscall_nr;
+        let mut best: Option<(usize, u8, &FieldSummary)> = None;
+        for (phase, event) in [(2, invocation.exit.as_ref()), (1, invocation.entry.as_ref())] {
+            for field in event.into_iter().flat_map(|event| &event.fields) {
+                if covered_preview(field).is_empty() {
+                    continue;
+                }
+                let rank = field_argument(nr, &field.key).unwrap_or(6);
+                if best.is_none_or(|(best, ..)| rank < best) {
+                    best = Some((rank, phase, field));
+                }
+            }
+        }
+        if let Some((_, phase, field)) = best {
+            self.select_field(phase, field);
+            return;
+        }
+        for event in &invocation.async_events {
+            if let Some(field) = event.fields.iter().find(|field| {
+                !field.key.starts_with("async.") && !covered_preview(field).is_empty()
+            }) {
+                self.select_async(event.event_seq, field);
+                return;
+            }
+        }
+        if let Some(result) = invocation.exit.as_ref().and_then(|exit| exit.result) {
+            self.selection = Some(Selection::Return(result));
+        }
+    }
+
+    fn select_async(&mut self, event_seq: u64, field: &FieldSummary) {
+        let selection = Selection::AsyncCaptured {
+            event_seq,
+            object_id: field.object_id,
+        };
+        if self.selection.as_ref() != Some(&selection) {
+            self.clear();
+            self.selection = Some(selection);
+            self.data = covered_preview(field).to_vec();
+            self.data_offset = 0;
+            self.byte_index = 0;
+            self.numeric_width = 1;
+        }
+    }
+
+    /// The decoded call: arguments (with the data captured behind them),
+    /// return value, other captured objects, phases and async observations.
+    fn tree(&mut self, ui: &mut egui::Ui, invocation: &InvocationSummary) {
+        let Some(event) = representative(invocation) else {
+            ui.colored_label(theme::warn(), "Missing phases");
+            return;
+        };
+        let nr = event.syscall_nr;
+        let salt = key(invocation);
+        ui.spacing_mut().item_spacing.y = 0.0;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            ui.label(
+                RichText::new(&event.syscall_name)
+                    .font(theme::mono(ui.style().text_styles[&egui::TextStyle::Body].size))
+                    .color(theme::value(ValueKind::Name)),
+            );
+            ui.label(
+                RichText::new(format!(
+                    "syscall {nr} · TID {} · call {}",
+                    event.tid, invocation.call_id
+                ))
+                .color(theme::muted()),
+            );
+        });
+        for (label, event) in [("Entry", &invocation.entry), ("Exit", &invocation.exit)] {
+            let Some(event) = event else {
+                continue;
+            };
+            if !event.complete {
+                warning_line(ui, &format!("{label}: incomplete capture"));
+            }
+            for issue in &event.issues {
+                warning_line(ui, &format!("{label}: {issue}"));
+            }
+        }
+        ui.add_space(4.0);
+
+        let (args, arg_phase) = match (
+            invocation.entry.as_ref().and_then(|entry| entry.args),
+            invocation.exit.as_ref().and_then(|exit| exit.args),
+        ) {
+            (Some(args), _) => (Some(args), 1),
+            (None, args) => (args, 2),
+        };
+        let fields: Vec<(u8, &FieldSummary)> = invocation
+            .entry
+            .iter()
+            .flat_map(|event| event.fields.iter().map(|field| (1, field)))
+            .chain(
+                invocation
+                    .exit
+                    .iter()
+                    .flat_map(|event| event.fields.iter().map(|field| (2, field))),
+            )
+            .collect();
+
+        if section_row(ui, ui.id().with((salt, "arguments")), "Arguments", true) {
+            match args {
+                Some(args) => {
+                    for index in 0..arg_count(nr) {
+                        let value = args[index];
+                        let name = argument_name(nr, index);
+                        let shown = values::argument(nr, index, &args);
+                        let owned: Vec<_> = fields
+                            .iter()
+                            .copied()
+                            .filter(|(_, field)| field_argument(nr, &field.key) == Some(index))
+                            .collect();
+                        let note = argument_data(&owned)
+                            .map(|(_, field)| (preview(field), theme::value(ValueKind::Text)))
+                            .or_else(|| shown.raw.clone().map(|raw| (raw, theme::muted())));
+                        let selected = self.selection
+                            == Some(Selection::Argument {
+                                phase: arg_phase,
+                                index,
+                                value,
+                            });
+                        let (response, open) = tree_row(
+                            ui,
+                            Row {
+                                id: ui.id().with((salt, "argument", index)),
+                                depth: 1,
+                                expand: (!owned.is_empty()).then_some(true),
+                                name,
+                                name_color: theme::text(),
+                                value: Some((&shown.text, theme::value(shown.kind))),
+                                note: note.as_ref().map(|(text, color)| (text.as_str(), *color)),
+                                selected,
+                            },
+                        );
+                        let c_type = syscalls::syscall(nr)
+                            .and_then(|info| info.arguments.get(index))
+                            .map_or("", |argument| argument.c_type.as_str());
+                        let response = response.on_hover_text(format!(
+                            "{c_type} {name}\n{}\nraw {value:#x}",
+                            shown.hover()
+                        ));
+                        data_view::number_menu(
+                            &response,
+                            value,
+                            8,
+                            &shown.text,
+                            &[("Name and value", &format!("{name}={}", shown.text))],
+                        );
+                        if response.clicked() {
+                            self.select_argument(arg_phase, index, value);
+                        }
+                        if open {
+                            self.phase_fields(ui, invocation, nr, &owned, 2, true);
+                        }
+                    }
+                }
+                None => {
+                    note_row(ui, 1, "Arguments unavailable", theme::muted());
+                }
+            }
+        }
+
+        match invocation.exit.as_ref().and_then(|exit| exit.result) {
+            Some(result) => {
+                let shown = values::result(nr, result);
+                let description = values::is_error(result)
+                    .then(|| values::errno_description(result.unsigned_abs()))
+                    .flatten()
+                    .map(|text| format!("{result} · {text}"));
+                let (response, _) = tree_row(
+                    ui,
+                    Row {
+                        id: ui.id().with((salt, "return")),
+                        depth: 0,
+                        expand: None,
+                        name: "Return",
+                        name_color: theme::heading(),
+                        value: Some((&shown.text, theme::value(shown.kind))),
+                        note: description.as_deref().map(|text| (text, theme::muted())),
+                        selected: self.selection == Some(Selection::Return(result)),
+                    },
+                );
+                let response = response.on_hover_text(values::result_hover(nr, result));
+                let mut extra = Vec::new();
+                if shown.raw.is_some() {
+                    extra.push(("Name", shown.text.as_str()));
+                }
+                data_view::number_menu(&response, result as u64, 8, &result.to_string(), &extra);
+                if response.clicked() {
+                    self.clear();
+                    self.selection = Some(Selection::Return(result));
+                }
+            }
+            None => {
+                let missing = if invocation.exit.is_some() {
+                    "no value"
+                } else {
+                    "missing Exit"
+                };
+                tree_row(
+                    ui,
+                    Row {
+                        id: ui.id().with((salt, "return")),
+                        depth: 0,
+                        expand: None,
+                        name: "Return",
+                        name_color: theme::heading(),
+                        value: Some((missing, theme::warn())),
+                        note: None,
+                        selected: false,
+                    },
+                );
+            }
+        }
+
+        let objects: Vec<_> = fields
+            .iter()
+            .copied()
+            .filter(|(_, field)| args.is_none() || field_argument(nr, &field.key).is_none())
+            .collect();
+        if !objects.is_empty()
+            && section_row(
+                ui,
+                ui.id().with((salt, "objects")),
+                &format!("Captured objects ({})", objects.len()),
+                true,
+            )
+        {
+            self.phase_fields(ui, invocation, nr, &objects, 1, false);
+        }
+
+        if section_row(ui, ui.id().with((salt, "phases")), "Phases", false) {
+            for (label, event) in [("Entry", &invocation.entry), ("Exit", &invocation.exit)] {
+                let Some(event) = event else {
+                    tree_row(
+                        ui,
+                        Row {
+                            id: ui.id().with((salt, label)),
+                            depth: 1,
+                            expand: None,
+                            name: label,
+                            name_color: theme::text(),
+                            value: Some(("missing", theme::warn())),
+                            note: None,
+                            selected: false,
+                        },
+                    );
+                    continue;
+                };
+                let record = format!("record {}", event.event_seq);
+                let note = format!(
+                    "{} s · CPU {}{}",
+                    seconds(event.timestamp_ns),
+                    event.cpu,
+                    if event.complete { "" } else { " · incomplete" }
+                );
+                let (response, _) = tree_row(
+                    ui,
+                    Row {
+                        id: ui.id().with((salt, label)),
+                        depth: 1,
+                        expand: None,
+                        name: label,
+                        name_color: theme::text(),
+                        value: Some((&record, theme::value(ValueKind::Number))),
+                        note: Some((&note, theme::muted())),
+                        selected: false,
+                    },
+                );
+                response.context_menu(|ui| {
+                    data_view::copy_items(
+                        ui,
+                        &[
+                            ("Record".into(), event.event_seq.to_string()),
+                            ("Time (ns)".into(), event.timestamp_ns.to_string()),
+                            ("CPU".into(), event.cpu.to_string()),
+                        ],
+                    );
+                });
+            }
+        }
+
+        if section_row(
+            ui,
+            ui.id().with((salt, "async")),
+            &format!("Async ({})", invocation.async_events.len()),
+            false,
+        ) {
+            if invocation.async_events.is_empty() {
+                note_row(ui, 1, "No correlated async observations", theme::muted());
+            }
+            for event in &invocation.async_events {
+                self.async_event(ui, invocation, event);
+            }
+        }
+    }
+
+    /// Captured fields of one argument or of the call, under "At entry" and
+    /// "At exit" rows when both phases captured some.
+    fn phase_fields(
+        &mut self,
+        ui: &mut egui::Ui,
+        invocation: &InvocationSummary,
+        nr: u64,
+        fields: &[(u8, &FieldSummary)],
+        depth: usize,
+        strip_arg: bool,
+    ) {
+        let both = fields.iter().any(|(phase, _)| *phase == 1)
+            && fields.iter().any(|(phase, _)| *phase == 2);
+        for (phase, label) in [(1, "At entry"), (2, "At exit")] {
+            let phase_fields: Vec<_> = fields
+                .iter()
+                .filter(|(owner, _)| *owner == phase)
+                .map(|(_, field)| *field)
+                .collect();
+            if phase_fields.is_empty() {
+                continue;
+            }
+            if both {
+                let (_, open) = tree_row(
+                    ui,
+                    Row {
+                        id: ui.id().with((key(invocation), depth, label, fields[0].1.object_id)),
+                        depth,
+                        expand: Some(true),
+                        name: label,
+                        name_color: theme::muted(),
+                        value: None,
+                        note: None,
+                        selected: false,
+                    },
+                );
+                if open {
+                    field_tree(
+                        ui,
+                        (invocation, nr, phase),
+                        &phase_fields,
+                        strip_arg,
+                        self,
+                        depth + 1,
+                    );
+                }
+            } else {
+                field_tree(
+                    ui,
+                    (invocation, nr, phase),
+                    &phase_fields,
+                    strip_arg,
+                    self,
+                    depth,
+                );
+            }
+        }
+    }
+
+    fn async_event(
+        &mut self,
+        ui: &mut egui::Ui,
+        invocation: &InvocationSummary,
+        event: &antinomie_monitor_core::EventSummary,
+    ) {
+        let stage = async_stage(event);
+        let record = format!("record {}", event.event_seq);
+        let note = format!("TID {} · CPU {}", event.tid, event.cpu);
+        let (response, open) = tree_row(
+            ui,
+            Row {
+                id: ui.id().with(("async", event.event_seq)),
+                depth: 1,
+                expand: Some(false),
+                name: &stage,
+                name_color: theme::text(),
+                value: Some((&record, theme::value(ValueKind::Number))),
+                note: Some((&note, theme::muted())),
+                selected: false,
+            },
+        );
+        response.context_menu(|ui| {
+            data_view::copy_items(
+                ui,
+                &[
+                    ("Stage".into(), stage.clone()),
+                    ("Event sequence".into(), event.event_seq.to_string()),
+                    ("TID".into(), event.tid.to_string()),
+                    ("CPU".into(), event.cpu.to_string()),
+                ],
+            );
+        });
+        if !open {
+            return;
+        }
+        for issue in &event.issues {
+            note_row(ui, 2, issue, theme::warn());
+        }
+        if let Some(result) = async_scalar(event, "async.result")
+            .map(|value| value as i64)
+            .or(event.result)
+        {
+            let label = match async_scalar(event, "async.stage") {
+                Some(6) => "Observation error",
+                Some(4 | 5) => "Operation result",
+                Some(3) => "Submission rejection",
+                _ => "Reported value",
+            };
+            let shown = values::result(event.syscall_nr, result);
+            let (response, _) = tree_row(
+                ui,
+                Row {
+                    id: ui.id().with(("async result", event.event_seq)),
+                    depth: 2,
+                    expand: None,
+                    name: label,
+                    name_color: theme::text(),
+                    value: Some((&shown.text, theme::value(shown.kind))),
+                    note: None,
+                    selected: false,
+                },
+            );
+            let response = response.on_hover_text(values::result_hover(event.syscall_nr, result));
+            data_view::number_menu(&response, result as u64, 8, &result.to_string(), &[]);
+        }
+        for field in &event.fields {
+            let size = capture_size(field);
+            let shown = preview(field);
+            let (response, _) = tree_row(
+                ui,
+                Row {
+                    id: ui.id().with(("async field", event.event_seq, field.object_id)),
+                    depth: 2,
+                    expand: None,
+                    name: &field.key,
+                    name_color: theme::text(),
+                    value: Some((&size, capture_color(field))),
+                    note: Some((&shown, theme::value(ValueKind::Text))),
+                    selected: self.selection
+                        == Some(Selection::AsyncCaptured {
+                            event_seq: event.event_seq,
+                            object_id: field.object_id,
+                        }),
+                },
+            );
+            let response = response.on_hover_text(capture_summary(field));
+            if field_menu(&response, field) {
+                self.request_data(
+                    invocation,
+                    event.syscall_nr,
+                    format!("async{}", event.event_seq),
+                    field,
+                );
+            }
+            if response.clicked() {
+                self.select_async(event.event_seq, field);
+            }
+        }
+    }
+
+    /// The right side: the selected number in every form, or the selected
+    /// field's captured bytes as a hex dump.
+    fn value_pane(
+        &mut self,
+        ui: &mut egui::Ui,
+        invocation: &InvocationSummary,
+        can_read: bool,
+    ) -> Option<(FieldSummary, u64, usize)> {
+        let nr = representative(invocation).map_or(0, |event| event.syscall_nr);
+        match self.selection.clone() {
+            Some(Selection::Argument { index, value, .. }) => {
+                let args = invocation
+                    .entry
+                    .as_ref()
+                    .and_then(|entry| entry.args)
+                    .or_else(|| invocation.exit.as_ref().and_then(|exit| exit.args));
+                let name = argument_name(nr, index);
+                ui.horizontal_wrapped(|ui| {
+                    theme::section(ui, name);
+                    if let Some(argument) =
+                        syscalls::syscall(nr).and_then(|info| info.arguments.get(index))
+                    {
+                        ui.colored_label(theme::muted(), &argument.c_type);
+                    }
+                });
+                if let Some(args) = args {
+                    value_line(ui, &values::argument(nr, index, &args));
+                }
+                show_flags(ui, nr, index, value, args);
+                ui.add_space(6.0);
+                numeric(ui, value, 8);
+                None
+            }
+            Some(Selection::Return(value)) => {
+                theme::section(ui, "Return value");
+                value_line(ui, &values::result(nr, value));
+                if values::is_error(value) {
+                    if let Some(description) = values::errno_description(value.unsigned_abs()) {
+                        ui.colored_label(theme::muted(), description);
+                    }
+                }
+                ui.add_space(6.0);
+                numeric(ui, value as u64, 8);
+                None
+            }
+            Some(Selection::Captured { .. } | Selection::AsyncCaptured { .. }) => {
+                let Some(field) = self.field(invocation) else {
+                    ui.colored_label(theme::muted(), "Captured field unavailable");
+                    return None;
+                };
+                self.bytes_pane(ui, invocation, field, can_read)
+            }
+            None => {
+                ui.colored_label(
+                    theme::muted(),
+                    "Nothing captured for this call; select an argument or the return value",
+                );
+                None
+            }
+        }
+    }
+
+    fn bytes_pane(
+        &mut self,
+        ui: &mut egui::Ui,
+        invocation: &InvocationSummary,
+        field: &FieldSummary,
+        can_read: bool,
+    ) -> Option<(FieldSummary, u64, usize)> {
+        let mut read = None;
+        let mut open_data = false;
+        ui.horizontal_wrapped(|ui| {
+            theme::section(ui, &field.key);
+            let phase = match &self.selection {
+                Some(Selection::Captured { phase: 1, .. }) => "at entry",
+                Some(Selection::Captured { .. }) => "at exit",
+                _ => "async",
+            };
+            ui.colored_label(theme::muted(), phase);
+            open_data = ui
+                .button(format!(
+                    "{} Open data…",
+                    egui_phosphor::regular::ARROW_SQUARE_OUT
+                ))
+                .on_hover_text(
+                    "Show all captured bytes as text, hexdump, C array, Base64 and more",
+                )
+                .clicked();
+        });
+        let length = ui.add(
+            egui::Label::new(capture_text(field, capture_summary(field)))
+                .sense(egui::Sense::click()),
+        );
+        data_view::number_menu(
+            &length,
+            field.captured_len,
+            8,
+            &field.captured_len.to_string(),
+            &[],
+        );
+        let mut facts = vec![match field.logical_len {
+            Some(logical) => format!("logical length {logical} bytes"),
+            None => "logical length unknown".to_owned(),
+        }];
+        if !field.layout.is_empty() {
+            facts.push(field.layout.clone());
+        }
+        if field.status.is_some_and(|status| status != 0) || field.capture_error != 0 {
+            facts.push(format!(
+                "status {}; error {}",
+                field.status.map_or_else(|| "none".into(), status_name),
+                if field.capture_error < 0 {
+                    values::errno_name(u64::from(field.capture_error.unsigned_abs()))
+                        .map_or_else(|| field.capture_error.to_string(), str::to_owned)
+                } else {
+                    field.capture_error.to_string()
+                }
+            ));
+        }
+        ui.add(egui::Label::new(RichText::new(facts.join(" · ")).color(theme::muted())).wrap());
+        if open_data {
+            self.open_selected_data(invocation, field);
+        }
+        if let Some(error) = &self.error {
+            ui.colored_label(theme::warn(), error);
+        }
+        if self.pending {
+            ui.colored_label(theme::muted(), "Reading capture...");
+        }
+        ui.add_space(4.0);
+        if self.data.is_empty() {
+            ui.colored_label(theme::muted(), "No captured bytes in this view");
+        } else {
+            self.hex_dump(ui);
+        }
+        if let Some((offset, len)) = next_range(
+            field,
+            self.data_offset.saturating_add(self.data.len() as u64),
+        ) {
+            if ui
+                .add_enabled(
+                    can_read && !self.pending,
+                    egui::Button::new(format!(
+                        "{} Read capture at {offset:#x}",
+                        egui_phosphor::regular::ARROW_RIGHT
+                    )),
+                )
+                .clicked()
+            {
+                read = Some((field.clone(), offset, len.min(4096) as usize));
+            }
+        }
+        if !self.data.is_empty() {
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(
+                    theme::muted(),
+                    format!(
+                        "Value at {:#x} as",
+                        self.data_offset + self.byte_index as u64
+                    ),
+                );
+                for width in [1, 2, 4, 8] {
+                    ui.selectable_value(&mut self.numeric_width, width, format!("{width} B"));
+                }
+            });
+            let width = self.numeric_width.max(1);
+            if let Some(slice) = self
+                .data
+                .get(self.byte_index..self.byte_index.saturating_add(width))
+            {
+                let mut data = [0; 8];
+                data[..width].copy_from_slice(slice);
+                numeric(ui, u64::from_le_bytes(data), width);
+            } else {
+                ui.colored_label(
+                    theme::muted(),
+                    "Selection needs more contiguous captured bytes",
+                );
+            }
+        }
+        egui::CollapsingHeader::new(format!("Captured ranges ({})", field.ranges.len()))
+            .id_salt("captured_ranges")
+            .show(ui, |ui| {
+                for &(offset, len) in &field.ranges {
+                    let end = offset.saturating_add(len);
+                    let response = ui.add(
+                        egui::Label::new(
+                            RichText::new(format!("{offset:#x}..{end:#x}  ({len} bytes)"))
+                                .monospace(),
+                        )
+                        .sense(egui::Sense::click()),
+                    );
+                    response.context_menu(|ui| {
+                        data_view::copy_items(
+                            ui,
+                            &[
+                                ("Range".into(), format!("{offset:#x}..{end:#x}")),
+                                ("Start".into(), format!("{offset:#x}")),
+                                ("End".into(), format!("{end:#x}")),
+                                ("Length".into(), len.to_string()),
+                            ],
+                        );
+                    });
+                }
+            });
+        read
+    }
+
+    /// The loaded bytes: offset, hex (two groups of eight) and ASCII; a
+    /// click picks the byte the numeric view starts at, and the bytes it
+    /// covers are highlighted in both columns.
+    fn hex_dump(&mut self, ui: &mut egui::Ui) {
+        let font = egui::TextStyle::Monospace.resolve(ui.style());
+        let char_width = ui.fonts(|fonts| fonts.glyph_width(&font, '0'));
+        let height = theme::row_height(font.size) - 2.0;
+        let per_line = if ui.available_width() >= char_width * 78.0 {
+            16
+        } else {
+            8
+        };
+        let group = per_line / 2;
+        let byte_x = |column: usize| {
+            char_width * (10.0 + column as f32 * 3.0 + if column >= group { 1.0 } else { 0.0 })
+        };
+        let ascii_x = byte_x(per_line) + char_width;
+        let width = ascii_x + per_line as f32 * char_width + 4.0;
+        let selected_end = self.byte_index + self.numeric_width.max(1);
+        let palette = theme::palette();
+        ui.spacing_mut().item_spacing.y = 0.0;
+        let mut clicked = None;
+        for (line, chunk) in self.data.chunks(per_line).enumerate() {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+            if !ui.is_rect_visible(rect) {
+                continue;
+            }
+            let painter = ui.painter();
+            let y = rect.center().y;
+            painter.text(
+                egui::pos2(rect.left(), y),
+                egui::Align2::LEFT_CENTER,
+                format!("{:08x}", self.data_offset + (line * per_line) as u64),
+                font.clone(),
+                theme::muted(),
+            );
+            for (column, byte) in chunk.iter().enumerate() {
+                let index = line * per_line + column;
+                let hex = egui::Rect::from_min_size(
+                    egui::pos2(rect.left() + byte_x(column) - char_width * 0.5, rect.top()),
+                    egui::vec2(char_width * 3.0, height),
+                );
+                let ascii = egui::Rect::from_min_size(
+                    egui::pos2(rect.left() + ascii_x + column as f32 * char_width, rect.top()),
+                    egui::vec2(char_width, height),
+                );
+                let response = ui
+                    .interact(hex, ui.id().with(("hex", index)), egui::Sense::click())
+                    .union(ui.interact(
+                        ascii,
+                        ui.id().with(("ascii", index)),
+                        egui::Sense::click(),
+                    ));
+                let fill = if index == self.byte_index {
+                    Some(palette.selection)
+                } else if (self.byte_index..selected_end).contains(&index) {
+                    Some(palette.selection.gamma_multiply(0.55))
+                } else if response.hovered() {
+                    Some(palette.hover)
+                } else {
+                    None
+                };
+                if let Some(fill) = fill {
+                    painter.rect_filled(hex.shrink2(egui::vec2(1.0, 1.0)), 2.0, fill);
+                    painter.rect_filled(ascii, 1.0, fill);
+                }
+                painter.text(
+                    egui::pos2(hex.center().x, y),
+                    egui::Align2::CENTER_CENTER,
+                    format!("{byte:02x}"),
+                    font.clone(),
+                    if *byte == 0 {
+                        theme::muted()
+                    } else {
+                        theme::text()
+                    },
+                );
+                let printable = byte.is_ascii_graphic() || *byte == b' ';
+                painter.text(
+                    egui::pos2(ascii.center().x, y),
+                    egui::Align2::CENTER_CENTER,
+                    if printable { char::from(*byte) } else { '.' },
+                    font.clone(),
+                    if printable {
+                        theme::value(ValueKind::Text)
+                    } else {
+                        theme::muted()
+                    },
+                );
+                let offset = self.data_offset + index as u64;
+                data_view::number_menu(
+                    &response,
+                    u64::from(*byte),
+                    1,
+                    &format!("{byte:02x}"),
+                    &[("Offset", &format!("{offset:#x}"))],
+                );
+                if response.clicked() {
+                    clicked = Some(index);
+                }
+            }
+        }
+        if let Some(index) = clicked {
+            self.byte_index = index;
+        }
     }
 }
 
 #[derive(Default)]
 struct FieldNode<'a> {
     field: Option<&'a FieldSummary>,
-    children: BTreeMap<String, FieldNode<'a>>,
+    /// In capture order, so `[2]` comes before `[10]`.
+    children: Vec<(String, FieldNode<'a>)>,
+}
+
+impl<'a> FieldNode<'a> {
+    fn child(&mut self, label: String) -> &mut FieldNode<'a> {
+        let index = match self.children.iter().position(|(name, _)| *name == label) {
+            Some(index) => index,
+            None => {
+                self.children.push((label, FieldNode::default()));
+                self.children.len() - 1
+            }
+        };
+        &mut self.children[index].1
+    }
 }
 
 /// The invocation, syscall number and phase that captured fields belong to.
 type FieldOwner<'a> = (&'a InvocationSummary, u64, u8);
 
+/// Captured fields as a tree of their key components (`iov[0].data`).
 fn field_tree(
     ui: &mut egui::Ui,
     owner: FieldOwner<'_>,
     fields: &[&FieldSummary],
     strip_arg: bool,
     inspector: &mut Inspector,
+    depth: usize,
 ) {
     let mut root = FieldNode::default();
     for field in fields {
@@ -646,8 +1037,7 @@ fn field_tree(
         }
         let mut node = &mut root;
         for component in components {
-            let parts = component.split('[');
-            for (index, part) in parts.enumerate() {
+            for (index, part) in component.split('[').enumerate() {
                 if part.is_empty() {
                     continue;
                 }
@@ -656,7 +1046,7 @@ fn field_tree(
                 } else {
                     format!("[{part}")
                 };
-                node = node.children.entry(label).or_default();
+                node = node.child(label);
             }
         }
         node.field = Some(field);
@@ -666,49 +1056,281 @@ fn field_tree(
         owner: FieldOwner<'_>,
         node: &FieldNode<'_>,
         inspector: &mut Inspector,
+        depth: usize,
     ) {
         let (invocation, nr, phase) = owner;
         for (label, child) in &node.children {
-            ui.push_id((phase, label), |ui| {
-                let response =
-                    egui::CollapsingHeader::new(label)
-                        .default_open(false)
-                        .show(ui, |ui| {
-                            if let Some(field) = child.field {
-                                let response = ui.selectable_label(
-                                    inspector.selection
-                                        == Some(Selection::Captured {
-                                            phase,
-                                            object_id: field.object_id,
-                                        }),
-                                    capture_text(field, capture_summary(field)),
-                                );
-                                if field_menu(&response, field) {
-                                    inspector.request_data(
-                                        invocation,
-                                        nr,
-                                        format!("p{phase}"),
-                                        field,
-                                    );
-                                }
-                                if response.clicked() {
-                                    inspector.select_field(phase, field);
-                                }
-                            }
-                            show(ui, owner, child, inspector);
-                        });
-                if let Some(field) = child.field {
-                    if field_menu(&response.header_response, field) {
-                        inspector.request_data(invocation, nr, format!("p{phase}"), field);
-                    }
-                    if response.header_response.clicked() {
-                        inspector.select_field(phase, field);
-                    }
+            let size = child.field.map(capture_size);
+            let shown = child.field.map(preview);
+            let (response, open) = tree_row(
+                ui,
+                Row {
+                    id: ui.id().with((key(invocation), phase, depth, label)),
+                    depth,
+                    expand: (!child.children.is_empty()).then_some(false),
+                    name: label,
+                    name_color: theme::text(),
+                    value: child
+                        .field
+                        .zip(size.as_deref())
+                        .map(|(field, size)| (size, capture_color(field))),
+                    note: shown
+                        .as_deref()
+                        .map(|text| (text, theme::value(ValueKind::Text))),
+                    selected: child.field.is_some_and(|field| {
+                        inspector.selection
+                            == Some(Selection::Captured {
+                                phase,
+                                object_id: field.object_id,
+                            })
+                    }),
+                },
+            );
+            if let Some(field) = child.field {
+                let response = response.on_hover_text(format!(
+                    "{}\n{}",
+                    field.key,
+                    capture_summary(field)
+                ));
+                if field_menu(&response, field) {
+                    inspector.request_data(invocation, nr, format!("p{phase}"), field);
                 }
-            });
+                if response.clicked() {
+                    inspector.select_field(phase, field);
+                }
+            }
+            if open {
+                show(ui, owner, child, inspector, depth + 1);
+            }
         }
     }
-    show(ui, owner, &root, inspector);
+    show(ui, owner, &root, inspector, depth);
+}
+
+/// One line of the decoded tree.
+struct Row<'a> {
+    id: egui::Id,
+    depth: usize,
+    /// Rows with children draw a caret: `Some(open by default)`.
+    expand: Option<bool>,
+    name: &'a str,
+    name_color: Color32,
+    /// Monospace, in its syntax color.
+    value: Option<(&'a str, Color32)>,
+    /// After the value: a decoded form, a preview or a remark.
+    note: Option<(&'a str, Color32)>,
+    selected: bool,
+}
+
+/// Draw a tree row: caret, name, then value and note aligned on a column
+/// shared by the row's siblings. A click selects; the caret or a double
+/// click opens and closes. Returns the response and whether the row is open.
+fn tree_row(ui: &mut egui::Ui, row: Row<'_>) -> (egui::Response, bool) {
+    let body = egui::TextStyle::Body.resolve(ui.style());
+    let mono = theme::mono(body.size - 1.0);
+    let height = theme::row_height(body.size);
+    let step = body.size * 1.1;
+    let caret = body.size;
+    let name_x = 2.0 + row.depth as f32 * step + caret;
+    let painter = ui.painter();
+    let name = painter.layout_no_wrap(row.name.to_owned(), body.clone(), row.name_color);
+    let value = row
+        .value
+        .map(|(text, color)| painter.layout_no_wrap(text.to_owned(), mono.clone(), color));
+    let note = row
+        .note
+        .map(|(text, color)| painter.layout_no_wrap(text.to_owned(), body.clone(), color));
+    let gap = body.size * 0.8;
+    let value_x = (name_x + name.size().x + gap).max(name_x + body.size * 6.5);
+    let note_x = value_x + value.as_ref().map_or(0.0, |value| value.size().x + gap);
+    let end = note_x + note.as_ref().map_or(0.0, |note| note.size().x) + 4.0;
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width().max(end), height),
+        egui::Sense::click(),
+    );
+    let mut open = false;
+    if let Some(default) = row.expand {
+        open = ui.data_mut(|data| *data.get_temp_mut_or(row.id, default));
+        let caret_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.left() + name_x - caret, rect.top()),
+            egui::vec2(caret, height),
+        );
+        let on_caret = response.clicked()
+            && response
+                .interact_pointer_pos()
+                .is_some_and(|pos| caret_rect.contains(pos));
+        if on_caret || response.double_clicked() {
+            open = !open;
+            ui.data_mut(|data| data.insert_temp(row.id, open));
+        }
+    }
+    if ui.is_rect_visible(rect) {
+        let palette = theme::palette();
+        let painter = ui.painter();
+        if row.selected {
+            painter.rect_filled(rect, 2.0, palette.selection);
+        } else if response.hovered() {
+            painter.rect_filled(rect, 2.0, palette.hover);
+        }
+        let y = rect.center().y;
+        if row.expand.is_some() {
+            painter.text(
+                egui::pos2(rect.left() + name_x - caret * 0.5, y),
+                egui::Align2::CENTER_CENTER,
+                if open {
+                    egui_phosphor::regular::CARET_DOWN
+                } else {
+                    egui_phosphor::regular::CARET_RIGHT
+                },
+                body.clone(),
+                theme::muted(),
+            );
+        }
+        let place = |x: f32, galley: &std::sync::Arc<egui::Galley>| {
+            egui::pos2(rect.left() + x, y - galley.size().y / 2.0)
+        };
+        painter.galley(place(name_x, &name), name.clone(), row.name_color);
+        if let Some(value) = value {
+            painter.galley(place(value_x, &value), value.clone(), theme::text());
+        }
+        if let Some(note) = note {
+            painter.galley(place(note_x, &note), note.clone(), theme::muted());
+        }
+    }
+    (response, open)
+}
+
+/// A top-level section of the tree (Arguments, Phases); true when open.
+fn section_row(ui: &mut egui::Ui, id: egui::Id, title: &str, default_open: bool) -> bool {
+    let (response, open) = tree_row(
+        ui,
+        Row {
+            id,
+            depth: 0,
+            expand: Some(default_open),
+            name: title,
+            name_color: theme::heading(),
+            value: None,
+            note: None,
+            selected: false,
+        },
+    );
+    // A section has nothing to select: a click anywhere opens or closes it.
+    if response.clicked() && !response.double_clicked() {
+        let caret = egui::TextStyle::Body.resolve(ui.style()).size + 2.0;
+        let on_caret = response
+            .interact_pointer_pos()
+            .is_some_and(|pos| pos.x < response.rect.left() + caret);
+        if !on_caret {
+            let open = !open;
+            ui.data_mut(|data| data.insert_temp(id, open));
+            return open;
+        }
+    }
+    open
+}
+
+/// A remark in the tree, such as "Arguments unavailable".
+fn note_row(ui: &mut egui::Ui, depth: usize, text: &str, color: Color32) {
+    tree_row(
+        ui,
+        Row {
+            id: ui.id().with(("note", depth, text)),
+            depth,
+            expand: None,
+            name: text,
+            name_color: color,
+            value: None,
+            note: None,
+            selected: false,
+        },
+    );
+}
+
+fn warning_line(ui: &mut egui::Ui, text: &str) {
+    ui.add(
+        egui::Label::new(
+            RichText::new(format!("{} {text}", egui_phosphor::regular::WARNING))
+                .color(theme::warn()),
+        )
+        .wrap(),
+    );
+}
+
+/// A value large, in its syntax color, with its number when it is a name.
+fn value_line(ui: &mut egui::Ui, shown: &values::Shown) {
+    let size = egui::TextStyle::Body.resolve(ui.style()).size;
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            RichText::new(&shown.text)
+                .font(theme::mono(size + 1.0))
+                .color(theme::value(shown.kind)),
+        );
+        if let Some(raw) = &shown.raw {
+            ui.label(
+                RichText::new(format!("= {raw}"))
+                    .font(theme::mono(size - 1.0))
+                    .color(theme::muted()),
+            );
+        }
+    });
+}
+
+/// The number of arguments syscall `nr` takes (six when unknown).
+pub(crate) fn arg_count(nr: u64) -> usize {
+    syscalls::syscall(nr)
+        .and_then(|info| info.arg_count)
+        .map_or(6, usize::from)
+        .min(6)
+}
+
+/// The captured data an argument points to, when one field holds it whole
+/// (a path, a buffer): exit data first, as it is what the call returned.
+fn argument_data<'a>(fields: &[(u8, &'a FieldSummary)]) -> Option<(u8, &'a FieldSummary)> {
+    let top_level = |field: &FieldSummary| {
+        let key = match field.key.strip_prefix("arg") {
+            Some(rest) if rest.as_bytes().first().is_some_and(u8::is_ascii_digit) => {
+                rest.get(2..).unwrap_or_default()
+            }
+            _ => field.key.as_str(),
+        };
+        !key.contains(['.', '['])
+    };
+    [2, 1].into_iter().find_map(|phase| {
+        fields
+            .iter()
+            .copied()
+            .find(|(owner, field)| {
+                *owner == phase && top_level(field) && !covered_preview(field).is_empty()
+            })
+    })
+}
+
+/// "832 bytes", or "4 of 8 bytes" when only part was captured.
+pub(crate) fn capture_size(field: &FieldSummary) -> String {
+    match field.logical_len {
+        Some(logical) if logical != field.captured_len => {
+            format!("{} of {logical} bytes", field.captured_len)
+        }
+        _ => format!("{} bytes", field.captured_len),
+    }
+}
+
+fn capture_color(field: &FieldSummary) -> Color32 {
+    if field.complete {
+        theme::value(ValueKind::Number)
+    } else {
+        theme::warn()
+    }
+}
+
+/// Guest time in seconds, to the microsecond.
+pub(crate) fn seconds(timestamp_ns: u64) -> String {
+    format!(
+        "{}.{:06}",
+        timestamp_ns / 1_000_000_000,
+        timestamp_ns % 1_000_000_000 / 1_000
+    )
 }
 
 /// The right-click menu of a captured field; true when the user asked to
@@ -778,12 +1400,7 @@ pub(crate) fn incomplete_reason(field: &FieldSummary) -> String {
 /// "Captured bytes (N bytes)"; an incomplete capture also says how much of
 /// the object it holds and why it stopped.
 pub(crate) fn capture_summary(field: &FieldSummary) -> String {
-    let count = match field.logical_len {
-        Some(logical) if logical != field.captured_len => {
-            format!("{} of {logical} bytes", field.captured_len)
-        }
-        _ => format!("{} bytes", field.captured_len),
-    };
+    let count = capture_size(field);
     if field.complete {
         format!("Captured bytes ({count})")
     } else {
@@ -960,131 +1577,172 @@ pub(crate) fn next_range(field: &FieldSummary, offset: u64) -> Option<(u64, u64)
         .min_by_key(|(offset, _)| *offset)
 }
 
-fn ascii(data: &[u8]) -> String {
-    data.iter()
-        .map(|byte| {
-            if byte.is_ascii_graphic() || *byte == b' ' {
-                char::from(*byte)
-            } else {
-                '.'
-            }
-        })
-        .collect()
-}
-
+/// A short form of a captured field: a socket address decoded, text quoted
+/// (without its NUL terminator), other bytes in hex; "..." when the field
+/// holds more than shown.
 pub(crate) fn preview(field: &FieldSummary) -> String {
     let data = covered_preview(field);
-    let data = &data[..data.len().min(48)];
-    let printable = data
+    if data.is_empty() {
+        return "uncaptured".into();
+    }
+    if field.key.contains("addr") {
+        if let Some(address) = values::sockaddr(data) {
+            return address;
+        }
+    }
+    let shown = &data[..data.len().min(48)];
+    let printable = shown
         .iter()
         .all(|byte| byte.is_ascii_graphic() || matches!(*byte, b' ' | b'\n' | b'\r' | b'\t' | 0));
     let text = if printable {
-        format!(
-            "\"{}\"",
-            data.iter()
-                .flat_map(|byte| char::from(*byte).escape_default())
-                .collect::<String>()
-        )
+        values::quoted(shown)
     } else {
-        data.iter()
+        shown
+            .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<Vec<_>>()
             .join(" ")
     };
-    let suffix = if field.logical_len.is_some_and(|len| len > data.len() as u64)
-        || field.captured_len > data.len() as u64
-    {
-        "..."
+    let more = field
+        .logical_len
+        .is_some_and(|len| len > shown.len() as u64)
+        || field.captured_len > shown.len() as u64;
+    if more {
+        format!("{text}...")
     } else {
-        ""
-    };
-    if data.is_empty() {
-        "uncaptured".into()
-    } else {
-        format!("{text}{suffix}")
+        text
     }
 }
 
-pub(crate) fn info(invocation: &InvocationSummary) -> String {
+/// How a piece of a trace line is colored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Tone {
+    /// Argument names and separators.
+    Label,
+    Value(ValueKind),
+    /// Missing phases, incomplete captures.
+    Note,
+}
+
+impl Tone {
+    pub(crate) fn color(self) -> Color32 {
+        match self {
+            Tone::Label => theme::muted(),
+            Tone::Value(kind) => theme::value(kind),
+            Tone::Note => theme::warn(),
+        }
+    }
+}
+
+/// The Info column of a call, strace-like: each argument by meaning
+/// (`fd=3 buf="..." count=832`), the data captured behind a pointer in
+/// place of its address, other captured objects, then remarks.
+pub(crate) fn info_parts(invocation: &InvocationSummary) -> Vec<(String, Tone)> {
     let Some(event) = representative(invocation) else {
-        return "Missing phases".into();
+        return vec![("Missing phases".into(), Tone::Note)];
     };
-    let args = invocation.entry.as_ref().and_then(|event| event.args);
-    let result = invocation.exit.as_ref().and_then(|event| event.result);
-    let fields = invocation
+    let nr = event.syscall_nr;
+    let args = invocation
+        .entry
+        .as_ref()
+        .and_then(|event| event.args)
+        .or_else(|| invocation.exit.as_ref().and_then(|event| event.args));
+    let fields: Vec<(u8, &FieldSummary)> = invocation
         .entry
         .iter()
         .chain(invocation.exit.iter())
-        .flat_map(|event| event.fields.iter());
-    let mut content = match (event.syscall_nr, args) {
-        (0 | 1 | 44 | 45, Some(args)) => format!(
-            "fd={} requested={} returned={}",
-            args[0],
-            args[2],
-            result
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| "pending".into())
-        ),
-        (19 | 20, Some(args)) => format!(
-            "fd={} iov_count={} returned={}",
-            args[0],
-            args[2],
-            result
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| "pending".into())
-        ),
-        (3 | 5 | 16 | 42 | 43 | 49 | 50, Some(args)) => format!("fd={}", args[0]),
-        (41, Some(args)) => format!("domain={} type={} protocol={}", args[0], args[1], args[2]),
-        (60 | 231, Some(args)) => format!("status={}", args[0]),
-        (62, Some(args)) => format!("pid={} signal={}", args[0], args[1]),
-        (9..=11, Some(args)) => format!("address={:#x} length={}", args[0], args[1]),
-        _ => String::new(),
+        .flat_map(|event| event.fields.iter().map(|field| (event.phase, field)))
+        .collect();
+    let mut parts = Vec::new();
+    let mut shown_fields = Vec::new();
+    let space = |parts: &mut Vec<(String, Tone)>| {
+        if !parts.is_empty() {
+            parts.push((" ".into(), Tone::Label));
+        }
     };
-    for field in fields
-        .filter(|field| {
-            field.key.contains("path")
-                || field.key.contains("data")
-                || field.key.contains("buf")
-                || field.key.contains("address")
-                || field.key.contains("argv")
+    if let Some(args) = args {
+        for index in 0..arg_count(nr) {
+            space(&mut parts);
+            parts.push((format!("{}=", argument_name(nr, index)), Tone::Label));
+            let owned: Vec<_> = fields
+                .iter()
+                .copied()
+                .filter(|(_, field)| field_argument(nr, &field.key) == Some(index))
+                .collect();
+            match argument_data(&owned) {
+                Some((_, field)) => {
+                    shown_fields.push(field.object_id);
+                    parts.push((preview(field), Tone::Value(ValueKind::Text)));
+                }
+                None => {
+                    let shown = values::argument(nr, index, &args);
+                    parts.push((shown.text, Tone::Value(shown.kind)));
+                }
+            }
+        }
+    }
+    for (_, field) in fields
+        .iter()
+        .filter(|(_, field)| {
+            !shown_fields.contains(&field.object_id)
+                && (field.key.contains("path")
+                    || field.key.contains("data")
+                    || field.key.contains("buf")
+                    || field.key.contains("address")
+                    || field.key.contains("argv"))
         })
         .take(3)
     {
-        if !content.is_empty() {
-            content.push_str("; ");
-        }
-        content.push_str(&format!("{}={}", field.key, preview(field)));
+        space(&mut parts);
+        parts.push((format!("{}=", field.key), Tone::Label));
+        parts.push((preview(field), Tone::Value(ValueKind::Text)));
     }
+    let mut notes = Vec::new();
     if invocation.entry.is_none() {
-        content.push_str("; missing Entry");
+        notes.push("missing Entry".to_owned());
     }
     if invocation.exit.is_none() {
-        content.push_str("; missing Exit");
+        notes.push("missing Exit".to_owned());
     }
     if !invocation.async_events.is_empty() {
-        content.push_str("; Async: ");
-        content.push_str(
-            &invocation
+        notes.push(format!(
+            "Async: {}",
+            invocation
                 .async_events
                 .iter()
                 .take(3)
                 .map(async_stage)
                 .collect::<Vec<_>>()
-                .join(", "),
-        );
+                .join(", ")
+        ));
     }
     for event in invocation.entry.iter().chain(invocation.exit.iter()) {
         if !event.complete || !event.issues.is_empty() {
-            content.push_str(&format!(
-                "; incomplete {}",
+            let mut note = format!(
+                "incomplete {}",
                 if event.phase == 2 { "Exit" } else { "Entry" }
-            ));
+            );
             for issue in event.issues.iter().take(2) {
-                content.push_str(&format!(": {}", issue.chars().take(96).collect::<String>()));
+                note.push_str(&format!(": {}", issue.chars().take(96).collect::<String>()));
             }
+            notes.push(note);
         }
     }
-    content.trim_start_matches("; ").to_owned()
+    if !notes.is_empty() {
+        if !parts.is_empty() {
+            parts.push(("; ".into(), Tone::Label));
+        }
+        parts.push((notes.join("; "), Tone::Note));
+    }
+    parts
+}
+
+/// The Info column as plain text (filtering, sorting, copying).
+pub(crate) fn info(invocation: &InvocationSummary) -> String {
+    info_parts(invocation)
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect()
 }
 
 pub(crate) fn numeric_formats(value: u64, width: usize) -> Vec<(&'static str, String)> {

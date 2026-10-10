@@ -11,6 +11,7 @@ mod terminal;
 mod theme;
 mod tools_window;
 mod trace;
+mod values;
 mod workspace;
 
 use antinomie_monitor_core::{Backend, BackendOptions, Command, Notification};
