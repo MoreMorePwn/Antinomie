@@ -301,6 +301,7 @@ mod tests {
             "scripts/build-monitor-kernel.sh",
             "scripts/build-monitor-image.py",
             "scripts/build-debian-image.py",
+            "scripts/make-kernel-symbols.py",
             ADAPTER,
             "src/debian/linux_6.12.94-1.dsc",
             "src/debian/linux_6.12.94-1.debian.tar.xz",
