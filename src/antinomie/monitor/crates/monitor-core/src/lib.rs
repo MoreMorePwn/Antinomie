@@ -9,6 +9,7 @@ mod builder_vm;
 pub mod capture;
 pub mod capture_processes;
 mod control;
+pub mod dependencies;
 mod display;
 pub mod distribution;
 mod execution;

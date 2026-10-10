@@ -10,6 +10,12 @@ Needs new bases for the transport settings and Never drop mode (BusyBox and
 Debian 13 (GNOME) for Antinomie 0.3.0). Bases for 0.2.0 and 0.1.0 still run,
 with 256 KiB buffers that drop when full.
 
+- **App dependencies.** Runtime requirements are checked in the background at
+  startup, including QEMU's GTK display support. Missing requirements open
+  **Tools → App dependencies** with install commands and a **Check again**
+  button; affected actions are blocked while saved recordings stay available.
+  VM startup rechecks requirements before allocating RAM or starting QEMU.
+
 - **Capture All by process.** A capture lists the processes it observed as a
   tree, named after the program each one executed (or its command name when
   it was already running), with call counts and exit codes. Selecting one

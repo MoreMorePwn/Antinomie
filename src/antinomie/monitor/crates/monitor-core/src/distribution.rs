@@ -210,6 +210,7 @@ pub(crate) fn spawn_download(
     url: &str,
     destination: &Path,
 ) -> Result<std::process::Child, String> {
+    crate::dependencies::require_tool(curl, "curl")?;
     ProcessCommand::new(curl)
         // A stalled mirror (under 1 KiB/s for a minute) fails over to a retry.
         .args([

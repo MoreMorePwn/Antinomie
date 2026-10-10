@@ -154,6 +154,7 @@ pub struct MonitorApp {
     build_open: bool,
     about_open: bool,
     tools_open: bool,
+    dependencies: crate::dependencies_window::DependenciesWindow,
     /// Download base: also list bases for earlier Antinomie versions.
     show_older_bases: bool,
     build_wizard: build_wizard::BuildWizard,
@@ -247,6 +248,7 @@ impl MonitorApp {
         };
         let exec = ExecRequest::default();
         let env = exec.env.join("\n");
+        let dependencies = crate::dependencies_window::DependenciesWindow::start(&options);
         let mut app = Self {
             backend,
             snapshot: Snapshot::default(),
@@ -269,6 +271,7 @@ impl MonitorApp {
             build_open: false,
             about_open: false,
             tools_open: false,
+            dependencies,
             show_older_bases: false,
             build_wizard: build_wizard::BuildWizard::default(),
             confirm: None,
@@ -347,6 +350,15 @@ impl MonitorApp {
     }
 
     fn send(&mut self, command: Command) {
+        if let Err(error) = self
+            .dependencies
+            .require(&command, &self.options, &self.snapshot)
+        {
+            self.dependencies.open = true;
+            self.status = error.clone();
+            self.log("ERROR", error);
+            return;
+        }
         let launch = matches!(&command, Command::Execute(_));
         let observer = matches!(
             &command,
@@ -688,9 +700,17 @@ impl MonitorApp {
             return Some(error);
         }
         if requires_credentials {
+            if let Err(error) = self.dependencies.require_dependencies(&[
+                antinomie_monitor_core::dependencies::Dependency::QemuImg,
+                antinomie_monitor_core::dependencies::Dependency::DebianAccount,
+            ]) {
+                return Some(error);
+            }
             return self.credentials.credentials().err();
         }
-        None
+        self.dependencies
+            .require_dependencies(&[antinomie_monitor_core::dependencies::Dependency::QemuImg])
+            .err()
     }
 
     fn save_validation_error(&self, vm: &VmConfig) -> Option<String> {
@@ -1864,6 +1884,10 @@ impl MonitorApp {
                         }
                         if ui.button("Analysis tools…").clicked() {
                             self.tools_open = true;
+                            ui.close_menu();
+                        }
+                        if ui.button("App dependencies…").clicked() {
+                            self.dependencies.open = true;
                             ui.close_menu();
                         }
                         ui.separator();
@@ -3676,6 +3700,7 @@ impl MonitorApp {
     }
 
     fn draw(&mut self, ctx: &egui::Context) {
+        self.dependencies.show(ctx, &self.options);
         self.menus(ctx);
         self.toolbar(ctx);
         self.health(ctx);
@@ -4312,6 +4337,7 @@ impl MonitorApp {
 
 impl eframe::App for MonitorApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.dependencies.poll();
         self.drain();
         self.flush_archive();
         self.drain_archive();
@@ -5104,6 +5130,22 @@ fn numeric<T: egui::emath::Numeric>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_startup_dependency_blocks_a_command_before_submission() {
+        let mut app = app();
+        app.dependencies = crate::dependencies_window::DependenciesWindow::missing_for_test(
+            antinomie_monitor_core::dependencies::Dependency::Gtk,
+        );
+        app.send(Command::Start {
+            vm_id: "test".into(),
+        });
+        assert!(app.submitted.is_empty());
+        assert!(app.dependencies.open);
+        assert!(app.status.contains("missing test dependency"));
+        app.send(Command::Close);
+        assert!(matches!(app.submitted.last(), Some(Command::Close)));
+    }
     use antinomie_monitor_core::RunIn;
 
     fn app() -> MonitorApp {
@@ -5132,6 +5174,7 @@ mod tests {
             build_open: false,
             about_open: false,
             tools_open: false,
+            dependencies: crate::dependencies_window::DependenciesWindow::ready_for_test(),
             show_older_bases: false,
             build_wizard: build_wizard::BuildWizard::default(),
             name_action: None,

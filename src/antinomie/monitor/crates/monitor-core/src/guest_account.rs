@@ -107,7 +107,9 @@ impl GuestAccount {
         if FAIL_PROVISION.with(|fail| fail.replace(false)) {
             return Err("injected offline provisioning failure".into());
         }
-        self.provision_with(disk, Path::new("virt-customize"))
+        let executable =
+            crate::dependencies::require_tool(Path::new("virt-customize"), "libguestfs-tools")?;
+        self.provision_with(disk, &executable)
     }
     fn provision_with(&self, disk: &Path, executable: &Path) -> Result<(), String> {
         self.validate()?;

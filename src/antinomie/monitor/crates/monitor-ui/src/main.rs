@@ -3,6 +3,7 @@ mod app;
 mod archive;
 mod build_wizard;
 mod data_view;
+mod dependencies_window;
 mod folders;
 mod network_view;
 mod runs;
@@ -36,6 +37,9 @@ struct Arguments {
     tcg: bool,
     #[arg(long)]
     smoke_exit: bool,
+    /// Check runtime requirements without opening the UI or modifying app data.
+    #[arg(long)]
+    check_dependencies: bool,
     /// Import a verified boot bundle into the durable base catalog without opening the UI.
     #[arg(long)]
     install_base: Option<PathBuf>,
@@ -60,6 +64,16 @@ fn main() -> eframe::Result<()> {
     }
     options.bootstrap_gpa = args.bootstrap_gpa;
     options.force_tcg = args.tcg;
+    if args.check_dependencies {
+        let report = antinomie_monitor_core::dependencies::check(&options);
+        for check in &report.checks {
+            match &check.problem {
+                Some(problem) => println!("{}: {problem}. {}", check.name, check.hint),
+                None => println!("{}: ready", check.name),
+            }
+        }
+        std::process::exit(i32::from(report.has_missing()));
+    }
     if let Some(directory) = args.install_base {
         return install_base(options, directory).map_err(|message| {
             eframe::Error::AppCreation(Box::new(std::io::Error::other(message)))

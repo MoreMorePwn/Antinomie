@@ -39,7 +39,9 @@ read, and anything the app could not decode or lost is marked as such.
 ## Requirements
 
 - Linux x86-64 host (WSL2 works with an X11 display)
-- QEMU (`qemu-system-x86_64`); KVM (`/dev/kvm`) strongly recommended
+- QEMU (`qemu-system-x86_64`, `qemu-img`) with its GTK display backend;
+  on Debian/Ubuntu install `qemu-system-x86 qemu-utils qemu-system-gui`.
+  KVM (`/dev/kvm`) strongly recommended; TCG works without it
 - Rust to build the app; building kernels and bases needs the tools listed in
   [CONTRIBUTING.md](CONTRIBUTING.md)
 - Static analysis runs in a bubblewrap sandbox (`bwrap`). Disassembly, rules
@@ -61,6 +63,15 @@ Your bases, VM disks and recordings are kept in `~/antinomie`. The app's
 version is in its title bar and **Help > About Antinomie**; see
 [CHANGELOG.md](CHANGELOG.md) and the versioning rules in
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning).
+
+At startup, Antinomie checks its runtime dependencies in the background and
+shows **Tools → App dependencies** when something is missing. The window lists
+the affected actions and package commands; install the missing packages, then
+select **Check again**. VM startup also checks QEMU's actual GTK support, so a
+headless-only QEMU install is caught before a VM starts. Missing dependencies
+block the actions that need them; saved recordings remain available. Build
+tools and optional analysis tools have separate checks in their own dialogs.
+For a terminal-only report, run `antinomie --check-dependencies`.
 
 ## Using the app
 

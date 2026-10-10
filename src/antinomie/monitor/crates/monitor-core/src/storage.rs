@@ -1148,6 +1148,7 @@ pub(crate) fn create_overlay(
     disk_gib: u32,
     bundle: &Bundle,
 ) -> Result<(), String> {
+    crate::dependencies::require_tool(&options.qemu_img, "qemu-utils")?;
     bundle.verify_installed()?;
     validate_disk_chain(options, &bundle.base_disk, None)?;
     let disk = dir.join("disk.qcow2");
@@ -1301,6 +1302,7 @@ pub(crate) fn validate_disk_chain(
     disk: &Path,
     expected_base: Option<&Path>,
 ) -> Result<(), String> {
+    crate::dependencies::require_tool(&options.qemu_img, "qemu-utils")?;
     let output = Command::new(&options.qemu_img)
         .args(["info", "-f", "qcow2", "--backing-chain", "--output=json"])
         .arg(disk)

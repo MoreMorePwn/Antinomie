@@ -614,6 +614,7 @@ fn spawn_worker_binary(
     executable: &Path,
     tools: Option<&Path>,
 ) -> Result<Child, String> {
+    crate::dependencies::require_tool(Path::new("/usr/bin/bwrap"), "bubblewrap")?;
     if CLEANUP_PENDING.load(Ordering::Acquire) {
         return Err("a previous worker still awaits reap; isolation worker unavailable".into());
     }

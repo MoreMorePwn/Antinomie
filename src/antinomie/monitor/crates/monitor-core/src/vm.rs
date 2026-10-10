@@ -311,6 +311,7 @@ impl VmProcess {
         bundle: &Bundle,
     ) -> Result<Self, String> {
         vm.launch.validate_for(options)?;
+        crate::dependencies::require_vm(options, &vm.launch)?;
         crate::storage::validate_boot_display(vm, bundle)?;
         let initial_size = initial_size(options, &vm.launch)
             .map(|dimensions| {
