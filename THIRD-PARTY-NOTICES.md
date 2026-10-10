@@ -78,7 +78,11 @@ this build. Its upstream code is public domain; see
 inventory the actual library shipped and the crates' transitive dependencies.
 The core and UI use `vt100 0.16.2` for terminal persistence and scrollback,
 including corrected history offsets and cursor restoration after resizing;
-the version update does not change its upstream MIT terms.
+the version update does not change its upstream MIT terms. The copyright and
+permission notices for `vt100` and its updated parser dependency `vte 0.15.0`
+(MIT option selected) are copied from the locked crate distributions in
+[vt100-MIT.txt](LICENSES/third-party/vt100-MIT.txt) and
+[vte-MIT.txt](LICENSES/third-party/vte-MIT.txt).
 
 The launch module directly uses already-locked `x11rb 0.13.2` and `rustix 1.1.5`
 for bounded X11/XWayland window sizing and deadline-aware polling. MIT options
