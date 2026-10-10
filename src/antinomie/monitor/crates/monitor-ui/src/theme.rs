@@ -111,6 +111,68 @@ pub fn syscall_tint(
     })
 }
 
+/// Row colors of the network packet list, in the order the rules apply
+/// (Wireshark's default coloring rules, in dark shades).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PacketColor {
+    TcpReset,
+    TcpSynFin,
+    Http,
+    Tls,
+    Dns,
+    Dhcp,
+    Arp,
+    Icmp,
+    Tcp,
+    Udp,
+}
+
+impl PacketColor {
+    pub const ALL: [PacketColor; 10] = [
+        PacketColor::TcpReset,
+        PacketColor::TcpSynFin,
+        PacketColor::Http,
+        PacketColor::Tls,
+        PacketColor::Dns,
+        PacketColor::Dhcp,
+        PacketColor::Arp,
+        PacketColor::Icmp,
+        PacketColor::Tcp,
+        PacketColor::Udp,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            PacketColor::TcpReset => "TCP reset (RST)",
+            PacketColor::TcpSynFin => "TCP open or close (SYN, FIN)",
+            PacketColor::Http => "HTTP",
+            PacketColor::Tls => "TLS",
+            PacketColor::Dns => "DNS",
+            PacketColor::Dhcp => "DHCP",
+            PacketColor::Arp => "ARP",
+            PacketColor::Icmp => "ICMP, ICMPv6",
+            PacketColor::Tcp => "Other TCP",
+            PacketColor::Udp => "Other UDP",
+        }
+    }
+
+    /// Dark shades that keep the normal text readable.
+    pub fn tint(self) -> Color32 {
+        match self {
+            PacketColor::TcpReset => Color32::from_rgb(112, 34, 40),
+            PacketColor::TcpSynFin => Color32::from_rgb(66, 66, 72),
+            PacketColor::Http => Color32::from_rgb(36, 80, 50),
+            PacketColor::Tls => Color32::from_rgb(74, 48, 100),
+            PacketColor::Dns => Color32::from_rgb(22, 74, 80),
+            PacketColor::Dhcp => Color32::from_rgb(80, 74, 26),
+            PacketColor::Arp => Color32::from_rgb(100, 64, 26),
+            PacketColor::Icmp => Color32::from_rgb(98, 38, 78),
+            PacketColor::Tcp => Color32::from_rgb(46, 52, 96),
+            PacketColor::Udp => Color32::from_rgb(24, 60, 102),
+        }
+    }
+}
+
 pub fn frame(fill: Color32) -> egui::Frame {
     egui::Frame::new()
         .fill(fill)
@@ -134,6 +196,16 @@ mod tests {
         let distinct: std::collections::HashSet<_> = tints.iter().collect();
         assert_eq!(distinct.len(), tints.len());
         // Dark enough that TEXT stays readable on every tint.
+        for tint in tints {
+            assert!(tint.r().max(tint.g()).max(tint.b()) <= 120, "{tint:?}");
+        }
+    }
+
+    #[test]
+    fn packet_colors_are_distinct_and_dark() {
+        let tints: std::collections::HashSet<_> =
+            PacketColor::ALL.iter().map(|color| color.tint()).collect();
+        assert_eq!(tints.len(), PacketColor::ALL.len());
         for tint in tints {
             assert!(tint.r().max(tint.g()).max(tint.b()) <= 120, "{tint:?}");
         }

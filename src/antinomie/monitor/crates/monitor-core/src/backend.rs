@@ -1837,6 +1837,9 @@ impl Worker {
                 {
                     self.snapshot.last_error = Some(e);
                 }
+                if let Err(e) = end_network_capture(&mut self.snapshot) {
+                    self.snapshot.last_error = Some(e);
+                }
                 self.snapshot.active_vm = None;
                 self.snapshot.state = VmState::Stopped;
                 self.publish();
@@ -2376,6 +2379,8 @@ impl Worker {
                 directory.display()
             )),
             Command::Start { vm_id } => self.start(&vm_id),
+            Command::StartNetworkCapture => self.start_network_capture(),
+            Command::StopNetworkCapture => self.stop_network_capture(),
             Command::Stop => {
                 self.stop()?;
                 Ok("VM stopped; capture finalized".into())
@@ -2496,7 +2501,7 @@ impl Worker {
         self.snapshot.capture_events.clear();
         self.snapshot.process_page = None;
         self.snapshot.boot_id = None;
-        self.snapshot.network_pcap = None;
+        self.snapshot.network_capture = None;
         self.publish();
         self.stopping.store(false, Ordering::Relaxed);
         let result = (|| -> Result<Session, String> {
@@ -2505,15 +2510,9 @@ impl Worker {
                 .recording_directory
                 .join("boots")
                 .join(&boot_id);
-            // QEMU records the VM's network traffic into the boot recording.
-            let network_pcap = vm.nat.then(|| boot_dir.join(crate::network::PCAP_FILE));
-            if network_pcap.is_some() {
-                storage::private_dir(&boot_dir).map_err(|e| e.to_string())?;
-            }
-            let process = VmProcess::launch(&self.options, &vm, &bundle, network_pcap.as_deref())?;
+            let process = VmProcess::launch(&self.options, &vm, &bundle)?;
             self.snapshot.serial_log = Some(process.runtime_dir.join("serial.log"));
             self.snapshot.boot_id = Some(boot_id.clone());
-            self.snapshot.network_pcap = network_pcap;
             let capture_dir = boot_dir.join("unassigned");
             let mut capture =
                 RawCapture::new(capture_dir.clone(), self.options.capture_quota_size)?;
@@ -2587,6 +2586,64 @@ impl Worker {
                 Err(e)
             }
         }
+    }
+    /// Attach a filter-dump to the VM's network interface: QEMU writes every
+    /// frame to a new pcap in the boot recording, outside the guest.
+    fn start_network_capture(&mut self) -> Result<String, String> {
+        let session = self.session.as_ref().ok_or("VM is stopped")?;
+        if !session.vm.nat {
+            return Err(
+                "this VM has no network: turn on NAT network in its settings and restart it".into(),
+            );
+        }
+        if self.snapshot.network_capture.is_some() {
+            return Err("a network capture is already running".into());
+        }
+        let boot_dir = crate::locations::locations(&self.options, &session.vm.id)?
+            .recording_directory
+            .join("boots")
+            .join(&session.boot_id);
+        let capture = crate::network::NetworkCapture::new(
+            &boot_dir,
+            &session.boot_id,
+            &storage::unique_id(),
+            unix_ms(),
+        );
+        let dir = capture.file.parent().ok_or("network capture folder")?;
+        storage::private_dir(dir).map_err(|e| format!("network capture folder: {e}"))?;
+        // QEMU truncates the file it is given and keeps its mode: private.
+        use std::os::unix::fs::OpenOptionsExt;
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&capture.file)
+            .map_err(|e| format!("network capture file: {e}"))?;
+        // The summary first, so an app that ends mid-capture still lists it.
+        crate::network::save_summary(&capture)?;
+        if let Err(error) = crate::network::filter_dump_add(&capture)
+            .and_then(|command| session.process.qmp(&command))
+        {
+            let _ = fs::remove_file(capture.summary_path());
+            let _ = fs::remove_file(&capture.file);
+            return Err(format!("network capture: {error}"));
+        }
+        self.snapshot.network_capture = Some(capture);
+        Ok("network capture started".into())
+    }
+    fn stop_network_capture(&mut self) -> Result<String, String> {
+        let session = self.session.as_ref().ok_or("VM is stopped")?;
+        let capture = self
+            .snapshot
+            .network_capture
+            .as_ref()
+            .ok_or("no network capture is running")?;
+        session
+            .process
+            .qmp(&crate::network::filter_dump_del(capture))
+            .map_err(|error| format!("network capture stop: {error}"))?;
+        let packets = end_network_capture(&mut self.snapshot)?;
+        Ok(format!("network capture stopped: {packets} packets"))
     }
     fn stop(&mut self) -> Result<(), String> {
         let Some(mut session) = self.session.take() else {
@@ -2714,6 +2771,9 @@ impl Worker {
             "unexpected-exit"
         };
         if let Err(e) = session.finalize(final_state, &mut self.snapshot) {
+            issues.push(e);
+        }
+        if let Err(e) = end_network_capture(&mut self.snapshot) {
             issues.push(e);
         }
         self.snapshot.active_vm = None;
@@ -3349,6 +3409,32 @@ fn decode_stats(reply: &[u8]) -> Result<[u64; 10], String> {
         *value = u64_at(reply, n * 8).map_err(|e| e.to_string())?;
     }
     Ok(counters)
+}
+
+/// Wall clock in milliseconds since the Unix epoch.
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |time| time.as_millis() as u64)
+}
+
+/// Record the end of the running network capture (stopped over QMP, or its
+/// VM gone) with its packet count. Returns the packets.
+fn end_network_capture(snapshot: &mut Snapshot) -> Result<u64, String> {
+    let Some(mut capture) = snapshot.network_capture.take() else {
+        return Ok(0);
+    };
+    capture.stopped_ms = Some(unix_ms());
+    let counted = crate::network::count_packets(&capture.file);
+    if let Ok((packets, bytes)) = counted {
+        capture.packets = Some(packets);
+        capture.bytes = Some(bytes);
+    }
+    crate::network::save_summary(&capture)
+        .map_err(|error| format!("network capture summary: {error}"))?;
+    counted
+        .map(|(packets, _)| packets)
+        .map_err(|error| format!("network capture count: {error}"))
 }
 
 fn remaining_request_budget(deadline: Instant, maximum: Duration) -> Duration {
