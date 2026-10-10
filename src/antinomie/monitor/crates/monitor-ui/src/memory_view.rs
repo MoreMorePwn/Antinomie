@@ -341,6 +341,7 @@ impl MemoryView {
             return;
         }
         self.selected = id;
+        self.status = None;
         self.reload_runs();
         let newest = self.runs.first().map(|run| run.id.clone());
         self.open_run(newest);
@@ -735,6 +736,7 @@ impl MemoryView {
             });
         if done || !open || ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.confirm_delete = None;
+            ctx.request_repaint();
             if done {
                 self.scan(cx.recording_roots);
             }
@@ -1615,6 +1617,7 @@ impl MemoryView {
             || !open
             || ctx.input(|input| input.key_pressed(egui::Key::Escape))
         {
+            ctx.request_repaint();
             if let Some(mut child) = self.import.take().and_then(|import| import.picker) {
                 let _ = child.kill();
                 let _ = child.wait();
