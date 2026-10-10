@@ -39,6 +39,69 @@ impl Panel {
     }
 }
 
+/// Which main tab the bottom Details panel follows: the syscall trace or the
+/// network panel. When only one of them is on screen it wins; when both are
+/// (split or detached), the one clicked last.
+#[derive(Default)]
+pub(crate) struct DetailsFollow {
+    network: bool,
+    /// Pass of the main window in which the trace and the network panel were
+    /// last drawn.
+    drawn: [Option<u64>; 2],
+}
+
+impl DetailsFollow {
+    fn side(panel: &Panel) -> Option<bool> {
+        match panel {
+            Panel::Trace => Some(false),
+            Panel::Network => Some(true),
+            _ => None,
+        }
+    }
+
+    /// `panel` was drawn into `ui` this pass.
+    pub(crate) fn drawn(&mut self, ui: &egui::Ui, panel: &Panel) {
+        let Some(network) = Self::side(panel) else {
+            return;
+        };
+        let now = ui.ctx().cumulative_pass_nr_for(egui::ViewportId::ROOT);
+        self.drawn[usize::from(network)] = Some(now);
+        // Alone on screen: it stays followed after it is hidden again (by
+        // Run History, say).
+        let other = self.drawn[usize::from(!network)];
+        let rect = ui.max_rect();
+        if other.is_none_or(|pass| pass + 1 < now)
+            || ui.input(|input| {
+                input.pointer.any_pressed()
+                    && input
+                        .pointer
+                        .interact_pos()
+                        .is_some_and(|pos| rect.contains(pos))
+            })
+        {
+            self.network = network;
+        }
+    }
+
+    /// The user chose `panel`'s tab.
+    pub(crate) fn chose(&mut self, panel: &Panel) {
+        if let Some(network) = Self::side(panel) {
+            self.network = network;
+        }
+    }
+
+    /// Details show the selected packet rather than the selected syscall.
+    pub(crate) fn network(&self, ctx: &egui::Context) -> bool {
+        let now = ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT);
+        let visible = |side: usize| self.drawn[side].is_some_and(|pass| pass + 1 >= now);
+        match (visible(0), visible(1)) {
+            (true, false) => false,
+            (false, true) => true,
+            _ => self.network,
+        }
+    }
+}
+
 /// Bumped when the default arrangement changes, so a layout saved before the
 /// change is replaced by the new default once. Version 2 also replaces layouts
 /// that closing a detached window had flattened into one tab bar.
@@ -575,6 +638,9 @@ impl TabViewer for Viewer<'_> {
     fn on_tab_button(&mut self, tab: &mut Panel, response: &egui::Response) {
         if response.drag_started_by(egui::PointerButton::Primary) {
             self.layout.drag = Some((tab.clone(), self.surface));
+        }
+        if response.clicked() {
+            self.app.details_follow.chose(tab);
         }
         response.clone().on_hover_text(self.app.panel_title(tab));
     }

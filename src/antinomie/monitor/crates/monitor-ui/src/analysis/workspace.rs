@@ -71,7 +71,11 @@ fn render(
     forced: Option<AnalysisKind>,
 ) -> Option<ReportAction> {
     let Some(report) = report else {
-        ui.label("No retained static analysis report.");
+        if forced.is_some() {
+            ui.label("No retained static analysis report.");
+        } else {
+            super::no_report(ui, true);
+        }
         return None;
     };
     state.bind(&report.id);

@@ -209,6 +209,15 @@ pub(super) fn status(state: CaptureState) -> &'static str {
     }
 }
 
+fn status_color(state: CaptureState) -> egui::Color32 {
+    match state {
+        CaptureState::Unknown => theme::warn(),
+        CaptureState::Active => theme::good(),
+        CaptureState::Stopped => theme::info(),
+        CaptureState::Finalized => theme::muted(),
+    }
+}
+
 pub(super) fn scope(scope: &CaptureScope) -> String {
     match scope {
         CaptureScope::Process { root } => format!("PID {} and future descendants", root.tgid),
@@ -223,7 +232,12 @@ pub(super) fn history(
     font_size: f32,
 ) -> Option<(String, bool)> {
     let mut action = None;
-    let height = (ui.available_height() * 0.58).max(70.0);
+    // The list takes the rows it needs, up to 40% of the height, so the
+    // process tree below gets the rest.
+    let row_height = theme::row_height(font_size);
+    let height = (captures.len().max(2) as f32 * row_height)
+        .min(ui.available_height() * 0.4)
+        .max(row_height * 2.0);
     egui::ScrollArea::horizontal()
         .id_salt("capture_columns")
         .show(ui, |ui| {
@@ -237,15 +251,15 @@ pub(super) fn history(
                 .striped(true)
                 .max_scroll_height(height)
                 .min_scrolled_height(0.0)
-                .header(font_size + 12.0, |mut header| {
+                .header(row_height + 4.0, |mut header| {
                     for label in ["Capture", "State"] {
                         header.col(|ui| {
-                            ui.strong(label);
+                            theme::section(ui, label);
                         });
                     }
                 })
                 .body(|body| {
-                    body.rows(font_size + 14.0, captures.len(), |mut row| {
+                    body.rows(row_height, captures.len(), |mut row| {
                         let capture = &captures[row.index()];
                         row.set_selected(selected == Some(capture.id.as_str()));
                         row.col(|ui| {
@@ -258,9 +272,12 @@ pub(super) fn history(
                         });
                         row.col(|ui| {
                             ui.add(
-                                egui::Label::new(status(capture.state))
-                                    .selectable(false)
-                                    .truncate(),
+                                egui::Label::new(
+                                    RichText::new(status(capture.state))
+                                        .color(status_color(capture.state)),
+                                )
+                                .selectable(false)
+                                .truncate(),
                             )
                             .on_hover_text(status(capture.state));
                         });
@@ -331,8 +348,9 @@ pub(super) enum ProcessSelection {
     Process(u32),
 }
 
-/// The capture's processes as an indented tree (parents before children).
-/// `None` in `selected` means all processes.
+/// The capture's processes as a tree (parents before children, with guide
+/// lines) and their PID, calls and exit status in columns. `None` in
+/// `selected` means all processes.
 pub(super) fn process_tree(
     ui: &mut egui::Ui,
     processes: &[CaptureProcess],
@@ -341,51 +359,168 @@ pub(super) fn process_tree(
 ) -> Option<ProcessSelection> {
     let mut action = None;
     let rows = tree_rows(processes);
+    let guides = tree_guides(&rows);
     ui.horizontal_wrapped(|ui| {
-        ui.strong("Processes");
-        ui.weak(format!(
-            "{} observed",
-            processes.iter().filter(|p| p.packets > 0).count()
-        ));
+        theme::section(ui, "Processes");
+        ui.colored_label(
+            theme::muted(),
+            format!(
+                "{} observed of {}",
+                processes.iter().filter(|p| p.packets > 0).count(),
+                processes.len()
+            ),
+        );
+        if ui
+            .selectable_label(selected.is_none(), "All processes")
+            .clicked()
+        {
+            action = Some(ProcessSelection::All);
+        }
     });
-    if ui
-        .selectable_label(selected.is_none(), "All processes")
-        .clicked()
-    {
-        action = Some(ProcessSelection::All);
-    }
-    let row_height = font_size + 10.0;
-    egui::ScrollArea::vertical()
+    let mono = theme::mono(font_size - 1.0);
+    let char_width = ui.fonts(|fonts| fonts.glyph_width(&mono, '0'));
+    let row_height = theme::row_height(font_size);
+    let indent = 18.0;
+    TableBuilder::new(ui)
         .id_salt("capture_process_tree")
-        .max_height((ui.available_height() - 8.0).max(80.0))
-        .auto_shrink([false, true])
-        .show_rows(ui, row_height, rows.len(), |ui, range| {
-            for (process, depth) in &rows[range] {
-                ui.horizontal(|ui| {
-                    ui.add_space(*depth as f32 * 14.0);
-                    let mut text = RichText::new(process_label(process));
-                    if process.packets == 0 {
-                        text = text.color(theme::muted());
-                    }
-                    let response = ui
-                        .selectable_label(selected == Some(process.pid), text)
-                        .on_hover_text(process_hover(process));
-                    if response.clicked() {
-                        action = Some(ProcessSelection::Process(process.pid));
-                    }
-                    if process.calls > 0 {
-                        ui.weak(format!("{} calls", process.calls));
-                    }
-                    if process.exited {
-                        ui.weak(match process.exit_code {
-                            Some(code) => format!("exited {code}"),
-                            None => "exited".into(),
-                        });
-                    }
+        .sense(egui::Sense::click())
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+        .striped(true)
+        .auto_shrink([false, false])
+        .max_scroll_height(f32::INFINITY)
+        .min_scrolled_height(0.0)
+        .column(Column::remainder().at_least(160.0).clip(true))
+        .column(Column::exact(char_width * 8.0 + 8.0))
+        .column(Column::exact(char_width * 10.0 + 8.0))
+        .column(Column::exact(char_width * 12.0 + 8.0))
+        .header(row_height + 4.0, |mut header| {
+            for label in ["Process", "PID", "Calls", "Exit"] {
+                header.col(|ui| {
+                    theme::section(ui, label);
                 });
             }
+        })
+        .body(|body| {
+            body.rows(row_height, rows.len(), |mut row| {
+                let (process, depth) = rows[row.index()];
+                let continues = &guides[row.index()];
+                row.set_selected(selected == Some(process.pid));
+                row.col(|ui| {
+                    let rect = ui.max_rect();
+                    let stroke = egui::Stroke::new(1.0_f32, theme::muted().gamma_multiply(0.6));
+                    let painter = ui.painter();
+                    for level in 1..=depth {
+                        let x = rect.left() + (level - 1) as f32 * indent + indent * 0.5;
+                        let below = continues[level - 1];
+                        if level < depth {
+                            if below {
+                                painter.vline(x, rect.y_range(), stroke);
+                            }
+                        } else {
+                            let bottom = if below {
+                                rect.bottom()
+                            } else {
+                                rect.center().y
+                            };
+                            painter.vline(x, rect.top()..=bottom, stroke);
+                            painter.hline(x..=x + indent * 0.5, rect.center().y, stroke);
+                        }
+                    }
+                    ui.add_space(depth as f32 * indent + 4.0);
+                    let name = if process.name.is_empty() {
+                        "?"
+                    } else {
+                        process.name.as_str()
+                    };
+                    let color = if process.packets == 0 {
+                        theme::muted()
+                    } else {
+                        theme::value(theme::ValueKind::Name)
+                    };
+                    ui.add(
+                        egui::Label::new(RichText::new(name).color(color))
+                            .selectable(false)
+                            .truncate(),
+                    );
+                    if let Some(exe) = process.exe.as_deref().filter(|exe| {
+                        std::path::Path::new(exe)
+                            .file_name()
+                            .is_none_or(|file| file.to_string_lossy() != name)
+                    }) {
+                        ui.add_space(6.0);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(exe).font(mono.clone()).color(theme::muted()),
+                            )
+                            .selectable(false)
+                            .truncate(),
+                        );
+                    }
+                });
+                row.col(|ui| {
+                    ui.label(
+                        RichText::new(process.pid.to_string())
+                            .font(mono.clone())
+                            .color(theme::value(theme::ValueKind::Number)),
+                    );
+                });
+                row.col(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if process.calls > 0 {
+                            ui.label(
+                                RichText::new(process.calls.to_string())
+                                    .font(mono.clone())
+                                    .color(theme::text()),
+                            );
+                        } else {
+                            ui.label(RichText::new("-").font(mono.clone()).color(theme::muted()));
+                        }
+                    });
+                });
+                row.col(|ui| {
+                    ui.add_space(8.0);
+                    let (text, color) = exit_status(process);
+                    ui.label(RichText::new(text).font(mono.clone()).color(color));
+                });
+                let response = row.response().on_hover_text(process_hover(process));
+                if response.clicked() {
+                    action = Some(ProcessSelection::Process(process.pid));
+                }
+            });
         });
     action
+}
+
+/// Exit status text and color: 0 is good, another code an error.
+fn exit_status(process: &CaptureProcess) -> (String, egui::Color32) {
+    match (process.exited, process.exit_code) {
+        (true, Some(0)) => ("exit 0".into(), theme::good()),
+        (true, Some(code)) => (format!("exit {code}"), theme::error()),
+        (true, None) => ("exited".into(), theme::warn()),
+        (false, _) => (String::new(), theme::muted()),
+    }
+}
+
+/// For each row of `tree_rows`, whether each of its levels (1..=depth)
+/// continues below it: a later sibling of the row (last level) or of its
+/// ancestor at that level, so the guide line goes on down.
+fn tree_guides(rows: &[(&CaptureProcess, usize)]) -> Vec<Vec<bool>> {
+    let mut guides = vec![Vec::new(); rows.len()];
+    // Walking up from the bottom: whether a row at each depth was seen
+    // since the last shallower one.
+    let mut seen: Vec<bool> = Vec::new();
+    for (index, (_, depth)) in rows.iter().enumerate().rev() {
+        let depth = *depth;
+        if seen.len() <= depth {
+            seen.resize(depth + 1, false);
+        }
+        guides[index] = (1..=depth).map(|level| seen[level]).collect();
+        seen[depth] = true;
+        for deeper in seen.iter_mut().skip(depth + 1) {
+            *deeper = false;
+        }
+    }
+    guides
 }
 
 /// Processes in tree order (parents before children) with their depth; a
@@ -485,4 +620,53 @@ fn process_hover(process: &CaptureProcess) -> String {
         process.calls, process.packets
     ));
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn process(pid: u32, parent_pid: u32) -> CaptureProcess {
+        CaptureProcess {
+            pid,
+            parent_pid,
+            name: format!("p{pid}"),
+            ..CaptureProcess::default()
+        }
+    }
+
+    #[test]
+    fn tree_guides_continue_only_to_later_siblings() {
+        // 1
+        // ├ 2
+        // │ └ 4
+        // └ 3
+        //   └ 5
+        let processes = [
+            process(1, 0),
+            process(2, 1),
+            process(3, 1),
+            process(4, 2),
+            process(5, 3),
+        ];
+        let rows = tree_rows(&processes);
+        let order: Vec<_> = rows.iter().map(|(p, depth)| (p.pid, *depth)).collect();
+        assert_eq!(order, [(1, 0), (2, 1), (4, 2), (3, 1), (5, 2)]);
+        assert_eq!(
+            tree_guides(&rows),
+            [
+                vec![],
+                vec![true],
+                vec![true, false],
+                vec![false],
+                vec![false, false],
+            ]
+        );
+        let mut failed = process(9, 1);
+        failed.exited = true;
+        failed.exit_code = Some(2);
+        assert_eq!(exit_status(&failed), ("exit 2".into(), theme::error()));
+        failed.exit_code = Some(0);
+        assert_eq!(exit_status(&failed).1, theme::good());
+    }
 }

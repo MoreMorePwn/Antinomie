@@ -198,6 +198,8 @@ pub struct MonitorApp {
     /// The VM dialog's Telemetry transport window is open.
     transport_open: bool,
     network_view: crate::network_view::NetworkView,
+    /// Whether the Details panel shows the selected packet or syscall.
+    pub(crate) details_follow: crate::workspace::DetailsFollow,
     /// Process tree of a selected capture that is not live (processes.json).
     archived_processes: Option<(String, Result<Vec<CaptureProcess>, String>)>,
     capture_history: Vec<CaptureSummary>,
@@ -313,6 +315,7 @@ impl MonitorApp {
             selected_process: None,
             transport_open: false,
             network_view: Default::default(),
+            details_follow: Default::default(),
             archived_processes: None,
             capture_history: Vec::new(),
             capture_tab: false,
@@ -5095,6 +5098,7 @@ impl MonitorApp {
 
     pub(crate) fn show_panel(&mut self, ui: &mut egui::Ui, panel: &Panel) {
         ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+        self.details_follow.drawn(ui, panel);
         match panel {
             Panel::Trace => self.events(ui),
             Panel::Network => {
@@ -5156,18 +5160,33 @@ impl MonitorApp {
                 self.analysis_action(&key, action);
             }
             Panel::StaticAnalysis => {
-                egui::ComboBox::from_id_salt("analysis-source")
-                    .selected_text(self.selected_analysis.as_deref().unwrap_or("Selected run"))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.selected_analysis, None, "Selected run");
-                        for report in &self.snapshot.analysis_reports {
-                            ui.selectable_value(
-                                &mut self.selected_analysis,
-                                Some(report.id.clone()),
-                                format!("{} ({:?})", report.source_path, report.state),
-                            );
-                        }
-                    });
+                ui.horizontal(|ui| {
+                    ui.colored_label(theme::muted(), "Report");
+                    let current = self.selected_analysis.as_deref().map_or_else(
+                        || "Selected run".to_owned(),
+                        |id| {
+                            self.snapshot
+                                .analysis_reports
+                                .iter()
+                                .find(|report| report.id == id)
+                                .map_or_else(|| id.to_owned(), |report| report.source_path.clone())
+                        },
+                    );
+                    egui::ComboBox::from_id_salt("analysis-source")
+                        .selected_text(current)
+                        .width((ui.available_width() - 8.0).clamp(160.0, 420.0))
+                        .truncate()
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.selected_analysis, None, "Selected run");
+                            for report in &self.snapshot.analysis_reports {
+                                ui.selectable_value(
+                                    &mut self.selected_analysis,
+                                    Some(report.id.clone()),
+                                    format!("{} ({:?})", report.source_path, report.state),
+                                );
+                            }
+                        });
+                });
                 let shown = match self.selected_analysis.as_deref() {
                     Some(id) => Some(id),
                     None => self.selected_run.as_deref().and_then(|id| {
@@ -5227,10 +5246,13 @@ impl MonitorApp {
                     );
                     self.analysis_action("workspace", action);
                 } else {
-                    ui.label("Select a run to view its static analysis report.");
+                    crate::analysis::no_report(ui, false);
                 }
             }
             Panel::RunHistory => self.run_history(ui),
+            Panel::Details if self.details_follow.network(ui.ctx()) => {
+                self.network_view.details(ui, self.settings.font_size)
+            }
             Panel::Details => self.details(ui),
             Panel::Activity => self.activity(ui),
             Panel::Terminal(id) => {
@@ -6678,6 +6700,7 @@ mod tests {
             selected_process: None,
             transport_open: false,
             network_view: Default::default(),
+            details_follow: Default::default(),
             archived_processes: None,
             capture_history: Vec::new(),
             capture_tab: false,
@@ -11436,7 +11459,9 @@ mod tests {
             .collect();
         for expected in [
             "Captures",
-            "2027-01-15 08:00:00 UTC\n2 packets · 6 s · 200 B",
+            "2027-01-15 08:00:00 UTC",
+            "2027-01-15 08:00:00",
+            "2 packets · 6 s · 200 B",
             "DNS",
             "TCP",
             "10.0.2.15",
@@ -11539,6 +11564,100 @@ mod tests {
         app.submitted.clear();
         click_label(&mut app, &ctx, size, &start);
         assert!(app.submitted.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn details_follow_the_network_tab_with_the_selected_packet_layers_and_bytes() {
+        use antinomie_monitor_core::network::NetworkCapture;
+        let root = std::env::temp_dir().join(format!("ant-ui-packet-{}", std::process::id()));
+        let capture = NetworkCapture {
+            stopped_ms: Some(1_800_000_006_000),
+            packets: Some(2),
+            bytes: Some(200),
+            ..NetworkCapture::new(&root.join("boots/b1"), "b1", "one", 1_800_000_000_000)
+        };
+        std::fs::create_dir_all(capture.file.parent().unwrap()).unwrap();
+        std::fs::write(&capture.file, test_pcap()).unwrap();
+        let mut saved = capture.clone();
+        saved.file = capture.file.file_name().unwrap().into();
+        std::fs::write(capture.summary_path(), serde_json::to_vec(&saved).unwrap()).unwrap();
+        let mut app = app();
+        observer_fixture(&mut app);
+        app.snapshot.vms[0].nat = true;
+        app.snapshot
+            .vm_locations
+            .push(antinomie_monitor_core::VmLocations {
+                vm_id: "vm".into(),
+                disk_directory: root.clone(),
+                recording_directory: root.clone(),
+                recording_directories: vec![root.clone()],
+            });
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1700.0, 1000.0);
+        let shown = |app: &mut MonitorApp| -> Vec<String> {
+            texts(&render(app, &ctx, size))
+                .into_iter()
+                .map(|(text, _)| text)
+                .collect()
+        };
+        // The trace is the open tab: Details show the (empty) syscall.
+        for _ in 0..3 {
+            render(&mut app, &ctx, size);
+        }
+        assert!(shown(&mut app)
+            .iter()
+            .any(|text| text == "No invocation selected"));
+        // On the Network tab, Details follow it; selecting a packet shows its
+        // layers and bytes.
+        app.focus_panel = Some(Panel::Network);
+        for _ in 0..3 {
+            render(&mut app, &ctx, size);
+        }
+        let texts_now = shown(&mut app);
+        assert!(
+            texts_now
+                .iter()
+                .any(|text| text.starts_with("No packet selected")),
+            "{texts_now:?}"
+        );
+        assert!(!texts_now
+            .iter()
+            .any(|text| text == "No invocation selected"));
+        click_label(&mut app, &ctx, size, "query A example.com");
+        let texts_now = shown(&mut app);
+        for expected in [
+            "Ethernet II  Src 52:54:00:12:34:56, Dst 52:55:0a:00:02:02",
+            "Internet Protocol Version 4  Src 10.0.2.15, Dst 10.0.2.3",
+            "Source: 52:54:00:12:34:56",
+        ] {
+            assert!(
+                texts_now.iter().any(|text| text == expected),
+                "missing {expected:?} in {texts_now:?}"
+            );
+        }
+        assert!(
+            texts_now
+                .iter()
+                .any(|text| text.starts_with("0000  52 55 0a 00 02 02 52 54  00 12 34 56 08 00")),
+            "{texts_now:?}"
+        );
+        // Choosing a field marks its bytes.
+        click_label(&mut app, &ctx, size, "Source: 52:54:00:12:34:56");
+        assert!(shown(&mut app)
+            .iter()
+            .any(|text| text == "Source: 6 bytes at 0x0006"));
+        // Back on the trace tab, Details show the syscall again.
+        app.focus_panel = Some(Panel::Trace);
+        for _ in 0..3 {
+            render(&mut app, &ctx, size);
+        }
+        let texts_now = shown(&mut app);
+        assert!(texts_now
+            .iter()
+            .any(|text| text == "No invocation selected"));
+        assert!(!texts_now.iter().any(|text| text.starts_with("Ethernet II")));
         std::fs::remove_dir_all(root).unwrap();
     }
 }
