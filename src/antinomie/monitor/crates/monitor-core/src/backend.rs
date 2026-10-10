@@ -2760,27 +2760,39 @@ impl Worker {
                 Ok(format!("{count} guest processes listed"))
             }
             Command::AttachProcess { identity } => {
-                let id = session.start_capture(
+                let message = session.start_capture(
                     &self.options,
                     CaptureScope::Process { root: identity },
                     &mut self.snapshot,
                     &self.sender,
                 )?;
                 // The picker's list names the attached process and its ancestors.
-                if let (Some(page), Some(capture)) =
-                    (&self.snapshot.process_page, session.captures.get_mut(&id))
-                {
+                if let (Some(page), Some(capture)) = (
+                    &self.snapshot.process_page,
+                    session
+                        .captures
+                        .values_mut()
+                        .find(|capture| capture.summary.state == CaptureState::Active),
+                ) {
                     capture.processes.seed(&page.processes);
                 }
-                Ok(id)
+                Ok(message)
             }
             Command::CaptureAll => {
-                let id = session.start_capture(
+                let message = session.start_capture(
                     &self.options,
                     CaptureScope::AllUserspace,
                     &mut self.snapshot,
                     &self.sender,
                 )?;
+                // start_capture answers with a status message; the capture
+                // just started is the active one.
+                let id = session
+                    .captures
+                    .iter()
+                    .find(|(_, capture)| capture.summary.state == CaptureState::Active)
+                    .map(|(id, _)| id.clone())
+                    .unwrap_or_default();
                 // Name the processes already running; the capture's fork and
                 // exec records name the rest. A failed list only leaves
                 // early processes unnamed.
@@ -2795,7 +2807,7 @@ impl Worker {
                             Some(format!("Capture All process names: {error}"));
                     }
                 }
-                Ok(id)
+                Ok(message)
             }
             Command::StopCapture { capture_id } => {
                 let capture = session

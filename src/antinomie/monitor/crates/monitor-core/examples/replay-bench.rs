@@ -35,15 +35,21 @@ fn main() -> Result<(), String> {
     let (mut packets, mut bytes) = (0u64, 0u64);
     let mut slow = Vec::new();
     let mut over_1ms = 0u64;
+    let mut errors = std::collections::BTreeMap::new();
     let started = Instant::now();
     while offset + 4 <= raw.len() {
+        if offset + 4 + u32::from_le_bytes(raw[offset..offset + 4].try_into().unwrap()) as usize > raw.len() {
+            break; // a truncated copy ends mid-packet
+        }
         let len = u32::from_le_bytes(raw[offset..offset + 4].try_into().unwrap()) as usize;
         let packet = &raw[offset + 4..offset + 4 + len];
         offset += 4 + len;
         let one = Instant::now();
         for (capture, assembler) in &mut sinks {
             capture.append_with_reserved(packet, 0);
-            let _ = assembler.ingest(packet);
+            if let Err(error) = assembler.ingest(packet) {
+                *errors.entry(error.to_string()).or_insert(0u64) += 1;
+            }
         }
         let took = one.elapsed();
         if took > Duration::from_millis(1) {
@@ -75,5 +81,8 @@ fn main() -> Result<(), String> {
         pct(0.999),
         slow.last().unwrap()
     );
+    for (error, count) in &errors {
+        println!("parser error x{count}: {error}");
+    }
     Ok(())
 }

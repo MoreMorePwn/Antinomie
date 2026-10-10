@@ -287,13 +287,69 @@ impl Field {
         s
     }
 }
+/// Packet sequence numbers an event received, kept as contiguous ranges so a
+/// call of any size fits, plus fingerprints of its first packets to tell a
+/// repeated packet from a conflicting one.
+#[derive(Default)]
+struct PacketSet {
+    /// Start → end (inclusive) of each received run of sequence numbers.
+    ranges: BTreeMap<u64, u64>,
+    count: u64,
+    fingerprints: std::collections::HashMap<u64, [u8; 32]>,
+}
+/// Packets per event whose fingerprints are kept.
+const FINGERPRINTED: usize = 8192;
+impl PacketSet {
+    fn len(&self) -> u64 {
+        self.count
+    }
+    fn first(&self) -> Option<u64> {
+        self.ranges.first_key_value().map(|(start, _)| *start)
+    }
+    fn last(&self) -> Option<u64> {
+        self.ranges.last_key_value().map(|(_, end)| *end)
+    }
+    fn contains(&self, seq: u64) -> bool {
+        self.ranges
+            .range(..=seq)
+            .next_back()
+            .is_some_and(|(_, end)| seq <= *end)
+    }
+    /// Record a packet; returns (already received, with different content).
+    fn insert(&mut self, seq: u64, packet: &[u8]) -> (bool, bool) {
+        if self.contains(seq) {
+            let conflicting = self.fingerprints.get(&seq).is_some_and(|previous| {
+                *previous != <[u8; 32]>::from(Sha256::digest(packet))
+            });
+            return (true, conflicting);
+        }
+        if self.fingerprints.len() < FINGERPRINTED {
+            self.fingerprints.insert(seq, Sha256::digest(packet).into());
+        }
+        self.count += 1;
+        let joins_before = seq
+            .checked_sub(1)
+            .and_then(|previous| {
+                self.ranges
+                    .range(..=previous)
+                    .next_back()
+                    .filter(|(_, end)| **end == previous)
+                    .map(|(start, _)| *start)
+            });
+        let joins_after = seq.checked_add(1).and_then(|next| self.ranges.remove(&next));
+        let start = joins_before.unwrap_or(seq);
+        self.ranges.insert(start, joins_after.unwrap_or(seq));
+        (false, false)
+    }
+}
+
 struct Event {
     summary: EventSummary,
     capture_cookie: u64,
     begin: Option<Vec<u8>>,
     end: Option<Vec<u8>>,
     fields: BTreeMap<u32, Field>,
-    packets: BTreeMap<u64, [u8; 32]>,
+    packets: PacketSet,
     issues: Issues,
     /// Queued for retirement: its END and every field's end have arrived.
     finished: bool,
@@ -324,7 +380,7 @@ impl Event {
             begin: None,
             end: None,
             fields: BTreeMap::new(),
-            packets: BTreeMap::new(),
+            packets: PacketSet::default(),
             issues: Issues::default(),
             finished: false,
         }
@@ -367,14 +423,12 @@ impl Event {
             if objects != self.fields.len() as u64 {
                 s.issues.push("missing or inconsistent object count".into());
             }
-            if attempted != self.packets.len() as u64 {
+            if attempted != self.packets.len() {
                 s.issues
                     .push("packet loss or inconsistent event packet count".into());
             }
-            if let (Some((first, _)), Some((last, _))) = (
-                self.packets.first_key_value(),
-                self.packets.last_key_value(),
-            ) && last.saturating_sub(*first).saturating_add(1) != self.packets.len() as u64
+            if let (Some(first), Some(last)) = (self.packets.first(), self.packets.last())
+                && last.saturating_sub(first).saturating_add(1) != self.packets.len()
             {
                 s.issues.push("packet sequence gap".into());
             }
@@ -518,7 +572,9 @@ impl Assembler {
         }
     }
     fn forget(&mut self, event: &Event) {
-        self.packet_count = self.packet_count.saturating_sub(event.packets.len());
+        self.packet_count = self
+            .packet_count
+            .saturating_sub(event.packets.fingerprints.len());
         self.field_count = self.field_count.saturating_sub(event.fields.len());
         self.chunk_count = self
             .chunk_count
@@ -572,21 +628,13 @@ impl Assembler {
             .events
             .get_mut(&key)
             .ok_or_else(|| error("missing event state"))?;
-        if e.packets.len() >= 8192 && !e.packets.contains_key(&h.packet_seq) {
-            return Err(error("event packet state limit"));
+        let fingerprinted = e.packets.fingerprints.len();
+        let (duplicate, conflicting) = e.packets.insert(h.packet_seq, packet);
+        if conflicting {
+            e.issues
+                .push("packet sequence reused with conflicting content".into());
         }
-        let fingerprint: [u8; 32] = Sha256::digest(packet).into();
-        let duplicate = if let Some(previous) = e.packets.get(&h.packet_seq) {
-            if previous != &fingerprint {
-                e.issues
-                    .push("packet sequence reused with conflicting content".into());
-            }
-            true
-        } else {
-            e.packets.insert(h.packet_seq, fingerprint);
-            false
-        };
-        if !duplicate {
+        if !duplicate && e.packets.fingerprints.len() > fingerprinted {
             self.packet_count += 1;
         }
         if e.summary.syscall_nr != h.syscall_nr {
@@ -1013,6 +1061,26 @@ mod tests {
         a.ingest(&packet(3, 1, 0, b"xyz", 3)).unwrap();
         assert!(!a.history()[0].complete);
         std::fs::remove_dir_all(path).unwrap();
+    }
+    #[test]
+    fn packet_sets_hold_any_number_of_packets_as_ranges() {
+        let mut set = PacketSet::default();
+        for seq in (1..=20_000u64).rev().filter(|seq| seq % 1000 != 0) {
+            assert_eq!(set.insert(seq, &seq.to_le_bytes()), (false, false));
+        }
+        assert_eq!(set.len(), 19_980);
+        assert_eq!(set.ranges.len(), 20);
+        assert_eq!((set.first(), set.last()), (Some(1), Some(19_999)));
+        assert!(set.fingerprints.len() <= FINGERPRINTED);
+        // Filling the gaps joins the runs.
+        for seq in (1000..20_000).step_by(1000) {
+            set.insert(seq, b"gap");
+        }
+        assert_eq!(set.ranges.len(), 1);
+        assert_eq!(set.len(), 19_999);
+        // A repeat is a duplicate; a fingerprinted one with other bytes conflicts.
+        assert_eq!(set.insert(19_999, &19_999u64.to_le_bytes()), (true, false));
+        assert_eq!(set.insert(19_999, b"other"), (true, true));
     }
     #[test]
     fn copy_fault_is_never_complete() {
