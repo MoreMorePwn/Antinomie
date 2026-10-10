@@ -7,6 +7,9 @@ use antinomie_monitor_core::{
 };
 use eframe::egui::{self, RichText};
 
+/// The window's egui ID (Escape closes it).
+pub(crate) const WINDOW_ID: &str = "analysis_tools";
+
 fn size(octets: u64) -> String {
     format!("{:.0} MB", octets as f64 / 1_000_000.0)
 }
@@ -22,6 +25,7 @@ pub(crate) fn show(
     let mut command = None;
     let running = install.is_some_and(|install| !install.finished);
     egui::Window::new("Analysis tools")
+        .id(egui::Id::new(WINDOW_ID))
         .open(open)
         .collapsible(false)
         .resizable(true)
@@ -34,17 +38,18 @@ pub(crate) fn show(
                  read-only.",
             );
             ui.add_space(6.0);
+            theme::section(ui, "Tools");
             for tool in tools {
                 ui.separator();
                 ui.horizontal(|ui| {
-                    ui.strong(&tool.name);
-                    ui.weak(&tool.purpose);
+                    ui.label(RichText::new(&tool.name).strong().color(theme::heading()));
+                    ui.label(RichText::new(&tool.purpose).color(theme::muted()));
                 });
                 ui.horizontal_wrapped(|ui| {
                     match (&tool.system, &tool.installed) {
                         (Some(path), installed) => {
                             ui.colored_label(theme::good(), "On this system");
-                            ui.weak(path);
+                            ui.label(RichText::new(path).monospace().color(theme::muted()));
                             if let Some(version) = installed {
                                 ui.weak(format!("(Antinomie's {version} also installed; unused)"));
                             }
@@ -79,11 +84,15 @@ pub(crate) fn show(
                             && ui
                                 .add_enabled(
                                     enabled && !running,
-                                    egui::Button::new(format!(
-                                        "Install {} ({})",
-                                        tool.version,
-                                        size(tool.size)
-                                    )),
+                                    egui::Button::new(
+                                        RichText::new(format!(
+                                            "Install {} ({})",
+                                            tool.version,
+                                            size(tool.size)
+                                        ))
+                                        .color(theme::palette().primary_text),
+                                    )
+                                    .fill(theme::primary()),
                                 )
                                 .clicked()
                         {
