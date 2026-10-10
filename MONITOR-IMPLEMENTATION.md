@@ -33,6 +33,24 @@ on 2026-10-01. Core workers/review use gpt-6.1-sol; bounded support may use Luna
 
 ## Ownership
 
+### Accepted ANT-T0042 Update
+
+User authorized local Antinomie 0.3.0 on 2026-10-09 and the usability follow-up
+on 2026-10-10. Capture All retains a per-process tree; revision-13 bases use
+transport ABI 8 with tunable rings and bounded never-drop waits. Legacy ABI 7
+bases remain supported with their original dropping behavior. This supersedes
+the initial drop-only/V7 requirement for new bases; no snapshot or reconnect.
+Network capture is explicitly started/stopped on a running NAT VM using QMP,
+retained separately per boot and capture, and browsed with history, protocol
+colors and structured filters. Terminals resize their guest PTYs and retain
+bounded scrollback. Details offer numeric copy formats and bounded captured-data
+windows; analysis displays ongoing progress. Optional guest-desktop launches
+join an already logged-in graphical session using the run's kernel-controlled
+process tree. No persistent guest helper or automatic login is introduced.
+The task record and resumption contract are ANT-T0042 in the documentation task
+directory. Product commits and binaries stay local until the user's testing;
+documentation publication is independent of that product-release decision.
+
 ### Accepted ANT-T0033 Update
 
 User authorized the native static-analysis workspace redesign on 2026-10-08.

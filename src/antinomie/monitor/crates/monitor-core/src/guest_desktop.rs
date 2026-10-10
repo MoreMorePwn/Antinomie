@@ -329,11 +329,26 @@ mod tests {
         assert!(stdout.starts_with(&expected_arguments()), "{stdout}");
         assert!(!Path::new("/tmp/ant-pwned").exists());
 
-        // The program's exit status is the terminal's.
+        // This fake terminal propagates the child's status.
         let mut failing = request(RunIn::GuestDesktopTerminal);
         failing.args = vec!["-c".into(), "exit 7".into()];
         let output = guest.run(&failing, &[], "\n");
         assert_eq!(output.status.code(), Some(7));
+
+        // Real emulators such as Xfce can exit successfully after their child
+        // fails: the wrapper reports the emulator's code, while the hold
+        // shell still displays the target program's own result.
+        guest.tool(
+            "xfce4-terminal",
+            r#"[ "$1 $2" = "--disable-server -x" ] || exit 90; shift 2; "$@"; exit 0"#,
+        );
+        let output = guest.run(&failing, &[], "\n");
+        assert_eq!(output.status.code(), Some(0));
+        assert!(
+            String::from_utf8(output.stdout)
+                .unwrap()
+                .ends_with("\n[/bin/sh exited with status 7; press Enter to close]")
+        );
     }
 
     #[test]

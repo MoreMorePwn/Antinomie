@@ -269,8 +269,11 @@ Cinnamon a private `gnome-terminal-server` started by the run (an ordinary
 `gnome-terminal` would hand the program to the session's shared terminal
 server, outside the run). Without these it uses `xterm` when the session has
 an X display, then `x-terminal-emulator`, which may run the program outside
-the run and says so; Capture All still records it. The run's exit status is
-the program's.
+the run and says so; Capture All still records it. A Guest desktop run's exit
+status is the program's. A Guest desktop terminal run reports the terminal
+launcher/server's status, which some emulators return as zero even when the
+program fails. The program's own status appears in its guest terminal and its
+process-tree exit record when that event is captured.
 
 The run's trace also contains the launch script's own calls (reading
 `/proc/*/environ` with `grep` and `tr`) before the program starts. Static

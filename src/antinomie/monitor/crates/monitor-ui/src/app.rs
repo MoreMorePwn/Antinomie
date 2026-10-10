@@ -1151,10 +1151,17 @@ impl MonitorApp {
                                         .sense(egui::Sense::hover()),
                                 )
                                 .on_hover_text(format!(
-                                    "Wait status: {:?}",
+                                    "Wait status: {:?}{}",
                                     run.execution
                                         .as_ref()
-                                        .and_then(|status| status.root_wait_status)
+                                        .and_then(|status| status.root_wait_status),
+                                    if run.request.run_in
+                                        == antinomie_monitor_core::RunIn::GuestDesktopTerminal
+                                    {
+                                        "\nThis is the desktop terminal launcher's status. The program's own status appears in its guest terminal and captured process tree."
+                                    } else {
+                                        ""
+                                    }
                                 ));
                             });
                             row.col(|ui| {

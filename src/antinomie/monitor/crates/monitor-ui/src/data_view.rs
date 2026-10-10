@@ -408,7 +408,7 @@ impl Drop for Loader {
 
 /// The captured ranges to read, sorted and merged, keeping at most `cap`
 /// bytes; true when that left some out.
-fn plan(field: &FieldSummary, cap: u64) -> (Vec<(u64, u64)>, bool) {
+fn plan(field: &FieldSummary, cap: u64) -> Result<(Vec<(u64, u64)>, bool), String> {
     let mut ranges: Vec<_> = field
         .ranges
         .iter()
@@ -418,7 +418,9 @@ fn plan(field: &FieldSummary, cap: u64) -> (Vec<(u64, u64)>, bool) {
     ranges.sort_unstable();
     let mut merged: Vec<(u64, u64)> = Vec::new();
     for (offset, len) in ranges {
-        let end = offset.saturating_add(len);
+        let end = offset
+            .checked_add(len)
+            .ok_or("captured range extent exceeds the supported offset")?;
         if let Some(last) = merged.last_mut() {
             let last_end = last.0.saturating_add(last.1);
             if offset <= last_end {
@@ -437,10 +439,10 @@ fn plan(field: &FieldSummary, cap: u64) -> (Vec<(u64, u64)>, bool) {
             total += take;
         }
         if take < len {
-            return (kept, true);
+            return Ok((kept, true));
         }
     }
-    (kept, false)
+    Ok((kept, false))
 }
 
 fn spawn_loader(
@@ -448,7 +450,7 @@ fn spawn_loader(
     directory: PathBuf,
     field: FieldSummary,
 ) -> Result<Loader, String> {
-    let (ranges, truncated) = plan(&field, DATA_WINDOW_CAP);
+    let (ranges, truncated) = plan(&field, DATA_WINDOW_CAP)?;
     let total = ranges.iter().map(|(_, len)| len).sum();
     let (sender, receiver) = mpsc::channel();
     let progress = Arc::new(AtomicU64::new(0));
@@ -460,7 +462,7 @@ fn spawn_loader(
         .spawn(move || {
             let mut segments = Vec::new();
             for (offset, len) in ranges {
-                let end = offset + len;
+                let end = offset.checked_add(len).expect("validated capture extent");
                 let mut data = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
                 let mut at = offset;
                 while at < end {
@@ -525,7 +527,10 @@ impl DataWindow {
     ) -> Self {
         let field = request.field;
         let preview = trace::covered_preview(&field).to_vec();
-        let (ranges, _) = plan(&field, u64::MAX);
+        let (ranges, range_error) = match plan(&field, u64::MAX) {
+            Ok((ranges, _)) => (ranges, None),
+            Err(error) => (Vec::new(), Some(error)),
+        };
         let preview_covers = match ranges.as_slice() {
             [] => true,
             [(0, len)] => *len <= preview.len() as u64,
@@ -548,7 +553,9 @@ impl DataWindow {
             open: true,
             field,
         };
-        if ranges.is_empty() {
+        if let Some(error) = range_error {
+            window.error = Some(format!("Could not read the capture: {error}"));
+        } else if ranges.is_empty() {
             window.note = Some("No bytes of this object were captured.".into());
         } else if !preview_covers {
             match directory.filter(|_| window.field.raw_path.is_some()) {
@@ -942,9 +949,36 @@ mod tests {
     fn read_plan_merges_ranges_and_stops_at_the_cap() {
         let mut field = field(b"");
         field.ranges = vec![(16, 4), (0, 8), (4, 8), (30, 10)];
-        assert_eq!(plan(&field, 100), (vec![(0, 12), (16, 4), (30, 10)], false));
-        assert_eq!(plan(&field, 14), (vec![(0, 12), (16, 2)], true));
-        assert_eq!(plan(&field, 16), (vec![(0, 12), (16, 4)], true));
+        assert_eq!(
+            plan(&field, 100).unwrap(),
+            (vec![(0, 12), (16, 4), (30, 10)], false)
+        );
+        assert_eq!(plan(&field, 14).unwrap(), (vec![(0, 12), (16, 2)], true));
+        assert_eq!(plan(&field, 16).unwrap(), (vec![(0, 12), (16, 4)], true));
+    }
+
+    #[test]
+    fn overflowing_capture_ranges_report_an_error_before_reading() {
+        let mut captured = field(b"abc");
+        captured.ranges = vec![(u64::MAX - 1, 8)];
+        assert!(plan(&captured, DATA_WINDOW_CAP)
+            .unwrap_err()
+            .contains("extent"));
+        let window = DataWindow::new(
+            &egui::Context::default(),
+            "malformed".into(),
+            OpenData {
+                key: "malformed".into(),
+                title: "buf".into(),
+                field: captured,
+            },
+            None,
+        );
+        assert!(window.loader.is_none());
+        assert!(window
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("extent")));
     }
 
     fn render(ctx: &egui::Context, windows: &mut DataWindows) -> egui::FullOutput {
@@ -1008,6 +1042,50 @@ mod tests {
     }
 
     #[test]
+    fn loading_progress_is_visible_until_the_reader_finishes() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut windows = DataWindows::default();
+        windows.open(
+            &ctx,
+            OpenData {
+                key: "loading".into(),
+                title: "buf / read".into(),
+                field: field(b"abc"),
+            },
+            None,
+        );
+        let (sender, receiver) = mpsc::channel();
+        windows.windows[0].loader = Some(Loader {
+            receiver,
+            progress: Arc::new(AtomicU64::new(1)),
+            total: 3,
+            cancelled: Arc::new(AtomicBool::new(false)),
+        });
+        // egui first sizes a new window in an invisible frame. Keep the
+        // reader pending so progress is tested independently of disk timing.
+        render(&ctx, &mut windows);
+        render(&ctx, &mut windows);
+        let shown = texts(&render(&ctx, &mut windows));
+        assert!(shown
+            .iter()
+            .any(|text| text == "Loading captured bytes: 1 of 3"));
+        sender
+            .send(Ok(Loaded {
+                segments: vec![(0, b"abc".to_vec())],
+                truncated: false,
+            }))
+            .unwrap();
+        render(&ctx, &mut windows);
+        assert!(windows.windows[0].loader.is_none());
+        let shown = texts(&render(&ctx, &mut windows));
+        assert!(!shown
+            .iter()
+            .any(|text| text.starts_with("Loading captured bytes")));
+        assert!(shown.iter().any(|text| text == "abc"));
+    }
+
+    #[test]
     fn data_window_reads_the_whole_capture_past_the_preview() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1046,15 +1124,7 @@ mod tests {
         );
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         while windows.windows[0].loader.is_some() && std::time::Instant::now() < deadline {
-            let shown = texts(&render(&ctx, &mut windows));
-            if windows.windows[0].loader.is_some() {
-                assert!(
-                    shown
-                        .iter()
-                        .any(|text| text.starts_with("Loading captured bytes")),
-                    "{shown:?}"
-                );
-            }
+            render(&ctx, &mut windows);
             thread::sleep(Duration::from_millis(10));
         }
         assert!(windows.windows[0].loader.is_none(), "reader finished");

@@ -435,7 +435,7 @@ impl RunIn {
                 "The program joins the logged-in graphical session, so its windows appear on the guest screen. Its terminal output stays in this app."
             }
             Self::GuestDesktopTerminal => {
-                "A terminal window on the guest desktop runs the program. This app's terminal shows only launch messages."
+                "A terminal window on the guest desktop runs the program. This app's terminal shows only launch messages. The run's exit code is the terminal launcher's; the program's own status appears in the guest terminal."
             }
         }
     }

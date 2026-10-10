@@ -895,6 +895,14 @@ pub(crate) fn migrate_default_data(options: &BackendOptions) -> Result<(), Strin
     migrate_data(&source, &options.data_dir)
 }
 pub fn migrate_data(source: &Path, destination: &Path) -> Result<(), String> {
+    migrate_data_with_proc(source, destination, Path::new("/proc"))
+}
+
+fn migrate_data_with_proc(
+    source: &Path,
+    destination: &Path,
+    proc_root: &Path,
+) -> Result<(), String> {
     if !destination.is_absolute() {
         return Err("migration destination must be absolute".into());
     }
@@ -902,7 +910,10 @@ pub fn migrate_data(source: &Path, destination: &Path) -> Result<(), String> {
         return Ok(());
     }
     let source = fs::canonicalize(source).map_err(|e| e.to_string())?;
-    for entry in fs::read_dir("/proc").map_err(|e| e.to_string())?.flatten() {
+    for entry in fs::read_dir(proc_root)
+        .map_err(|e| e.to_string())?
+        .flatten()
+    {
         let Some(pid) = entry
             .file_name()
             .to_str()
@@ -1983,17 +1994,34 @@ mod tests {
             &serde_json::json!({"bundle":bundle,"raw_path":capture.join("objects/field.raw")}),
         )
         .unwrap();
-        let monitor = parent.join("antinomie-monitor");
-        std::os::unix::fs::symlink("/bin/sleep", &monitor).unwrap();
-        let mut child = Command::new(&monitor).arg("60").spawn().unwrap();
+        // Use a controlled process table: an unrelated running app must not
+        // make this fixture depend on the developer's desktop or other tests.
+        let proc_root = parent.join("proc");
+        let monitor = proc_root.join("1");
+        fs::create_dir_all(&monitor).unwrap();
+        fs::write(monitor.join("cmdline"), b"/bin/antinomie-monitor\0").unwrap();
         assert!(
-            migrate_data(&source, &destination)
+            migrate_data_with_proc(&source, &destination, &proc_root)
                 .unwrap_err()
                 .contains("deferred")
         );
-        child.kill().unwrap();
-        child.wait().unwrap();
-        migrate_data(&source, &destination).unwrap();
+        fs::remove_dir_all(monitor).unwrap();
+        let unrelated = proc_root.join("2");
+        fs::create_dir_all(&unrelated).unwrap();
+        fs::write(unrelated.join("cmdline"), b"qemu-system-x86_64\0other-vm\0").unwrap();
+        let vm_process = proc_root.join("3");
+        fs::create_dir_all(&vm_process).unwrap();
+        let mut command = b"qemu-system-x86_64\0-drive\0".to_vec();
+        command.extend_from_slice(source.join("disk.qcow2").as_os_str().as_bytes());
+        command.push(0);
+        fs::write(vm_process.join("cmdline"), command).unwrap();
+        assert!(
+            migrate_data_with_proc(&source, &destination, &proc_root)
+                .unwrap_err()
+                .contains("deferred")
+        );
+        fs::remove_dir_all(vm_process).unwrap();
+        migrate_data_with_proc(&source, &destination, &proc_root).unwrap();
         assert_eq!(
             fs::metadata(&parent).unwrap().permissions().mode() & 0o777,
             0o750
@@ -2045,7 +2073,7 @@ mod tests {
         );
         assert!(hidden.exists());
         assert!(
-            migrate_data(&hidden, &hidden.join("nested"))
+            migrate_data_with_proc(&hidden, &hidden.join("nested"), &proc_root)
                 .unwrap_err()
                 .contains("overlap")
         );
@@ -2053,7 +2081,7 @@ mod tests {
         private_dir(&conflict).unwrap();
         fs::write(conflict.join("keep"), b"untouched").unwrap();
         assert!(
-            migrate_data(&hidden, &conflict)
+            migrate_data_with_proc(&hidden, &conflict, &proc_root)
                 .unwrap_err()
                 .contains("not empty")
         );
@@ -2061,7 +2089,7 @@ mod tests {
         let bad = parent.join("bad-source");
         private_dir(&bad).unwrap();
         fs::write(bad.join("manifest.json"), b"{broken").unwrap();
-        assert!(migrate_data(&bad, &parent.join("bad-target")).is_err());
+        assert!(migrate_data_with_proc(&bad, &parent.join("bad-target"), &proc_root).is_err());
         assert!(bad.join("manifest.json").exists());
         assert!(!parent.join("bad-target").exists());
         fs::remove_dir_all(parent).unwrap();
