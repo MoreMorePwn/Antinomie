@@ -15,7 +15,7 @@ eframe = { version = "0.31", default-features = false, features = ["glow", "x11"
 egui_extras = "0.31"
 egui_dock = { version = "=0.16.0", features = ["serde"] }
 egui-phosphor = "0.9"
-vt100 = "0.15"
+vt100 = "0.16"
 serde = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"] }
 
