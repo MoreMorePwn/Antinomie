@@ -101,6 +101,14 @@ impl QemuBuild<'_> {
         fs::create_dir_all(&builder).map_err(|e| format!("{}: {e}", builder.display()))?;
         let image = self.cloud_image(&builder, &mut on_line)?;
         let tools = self.tools_overlay(&builder, &image, &mut on_line)?;
+        // A build interrupted by closing the app leaves its job folder with a
+        // multi-GiB VM disk; one build runs at a time, so remove leftovers.
+        for entry in fs::read_dir(self.root).into_iter().flatten().flatten() {
+            if entry.file_name().to_string_lossy().starts_with("qemu-job-") {
+                on_line("removing the disk of an interrupted earlier build");
+                let _ = fs::remove_dir_all(entry.path());
+            }
+        }
         let job = self
             .root
             .join(format!("qemu-job-{}", crate::storage::unique_id()));
