@@ -1737,6 +1737,84 @@ pub(crate) fn info_parts(invocation: &InvocationSummary) -> Vec<(String, Tone)> 
     parts
 }
 
+/// The trace table cells of a call, colored, each with its hover text:
+/// time, records, TID, CPU, syscall, return and info.
+pub(crate) fn cells(invocation: &InvocationSummary) -> Vec<(Vec<(String, Tone)>, String)> {
+    let Some(event) = representative(invocation) else {
+        return Vec::new();
+    };
+    let plain = |text: String| vec![(text, Tone::Value(ValueKind::Plain))];
+    let label = |text: String| vec![(text, Tone::Label)];
+    let (records, records_hover) = match (&invocation.entry, &invocation.exit) {
+        (Some(entry), Some(exit)) => (
+            format!("{}\u{2192}{}", entry.event_seq, exit.event_seq),
+            format!(
+                "Entry record {}, Exit record {}",
+                entry.event_seq, exit.event_seq
+            ),
+        ),
+        _ => (
+            event.event_seq.to_string(),
+            format!("Record {}", event.event_seq),
+        ),
+    };
+    let (cpu, cpu_hover) = match (&invocation.entry, &invocation.exit) {
+        (Some(entry), Some(exit)) if entry.cpu != exit.cpu => (
+            format!("{}\u{2192}{}", entry.cpu, exit.cpu),
+            format!("Entered on CPU {}, returned on CPU {}", entry.cpu, exit.cpu),
+        ),
+        _ => (event.cpu.to_string(), format!("CPU {}", event.cpu)),
+    };
+    let group = antinomie_monitor_core::syscall_groups::SyscallGroup::of(&event.syscall_name);
+    let syscall = vec![
+        (event.syscall_name.clone(), Tone::Value(ValueKind::Name)),
+        (format!(" ({})", event.syscall_nr), Tone::Label),
+    ];
+    let syscall_hover = format!(
+        "{} (syscall {}){}",
+        event.syscall_name,
+        event.syscall_nr,
+        group.map_or_else(String::new, |group| format!("\n{}", group.label()))
+    );
+    let (result, result_hover) = match invocation.exit.as_ref().and_then(|exit| exit.result) {
+        Some(result) => {
+            let shown = values::result(event.syscall_nr, result);
+            (
+                vec![(shown.text, Tone::Value(shown.kind))],
+                values::result_hover(event.syscall_nr, result),
+            )
+        }
+        None => (
+            vec![("missing Exit".to_owned(), Tone::Note)],
+            "No Exit event: the call has not returned, or its Exit was lost".to_owned(),
+        ),
+    };
+    let info = info_parts(invocation);
+    let info_hover: String = info.iter().map(|(text, _)| text.as_str()).collect();
+    vec![
+        (
+            plain(seconds(event.timestamp_ns)),
+            format!(
+                "{} ns since the guest booted",
+                event.timestamp_ns
+            ),
+        ),
+        (label(records), records_hover),
+        (
+            plain(event.tid.to_string()),
+            if event.pid == 0 {
+                format!("TID {}", event.tid)
+            } else {
+                format!("TID {}, PID {}", event.tid, event.pid)
+            },
+        ),
+        (label(cpu), cpu_hover),
+        (syscall, syscall_hover),
+        (result, result_hover),
+        (info, info_hover),
+    ]
+}
+
 /// The Info column as plain text (filtering, sorting, copying).
 pub(crate) fn info(invocation: &InvocationSummary) -> String {
     info_parts(invocation)
