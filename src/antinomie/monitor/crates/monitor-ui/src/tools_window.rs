@@ -7,6 +7,9 @@ use antinomie_monitor_core::{
 };
 use eframe::egui::{self, RichText};
 
+/// The window's egui ID (Escape closes it).
+pub(crate) const WINDOW_ID: &str = "analysis_tools";
+
 fn size(octets: u64) -> String {
     format!("{:.0} MB", octets as f64 / 1_000_000.0)
 }
@@ -22,6 +25,7 @@ pub(crate) fn show(
     let mut command = None;
     let running = install.is_some_and(|install| !install.finished);
     egui::Window::new("Analysis tools")
+        .id(egui::Id::new(WINDOW_ID))
         .open(open)
         .collapsible(false)
         .resizable(true)

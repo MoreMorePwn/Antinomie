@@ -13,6 +13,9 @@ use std::{
 
 type Worker = (Receiver<Report>, JoinHandle<()>);
 
+/// The window's egui ID (Escape closes it).
+pub(crate) const WINDOW_ID: &str = "app_dependencies";
+
 #[derive(Default)]
 pub(crate) struct DependenciesWindow {
     pub open: bool,
@@ -101,6 +104,7 @@ impl DependenciesWindow {
         }
         let mut recheck = false;
         egui::Window::new("App dependencies")
+            .id(egui::Id::new(WINDOW_ID))
             .open(&mut self.open)
             .collapsible(false)
             .default_width(640.0)
