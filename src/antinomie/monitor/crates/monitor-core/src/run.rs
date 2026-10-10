@@ -189,7 +189,7 @@ impl ProgramRun {
         self.journal(1, data, available)
     }
     pub fn resize(&mut self, rows: u16, cols: u16, available: u64) -> Result<(), String> {
-        self.terminal.set_size(rows, cols);
+        self.terminal.screen_mut().set_size(rows, cols);
         self.sequence = self.sequence.saturating_add(1);
         self.journal(
             2,

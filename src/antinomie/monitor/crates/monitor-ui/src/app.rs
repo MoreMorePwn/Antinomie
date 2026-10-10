@@ -4169,9 +4169,7 @@ impl MonitorApp {
                     let (data, resize) = if live {
                         terminal.terminal.show(ui, interactive)
                     } else {
-                        egui::ScrollArea::both()
-                            .show(ui, |ui| terminal.terminal.show_grid(ui, false, false))
-                            .inner
+                        terminal.terminal.show_grid(ui, false, false)
                     };
                     if !data.is_empty() {
                         commands.push(Command::TerminalInput {
@@ -4706,10 +4704,7 @@ fn show_terminal_viewport(
         let (data, resize) = if live {
             terminal.terminal.show(ui, interactive)
         } else {
-            egui::ScrollArea::both()
-                .auto_shrink([false, false])
-                .show(ui, |ui| terminal.terminal.show_grid(ui, false, false))
-                .inner
+            terminal.terminal.show_grid(ui, false, false)
         };
         if !data.is_empty() {
             commands.push(Command::TerminalInput {
@@ -8741,6 +8736,91 @@ mod tests {
             }
         }
         assert!(evidence.retained && evidence.reopened);
+    }
+
+    #[test]
+    #[ignore = "requires decorated X11; maximizes a terminal window and exits"]
+    fn native_terminal_window_maximizes_and_grows_its_grid() {
+        use std::sync::{Arc, Mutex};
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        #[derive(Default)]
+        struct Evidence {
+            before: Option<(egui::Vec2, (u16, u16))>,
+            after: Option<(egui::Vec2, (u16, u16), bool)>,
+        }
+        struct QaApp {
+            app: MonitorApp,
+            started: Instant,
+            evidence: Arc<Mutex<Evidence>>,
+            maximized: bool,
+        }
+        impl eframe::App for QaApp {
+            fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+                let elapsed = self.started.elapsed().as_secs_f32();
+                let viewport = egui::ViewportId::from_hash_of(("workspace", 1usize));
+                if elapsed >= 5.0 {
+                    self.app.snapshot.active_vm = None;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                eframe::App::update(&mut self.app, ctx, frame);
+                let inner = ctx.input_for(viewport, |input| input.viewport().inner_rect);
+                let maximized = ctx.input_for(viewport, |input| input.viewport().maximized);
+                let grid = self.app.terminals["maximize"].terminal.size();
+                let mut evidence = self.evidence.lock().expect("maximize evidence");
+                if elapsed >= 1.5 && !self.maximized {
+                    self.maximized = true;
+                    evidence.before = inner.map(|inner| (inner.size(), grid));
+                    // The same request the window manager's maximize button makes.
+                    ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Maximized(true));
+                }
+                if elapsed >= 4.0 {
+                    evidence.after =
+                        inner.map(|inner| (inner.size(), grid, maximized == Some(true)));
+                }
+                ctx.request_repaint_after(Duration::from_millis(10));
+            }
+        }
+        let evidence = Arc::new(Mutex::new(Evidence::default()));
+        let result = evidence.clone();
+        eframe::run_native(
+            "Antinomie Terminal Maximize QA",
+            eframe::NativeOptions {
+                viewport: egui::ViewportBuilder::default().with_inner_size([1024.0, 720.0]),
+                persist_window: false,
+                event_loop_builder: Some(Box::new(|builder| {
+                    builder.with_x11().with_any_thread(true);
+                })),
+                ..Default::default()
+            },
+            Box::new(move |cc| {
+                theme::install(&cc.egui_ctx);
+                let mut app = app();
+                app.snapshot.state = VmState::Running;
+                app.snapshot.active_vm = Some("vm".into());
+                let run = run("maximize");
+                app.snapshot.runs.push(run.clone());
+                app.terminals
+                    .insert("maximize".into(), RunTerminal::new(run));
+                Ok(Box::new(QaApp {
+                    app,
+                    started: Instant::now(),
+                    evidence,
+                    maximized: false,
+                }))
+            }),
+        )
+        .expect("native maximize fixture");
+        let evidence = result.lock().expect("maximize evidence");
+        let (size, grid) = evidence.before.expect("terminal window before maximizing");
+        let (maximized_size, maximized_grid, maximized) =
+            evidence.after.expect("terminal window after maximizing");
+        eprintln!("Before: {size:?} {grid:?}; after: {maximized_size:?} {maximized_grid:?}");
+        assert!(
+            maximized,
+            "window manager did not maximize the terminal window"
+        );
+        assert!(maximized_size.x > size.x + 100.0 && maximized_size.y > size.y + 100.0);
+        assert!(maximized_grid.0 > grid.0 && maximized_grid.1 > grid.1);
     }
 
     fn section_report(id: &str, marker: &str) -> antinomie_monitor_core::AnalysisReport {
