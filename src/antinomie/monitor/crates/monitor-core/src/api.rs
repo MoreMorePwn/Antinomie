@@ -394,6 +394,55 @@ pub struct ExecRequest {
     pub gid: u32,
     #[serde(default)]
     pub analysis: crate::analysis::AnalysisSelection,
+    /// Where the program runs; runs saved before this choice existed ran in
+    /// the app terminal.
+    #[serde(default)]
+    pub run_in: RunIn,
+}
+
+/// Where a launched program runs. The guest desktop choices need a graphical
+/// base and a user logged in on the VM display; the guest has no helper, so
+/// the program is started through a `/bin/sh` wrapper that joins that session.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunIn {
+    /// The program's terminal is a window of this app.
+    #[default]
+    AppTerminal,
+    /// The program joins the guest's graphical session, so its windows appear
+    /// on the guest screen; its terminal output stays in this app.
+    GuestDesktop,
+    /// A terminal window on the guest desktop runs the program.
+    GuestDesktopTerminal,
+}
+impl RunIn {
+    pub const ALL: [Self; 3] = [
+        Self::AppTerminal,
+        Self::GuestDesktop,
+        Self::GuestDesktopTerminal,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::AppTerminal => "App terminal",
+            Self::GuestDesktop => "Guest desktop",
+            Self::GuestDesktopTerminal => "Guest desktop terminal",
+        }
+    }
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::AppTerminal => "The program's terminal opens in a window of this app.",
+            Self::GuestDesktop => {
+                "The program joins the logged-in graphical session, so its windows appear on the guest screen. Its terminal output stays in this app."
+            }
+            Self::GuestDesktopTerminal => {
+                "A terminal window on the guest desktop runs the program. This app's terminal shows only launch messages."
+            }
+        }
+    }
+    /// True when the program runs in the guest's graphical session.
+    pub fn guest_desktop(self) -> bool {
+        self != Self::AppTerminal
+    }
 }
 
 /// Identity is persistent and boot-scoped; PID is descriptive, never an owner key.
@@ -775,6 +824,7 @@ impl Default for ExecRequest {
             uid: 1000,
             gid: 1000,
             analysis: crate::analysis::AnalysisSelection::default(),
+            run_in: RunIn::default(),
         }
     }
 }

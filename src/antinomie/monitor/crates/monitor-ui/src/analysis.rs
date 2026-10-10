@@ -1,7 +1,7 @@
 //! Opt-in launch selection and retained, run-addressed analysis evidence.
 use antinomie_monitor_core::{
     analysis_tools::ToolStatus, AnalysisKind, AnalysisReport, AnalysisSectionState,
-    AnalysisSelection, AnalysisState, ExecRequest,
+    AnalysisSelection, AnalysisState, ExecRequest, RunIn,
 };
 use eframe::egui;
 mod entropy;
@@ -11,31 +11,39 @@ mod workspace;
 pub(crate) use workspace::{workspace, workspace_section, WorkspaceState};
 
 /// Program fields and the analysis selection; true when the user asked to
-/// install a missing analysis tool.
+/// install a missing analysis tool. `graphical` offers the Run in choice,
+/// which only a graphical base's session can use.
 pub(crate) fn launch_fields(
     ui: &mut egui::Ui,
     request: &mut ExecRequest,
     args: &mut String,
     env: &mut String,
     tools: &[ToolStatus],
+    graphical: bool,
 ) -> bool {
     let mut install = false;
     let spacing = ui.spacing().item_spacing.x;
     let min_pane = ui.text_style_height(&egui::TextStyle::Body) * 22.0;
     if ui.available_width() >= min_pane * 2.0 + spacing {
         ui.columns(2, |columns| {
-            fields(&mut columns[0], request, args, env);
+            fields(&mut columns[0], request, args, env, graphical);
             selection(&mut columns[1], &mut request.analysis, tools, &mut install);
         });
     } else {
-        fields(ui, request, args, env);
+        fields(ui, request, args, env, graphical);
         ui.separator();
         selection(ui, &mut request.analysis, tools, &mut install);
     }
     install
 }
 
-fn fields(ui: &mut egui::Ui, request: &mut ExecRequest, args: &mut String, env: &mut String) {
+fn fields(
+    ui: &mut egui::Ui,
+    request: &mut ExecRequest,
+    args: &mut String,
+    env: &mut String,
+    graphical: bool,
+) {
     ui.heading("Program");
     for (label, value, multiline) in [
         ("Executable", &mut request.path, false),
@@ -63,6 +71,39 @@ fn fields(ui: &mut egui::Ui, request: &mut ExecRequest, args: &mut String, env: 
         ui.label("GID");
         ui.add(egui::DragValue::new(&mut request.gid).range(0..=u32::MAX));
     });
+    if graphical {
+        run_in(ui, &mut request.run_in);
+    }
+}
+
+/// Where the program runs: this app's terminal or the guest's desktop.
+fn run_in(ui: &mut egui::Ui, choice: &mut RunIn) {
+    ui.horizontal_wrapped(|ui| {
+        let label = ui.label("Run in");
+        egui::ComboBox::from_id_salt("run-in")
+            .selected_text(choice.label())
+            .show_ui(ui, |ui| {
+                for option in RunIn::ALL {
+                    ui.selectable_value(choice, option, option.label())
+                        .on_hover_text(option.description());
+                }
+            })
+            .response
+            .labelled_by(label.id);
+    });
+    ui.colored_label(crate::theme::MUTED, choice.description());
+    if choice.guest_desktop() {
+        ui.colored_label(
+            crate::theme::MUTED,
+            "Log in on the VM display as this UID first. The run also records the launch script that joins the session.",
+        );
+    }
+    if *choice == RunIn::GuestDesktopTerminal {
+        ui.colored_label(
+            crate::theme::MUTED,
+            "The desktop's own terminal is started for this run, so the program stays in it. A guest with only another x-terminal-emulator may run the program outside the run; Capture All still records it.",
+        );
+    }
 }
 
 pub(crate) fn selection(
@@ -146,13 +187,19 @@ fn check(ui: &mut egui::Ui, selection: &mut AnalysisSelection, kind: AnalysisKin
     }
 }
 
+/// The request to launch; a VM without a graphical base always runs the
+/// program in the app terminal, whatever Run in the dialog remembers.
 pub(crate) fn snapshot(
     request: &ExecRequest,
     args: &str,
     env: &str,
+    graphical: bool,
 ) -> Result<ExecRequest, String> {
     request.analysis.validate()?;
     let mut request = request.clone();
+    if !graphical {
+        request.run_in = RunIn::AppTerminal;
+    }
     request.args = args.lines().map(str::to_owned).collect();
     request.env = env
         .lines()
@@ -336,13 +383,13 @@ mod tests {
         assert!(!draft.analysis.enabled);
         assert_eq!(draft.analysis.checks, AnalysisKind::TRIAGE);
         draft.analysis.enabled = true;
-        let launched = snapshot(&draft, "first\nsecond", "A=B").unwrap();
+        let launched = snapshot(&draft, "first\nsecond", "A=B", false).unwrap();
         draft.analysis.checks.clear();
         assert_eq!(launched.analysis.checks, AnalysisKind::TRIAGE);
         assert_eq!(launched.args, ["first", "second"]);
-        assert!(snapshot(&draft, "", "").is_err());
+        assert!(snapshot(&draft, "", "", false).is_err());
         draft.analysis.enabled = false;
-        assert!(snapshot(&draft, "", "").is_ok());
+        assert!(snapshot(&draft, "", "", false).is_ok());
     }
 
     #[test]

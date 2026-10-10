@@ -598,6 +598,17 @@ impl MonitorApp {
         self.snapshot.state == VmState::Running && self.snapshot.active_vm == self.selected
     }
 
+    /// The selected VM's base has a graphical desktop a program can join.
+    fn selected_vm_graphical(&self) -> bool {
+        self.snapshot
+            .vms
+            .iter()
+            .find(|vm| self.selected.as_ref() == Some(&vm.id))
+            .and_then(|vm| selected_base(&self.snapshot, vm.base_identity.as_deref()))
+            .and_then(|base| base.guest.as_ref())
+            .is_some_and(|guest| guest.graphical)
+    }
+
     fn launch_admission(&self) -> Result<(), String> {
         if self.pending_launch.is_some() {
             return Err("A program launch is still pending".into());
@@ -1203,6 +1214,7 @@ impl MonitorApp {
                                 ("Arguments", format!("{:?}", run.request.args)),
                                 ("Working directory", run.request.cwd.clone()),
                                 ("Environment", run.request.env.join("\n")),
+                                ("Run in", run.request.run_in.label().to_owned()),
                                 (
                                     "UID / GID",
                                     format!("{} / {}", run.request.uid, run.request.gid),
@@ -2427,6 +2439,7 @@ impl MonitorApp {
     fn launch_form(&mut self, ui: &mut egui::Ui) {
         ui.add_enabled_ui(self.running() && self.pending_launch.is_none(), |ui| {
             let selection_error = self.exec.analysis.validate().err();
+            let graphical = self.selected_vm_graphical();
             let footer = ui.spacing().interact_size.y
                 + 24.0
                 + if selection_error.is_some() {
@@ -2445,6 +2458,7 @@ impl MonitorApp {
                         &mut self.args,
                         &mut self.env,
                         &self.snapshot.analysis_tools,
+                        graphical,
                     ) {
                         self.tools_open = true;
                     }
@@ -2460,7 +2474,7 @@ impl MonitorApp {
                         .fill(theme::PRIMARY),
                 );
                 if run.clicked() {
-                    match crate::analysis::snapshot(&self.exec, &self.args, &self.env) {
+                    match crate::analysis::snapshot(&self.exec, &self.args, &self.env, graphical) {
                         Ok(request) => self.send(Command::Execute(request)),
                         Err(reason) => self.status = reason,
                     }
@@ -4982,6 +4996,7 @@ fn numeric<T: egui::emath::Numeric>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use antinomie_monitor_core::RunIn;
 
     fn app() -> MonitorApp {
         let exec = ExecRequest::default();
@@ -8122,6 +8137,88 @@ mod tests {
             app.exec.analysis.checks.clear();
             assert!(app.submitted.iter().any(|command| matches!(command, Command::Execute(request) if request.analysis.checks.len() == 2)));
         }
+    }
+
+    #[test]
+    fn run_in_is_offered_for_graphical_bases_remembered_and_sent_with_the_launch() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 820.0);
+        let mut app = analysis_setup_fixture();
+        app.exec.analysis.enabled = false;
+        app.exec.run_in = RunIn::GuestDesktop;
+        let click_run = |app: &mut MonitorApp| {
+            for _ in 0..3 {
+                let _ = render(app, &ctx, size);
+            }
+            let output = render(app, &ctx, size);
+            let visible = texts(&output);
+            let offered = visible.iter().any(|(text, _)| text == "Run in");
+            let run = app.launch_action_rects.unwrap().0.center();
+            for pressed in [true, false] {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        events: vec![
+                            egui::Event::PointerMoved(run),
+                            egui::Event::PointerButton {
+                                pos: run,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                    |ctx| app.draw(ctx),
+                );
+            }
+            let sent = app
+                .submitted
+                .iter()
+                .rev()
+                .find_map(|command| match command {
+                    Command::Execute(request) => Some(request.run_in),
+                    _ => None,
+                });
+            (offered, sent)
+        };
+        // A base without a desktop hides the choice and runs in the app.
+        assert_eq!(click_run(&mut app), (false, Some(RunIn::AppTerminal)));
+        assert_eq!(app.exec.run_in, RunIn::GuestDesktop);
+
+        let mut app = analysis_setup_fixture();
+        app.exec.analysis.enabled = false;
+        app.exec.run_in = RunIn::GuestDesktopTerminal;
+        app.snapshot
+            .bases
+            .push(antinomie_monitor_core::BaseSummary {
+                id: "gnome".into(),
+                label: "Debian 13 (GNOME)".into(),
+                directory: "/bases/gnome".into(),
+                min_ram_mib: 4096,
+                min_disk_gib: 16,
+                fixed_display: true,
+                size_bytes: 0,
+                revision: Some(APP_REVISION),
+                min_app_version: None,
+                built_with: None,
+                guest: Some(antinomie_monitor_core::GuestProfile {
+                    id: "debian-gnome".into(),
+                    label: "Debian 13 (GNOME)".into(),
+                    min_ram_mib: 4096,
+                    min_disk_gib: 16,
+                    requires_credentials: true,
+                    graphical: true,
+                }),
+            });
+        app.snapshot.vms[0].base_identity = Some("gnome".into());
+        assert_eq!(
+            click_run(&mut app),
+            (true, Some(RunIn::GuestDesktopTerminal))
+        );
+        // The dialog keeps the choice for the next launch.
+        assert_eq!(app.exec.run_in, RunIn::GuestDesktopTerminal);
     }
 
     #[test]

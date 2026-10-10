@@ -236,6 +236,47 @@ launch, upload and recording settings open in bounded dialogs. Toolbar icons
 have tooltips; menus expose the same implemented commands. There are no
 placeholder process/rules/build views or duplicate image/run catalogs.
 
+### Running in the guest desktop
+
+On a VM whose base has a desktop, **Run in** in the launch setup chooses where
+the program runs. The dialog keeps the choice; Run History shows it for each
+run, and older runs read as **App terminal**.
+
+| Run in | What happens |
+| --- | --- |
+| App terminal | Default. The program's terminal is a window of this app. |
+| Guest desktop | The program joins the logged-in graphical session, so its windows appear on the VM screen. Its terminal input and output stay in the app terminal. |
+| Guest desktop terminal | A terminal window on the VM screen runs the program and stays open after it exits until Enter. The app terminal shows only launch messages. |
+
+The guest has no helper program and the host does not know the session's
+display, so a desktop run launches `/bin/sh` with a fixed script
+(`crates/monitor-core/src/guest_desktop.sh`). The program path and arguments
+are positional parameters of the script, never shell text. The script copies
+the display variables (`DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`,
+`XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS` and the session's desktop and
+locale names) from a process of the run user's session that names the most
+of them; variables set in the launch environment win. `HOME`, `USER`,
+`LOGNAME` and `SHELL` come only from the run user's own session. A root run
+joins the session of a user with UID 1000 or above. Without such a session
+the script prints why and exits with status 1, so the run ends at once.
+
+Guest desktop then executes the program in place: it keeps the run's root
+process and PID. Guest desktop terminal starts the desktop's own terminal for
+the run, so the terminal and the program are in the run's process tree:
+`xfce4-terminal --disable-server`, `mate-terminal --disable-factory`,
+`konsole --separate`, `qterminal`, `lxterminal --no-remote`, or for GNOME and
+Cinnamon a private `gnome-terminal-server` started by the run (an ordinary
+`gnome-terminal` would hand the program to the session's shared terminal
+server, outside the run). Without these it uses `xterm` when the session has
+an X display, then `x-terminal-emulator`, which may run the program outside
+the run and says so; Capture All still records it. The run's exit status is
+the program's.
+
+The run's trace also contains the launch script's own calls (reading
+`/proc/*/environ` with `grep` and `tr`) before the program starts. Static
+analysis of a desktop run reads the program file by path right after the
+launch, because the kernel's exec-time acquisition would capture `/bin/sh`.
+
 Each program opens its own native interactive terminal window. Concurrent
 programs have independent terminal IDs, input, resize, recording and Stop
 actions. Closing a terminal window leaves the program running; reopen it from

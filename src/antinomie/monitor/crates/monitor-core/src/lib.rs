@@ -13,6 +13,7 @@ mod display;
 pub mod distribution;
 mod execution;
 mod guest_account;
+mod guest_desktop;
 mod kit;
 mod locations;
 pub mod network;
