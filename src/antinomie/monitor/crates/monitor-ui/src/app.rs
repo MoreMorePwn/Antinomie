@@ -9465,6 +9465,7 @@ mod tests {
         for expected in [
             "Captures",
             "2027-01-15 08:00:00 UTC",
+            "2027-01-15 08:00:00",
             "2 packets · 6 s · 200 B",
             "DNS",
             "TCP",

@@ -682,16 +682,18 @@ impl NetworkView {
                     .collect();
                 for capture in &earlier {
                     let selected = self.list.path.as_ref() == Some(&capture.file);
-                    let title = format_date(capture.started_ms / 1000);
+                    // The date in UTC; the zone is in the hover text.
+                    let started = format_date(capture.started_ms / 1000);
+                    let title = started.trim_end_matches(" UTC");
                     if capture_row(
                         ui,
                         selected,
-                        (&title, theme::text()),
+                        (title, theme::text()),
                         &capture_detail(capture, false, None),
                         font_size,
                     )
                     .on_hover_text(format!(
-                        "Boot {}\n{}",
+                        "Started {started}\nBoot {}\n{}",
                         capture.boot_id,
                         capture.file.display()
                     ))
@@ -1153,8 +1155,11 @@ fn layer_tree(
     mono: &egui::FontId,
 ) -> Option<std::ops::Range<usize>> {
     let mut hovered = None;
-    ui.spacing_mut().item_spacing.y = 1.0;
     let font_size = mono.size + 1.0;
+    // Dense rows, as in Wireshark's details tree.
+    ui.spacing_mut().item_spacing.y = 0.0;
+    ui.spacing_mut().button_padding.y = 1.0;
+    ui.spacing_mut().interact_size.y = theme::row_height(font_size) - 2.0;
     for (index, layer) in layers.iter().enumerate() {
         let id = ui.make_persistent_id(("packet_layer", &layer.name));
         egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)

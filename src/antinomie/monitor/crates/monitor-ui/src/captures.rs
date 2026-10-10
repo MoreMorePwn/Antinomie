@@ -373,7 +373,7 @@ pub(super) fn process_tree(
     let mono = theme::mono(font_size - 1.0);
     let char_width = ui.fonts(|fonts| fonts.glyph_width(&mono, '0'));
     let row_height = theme::row_height(font_size);
-    let indent = 16.0;
+    let indent = 18.0;
     TableBuilder::new(ui)
         .id_salt("capture_process_tree")
         .sense(egui::Sense::click())
@@ -419,7 +419,7 @@ pub(super) fn process_tree(
                             painter.hline(x..=x + indent * 0.5, rect.center().y, stroke);
                         }
                     }
-                    ui.add_space(depth as f32 * indent + 2.0);
+                    ui.add_space(depth as f32 * indent + 4.0);
                     let name = if process.name.is_empty() {
                         "?"
                     } else {
@@ -471,6 +471,7 @@ pub(super) fn process_tree(
                     });
                 });
                 row.col(|ui| {
+                    ui.add_space(8.0);
                     let (text, color) = exit_status(process);
                     ui.label(RichText::new(text).font(mono.clone()).color(color));
                 });

@@ -64,16 +64,21 @@ impl DetailsFollow {
         let Some(network) = Self::side(panel) else {
             return;
         };
-        self.drawn[usize::from(network)] =
-            Some(ui.ctx().cumulative_pass_nr_for(egui::ViewportId::ROOT));
+        let now = ui.ctx().cumulative_pass_nr_for(egui::ViewportId::ROOT);
+        self.drawn[usize::from(network)] = Some(now);
+        // Alone on screen: it stays followed after it is hidden again (by
+        // Run History, say).
+        let other = self.drawn[usize::from(!network)];
         let rect = ui.max_rect();
-        if ui.input(|input| {
-            input.pointer.any_pressed()
-                && input
-                    .pointer
-                    .interact_pos()
-                    .is_some_and(|pos| rect.contains(pos))
-        }) {
+        if other.is_none_or(|pass| pass + 1 < now)
+            || ui.input(|input| {
+                input.pointer.any_pressed()
+                    && input
+                        .pointer
+                        .interact_pos()
+                        .is_some_and(|pos| rect.contains(pos))
+            })
+        {
             self.network = network;
         }
     }
