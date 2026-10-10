@@ -11608,7 +11608,7 @@ mod tests {
         }
         assert!(shown(&mut app)
             .iter()
-            .any(|text| text == "No invocation selected"));
+            .any(|text| text == "Select a syscall in the trace to decode it here"));
         // On the Network tab, Details follow it; selecting a packet shows its
         // layers and bytes.
         app.focus_panel = Some(Panel::Network);
@@ -11624,7 +11624,7 @@ mod tests {
         );
         assert!(!texts_now
             .iter()
-            .any(|text| text == "No invocation selected"));
+            .any(|text| text == "Select a syscall in the trace to decode it here"));
         click_label(&mut app, &ctx, size, "query A example.com");
         let texts_now = shown(&mut app);
         for expected in [
@@ -11656,7 +11656,7 @@ mod tests {
         let texts_now = shown(&mut app);
         assert!(texts_now
             .iter()
-            .any(|text| text == "No invocation selected"));
+            .any(|text| text == "Select a syscall in the trace to decode it here"));
         assert!(!texts_now.iter().any(|text| text.starts_with("Ethernet II")));
         std::fs::remove_dir_all(root).unwrap();
     }

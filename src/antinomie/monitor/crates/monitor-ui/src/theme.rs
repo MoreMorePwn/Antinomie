@@ -3,7 +3,6 @@
 //! addresses, strings, flags, errors) gets syntax colors so dense views stay
 //! readable, and tables size their rows from the density setting.
 // The value colors, headings and density are adopted view by view.
-#![allow(dead_code)]
 use eframe::egui::{self, Color32, FontData, FontFamily, FontId, Stroke, TextStyle};
 use std::sync::atomic::{AtomicBool, Ordering};
 
