@@ -68,7 +68,7 @@ fn fields(
                 ui.add(
                     edit.margin(crate::theme::TEXT_EDIT_MARGIN)
                         .font(egui::TextStyle::Monospace)
-                        .hint_text(hint)
+                        .hint_text(egui::RichText::new(hint).color(crate::theme::muted()))
                         .desired_width(f32::INFINITY),
                 )
                 .labelled_by(label_response.id)

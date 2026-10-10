@@ -2074,6 +2074,7 @@ impl MonitorApp {
                                     tooltip: &shortcut("Start the selected VM", keys::START_VM),
                                     enabled: self.can_start_vm(),
                                     tone: theme::good(),
+                                    strong: true,
                                     active: false,
                                 },
                             ) {
@@ -2087,6 +2088,7 @@ impl MonitorApp {
                                     tooltip: &shortcut("Shut down the running VM", keys::STOP_VM),
                                     enabled: self.can_stop_vm(),
                                     tone: theme::error(),
+                                    strong: true,
                                     active: false,
                                 },
                             ) {
@@ -2104,6 +2106,7 @@ impl MonitorApp {
                                     ),
                                     enabled: self.running(),
                                     tone: theme::blue(),
+                                    strong: false,
                                     active: self.launch_open,
                                 },
                             ) {
@@ -2133,6 +2136,7 @@ impl MonitorApp {
                                         self.observer_start_enabled()
                                     },
                                     tone: theme::error(),
+                                    strong: false,
                                     active: capturing,
                                 },
                             ) {
@@ -2150,6 +2154,7 @@ impl MonitorApp {
                                     tooltip: self.network_toggle_label(),
                                     enabled: self.network_toggle_enabled(),
                                     tone: theme::info(),
+                                    strong: false,
                                     active: self.snapshot.network_capture.is_some(),
                                 },
                             ) {
@@ -2278,14 +2283,14 @@ impl MonitorApp {
             None => machine.push(("Base unavailable".into(), theme::warn())),
         }
         machine.extend([
-            ("  ·  ".into(), theme::muted()),
+            (" · ".into(), theme::muted()),
             (vm.cpus.to_string(), number),
-            (" CPU  ".into(), theme::muted()),
+            (" CPU · ".into(), theme::muted()),
             (vm.ram_mib.to_string(), number),
             (" MiB".into(), theme::muted()),
         ]);
         if vm.nat {
-            machine.push(("  ·  ".into(), theme::muted()));
+            machine.push((" · ".into(), theme::muted()));
             machine.push(("NAT".into(), theme::info()));
         }
         let last = match self.settings.last_runs.get(&vm.id) {
@@ -2299,7 +2304,19 @@ impl MonitorApp {
                     theme::value(theme::ValueKind::Name),
                 ),
                 (
-                    format!("  ·  {}", relative_time(now.saturating_sub(last.started))),
+                    format!(" · {}", relative_time(now.saturating_sub(last.started))),
+                    theme::muted(),
+                ),
+            ],
+            // Saved runs carry no start time; the history of the selected
+            // VM still tells how many there are.
+            None if self.selected.as_ref() == Some(&vm.id) && !self.history.is_empty() => vec![
+                (self.history.len().to_string(), number),
+                (
+                    format!(
+                        " recorded run{}",
+                        if self.history.len() == 1 { "" } else { "s" }
+                    ),
                     theme::muted(),
                 ),
             ],
@@ -2343,7 +2360,7 @@ impl MonitorApp {
         egui::SidePanel::left("vms")
             // Room for the VM details, but the trace keeps most of a small
             // screen.
-            .default_width((ctx.screen_rect().width() * 0.2).clamp(200.0, 260.0))
+            .default_width((ctx.screen_rect().width() * 0.2).clamp(200.0, 300.0))
             .min_width(200.0)
             .max_width(380.0)
             .resizable(true)
@@ -2711,7 +2728,9 @@ impl MonitorApp {
                             health.transport_waits
                         ));
                     }
+                    ui.add_space(8.0);
                     status_value(ui, "UI loss", &health.ui_dropped.to_string(), loss(health.ui_dropped));
+                    ui.add_space(8.0);
                     status_value(
                         ui,
                         "Storage loss",
@@ -2927,7 +2946,7 @@ impl MonitorApp {
                 ui.add(
                     text_field(&mut self.source)
                         .font(egui::TextStyle::Monospace)
-                        .hint_text("/path/on/this/computer")
+                        .hint_text(RichText::new("/path/on/this/computer").color(theme::muted()))
                         .desired_width(320.0),
                 );
                 ui.end_row();
@@ -3452,7 +3471,7 @@ impl MonitorApp {
                                         - ui.spacing().item_spacing.x,
                                 )
                                 .font(egui::TextStyle::Monospace)
-                                .hint_text("Bundle directory"),
+                                .hint_text(RichText::new("Bundle directory").color(theme::muted())),
                         );
                         if icon(
                             ui,
@@ -6065,6 +6084,8 @@ struct ToolButton<'a> {
     enabled: bool,
     tone: egui::Color32,
     active: bool,
+    /// The label takes the tone too (Start, Stop).
+    strong: bool,
 }
 
 fn tool_button(ui: &mut egui::Ui, button: ToolButton<'_>) -> bool {
@@ -6072,7 +6093,7 @@ fn tool_button(ui: &mut egui::Ui, button: ToolButton<'_>) -> bool {
     let (icon, label) = if button.enabled {
         (
             button.tone,
-            if button.active {
+            if button.active || button.strong {
                 button.tone
             } else {
                 theme::text()

@@ -91,7 +91,9 @@ impl ProcessPicker {
                         egui::TextEdit::singleline(&mut self.filter)
                             .margin(theme::TEXT_EDIT_MARGIN)
                             .desired_width(180.0)
-                            .hint_text("Filter by name or PID"),
+                            .hint_text(
+                                RichText::new("Filter by name or PID").color(theme::muted()),
+                            ),
                     );
                 });
                 let height = (viewport.height() - 300.0).clamp(64.0, 360.0);

@@ -419,7 +419,7 @@ impl BuildWizard {
         ui.add(
             egui::TextEdit::singleline(&mut options.proxy)
                 .desired_width(420.0)
-                .hint_text("http://user:password@host:port/"),
+                .hint_text(RichText::new("http://user:password@host:port/").color(theme::muted())),
         );
         ui.small("The proxy is used while building and is not kept in the image.");
         let mut probe = options.clone();
