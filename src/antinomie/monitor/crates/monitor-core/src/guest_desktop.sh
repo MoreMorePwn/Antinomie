@@ -35,39 +35,57 @@ eligible() {
 	[ "$owner" = "$uid" ] && return 0
 	[ "$uid" = 0 ] && [ "$owner" -ge 1000 ] && [ "$owner" -lt 65534 ]
 }
-finish() {
-	if [ -n "$file" ] && [ "$file" != "/proc/$$/environ" ] && [ "$display" = 1 ] &&
-		[ "$score" -gt "$best_score" ] && eligible; then
-		best=$file best_score=$score best_owner=$owner
+read_environment() {
+	# Preserve trailing newlines so byte counting also detects a cut record.
+	environment=$(grep -a -s -z -E "$pattern" "$1" | head -c "$((environment_limit + 1))" | tr '\0' '\n'; printf '.')
+	environment=${environment%.}
+	size=$(printf '%s' "$environment" | wc -c)
+	if [ "$size" -gt "$environment_limit" ]; then
+		echo "antinomie: session discovery exceeded its $environment_limit-byte environment limit; the program was not started" >&2
+		exit 1
 	fi
+	case $environment in
+	'' | *"$newline") ;;
+	*)
+		echo "antinomie: session discovery found a truncated environment entry; the program was not started" >&2
+		exit 1
+		;;
+	esac
 }
 
 # The session process whose environment names the most of its display wins.
-best= best_score=0 best_owner=
-file= score=0 display=0 owner=
-scan=$(grep -a -s -z -H -E "$pattern" /proc/[0-9]*/environ | tr '\0' '\n')
-while IFS= read -r line; do
-	case $line in
-	/proc/[0-9]*/environ:*) ;;
-	*) continue ;;
-	esac
-	path=${line%%:*}
-	entry=${line#*:}
-	if [ "$path" != "$file" ]; then
-		finish
-		file=$path score=0 display=0
-		owner_of "${path%/environ}"
+# Limit work to 4096 candidates and retained allowlisted environment to 64 KiB
+# per eligible candidate. Ineligible processes never have their environment read.
+candidate_limit=4096 environment_limit=65536 candidates=0
+newline='
+'
+best_score=0 best_owner= session=
+for candidate in /proc/[0-9]*; do
+	[ -d "$candidate" ] || continue
+	candidates=$((candidates + 1))
+	if [ "$candidates" -gt "$candidate_limit" ]; then
+		echo "antinomie: session discovery exceeded its $candidate_limit-process candidate limit; the program was not started" >&2
+		exit 1
 	fi
-	case $entry in
-	DISPLAY=?* | WAYLAND_DISPLAY=?*) display=1 score=$((score + 2)) ;;
-	XAUTHORITY=?* | DBUS_SESSION_BUS_ADDRESS=?* | XDG_RUNTIME_DIR=?*) score=$((score + 1)) ;;
-	esac
-done <<EOF
-$scan
+	[ "$candidate" != "/proc/$$" ] || continue
+	owner_of "$candidate"
+	eligible || continue
+	read_environment "$candidate/environ"
+	score=0 display=0
+	while IFS= read -r entry; do
+		case $entry in
+		DISPLAY=?* | WAYLAND_DISPLAY=?*) display=1 score=$((score + 2)) ;;
+		XAUTHORITY=?* | DBUS_SESSION_BUS_ADDRESS=?* | XDG_RUNTIME_DIR=?*) score=$((score + 1)) ;;
+		esac
+	done <<EOF
+$environment
 EOF
-finish
+	if [ "$display" = 1 ] && [ "$score" -gt "$best_score" ]; then
+		session=$environment best_score=$score best_owner=$owner
+	fi
+done
 
-if [ -z "$best" ]; then
+if [ -z "$best_owner" ]; then
 	if [ "$uid" = 0 ]; then
 		echo "antinomie: no graphical session is logged in on the guest; log in on the VM display, then run the program again" >&2
 	else
@@ -75,7 +93,6 @@ if [ -z "$best" ]; then
 	fi
 	exit 1
 fi
-session=$(grep -a -s -z -E "$pattern" "$best" | tr '\0' '\n')
 while IFS= read -r entry; do
 	name=${entry%%=*}
 	case " $names " in

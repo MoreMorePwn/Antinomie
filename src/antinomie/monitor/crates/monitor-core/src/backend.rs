@@ -2629,6 +2629,9 @@ impl Worker {
             return Err(format!("network capture: {error}"));
         }
         self.snapshot.network_capture = Some(capture);
+        // Publish the changed toggle before acknowledging the command, so
+        // the UI cannot briefly re-enable the old action after completion.
+        self.publish();
         Ok("network capture started".into())
     }
     fn stop_network_capture(&mut self) -> Result<String, String> {
@@ -2642,7 +2645,9 @@ impl Worker {
             .process
             .qmp(&crate::network::filter_dump_del(capture))
             .map_err(|error| format!("network capture stop: {error}"))?;
-        let packets = end_network_capture(&mut self.snapshot)?;
+        let finished = end_network_capture(&mut self.snapshot);
+        self.publish();
+        let packets = finished?;
         Ok(format!("network capture stopped: {packets} packets"))
     }
     fn stop(&mut self) -> Result<(), String> {

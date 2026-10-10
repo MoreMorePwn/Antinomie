@@ -259,6 +259,9 @@ of them; variables set in the launch environment win. `HOME`, `USER`,
 `LOGNAME` and `SHELL` come only from the run user's own session. A root run
 joins the session of a user with UID 1000 or above. Without such a session
 the script prints why and exits with status 1, so the run ends at once.
+Session discovery checks at most 4,096 process candidates and keeps at most
+64 KiB of allowed display environment per eligible candidate. Exceeding a limit
+stops the launch with a clear error; other users' environments are not read.
 
 Guest desktop then executes the program in place: it keeps the run's root
 process and PID. Guest desktop terminal starts the desktop's own terminal for

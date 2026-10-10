@@ -71,7 +71,7 @@ mod tests {
                 .join(format!("ant-guest-desktop-{}", crate::storage::unique_id()));
             fs::create_dir_all(root.join("proc")).unwrap();
             fs::create_dir_all(root.join("bin")).unwrap();
-            for tool in ["grep", "tr"] {
+            for tool in ["grep", "tr", "head", "wc"] {
                 let found = ["/usr/bin", "/bin"]
                     .iter()
                     .map(|dir| Path::new(dir).join(tool))
@@ -299,6 +299,68 @@ mod tests {
         root.uid = 0;
         let stderr = String::from_utf8(guest.run(&root, &[], "").stderr).unwrap();
         assert!(stderr.contains("no graphical session is logged in"));
+    }
+
+    #[test]
+    fn oversized_ineligible_environments_are_not_read() {
+        let guest = Guest::new();
+        let oversized = format!("DISPLAY={}", "x".repeat(70_000));
+        for pid in 100..132 {
+            guest.process(pid, 1001, &[&oversized]);
+        }
+        guest.process(200, 1000, &["DISPLAY=:0"]);
+        let output = guest.run(&request(RunIn::GuestDesktop), &[], "");
+        assert!(output.status.success(), "{:?}", output.stderr);
+        assert!(String::from_utf8(output.stdout).unwrap().contains("D=:0"));
+    }
+
+    #[test]
+    fn session_discovery_rejects_candidate_exhaustion_before_launch() {
+        let guest = Guest::new();
+        for pid in 1..=4096 {
+            fs::create_dir(guest.root.join("proc").join(pid.to_string())).unwrap();
+        }
+        let output = guest.run(&request(RunIn::GuestDesktop), &[], "");
+        assert!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("has no graphical session")
+        );
+        guest.process(4097, 1000, &["DISPLAY=:0"]);
+        let output = guest.run(&request(RunIn::GuestDesktop), &[], "");
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("4096-process candidate limit")
+        );
+    }
+
+    #[test]
+    fn selected_environment_limit_keeps_complete_entries_and_rejects_truncation() {
+        let guest = Guest::new();
+        // DISPLAY=, value and its NUL terminator total exactly 64 KiB.
+        let exact = format!("DISPLAY={}", "x".repeat(65_527));
+        guest.process(1, 1000, &[&exact]);
+        let mut target = request(RunIn::GuestDesktop);
+        target.args = vec!["-c".into(), "printf 'length=%s' \"${#DISPLAY}\"".into()];
+        let output = guest.run(&target, &[], "");
+        assert!(output.status.success(), "{:?}", output.stderr);
+        assert_eq!(output.stdout, b"length=65527");
+
+        // A valid display before an oversized entry must not cause a launch
+        // with an imported prefix of that entry.
+        let oversized = format!("XAUTHORITY={}", "x".repeat(70_000));
+        guest.process(1, 1000, &["DISPLAY=:0", &oversized]);
+        let output = guest.run(&target, &[], "");
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("65536-byte environment limit")
+        );
     }
 
     #[test]
