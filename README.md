@@ -119,9 +119,9 @@ for Antinomie 0.3.0 and newer):
    (and its future children); **Capture all** traces all of userspace. Neither
    stops or signals anything. A capture lists the processes it saw as a tree
    (named after the program each one ran); select one to see only its calls.
-7. With **NAT network** on, every packet of the VM's network interface is
-   recorded by QEMU, outside the guest, as `network.pcap` in the boot's
-   recording.
+7. With **NAT network** on, start **Network capture** to record packets of the
+   VM's network interface outside the guest. Stop it to finish the capture;
+   each start creates a separate retained pcap in the boot recording.
 
 ### 4. Read the results
 - **Syscall Trace**: every recorded call with its arguments, return value and
@@ -131,14 +131,21 @@ for Antinomie 0.3.0 and newer):
 - **Run History**: every run on the selected VM, including earlier boots, with
   its command line, user, status and exit code. Double-click a run to open its
   saved trace.
-- **Network**: the packets of the running boot (followed live) or an earlier
-  one: source, destination, protocol and a summary (DNS names and answers, TCP
-  flags, HTTP request lines, TLS server names), with the bytes of the selected
-  packet. **Open in Wireshark** hands the capture to Wireshark when it is
-  installed.
+- **Network**: select an ongoing or saved capture from capture history, or start
+  one there. Protocol colors help scan the packets; click an address, protocol
+  or port to filter it, or use the counted dropdowns. Packets include source,
+  destination, DNS names, TCP flags, HTTP request lines and TLS server names,
+  with a byte view. **Open in Wireshark** opens the capture when installed.
 - **Static Analysis**: the selected run's report: an overview, then each
   category; disassembly and decompilation are full listings with search.
 - **Details** and **Activity**: the selected call or run, and VM events.
+  Right-click values to copy common numeric formats. Open captured data in its
+  own window, initially UTF-8, then choose ASCII, hex, hexdump, Base64 or other
+  forms and copy the result. Partial captures keep their gap/error information.
+
+Process terminals resize their grids with the window and retain up to 10,000
+history lines. Use the mouse wheel or scrollbar to read earlier output; the
+**newer lines** button or **Shift+End** returns to the newest output.
 
 Panels can be dragged out into their own windows and docked back;
 **View → Reset layout** restores the default arrangement. Text size is under

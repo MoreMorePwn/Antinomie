@@ -72,12 +72,12 @@ fn fields(
         ui.add(egui::DragValue::new(&mut request.gid).range(0..=u32::MAX));
     });
     if graphical {
-        run_in(ui, &mut request.run_in);
+        run_in(ui, &mut request.run_in, request.uid);
     }
 }
 
 /// Where the program runs: this app's terminal or the guest's desktop.
-fn run_in(ui: &mut egui::Ui, choice: &mut RunIn) {
+fn run_in(ui: &mut egui::Ui, choice: &mut RunIn, uid: u32) {
     ui.horizontal_wrapped(|ui| {
         let label = ui.label("Run in");
         egui::ComboBox::from_id_salt("run-in")
@@ -95,7 +95,11 @@ fn run_in(ui: &mut egui::Ui, choice: &mut RunIn) {
     if choice.guest_desktop() {
         ui.colored_label(
             crate::theme::MUTED,
-            "Log in on the VM display as this UID first. The run also records the launch script that joins the session.",
+            if uid == 0 {
+                "Log in on the VM display as a normal user first; a root run joins that user's desktop. The run also records the launch script."
+            } else {
+                "Log in on the VM display as this UID first. The run also records the launch script that joins the session."
+            },
         );
     }
     if *choice == RunIn::GuestDesktopTerminal {

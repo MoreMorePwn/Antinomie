@@ -25,11 +25,18 @@ with 256 KiB buffers that drop when full.
   that stays too slow slows the guest instead of losing data.
 - The host event table retires finished calls first; only calls still in
   progress count as evicted.
-- **Network capture.** With NAT on, QEMU records every packet of the VM's
-  network interface to `network.pcap` in the boot recording, outside the
-  guest. The new **Network** panel lists packets live (DNS, TCP, UDP, ICMP,
-  ARP, DHCP, HTTP request lines, TLS server names) with a byte view and opens
-  the capture in Wireshark when it is installed.
+- **Network capture.** With NAT on, start and stop captures without restarting
+  the VM. Each capture has its own pcap in the boot recording, outside the
+  guest. The **Network** panel offers capture history, protocol colors,
+  clickable address/port/protocol filters and counted dropdowns, with a byte
+  view and Wireshark integration.
+- Process terminals freely resize and maximize, update the guest terminal
+  grid, and retain 10,000 history lines with wheel and scrollbar navigation.
+- **Details** offers common numeric copy formats and captured-data windows
+  with UTF-8, ASCII, hex, hexdump, C array, Base64 and escaped forms. Invalid
+  extents are rejected, and partial captures keep their gap/error status.
+- Static analysis names the categories still queued or running until the
+  selected report finishes.
 - Commands queued while the transport thread is busy are handled together
   instead of one per pass.
 - **Run in the guest desktop.** On desktop bases, **Run in** in the launch

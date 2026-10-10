@@ -76,8 +76,9 @@ locked crate distributions. SQLite is linked from the system, not bundled by
 this build. Its upstream code is public domain; see
 [SQLite copyright](https://www.sqlite.org/copyright.html). Packaging must still
 inventory the actual library shipped and the crates' transitive dependencies.
-The core also uses the already locked `vt100 0.15.2` for terminal persistence;
-moving a dependency to core does not change its upstream terms.
+The core and UI use `vt100 0.16.2` for terminal persistence and scrollback,
+including corrected history offsets and cursor restoration after resizing;
+the version update does not change its upstream MIT terms.
 
 The launch module directly uses already-locked `x11rb 0.13.2` and `rustix 1.1.5`
 for bounded X11/XWayland window sizing and deadline-aware polling. MIT options
