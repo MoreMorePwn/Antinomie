@@ -5,6 +5,7 @@ mod build_wizard;
 mod data_view;
 mod dependencies_window;
 mod folders;
+mod memory_view;
 mod network_view;
 mod runs;
 mod terminal;

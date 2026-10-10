@@ -190,6 +190,7 @@ struct Session {
     network_bytes_done: u64,
     network_bytes: u64,
     last_network_check: Instant,
+    last_memory_check: Instant,
     /// The last drain pass found enough telemetry that the next one should
     /// follow without waiting.
     telemetry_busy: bool,
@@ -1850,6 +1851,7 @@ impl Worker {
                 if let Err(e) = end_network_capture(&mut self.snapshot) {
                     self.snapshot.last_error = Some(e);
                 }
+                abandon_memory_dump(&mut self.snapshot);
                 self.snapshot.active_vm = None;
                 self.snapshot.state = VmState::Stopped;
                 self.publish();
@@ -1884,6 +1886,7 @@ impl Worker {
             self.poll_build();
             self.poll_tool();
             self.check_network_capture();
+            self.check_memory_dump();
             if self.last_publish.elapsed() >= Duration::from_millis(250) {
                 self.publish();
             }
@@ -2392,6 +2395,7 @@ impl Worker {
             Command::Start { vm_id } => self.start(&vm_id),
             Command::StartNetworkCapture => self.start_network_capture(),
             Command::StopNetworkCapture => self.stop_network_capture(),
+            Command::DumpMemory => self.start_memory_dump(),
             Command::Stop => {
                 self.stop()?;
                 Ok("VM stopped; capture finalized".into())
@@ -2582,6 +2586,7 @@ impl Worker {
                 network_bytes_done: 0,
                 network_bytes: 0,
                 last_network_check: Instant::now(),
+                last_memory_check: Instant::now(),
                 status_cursor: 0,
                 last_status_query: Instant::now(),
                 persisted_packets: 0,
@@ -2673,6 +2678,90 @@ impl Worker {
             "network capture stopped ({:.1} MB)",
             bytes as f64 / 1e6
         ))
+    }
+    /// Start writing the running VM's RAM to a new memory dump; QEMU writes
+    /// it in the background and pauses the guest until it is done.
+    fn start_memory_dump(&mut self) -> Result<String, String> {
+        let session = self.session.as_mut().ok_or("VM is stopped")?;
+        if self.snapshot.memory_dump.is_some() {
+            return Err("a memory dump is already being written".into());
+        }
+        let recording =
+            crate::locations::locations(&self.options, &session.vm.id)?.recording_directory;
+        let bundle = &session.bundle;
+        let system = match &bundle.name {
+            Some(name) => format!("Linux {} · {name}", bundle.kernel_version),
+            None => format!("Linux {}", bundle.kernel_version),
+        };
+        let dump = crate::memory::new_vm_dump(
+            &recording,
+            &session.vm,
+            &session.boot_id,
+            system,
+            bundle.symbols.as_deref(),
+        )?;
+        if let Err(error) =
+            crate::memory::dump_command(&dump).and_then(|command| session.process.qmp(&command))
+        {
+            let _ = crate::memory::delete(&dump);
+            return Err(format!("memory dump: {error}"));
+        }
+        session.last_memory_check = Instant::now();
+        let total = u64::from(session.vm.ram_mib) << 20;
+        self.snapshot.memory_dump = Some(crate::memory::DumpProgress {
+            dump,
+            completed: 0,
+            total,
+        });
+        self.publish();
+        Ok("memory dump started: the VM is paused while its RAM is written".into())
+    }
+    /// Follow the memory dump QEMU writes, and record it when it is done.
+    fn check_memory_dump(&mut self) {
+        let (Some(session), Some(progress)) =
+            (self.session.as_mut(), self.snapshot.memory_dump.as_mut())
+        else {
+            return;
+        };
+        if session.last_memory_check.elapsed() < Duration::from_millis(200) {
+            return;
+        }
+        session.last_memory_check = Instant::now();
+        let status = session
+            .process
+            .qmp(&serde_json::from_str(crate::memory::QUERY_DUMP).unwrap_or_default())
+            .map(|reply| crate::memory::dump_status(&reply));
+        let mut dump = progress.dump.clone();
+        let message = match status {
+            Ok(crate::memory::DumpStatus::Active { completed, total }) => {
+                progress.completed = completed;
+                progress.total = total.max(1);
+                return;
+            }
+            Ok(crate::memory::DumpStatus::Completed) => {
+                dump.finished_ms = Some(unix_ms());
+                dump.bytes = fs::metadata(dump.path()).ok().map(|m| m.len());
+                format!(
+                    "memory dump written ({:.1} GB)",
+                    dump.bytes.unwrap_or(0) as f64 / 1e9
+                )
+            }
+            Ok(_) => {
+                dump.error = Some("QEMU could not write the memory dump".into());
+                "memory dump failed".into()
+            }
+            Err(error) => {
+                dump.error = Some(error.clone());
+                format!("memory dump: {error}")
+            }
+        };
+        if let Err(error) = dump.save() {
+            self.snapshot.last_error = Some(format!("memory dump summary: {error}"));
+        } else if dump.error.is_some() {
+            self.snapshot.last_error = Some(message);
+        }
+        self.snapshot.memory_dump = None;
+        self.publish();
     }
     /// About once a second: measure the running network capture and stop it
     /// when the recordings of this boot have used up the quota.
@@ -2830,6 +2919,7 @@ impl Worker {
         if let Err(e) = end_network_capture(&mut self.snapshot) {
             issues.push(e);
         }
+        abandon_memory_dump(&mut self.snapshot);
         self.snapshot.active_vm = None;
         self.snapshot.state = VmState::Stopped;
         self.stopping.store(false, Ordering::Relaxed);
@@ -3523,6 +3613,15 @@ fn end_network_capture(snapshot: &mut Snapshot) -> Result<u64, String> {
     Ok(bytes)
 }
 
+/// The VM stopped while QEMU was writing a memory dump: record it as failed.
+fn abandon_memory_dump(snapshot: &mut Snapshot) {
+    if let Some(progress) = snapshot.memory_dump.take() {
+        let mut dump = progress.dump;
+        dump.error = Some("the VM stopped before the memory dump was written".into());
+        let _ = dump.save();
+    }
+}
+
 fn remaining_request_budget(deadline: Instant, maximum: Duration) -> Duration {
     deadline
         .saturating_duration_since(Instant::now())
@@ -4001,6 +4100,7 @@ mod tests {
                 built_with: None,
                 min_app_version: None,
                 name: None,
+                symbols: None,
             };
             storage::atomic_json(&source.join("bundle.json"), &bundle).unwrap();
             worker
@@ -4406,6 +4506,7 @@ mod tests {
             built_with: None,
             min_app_version: None,
             name: None,
+            symbols: None,
         };
         capture
             .manifest(&VmConfig::default(), &bundle, &bundle, "clean")

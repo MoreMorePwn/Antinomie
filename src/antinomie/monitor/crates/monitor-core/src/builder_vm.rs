@@ -64,6 +64,7 @@ const OUTPUT_FILES: &[&str] = &[
     "kernel.config",
     "initrd.gz",
     "base.qcow2",
+    "symbols.json.xz",
     "provenance.tar",
     "kernel.tar",
     "rootfs.tar",

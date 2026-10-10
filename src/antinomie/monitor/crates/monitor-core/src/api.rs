@@ -949,6 +949,9 @@ pub enum Command {
     /// of the boot recording, until `StopNetworkCapture` or the VM stops.
     StartNetworkCapture,
     StopNetworkCapture,
+    /// Dump the running VM's RAM (QEMU pauses the guest while it writes)
+    /// into a new memory dump of its recordings, for the Memory tab.
+    DumpMemory,
     OpenRecording {
         directory: PathBuf,
     },
@@ -1004,6 +1007,8 @@ pub enum VmState {
 pub struct Snapshot {
     /// The running VM's network capture, while one runs.
     pub network_capture: Option<crate::network::NetworkCapture>,
+    /// The memory dump QEMU is writing, while it writes.
+    pub memory_dump: Option<crate::memory::DumpProgress>,
     /// Process trees of this boot's captures that are still open, by capture id.
     pub capture_processes:
         std::collections::BTreeMap<String, Vec<crate::capture_processes::CaptureProcess>>,

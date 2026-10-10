@@ -12,7 +12,8 @@
 # ccache with that cache directory, when ccache is installed.
 #
 # minimal (default): upstream x86_64_defconfig plus the symbols below, all
-#   built in; output in work/monitor-build. Used by the BusyBox base.
+#   built in, with DWARF debug information in vmlinux; output in
+#   work/monitor-build. Used by the BusyBox base.
 # debian: the pinned Debian amd64 configuration (debian/config/config, then
 #   kernelarch-x86/config, then amd64/config) with only the deviations listed
 #   in DEBIAN_BUILTIN and below; output in work/monitor-build-debian, with
@@ -143,11 +144,14 @@ if [[ $profile == minimal ]]; then
         "$config" --file "$build_tree/.config" --enable "$symbol"
     done
     "$config" --file "$build_tree/.config" --disable IKCONFIG_PROC
+    # DWARF in vmlinux, for the base's Volatility symbol table (as Debian).
+    "$config" --file "$build_tree/.config" --disable DEBUG_INFO_NONE \
+        --enable DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT
     "$config" --file "$build_tree/.config" --set-str INITRAMFS_SOURCE ""
     "$config" --file "$build_tree/.config" --set-str ANTINOMIE_SOURCE_ID "$source_id"
     make -C "$source_tree" O="$build_tree" olddefconfig
     # shellcheck disable=SC2086
-    require_symbols ANTINOMIE IKCONFIG $DEBIAN_PARITY $MINIMAL_EXTRA
+    require_symbols ANTINOMIE IKCONFIG DEBUG_INFO $DEBIAN_PARITY $MINIMAL_EXTRA
     require_source_id
     make -C "$source_tree" O="$build_tree" "${compiler[@]}" -j"$jobs" bzImage
     [[ ${#compiler[@]} -eq 0 ]] || ccache --show-stats >&2
@@ -182,7 +186,7 @@ done
 "$config" --file "$build_tree/.config" --set-str ANTINOMIE_SOURCE_ID "$source_id"
 make -C "$source_tree" O="$build_tree" olddefconfig
 # shellcheck disable=SC2086
-require_symbols $DEBIAN_BUILTIN $DEBIAN_PARITY KERNEL_GZIP
+require_symbols $DEBIAN_BUILTIN $DEBIAN_PARITY KERNEL_GZIP DEBUG_INFO
 require_source_id
 "$source_tree/scripts/diffconfig" "$reference/.config" "$build_tree/.config" \
     > "$build_tree/antinomie-config-deviations.txt"

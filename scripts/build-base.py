@@ -153,6 +153,13 @@ def build_kernel(kernel_profile, tree, work, jobs, ccache=None):
     return build
 
 
+def make_symbols(build, work):
+    """The kernel's Volatility symbol table, from vmlinux's DWARF and System.map."""
+    run(sys.executable, KIT / "scripts/make-kernel-symbols.py", "--vmlinux", build / "vmlinux",
+        "--system-map", build / "System.map", "--output", build / "symbols.json.xz",
+        "--tools", work / "tools")
+
+
 def keep_artifacts(build, work):
     """Keep only what the image needs and free the kernel object tree."""
     kept = work / "kernel-artifacts"
@@ -161,6 +168,7 @@ def keep_artifacts(build, work):
     (kept / "arch/x86/boot").mkdir(parents=True)
     shutil.copy2(build / "arch/x86/boot/bzImage", kept / "arch/x86/boot/bzImage")
     shutil.copy2(build / ".config", kept / ".config")
+    shutil.copy2(build / "symbols.json.xz", kept / "symbols.json.xz")
     if (build / "modules-install").is_dir():
         shutil.move(build / "modules-install", kept / "modules-install")
     shutil.rmtree(build)
@@ -173,7 +181,8 @@ def keep_artifacts(build, work):
 
 def kernel_identity(kernel_profile):
     return {"format": 1, "profile": kernel_profile, "series": series_hash(),
-            "kernel_script_sha256": checksum(KIT / "scripts/build-monitor-kernel.sh")}
+            "kernel_script_sha256": checksum(KIT / "scripts/build-monitor-kernel.sh"),
+            "symbols_script_sha256": checksum(KIT / "scripts/make-kernel-symbols.py")}
 
 
 def load_cached_kernel(cache, kernel_profile, work):
@@ -197,7 +206,8 @@ def load_cached_kernel(cache, kernel_profile, work):
         if kept.exists():
             shutil.rmtree(kept)
         return None
-    if not (kept / "arch/x86/boot/bzImage").is_file() or not (kept / ".config").is_file():
+    if not all((kept / name).is_file()
+               for name in ("arch/x86/boot/bzImage", ".config", "symbols.json.xz")):
         shutil.rmtree(kept)
         return None
     print(f"using the cached kernel for series {manifest['series'][:16]}", flush=True)
@@ -222,7 +232,7 @@ def save_cached_kernel(cache, kept, kernel_profile):
         entry = tarfile.TarInfo("kernel-cache.json")
         entry.size = len(manifest)
         archive.addfile(entry, io.BytesIO(manifest))
-        for name in ("arch/x86/boot/bzImage", ".config", "modules-install"):
+        for name in ("arch/x86/boot/bzImage", ".config", "symbols.json.xz", "modules-install"):
             if (kept / name).exists():
                 archive.add(kept / name, arcname=name, filter=portable)
     os.replace(partial, cache)
@@ -232,7 +242,8 @@ def save_cached_kernel(cache, kept, kernel_profile):
 def build_image(profile, values, build, work, output, app_version=None, image_cache=None):
     recipe = KIT / "scripts" / PROFILES[profile][1]
     command = [sys.executable, recipe, "--kernel", build / "arch/x86/boot/bzImage",
-               "--kernel-config", build / ".config", "--output", output, "--work", work]
+               "--kernel-config", build / ".config", "--symbols", build / "symbols.json.xz",
+               "--output", output, "--work", work]
     if app_version:
         command += ["--app-version", app_version]
     if profile == "busybox":
@@ -278,6 +289,8 @@ def main():
             tree = prepare_source(args.inputs, args.work)
             stage("kernel")
             build = build_kernel(kernel_profile, tree, args.work, args.jobs, args.ccache)
+            stage("symbols")
+            make_symbols(build, args.work)
             if not args.keep_kernel_build:
                 build = keep_artifacts(build, args.work)
             if args.kernel_cache is not None:

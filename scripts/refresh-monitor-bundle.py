@@ -62,7 +62,12 @@ def refresh(source, kernel, config, output, allow_unversioned=False):
     if manifest.get("initrd") is not None:
         artifacts["initrd"] = artifact(source, manifest["initrd"])
     source_hashes = {key: image.checksum(path) for key, path in artifacts.items()}
-    parent_identity = image.bundle_identity(manifest, source_hashes)
+    # The symbol table belongs to the replaced kernel: part of the source
+    # identity, not carried into the refreshed bundle.
+    identity_hashes = dict(source_hashes)
+    if manifest.get("symbols") is not None:
+        identity_hashes["symbols"] = image.checksum(artifact(source, manifest["symbols"]))
+    parent_identity = image.bundle_identity(manifest, identity_hashes)
     if manifest.get("base_identity") not in (None, parent_identity):
         raise RuntimeError("installed source base identity mismatch")
     disk = json.loads(subprocess.check_output(

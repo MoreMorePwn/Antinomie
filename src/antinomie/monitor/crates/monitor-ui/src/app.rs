@@ -198,6 +198,7 @@ pub struct MonitorApp {
     /// The VM dialog's Telemetry transport window is open.
     transport_open: bool,
     network_view: crate::network_view::NetworkView,
+    memory_view: crate::memory_view::MemoryView,
     /// Whether the Details panel shows the selected packet or syscall.
     pub(crate) details_follow: crate::workspace::DetailsFollow,
     /// Process tree of a selected capture that is not live (processes.json).
@@ -315,6 +316,7 @@ impl MonitorApp {
             selected_process: None,
             transport_open: false,
             network_view: Default::default(),
+            memory_view: Default::default(),
             details_follow: Default::default(),
             archived_processes: None,
             capture_history: Vec::new(),
@@ -1991,6 +1993,7 @@ impl MonitorApp {
                         for view in [
                             Panel::Trace,
                             Panel::Network,
+                            Panel::Memory,
                             Panel::StaticAnalysis,
                             Panel::RunHistory,
                             Panel::Details,
@@ -5144,6 +5147,71 @@ impl MonitorApp {
                     });
                 }
             }
+            Panel::Memory => {
+                let vm_id = self.selected.clone();
+                let vm = self
+                    .snapshot
+                    .vms
+                    .iter()
+                    .find(|config| Some(&config.id) == vm_id.as_ref())
+                    .cloned();
+                let locations = self
+                    .snapshot
+                    .vm_locations
+                    .iter()
+                    .find(|location| Some(&location.vm_id) == vm_id.as_ref())
+                    .cloned();
+                let running = self.running()
+                    && !self.closing
+                    && vm_id.is_some()
+                    && vm_id == self.snapshot.active_vm;
+                let dumping = self
+                    .snapshot
+                    .memory_dump
+                    .clone()
+                    .filter(|progress| Some(&progress.dump.vm_id) == vm_id.as_ref());
+                let volatility = self
+                    .snapshot
+                    .analysis_tools
+                    .iter()
+                    .find(|tool| tool.id == "volatility3");
+                let installing = self
+                    .snapshot
+                    .tool_install
+                    .as_ref()
+                    .is_some_and(|install| install.id == "volatility3" && !install.finished);
+                let action = self.memory_view.show(
+                    ui,
+                    crate::memory_view::MemoryContext {
+                        vm: vm.as_ref(),
+                        recordings: locations
+                            .as_ref()
+                            .map(|location| location.recording_directory.as_path()),
+                        recording_roots: locations
+                            .as_ref()
+                            .map(|location| location.recording_directories.as_slice())
+                            .unwrap_or_default(),
+                        running,
+                        dumping: dumping.as_ref(),
+                        pending: false,
+                        data_dir: &self.options.data_dir,
+                        volatility_installed: volatility
+                            .is_some_and(|tool| tool.installed.is_some()),
+                        volatility_installing: installing,
+                        bases: &self.snapshot.bases,
+                        font_size: self.settings.font_size,
+                    },
+                );
+                match action {
+                    Some(crate::memory_view::MemoryAction::Dump) => self.send(Command::DumpMemory),
+                    Some(crate::memory_view::MemoryAction::InstallVolatility) => {
+                        self.send(Command::InstallTool {
+                            id: "volatility3".into(),
+                        })
+                    }
+                    None => {}
+                }
+            }
             Panel::AnalysisSection { report_id, kind } => {
                 let key = format!("section:{report_id}:{kind:?}");
                 let report = self.analysis_windows.get(report_id);
@@ -6705,6 +6773,7 @@ mod tests {
             selected_process: None,
             transport_open: false,
             network_view: Default::default(),
+            memory_view: Default::default(),
             details_follow: Default::default(),
             archived_processes: None,
             capture_history: Vec::new(),

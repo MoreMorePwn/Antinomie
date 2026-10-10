@@ -47,6 +47,8 @@ def bundle_identity(manifest, hashes):
             ("parent_identity", "kernel_sha256", "base_disk_sha256", "initrd_sha256", "kernel_config_sha256")}))
     for key in ("kernel", "base_disk", "initrd"):
         digest.update(b"\x01" + bytes.fromhex(hashes[key]) if key in hashes else b"\x00")
+    if "symbols" in hashes:
+        digest.update(b"antinomie-volatility-symbols-v1" + bytes.fromhex(hashes["symbols"]))
     return digest.hexdigest()
 
 
@@ -129,6 +131,10 @@ def valid_name(name):
     return name
 
 
+# First app version that knows bases with a Volatility symbol table.
+SYMBOLS_APP_VERSION = "0.4.0"
+
+
 def stamp_revision(manifest, kernel, allow_unversioned, app_version=None):
     """Record the patch revision and series the kernel was built from, the
     oldest app version that can run it and the app version that built it."""
@@ -140,6 +146,10 @@ def stamp_revision(manifest, kernel, allow_unversioned, app_version=None):
         return
     manifest["antinomie_revision"], manifest["antinomie_source"] = identity
     manifest["min_app_version"] = first_app_version(identity[0])
+    if "symbols" in manifest:
+        # Older apps compute the base identity without the symbol table.
+        manifest["min_app_version"] = max(manifest["min_app_version"], SYMBOLS_APP_VERSION,
+                                          key=lambda v: tuple(map(int, v.split("."))))
     built_with = app_version or workspace_version()
     if built_with is not None:
         if not VERSION.fullmatch(built_with):
@@ -261,6 +271,8 @@ def main():
     parser.add_argument("--kernel-config", type=Path,
                         help="matching kernel .config; validates built-in fixed-display support")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--symbols", type=Path,
+                        help="the kernel's Volatility symbol table (scripts/make-kernel-symbols.py)")
     parser.add_argument("--base-size-mib", type=int, default=256)
     parser.add_argument("--allow-unversioned", action="store_true",
                         help="accept a development kernel without a source id")
@@ -318,6 +330,10 @@ def main():
                 "kernel_append": "console=tty0 console=ttyS0 panic=-1",
                 "sha256": {name: checksum(args.output / name)
                            for name in ("kernel", "initrd.gz", "base.qcow2")}}
+    if args.symbols:
+        shutil.copy2(args.symbols, args.output / "symbols.json.xz")
+        manifest["symbols"] = "symbols.json.xz"
+        manifest["sha256"]["symbols.json.xz"] = checksum(args.output / "symbols.json.xz")
     stamp_revision(manifest, args.output / "kernel", args.allow_unversioned, args.app_version)
     if name:
         manifest["name"] = name

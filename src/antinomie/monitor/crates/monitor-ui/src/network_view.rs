@@ -1035,7 +1035,7 @@ impl NetworkView {
 }
 
 /// A two-line entry of the capture list: its title, then muted details.
-fn capture_row(
+pub(crate) fn capture_row(
     ui: &mut egui::Ui,
     selected: bool,
     (title, color): (&str, egui::Color32),
@@ -1444,7 +1444,7 @@ fn format_duration(ms: u64) -> String {
     }
 }
 
-fn format_bytes(bytes: u64) -> String {
+pub(crate) fn format_bytes(bytes: u64) -> String {
     match bytes {
         0..1024 => format!("{bytes} B"),
         1024..1_048_576 => format!("{:.1} KiB", bytes as f64 / 1024.0),
@@ -1461,7 +1461,7 @@ fn which(program: &str) -> Option<PathBuf> {
 }
 
 /// UTC date and time of Unix `seconds`.
-fn format_date(seconds: u64) -> String {
+pub(crate) fn format_date(seconds: u64) -> String {
     // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
     let days = (seconds / 86_400) as i64 + 719_468;
     let era = days.div_euclid(146_097);

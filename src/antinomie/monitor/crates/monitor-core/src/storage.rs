@@ -447,6 +447,9 @@ impl BundleBuildProvenance {
     }
 }
 
+/// File name of a base's Volatility symbol table.
+pub const SYMBOLS_FILE: &str = "symbols.json.xz";
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Bundle {
     pub kernel: PathBuf,
@@ -482,6 +485,10 @@ pub struct Bundle {
     /// Display name chosen when the base was built; not part of the identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Volatility 3 symbol table (ISF, xz) of the kernel, for memory
+    /// analysis; bases before 0.4.0 have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbols: Option<PathBuf>,
 }
 fn is_false(value: &bool) -> bool {
     !value
@@ -505,6 +512,7 @@ impl Bundle {
         b.kernel = resolve(&b.kernel)?;
         b.base_disk = resolve(&b.base_disk)?;
         b.initrd = b.initrd.as_ref().map(|p| resolve(p)).transpose()?;
+        b.symbols = b.symbols.as_ref().map(|p| resolve(p)).transpose()?;
         Ok(b)
     }
     fn validate_revision(&self) -> Result<(), String> {
@@ -597,6 +605,16 @@ impl Bundle {
                 digest.update([0]);
             }
         }
+        // Absent in older bases, whose identity stays as it was.
+        if let Some(path) = &self.symbols {
+            let file = crate::archive_io::open_regular(
+                path.parent().ok_or("missing artifact parent")?,
+                path,
+            )
+            .map_err(|e| e.to_string())?;
+            digest.update(b"antinomie-volatility-symbols-v1");
+            digest.update(checksum(file, path)?);
+        }
         Ok(format!("{:x}", digest.finalize()))
     }
     /// Import a content-addressed immutable base outside disposable build trees.
@@ -613,6 +631,7 @@ impl Bundle {
                     (Some(&self.kernel), "kernel"),
                     (Some(&self.base_disk), "base.qcow2"),
                     (self.initrd.as_ref(), "initrd"),
+                    (self.symbols.as_ref(), SYMBOLS_FILE),
                 ] {
                     if let Some(source) = source {
                         let destination = staging.join(name);
@@ -640,6 +659,7 @@ impl Bundle {
                     built_with: self.built_with.clone(),
                     min_app_version: self.min_app_version.clone(),
                     name: self.name.clone(),
+                    symbols: self.symbols.as_ref().map(|_| staging.join(SYMBOLS_FILE)),
                 };
                 if copied.identity()? != identity {
                     return Err("bundle changed during import; copies rejected".into());
@@ -677,6 +697,7 @@ impl Bundle {
             built_with: self.built_with,
             min_app_version: self.min_app_version,
             name: self.name,
+            symbols: self.symbols.as_ref().map(|_| target.join(SYMBOLS_FILE)),
         };
         installed.verify_installed()?;
         atomic_json(&target.join("bundle.json"), &installed)?;
@@ -1675,6 +1696,7 @@ mod tests {
             built_with: None,
             min_app_version: None,
             name: None,
+            symbols: None,
         }
         .install(&options)
         .unwrap();
@@ -1959,6 +1981,7 @@ mod tests {
             built_with: None,
             min_app_version: None,
             name: None,
+            symbols: None,
         };
         bundle.base_identity = Some(bundle.identity().unwrap());
         let vm = source.join("vms/old-id");
@@ -2188,6 +2211,7 @@ mod tests {
             built_with: None,
             min_app_version: None,
             name: None,
+            symbols: None,
         };
         let options = BackendOptions {
             data_dir: directory.join("data"),

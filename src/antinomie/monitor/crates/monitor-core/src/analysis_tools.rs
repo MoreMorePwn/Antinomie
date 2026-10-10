@@ -140,6 +140,51 @@ pub const PACKAGES: &[Package] = &[
         ],
         entry: "ghidra/support/analyzeHeadless",
     },
+    // Wheels are zip files: unpacked side by side they form an import path
+    // for the system Python 3 (see memory::Volatility).
+    Package {
+        id: "volatility3",
+        name: "Volatility 3",
+        version: "2.28.2",
+        purpose: "Memory analysis of RAM dumps in the Memory tab (runs on the system Python 3)",
+        license: "Volatility Software License 1.0 (Volatility 3); MIT (pefile); BSD-3-Clause \
+                  (Capstone); BSD-2-Clause and public domain (PyCryptodome)",
+        downloads: &[
+            Download {
+                file: "volatility3-2.28.2-py3-none-any.whl",
+                url: "https://files.pythonhosted.org/packages/8a/26/548439f5192e496fff7f54d41d8762fa8f3712d53c8441b9f57d7c7a8310/volatility3-2.28.2-py3-none-any.whl",
+                sha256: "0461d6dd71b9ddbaf70c96e079c06efdf174ac65383b3dcf10dd165181fbd3c3",
+                size: 1_424_884,
+                archive: Archive::Zip { strip: 0 },
+                into: "lib",
+            },
+            Download {
+                file: "pefile-2024.8.26-py3-none-any.whl",
+                url: "https://files.pythonhosted.org/packages/54/16/12b82f791c7f50ddec566873d5bdd245baa1491bac11d15ffb98aecc8f8b/pefile-2024.8.26-py3-none-any.whl",
+                sha256: "76f8b485dcd3b1bb8166f1128d395fa3d87af26360c2358fb75b80019b957c6f",
+                size: 74_766,
+                archive: Archive::Zip { strip: 0 },
+                into: "lib",
+            },
+            Download {
+                file: "capstone-5.0.9-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+                url: "https://files.pythonhosted.org/packages/d1/39/17747862222bb062e86b501f1f148d5ff589b77908b080d30f7f085cbfb7/capstone-5.0.9-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+                sha256: "273fd8d747d2e35c88f91450be51a603ecfaafb00d96d9f315dcb8689c86193e",
+                size: 1_485_316,
+                archive: Archive::Zip { strip: 0 },
+                into: "lib",
+            },
+            Download {
+                file: "pycryptodome-3.23.0-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+                url: "https://files.pythonhosted.org/packages/5f/e9/a09476d436d0ff1402ac3867d933c61805ec2326c6ea557aeeac3825604e/pycryptodome-3.23.0-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+                sha256: "c8987bd3307a39bc03df5c8e0e3d8be0c4c3518b7f044b0f4c15d1aa78f52575",
+                size: 2_268_954,
+                archive: Archive::Zip { strip: 0 },
+                into: "lib",
+            },
+        ],
+        entry: "lib/volatility3/__init__.py",
+    },
 ];
 
 pub fn package(id: &str) -> Option<&'static Package> {
@@ -549,7 +594,11 @@ mod tests {
                 );
                 assert!(download.size > 0);
             }
-            assert!(!system_candidates(package.id).is_empty());
+            // Volatility only runs from Antinomie's own pinned install.
+            assert_eq!(
+                system_candidates(package.id).is_empty(),
+                package.id == "volatility3"
+            );
         }
     }
 

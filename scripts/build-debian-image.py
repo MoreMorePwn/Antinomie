@@ -497,7 +497,7 @@ def root_image(values, raw, staging, provenance, log, modules=None, cache=None):
 
 
 def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=False,
-          values=None, work=None, app_version=None, rootfs_cache=None):
+          values=None, work=None, app_version=None, rootfs_cache=None, symbols=None):
     if output.exists():
         raise RuntimeError("output already exists; choose a new unpublished bundle path")
     values = options(values or {})
@@ -555,6 +555,10 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
                     "kernel": "kernel", "initrd": "initrd.gz", "base_disk": "base.qcow2",
                     "kernel_append": APPEND, "guest": profile(values["desktop"]),
                     "sha256": hashes}
+        if symbols:
+            shutil.copy2(symbols, bundle / "symbols.json.xz")
+            manifest["symbols"] = "symbols.json.xz"
+            hashes["symbols.json.xz"] = helpers.checksum(bundle / "symbols.json.xz")
         helpers.stamp_revision(manifest, bundle / "kernel", allow_unversioned, app_version)
         if values["name"]:
             manifest["name"] = values["name"]
@@ -578,6 +582,8 @@ def main():
     parser.add_argument("--kernel-config", type=Path,
                         help="matching kernel .config; validates built-in fixed-display support")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--symbols", type=Path,
+                        help="the kernel's Volatility symbol table (scripts/make-kernel-symbols.py)")
     parser.add_argument("--modules", type=Path,
                         help="modules_install root (INSTALL_MOD_PATH) matching the kernel")
     parser.add_argument("--allow-unversioned", action="store_true",
@@ -602,7 +608,8 @@ def main():
         if not isinstance(values, dict):
             raise RuntimeError("options must be a JSON object")
         build(args.kernel, args.output, args.kernel_config, args.modules,
-              args.allow_unversioned, values, args.work, args.app_version, args.rootfs_cache)
+              args.allow_unversioned, values, args.work, args.app_version, args.rootfs_cache,
+              args.symbols)
     except (RuntimeError, OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.exit(1, "Debian image build failed: " + str(error) + "\n")
     print(args.output)

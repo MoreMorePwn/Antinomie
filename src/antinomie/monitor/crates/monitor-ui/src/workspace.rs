@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 pub(crate) enum Panel {
     Trace,
     Network,
+    Memory,
     StaticAnalysis,
     AnalysisSection {
         report_id: String,
@@ -29,6 +30,7 @@ impl Panel {
         match self {
             Self::Trace => "Syscall Trace",
             Self::Network => "Network",
+            Self::Memory => "Memory",
             Self::StaticAnalysis => "Static Analysis",
             Self::AnalysisSection { kind, .. } => kind.label(),
             Self::RunHistory => "Run History",
@@ -141,6 +143,7 @@ impl Default for WorkspaceLayout {
             Panel::RunHistory,
             Panel::Trace,
             Panel::Network,
+            Panel::Memory,
             Panel::StaticAnalysis,
         ]);
         dock.set_active_tab((SurfaceIndex::main(), NodeIndex::root(), TabIndex(1)));
@@ -190,6 +193,7 @@ impl WorkspaceLayout {
             Panel::RunHistory,
             Panel::Trace,
             Panel::Network,
+            Panel::Memory,
             Panel::StaticAnalysis,
             Panel::Details,
             Panel::Activity,
@@ -552,6 +556,7 @@ impl WorkspaceLayout {
                     Panel::RunHistory,
                     Panel::Trace,
                     Panel::Network,
+                    Panel::Memory,
                     Panel::StaticAnalysis,
                 ],
             )
@@ -561,6 +566,7 @@ impl WorkspaceLayout {
                     Panel::RunHistory,
                     Panel::Trace,
                     Panel::Network,
+                    Panel::Memory,
                     Panel::StaticAnalysis,
                 ],
                 vec![Panel::Details, Panel::Activity],
@@ -1072,6 +1078,7 @@ mod tests {
                 Panel::RunHistory,
                 Panel::Trace,
                 Panel::Network,
+                Panel::Memory,
                 Panel::StaticAnalysis
             ]
         );
@@ -1100,6 +1107,7 @@ mod tests {
                 Panel::RunHistory,
                 Panel::Trace,
                 Panel::Network,
+                Panel::Memory,
                 Panel::StaticAnalysis
             ]
         );
@@ -1142,6 +1150,7 @@ mod tests {
                 Panel::RunHistory,
                 Panel::Trace,
                 Panel::Network,
+                Panel::Memory,
                 Panel::StaticAnalysis
             ]
         );
@@ -1168,6 +1177,7 @@ mod tests {
                 Panel::RunHistory,
                 Panel::Trace,
                 Panel::Network,
+                Panel::Memory,
                 Panel::StaticAnalysis
             ]
         );
@@ -1193,6 +1203,7 @@ mod tests {
                 Panel::RunHistory,
                 Panel::Trace,
                 Panel::Network,
+                Panel::Memory,
                 Panel::StaticAnalysis
             ]
         );
@@ -1274,7 +1285,7 @@ mod tests {
             .dock
             .add_window(vec![Panel::Trace, Panel::Terminal("past".into())]);
         layout.validate();
-        assert_eq!(layout.dock.iter_all_tabs().count(), 6);
+        assert_eq!(layout.dock.iter_all_tabs().count(), 7);
         assert_eq!(
             layout
                 .dock

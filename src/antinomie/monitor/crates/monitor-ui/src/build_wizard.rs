@@ -549,6 +549,7 @@ impl BuildWizard {
                 ("builder", "Builder VM"),
                 ("source", "Patch kernel"),
                 ("kernel", "Compile kernel"),
+                ("symbols", "Memory analysis symbols"),
                 ("image", "Build image"),
                 ("install", "Install base"),
             ]
@@ -557,6 +558,7 @@ impl BuildWizard {
                 ("prepare", "Kit and kernel source"),
                 ("source", "Patch kernel"),
                 ("kernel", "Compile kernel"),
+                ("symbols", "Memory analysis symbols"),
                 ("image", "Build image"),
                 ("install", "Install base"),
             ]

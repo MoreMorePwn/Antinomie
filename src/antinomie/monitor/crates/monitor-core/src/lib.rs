@@ -17,6 +17,7 @@ mod guest_account;
 mod guest_desktop;
 mod kit;
 mod locations;
+pub mod memory;
 pub mod network;
 pub mod observation;
 pub mod parser;
