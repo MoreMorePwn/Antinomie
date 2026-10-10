@@ -1956,6 +1956,113 @@ mod tests {
         assert_eq!(numeric_formats(0x4241, 2)[6].1, "A B");
     }
 
+    fn openat(result: i64) -> InvocationSummary {
+        let event = |phase: u8| antinomie_monitor_core::EventSummary {
+            root_task_cookie: 7,
+            stream_id: 1,
+            task_cookie: 3,
+            call_id: 9,
+            event_seq: u64::from(phase) + 10,
+            phase,
+            syscall_nr: 257,
+            syscall_name: "openat".into(),
+            pid: 42,
+            tid: 43,
+            cpu: 0,
+            timestamp_ns: 1_500_000_000,
+            args: (phase == 1).then_some([(-100i64) as u64, 0x7ffe_0000, 0o2000000, 0, 0, 0]),
+            result: (phase == 2).then_some(result),
+            complete: true,
+            issues: Vec::new(),
+            fields: Vec::new(),
+        };
+        let mut entry = event(1);
+        entry.fields.push(FieldSummary {
+            object_id: 4,
+            key: "arg1.path".into(),
+            layout: String::new(),
+            logical_len: Some(12),
+            captured_len: 12,
+            status: Some(0),
+            capture_error: 0,
+            complete: true,
+            preview: b"/etc/passwd\0".to_vec(),
+            raw_path: None,
+            ranges: vec![(0, 12)],
+        });
+        InvocationSummary {
+            stream_id: 1,
+            task_cookie: 3,
+            call_id: 9,
+            entry: Some(entry),
+            exit: Some(event(2)),
+            async_events: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn info_reads_arguments_by_meaning_with_captured_strings() {
+        let row = openat(-2);
+        assert_eq!(
+            info(&row),
+            "dfd=AT_FDCWD filename=\"/etc/passwd\" flags=O_RDONLY|O_CLOEXEC mode=0"
+        );
+        let parts = info_parts(&row);
+        assert!(parts.contains(&("AT_FDCWD".into(), Tone::Value(ValueKind::Name))));
+        assert!(parts.contains(&("\"/etc/passwd\"".into(), Tone::Value(ValueKind::Text))));
+        let cells = cells(&row);
+        assert_eq!(cells[0].0[0].0, "1.500000");
+        assert_eq!(cells[1].0[0].0, "11\u{2192}12");
+        assert_eq!(cells[2].1, "TID 43, PID 42");
+        assert_eq!(
+            cells[5].0,
+            vec![("ENOENT".to_owned(), Tone::Value(ValueKind::Error))]
+        );
+        assert!(cells[5].1.contains("ENOENT = -2"));
+        let cells = super::cells(&openat(3));
+        assert_eq!(cells[5].0[0].0, "3");
+    }
+
+    #[test]
+    fn selecting_a_call_starts_with_its_captured_data() {
+        let row = openat(3);
+        let mut inspector = Inspector::default();
+        inspector.select_first(&row);
+        assert_eq!(
+            inspector.selection,
+            Some(Selection::Captured {
+                phase: 1,
+                object_id: 4
+            })
+        );
+        assert_eq!(inspector.data, b"/etc/passwd\0");
+        // Nothing captured: the return value is what there is to inspect.
+        let mut bare = openat(3);
+        bare.entry.as_mut().unwrap().fields.clear();
+        let mut inspector = Inspector::default();
+        inspector.select_first(&bare);
+        assert_eq!(inspector.selection, Some(Selection::Return(3)));
+    }
+
+    #[test]
+    fn previews_show_text_without_terminators_and_zeros_as_bytes() {
+        let mut field = field();
+        field.preview = b"/etc\0".to_vec();
+        field.ranges = vec![(0, 5)];
+        field.captured_len = 5;
+        field.logical_len = Some(5);
+        assert_eq!(preview(&field), "\"/etc\"");
+        field.preview = vec![0; 4];
+        field.ranges = vec![(0, 4)];
+        field.captured_len = 4;
+        field.logical_len = Some(4);
+        assert_eq!(preview(&field), "00 00 00 00");
+        field.key = "address.data".into();
+        field.preview = vec![2, 0, 0, 53, 10, 0, 2, 3];
+        field.ranges = vec![(0, 8)];
+        assert_eq!(preview(&field), "10.0.2.3:53");
+    }
+
     #[test]
     fn preview_is_bounded_and_marks_truncation() {
         let mut field = field();

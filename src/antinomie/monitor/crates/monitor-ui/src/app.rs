@@ -7922,7 +7922,13 @@ mod tests {
             assert!(find(&output, label).is_some(), "{label} offered");
             assert!(find(&output, value).is_some(), "{value} previewed");
         }
-        let hex = find(&output, "Hex").unwrap();
+        // The menu is drawn last, over the numeric view's own "Hex" row.
+        let hex = texts(&output)
+            .into_iter()
+            .filter(|(text, _)| text == "Hex")
+            .map(|(_, rect)| rect.center())
+            .next_back()
+            .unwrap();
         let (output, copied) = click(&mut inspector, hex, egui::PointerButton::Primary);
         assert_eq!(copied, ["0xfffffffffffffffe"]);
 
@@ -7945,7 +7951,10 @@ mod tests {
             .collect();
         rows.sort_by(|a, b| a.top().total_cmp(&b.top()));
         assert_eq!(rows.len(), 2, "argument row and its captured field");
-        assert!(rows[1].left() > rows[0].left(), "field indented under argument");
+        assert!(
+            rows[1].left() > rows[0].left(),
+            "field indented under argument"
+        );
         let field = rows[1].center();
         let (output, _) = click(&mut inspector, field, egui::PointerButton::Secondary);
         let open = find(
@@ -8564,6 +8573,140 @@ mod tests {
             labels.contains(&"File & filesystem 1".to_string()),
             "{labels:?}"
         );
+    }
+
+    #[test]
+    fn stopped_vm_trace_offers_its_recent_runs_and_captures() {
+        let size = egui::vec2(1280.0, 820.0);
+        let fixture = || {
+            let mut app = app();
+            app.selected = Some("vm".into());
+            let mut saved = run("saved");
+            saved.state = RunState::Finished;
+            saved.request.path = "/usr/bin/recent-run".into();
+            app.history = vec![saved];
+            app.capture_history = vec![observer("cap", CaptureState::Finalized)];
+            // Stale events of an ended session are not a live trace.
+            app.snapshot.events = vec![event(1, 0), event(2, 0)];
+            app.snapshot.vms = vec![VmConfig {
+                id: "vm".into(),
+                ..VmConfig::default()
+            }];
+            app
+        };
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut app = fixture();
+        assert!(app.no_live_trace());
+        for _ in 0..3 {
+            let _ = render(&mut app, &ctx, size);
+        }
+        let shown: Vec<_> = texts(&render(&mut app, &ctx, size))
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+        for label in [
+            "No live trace",
+            "Recent runs",
+            "/usr/bin/recent-run",
+            "Recent captures",
+            "All guest programs",
+        ] {
+            assert!(shown.iter().any(|text| text == label), "{label}: {shown:?}");
+        }
+        assert!(!shown.iter().any(|text| text == "read (0)"));
+        // Run History lists runs; the panel asked for the captures too.
+        assert!(matches!(
+            app.pending_archive,
+            Some(Request::ListCaptures { ref vm_id, .. }) if vm_id == "vm"
+        ));
+
+        click_label(&mut app, &ctx, size, "/usr/bin/recent-run");
+        assert_eq!(app.selected_run.as_deref(), Some("saved"));
+        assert!(app.archive_selected);
+        assert!(matches!(
+            app.pending_archive,
+            Some(Request::Invocations { capture: false, .. })
+        ));
+        assert!(!app.no_live_trace());
+
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut app = fixture();
+        click_label(&mut app, &ctx, size, "All guest programs");
+        assert_eq!(app.selected_capture.as_deref(), Some("cap"));
+        assert!(matches!(
+            app.pending_archive,
+            Some(Request::Invocations { capture: true, .. })
+        ));
+
+        // A running VM shows its live trace instead.
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut app = fixture();
+        app.snapshot.active_vm = Some("vm".into());
+        app.snapshot.state = VmState::Running;
+        assert!(!app.no_live_trace());
+        for _ in 0..3 {
+            let _ = render(&mut app, &ctx, size);
+        }
+        assert!(texts(&render(&mut app, &ctx, size))
+            .iter()
+            .any(|(text, _)| text == "read (0)"));
+    }
+
+    #[test]
+    fn category_chips_wrap_to_two_lines_inside_the_panel() {
+        for (size, font) in [
+            (egui::vec2(1280.0, 820.0), 16.0),
+            (egui::vec2(800.0, 600.0), 16.0),
+            (egui::vec2(800.0, 600.0), 24.0),
+        ] {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            theme::text_size(&ctx, font);
+            let mut app = app();
+            app.settings.font_size = font;
+            app.snapshot.events = vec![event(1, 0), event(2, 0)];
+            for _ in 0..3 {
+                let _ = render(&mut app, &ctx, size);
+            }
+            let texts = texts(&render(&mut app, &ctx, size));
+            let chips: Vec<_> = texts
+                .iter()
+                .filter(|(text, _)| {
+                    text == "All"
+                        || SyscallGroup::ALL.iter().any(|group| {
+                            text.strip_prefix(group.label())
+                                .and_then(|count| count.strip_prefix(' '))
+                                .is_some_and(|count| count.parse::<usize>().is_ok())
+                        })
+                })
+                .map(|(_, rect)| *rect)
+                .collect();
+            let mut lines: Vec<f32> = Vec::new();
+            for chip in &chips {
+                if !lines
+                    .iter()
+                    .any(|line| (line - chip.center().y).abs() < 8.0)
+                {
+                    lines.push(chip.center().y);
+                }
+                assert!(chip.right() <= size.x, "chip overflows at {size:?}/{font}");
+            }
+            assert!(lines.len() <= 2, "chip lines {lines:?} at {size:?}/{font}");
+            if size.x > 1000.0 {
+                // Wide enough for every chip within the two lines.
+                assert_eq!(chips.len(), SyscallGroup::ALL.len() + 1);
+                assert_eq!(lines.len(), 2);
+            }
+            let header = texts
+                .iter()
+                .find(|(text, _)| text == "Record")
+                .expect("table header stays in view")
+                .1;
+            assert!(chips.iter().all(|chip| chip.bottom() < header.top()));
+        }
     }
 
     #[test]
