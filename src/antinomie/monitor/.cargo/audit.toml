@@ -1,0 +1,17 @@
+# Reviewed advisories (cargo audit). All come through yara-x 1.21.0, the
+# newest release, which pins wasmtime 45 and depends on rsa; revisit when
+# yara-x updates them.
+[advisories]
+ignore = [
+    # rsa: timing side channel in private-key decryption and signing; yara-x
+    # only verifies Authenticode signatures with public keys.
+    "RUSTSEC-2023-0071",
+    # wasmtime: component-model async lifting, hostcall fuel for record
+    # lifting, type indices across engines and WASI filesystem paths. yara-x
+    # runs core modules it compiles from the bundled rules, with one engine,
+    # no components and no WASI; scanning runs inside the bubblewrap sandbox.
+    "RUSTSEC-2026-0316",
+    "RUSTSEC-2026-0222",
+    "RUSTSEC-2026-0327",
+    "RUSTSEC-2026-0269",
+]
