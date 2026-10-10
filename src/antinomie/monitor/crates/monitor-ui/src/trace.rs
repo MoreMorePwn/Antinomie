@@ -1,5 +1,8 @@
 //! Paired invocation presentation and inspectors for actually captured content.
-use crate::theme;
+use crate::{
+    data_view::{self, OpenData},
+    theme,
+};
 use antinomie_monitor_core::{syscalls, FieldSummary, InvocationSummary};
 use eframe::egui::{self, RichText};
 use std::collections::BTreeMap;
@@ -42,6 +45,8 @@ pub(crate) struct Inspector {
     pub(crate) error: Option<String>,
     byte_index: usize,
     numeric_width: usize,
+    /// Fields the user asked to see in a data window; the app opens them.
+    pub(crate) open_data: Vec<OpenData>,
 }
 
 impl Inspector {
@@ -78,6 +83,52 @@ impl Inspector {
             self.byte_index = 0;
             self.numeric_width = 1;
         }
+    }
+
+    /// Ask for `field` of `invocation` to open in its own data window.
+    fn request_data(
+        &mut self,
+        invocation: &InvocationSummary,
+        nr: u64,
+        scope: String,
+        field: &FieldSummary,
+    ) {
+        self.open_data.push(OpenData {
+            key: format!("{:?}/{scope}/{}", key(invocation), field.object_id),
+            title: format!(
+                "{} / {} call {}",
+                field.key,
+                syscall_name(nr),
+                invocation.call_id
+            ),
+            field: field.clone(),
+        });
+    }
+
+    /// Open the selected captured field in a data window.
+    fn open_selected_data(&mut self, invocation: &InvocationSummary, field: &FieldSummary) {
+        let (nr, scope) = match &self.selection {
+            Some(Selection::Captured { phase, .. }) => (
+                if *phase == 2 {
+                    invocation.exit.as_ref()
+                } else {
+                    invocation.entry.as_ref()
+                }
+                .or(representative(invocation))
+                .map_or(0, |event| event.syscall_nr),
+                format!("p{phase}"),
+            ),
+            Some(Selection::AsyncCaptured { event_seq, .. }) => (
+                invocation
+                    .async_events
+                    .iter()
+                    .find(|event| event.event_seq == *event_seq)
+                    .map_or(0, |event| event.syscall_nr),
+                format!("async{event_seq}"),
+            ),
+            _ => return,
+        };
+        self.request_data(invocation, nr, scope, field);
     }
 
     pub(crate) fn field<'a>(&self, invocation: &'a InvocationSummary) -> Option<&'a FieldSummary> {
@@ -149,13 +200,18 @@ impl Inspector {
                                         ui.colored_label(theme::WARN, issue);
                                     }
                                     if let Some(result) = event.result {
-                                        if ui
-                                            .selectable_label(
-                                                self.selection == Some(Selection::Return(result)),
-                                                format!("Return: {result}"),
-                                            )
-                                            .clicked()
-                                        {
+                                        let response = ui.selectable_label(
+                                            self.selection == Some(Selection::Return(result)),
+                                            format!("Return: {result}"),
+                                        );
+                                        data_view::number_menu(
+                                            &response,
+                                            result as u64,
+                                            8,
+                                            &result.to_string(),
+                                            &[],
+                                        );
+                                        if response.clicked() {
                                             self.clear();
                                             self.selection = Some(Selection::Return(result));
                                         }
@@ -179,9 +235,9 @@ impl Inspector {
                                                     index,
                                                     value,
                                                 });
+                                            let name = argument_name(event.syscall_nr, index);
                                             let response = egui::CollapsingHeader::new(format!(
-                                                "{}: {value:#x}",
-                                                argument_name(event.syscall_nr, index)
+                                                "{name}: {value:#x}"
                                             ))
                                             .id_salt((key(invocation), phase, index))
                                             .default_open(false)
@@ -193,10 +249,16 @@ impl Inspector {
                                                     value,
                                                     Some(args),
                                                 );
-                                                if ui
-                                                    .selectable_label(selected, "Numeric value")
-                                                    .clicked()
-                                                {
+                                                let numeric =
+                                                    ui.selectable_label(selected, "Numeric value");
+                                                data_view::number_menu(
+                                                    &numeric,
+                                                    value,
+                                                    8,
+                                                    &format!("{value:#x}"),
+                                                    &[],
+                                                );
+                                                if numeric.clicked() {
                                                     self.select_argument(phase, index, value);
                                                 }
                                                 let fields: Vec<_> = event
@@ -207,8 +269,24 @@ impl Inspector {
                                                             == Some(index)
                                                     })
                                                     .collect();
-                                                field_tree(ui, phase, &fields, true, self);
+                                                field_tree(
+                                                    ui,
+                                                    (invocation, event.syscall_nr, phase),
+                                                    &fields,
+                                                    true,
+                                                    self,
+                                                );
                                             });
+                                            data_view::number_menu(
+                                                &response.header_response,
+                                                value,
+                                                8,
+                                                &format!("{value:#x}"),
+                                                &[(
+                                                    "Name and value",
+                                                    &format!("{name}: {value:#x}"),
+                                                )],
+                                            );
                                             if response.header_response.clicked() {
                                                 self.select_argument(phase, index, value);
                                             }
@@ -230,7 +308,13 @@ impl Inspector {
                                             .id_salt((key(invocation), phase, "objects"))
                                             .default_open(true)
                                             .show(ui, |ui| {
-                                                field_tree(ui, phase, &fields, false, self)
+                                                field_tree(
+                                                    ui,
+                                                    (invocation, event.syscall_nr, phase),
+                                                    &fields,
+                                                    false,
+                                                    self,
+                                                )
                                             });
                                     }
                                 });
@@ -246,7 +330,7 @@ impl Inspector {
                                 ui.colored_label(theme::MUTED, "No correlated async observations");
                             }
                             for event in &invocation.async_events {
-                                egui::CollapsingHeader::new(format!(
+                                let header = egui::CollapsingHeader::new(format!(
                                     "{} / {} / TID {} / CPU {}",
                                     async_stage(event),
                                     event.event_seq,
@@ -268,23 +352,43 @@ impl Inspector {
                                             Some(3) => "Submission rejection",
                                             _ => "Reported value",
                                         };
-                                        ui.label(format!("{label}: {result}"));
+                                        let response = ui.add(
+                                            egui::Label::new(format!("{label}: {result}"))
+                                                .sense(egui::Sense::click()),
+                                        );
+                                        data_view::number_menu(
+                                            &response,
+                                            result as u64,
+                                            8,
+                                            &result.to_string(),
+                                            &[],
+                                        );
                                     }
                                     for field in &event.fields {
-                                        if ui
-                                            .selectable_label(
-                                                self.selection
-                                                    == Some(Selection::AsyncCaptured {
-                                                        event_seq: event.event_seq,
-                                                        object_id: field.object_id,
-                                                    }),
+                                        let response = ui.selectable_label(
+                                            self.selection
+                                                == Some(Selection::AsyncCaptured {
+                                                    event_seq: event.event_seq,
+                                                    object_id: field.object_id,
+                                                }),
+                                            capture_text(
+                                                field,
                                                 format!(
-                                                    "{} / Captured bytes ({} bytes)",
-                                                    field.key, field.captured_len
+                                                    "{} / {}",
+                                                    field.key,
+                                                    capture_summary(field)
                                                 ),
-                                            )
-                                            .clicked()
-                                        {
+                                            ),
+                                        );
+                                        if field_menu(&response, field) {
+                                            self.request_data(
+                                                invocation,
+                                                event.syscall_nr,
+                                                format!("async{}", event.event_seq),
+                                                field,
+                                            );
+                                        }
+                                        if response.clicked() {
                                             self.clear();
                                             self.selection = Some(Selection::AsyncCaptured {
                                                 event_seq: event.event_seq,
@@ -296,6 +400,17 @@ impl Inspector {
                                             self.numeric_width = 1;
                                         }
                                     }
+                                });
+                                header.header_response.context_menu(|ui| {
+                                    data_view::copy_items(
+                                        ui,
+                                        &[
+                                            ("Stage".into(), async_stage(event)),
+                                            ("Event sequence".into(), event.event_seq.to_string()),
+                                            ("TID".into(), event.tid.to_string()),
+                                            ("CPU".into(), event.cpu.to_string()),
+                                        ],
+                                    );
                                 });
                             }
                         });
@@ -335,36 +450,84 @@ impl Inspector {
                                 ui.label("Captured field unavailable");
                                 return;
                             };
-                            ui.strong(&field.key);
-                            ui.label(format!(
-                                "Captured bytes ({} bytes); logical length {} bytes",
+                            let mut open_data = false;
+                            ui.horizontal_wrapped(|ui| {
+                                ui.strong(&field.key);
+                                open_data = ui
+                                    .button(format!(
+                                        "{} Open data…",
+                                        egui_phosphor::regular::ARROW_SQUARE_OUT
+                                    ))
+                                    .on_hover_text(
+                                        "Show all captured bytes as text, hexdump, C array, \
+                                         Base64 and more",
+                                    )
+                                    .clicked();
+                            });
+                            let length = ui.add(
+                                egui::Label::new(capture_text(field, capture_summary(field)))
+                                    .sense(egui::Sense::click()),
+                            );
+                            data_view::number_menu(
+                                &length,
                                 field.captured_len,
-                                field
-                                    .logical_len
-                                    .map(|n| n.to_string())
-                                    .unwrap_or_else(|| "unknown".into())
-                            ));
-                            ui.label(format!(
-                                "{}; status {:?}; error {}",
-                                if field.complete {
-                                    "Complete"
-                                } else {
-                                    "Incomplete"
-                                },
-                                field.status,
-                                field.capture_error
-                            ));
+                                8,
+                                &field.captured_len.to_string(),
+                                &[],
+                            );
+                            if let Some(logical) = field.logical_len {
+                                let response = ui.add(
+                                    egui::Label::new(format!("Logical length {logical} bytes"))
+                                        .sense(egui::Sense::click()),
+                                );
+                                data_view::number_menu(
+                                    &response,
+                                    logical,
+                                    8,
+                                    &logical.to_string(),
+                                    &[],
+                                );
+                            } else {
+                                ui.label("Logical length unknown");
+                            }
+                            if field.status.is_some_and(|status| status != 0)
+                                || field.capture_error != 0
+                            {
+                                ui.label(format!(
+                                    "Status {}; error {}",
+                                    field.status.map_or_else(|| "none".into(), status_name),
+                                    field.capture_error
+                                ));
+                            }
                             if !field.layout.is_empty() {
                                 ui.label(&field.layout);
                             }
                             egui::CollapsingHeader::new("Captured ranges").show(ui, |ui| {
                                 for &(offset, len) in &field.ranges {
-                                    ui.monospace(format!(
-                                        "{offset:#x}..{:#x}",
-                                        offset.saturating_add(len)
-                                    ));
+                                    let end = offset.saturating_add(len);
+                                    let response = ui.add(
+                                        egui::Label::new(
+                                            RichText::new(format!("{offset:#x}..{end:#x}"))
+                                                .monospace(),
+                                        )
+                                        .sense(egui::Sense::click()),
+                                    );
+                                    response.context_menu(|ui| {
+                                        data_view::copy_items(
+                                            ui,
+                                            &[
+                                                ("Range".into(), format!("{offset:#x}..{end:#x}")),
+                                                ("Start".into(), format!("{offset:#x}")),
+                                                ("End".into(), format!("{end:#x}")),
+                                                ("Length".into(), len.to_string()),
+                                            ],
+                                        );
+                                    });
                                 }
                             });
+                            if open_data {
+                                self.open_selected_data(invocation, field);
+                            }
                             if let Some(error) = &self.error {
                                 ui.colored_label(theme::WARN, error);
                             }
@@ -401,13 +564,19 @@ impl Inspector {
                                     ui.spacing_mut().item_spacing.x = 3.0;
                                     for (column, byte) in data.iter().enumerate() {
                                         let index = line * 16 + column;
-                                        if ui
-                                            .selectable_label(
-                                                self.byte_index == index,
-                                                RichText::new(format!("{byte:02x}")).monospace(),
-                                            )
-                                            .clicked()
-                                        {
+                                        let response = ui.selectable_label(
+                                            self.byte_index == index,
+                                            RichText::new(format!("{byte:02x}")).monospace(),
+                                        );
+                                        let offset = self.data_offset + index as u64;
+                                        data_view::number_menu(
+                                            &response,
+                                            u64::from(*byte),
+                                            1,
+                                            &format!("{byte:02x}"),
+                                            &[("Offset", &format!("{offset:#x}"))],
+                                        );
+                                        if response.clicked() {
                                             self.byte_index = index;
                                         }
                                     }
@@ -456,9 +625,12 @@ struct FieldNode<'a> {
     children: BTreeMap<String, FieldNode<'a>>,
 }
 
+/// The invocation, syscall number and phase that captured fields belong to.
+type FieldOwner<'a> = (&'a InvocationSummary, u64, u8);
+
 fn field_tree(
     ui: &mut egui::Ui,
-    phase: u8,
+    owner: FieldOwner<'_>,
     fields: &[&FieldSummary],
     strip_arg: bool,
     inspector: &mut Inspector,
@@ -486,7 +658,13 @@ fn field_tree(
         }
         node.field = Some(field);
     }
-    fn show(ui: &mut egui::Ui, phase: u8, node: &FieldNode<'_>, inspector: &mut Inspector) {
+    fn show(
+        ui: &mut egui::Ui,
+        owner: FieldOwner<'_>,
+        node: &FieldNode<'_>,
+        inspector: &mut Inspector,
+    ) {
+        let (invocation, nr, phase) = owner;
         for (label, child) in &node.children {
             ui.push_id((phase, label), |ui| {
                 let response =
@@ -494,40 +672,133 @@ fn field_tree(
                         .default_open(false)
                         .show(ui, |ui| {
                             if let Some(field) = child.field {
-                                if ui
-                                    .selectable_label(
-                                        inspector.selection
-                                            == Some(Selection::Captured {
-                                                phase,
-                                                object_id: field.object_id,
-                                            }),
-                                        format!("Captured bytes ({} bytes)", field.captured_len),
-                                    )
-                                    .clicked()
-                                {
+                                let response = ui.selectable_label(
+                                    inspector.selection
+                                        == Some(Selection::Captured {
+                                            phase,
+                                            object_id: field.object_id,
+                                        }),
+                                    capture_text(field, capture_summary(field)),
+                                );
+                                if field_menu(&response, field) {
+                                    inspector.request_data(
+                                        invocation,
+                                        nr,
+                                        format!("p{phase}"),
+                                        field,
+                                    );
+                                }
+                                if response.clicked() {
                                     inspector.select_field(phase, field);
                                 }
-                                ui.label(format!(
-                                    "{} bytes captured; {}",
-                                    field.captured_len,
-                                    if field.complete {
-                                        "complete"
-                                    } else {
-                                        "incomplete"
-                                    }
-                                ));
                             }
-                            show(ui, phase, child, inspector);
+                            show(ui, owner, child, inspector);
                         });
-                if response.header_response.clicked() {
-                    if let Some(field) = child.field {
+                if let Some(field) = child.field {
+                    if field_menu(&response.header_response, field) {
+                        inspector.request_data(invocation, nr, format!("p{phase}"), field);
+                    }
+                    if response.header_response.clicked() {
                         inspector.select_field(phase, field);
                     }
                 }
             });
         }
     }
-    show(ui, phase, &root, inspector);
+    show(ui, owner, &root, inspector);
+}
+
+/// The right-click menu of a captured field; true when the user asked to
+/// open its data window.
+fn field_menu(response: &egui::Response, field: &FieldSummary) -> bool {
+    let mut open = false;
+    response.context_menu(|ui| {
+        if ui
+            .button(format!(
+                "{} Open data…",
+                egui_phosphor::regular::ARROW_SQUARE_OUT
+            ))
+            .clicked()
+        {
+            open = true;
+            ui.close_menu();
+        }
+        ui.separator();
+        let mut items = vec![
+            ("Key".to_owned(), field.key.clone()),
+            ("Captured length".to_owned(), field.captured_len.to_string()),
+        ];
+        if let Some(logical) = field.logical_len {
+            items.push(("Logical length".to_owned(), logical.to_string()));
+        }
+        let preview = covered_preview(field);
+        if !preview.is_empty() {
+            items.push((
+                "Preview as hex".to_owned(),
+                data_view::format_bytes(data_view::DataFormat::Hex, preview, 0),
+            ));
+        }
+        data_view::copy_items(ui, &items);
+    });
+    open
+}
+
+/// Status names of `enum ant_status` in the guest kernel's capture API.
+pub(crate) fn status_name(status: u32) -> String {
+    match status {
+        0 => "complete",
+        1 => "copy fault",
+        2 => "invalid extent",
+        3 => "unknown extent",
+        4 => "no decoder",
+        5 => "null pointer",
+        6 => "address only",
+        7 => "not observed asynchronously",
+        8 => "resource exhausted",
+        9 => "aborted on loss",
+        10 => "context missing",
+        11 => "not written",
+        12 => "not resident",
+        status => return format!("status {status}"),
+    }
+    .into()
+}
+
+/// Why a field's capture is not complete, in a few words.
+pub(crate) fn incomplete_reason(field: &FieldSummary) -> String {
+    match field.status {
+        Some(0) | None => "incomplete".into(),
+        Some(status) => status_name(status),
+    }
+}
+
+/// "Captured bytes (N bytes)"; an incomplete capture also says how much of
+/// the object it holds and why it stopped.
+pub(crate) fn capture_summary(field: &FieldSummary) -> String {
+    let count = match field.logical_len {
+        Some(logical) if logical != field.captured_len => {
+            format!("{} of {logical} bytes", field.captured_len)
+        }
+        _ => format!("{} bytes", field.captured_len),
+    };
+    if field.complete {
+        format!("Captured bytes ({count})")
+    } else {
+        format!("Captured bytes ({count}, {})", incomplete_reason(field))
+    }
+}
+
+/// `text` about `field`, in the warning color when its capture is incomplete.
+fn capture_text(field: &FieldSummary, text: String) -> RichText {
+    if field.complete {
+        RichText::new(text)
+    } else {
+        RichText::new(text).color(theme::WARN)
+    }
+}
+
+fn syscall_name(nr: u64) -> String {
+    syscalls::syscall(nr).map_or_else(|| format!("syscall {nr}"), |info| info.name.clone())
 }
 
 pub(crate) fn argument_name(nr: u64, index: usize) -> &'static str {
@@ -566,14 +837,29 @@ pub(crate) fn argument_name(nr: u64, index: usize) -> &'static str {
 
 fn show_flags(ui: &mut egui::Ui, number: u64, index: usize, value: u64, args: Option<[u64; 6]>) {
     if let Some(name) = args.and_then(|args| syscalls::selector_name(number, index, &args)) {
-        ui.label(format!("{name} (raw {value:#x})"));
+        let shown = format!("{name} (raw {value:#x})");
+        let response = ui.add(egui::Label::new(&shown).sense(egui::Sense::click()));
+        data_view::number_menu(&response, value, 8, &shown, &[("Name", &name)]);
     }
     if let Some(flags) = syscalls::argument_flags(number, index, value) {
-        ui.label(format!("{} (raw {value:#x})", flags.names.join(" | ")));
+        let names = flags.names.join(" | ");
+        let shown = format!("{names} (raw {value:#x})");
+        let response = ui.add(egui::Label::new(&shown).sense(egui::Sense::click()));
+        data_view::number_menu(&response, value, 8, &shown, &[("Flag names", &names)]);
         if flags.unknown_bits != 0 {
-            ui.colored_label(
-                theme::WARN,
-                format!("Unknown bits: {:#x}", flags.unknown_bits),
+            let response = ui.add(
+                egui::Label::new(
+                    RichText::new(format!("Unknown bits: {:#x}", flags.unknown_bits))
+                        .color(theme::WARN),
+                )
+                .sense(egui::Sense::click()),
+            );
+            data_view::number_menu(
+                &response,
+                flags.unknown_bits,
+                8,
+                &format!("{:#x}", flags.unknown_bits),
+                &[],
             );
         }
     }
@@ -845,9 +1131,25 @@ fn numeric(ui: &mut egui::Ui, value: u64, width: usize) {
         .num_columns(2)
         .spacing([12.0, 4.0])
         .show(ui, |ui| {
-            for (label, text) in numeric_formats(value, width) {
-                ui.label(label);
-                ui.monospace(text);
+            let formats = numeric_formats(value, width);
+            for (label, text) in &formats {
+                ui.label(*label);
+                let response = ui.add(
+                    egui::Label::new(RichText::new(text).monospace()).sense(egui::Sense::click()),
+                );
+                response.context_menu(|ui| {
+                    let mut items = vec![((*label).to_owned(), text.clone())];
+                    items.push((
+                        "All forms".to_owned(),
+                        formats
+                            .iter()
+                            .map(|(label, text)| format!("{label}: {text}"))
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    ));
+                    items.extend(data_view::number_items(value, width, ""));
+                    data_view::copy_items(ui, &items);
+                });
                 ui.end_row();
             }
         });

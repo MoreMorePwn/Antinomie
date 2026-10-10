@@ -384,3 +384,59 @@ fn native_analysis_workspace_fixture() {
     )
     .unwrap();
 }
+
+#[test]
+fn unfinished_analysis_shows_progress_until_it_completes() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let mut report = fixture();
+    report.state = AnalysisState::Running;
+    let mut entropy = AnalysisSection::new(AnalysisKind::Entropy);
+    entropy.summary = "pending acquisition".into();
+    report.sections.push(entropy);
+    let mut state = WorkspaceState::default();
+    let size = egui::vec2(1200.0, 800.0);
+    let overview = |report: &AnalysisReport, state: &mut WorkspaceState| {
+        let mut output = None;
+        for _ in 0..3 {
+            output = Some(ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        workspace(ui, Some(report), state, None, None);
+                    });
+                },
+            ));
+        }
+        texts(&output.unwrap())
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect::<Vec<_>>()
+    };
+    let shown = overview(&report, &mut state);
+    assert!(
+        shown
+            .iter()
+            .any(|text| text == "Analysis in progress: Entropy"),
+        "{shown:?}"
+    );
+    assert!(shown.iter().any(|text| text == "Running… / 0 rows"));
+    assert!(shown
+        .iter()
+        .any(|text| text == &format!("{} Entropy", egui_phosphor::regular::HOURGLASS_MEDIUM)));
+    let (output, _) = render(&ctx, &report, &mut state, size, Vec::new(), None);
+    assert!(texts(&output)
+        .iter()
+        .any(|(text, _)| text == "Analysis in progress: Entropy"));
+
+    report.state = AnalysisState::Complete;
+    report.sections.last_mut().unwrap().state = AnalysisSectionState::Complete;
+    let shown = overview(&report, &mut state);
+    assert!(!shown
+        .iter()
+        .any(|text| text.starts_with("Analysis in progress")));
+    assert!(!shown.iter().any(|text| text.starts_with("Running…")));
+}

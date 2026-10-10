@@ -1,6 +1,7 @@
 //! Opt-in launch selection and retained, run-addressed analysis evidence.
 use antinomie_monitor_core::{
-    analysis_tools::ToolStatus, AnalysisKind, AnalysisSelection, ExecRequest,
+    analysis_tools::ToolStatus, AnalysisKind, AnalysisReport, AnalysisSectionState,
+    AnalysisSelection, AnalysisState, ExecRequest,
 };
 use eframe::egui;
 mod entropy;
@@ -199,9 +200,135 @@ pub(crate) fn section_title(kind: AnalysisKind) -> &'static str {
     }
 }
 
+/// True while a report's analysis is waiting for, or working on, its program.
+pub(crate) fn in_progress(report: &AnalysisReport) -> bool {
+    matches!(
+        report.state,
+        AnalysisState::Acquiring | AnalysisState::Queued | AnalysisState::Running
+    )
+}
+
+/// The word for a category that has no result yet while its report is in
+/// progress.
+pub(crate) fn pending_word(state: AnalysisState) -> &'static str {
+    match state {
+        AnalysisState::Acquiring | AnalysisState::Queued => "Queued…",
+        _ => "Running…",
+    }
+}
+
+/// "Analysis in progress: <categories without a result>", or None once the
+/// analysis has finished.
+pub(crate) fn progress_text(report: &AnalysisReport) -> Option<String> {
+    if !in_progress(report) {
+        return None;
+    }
+    let stage = match report.state {
+        AnalysisState::Acquiring => " (copying the program from the guest)",
+        AnalysisState::Queued => " (queued)",
+        _ => "",
+    };
+    let pending: Vec<_> = report
+        .sections
+        .iter()
+        .filter(|section| section.state == AnalysisSectionState::Pending)
+        .map(|section| section_title(section.kind))
+        .collect();
+    Some(if pending.is_empty() {
+        format!("Analysis in progress{stage}")
+    } else {
+        format!("Analysis in progress{stage}: {}", pending.join(", "))
+    })
+}
+
+/// A spinner and the progress line while `report` is still being analyzed.
+pub(crate) fn progress_banner(ui: &mut egui::Ui, report: &AnalysisReport) {
+    if let Some(text) = progress_text(report) {
+        ui.horizontal_wrapped(|ui| {
+            ui.add(egui::Spinner::new());
+            ui.colored_label(crate::theme::BLUE, text);
+        });
+    }
+}
+
+/// Analyses still in progress besides the one shown, each with a spinner.
+pub(crate) fn other_progress<'a>(
+    ui: &mut egui::Ui,
+    reports: impl IntoIterator<Item = &'a AnalysisReport>,
+    shown: Option<&str>,
+) {
+    let mut seen = Vec::new();
+    for report in reports {
+        if Some(report.id.as_str()) == shown || seen.contains(&&report.id) {
+            continue;
+        }
+        seen.push(&report.id);
+        if let Some(text) = progress_text(report) {
+            ui.horizontal_wrapped(|ui| {
+                ui.add(egui::Spinner::new());
+                ui.colored_label(
+                    crate::theme::MUTED,
+                    format!("{}: {text}", report.source_path),
+                )
+                .on_hover_text(format!("Report {}", report.id));
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn report(
+        state: AnalysisState,
+        sections: &[(AnalysisKind, AnalysisSectionState)],
+    ) -> AnalysisReport {
+        AnalysisReport {
+            id: "report".into(),
+            state,
+            source_path: "/bin/true".into(),
+            specimen_sha256: None,
+            specimen_len: None,
+            reason: None,
+            sections: sections
+                .iter()
+                .map(|&(kind, state)| {
+                    let mut section = antinomie_monitor_core::AnalysisSection::new(kind);
+                    section.state = state;
+                    section
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn progress_names_categories_still_running_and_clears_when_finished() {
+        let sections = [
+            (AnalysisKind::Metadata, AnalysisSectionState::Complete),
+            (AnalysisKind::Strings, AnalysisSectionState::Pending),
+            (AnalysisKind::Entropy, AnalysisSectionState::Pending),
+        ];
+        assert_eq!(
+            progress_text(&report(AnalysisState::Running, &sections)).as_deref(),
+            Some("Analysis in progress: Strings, Entropy")
+        );
+        assert_eq!(
+            progress_text(&report(AnalysisState::Queued, &sections[..1])).as_deref(),
+            Some("Analysis in progress (queued)")
+        );
+        assert!(progress_text(&report(AnalysisState::Acquiring, &sections))
+            .unwrap()
+            .starts_with("Analysis in progress (copying the program from the guest): Strings"));
+        for state in [
+            AnalysisState::Complete,
+            AnalysisState::Partial,
+            AnalysisState::Unavailable,
+            AnalysisState::Cancelled,
+        ] {
+            assert_eq!(progress_text(&report(state, &sections)), None);
+        }
+    }
 
     #[test]
     fn launch_selection_is_owned_and_empty_enabled_selection_is_rejected() {

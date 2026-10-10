@@ -104,6 +104,7 @@ fn render(
         ui.add(egui::Label::new(egui::RichText::new(reason).color(crate::theme::MUTED)).truncate())
             .on_hover_text(reason);
     }
+    super::progress_banner(ui, report);
     ui.separator();
     if forced.is_none() && ui.available_width() >= 900.0 {
         ui.horizontal_top(|ui| {
@@ -159,7 +160,8 @@ fn navigation(ui: &mut egui::Ui, report: &AnalysisReport, state: &mut WorkspaceS
     }
     for section in &report.sections {
         if section.kind == AnalysisKind::Structures {
-            egui::CollapsingHeader::new("Structures")
+            egui::CollapsingHeader::new(nav_title(report, section))
+                .id_salt("Structures")
                 .default_open(true)
                 .show(ui, |ui| {
                     if ui
@@ -197,15 +199,31 @@ fn navigation(ui: &mut egui::Ui, report: &AnalysisReport, state: &mut WorkspaceS
                 });
         } else if ui
             .add(
-                egui::Button::new(section_title(section.kind))
+                egui::Button::new(nav_title(report, section))
                     .selected(state.kind == Some(section.kind))
                     .frame(false)
                     .truncate(),
             )
+            .on_hover_text(state_word(report, section))
             .clicked()
         {
             state.kind = Some(section.kind);
         }
+    }
+}
+
+/// A category's name, marked with an hourglass while it is still running.
+fn nav_title(report: &AnalysisReport, section: &AnalysisSection) -> String {
+    if super::in_progress(report)
+        && section.state == antinomie_monitor_core::AnalysisSectionState::Pending
+    {
+        format!(
+            "{} {}",
+            egui_phosphor::regular::HOURGLASS_MEDIUM,
+            section_title(section.kind)
+        )
+    } else {
+        section_title(section.kind).to_owned()
     }
 }
 
@@ -236,7 +254,7 @@ fn results(
             .listing
             .as_ref()
             .map_or(section.entries.len() as u64, |listing| listing.rows);
-        ui.label(format!("{} · {rows} rows", state_word(section)));
+        ui.label(format!("{} · {rows} rows", state_word(report, section)));
         if forced.is_none()
             && ui
                 .button(egui_phosphor::regular::ARROW_SQUARE_OUT)
@@ -475,8 +493,8 @@ fn overview(
                         state.kind = Some(section.kind);
                     }
                     ui.label(format!(
-                        "{:?} / {} rows",
-                        section.state,
+                        "{} / {} rows",
+                        state_word(report, section),
                         section.entries.len()
                     ));
                     if ui
@@ -543,9 +561,13 @@ fn tools(section: &AnalysisSection) -> Vec<String> {
     tools
 }
 
-/// A category's state as a word.
-fn state_word(section: &AnalysisSection) -> &'static str {
+/// A category's state as a word; one without a result says "Running…"
+/// while its report is still being analyzed.
+fn state_word(report: &AnalysisReport, section: &AnalysisSection) -> &'static str {
     match section.state {
+        antinomie_monitor_core::AnalysisSectionState::Pending if super::in_progress(report) => {
+            super::pending_word(report.state)
+        }
         antinomie_monitor_core::AnalysisSectionState::Pending => "Pending",
         antinomie_monitor_core::AnalysisSectionState::Complete => "Complete",
         antinomie_monitor_core::AnalysisSectionState::Partial => "Partial",

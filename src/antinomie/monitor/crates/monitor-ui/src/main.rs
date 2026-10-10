@@ -2,6 +2,7 @@ mod analysis;
 mod app;
 mod archive;
 mod build_wizard;
+mod data_view;
 mod folders;
 mod network_view;
 mod runs;

@@ -197,6 +197,7 @@ pub struct MonitorApp {
     archive_pending: bool,
     archive_error: Option<String>,
     inspector: Inspector,
+    data_windows: crate::data_view::DataWindows,
     layout: WorkspaceLayout,
     focus_panel: Option<Panel>,
     activity: VecDeque<Activity>,
@@ -304,6 +305,7 @@ impl MonitorApp {
             archive_pending: false,
             archive_error: None,
             inspector: Inspector::default(),
+            data_windows: crate::data_view::DataWindows::default(),
             layout: WorkspaceLayout::restore(
                 cc.storage
                     .and_then(|storage| eframe::get_value(storage, "workspace_layout")),
@@ -2924,9 +2926,11 @@ impl MonitorApp {
             .iter()
             .find(|invocation| Some(trace::key(invocation)) == self.selected_event);
         let directory = self.invocation_directory(invocation);
-        if let Some((field, offset, data_len)) =
-            self.inspector.show(ui, invocation, directory.is_some())
-        {
+        let read = self.inspector.show(ui, invocation, directory.is_some());
+        for request in std::mem::take(&mut self.inspector.open_data) {
+            self.data_windows.open(ui.ctx(), request, directory.clone());
+        }
+        if let Some((field, offset, data_len)) = read {
             if let Some(directory) = directory {
                 self.inspector.generation = self.inspector.generation.wrapping_add(1);
                 let request = Request::Captured {
@@ -3573,6 +3577,7 @@ impl MonitorApp {
         layout.show(self, ctx);
         self.layout = layout;
         self.dialogs(ctx);
+        self.data_windows.show(ctx);
         let enabled = self.observer_start_enabled();
         if self
             .process_picker
@@ -4056,6 +4061,28 @@ impl MonitorApp {
                             );
                         }
                     });
+                let shown = match self.selected_analysis.as_deref() {
+                    Some(id) => Some(id),
+                    None => self.selected_run.as_deref().and_then(|id| {
+                        self.snapshot
+                            .runs
+                            .iter()
+                            .chain(&self.history)
+                            .find(|run| run.id == id)
+                            .and_then(|run| run.analysis.as_ref())
+                            .map(|report| report.id.as_str())
+                    }),
+                };
+                crate::analysis::other_progress(
+                    ui,
+                    self.snapshot
+                        .runs
+                        .iter()
+                        .chain(&self.history)
+                        .filter_map(|run| run.analysis.as_ref())
+                        .chain(&self.snapshot.analysis_reports),
+                    shown,
+                );
                 if let Some(id) = self.selected_analysis.as_deref() {
                     let report = self
                         .snapshot
@@ -5019,6 +5046,7 @@ mod tests {
             archive_pending: false,
             archive_error: None,
             inspector: Inspector::default(),
+            data_windows: crate::data_view::DataWindows::default(),
             layout: WorkspaceLayout::default(),
             focus_panel: None,
             activity: VecDeque::new(),
@@ -7240,6 +7268,142 @@ mod tests {
             object_id: 1,
         });
         assert_eq!(inspector.field(&row).unwrap().key, "async.stage");
+    }
+
+    #[test]
+    fn details_values_copy_in_many_forms_and_captured_fields_open_data_windows() {
+        let mut exit = event(2, 0);
+        exit.result = Some(-2);
+        exit.fields = vec![antinomie_monitor_core::FieldSummary {
+            object_id: 5,
+            key: "buf".into(),
+            layout: String::new(),
+            logical_len: Some(8),
+            captured_len: 4,
+            status: Some(1),
+            capture_error: -14,
+            complete: false,
+            preview: b"abcd".to_vec(),
+            raw_path: None,
+            ranges: vec![(0, 4)],
+        }];
+        let row = InvocationSummary {
+            stream_id: 1,
+            task_cookie: 3,
+            call_id: 2,
+            entry: Some(event(1, 0)),
+            exit: Some(exit),
+            async_events: Vec::new(),
+        };
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut inspector = trace::Inspector::default();
+        let frame = |inspector: &mut trace::Inspector, events: Vec<egui::Event>| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1400.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        inspector.show(ui, Some(&row), false);
+                    });
+                },
+            )
+        };
+        let click = |inspector: &mut trace::Inspector, pos: egui::Pos2, button| {
+            let mut copied = Vec::new();
+            for events in [
+                vec![egui::Event::PointerMoved(pos)],
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                Vec::new(),
+            ] {
+                let output = frame(inspector, events);
+                for command in output.platform_output.commands {
+                    if let egui::OutputCommand::CopyText(text) = command {
+                        copied.push(text);
+                    }
+                }
+            }
+            (frame(inspector, Vec::new()), copied)
+        };
+        let find = |output: &egui::FullOutput, label: &str| {
+            texts(output)
+                .into_iter()
+                .find(|(text, _)| text == label)
+                .map(|(_, rect)| rect.center())
+        };
+        let (output, _) = click(
+            &mut inspector,
+            egui::pos2(-10.0, -10.0),
+            egui::PointerButton::Primary,
+        );
+        let target = find(&output, "Return: -2").expect("return value shown");
+        let (output, _) = click(&mut inspector, target, egui::PointerButton::Secondary);
+        for (label, value) in [
+            ("Signed decimal", "-2"),
+            ("Hex", "0xfffffffffffffffe"),
+            ("Decimal", "18446744073709551614"),
+        ] {
+            assert!(find(&output, label).is_some(), "{label} offered");
+            assert!(find(&output, value).is_some(), "{value} previewed");
+        }
+        let hex = find(&output, "Hex").unwrap();
+        let (output, copied) = click(&mut inspector, hex, egui::PointerButton::Primary);
+        assert_eq!(copied, ["0xfffffffffffffffe"]);
+
+        // A captured field: right-click offers its data window. The Exit
+        // phase (shown second) holds the field.
+        let argument = texts(&output)
+            .into_iter()
+            .filter(|(text, _)| text == "buf: 0x1000")
+            .map(|(_, rect)| rect.center())
+            .next_back()
+            .expect("argument header");
+        let (mut output, _) = click(&mut inspector, argument, egui::PointerButton::Primary);
+        for _ in 0..20 {
+            output = frame(&mut inspector, Vec::new());
+        }
+        let field = find(&output, "buf").expect("captured field node");
+        let (output, _) = click(&mut inspector, field, egui::PointerButton::Secondary);
+        let open = find(
+            &output,
+            &format!("{} Open data…", egui_phosphor::regular::ARROW_SQUARE_OUT),
+        )
+        .expect("Open data offered");
+        click(&mut inspector, open, egui::PointerButton::Primary);
+        assert_eq!(inspector.open_data.len(), 1);
+        assert_eq!(inspector.open_data[0].field.object_id, 5);
+        assert_eq!(inspector.open_data[0].title, "buf / read call 2");
+
+        // The selected field names its partial capture instead of "x bytes captured".
+        inspector.selection = Some(trace::Selection::Captured {
+            phase: 2,
+            object_id: 5,
+        });
+        let output = frame(&mut inspector, Vec::new());
+        let shown = texts(&output);
+        assert!(shown
+            .iter()
+            .any(|(text, _)| text == "Captured bytes (4 of 8 bytes, copy fault)"));
+        assert!(!shown
+            .iter()
+            .any(|(text, _)| text.contains("bytes captured;")));
     }
 
     #[test]
