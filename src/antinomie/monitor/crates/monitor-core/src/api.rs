@@ -945,6 +945,10 @@ pub enum Command {
     StopCapture {
         capture_id: String,
     },
+    /// Record the running VM's network traffic (NAT VMs) into a new capture
+    /// of the boot recording, until `StopNetworkCapture` or the VM stops.
+    StartNetworkCapture,
+    StopNetworkCapture,
     OpenRecording {
         directory: PathBuf,
     },
@@ -998,8 +1002,8 @@ pub enum VmState {
 
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
-    /// The running boot's network capture (pcap), when the VM has NAT.
-    pub network_pcap: Option<PathBuf>,
+    /// The running VM's network capture, while one runs.
+    pub network_capture: Option<crate::network::NetworkCapture>,
     /// Process trees of this boot's captures that are still open, by capture id.
     pub capture_processes:
         std::collections::BTreeMap<String, Vec<crate::capture_processes::CaptureProcess>>,

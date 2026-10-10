@@ -18,7 +18,10 @@
 //!  "screenshot": "/tmp/screen.png", "screenshot_after": 20}
 //! ```
 //!
-//! `"vm": {"nat": true}` gives the VM NAT networking (and a network.pcap).
+//! `"vm": {"nat": true}` gives the VM NAT networking.
+//! `"network_capture": true` (NAT VMs) starts a network capture before the
+//! runs and stops it after them; `"keep"` leaves it running for the VM stop
+//! to end. The report then lists the VM's network captures.
 //! `"vm": {"transport": {"ring_kib": 4096, "lossless": true, "max_wait_ms": 100,
 //! "event_table": 16384}}` sets the VM's transport settings (any subset).
 //!
@@ -327,6 +330,15 @@ fn run() -> Result<Value, String> {
     if capture_all {
         session.guest_command(|| Command::CaptureAll, boot)?;
     }
+    let keep_network_capture = plan.get("network_capture") == Some(&json!("keep"));
+    let network_capture = keep_network_capture
+        || plan
+            .get("network_capture")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    if network_capture {
+        session.command(Command::StartNetworkCapture, 30)?;
+    }
     let boot_seconds = started.elapsed().as_secs_f64();
 
     let mut runs = Vec::new();
@@ -439,6 +451,9 @@ fn run() -> Result<Value, String> {
         }
         None => None,
     };
+    if network_capture && !keep_network_capture {
+        session.command(Command::StopNetworkCapture, 60)?;
+    }
     let mut capture = None;
     if capture_all {
         let id = session
@@ -469,11 +484,23 @@ fn run() -> Result<Value, String> {
     // run can leave in the hundreds of megabytes.
     session.command(Command::Stop, 600)?;
     session.settle(|s| s.state == VmState::Stopped, 60)?;
+    let network_captures = network_capture
+        .then(|| {
+            session
+                .snapshot
+                .vm_locations
+                .iter()
+                .find(|location| location.vm_id == vm_id)
+                .map(|location| {
+                    antinomie_monitor_core::network::list_captures(&location.recording_directory)
+                })
+        })
+        .flatten();
     session.backend.shutdown()?;
     Ok(
         json!({"vm_id": vm_id, "base": base, "boot_seconds": boot_seconds,
               "runs": runs, "recorder": recorder, "health": health, "capture": capture,
-              "screenshot": screenshot}),
+              "network_captures": network_captures, "screenshot": screenshot}),
     )
 }
 

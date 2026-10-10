@@ -2,6 +2,7 @@ use crate::{
     archive::{Answer, ArchiveWorker, Request},
     build_wizard,
     folders::{FolderPicker, Kind as FolderKind, Target as FolderTarget},
+    network_view::{NetworkAction, NetworkContext},
     runs::RunTerminal,
     theme,
     trace::{self, Inspector, InvocationKey},
@@ -176,6 +177,8 @@ pub struct MonitorApp {
     capture_tab: bool,
     process_picker: captures::ProcessPicker,
     pending_observer: Option<u64>,
+    /// A network capture start or stop request in flight.
+    pending_network: Option<u64>,
     selected_analysis: Option<String>,
     analysis_windows: BTreeMap<String, antinomie_monitor_core::AnalysisReport>,
     analysis_directories: BTreeMap<String, PathBuf>,
@@ -284,6 +287,7 @@ impl MonitorApp {
             capture_tab: false,
             process_picker: captures::ProcessPicker::default(),
             pending_observer: None,
+            pending_network: None,
             selected_analysis: None,
             analysis_windows: BTreeMap::new(),
             analysis_directories: BTreeMap::new(),
@@ -349,6 +353,10 @@ impl MonitorApp {
             Command::AttachProcess { .. } | Command::CaptureAll | Command::StopCapture { .. }
         );
         let process_list = matches!(&command, Command::ListProcesses { .. });
+        let network = matches!(
+            &command,
+            Command::StartNetworkCapture | Command::StopNetworkCapture
+        );
         let admission = if launch {
             self.launch_admission()
         } else {
@@ -372,6 +380,9 @@ impl MonitorApp {
                     }
                     if process_list {
                         self.process_picker.pending = Some(id);
+                    }
+                    if network {
+                        self.pending_network = Some(id);
                     }
                     if launch {
                         self.pending_launch = Some(id);
@@ -477,6 +488,9 @@ impl MonitorApp {
                     }) => {
                         if self.pending_observer == Some(id) {
                             self.pending_observer = None;
+                        }
+                        if self.pending_network == Some(id) {
+                            self.pending_network = None;
                         }
                         if self.process_picker.pending == Some(id) {
                             self.process_picker.pending = None;
@@ -807,6 +821,42 @@ impl MonitorApp {
                     capture_id: capture.id.clone(),
                 });
             }
+        }
+    }
+
+    /// The running VM has NAT networking.
+    fn running_nat(&self) -> bool {
+        self.snapshot
+            .vms
+            .iter()
+            .any(|vm| Some(&vm.id) == self.snapshot.active_vm.as_ref() && vm.nat)
+    }
+
+    /// A network capture can be started or stopped now.
+    fn network_toggle_enabled(&self) -> bool {
+        self.running()
+            && !self.closing
+            && self.pending_network.is_none()
+            && (self.snapshot.network_capture.is_some() || self.running_nat())
+    }
+
+    fn toggle_network_capture(&mut self) {
+        if self.network_toggle_enabled() {
+            self.send(if self.snapshot.network_capture.is_some() {
+                Command::StopNetworkCapture
+            } else {
+                Command::StartNetworkCapture
+            });
+        }
+    }
+
+    fn network_toggle_label(&self) -> &'static str {
+        if self.snapshot.network_capture.is_some() {
+            "Stop network capture"
+        } else if self.running() && !self.running_nat() {
+            "Capture network (needs NAT network: turn it on in the VM settings)"
+        } else {
+            "Capture network"
         }
     }
 
@@ -1765,6 +1815,21 @@ impl MonitorApp {
                             );
                         }
                         if ui
+                            .add_enabled(
+                                self.network_toggle_enabled(),
+                                egui::Button::new(if self.snapshot.network_capture.is_some() {
+                                    "Stop network capture"
+                                } else {
+                                    "Capture network"
+                                }),
+                            )
+                            .on_disabled_hover_text(self.network_toggle_label())
+                            .clicked()
+                        {
+                            self.toggle_network_capture();
+                            ui.close_menu();
+                        }
+                        if ui
                             .add_enabled(self.running(), egui::Button::new("Upload file"))
                             .clicked()
                         {
@@ -1918,6 +1983,30 @@ impl MonitorApp {
                                     && self.active_observer().is_some(),
                             ) {
                                 self.stop_observer();
+                            }
+                            // One toggle, red while the network is recorded.
+                            let capturing = self.snapshot.network_capture.is_some();
+                            let mut network_icon = RichText::new(egui_phosphor::regular::NETWORK)
+                                .size(ui.text_style_height(&egui::TextStyle::Body));
+                            if capturing {
+                                network_icon = network_icon.color(theme::ERROR);
+                            }
+                            if ui
+                                .add_enabled(
+                                    self.network_toggle_enabled(),
+                                    egui::Button::new(network_icon)
+                                        .frame(false)
+                                        .selected(capturing)
+                                        .min_size(egui::vec2(
+                                            ui.spacing().interact_size.y,
+                                            ui.spacing().interact_size.y,
+                                        )),
+                                )
+                                .on_hover_text(self.network_toggle_label())
+                                .on_disabled_hover_text(self.network_toggle_label())
+                                .clicked()
+                            {
+                                self.toggle_network_capture();
                             }
                             ui.separator();
                             if icon(
@@ -4030,9 +4119,9 @@ impl MonitorApp {
             Panel::Trace => self.events(ui),
             Panel::Network => {
                 let vm = self.selected.clone();
-                let live = self
+                let active = self
                     .snapshot
-                    .network_pcap
+                    .network_capture
                     .clone()
                     .filter(|_| vm.is_some() && vm == self.snapshot.active_vm);
                 let recordings = self
@@ -4046,13 +4135,26 @@ impl MonitorApp {
                     .vms
                     .iter()
                     .any(|config| Some(&config.id) == vm.as_ref() && config.nat);
-                self.network_view.show(
+                let action = self.network_view.show(
                     ui,
-                    live.as_deref(),
-                    recordings.as_deref(),
-                    nat,
-                    self.settings.font_size,
+                    NetworkContext {
+                        active: active.as_ref(),
+                        recordings: recordings.as_deref(),
+                        nat,
+                        running: self.running()
+                            && !self.closing
+                            && vm.is_some()
+                            && vm == self.snapshot.active_vm,
+                        pending: self.pending_network.is_some(),
+                        font_size: self.settings.font_size,
+                    },
                 );
+                if let (Some(action), true) = (action, self.network_toggle_enabled()) {
+                    self.send(match action {
+                        NetworkAction::Start => Command::StartNetworkCapture,
+                        NetworkAction::Stop => Command::StopNetworkCapture,
+                    });
+                }
             }
             Panel::AnalysisSection { report_id, kind } => {
                 let key = format!("section:{report_id}:{kind:?}");
@@ -5042,6 +5144,7 @@ mod tests {
             capture_tab: false,
             process_picker: captures::ProcessPicker::default(),
             pending_observer: None,
+            pending_network: None,
             selected_analysis: None,
             analysis_windows: BTreeMap::new(),
             analysis_directories: BTreeMap::new(),
@@ -9177,5 +9280,191 @@ mod tests {
             }),
         )
         .unwrap();
+    }
+
+    /// A pcap of a DNS query (UDP 5353 → 53) and a TCP SYN (40000 → 80).
+    fn test_pcap() -> Vec<u8> {
+        fn frame(protocol: u8, transport: &[u8]) -> Vec<u8> {
+            let mut frame = vec![
+                0x52, 0x55, 10, 0, 2, 2, 0x52, 0x54, 0, 0x12, 0x34, 0x56, 8, 0,
+            ];
+            let total = (20 + transport.len()) as u16;
+            frame.extend([0x45, 0]);
+            frame.extend(total.to_be_bytes());
+            frame.extend([0, 0, 0x40, 0, 64, protocol, 0, 0, 10, 0, 2, 15, 10, 0, 2, 3]);
+            frame.extend(transport);
+            frame
+        }
+        let mut dns = vec![0x14, 0xe9, 0, 53, 0, 37, 0, 0];
+        dns.extend([0x12, 0x34, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
+        dns.extend(b"\x07example\x03com\x00\x00\x01\x00\x01");
+        let mut syn = vec![0x9c, 0x40, 0, 80, 0, 0, 0, 0, 0, 0, 0, 0, 0x50, 0x02];
+        syn.extend([0; 6]);
+        let mut file = Vec::new();
+        file.extend(0xa1b2c3d4u32.to_le_bytes());
+        file.extend([2, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        file.extend(65535u32.to_le_bytes());
+        file.extend(1u32.to_le_bytes());
+        for frame in [frame(17, &dns), frame(6, &syn)] {
+            file.extend(1_800_000_000u32.to_le_bytes());
+            file.extend(0u32.to_le_bytes());
+            file.extend((frame.len() as u32).to_le_bytes());
+            file.extend((frame.len() as u32).to_le_bytes());
+            file.extend(frame);
+        }
+        file
+    }
+
+    #[test]
+    fn network_panel_lists_captures_toggles_capture_and_filters_by_clicked_values() {
+        use antinomie_monitor_core::network::NetworkCapture;
+        let root = std::env::temp_dir().join(format!("ant-ui-network-{}", std::process::id()));
+        let dir = root.join("boots").join("b1").join("network");
+        std::fs::create_dir_all(&dir).unwrap();
+        let save = |capture: &NetworkCapture| {
+            std::fs::write(&capture.file, test_pcap()).unwrap();
+            let mut saved = capture.clone();
+            saved.file = capture.file.file_name().unwrap().into();
+            std::fs::write(
+                capture.file.with_extension("json"),
+                serde_json::to_vec(&saved).unwrap(),
+            )
+            .unwrap();
+        };
+        let earlier = NetworkCapture {
+            stopped_ms: Some(1_800_000_006_000),
+            packets: Some(2),
+            bytes: Some(200),
+            ..NetworkCapture::new(&root.join("boots/b1"), "b1", "earlier", 1_800_000_000_000)
+        };
+        save(&earlier);
+        let mut app = app();
+        observer_fixture(&mut app);
+        app.snapshot.vms[0].nat = true;
+        app.snapshot
+            .vm_locations
+            .push(antinomie_monitor_core::VmLocations {
+                vm_id: "vm".into(),
+                disk_directory: root.clone(),
+                recording_directory: root.clone(),
+                recording_directories: vec![root.clone()],
+            });
+        app.focus_panel = Some(Panel::Network);
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1400.0, 900.0);
+        for _ in 0..3 {
+            render(&mut app, &ctx, size);
+        }
+        let shown: Vec<_> = texts(&render(&mut app, &ctx, size))
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+        for expected in [
+            "Captures",
+            "2027-01-15 08:00:00 UTC\n2 packets · 6 s · 200 B",
+            "DNS",
+            "TCP",
+            "10.0.2.15",
+            ":5353",
+            "query A example.com",
+        ] {
+            assert!(
+                shown.iter().any(|text| text == expected),
+                "missing {expected:?} in {shown:?}"
+            );
+        }
+        // The capture list's button starts a capture of the running NAT VM.
+        let start = format!("{} Start capture", egui_phosphor::regular::RECORD);
+        click_label(&mut app, &ctx, size, &start);
+        assert!(matches!(
+            app.submitted.last(),
+            Some(Command::StartNetworkCapture)
+        ));
+        app.pending_network = None;
+        // Clicking a value filters by it.
+        click_label(&mut app, &ctx, size, "DNS");
+        click_label(&mut app, &ctx, size, ":5353");
+        let shown: Vec<_> = texts(&render(&mut app, &ctx, size))
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+        assert!(
+            shown
+                .iter()
+                .any(|text| text == "Filter port 5353: 1 of 2 packets"),
+            "{shown:?}"
+        );
+        assert!(!shown.iter().any(|text| text == "TCP"));
+        click_label(&mut app, &ctx, size, "Clear filter");
+        // The quick filters list values with their packet counts.
+        click_label(&mut app, &ctx, size, "Addresses");
+        click_label(&mut app, &ctx, size, "10.0.2.3 (2)");
+        let shown: Vec<_> = texts(&render(&mut app, &ctx, size))
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+        assert!(
+            shown
+                .iter()
+                .any(|text| text == "Filter ip 10.0.2.3: 2 of 2 packets"),
+            "{shown:?}"
+        );
+        click_label(&mut app, &ctx, size, "Clear filter");
+        // A running capture is listed first, opened, and stopped from the list.
+        let live = NetworkCapture::new(&root.join("boots/b1"), "b1", "live", 1_800_000_100_000);
+        save(&live);
+        app.snapshot.network_capture = Some(live.clone());
+        let stop = format!("{} Stop capture", egui_phosphor::regular::STOP);
+        click_label(&mut app, &ctx, size, &stop);
+        assert!(matches!(
+            app.submitted.last(),
+            Some(Command::StopNetworkCapture)
+        ));
+        let shown: Vec<_> = texts(&render(&mut app, &ctx, size))
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+        assert!(
+            shown.iter().any(|text| text
+                .starts_with(&format!("{} Live capture", egui_phosphor::regular::RECORD))),
+            "{shown:?}"
+        );
+        assert!(shown
+            .iter()
+            .any(|text| text == "Live capture of 2027-01-15 08:01:40 UTC"));
+        // Without NAT the toggle stays off.
+        app.pending_network = None;
+        app.snapshot.network_capture = None;
+        app.snapshot.vms[0].nat = false;
+        assert!(!app.network_toggle_enabled());
+        app.snapshot.vms[0].nat = true;
+        assert!(app.network_toggle_enabled());
+        app.toggle_network_capture();
+        assert!(matches!(
+            app.submitted.last(),
+            Some(Command::StartNetworkCapture)
+        ));
+        // A stopped VM's capture panel must never start a capture of a
+        // different VM that happens to be running.
+        app.pending_network = None;
+        app.selected = Some("other-vm".into());
+        app.snapshot.vms.push(VmConfig {
+            id: "other-vm".into(),
+            nat: true,
+            ..VmConfig::default()
+        });
+        app.snapshot
+            .vm_locations
+            .push(antinomie_monitor_core::VmLocations {
+                vm_id: "other-vm".into(),
+                disk_directory: root.clone(),
+                recording_directory: root.clone(),
+                recording_directories: vec![root.clone()],
+            });
+        app.submitted.clear();
+        click_label(&mut app, &ctx, size, &start);
+        assert!(app.submitted.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

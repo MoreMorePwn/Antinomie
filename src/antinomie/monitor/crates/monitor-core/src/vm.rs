@@ -247,14 +247,68 @@ pub(crate) struct VmProcess {
     pub ram_size: u64,
     pub qmp_path: PathBuf,
 }
+/// A QMP connection, past the greeting and capability negotiation.
+struct Qmp {
+    writer: UnixStream,
+    reader: std::io::BufReader<UnixStream>,
+}
+impl Qmp {
+    /// Connects, retrying for `wait` while QEMU is still creating the socket.
+    fn connect(path: &Path, wait: Duration) -> Result<Self, String> {
+        let deadline = std::time::Instant::now() + wait;
+        let socket = loop {
+            match UnixStream::connect(path) {
+                Ok(socket) => break socket,
+                Err(_) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(50))
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+        };
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .and_then(|_| socket.set_write_timeout(Some(Duration::from_secs(5))))
+            .map_err(|e| e.to_string())?;
+        let mut qmp = Qmp {
+            writer: socket.try_clone().map_err(|e| e.to_string())?,
+            reader: std::io::BufReader::new(socket),
+        };
+        qmp.reply("")?;
+        qmp.reply("{\"execute\":\"qmp_capabilities\"}\n")?;
+        Ok(qmp)
+    }
+    /// Sends `command` (unless empty) and returns the next greeting or
+    /// return value, skipping events.
+    fn reply(&mut self, command: &str) -> Result<serde_json::Value, String> {
+        if !command.is_empty() {
+            self.writer
+                .write_all(command.as_bytes())
+                .map_err(|e| format!("QMP write: {e}"))?;
+        }
+        loop {
+            let mut line = String::new();
+            if std::io::BufRead::read_line(&mut self.reader, &mut line)
+                .map_err(|e| format!("QMP read: {e}"))?
+                == 0
+            {
+                return Err("QMP closed".into());
+            }
+            let value: serde_json::Value =
+                serde_json::from_str(&line).map_err(|e| format!("QMP reply: {e}"))?;
+            if value.get("QMP").is_some() || value.get("return").is_some() {
+                return Ok(value);
+            }
+            if let Some(error) = value.get("error") {
+                return Err(format!("QMP error: {error}"));
+            }
+        }
+    }
+}
 impl VmProcess {
-    /// `network_pcap`: with NAT, QEMU writes every frame of the VM's network
-    /// interface to this pcap file (filter-dump), outside the guest.
     pub fn launch(
         options: &BackendOptions,
         vm: &VmConfig,
         bundle: &Bundle,
-        network_pcap: Option<&Path>,
     ) -> Result<Self, String> {
         vm.launch.validate_for(options)?;
         crate::storage::validate_boot_display(vm, bundle)?;
@@ -337,18 +391,13 @@ impl VmProcess {
             cmd.arg("-initrd").arg(initrd);
         }
         if vm.nat {
+            // Network captures attach a filter-dump to net0 over QMP.
             cmd.args([
                 "-netdev",
                 "user,id=net0",
                 "-device",
                 "virtio-net-pci,netdev=net0",
             ]);
-            if let Some(pcap) = network_pcap {
-                cmd.arg("-object").arg(format!(
-                    "filter-dump,id=netdump,netdev=net0,maxlen=65535,file={}",
-                    qemu_path(pcap)?
-                ));
-            }
         } else {
             cmd.args(["-nic", "none"]);
         }
@@ -400,49 +449,9 @@ impl VmProcess {
     }
     /// Confirms over QMP that QEMU placed guest RAM where the transport maps it.
     pub fn verify_ram_layout(&self) -> Result<(), String> {
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        let socket = loop {
-            match UnixStream::connect(&self.qmp_path) {
-                Ok(socket) => break socket,
-                Err(_) if std::time::Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(50))
-                }
-                Err(error) => return Err(format!("QMP connect for RAM layout: {error}")),
-            }
-        };
-        socket
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .and_then(|_| socket.set_write_timeout(Some(Duration::from_secs(5))))
-            .map_err(|e| e.to_string())?;
-        let mut writer = socket.try_clone().map_err(|e| e.to_string())?;
-        let mut reader = std::io::BufReader::new(socket);
-        let mut reply = |command: &str| -> Result<serde_json::Value, String> {
-            if !command.is_empty() {
-                writer
-                    .write_all(command.as_bytes())
-                    .map_err(|e| format!("QMP write: {e}"))?;
-            }
-            loop {
-                let mut line = String::new();
-                if std::io::BufRead::read_line(&mut reader, &mut line)
-                    .map_err(|e| format!("QMP read: {e}"))?
-                    == 0
-                {
-                    return Err("QMP closed".into());
-                }
-                let value: serde_json::Value =
-                    serde_json::from_str(&line).map_err(|e| format!("QMP reply: {e}"))?;
-                if value.get("QMP").is_some() || value.get("return").is_some() {
-                    return Ok(value);
-                }
-                if let Some(error) = value.get("error") {
-                    return Err(format!("QMP error: {error}"));
-                }
-            }
-        };
-        reply("")?;
-        reply("{\"execute\":\"qmp_capabilities\"}\n")?;
-        let mtree = reply(
+        let mut qmp = Qmp::connect(&self.qmp_path, Duration::from_secs(10))
+            .map_err(|error| format!("QMP connect for RAM layout: {error}"))?;
+        let mtree = qmp.reply(
             "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info mtree\"}}\n",
         )?;
         let mtree = mtree["return"]
@@ -457,6 +466,14 @@ impl VmProcess {
             ));
         }
         Ok(())
+    }
+    /// Runs one QMP command (a `{"execute": ...}` object) and returns its
+    /// return value.
+    pub fn qmp(&self, command: &serde_json::Value) -> Result<serde_json::Value, String> {
+        let mut qmp = Qmp::connect(&self.qmp_path, Duration::from_secs(2))
+            .map_err(|error| format!("QMP connect: {error}"))?;
+        let reply = qmp.reply(&format!("{command}\n"))?;
+        Ok(reply.get("return").cloned().unwrap_or_default())
     }
     pub fn force_stop(&mut self) -> Result<(), String> {
         if self.child.try_wait().map_err(|e| e.to_string())?.is_some() {
