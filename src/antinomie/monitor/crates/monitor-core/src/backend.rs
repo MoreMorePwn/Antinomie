@@ -184,6 +184,12 @@ struct Session {
     late_reads: BTreeMap<u64, u64>,
     /// When capture process trees were last queued for saving.
     last_process_save: Instant,
+    /// Bytes of this boot's network captures (pcaps written by QEMU): the
+    /// finished ones, and the running one as last measured. They count
+    /// against the recording quota like every other recording.
+    network_bytes_done: u64,
+    network_bytes: u64,
+    last_network_check: Instant,
     /// The last drain pass found enough telemetry that the next one should
     /// follow without waiting.
     telemetry_busy: bool,
@@ -218,6 +224,7 @@ impl Session {
                     .map(CaptureSession::stored_len)
                     .sum::<u64>(),
             )
+            .saturating_add(self.network_bytes)
     }
     fn available(&self) -> u64 {
         self.capture.quota().saturating_sub(self.stored_len())
@@ -231,12 +238,15 @@ impl Session {
                 .saturating_add(self.analysis.persisted_len()),
             &self.runs,
         );
-        health.persisted_len = health.persisted_len.saturating_add(
-            self.captures
-                .values()
-                .map(CaptureSession::stored_len)
-                .sum::<u64>(),
-        );
+        health.persisted_len = health
+            .persisted_len
+            .saturating_add(
+                self.captures
+                    .values()
+                    .map(CaptureSession::stored_len)
+                    .sum::<u64>(),
+            )
+            .saturating_add(self.network_bytes);
         health.persistence_error = health.persistence_error.clone().or_else(|| {
             self.captures
                 .values()
@@ -1873,6 +1883,7 @@ impl Worker {
             self.poll_remote();
             self.poll_build();
             self.poll_tool();
+            self.check_network_capture();
             if self.last_publish.elapsed() >= Duration::from_millis(250) {
                 self.publish();
             }
@@ -2568,6 +2579,9 @@ impl Worker {
                 late_reads: BTreeMap::new(),
                 telemetry_busy: false,
                 last_process_save: Instant::now(),
+                network_bytes_done: 0,
+                network_bytes: 0,
+                last_network_check: Instant::now(),
                 status_cursor: 0,
                 last_status_query: Instant::now(),
                 persisted_packets: 0,
@@ -2598,6 +2612,9 @@ impl Worker {
         }
         if self.snapshot.network_capture.is_some() {
             return Err("a network capture is already running".into());
+        }
+        if session.available() == 0 {
+            return Err("the recording quota of this boot is full".into());
         }
         let boot_dir = crate::locations::locations(&self.options, &session.vm.id)?
             .recording_directory
@@ -2646,9 +2663,41 @@ impl Worker {
             .qmp(&crate::network::filter_dump_del(capture))
             .map_err(|error| format!("network capture stop: {error}"))?;
         let finished = end_network_capture(&mut self.snapshot);
+        if let (Ok(bytes), Some(session)) = (&finished, self.session.as_mut()) {
+            session.network_bytes_done = session.network_bytes_done.saturating_add(*bytes);
+            session.network_bytes = session.network_bytes_done;
+        }
         self.publish();
-        let packets = finished?;
-        Ok(format!("network capture stopped: {packets} packets"))
+        let bytes = finished?;
+        Ok(format!(
+            "network capture stopped ({:.1} MB)",
+            bytes as f64 / 1e6
+        ))
+    }
+    /// About once a second: measure the running network capture and stop it
+    /// when the recordings of this boot have used up the quota.
+    fn check_network_capture(&mut self) {
+        let (Some(session), Some(capture)) = (
+            self.session.as_mut(),
+            self.snapshot.network_capture.as_ref(),
+        ) else {
+            return;
+        };
+        if session.last_network_check.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        session.last_network_check = Instant::now();
+        let live = fs::metadata(&capture.file).map_or(0, |metadata| metadata.len());
+        session.network_bytes = session.network_bytes_done.saturating_add(live);
+        if session.available() > 0 {
+            return;
+        }
+        let result = self.stop_network_capture();
+        self.snapshot.last_error = Some(match result {
+            Ok(_) => "network capture stopped: the recording quota is full".into(),
+            Err(error) => format!("network capture reached the recording quota; {error}"),
+        });
+        self.publish();
     }
     fn stop(&mut self) -> Result<(), String> {
         let Some(mut session) = self.session.take() else {
@@ -3451,22 +3500,27 @@ fn unix_ms() -> u64 {
 }
 
 /// Record the end of the running network capture (stopped over QMP, or its
-/// VM gone) with its packet count. Returns the packets.
+/// VM gone) with its size, and count its packets on a background thread so
+/// a large capture does not pause the transport. Returns the bytes.
 fn end_network_capture(snapshot: &mut Snapshot) -> Result<u64, String> {
     let Some(mut capture) = snapshot.network_capture.take() else {
         return Ok(0);
     };
     capture.stopped_ms = Some(unix_ms());
-    let counted = crate::network::count_packets(&capture.file);
-    if let Ok((packets, bytes)) = counted {
-        capture.packets = Some(packets);
-        capture.bytes = Some(bytes);
-    }
+    let bytes = fs::metadata(&capture.file).map_or(0, |metadata| metadata.len());
+    capture.bytes = Some(bytes);
     crate::network::save_summary(&capture)
         .map_err(|error| format!("network capture summary: {error}"))?;
-    counted
-        .map(|(packets, _)| packets)
-        .map_err(|error| format!("network capture count: {error}"))
+    let _ = thread::Builder::new()
+        .name("antinomie-pcap-count".into())
+        .spawn(move || {
+            if let Ok((packets, bytes)) = crate::network::count_packets(&capture.file) {
+                capture.packets = Some(packets);
+                capture.bytes = Some(bytes);
+                let _ = crate::network::save_summary(&capture);
+            }
+        });
+    Ok(bytes)
 }
 
 fn remaining_request_budget(deadline: Instant, maximum: Duration) -> Duration {

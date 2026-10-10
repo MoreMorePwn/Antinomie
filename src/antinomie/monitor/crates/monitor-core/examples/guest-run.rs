@@ -196,6 +196,10 @@ fn run() -> Result<Value, String> {
     if let Some(data_dir) = text(&plan, "data_dir") {
         options.data_dir = PathBuf::from(data_dir);
     }
+    // "quota_mib": recording quota of each boot (default 4 GiB).
+    if let Some(quota) = plan.get("quota_mib").and_then(Value::as_u64) {
+        options.capture_quota_size = quota * 1024 * 1024;
+    }
     let mut session = Session {
         backend: Backend::new(options)?,
         snapshot: Snapshot::default(),
@@ -451,7 +455,8 @@ fn run() -> Result<Value, String> {
         }
         None => None,
     };
-    if network_capture && !keep_network_capture {
+    // A capture the recording quota already ended needs no stop.
+    if network_capture && !keep_network_capture && session.snapshot.network_capture.is_some() {
         session.command(Command::StopNetworkCapture, 60)?;
     }
     let mut capture = None;
