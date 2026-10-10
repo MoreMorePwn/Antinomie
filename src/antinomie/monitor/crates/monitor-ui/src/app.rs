@@ -2341,7 +2341,9 @@ impl MonitorApp {
         let mut open_downloads = false;
         let mut new_vm = false;
         egui::SidePanel::left("vms")
-            .default_width(250.0)
+            // Room for the VM details, but the trace keeps most of a small
+            // screen.
+            .default_width((ctx.screen_rect().width() * 0.2).clamp(200.0, 260.0))
             .min_width(200.0)
             .max_width(380.0)
             .resizable(true)
@@ -3812,10 +3814,14 @@ impl MonitorApp {
                     .unwrap_or(&self.options.data_dir)
                     .to_path_buf()
             };
+            // Measure against the viewport, not last frame's window size,
+            // so the window takes its full height at once.
+            let height = (screen.height() - 110.0).max(150.0);
+            ui.set_max_height(height);
             let footer = ui.spacing().interact_size.y * 3.0 + 40.0;
             egui::ScrollArea::vertical()
                 .id_salt("vm_dialog_form")
-                .max_height((screen.height() - 140.0 - footer).max(120.0))
+                .max_height((height - footer).max(120.0))
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     ui.add_enabled_ui(editable, |ui| {
@@ -7164,9 +7170,10 @@ mod tests {
             .expect("base images title")
             .1;
         assert_eq!(rows.len(), 2);
-        // Left-aligned with the section title, not centred in the sidebar.
+        // Left-aligned with the section title (after the row's status
+        // mark), not centred in the sidebar.
         assert!(
-            rows.iter().all(|row| row.left() < title.left() + 12.0),
+            rows.iter().all(|row| row.left() < title.left() + 16.0),
             "{rows:?} {title:?}"
         );
         let target = rows[1].center();
@@ -9238,7 +9245,17 @@ mod tests {
                         .1
                 };
                 assert!(rect("Syscalls").bottom() < rect("Details").top());
-                assert!(rect("Details").bottom() < rect("Transport loss: 3").top());
+                assert!(rect("Details").bottom() < rect("Transport loss").top());
+                // The status bar value sits beside its name, colored as a loss.
+                let label = rect("Transport loss");
+                let loss = texts
+                    .iter()
+                    .find(|(text, value)| {
+                        text == "3" && (value.center().y - label.center().y).abs() < 4.0
+                    })
+                    .expect("transport loss value")
+                    .1;
+                assert!(label.right() < loss.left());
                 assert!(rect("File").bottom() < rect("Syscalls").top());
                 let title = rect("Virtual machines");
                 let add = texts
