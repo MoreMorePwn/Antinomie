@@ -105,6 +105,12 @@ for Antinomie 0.3.0 and newer):
 3. **Launch program** runs it. Set the **Executable**, **Arguments**,
    **Working directory** and **Environment**. Each launch gets its own terminal
    window for input and output.
+   On a VM with a desktop base, **Run in** picks where the program runs:
+   **App terminal** (the default), **Guest desktop** (the program joins the
+   graphical session, so its windows appear on the VM screen; its output
+   stays in the app terminal) or **Guest desktop terminal** (a terminal
+   window on the VM screen runs it). Both desktop choices need the run's user
+   logged in on the VM display; otherwise the app terminal says so.
 4. **Stop** ends a run together with all of its child processes. Closing a
    terminal window does not stop the program.
 5. **Static Analysis** in the launch dialog analyzes the program's file before

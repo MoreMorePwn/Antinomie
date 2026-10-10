@@ -32,6 +32,11 @@ with 256 KiB buffers that drop when full.
   the capture in Wireshark when it is installed.
 - Commands queued while the transport thread is busy are handled together
   instead of one per pass.
+- **Run in the guest desktop.** On desktop bases, **Run in** in the launch
+  dialog runs a program in the logged-in graphical session, so its windows
+  appear on the VM screen (**Guest desktop**), or in a terminal window on the
+  VM screen (**Guest desktop terminal**). The program stays in the run's
+  process tree and trace. Run History shows each run's choice.
 
 ## 0.2.3 — 2026-10-09
 

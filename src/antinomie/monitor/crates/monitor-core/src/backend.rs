@@ -2861,8 +2861,25 @@ impl Worker {
                     .as_ref()
                     .and_then(|k| k.revision)
                     .is_some_and(|r| r >= 10);
-                let args = control::execute_analysis(&request, supported)?;
+                let desktop = request.run_in.guest_desktop();
+                if desktop
+                    && !session
+                        .disk_bundle
+                        .guest
+                        .as_ref()
+                        .is_some_and(|guest| guest.graphical)
+                {
+                    return Err(format!(
+                        "{} needs a VM with a graphical base",
+                        request.run_in.label()
+                    ));
+                }
+                // A desktop run executes `/bin/sh`, so its program is acquired
+                // by path after the launch instead of by the kernel's exec.
+                let wire = crate::guest_desktop::wire_request(&request)?;
+                let args = control::execute_analysis(&wire, supported)?;
                 let selected = request.analysis.enabled;
+                let inline_acquisition = selected && supported && !desktop;
                 let run_id = storage::unique_id();
                 let directory = crate::locations::locations(&self.options, &session.vm.id)?
                     .recording_directory
@@ -2906,7 +2923,7 @@ impl Worker {
                         return Err(error);
                     }
                 };
-                if reply.len() != if selected && supported { 48 } else { 24 }
+                if reply.len() != if inline_acquisition { 48 } else { 24 }
                     || u32_at(&reply, 20).map_err(|e| e.to_string())? != 0
                 {
                     return Err("invalid execution reply".into());
@@ -2924,8 +2941,18 @@ impl Worker {
                 run.summary.pid = pid;
                 run.summary.state = RunState::Running;
                 if let Some(report) = run.summary.analysis.take() {
-                    let acquisition = if supported {
+                    let acquisition = if inline_acquisition {
                         control::acquisition(&reply[24..])
+                    } else if supported {
+                        session
+                            .request(
+                                control::ACQUIRE,
+                                &control::acquire(&request.path, request.uid, request.gid)?,
+                                &mut self.snapshot,
+                                &self.sender,
+                                timeout,
+                            )
+                            .and_then(|reply| control::acquisition(&reply))
                     } else {
                         Err(
                             "this base does not support static analysis (it needs a base for Antinomie 0.2.0 or newer); the program ran without it"

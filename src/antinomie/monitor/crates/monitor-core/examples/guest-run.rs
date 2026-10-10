@@ -24,8 +24,13 @@
 //!
 //! `"capture_all": true` starts Capture All once the guest is up, before the
 //! runs, and stops it after them; the report then includes its summary.
+//!
+//! A run may also set `"run_in": "guest_desktop"` (or
+//! `"guest_desktop_terminal"`), `"screenshot": PATH` to save the screen
+//! `"screenshot_after"` seconds (default 10) after its `done` marker, and
+//! `"stop": true` to stop its process tree after that.
 use antinomie_monitor_core::{
-    Backend, BackendOptions, Command, ExecRequest, GuestCredentials, Notification, Snapshot,
+    Backend, BackendOptions, Command, ExecRequest, GuestCredentials, Notification, RunIn, Snapshot,
     VmConfig, VmState,
 };
 use serde_json::{Value, json};
@@ -347,6 +352,13 @@ fn run() -> Result<Value, String> {
             env: vec!["PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin".into()],
             uid: number(&spec, "uid", 1000) as u32,
             gid: number(&spec, "gid", 1000) as u32,
+            run_in: spec
+                .get("run_in")
+                .cloned()
+                .map(serde_json::from_value::<RunIn>)
+                .transpose()
+                .map_err(|e| format!("run.run_in: {e}"))?
+                .unwrap_or_default(),
             ..ExecRequest::default()
         };
         let launched = Instant::now();
@@ -375,6 +387,21 @@ fn run() -> Result<Value, String> {
         let done = text(&spec, "done").ok_or("run.done")?;
         let marker_seen = session.terminal_until(&run_id, &done, timeout)?;
         let elapsed = launched.elapsed().as_secs_f64();
+        let run_screenshot = match text(&spec, "screenshot") {
+            Some(path) => {
+                thread::sleep(Duration::from_secs(number(&spec, "screenshot_after", 10)));
+                Some(screendump(&session.snapshot, &path)?)
+            }
+            None => None,
+        };
+        if spec.get("stop").and_then(Value::as_bool).unwrap_or(false) {
+            session.command(
+                Command::StopRun {
+                    run_id: run_id.clone(),
+                },
+                30,
+            )?;
+        }
         // The status is final once the tree exited and no request is pending.
         let id = run_id.clone();
         session.settle(
@@ -400,6 +427,7 @@ fn run() -> Result<Value, String> {
             "execution": summary.as_ref().and_then(|r| r.execution.clone()),
             "seconds": elapsed,
             "marker_seen": marker_seen,
+            "screenshot": run_screenshot,
             "terminal": String::from_utf8_lossy(session.terminals.get(&run_id).map_or(&[][..], |d| d)),
         }));
     }
