@@ -185,7 +185,11 @@ const KERNEL_ERRNO: [(u64, &str, &str); 19] = [
     (513, "ERESTARTNOINTR", "restart the call"),
     (514, "ERESTARTNOHAND", "restart the call if no handler"),
     (515, "ENOIOCTLCMD", "no such ioctl command"),
-    (516, "ERESTART_RESTARTBLOCK", "restart through restart_syscall"),
+    (
+        516,
+        "ERESTART_RESTARTBLOCK",
+        "restart through restart_syscall",
+    ),
     (517, "EPROBE_DEFER", "driver probe deferred"),
     (518, "EOPENSTALE", "open found a stale dentry"),
     (519, "ENOPARAM", "parameter not supported"),
@@ -447,7 +451,8 @@ pub(crate) fn quoted(data: &[u8]) -> String {
 /// `[::1]:443` or a Unix socket path. None for other families or short data.
 pub(crate) fn sockaddr(data: &[u8]) -> Option<String> {
     let family = u16::from_le_bytes(data.get(..2)?.try_into().ok()?);
-    let port = |data: &[u8]| -> Option<u16> { Some(u16::from_be_bytes(data.get(2..4)?.try_into().ok()?)) };
+    let port =
+        |data: &[u8]| -> Option<u16> { Some(u16::from_be_bytes(data.get(2..4)?.try_into().ok()?)) };
     match family {
         // AF_UNIX; a leading NUL names an abstract socket.
         1 => {
@@ -456,19 +461,30 @@ pub(crate) fn sockaddr(data: &[u8]) -> Option<String> {
                 Some((0, rest)) => ("@", rest),
                 _ => ("", path),
             };
-            let end = path.iter().position(|byte| *byte == 0).unwrap_or(path.len());
+            let end = path
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(path.len());
             let text = String::from_utf8_lossy(&path[..end]);
             Some(format!("unix:{prefix}{text}"))
         }
         // AF_INET
         2 => {
             let address: [u8; 4] = data.get(4..8)?.try_into().ok()?;
-            Some(format!("{}:{}", std::net::Ipv4Addr::from(address), port(data)?))
+            Some(format!(
+                "{}:{}",
+                std::net::Ipv4Addr::from(address),
+                port(data)?
+            ))
         }
         // AF_INET6
         10 => {
             let address: [u8; 16] = data.get(8..24)?.try_into().ok()?;
-            Some(format!("[{}]:{}", std::net::Ipv6Addr::from(address), port(data)?))
+            Some(format!(
+                "[{}]:{}",
+                std::net::Ipv6Addr::from(address),
+                port(data)?
+            ))
         }
         _ => None,
     }

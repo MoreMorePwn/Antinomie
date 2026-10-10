@@ -223,7 +223,10 @@ impl Inspector {
         };
         let nr = event.syscall_nr;
         let mut best: Option<(usize, u8, &FieldSummary)> = None;
-        for (phase, event) in [(2, invocation.exit.as_ref()), (1, invocation.entry.as_ref())] {
+        for (phase, event) in [
+            (2, invocation.exit.as_ref()),
+            (1, invocation.entry.as_ref()),
+        ] {
             for field in event.into_iter().flat_map(|event| &event.fields) {
                 if covered_preview(field).is_empty() {
                     continue;
@@ -280,7 +283,9 @@ impl Inspector {
             ui.spacing_mut().item_spacing.x = 8.0;
             ui.label(
                 RichText::new(&event.syscall_name)
-                    .font(theme::mono(ui.style().text_styles[&egui::TextStyle::Body].size))
+                    .font(theme::mono(
+                        ui.style().text_styles[&egui::TextStyle::Body].size,
+                    ))
                     .color(theme::value(ValueKind::Name)),
             );
             ui.label(
@@ -546,7 +551,9 @@ impl Inspector {
                 let (_, open) = tree_row(
                     ui,
                     Row {
-                        id: ui.id().with((key(invocation), depth, label, fields[0].1.object_id)),
+                        id: ui
+                            .id()
+                            .with((key(invocation), depth, label, fields[0].1.object_id)),
                         depth,
                         expand: Some(true),
                         name: label,
@@ -651,7 +658,9 @@ impl Inspector {
             let (response, _) = tree_row(
                 ui,
                 Row {
-                    id: ui.id().with(("async field", event.event_seq, field.object_id)),
+                    id: ui
+                        .id()
+                        .with(("async field", event.event_seq, field.object_id)),
                     depth: 2,
                     expand: None,
                     name: &field.key,
@@ -764,9 +773,7 @@ impl Inspector {
                     "{} Open data…",
                     egui_phosphor::regular::ARROW_SQUARE_OUT
                 ))
-                .on_hover_text(
-                    "Show all captured bytes as text, hexdump, C array, Base64 and more",
-                )
+                .on_hover_text("Show all captured bytes as text, hexdump, C array, Base64 and more")
                 .clicked();
         });
         let length = ui.add(
@@ -932,7 +939,10 @@ impl Inspector {
                     egui::vec2(char_width * 3.0, height),
                 );
                 let ascii = egui::Rect::from_min_size(
-                    egui::pos2(rect.left() + ascii_x + column as f32 * char_width, rect.top()),
+                    egui::pos2(
+                        rect.left() + ascii_x + column as f32 * char_width,
+                        rect.top(),
+                    ),
                     egui::vec2(char_width, height),
                 );
                 let response = ui
@@ -1087,11 +1097,8 @@ fn field_tree(
                 },
             );
             if let Some(field) = child.field {
-                let response = response.on_hover_text(format!(
-                    "{}\n{}",
-                    field.key,
-                    capture_summary(field)
-                ));
+                let response =
+                    response.on_hover_text(format!("{}\n{}", field.key, capture_summary(field)));
                 if field_menu(&response, field) {
                     inspector.request_data(invocation, nr, format!("p{phase}"), field);
                 }
@@ -1297,12 +1304,9 @@ fn argument_data<'a>(fields: &[(u8, &'a FieldSummary)]) -> Option<(u8, &'a Field
         !key.contains(['.', '['])
     };
     [2, 1].into_iter().find_map(|phase| {
-        fields
-            .iter()
-            .copied()
-            .find(|(owner, field)| {
-                *owner == phase && top_level(field) && !covered_preview(field).is_empty()
-            })
+        fields.iter().copied().find(|(owner, field)| {
+            *owner == phase && top_level(field) && !covered_preview(field).is_empty()
+        })
     })
 }
 
@@ -1593,9 +1597,9 @@ pub(crate) fn preview(field: &FieldSummary) -> String {
     let shown = &data[..data.len().min(48)];
     // All zeros is a cleared structure, not an empty string.
     let printable = (shown.len() == 1 || shown.iter().any(|byte| *byte != 0))
-        && shown
-            .iter()
-        .all(|byte| byte.is_ascii_graphic() || matches!(*byte, b' ' | b'\n' | b'\r' | b'\t' | 0));
+        && shown.iter().all(|byte| {
+            byte.is_ascii_graphic() || matches!(*byte, b' ' | b'\n' | b'\r' | b'\t' | 0)
+        });
     let text = if printable {
         values::quoted(shown)
     } else {
@@ -1796,10 +1800,7 @@ pub(crate) fn cells(invocation: &InvocationSummary) -> Vec<(Vec<(String, Tone)>,
     vec![
         (
             plain(seconds(event.timestamp_ns)),
-            format!(
-                "{} ns since the guest booted",
-                event.timestamp_ns
-            ),
+            format!("{} ns since the guest booted", event.timestamp_ns),
         ),
         (label(records), records_hover),
         (

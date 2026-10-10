@@ -2844,14 +2844,27 @@ impl MonitorApp {
         let body_font = egui::FontId::proportional(font);
         let char_width = ui.fonts(|fonts| fonts.glyph_width(&mono, '0'));
         let chars = |count: f32| count * char_width + 14.0;
-        let widths = [
-            chars(10.0),
+        let mut widths = [
             chars(9.0),
-            chars(6.0),
-            chars(4.0),
-            font * 9.5,
+            chars(8.0),
+            chars(5.0),
+            chars(3.0),
+            font * 8.5,
             chars(14.0),
         ];
+        // Narrow panels shrink the fixed columns so Info stays in view.
+        let room = ui.available_width() - font * 6.0 - 7.0 * ui.spacing().item_spacing.x;
+        let needed: f32 = widths.iter().sum();
+        let mut scale = 1.0;
+        if needed > room {
+            scale = (room / needed).max(0.35);
+            for width in &mut widths {
+                *width *= scale;
+            }
+        }
+        // Initial widths apply once per table id: a new width class (narrow
+        // panel, other text size) starts from fitting widths again.
+        let width_class = ((scale * 10.0).round() as i32, font as i32);
         // Row hover is known only once the row is drawn; tinted rows use the
         // previous frame's to brighten under the pointer.
         let hover_id = ui.id().with("trace_hovered_row");
@@ -2864,6 +2877,7 @@ impl MonitorApp {
             .show(ui, |ui| {
                 ui.set_min_width((font / 16.0 * 760.0).max(ui.available_width()));
                 TableBuilder::new(ui)
+                    .id_salt(("syscall_table", width_class))
                     .striped(true)
                     .resizable(true)
                     .sense(egui::Sense::click())
@@ -2945,9 +2959,7 @@ impl MonitorApp {
                             let fill = if selected {
                                 Some(palette.selection)
                             } else {
-                                group
-                                    .filter(|_| trace_colors)
-                                    .and_then(theme::syscall_tint)
+                                group.filter(|_| trace_colors).and_then(theme::syscall_tint)
                             };
                             let hovered = hovered_row == Some(index) && !selected;
                             let result = invocation.exit.as_ref().and_then(|event| event.result);
@@ -2971,13 +2983,19 @@ impl MonitorApp {
                                             if theme::is_light() {
                                                 egui::Color32::from_black_alpha(14)
                                             } else {
-                                                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 14)
+                                                egui::Color32::from_rgba_unmultiplied(
+                                                    255, 255, 255, 14,
+                                                )
                                             },
                                         );
                                     }
                                     if selected {
                                         let stroke = egui::Stroke::new(1.0_f32, palette.accent);
-                                        ui.painter().hline(cell.x_range(), cell.top() + 0.5, stroke);
+                                        ui.painter().hline(
+                                            cell.x_range(),
+                                            cell.top() + 0.5,
+                                            stroke,
+                                        );
                                         ui.painter().hline(
                                             cell.x_range(),
                                             cell.bottom() - 0.5,
@@ -2993,7 +3011,11 @@ impl MonitorApp {
                                         ui.painter().rect_filled(
                                             bar,
                                             0.0,
-                                            if failed { palette.error } else { palette.accent },
+                                            if failed {
+                                                palette.error
+                                            } else {
+                                                palette.accent
+                                            },
                                         );
                                     }
                                     let font = if matches!(column, 4 | 6) {
@@ -3051,76 +3073,81 @@ impl MonitorApp {
             }
         }
         let hidden = &mut self.settings.hidden_trace_categories;
-        // Chips wrap onto a second line instead of overflowing a narrow panel.
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
-            ui.spacing_mut().button_padding = egui::vec2(7.0, 1.0);
-            let all_shown = hidden.is_empty();
-            let all = egui::Button::new(RichText::new("All").small().color(if all_shown {
-                theme::palette().primary_text
-            } else {
-                theme::text()
-            }))
-            .fill(if all_shown {
-                theme::primary()
-            } else {
-                theme::panel()
-            })
-            .stroke(egui::Stroke::new(1.0_f32, theme::line()))
-            .corner_radius(8.0);
-            if ui
-                .add(all)
-                .on_hover_text(if all_shown {
-                    "Hide every category"
-                } else {
-                    "Show every category"
-                })
-                .clicked()
-            {
-                if all_shown {
-                    *hidden = SyscallGroup::ALL.to_vec();
-                } else {
-                    hidden.clear();
-                }
-            }
-            for group in SyscallGroup::ALL {
-                let shown = !hidden.contains(&group);
-                let swatch = theme::syscall_tint(group).unwrap_or(theme::raised());
-                let count = counts.get(&group).copied().unwrap_or(0);
-                let text = RichText::new(format!("{} {count}", group.label()))
-                    .small()
-                    .color(if shown {
+        // Chips wrap onto a second line instead of overflowing a narrow
+        // panel; past two lines (large text) they scroll within those two.
+        let chip_height = egui::TextStyle::Small.resolve(ui.style()).size + 6.0;
+        egui::ScrollArea::vertical()
+            .id_salt("trace_categories")
+            .max_height(chip_height * 2.0 + 5.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+                    ui.spacing_mut().button_padding = egui::vec2(7.0, 1.0);
+                    ui.spacing_mut().interact_size.y = chip_height;
+                    let all_shown = hidden.is_empty();
+                    let all = egui::Button::new(RichText::new("All").small().color(if all_shown {
+                        theme::palette().primary_text
+                    } else {
                         theme::text()
+                    }))
+                    .fill(if all_shown {
+                        theme::primary()
                     } else {
-                        theme::muted()
-                    });
-                let text = if shown { text } else { text.strikethrough() };
-                let border = if theme::is_light() {
-                    swatch.gamma_multiply(0.8)
-                } else {
-                    swatch.gamma_multiply(1.6)
-                };
-                let button = egui::Button::new(text)
-                    .fill(if shown { swatch } else { theme::panel() })
-                    .stroke(egui::Stroke::new(1.0_f32, border))
-                    .corner_radius(8.0);
-                if ui
-                    .add(button)
-                    .on_hover_text(if shown {
-                        "Click to hide these syscalls"
-                    } else {
-                        "Click to show these syscalls"
+                        theme::panel()
                     })
-                    .clicked()
-                {
-                    if shown {
-                        hidden.push(group);
-                    } else {
-                        hidden.retain(|other| *other != group);
+                    .stroke(egui::Stroke::new(1.0_f32, theme::line()))
+                    .corner_radius(8.0);
+                    if ui
+                        .add(all)
+                        .on_hover_text(if all_shown {
+                            "Hide every category"
+                        } else {
+                            "Show every category"
+                        })
+                        .clicked()
+                    {
+                        if all_shown {
+                            *hidden = SyscallGroup::ALL.to_vec();
+                        } else {
+                            hidden.clear();
+                        }
                     }
-                }
-            }
-        });
+                    for group in SyscallGroup::ALL {
+                        let shown = !hidden.contains(&group);
+                        let swatch = theme::syscall_tint(group).unwrap_or(theme::raised());
+                        let count = counts.get(&group).copied().unwrap_or(0);
+                        let text = RichText::new(format!("{} {count}", group.label()))
+                            .small()
+                            .color(if shown { theme::text() } else { theme::muted() });
+                        let text = if shown { text } else { text.strikethrough() };
+                        let border = if theme::is_light() {
+                            swatch.gamma_multiply(0.8)
+                        } else {
+                            swatch.gamma_multiply(1.6)
+                        };
+                        let button = egui::Button::new(text)
+                            .fill(if shown { swatch } else { theme::panel() })
+                            .stroke(egui::Stroke::new(1.0_f32, border))
+                            .corner_radius(8.0);
+                        if ui
+                            .add(button)
+                            .on_hover_text(if shown {
+                                "Click to hide these syscalls"
+                            } else {
+                                "Click to show these syscalls"
+                            })
+                            .clicked()
+                        {
+                            if shown {
+                                hidden.push(group);
+                            } else {
+                                hidden.retain(|other| *other != group);
+                            }
+                        }
+                    }
+                })
+            });
         if self.settings.hidden_trace_categories.len() == SyscallGroup::ALL.len() {
             ui.colored_label(
                 theme::muted(),
@@ -6674,13 +6701,13 @@ mod tests {
         assert_eq!(app.trace_sort, Some((TraceColumn::Tid, false)));
         assert_eq!(
             header(&mut app).0,
-            format!("TID {}", egui_phosphor::regular::CARET_UP)
+            format!("TID{}", egui_phosphor::regular::CARET_UP)
         );
         click(&mut app);
         assert_eq!(app.trace_sort, Some((TraceColumn::Tid, true)));
         assert_eq!(
             header(&mut app).0,
-            format!("TID {}", egui_phosphor::regular::CARET_DOWN)
+            format!("TID{}", egui_phosphor::regular::CARET_DOWN)
         );
     }
 
@@ -7882,7 +7909,10 @@ mod tests {
             egui::pos2(-10.0, -10.0),
             egui::PointerButton::Primary,
         );
-        let target = find(&output, "Return: -2").expect("return value shown");
+        // The return value reads by meaning: the error name, its number in
+        // the copy menu.
+        assert!(find(&output, "ENOENT").is_some(), "error shown by name");
+        let target = find(&output, "Return").expect("return value shown");
         let (output, _) = click(&mut inspector, target, egui::PointerButton::Secondary);
         for (label, value) in [
             ("Signed decimal", "-2"),
@@ -7896,19 +7926,27 @@ mod tests {
         let (output, copied) = click(&mut inspector, hex, egui::PointerButton::Primary);
         assert_eq!(copied, ["0xfffffffffffffffe"]);
 
-        // A captured field: right-click offers its data window. The Exit
-        // phase (shown second) holds the field.
-        let argument = texts(&output)
-            .into_iter()
-            .filter(|(text, _)| text == "buf: 0x1000")
-            .map(|(_, rect)| rect.center())
-            .next_back()
-            .expect("argument header");
+        // A captured field: right-click offers its data window. The
+        // argument row shows the pointer; the Exit data sits under it.
+        assert!(find(&output, "0x1000").is_some(), "pointer argument in hex");
+        let argument = find(&output, "buf").expect("argument row");
         let (mut output, _) = click(&mut inspector, argument, egui::PointerButton::Primary);
         for _ in 0..20 {
             output = frame(&mut inspector, Vec::new());
         }
-        let field = find(&output, "buf").expect("captured field node");
+        assert!(matches!(
+            inspector.selection,
+            Some(trace::Selection::Argument { index: 1, .. })
+        ));
+        let mut rows: Vec<_> = texts(&output)
+            .into_iter()
+            .filter(|(text, rect)| text == "buf" && rect.left() < 600.0)
+            .map(|(_, rect)| rect)
+            .collect();
+        rows.sort_by(|a, b| a.top().total_cmp(&b.top()));
+        assert_eq!(rows.len(), 2, "argument row and its captured field");
+        assert!(rows[1].left() > rows[0].left(), "field indented under argument");
+        let field = rows[1].center();
         let (output, _) = click(&mut inspector, field, egui::PointerButton::Secondary);
         let open = find(
             &output,
@@ -8209,7 +8247,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(trace::key(&rows[0]), (1, 3, 2));
         assert_eq!(rows[0].exit.as_ref().unwrap().cpu, 3);
-        assert!(trace::info(&rows[0]).contains("fd=3 requested=8 returned=4"));
+        assert!(trace::info(&rows[0]).contains("fd=3 buf=0x1000 count=8"));
         app.selected_event = Some((1, 3, 2));
         assert_eq!(
             app.invocations()
@@ -8379,12 +8417,12 @@ mod tests {
     fn clicking_trace_cell_text_selects_its_invocation() {
         for label in [
             "0.000001",
-            "1/2",
+            "1\u{2192}2",
             "42",
-            "0>3",
+            "0\u{2192}3",
             "read (0)",
             "4",
-            "fd=3 requested=8 returned=4",
+            "fd=3 buf=0x1000 count=8",
         ] {
             let ctx = egui::Context::default();
             theme::install(&ctx);
