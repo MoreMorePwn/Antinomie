@@ -2850,7 +2850,7 @@ impl MonitorApp {
             chars(6.0),
             chars(4.0),
             font * 9.5,
-            chars(12.0),
+            chars(14.0),
         ];
         // Row hover is known only once the row is drawn; tinted rows use the
         // previous frame's to brighten under the pointer.
@@ -2959,7 +2959,7 @@ impl MonitorApp {
                                     // row reads as one band, as in Wireshark.
                                     let cell = ui.max_rect().expand2(egui::vec2(
                                         ui.spacing().item_spacing.x / 2.0,
-                                        0.0,
+                                        ui.spacing().item_spacing.y / 2.0,
                                     ));
                                     if let Some(fill) = fill {
                                         ui.painter().rect_filled(cell, 0.0, fill);
@@ -2969,9 +2969,9 @@ impl MonitorApp {
                                             cell,
                                             0.0,
                                             if theme::is_light() {
-                                                egui::Color32::from_black_alpha(18)
+                                                egui::Color32::from_black_alpha(14)
                                             } else {
-                                                egui::Color32::from_white_alpha(18)
+                                                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 14)
                                             },
                                         );
                                     }
@@ -2985,7 +2985,10 @@ impl MonitorApp {
                                         );
                                     }
                                     if column == 0 && (failed || selected) {
-                                        let mut bar = cell;
+                                        let mut bar = ui.max_rect().expand2(egui::vec2(
+                                            0.0,
+                                            ui.spacing().item_spacing.y / 2.0,
+                                        ));
                                         bar.set_width(3.0);
                                         ui.painter().rect_filled(
                                             bar,
@@ -3005,6 +3008,10 @@ impl MonitorApp {
                                             0.0,
                                             egui::TextFormat::simple(font.clone(), tone.color()),
                                         );
+                                    }
+                                    if column == 0 {
+                                        // Clear of the failure and selection bar.
+                                        ui.add_space(3.0);
                                     }
                                     ui.add(
                                         egui::Label::new(job)
@@ -3255,14 +3262,14 @@ impl MonitorApp {
                         for run in &runs {
                             let detail = format!(
                                 "{}  \u{00b7}  {}",
-                                run.request.args.join(" "),
-                                run_status(run)
+                                run_status(run),
+                                run.request.args.join(" ")
                             );
                             if recent_row(
                                 ui,
                                 egui_phosphor::regular::TERMINAL_WINDOW,
                                 &run.request.path,
-                                detail.trim_start_matches("  \u{00b7}  "),
+                                detail.trim_end_matches("  \u{00b7}  "),
                             )
                             .on_hover_text(format!(
                                 "Open this run's recording in the trace\n{}",
@@ -5262,11 +5269,17 @@ fn recent_row(ui: &mut egui::Ui, icon: &str, title: &str, detail: &str) -> egui:
             title,
             theme::text(),
         );
-        painter.text(
-            egui::pos2(title_x + title_width + size * 0.8, y),
-            egui::Align2::LEFT_CENTER,
-            detail,
+        let detail_x = title_x + title_width + size * 0.8;
+        let mut job = egui::text::LayoutJob::simple_singleline(
+            detail.to_owned(),
             egui::FontId::proportional(size - 1.0),
+            theme::muted(),
+        );
+        job.wrap = egui::text::TextWrapping::truncate_at_width(rect.right() - detail_x - 6.0);
+        let detail = painter.layout_job(job);
+        painter.galley(
+            egui::pos2(detail_x, y - detail.size().y / 2.0),
+            detail,
             theme::muted(),
         );
     }

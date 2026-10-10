@@ -380,6 +380,7 @@ pub(crate) fn argument(nr: u64, index: usize, args: &[u64; 6]) -> Shown {
         Meaning::Pointer => Shown::new(format!("{value:#x}"), ValueKind::Pointer),
         Meaning::Flags => flags(nr, index, value),
         Meaning::Hex => Shown::new(format!("{value:#x}"), ValueKind::Flags),
+        Meaning::Mode if value & 0o7777 == 0 => Shown::new("0", ValueKind::Number),
         Meaning::Mode => Shown::new(format!("0{:o}", value & 0o7777), ValueKind::Number),
         Meaning::Descriptor => {
             let fd = value as i32;

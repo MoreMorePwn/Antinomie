@@ -895,7 +895,7 @@ impl Inspector {
     fn hex_dump(&mut self, ui: &mut egui::Ui) {
         let font = egui::TextStyle::Monospace.resolve(ui.style());
         let char_width = ui.fonts(|fonts| fonts.glyph_width(&font, '0'));
-        let height = theme::row_height(font.size) - 2.0;
+        let height = font.size + if theme::is_compact() { 5.0 } else { 9.0 };
         let per_line = if ui.available_width() >= char_width * 78.0 {
             16
         } else {
@@ -1591,8 +1591,10 @@ pub(crate) fn preview(field: &FieldSummary) -> String {
         }
     }
     let shown = &data[..data.len().min(48)];
-    let printable = shown
-        .iter()
+    // All zeros is a cleared structure, not an empty string.
+    let printable = (shown.len() == 1 || shown.iter().any(|byte| *byte != 0))
+        && shown
+            .iter()
         .all(|byte| byte.is_ascii_graphic() || matches!(*byte, b' ' | b'\n' | b'\r' | b'\t' | 0));
     let text = if printable {
         values::quoted(shown)
@@ -1866,15 +1868,24 @@ pub(crate) fn numeric_formats(value: u64, width: usize) -> Vec<(&'static str, St
 }
 
 fn numeric(ui: &mut egui::Ui, value: u64, width: usize) {
+    let size = egui::TextStyle::Body.resolve(ui.style()).size;
+    ui.spacing_mut().interact_size.y = theme::row_height(size) - 4.0;
     egui::Grid::new("numeric_inspector")
         .num_columns(2)
-        .spacing([12.0, 4.0])
+        .spacing([16.0, 2.0])
         .show(ui, |ui| {
             let formats = numeric_formats(value, width);
             for (label, text) in &formats {
-                ui.label(*label);
+                ui.colored_label(theme::muted(), *label);
+                let color = match *label {
+                    "Char / ASCII" => theme::value(ValueKind::Text),
+                    "Byte order" => theme::muted(),
+                    _ if text.starts_with("needs") => theme::muted(),
+                    _ => theme::value(ValueKind::Number),
+                };
                 let response = ui.add(
-                    egui::Label::new(RichText::new(text).monospace()).sense(egui::Sense::click()),
+                    egui::Label::new(RichText::new(text).monospace().color(color))
+                        .sense(egui::Sense::click()),
                 );
                 response.context_menu(|ui| {
                     let mut items = vec![((*label).to_owned(), text.clone())];
