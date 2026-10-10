@@ -7,7 +7,7 @@ use antinomie_monitor_core::network::{self, NetworkCapture, NetworkPacket};
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -33,6 +33,8 @@ pub(crate) struct NetworkContext<'a> {
     pub active: Option<&'a NetworkCapture>,
     /// The VM's recording folder.
     pub recordings: Option<&'a Path>,
+    /// Recording folders retained after the VM's recording location changed.
+    pub recording_roots: &'a [PathBuf],
     pub nat: bool,
     /// The VM is the one running.
     pub running: bool,
@@ -65,13 +67,45 @@ struct PacketList {
 pub(crate) struct NetworkView {
     list: PacketList,
     filter: String,
-    /// Captures of the selected VM, newest first, and the recording folder
-    /// they were listed from.
+    /// Captures of the selected VM, newest first, and the current and retained
+    /// recording folders they were listed from.
     captures: Vec<NetworkCapture>,
-    captures_for: Option<Option<PathBuf>>,
+    captures_for: Option<(Option<PathBuf>, Vec<PathBuf>)>,
     /// The running capture (id, file) last seen, to notice a start or stop.
     seen_active: Option<(String, PathBuf)>,
     hide_list: bool,
+}
+
+/// Capture identity is stable when a recording folder is copied or moved.
+/// Prefer the current folder, then merge retained folders without duplicate
+/// roots or captures. Whole-boot pcaps remain part of the same history.
+fn capture_history(current: Option<&Path>, retained: &[PathBuf]) -> Vec<NetworkCapture> {
+    let mut roots = HashSet::new();
+    let mut identities = HashSet::new();
+    let mut captures = Vec::new();
+    for root in current
+        .into_iter()
+        .chain(retained.iter().map(PathBuf::as_path))
+    {
+        let identity = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        if !roots.insert(identity) {
+            continue;
+        }
+        captures.extend(network::list_captures(root).into_iter().filter(|capture| {
+            identities.insert((
+                capture.boot_id.clone(),
+                capture.id.clone(),
+                capture.whole_boot,
+            ))
+        }));
+    }
+    captures.sort_by(|a, b| {
+        b.started_ms
+            .cmp(&a.started_ms)
+            .then_with(|| b.id.cmp(&a.id))
+            .then_with(|| b.boot_id.cmp(&a.boot_id))
+    });
+    captures
 }
 
 /// A packet filter, typed or set by clicking a value.
@@ -295,9 +329,9 @@ impl NetworkView {
         }
     }
 
-    fn scan(&mut self, recordings: Option<&Path>) {
-        self.captures = recordings.map(network::list_captures).unwrap_or_default();
-        self.captures_for = Some(recordings.map(Path::to_path_buf));
+    fn scan(&mut self, recordings: Option<&Path>, recording_roots: &[PathBuf]) {
+        self.captures = capture_history(recordings, recording_roots);
+        self.captures_for = Some((recordings.map(Path::to_path_buf), recording_roots.to_vec()));
     }
 
     /// Draw the panel.
@@ -309,9 +343,15 @@ impl NetworkView {
         let active = cx
             .active
             .map(|capture| (capture.id.clone(), capture.file.clone()));
-        if self.captures_for.as_ref().map(Option::as_deref) != Some(cx.recordings) {
+        if self
+            .captures_for
+            .as_ref()
+            .is_none_or(|(current, retained)| {
+                current.as_deref() != cx.recordings || retained != cx.recording_roots
+            })
+        {
             // Another VM: show its running capture, else its newest one.
-            self.scan(cx.recordings);
+            self.scan(cx.recordings, cx.recording_roots);
             let first = active
                 .as_ref()
                 .map(|(_, file)| file.clone())
@@ -320,7 +360,7 @@ impl NetworkView {
             self.seen_active = active.clone();
         } else if self.seen_active != active {
             // A capture started or stopped: list it, and show a new one live.
-            self.scan(cx.recordings);
+            self.scan(cx.recordings, cx.recording_roots);
             if let Some((_, file)) = &active {
                 self.open(Some(file.clone()));
             }
@@ -535,7 +575,7 @@ impl NetworkView {
                 .on_hover_text("Refresh the list")
                 .clicked()
             {
-                self.scan(cx.recordings);
+                self.scan(cx.recordings, cx.recording_roots);
             }
         });
         if let Some(active) = cx.active {
@@ -1173,5 +1213,64 @@ mod tests {
         assert_eq!(list.rows, [1]);
         list.filter_rows("");
         assert_eq!(list.rows, [0, 1, 2]);
+    }
+
+    #[test]
+    fn capture_history_merges_retained_roots_and_deduplicates_moved_captures() {
+        let fixture = std::env::temp_dir().join(format!(
+            "ant-network-roots-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let current = fixture.join("current");
+        let prior = fixture.join("prior");
+        let write_capture = |root: &Path, boot: &str, id: &str, started_ms: u64| {
+            let mut capture =
+                NetworkCapture::new(&root.join("boots").join(boot), boot, id, started_ms);
+            capture.stopped_ms = Some(started_ms + 1_000);
+            std::fs::create_dir_all(capture.file.parent().unwrap()).unwrap();
+            std::fs::write(&capture.file, []).unwrap();
+            let mut saved = capture.clone();
+            saved.file = capture.file.file_name().unwrap().into();
+            std::fs::write(capture.summary_path(), serde_json::to_vec(&saved).unwrap()).unwrap();
+            capture
+        };
+        let newest = write_capture(&current, "b-current", "moved", 4_000_000_000_000);
+        // A retained root may contain the same capture after a location move.
+        write_capture(&prior, "b-current", "moved", newest.started_ms);
+        let older = write_capture(&prior, "b-prior", "older", 3_000_000_000_000);
+        let legacy = prior.join("boots/b-legacy").join(network::PCAP_FILE);
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        let mut header = Vec::new();
+        header.extend(0xa1b2c3d4u32.to_le_bytes());
+        header.extend(2u16.to_le_bytes());
+        header.extend(4u16.to_le_bytes());
+        header.extend([0u8; 8]);
+        header.extend(65_535u32.to_le_bytes());
+        header.extend(1u32.to_le_bytes());
+        // A fixed first-packet timestamp makes ordering independent of the
+        // host clock and the file's modification time.
+        header.extend(1_000_000_000u32.to_le_bytes());
+        header.extend(0u32.to_le_bytes());
+        header.extend(14u32.to_le_bytes());
+        header.extend(14u32.to_le_bytes());
+        header.extend([0u8; 14]);
+        std::fs::write(&legacy, header).unwrap();
+        let retained = [
+            prior.clone(),
+            current.clone(),
+            prior.join("."),
+            prior.clone(),
+        ];
+        let captures = capture_history(Some(&current), &retained);
+        assert_eq!(captures.len(), 3);
+        assert_eq!(captures[0], newest);
+        assert_eq!(captures[1], older);
+        assert_eq!(captures[2].file, legacy);
+        assert!(captures[2].whole_boot);
+        std::fs::remove_dir_all(fixture).unwrap();
     }
 }

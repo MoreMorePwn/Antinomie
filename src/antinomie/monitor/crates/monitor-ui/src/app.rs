@@ -4124,12 +4124,15 @@ impl MonitorApp {
                     .network_capture
                     .clone()
                     .filter(|_| vm.is_some() && vm == self.snapshot.active_vm);
-                let recordings = self
+                let locations = self
                     .snapshot
                     .vm_locations
                     .iter()
-                    .find(|location| Some(&location.vm_id) == vm.as_ref())
-                    .map(|location| location.recording_directory.clone());
+                    .find(|location| Some(&location.vm_id) == vm.as_ref());
+                let recordings = locations.map(|location| location.recording_directory.clone());
+                let recording_roots = locations
+                    .map(|location| location.recording_directories.as_slice())
+                    .unwrap_or_default();
                 let nat = self
                     .snapshot
                     .vms
@@ -4140,6 +4143,7 @@ impl MonitorApp {
                     NetworkContext {
                         active: active.as_ref(),
                         recordings: recordings.as_deref(),
+                        recording_roots,
                         nat,
                         running: self.running()
                             && !self.closing
