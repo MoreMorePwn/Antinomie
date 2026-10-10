@@ -458,11 +458,11 @@ impl NetworkView {
         if !self.filter.trim().is_empty() || cx.pending {
             ui.horizontal_wrapped(|ui| {
                 if cx.pending {
-                    ui.colored_label(theme::MUTED, "Waiting for the VM...");
+                    ui.colored_label(theme::muted(), "Waiting for the VM...");
                 }
                 if !self.filter.trim().is_empty() {
                     ui.colored_label(
-                        theme::BLUE,
+                        theme::blue(),
                         format!(
                             "Filter {}: {} of {total} packets",
                             self.filter.trim(),
@@ -623,7 +623,11 @@ impl NetworkView {
                         egui_phosphor::regular::RECORD,
                         capture_detail(active, true, loaded)
                     ))
-                    .color(if selected { theme::TEXT } else { theme::ERROR });
+                    .color(if selected {
+                        theme::text()
+                    } else {
+                        theme::error()
+                    });
                     if ui
                         .selectable_label(selected, text)
                         .on_hover_text(active.file.display().to_string())
@@ -657,7 +661,7 @@ impl NetworkView {
                     }
                 }
                 if cx.active.is_none() && earlier.is_empty() {
-                    ui.colored_label(theme::MUTED, "No network captures for this VM");
+                    ui.colored_label(theme::muted(), "No network captures for this VM");
                 }
             });
         if let Some(path) = open {
@@ -669,7 +673,7 @@ impl NetworkView {
     fn packets(&mut self, ui: &mut egui::Ui, is_live: bool, cx: &NetworkContext<'_>) {
         if self.list.path.is_none() {
             ui.colored_label(
-                theme::MUTED,
+                theme::muted(),
                 if !cx.nat {
                     "The VM has no network (NAT is off). With NAT on, a network capture \
                      records every packet of its network interface, outside the guest."
@@ -683,11 +687,11 @@ impl NetworkView {
             return;
         }
         if let Some(error) = &self.list.error {
-            ui.colored_label(theme::WARN, error);
+            ui.colored_label(theme::warn(), error);
         }
         if self.list.truncated {
             ui.colored_label(
-                theme::WARN,
+                theme::warn(),
                 format!(
                     "Showing the first {MAX_PACKETS} packets; open the capture in Wireshark for all."
                 ),
@@ -832,7 +836,7 @@ impl NetworkView {
             .cloned()
         else {
             ui.colored_label(
-                theme::MUTED,
+                theme::muted(),
                 if self.list.packets.is_empty() {
                     "No packets yet"
                 } else {
@@ -874,7 +878,7 @@ impl NetworkView {
                     });
             }
             Some(Err(error)) => {
-                ui.colored_label(theme::WARN, error);
+                ui.colored_label(theme::warn(), error);
             }
             None => {}
         }
@@ -896,7 +900,7 @@ fn link(ui: &mut egui::Ui, text: &str, hover: &str) -> bool {
         ui.painter().hline(
             rect.x_range(),
             rect.bottom(),
-            egui::Stroke::new(1.0_f32, theme::TEXT),
+            egui::Stroke::new(1.0_f32, theme::text()),
         );
     }
     response.clicked()

@@ -126,15 +126,15 @@ impl BuildWizard {
             for (index, other) in pages.iter().enumerate() {
                 let text = RichText::new(other.title());
                 let text = if index == self.page {
-                    text.strong().color(theme::BLUE)
+                    text.strong().color(theme::blue())
                 } else if index < self.page {
-                    text.color(theme::TEXT)
+                    text.color(theme::text())
                 } else {
-                    text.color(theme::MUTED)
+                    text.color(theme::muted())
                 };
                 ui.label(text);
                 if index + 1 < pages.len() {
-                    ui.label(RichText::new("›").color(theme::MUTED));
+                    ui.label(RichText::new("›").color(theme::muted()));
                 }
             }
         });
@@ -234,7 +234,7 @@ impl BuildWizard {
                 let missing = build::missing(kind, mode);
                 if !missing.is_empty() {
                     ui.colored_label(
-                        theme::WARN,
+                        theme::warn(),
                         format!(
                             "    missing: {}",
                             missing
@@ -248,28 +248,28 @@ impl BuildWizard {
                 } else if let Some(obstacle) =
                     build::native_obstacle(kind).filter(|_| mode == BuildMode::Native)
                 {
-                    ui.colored_label(theme::WARN, format!("    {obstacle}"));
+                    ui.colored_label(theme::warn(), format!("    {obstacle}"));
                 }
             }
         }
         ui.add_space(6.0);
         match build::resolve_mode(kind, self.mode) {
             Ok(BuildMode::Native) => {
-                ui.colored_label(theme::GOOD, "The build will run on this host.");
+                ui.colored_label(theme::good(), "The build will run on this host.");
                 true
             }
             Ok(_) => {
-                ui.colored_label(theme::GOOD, "The build will run in the QEMU builder VM.");
+                ui.colored_label(theme::good(), "The build will run in the QEMU builder VM.");
                 if !std::path::Path::new("/dev/kvm").exists() {
                     ui.colored_label(
-                        theme::WARN,
+                        theme::warn(),
                         "No KVM: the builder VM runs without hardware acceleration and can take many hours.",
                     );
                 }
                 true
             }
             Err(error) => {
-                ui.colored_label(theme::ERROR, error);
+                ui.colored_label(theme::error(), error);
                 false
             }
         }
@@ -365,7 +365,7 @@ impl BuildWizard {
         match build::valid_hostname(&options.hostname) {
             Ok(()) => true,
             Err(error) => {
-                ui.colored_label(theme::ERROR, error);
+                ui.colored_label(theme::error(), error);
                 false
             }
         }
@@ -380,10 +380,10 @@ impl BuildWizard {
             ui.horizontal(|ui| {
                 ui.radio_value(&mut options.desktop, desktop.id.to_string(), desktop.label);
                 if detected.as_deref() == Some(desktop.id) {
-                    ui.colored_label(theme::GOOD, "this computer");
+                    ui.colored_label(theme::good(), "this computer");
                 }
                 if !desktop.verified {
-                    ui.colored_label(theme::WARN, "untested")
+                    ui.colored_label(theme::warn(), "untested")
                         .on_hover_text("Offered like the Debian installer, but not yet built and checked to reach its login screen");
                 }
             });
@@ -415,7 +415,7 @@ impl BuildWizard {
         match probe.validate(Kind::DebianXfce) {
             Ok(()) => true,
             Err(error) if error.contains("mirror") || error.contains("proxy") => {
-                ui.colored_label(theme::ERROR, error);
+                ui.colored_label(theme::error(), error);
                 false
             }
             Err(_) => true,
@@ -497,7 +497,7 @@ impl BuildWizard {
             .spacing([18.0, 4.0])
             .show(ui, |ui| {
                 for (name, value) in rows {
-                    ui.label(RichText::new(name).color(theme::MUTED));
+                    ui.label(RichText::new(name).color(theme::muted()));
                     ui.label(value);
                     ui.end_row();
                 }
@@ -523,7 +523,7 @@ impl BuildWizard {
         match options.validate(kind) {
             Ok(()) => true,
             Err(error) => {
-                ui.colored_label(theme::ERROR, error);
+                ui.colored_label(theme::error(), error);
                 false
             }
         }
@@ -573,21 +573,21 @@ impl BuildWizard {
             for (index, (_, label)) in stages.iter().enumerate() {
                 let (mark, color) = if status.finished && status.error.is_none() || index < current
                 {
-                    ("✔", theme::GOOD)
+                    ("✔", theme::good())
                 } else if index == current && status.error.is_some() {
-                    ("✖", theme::ERROR)
+                    ("✖", theme::error())
                 } else if index == current && !status.finished {
-                    ("●", theme::BLUE)
+                    ("●", theme::blue())
                 } else {
-                    ("○", theme::MUTED)
+                    ("○", theme::muted())
                 };
                 ui.colored_label(color, format!("{mark} {label}"));
             }
         });
         if let Some(error) = &status.error {
-            ui.colored_label(theme::ERROR, error);
+            ui.colored_label(theme::error(), error);
         } else if status.finished {
-            ui.colored_label(theme::GOOD, "Base built and installed.");
+            ui.colored_label(theme::good(), "Base built and installed.");
         } else if let Some((_, label)) = stages.get(current) {
             ui.label(format!("{label}…"));
         }
@@ -597,8 +597,8 @@ impl BuildWizard {
         let footer = ui.spacing().interact_size.y * 2.0 + 24.0;
         let height = (ui.available_height() - footer).max(160.0);
         egui::Frame::new()
-            .fill(theme::TERMINAL)
-            .stroke(egui::Stroke::new(1.0_f32, theme::LINE))
+            .fill(theme::terminal())
+            .stroke(egui::Stroke::new(1.0_f32, theme::line()))
             .inner_margin(egui::Margin::same(6))
             .show(ui, |ui| {
                 ui.set_min_height(height);
@@ -608,7 +608,12 @@ impl BuildWizard {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         for line in &status.log {
-                            ui.label(RichText::new(line).monospace().small().color(theme::MUTED));
+                            ui.label(
+                                RichText::new(line)
+                                    .monospace()
+                                    .small()
+                                    .color(theme::muted()),
+                            );
                         }
                     });
             });
@@ -647,10 +652,10 @@ fn pick_list<'a>(
         .find(|(value, _)| *value == selected.as_str())
         .map_or(selected.clone(), |(_, label)| label.clone());
     ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new("Selected:").color(theme::MUTED));
+        ui.label(RichText::new("Selected:").color(theme::muted()));
         ui.label(RichText::new(current).strong());
         if detected == Some(selected.as_str()) {
-            ui.colored_label(theme::GOOD, "detected from this computer");
+            ui.colored_label(theme::good(), "detected from this computer");
         }
     });
     ui.horizontal(|ui| {

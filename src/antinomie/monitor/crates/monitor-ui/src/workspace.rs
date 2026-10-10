@@ -165,7 +165,7 @@ impl WorkspaceLayout {
             }
         }
         egui::CentralPanel::default()
-            .frame(theme::frame(theme::BG))
+            .frame(theme::frame(theme::bg()))
             .show(ctx, |ui| self.show_surface(app, ui, SurfaceIndex::main()));
         let surfaces: Vec<_> = (1..self.dock.surfaces_count())
             .filter(|index| self.dock.is_surface_valid(SurfaceIndex(*index)))
@@ -196,7 +196,7 @@ impl WorkspaceLayout {
                             .show(ctx, |ui| self.show_surface(app, ui, surface));
                     } else {
                         egui::CentralPanel::default()
-                            .frame(theme::frame(theme::BG))
+                            .frame(theme::frame(theme::bg()))
                             .show(ctx, |ui| self.show_surface(app, ui, surface));
                     }
                 },

@@ -43,7 +43,7 @@ pub(crate) fn show(
                 ui.horizontal_wrapped(|ui| {
                     match (&tool.system, &tool.installed) {
                         (Some(path), installed) => {
-                            ui.colored_label(theme::GOOD, "On this system");
+                            ui.colored_label(theme::good(), "On this system");
                             ui.weak(path);
                             if let Some(version) = installed {
                                 ui.weak(format!("(Antinomie's {version} also installed; unused)"));
@@ -51,12 +51,12 @@ pub(crate) fn show(
                         }
                         (None, Some(version)) => {
                             ui.colored_label(
-                                theme::GOOD,
+                                theme::good(),
                                 format!("Installed by Antinomie ({version})"),
                             );
                         }
                         (None, None) => {
-                            ui.colored_label(theme::WARN, "Not installed");
+                            ui.colored_label(theme::warn(), "Not installed");
                         }
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -96,7 +96,7 @@ pub(crate) fn show(
                 if let Some(install) = install.filter(|install| install.id == tool.id) {
                     if install.finished {
                         if let Some(error) = &install.error {
-                            ui.colored_label(theme::ERROR, error);
+                            ui.colored_label(theme::error(), error);
                         }
                     } else {
                         let fraction = if install.total > 0 {

@@ -37,6 +37,10 @@ struct Settings {
     trace_colors: bool,
     /// Syscall groups hidden from the trace.
     hidden_trace_categories: Vec<SyscallGroup>,
+    /// Light palette instead of the dark one.
+    light_theme: bool,
+    /// Compact table rows (Comfortable when false).
+    compact: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -47,6 +51,8 @@ impl Default for Settings {
             font_size: 16.0,
             trace_colors: true,
             hidden_trace_categories: Vec::new(),
+            light_theme: false,
+            compact: true,
         }
     }
 }
@@ -238,6 +244,8 @@ impl MonitorApp {
             settings.bundle = options.bundle_dir.to_string_lossy().into_owned();
         }
         settings.font_size = settings.font_size.clamp(12.0, 24.0);
+        theme::apply(&cc.egui_ctx, settings.light_theme);
+        theme::set_compact(settings.compact);
         theme::text_size(&cc.egui_ctx, settings.font_size);
         options.bundle_dir = crate::folders::user_path(&settings.bundle);
         options.capture_quota_size = u64::from(settings.quota_gib) * 1024 * 1024 * 1024;
@@ -1095,7 +1103,7 @@ impl MonitorApp {
 
     fn run_history(&mut self, ui: &mut egui::Ui) {
         let Some(vm_id) = self.selected.clone() else {
-            ui.colored_label(theme::MUTED, "No VM selected");
+            ui.colored_label(theme::muted(), "No VM selected");
             return;
         };
         ui.horizontal_wrapped(|ui| {
@@ -1316,7 +1324,7 @@ impl MonitorApp {
                         });
                 });
         } else if runs.is_empty() {
-            ui.colored_label(theme::MUTED, "No retained runs for this VM");
+            ui.colored_label(theme::muted(), "No retained runs for this VM");
         }
     }
 
@@ -1409,11 +1417,11 @@ impl MonitorApp {
         ui.separator();
         match processes {
             Err(error) => {
-                ui.colored_label(theme::WARN, format!("Process tree unavailable: {error}"));
+                ui.colored_label(theme::warn(), format!("Process tree unavailable: {error}"));
             }
             Ok([]) => {
                 ui.colored_label(
-                    theme::MUTED,
+                    theme::muted(),
                     "No process tree (captures before Antinomie 0.3.0 keep one combined trace)",
                 );
             }
@@ -1710,7 +1718,7 @@ impl MonitorApp {
         let selected = self.selected.is_some() && stopped;
         egui::TopBottomPanel::top("menus")
             .exact_height(self.settings.font_size + 16.0)
-            .frame(theme::frame(theme::PANEL))
+            .frame(theme::frame(theme::panel()))
             .show(ctx, |ui| {
                 egui::menu::bar(ui, |ui| {
                     ui.menu_button("File", |ui| {
@@ -1830,7 +1838,7 @@ impl MonitorApp {
                         }
                         if self.running() && !self.observer_supported() {
                             ui.colored_label(
-                                theme::MUTED,
+                                theme::muted(),
                                 "Capture unavailable: needs a base for Antinomie 0.2.0 or newer",
                             );
                         }
@@ -1912,7 +1920,7 @@ impl MonitorApp {
                         ui.separator();
                         if ui
                             .add(egui::Button::new(
-                                RichText::new("No base image — Add base").color(theme::WARN),
+                                RichText::new("No base image — Add base").color(theme::warn()),
                             ))
                             .clicked()
                         {
@@ -1929,7 +1937,7 @@ impl MonitorApp {
     fn toolbar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("toolbar")
             .exact_height(self.settings.font_size + 22.0)
-            .frame(theme::frame(theme::PANEL))
+            .frame(theme::frame(theme::panel()))
             .show(ctx, |ui| {
                 egui::ScrollArea::horizontal()
                     .id_salt("toolbar_controls")
@@ -2013,7 +2021,7 @@ impl MonitorApp {
                             let mut network_icon = RichText::new(egui_phosphor::regular::NETWORK)
                                 .size(ui.text_style_height(&egui::TextStyle::Body));
                             if capturing {
-                                network_icon = network_icon.color(theme::ERROR);
+                                network_icon = network_icon.color(theme::error());
                             }
                             if ui
                                 .add_enabled(
@@ -2060,16 +2068,16 @@ impl MonitorApp {
                                             });
                                         ui.add(
                                             egui::Label::new(
-                                                RichText::new(name).color(theme::MUTED),
+                                                RichText::new(name).color(theme::muted()),
                                             )
                                             .truncate(),
                                         )
                                         .on_hover_text(name);
                                         ui.colored_label(
                                             if self.snapshot.state == VmState::Running {
-                                                theme::GOOD
+                                                theme::good()
                                             } else {
-                                                theme::MUTED
+                                                theme::muted()
                                             },
                                             egui_phosphor::regular::CIRCLE,
                                         );
@@ -2094,7 +2102,7 @@ impl MonitorApp {
             .resizable(true)
             .frame(
                 egui::Frame::new()
-                    .fill(theme::PANEL)
+                    .fill(theme::panel())
                     .inner_margin(egui::Margin::same(8)),
             )
             .show(ctx, |ui| {
@@ -2117,7 +2125,7 @@ impl MonitorApp {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         if self.snapshot.vms.is_empty() {
-                            ui.label(RichText::new("No saved VMs").color(theme::MUTED));
+                            ui.label(RichText::new("No saved VMs").color(theme::muted()));
                         }
                         for vm in &self.snapshot.vms {
                             let active = self.snapshot.active_vm.as_ref() == Some(&vm.id);
@@ -2216,14 +2224,14 @@ impl MonitorApp {
                             ui.horizontal(|ui| {
                                 ui.spinner();
                                 ui.label(
-                                    RichText::new("Checking base images…").color(theme::MUTED),
+                                    RichText::new("Checking base images…").color(theme::muted()),
                                 )
                                 .on_hover_text(
                                     "The first start after an update or import checks each base once",
                                 );
                             });
                         } else if self.snapshot.bases.is_empty() {
-                            ui.label(RichText::new("No base images").color(theme::MUTED));
+                            ui.label(RichText::new("No base images").color(theme::muted()));
                             if ui.button("Add base…").clicked() {
                                 self.download_open = true;
                                 if !self.snapshot.remote_refreshing {
@@ -2301,7 +2309,7 @@ impl MonitorApp {
                                     if ui
                                         .add(
                                             egui::Label::new(
-                                                RichText::new(hint).small().color(theme::WARN),
+                                                RichText::new(hint).small().color(theme::warn()),
                                             )
                                             .sense(egui::Sense::click()),
                                         )
@@ -2417,7 +2425,7 @@ impl MonitorApp {
 
     fn health(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::bottom("health")
-            .frame(theme::frame(theme::RAISED))
+            .frame(theme::frame(theme::raised()))
             .show(ctx, |ui| {
                 let health = &self.snapshot.health;
                 ui.add_space(3.0);
@@ -2426,7 +2434,7 @@ impl MonitorApp {
                     if let Some(kernel) = &self.snapshot.guest_kernel {
                         let status = RevisionStatus::of(kernel.revision);
                         ui.colored_label(
-                            if status == RevisionStatus::Current { theme::GOOD } else { theme::WARN },
+                            if status == RevisionStatus::Current { theme::good() } else { theme::warn() },
                             format!("Kernel: {}", RevisionStatus::describe(kernel.revision, None)),
                         )
                         .on_hover_text(format!(
@@ -2436,7 +2444,7 @@ impl MonitorApp {
                         ));
                     }
                     ui.separator();
-                    ui.colored_label(if health.dropped == 0 { theme::GOOD } else { theme::WARN },
+                    ui.colored_label(if health.dropped == 0 { theme::good() } else { theme::warn() },
                         format!("Transport loss: {}", health.dropped))
                         .on_hover_text(format!(
                             "Records the guest could not hand over: {} of {}\nGuest buffer per vCPU: {}\nWhen buffers fill: {}",
@@ -2454,12 +2462,12 @@ impl MonitorApp {
                             ));
                     }
                     if health.write_backlog > 64 * 1024 * 1024 {
-                        ui.colored_label(theme::WARN, format!("Disk backlog: {} MB", health.write_backlog / 1_000_000))
+                        ui.colored_label(theme::warn(), format!("Disk backlog: {} MB", health.write_backlog / 1_000_000))
                             .on_hover_text("Recording data waiting for the disk; when the queue is full the transport waits");
                     }
-                    ui.colored_label(if health.ui_dropped == 0 { theme::GOOD } else { theme::WARN },
+                    ui.colored_label(if health.ui_dropped == 0 { theme::good() } else { theme::warn() },
                         format!("UI loss: {}", health.ui_dropped));
-                    ui.colored_label(if health.storage_dropped_packets == 0 && health.persistence_error.is_none() { theme::GOOD } else { theme::WARN },
+                    ui.colored_label(if health.storage_dropped_packets == 0 && health.persistence_error.is_none() { theme::good() } else { theme::warn() },
                         format!("Storage loss: {}", health.storage_dropped_packets));
                     let recording = format!("Saved {:.1} / {} GiB",
                         health.persisted_len as f64 / 1073741824.0, self.settings.quota_gib);
@@ -2469,15 +2477,15 @@ impl MonitorApp {
                         health.reply_stalls, health.transport_health,
                         self.snapshot.capture_dir.as_ref().map(|path| path.display().to_string()).unwrap_or_else(|| "none".into())));
                     if health.parser_errors > 0 {
-                        ui.colored_label(theme::WARN, format!("Parser errors: {}", health.parser_errors));
+                        ui.colored_label(theme::warn(), format!("Parser errors: {}", health.parser_errors));
                     }
                 });
                 if let Some(error) = &health.persistence_error {
-                    ui.add(egui::Label::new(RichText::new(format!("Saving stopped: {error}")).color(theme::ERROR)).truncate())
+                    ui.add(egui::Label::new(RichText::new(format!("Saving stopped: {error}")).color(theme::error())).truncate())
                         .on_hover_text(error);
                 }
                 if let Some(error) = &self.snapshot.last_error {
-                    ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).truncate())
+                    ui.add(egui::Label::new(RichText::new(error).color(theme::error())).truncate())
                         .on_hover_text(error);
                 }
                 if self.closing {
@@ -2512,7 +2520,7 @@ impl MonitorApp {
 
     fn activity(&mut self, ui: &mut egui::Ui) {
         if self.activity.is_empty() {
-            ui.label(RichText::new("No activity").color(theme::MUTED));
+            ui.label(RichText::new("No activity").color(theme::muted()));
             return;
         }
         let height = (ui.available_height() - 30.0).max(0.0);
@@ -2528,7 +2536,7 @@ impl MonitorApp {
             .header(30.0, |mut header| {
                 for text in ["Time", "Level", "Message"] {
                     header.col(|ui| {
-                        ui.label(RichText::new(text).color(theme::MUTED));
+                        ui.label(RichText::new(text).color(theme::muted()));
                     });
                 }
             })
@@ -2541,9 +2549,9 @@ impl MonitorApp {
                     row.col(|ui| {
                         ui.colored_label(
                             if activity.level == "ERROR" {
-                                theme::ERROR
+                                theme::error()
                             } else {
-                                theme::MUTED
+                                theme::muted()
                             },
                             activity.level,
                         );
@@ -2585,13 +2593,13 @@ impl MonitorApp {
                 });
             ui.separator();
             if let Some(reason) = selection_error {
-                ui.colored_label(theme::ERROR, reason);
+                ui.colored_label(theme::error(), reason);
             }
             ui.horizontal(|ui| {
                 let run = ui.add_enabled(
                     !self.exec.path.trim().is_empty() && self.exec.analysis.validate().is_ok(),
                     egui::Button::new(format!("{} Run", egui_phosphor::regular::PLAY))
-                        .fill(theme::PRIMARY),
+                        .fill(theme::primary()),
                 );
                 if run.clicked() {
                     match crate::analysis::snapshot(&self.exec, &self.args, &self.env, graphical) {
@@ -2778,7 +2786,7 @@ impl MonitorApp {
             }
         });
         if let Some(error) = &self.archive_error {
-            ui.add(egui::Label::new(RichText::new(error).color(theme::WARN)).truncate())
+            ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).truncate())
                 .on_hover_text(error);
         }
         let filter = self.filter.to_lowercase();
@@ -2938,11 +2946,11 @@ impl MonitorApp {
                                     if failed && column == 0 {
                                         let mut bar = cell;
                                         bar.set_width(3.0);
-                                        ui.painter().rect_filled(bar, 0.0, theme::ERROR);
+                                        ui.painter().rect_filled(bar, 0.0, theme::error());
                                     }
                                     let mut label = RichText::new(&text);
                                     if failed && column == 5 {
-                                        label = label.color(theme::ERROR);
+                                        label = label.color(theme::error());
                                     }
                                     ui.add(
                                         egui::Label::new(label)
@@ -2991,11 +2999,11 @@ impl MonitorApp {
                     let all_shown = hidden.is_empty();
                     let all = egui::Button::new(RichText::new("All").small().strong())
                         .fill(if all_shown {
-                            theme::PRIMARY
+                            theme::primary()
                         } else {
-                            theme::PANEL
+                            theme::panel()
                         })
-                        .stroke(egui::Stroke::new(1.0_f32, theme::LINE));
+                        .stroke(egui::Stroke::new(1.0_f32, theme::line()));
                     if ui
                         .add(all)
                         .on_hover_text(if all_shown {
@@ -3013,7 +3021,7 @@ impl MonitorApp {
                     }
                     for group in SyscallGroup::ALL {
                         let shown = !hidden.contains(&group);
-                        let swatch = theme::syscall_tint(group).unwrap_or(theme::RAISED);
+                        let swatch = theme::syscall_tint(group).unwrap_or(theme::raised());
                         let text = RichText::new(format!(
                             "{} {}",
                             group.label(),
@@ -3021,12 +3029,12 @@ impl MonitorApp {
                         ))
                         .small()
                         .color(if shown {
-                            theme::TEXT
+                            theme::text()
                         } else {
-                            theme::MUTED
+                            theme::muted()
                         });
                         let button = egui::Button::new(text)
-                            .fill(if shown { swatch } else { theme::PANEL })
+                            .fill(if shown { swatch } else { theme::panel() })
                             .stroke(egui::Stroke::new(1.0_f32, swatch.gamma_multiply(1.6)));
                         if ui
                             .add(button)
@@ -3048,7 +3056,7 @@ impl MonitorApp {
             });
         if self.settings.hidden_trace_categories.len() == SyscallGroup::ALL.len() {
             ui.colored_label(
-                theme::MUTED,
+                theme::muted(),
                 "All categories are hidden; click All to show them.",
             );
         }
@@ -3196,10 +3204,10 @@ impl MonitorApp {
                         .num_columns(2)
                         .spacing([16.0, 4.0])
                         .show(ui, |ui| {
-                            ui.label(RichText::new("Guest kernel").color(theme::MUTED));
+                            ui.label(RichText::new("Guest kernel").color(theme::muted()));
                             ui.label("Linux 6.12.94 (Debian 6.12.94-1 source)");
                             ui.end_row();
-                            ui.label(RichText::new("Bases").color(theme::MUTED));
+                            ui.label(RichText::new("Bases").color(theme::muted()));
                             ui.label(format!(
                                 "{} or newer",
                                 RevisionStatus::describe(Some(APP_REVISION), None)
@@ -3379,7 +3387,7 @@ impl MonitorApp {
                         });
                         if self.draft.nat {
                             ui.colored_label(
-                                theme::WARN,
+                                theme::warn(),
                                 "NAT permits guest access to the host network and Internet.",
                             );
                         }
@@ -3391,7 +3399,7 @@ impl MonitorApp {
                         }
                         // Above the button, so it stays in view in a tall dialog.
                         if let Some(error) = &form_error {
-                            ui.add(egui::Label::new(egui::RichText::new(error).color(theme::WARN)).wrap());
+                            ui.add(egui::Label::new(egui::RichText::new(error).color(theme::warn())).wrap());
                         }
                         ui.horizontal(|ui| {
                             save = ui
@@ -3402,7 +3410,7 @@ impl MonitorApp {
                                     } else {
                                         "Save configuration"
                                     })
-                                    .fill(theme::PRIMARY),
+                                    .fill(theme::primary()),
                                 )
                                 .clicked();
                             if !creating {
@@ -3428,7 +3436,7 @@ impl MonitorApp {
                             self.save_validation_error(&self.draft)
                         };
                         if let Some(error) = &form_error {
-                            ui.add(egui::Label::new(egui::RichText::new(error).color(theme::WARN)).wrap());
+                            ui.add(egui::Label::new(egui::RichText::new(error).color(theme::warn())).wrap());
                         }
                     }
                 });
@@ -3544,6 +3552,25 @@ impl MonitorApp {
                                 for terminal in self.terminals.values_mut() {
                                     terminal.terminal.invalidate_resize();
                                 }
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Theme");
+                            let before = self.settings.light_theme;
+                            ui.selectable_value(&mut self.settings.light_theme, false, "Dark");
+                            ui.selectable_value(&mut self.settings.light_theme, true, "Light");
+                            if self.settings.light_theme != before {
+                                theme::apply(ctx, self.settings.light_theme);
+                                theme::text_size(ctx, self.settings.font_size);
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Table rows");
+                            let before = self.settings.compact;
+                            ui.selectable_value(&mut self.settings.compact, true, "Compact");
+                            ui.selectable_value(&mut self.settings.compact, false, "Comfortable");
+                            if self.settings.compact != before {
+                                theme::set_compact(self.settings.compact);
                             }
                         });
                         ui.checkbox(
@@ -3970,7 +3997,7 @@ impl MonitorApp {
                     });
                 });
                 if let Some(error) = &self.snapshot.remote_error {
-                    ui.colored_label(theme::ERROR, error);
+                    ui.colored_label(theme::error(), error);
                 }
                 if let Some(status) = download.as_ref().filter(|status| !status.finished) {
                     ui.separator();
@@ -4003,7 +4030,7 @@ impl MonitorApp {
                     match &status.error {
                         Some(error) if error.contains("cancelled") => {
                             ui.colored_label(
-                                theme::MUTED,
+                                theme::muted(),
                                 format!(
                                     "{}: download cancelled; it resumes where it stopped",
                                     status.label
@@ -4011,16 +4038,16 @@ impl MonitorApp {
                             );
                         }
                         Some(error) => {
-                            ui.colored_label(theme::ERROR, format!("{}: {error}", status.label));
+                            ui.colored_label(theme::error(), format!("{}: {error}", status.label));
                         }
                         None => {
-                            ui.colored_label(theme::GOOD, format!("{} installed", status.label));
+                            ui.colored_label(theme::good(), format!("{} installed", status.label));
                         }
                     }
                 }
                 ui.separator();
                 if current.is_empty() && older.is_empty() && other.is_empty() {
-                    ui.colored_label(theme::MUTED, "No bases listed yet: refresh the catalog.");
+                    ui.colored_label(theme::muted(), "No bases listed yet: refresh the catalog.");
                 }
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
@@ -4032,11 +4059,15 @@ impl MonitorApp {
                         for (index, base) in rows.enumerate() {
                             if index == current.len() && !other.is_empty() {
                                 ui.add_space(6.0);
-                                ui.label(RichText::new("Other bases").strong().color(theme::MUTED));
+                                ui.label(
+                                    RichText::new("Other bases").strong().color(theme::muted()),
+                                );
                             }
                             if index == current.len() + other.len() && *show_older {
                                 ui.add_space(6.0);
-                                ui.label(RichText::new("Older bases").strong().color(theme::MUTED));
+                                ui.label(
+                                    RichText::new("Older bases").strong().color(theme::muted()),
+                                );
                             }
                             egui::Frame::group(ui.style())
                                 .inner_margin(egui::Margin::symmetric(10, 8))
@@ -4293,7 +4324,7 @@ impl MonitorApp {
                             .as_ref()
                             .or(terminal.replay_error.as_ref())
                         {
-                            ui.colored_label(theme::WARN, error);
+                            ui.colored_label(theme::warn(), error);
                         }
                     });
                     let interactive = live && terminal.interactive() && !self.closing;
@@ -4507,14 +4538,14 @@ fn download_row(
                 ui.label(
                     RichText::new(facts.join("  ·  "))
                         .small()
-                        .color(theme::MUTED),
+                        .color(theme::muted()),
                 );
             },
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if installed.contains(&base.identity) {
                 ui.colored_label(
-                    theme::GOOD,
+                    theme::good(),
                     format!("{} Installed", egui_phosphor::regular::CHECK),
                 );
             } else if running.is_some() {
@@ -4692,7 +4723,7 @@ fn transport_window(
                 transport_options(ui, transport, cpus, tunable)
             });
             if !editable {
-                ui.colored_label(theme::WARN, "Stop the VM to change these settings.");
+                ui.colored_label(theme::warn(), "Stop the VM to change these settings.");
             }
             ui.weak("Save the VM configuration to apply.");
         });
@@ -4706,7 +4737,7 @@ fn transport_options(
 ) {
     if !tunable {
         ui.colored_label(
-            theme::WARN,
+            theme::warn(),
             "This base predates Antinomie 0.3.0: it always uses 256 KiB buffers \
              and drops telemetry when they are full. These settings apply to \
              newer bases.",
@@ -4869,7 +4900,7 @@ fn show_terminal_viewport(
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::NONE
-                    .fill(theme::TERMINAL)
+                    .fill(theme::terminal())
                     .inner_margin(egui::Margin::same(4)),
             )
             .show(ctx, content);
@@ -5065,12 +5096,12 @@ fn section_header(
             let lit = enabled && (response.hovered() || open);
             if ui.is_rect_visible(rect) {
                 if lit {
-                    ui.painter().rect_filled(rect, 4.0, theme::PRIMARY);
+                    ui.painter().rect_filled(rect, 4.0, theme::primary());
                 }
                 let color = match (enabled, lit) {
-                    (false, _) => theme::MUTED.gamma_multiply(0.5),
+                    (false, _) => theme::muted().gamma_multiply(0.5),
                     (true, true) => egui::Color32::WHITE,
-                    (true, false) => theme::TEXT,
+                    (true, false) => theme::text(),
                 };
                 ui.painter().text(
                     rect.center(),
@@ -6154,7 +6185,7 @@ mod tests {
             fn find(shape: &egui::Shape, point: egui::Pos2) -> bool {
                 match shape {
                     egui::Shape::Rect(rect) => {
-                        rect.fill == theme::PRIMARY && rect.rect.contains(point)
+                        rect.fill == theme::primary() && rect.rect.contains(point)
                     }
                     egui::Shape::Vec(shapes) => shapes.iter().any(|shape| find(shape, point)),
                     _ => false,
@@ -8208,9 +8239,10 @@ mod tests {
                 );
                 assert!(rect("Return").right() <= rect("Info").left());
                 assert!(!texts.iter().any(|(text, _)| text == "Terminal"));
+                // DejaVu Sans Mono runs wider; data text is one point smaller.
                 assert_eq!(
                     ctx.style().text_styles[&egui::TextStyle::Monospace].size,
-                    font
+                    font - 1.0
                 );
             }
         }

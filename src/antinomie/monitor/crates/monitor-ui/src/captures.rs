@@ -169,7 +169,7 @@ impl ProcessPicker {
                     .on_hover_text(format!("Boot {}", identity.boot_id));
                 }
                 if !enabled {
-                    ui.colored_label(theme::WARN, "Process attachment unavailable");
+                    ui.colored_label(theme::warn(), "Process attachment unavailable");
                 }
                 ui.horizontal_wrapped(|ui| {
                     if ui
@@ -309,11 +309,11 @@ pub(super) fn history(
                     .into_iter()
                     .flatten()
                 {
-                    ui.label(RichText::new(warning).color(theme::WARN));
+                    ui.label(RichText::new(warning).color(theme::warn()));
                 }
             });
     } else if captures.is_empty() {
-        ui.colored_label(theme::MUTED, "No retained captures for this VM");
+        ui.colored_label(theme::muted(), "No retained captures for this VM");
     }
     action
 }
@@ -358,7 +358,7 @@ pub(super) fn process_tree(
                     ui.add_space(*depth as f32 * 14.0);
                     let mut text = RichText::new(process_label(process));
                     if process.packets == 0 {
-                        text = text.color(theme::MUTED);
+                        text = text.color(theme::muted());
                     }
                     let response = ui
                         .selectable_label(selected == Some(process.pid), text)

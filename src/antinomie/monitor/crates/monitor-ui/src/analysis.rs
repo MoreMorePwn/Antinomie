@@ -91,10 +91,10 @@ fn run_in(ui: &mut egui::Ui, choice: &mut RunIn, uid: u32) {
             .response
             .labelled_by(label.id);
     });
-    ui.colored_label(crate::theme::MUTED, choice.description());
+    ui.colored_label(crate::theme::muted(), choice.description());
     if choice.guest_desktop() {
         ui.colored_label(
-            crate::theme::MUTED,
+            crate::theme::muted(),
             if uid == 0 {
                 "Log in on the VM display as a normal user first; a root run joins that user's desktop. The run also records the launch script."
             } else {
@@ -104,7 +104,7 @@ fn run_in(ui: &mut egui::Ui, choice: &mut RunIn, uid: u32) {
     }
     if *choice == RunIn::GuestDesktopTerminal {
         ui.colored_label(
-            crate::theme::MUTED,
+            crate::theme::muted(),
             "The desktop's own terminal is started for this run, so the program stays in it. A guest with only another x-terminal-emulator may run the program outside the run; Capture All still records it.",
         );
     }
@@ -144,7 +144,7 @@ pub(crate) fn selection(
         });
     });
     if let Err(reason) = selection.validate() {
-        ui.colored_label(crate::theme::ERROR, reason);
+        ui.colored_label(crate::theme::error(), reason);
     }
     master.inner
 }
@@ -173,7 +173,7 @@ fn needs_tool(
     }
     ui.horizontal_wrapped(|ui| {
         ui.add_space(24.0);
-        ui.colored_label(crate::theme::WARN, format!("Needs {name}, not installed"));
+        ui.colored_label(crate::theme::warn(), format!("Needs {name}, not installed"));
         if ui.small_button("Install…").clicked() {
             *install = true;
         }
@@ -297,7 +297,7 @@ pub(crate) fn progress_banner(ui: &mut egui::Ui, report: &AnalysisReport) {
     if let Some(text) = progress_text(report) {
         ui.horizontal_wrapped(|ui| {
             ui.add(egui::Spinner::new());
-            ui.colored_label(crate::theme::BLUE, text);
+            ui.colored_label(crate::theme::blue(), text);
         });
     }
 }
@@ -318,7 +318,7 @@ pub(crate) fn other_progress<'a>(
             ui.horizontal_wrapped(|ui| {
                 ui.add(egui::Spinner::new());
                 ui.colored_label(
-                    crate::theme::MUTED,
+                    crate::theme::muted(),
                     format!("{}: {text}", report.source_path),
                 )
                 .on_hover_text(format!("Report {}", report.id));

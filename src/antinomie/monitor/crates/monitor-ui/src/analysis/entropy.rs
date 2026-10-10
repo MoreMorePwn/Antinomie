@@ -39,7 +39,7 @@ pub(super) fn chart(
     ui.label("Measured regions / bits per octet (0..8)");
     let (rect, _) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 80.0), egui::Sense::hover());
-    ui.painter().rect_filled(rect, 0.0, crate::theme::BG);
+    ui.painter().rect_filled(rect, 0.0, crate::theme::bg());
     let slot_size = rect.width() / regions.len() as f32;
     let mut selected = None;
     for (ordinal, &(index, offset, len, milli_bits)) in regions.iter().enumerate() {
@@ -54,7 +54,7 @@ pub(super) fn chart(
             ),
             egui::pos2((slot.right() - 1.0).max(slot.left() + 1.0), rect.bottom()),
         );
-        ui.painter().rect_filled(bar, 0.0, crate::theme::BLUE);
+        ui.painter().rect_filled(bar, 0.0, crate::theme::blue());
         if ui
             .interact(
                 slot,

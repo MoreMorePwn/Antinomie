@@ -101,8 +101,10 @@ fn render(
             ));
     });
     if let Some(reason) = &report.reason {
-        ui.add(egui::Label::new(egui::RichText::new(reason).color(crate::theme::MUTED)).truncate())
-            .on_hover_text(reason);
+        ui.add(
+            egui::Label::new(egui::RichText::new(reason).color(crate::theme::muted())).truncate(),
+        )
+        .on_hover_text(reason);
     }
     super::progress_banner(ui, report);
     ui.separator();
@@ -861,7 +863,7 @@ fn detail(
                     }
                 }
                 Some(Err(reason)) => {
-                    ui.colored_label(crate::theme::ERROR, reason);
+                    ui.colored_label(crate::theme::error(), reason);
                 }
                 _ => {
                     ui.label("Awaiting matching specimen preview.");

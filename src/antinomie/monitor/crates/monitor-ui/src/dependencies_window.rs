@@ -110,7 +110,7 @@ impl DependenciesWindow {
                     ui.horizontal(|ui| { ui.spinner(); ui.label("Checking this system…"); });
                 }
                 if let Some(error) = &self.error {
-                    ui.colored_label(theme::ERROR, error);
+                    ui.colored_label(theme::error(), error);
                 }
                 if let Some(report) = &self.report {
                     egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
@@ -121,7 +121,7 @@ impl DependenciesWindow {
                             ui.separator();
                             ui.horizontal_wrapped(|ui| {
                                 ui.strong(check.name);
-                                ui.colored_label(if check.problem.is_some() { theme::WARN } else { theme::GOOD },
+                                ui.colored_label(if check.problem.is_some() { theme::warn() } else { theme::good() },
                                     if check.problem.is_some() { "Unavailable" } else { "Ready" });
                             });
                             ui.weak(check.purpose);

@@ -218,7 +218,7 @@ impl Terminal {
         }
 
         let painter = ui.painter_at(grid);
-        painter.rect_filled(grid, 0.0, theme::TERMINAL);
+        painter.rect_filled(grid, 0.0, theme::terminal());
         let (first, count) = view_lines(lines, shown, self.offset);
         let mut line = first;
         while line < first + count {
@@ -277,7 +277,7 @@ impl Terminal {
                                 egui_phosphor::regular::ARROW_LINE_DOWN,
                                 if below == 1 { "" } else { "s" }
                             ))
-                            .fill(theme::RAISED),
+                            .fill(theme::raised()),
                         )
                         .on_hover_text("Jump to the newest output (Shift+End)")
                     },
@@ -416,9 +416,9 @@ fn paint_rows(
                 continue;
             };
             let bg = if content.inverse() {
-                color(content.fgcolor(), theme::TEXT)
+                color(content.fgcolor(), theme::text())
             } else {
-                color(content.bgcolor(), theme::TERMINAL)
+                color(content.bgcolor(), theme::terminal())
             };
             painter.rect_filled(egui::Rect::from_min_size(at(row, col), cell), 0.0, bg);
         }
@@ -431,9 +431,9 @@ fn paint_rows(
             };
             let pos = at(row, col);
             let fg = if content.inverse() {
-                color(content.bgcolor(), theme::TERMINAL)
+                color(content.bgcolor(), theme::terminal())
             } else {
-                color(content.fgcolor(), theme::TEXT)
+                color(content.fgcolor(), theme::text())
             };
             if !content.is_wide_continuation() {
                 painter.text(
@@ -519,9 +519,9 @@ fn scrollbar(
         )
     };
     let fill = if response.hovered() || response.is_pointer_button_down_on() {
-        theme::MUTED
+        theme::muted()
     } else {
-        theme::LINE
+        theme::line()
     };
     ui.painter().rect_filled(thumb, 3.0, fill);
     requested
@@ -615,13 +615,13 @@ mod tests {
 
     #[test]
     fn terminal_defaults_use_native_theme_without_overriding_explicit_color() {
-        assert_eq!(color(vt100::Color::Default, theme::TEXT), theme::TEXT);
+        assert_eq!(color(vt100::Color::Default, theme::text()), theme::text());
         assert_eq!(
-            color(vt100::Color::Rgb(1, 2, 3), theme::TEXT),
+            color(vt100::Color::Rgb(1, 2, 3), theme::text()),
             Color32::from_rgb(1, 2, 3)
         );
         assert_eq!(
-            color(vt100::Color::Idx(255), theme::TEXT),
+            color(vt100::Color::Idx(255), theme::text()),
             Color32::from_rgb(238, 238, 238)
         );
     }
@@ -865,7 +865,7 @@ mod tests {
         // A scrollbar thumb and a way back to the newest output appear.
         assert!(output.shapes.iter().any(|shape| matches!(
             &shape.shape,
-            egui::Shape::Rect(rect) if rect.fill == theme::LINE || rect.fill == theme::MUTED
+            egui::Shape::Rect(rect) if rect.fill == theme::line() || rect.fill == theme::muted()
         )));
         assert!(output.shapes.iter().any(|shape| matches!(
             &shape.shape,

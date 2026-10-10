@@ -28,7 +28,7 @@ redistribute them. Their license files arrive with each download.
 
 ## Embedded UI assets
 
-The UI uses egui default fonts and the regular egui-phosphor icon font.
+The UI uses the DejaVu fonts (text and data), egui default fonts as fallbacks and the regular egui-phosphor icon font.
 Notices below are retained for these bundled assets, not promotional credits.
 
 | Locked component / material | Terms / retained notice |
@@ -37,6 +37,7 @@ Notices below are retained for these bundled assets, not promotional credits.
 | `epaint_default_fonts 0.31.1` / Noto Emoji | SIL OFL 1.1 in [OFL.txt](LICENSES/third-party/fonts/OFL.txt) |
 | `epaint_default_fonts 0.31.1` / Ubuntu Light | Ubuntu Font License 1.0 in [UFL.txt](LICENSES/third-party/fonts/UFL.txt) |
 | `epaint_default_fonts 0.31.1` / emoji icon font | MIT in [emoji-icon-font-mit-license.txt](LICENSES/third-party/fonts/emoji-icon-font-mit-license.txt) |
+| DejaVu Sans, DejaVu Sans Bold, DejaVu Sans Mono 2.37 (Debian `fonts-dejavu-core` 2.37-8), bundled in `crates/monitor-ui/assets/fonts` | Bitstream Vera and Arev font terms, DejaVu changes in the public domain; [DejaVu-copyright.txt](LICENSES/third-party/fonts/DejaVu-copyright.txt) |
 | `egui-phosphor 0.9.0` binding | MIT option selected; [egui-phosphor-MIT.txt](LICENSES/third-party/fonts/egui-phosphor-MIT.txt) |
 | Phosphor Icons 2.1.0 font bundled by that crate | MIT; [Phosphor-Icons-MIT.txt](LICENSES/third-party/fonts/Phosphor-Icons-MIT.txt) |
 

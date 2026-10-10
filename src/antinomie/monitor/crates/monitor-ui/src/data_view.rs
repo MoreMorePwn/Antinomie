@@ -284,19 +284,19 @@ fn display_row(row: &str, font: &egui::FontId) -> egui::text::LayoutJob {
     let mut start = 0;
     for (index, character) in row.char_indices() {
         let stand_in = match character {
-            '\u{FFFD}' => ("\u{25A1}", theme::WARN),
-            '\t' => ("    ", theme::TEXT),
-            character if character.is_control() => ("\u{B7}", theme::MUTED),
+            '\u{FFFD}' => ("\u{25A1}", theme::warn()),
+            '\t' => ("    ", theme::text()),
+            character if character.is_control() => ("\u{B7}", theme::muted()),
             _ => continue,
         };
         if start < index {
-            job.append(&row[start..index], 0.0, format(theme::TEXT));
+            job.append(&row[start..index], 0.0, format(theme::text()));
         }
         job.append(stand_in.0, 0.0, format(stand_in.1));
         start = index + character.len_utf8();
     }
     if start < row.len() || row.is_empty() {
-        job.append(&row[start..], 0.0, format(theme::TEXT));
+        job.append(&row[start..], 0.0, format(theme::text()));
     }
     job
 }
@@ -347,7 +347,7 @@ fn elide(value: &str) -> String {
 
 /// Rows of a context menu that each copy one labelled value.
 pub(crate) fn copy_items(ui: &mut egui::Ui, items: &[(String, String)]) {
-    ui.label(RichText::new("Copy").color(theme::MUTED));
+    ui.label(RichText::new("Copy").color(theme::muted()));
     for (label, value) in items {
         if ui
             .add(egui::Button::new(label.as_str()).shortcut_text(elide(value)))
@@ -646,12 +646,12 @@ impl DataWindow {
             ui.strong(&self.field.key);
             ui.label(trace::capture_summary(&self.field));
             if !self.field.layout.is_empty() {
-                ui.label(RichText::new(&self.field.layout).color(theme::MUTED));
+                ui.label(RichText::new(&self.field.layout).color(theme::muted()));
             }
         });
         if !self.field.complete {
             ui.colored_label(
-                theme::WARN,
+                theme::warn(),
                 format!("Partial capture: {}", trace::incomplete_reason(&self.field)),
             );
         }
@@ -668,7 +668,7 @@ impl DataWindow {
         }
         if self.truncated {
             ui.colored_label(
-                theme::WARN,
+                theme::warn(),
                 format!(
                     "Showing the first {} MiB ({} bytes) of {} captured bytes",
                     DATA_WINDOW_CAP / (1024 * 1024),
@@ -679,15 +679,15 @@ impl DataWindow {
         }
         if self.segments.len() > 1 || self.segments.first().is_some_and(|(offset, _)| *offset > 0) {
             ui.colored_label(
-                theme::MUTED,
+                theme::muted(),
                 "Ranges that were not captured are marked in the text.",
             );
         }
         if let Some(note) = &self.note {
-            ui.colored_label(theme::MUTED, note);
+            ui.colored_label(theme::muted(), note);
         }
         if let Some(error) = &self.error {
-            ui.colored_label(theme::ERROR, error);
+            ui.colored_label(theme::error(), error);
         }
         ui.horizontal_wrapped(|ui| {
             let label = ui.label("Format");
@@ -723,7 +723,7 @@ impl DataWindow {
                     }
                 }
             });
-            ui.label(RichText::new(format!("{} bytes", self.loaded_len())).color(theme::MUTED));
+            ui.label(RichText::new(format!("{} bytes", self.loaded_len())).color(theme::muted()));
         });
         if self.format == DataFormat::Utf8 {
             ui.label(
@@ -731,12 +731,12 @@ impl DataWindow {
                     "\u{25A1} marks bytes that are not valid UTF-8, \u{B7} control characters",
                 )
                 .small()
-                .color(theme::MUTED),
+                .color(theme::muted()),
             );
         }
         ui.separator();
         if self.segments.is_empty() {
-            ui.colored_label(theme::MUTED, "No captured bytes");
+            ui.colored_label(theme::muted(), "No captured bytes");
             return;
         }
         let font = egui::TextStyle::Monospace.resolve(ui.style());
@@ -929,8 +929,8 @@ mod tests {
         let font = egui::FontId::monospace(14.0);
         let job = display_row("a\u{FFFD}\u{1}\tb\r", &font);
         assert_eq!(job.text, "a\u{25A1}\u{B7}    b\u{B7}");
-        assert_eq!(job.sections[1].format.color, theme::WARN);
-        assert_eq!(job.sections[2].format.color, theme::MUTED);
+        assert_eq!(job.sections[1].format.color, theme::warn());
+        assert_eq!(job.sections[2].format.color, theme::muted());
         assert_eq!(display_row("", &font).text, "");
     }
 

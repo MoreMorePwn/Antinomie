@@ -64,7 +64,7 @@ pub(super) fn show(
     let page = match page {
         Some(Ok(page)) if page.kind == kind && page.query == state.query => page,
         Some(Err(error)) => {
-            ui.colored_label(theme::ERROR, error);
+            ui.colored_label(theme::error(), error);
             if ui.button("Retry").clicked() {
                 action = request(0, &state.query);
             }
@@ -208,7 +208,7 @@ fn cells(
                 _ => format!("{address:x}"),
             };
             row.col(|ui| {
-                ui.label(mono_text(first, mono, theme::BLUE).strong());
+                ui.label(mono_text(first, mono, theme::blue()).strong());
             });
             let title = if *size > 0 {
                 format!("{name}  ·  0x{address:x}, {size} octets")
@@ -219,7 +219,7 @@ fn cells(
                 row.col(|_| {});
             }
             row.col(|ui| {
-                ui.add(egui::Label::new(mono_text(title, mono, theme::BLUE).strong()).truncate());
+                ui.add(egui::Label::new(mono_text(title, mono, theme::blue()).strong()).truncate());
             });
         }
         (
@@ -233,30 +233,30 @@ fn cells(
             }),
         ) => {
             row.col(|ui| {
-                ui.label(mono_text(format!("{address:x}"), mono, theme::MUTED));
+                ui.label(mono_text(format!("{address:x}"), mono, theme::muted()));
             });
             row.col(|ui| {
-                ui.add(egui::Label::new(mono_text(bytes.clone(), mono, theme::MUTED)).truncate());
+                ui.add(egui::Label::new(mono_text(bytes.clone(), mono, theme::muted())).truncate());
             });
             row.col(|ui| {
                 let mut job = LayoutJob::default();
                 let color = if mnemonic.starts_with("call") {
-                    theme::BLUE
+                    theme::blue()
                 } else if mnemonic.starts_with('j') || mnemonic.starts_with("ret") {
-                    theme::WARN
+                    theme::warn()
                 } else if mnemonic == "(bad)" {
-                    theme::ERROR
+                    theme::error()
                 } else {
-                    theme::TEXT
+                    theme::text()
                 };
                 job.append(&format!("{mnemonic:<8} "), 0.0, format(mono, color));
-                job.append(operands, 0.0, format(mono, theme::TEXT));
+                job.append(operands, 0.0, format(mono, theme::text()));
                 ui.add(egui::Label::new(job).truncate());
             });
         }
         (AnalysisKind::Decompilation, Some(AnalysisData::SourceLine { line, .. })) => {
             row.col(|ui| {
-                ui.label(mono_text(line.to_string(), mono, theme::MUTED));
+                ui.label(mono_text(line.to_string(), mono, theme::muted()));
             });
             row.col(|ui| {
                 ui.add(egui::Label::new(highlight(&entry.value, mono)).truncate());
@@ -270,7 +270,7 @@ fn cells(
         ) => {
             let offset = entry.offset.unwrap_or(0);
             row.col(|ui| {
-                ui.label(mono_text(format!("{offset:x}"), mono, theme::MUTED));
+                ui.label(mono_text(format!("{offset:x}"), mono, theme::muted()));
             });
             row.col(|ui| {
                 ui.label(encoding.as_str());
@@ -280,7 +280,8 @@ fn cells(
             });
             row.col(|ui| {
                 ui.add(
-                    egui::Label::new(mono_text(entry.value.clone(), mono, theme::TEXT)).truncate(),
+                    egui::Label::new(mono_text(entry.value.clone(), mono, theme::text()))
+                        .truncate(),
                 )
                 .on_hover_text(&entry.value);
             });
@@ -340,7 +341,7 @@ fn highlight(line: &str, font: &FontId) -> LayoutJob {
     let mut job = LayoutJob::default();
     let trimmed = line.trim_start();
     if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
-        job.append(line, 0.0, format(font, theme::MUTED));
+        job.append(line, 0.0, format(font, theme::muted()));
         return job;
     }
     let mut rest = line;
@@ -351,28 +352,28 @@ fn highlight(line: &str, font: &FontId) -> LayoutJob {
                 .find(first)
                 .map_or(rest.len(), |at| at + 2)
                 .min(rest.len());
-            (&rest[..end], theme::GOOD)
+            (&rest[..end], theme::good())
         } else if first.is_ascii_digit() {
             let end = rest
                 .find(|c: char| !(c.is_ascii_alphanumeric() || c == '.'))
                 .unwrap_or(rest.len());
-            (&rest[..end], theme::WARN)
+            (&rest[..end], theme::warn())
         } else if first.is_alphabetic() || first == '_' {
             let end = rest
                 .find(|c: char| !(c.is_alphanumeric() || c == '_'))
                 .unwrap_or(rest.len());
             let word = &rest[..end];
             let color = if KEYWORDS.contains(&word) {
-                theme::ERROR
+                theme::error()
             } else if TYPES.contains(&word) {
-                theme::BLUE
+                theme::blue()
             } else {
-                theme::TEXT
+                theme::text()
             };
             (word, color)
         } else {
             let end = rest.char_indices().nth(1).map_or(rest.len(), |(at, _)| at);
-            (&rest[..end], theme::TEXT)
+            (&rest[..end], theme::text())
         };
         job.append(token, 0.0, format(font, color));
         rest = &rest[token.len()..];

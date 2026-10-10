@@ -190,14 +190,14 @@ impl Inspector {
                                 .default_open(true)
                                 .show(ui, |ui| {
                                     let Some(event) = event else {
-                                        ui.colored_label(theme::WARN, "Missing phase");
+                                        ui.colored_label(theme::warn(), "Missing phase");
                                         return;
                                     };
                                     if !event.complete {
-                                        ui.colored_label(theme::WARN, "Incomplete capture");
+                                        ui.colored_label(theme::warn(), "Incomplete capture");
                                     }
                                     for issue in &event.issues {
-                                        ui.colored_label(theme::WARN, issue);
+                                        ui.colored_label(theme::warn(), issue);
                                     }
                                     if let Some(result) = event.result {
                                         let response = ui.selectable_label(
@@ -220,7 +220,7 @@ impl Inspector {
                                         invocation.entry.as_ref().and_then(|entry| entry.args)
                                     });
                                     if event.args.is_none() && args.is_some() {
-                                        ui.colored_label(theme::MUTED, "Saved Entry arguments");
+                                        ui.colored_label(theme::muted(), "Saved Entry arguments");
                                     }
                                     if let Some(args) = args {
                                         let arg_count = syscalls::syscall(event.syscall_nr)
@@ -292,7 +292,7 @@ impl Inspector {
                                             }
                                         }
                                     } else {
-                                        ui.colored_label(theme::MUTED, "Arguments unavailable");
+                                        ui.colored_label(theme::muted(), "Arguments unavailable");
                                     }
                                     let fields: Vec<_> = event
                                         .fields
@@ -327,7 +327,10 @@ impl Inspector {
                         .default_open(false)
                         .show(ui, |ui| {
                             if invocation.async_events.is_empty() {
-                                ui.colored_label(theme::MUTED, "No correlated async observations");
+                                ui.colored_label(
+                                    theme::muted(),
+                                    "No correlated async observations",
+                                );
                             }
                             for event in &invocation.async_events {
                                 let header = egui::CollapsingHeader::new(format!(
@@ -340,7 +343,7 @@ impl Inspector {
                                 .id_salt(event.event_seq)
                                 .show(ui, |ui| {
                                     for issue in &event.issues {
-                                        ui.colored_label(theme::WARN, issue);
+                                        ui.colored_label(theme::warn(), issue);
                                     }
                                     if let Some(result) = async_scalar(event, "async.result")
                                         .map(|value| value as i64)
@@ -529,7 +532,7 @@ impl Inspector {
                                 self.open_selected_data(invocation, field);
                             }
                             if let Some(error) = &self.error {
-                                ui.colored_label(theme::WARN, error);
+                                ui.colored_label(theme::warn(), error);
                             }
                             if self.pending {
                                 ui.label("Reading capture...");
@@ -553,7 +556,7 @@ impl Inspector {
                                 }
                             }
                             if self.data.is_empty() {
-                                ui.colored_label(theme::MUTED, "No captured bytes in this view");
+                                ui.colored_label(theme::muted(), "No captured bytes in this view");
                             }
                             for (line, data) in self.data.chunks(16).enumerate() {
                                 ui.horizontal(|ui| {
@@ -604,7 +607,7 @@ impl Inspector {
                                     numeric(ui, u64::from_le_bytes(data), width);
                                 } else {
                                     ui.colored_label(
-                                        theme::MUTED,
+                                        theme::muted(),
                                         "Selection needs more contiguous captured bytes",
                                     );
                                 }
@@ -793,7 +796,7 @@ fn capture_text(field: &FieldSummary, text: String) -> RichText {
     if field.complete {
         RichText::new(text)
     } else {
-        RichText::new(text).color(theme::WARN)
+        RichText::new(text).color(theme::warn())
     }
 }
 
@@ -850,7 +853,7 @@ fn show_flags(ui: &mut egui::Ui, number: u64, index: usize, value: u64, args: Op
             let response = ui.add(
                 egui::Label::new(
                     RichText::new(format!("Unknown bits: {:#x}", flags.unknown_bits))
-                        .color(theme::WARN),
+                        .color(theme::warn()),
                 )
                 .sense(egui::Sense::click()),
             );
