@@ -318,25 +318,26 @@ impl PacketSet {
     /// Record a packet; returns (already received, with different content).
     fn insert(&mut self, seq: u64, packet: &[u8]) -> (bool, bool) {
         if self.contains(seq) {
-            let conflicting = self.fingerprints.get(&seq).is_some_and(|previous| {
-                *previous != <[u8; 32]>::from(Sha256::digest(packet))
-            });
+            let conflicting = self
+                .fingerprints
+                .get(&seq)
+                .is_some_and(|previous| *previous != <[u8; 32]>::from(Sha256::digest(packet)));
             return (true, conflicting);
         }
         if self.fingerprints.len() < FINGERPRINTED {
             self.fingerprints.insert(seq, Sha256::digest(packet).into());
         }
         self.count += 1;
-        let joins_before = seq
-            .checked_sub(1)
-            .and_then(|previous| {
-                self.ranges
-                    .range(..=previous)
-                    .next_back()
-                    .filter(|(_, end)| **end == previous)
-                    .map(|(start, _)| *start)
-            });
-        let joins_after = seq.checked_add(1).and_then(|next| self.ranges.remove(&next));
+        let joins_before = seq.checked_sub(1).and_then(|previous| {
+            self.ranges
+                .range(..=previous)
+                .next_back()
+                .filter(|(_, end)| **end == previous)
+                .map(|(start, _)| *start)
+        });
+        let joins_after = seq
+            .checked_add(1)
+            .and_then(|next| self.ranges.remove(&next));
         let start = joins_before.unwrap_or(seq);
         self.ranges.insert(start, joins_after.unwrap_or(seq));
         (false, false)

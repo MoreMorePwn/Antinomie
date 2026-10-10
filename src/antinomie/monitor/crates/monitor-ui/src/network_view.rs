@@ -189,7 +189,10 @@ impl NetworkView {
                             .arg(&wireshark)
                             .spawn()
                     } else {
-                        std::process::Command::new(wireshark).arg("-r").arg(&path).spawn()
+                        std::process::Command::new(wireshark)
+                            .arg("-r")
+                            .arg(&path)
+                            .spawn()
                     };
                     if let Err(error) = spawned {
                         self.error = Some(format!("Wireshark: {error}"));
