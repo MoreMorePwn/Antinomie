@@ -1262,25 +1262,23 @@ fn ipv6_layer(frame: &[u8], at: usize, layers: &mut Vec<PacketLayer>) {
     let mut position = at + 40;
     for _ in 0..8 {
         let header = &frame[position..end];
-        if next == 44 {
-            if header.len() >= 8 {
-                layer.add(
-                    "Fragment header",
-                    format!(
-                        "offset {}, next {}",
-                        usize::from(u16_be(header, 2).unwrap_or(0) >> 3) * 8,
-                        ip_protocol_name(header[0])
-                    ),
-                    FieldKind::Name,
-                    position,
-                    8,
-                );
-                layer.len = position + 8 - at;
-                if u16_be(header, 2).is_some_and(|flags| flags & 0xfff8 != 0) {
-                    layers.push(layer);
-                    data_layer(frame, position + 8, end, layers);
-                    return;
-                }
+        if next == 44 && header.len() >= 8 {
+            layer.add(
+                "Fragment header",
+                format!(
+                    "offset {}, next {}",
+                    usize::from(u16_be(header, 2).unwrap_or(0) >> 3) * 8,
+                    ip_protocol_name(header[0])
+                ),
+                FieldKind::Name,
+                position,
+                8,
+            );
+            layer.len = position + 8 - at;
+            if u16_be(header, 2).is_some_and(|flags| flags & 0xfff8 != 0) {
+                layers.push(layer);
+                data_layer(frame, position + 8, end, layers);
+                return;
             }
         }
         let skip = match next {
@@ -2019,45 +2017,45 @@ fn tls_layer(frame: &[u8], start: usize, end: usize, layers: &mut Vec<PacketLaye
             2,
         );
         let mut what = content.to_owned();
-        if kind == 22 {
-            if let Some(&handshake) = data.get(at + 5) {
-                let name = match handshake {
-                    1 => "Client Hello",
-                    2 => "Server Hello",
-                    4 => "New Session Ticket",
-                    8 => "Encrypted Extensions",
-                    11 => "Certificate",
-                    12 => "Server Key Exchange",
-                    13 => "Certificate Request",
-                    14 => "Server Hello Done",
-                    15 => "Certificate Verify",
-                    16 => "Client Key Exchange",
-                    20 => "Finished",
-                    _ => "",
-                };
-                if !name.is_empty() {
-                    what = name.to_owned();
-                    layer.sub(
-                        "Handshake type",
-                        format!("{name} ({handshake})"),
-                        FieldKind::Name,
-                        start + at + 5,
-                        1,
-                    );
-                }
-                if handshake == 1 {
-                    if let Some((sni, sni_len)) = tls_sni(&data[at..]) {
-                        let host = String::from_utf8_lossy(&data[at + sni..at + sni + sni_len]);
-                        what = format!("Client Hello, SNI {host}");
-                        layer.sub(
-                            "Server name",
-                            host.into_owned(),
-                            FieldKind::Name,
-                            start + at + sni,
-                            sni_len,
-                        );
-                    }
-                }
+        if kind == 22
+            && let Some(&handshake) = data.get(at + 5)
+        {
+            let name = match handshake {
+                1 => "Client Hello",
+                2 => "Server Hello",
+                4 => "New Session Ticket",
+                8 => "Encrypted Extensions",
+                11 => "Certificate",
+                12 => "Server Key Exchange",
+                13 => "Certificate Request",
+                14 => "Server Hello Done",
+                15 => "Certificate Verify",
+                16 => "Client Key Exchange",
+                20 => "Finished",
+                _ => "",
+            };
+            if !name.is_empty() {
+                what = name.to_owned();
+                layer.sub(
+                    "Handshake type",
+                    format!("{name} ({handshake})"),
+                    FieldKind::Name,
+                    start + at + 5,
+                    1,
+                );
+            }
+            if handshake == 1
+                && let Some((sni, sni_len)) = tls_sni(&data[at..])
+            {
+                let host = String::from_utf8_lossy(&data[at + sni..at + sni + sni_len]);
+                what = format!("Client Hello, SNI {host}");
+                layer.sub(
+                    "Server name",
+                    host.into_owned(),
+                    FieldKind::Name,
+                    start + at + sni,
+                    sni_len,
+                );
             }
         }
         summary.push(what);
