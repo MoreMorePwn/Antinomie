@@ -5363,6 +5363,9 @@ fn transport_window(
     let mut closed = false;
     egui::Window::new("Telemetry transport")
         .id(egui::Id::new("vm_transport"))
+        // Beside the top of the VM dialog, not over its buttons.
+        .pivot(egui::Align2::CENTER_TOP)
+        .default_pos(egui::pos2(ctx.screen_rect().center().x, 60.0))
         .open(open)
         .collapsible(false)
         .resizable(false)
@@ -5476,6 +5479,7 @@ fn password_input(ui: &mut egui::Ui, text: &mut String, salt: &str) {
     let mut output = egui::TextEdit::singleline(text)
         .id(egui::Id::new(salt))
         .password(true)
+        .margin(theme::TEXT_EDIT_MARGIN)
         .char_limit(128)
         .desired_width(280.0)
         .show(ui);
@@ -5499,7 +5503,11 @@ fn directory_input(
         .into_owned();
     ui.horizontal(|ui| {
         if ui
-            .add(egui::TextEdit::singleline(&mut text).desired_width(235.0))
+            .add(
+                text_field(&mut text)
+                    .font(egui::TextStyle::Monospace)
+                    .desired_width(235.0),
+            )
             .on_hover_text(text.clone())
             .changed()
         {
