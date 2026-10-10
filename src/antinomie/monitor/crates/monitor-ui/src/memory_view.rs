@@ -9,7 +9,7 @@ use crate::{
 use antinomie_monitor_core::{
     memory::{
         self, Column as ResultColumn, ColumnKind, DumpProgress, MemoryDump, OptionKind, Os,
-        PluginInfo, PluginRun, ResultTable, RunHandle, RunState, Volatility,
+        PluginCatalog, PluginInfo, PluginRun, ResultTable, RunHandle, RunState, Volatility,
     },
     BaseSummary, VmConfig,
 };
@@ -54,8 +54,8 @@ pub(crate) struct MemoryContext<'a> {
 
 enum Catalog {
     Unknown,
-    Loading(Receiver<Result<(Volatility, Vec<PluginInfo>), String>>),
-    Ready(Volatility, Vec<PluginInfo>),
+    Loading(Receiver<Result<(Volatility, PluginCatalog), String>>),
+    Ready(Volatility, PluginCatalog),
     Failed(String),
 }
 
@@ -825,7 +825,7 @@ impl MemoryView {
             );
             return action;
         }
-        self.plugin_bar(ui, &dump, cx.font_size);
+        self.plugin_bar(ui, &dump, cx.data_dir, cx.font_size);
         if let Some((message, error)) = &self.status {
             ui.colored_label(
                 if *error {
@@ -852,10 +852,19 @@ impl MemoryView {
         action
     }
 
-    fn plugin_bar(&mut self, ui: &mut egui::Ui, dump: &MemoryDump, font_size: f32) {
-        let Catalog::Ready(volatility, plugins) = &self.catalog else {
+    fn plugin_bar(
+        &mut self,
+        ui: &mut egui::Ui,
+        dump: &MemoryDump,
+        data_dir: &Path,
+        font_size: f32,
+    ) {
+        let Catalog::Ready(volatility, catalog) = &self.catalog else {
             return;
         };
+        let plugins = &catalog.plugins;
+        let failures = &catalog.failures;
+        let mut reload = false;
         let applies = |plugin: &&PluginInfo| {
             plugin.os().is_none_or(|os| os == dump.os)
                 && !matches!(
@@ -904,7 +913,12 @@ impl MemoryView {
                     ui.separator();
                     let needle = self.search.trim().to_lowercase();
                     let mut group = String::new();
-                    for plugin in plugins.iter().filter(applies) {
+                    // Volatility's own plugins, then the community folder's.
+                    let ordered = plugins
+                        .iter()
+                        .filter(|plugin| !plugin.community)
+                        .chain(plugins.iter().filter(|plugin| plugin.community));
+                    for plugin in ordered.filter(applies) {
                         if plugin.deprecated() && !self.show_deprecated {
                             continue;
                         }
@@ -914,7 +928,11 @@ impl MemoryView {
                         {
                             continue;
                         }
-                        let area = plugin_area(&plugin.name);
+                        let area = if plugin.community {
+                            format!("community · {}", plugin_area(&plugin.name))
+                        } else {
+                            plugin_area(&plugin.name)
+                        };
                         if area != group {
                             group = area.clone();
                             ui.add_space(2.0);
@@ -953,6 +971,59 @@ impl MemoryView {
                 let values = self.values.get(&current.name).cloned().unwrap_or_default();
                 run = Some(memory::plugin_args(&current, &values));
             }
+            let community = plugins.iter().filter(|plugin| plugin.community).count();
+            let label = if failures.is_empty() {
+                format!(
+                    "{} Community ({community})",
+                    egui_phosphor::regular::PUZZLE_PIECE
+                )
+            } else {
+                format!(
+                    "{} Community ({community}, {} failed)",
+                    egui_phosphor::regular::PUZZLE_PIECE,
+                    failures.len()
+                )
+            };
+            ui.menu_button(label, |ui| {
+                ui.set_max_width(420.0);
+                ui.label(
+                    RichText::new(
+                        "Volatility 3 plugins (.py files) put in the community folder are \
+                         listed with the others. They are ordinary Python and run as you, \
+                         outside any sandbox: add only plugins you have read or trust.",
+                    )
+                    .color(theme::muted()),
+                );
+                if !failures.is_empty() {
+                    ui.colored_label(theme::error(), "Failed to load:");
+                    for failure in failures {
+                        ui.label(
+                            RichText::new(failure.trim_start_matches("volatility3.plugins."))
+                                .font(theme::mono(font_size - 2.0))
+                                .color(theme::error()),
+                        );
+                    }
+                }
+                ui.separator();
+                if ui.button("Open community plugins folder").clicked() {
+                    let dir = memory::plugins_dir(data_dir);
+                    let opened = std::fs::create_dir_all(&dir)
+                        .map_err(|error| format!("{}: {error}", dir.display()))
+                        .and_then(|()| open_directory(&dir));
+                    if let Err(error) = opened {
+                        self.status = Some((error, true));
+                    }
+                    ui.close_menu();
+                }
+                if ui
+                    .button("Reload plugin list")
+                    .on_hover_text("After adding, changing or removing plugins")
+                    .clicked()
+                {
+                    reload = true;
+                    ui.close_menu();
+                }
+            });
             ui.colored_label(theme::muted(), &current.help)
                 .on_hover_text(&current.help);
         });
@@ -1030,6 +1101,10 @@ impl MemoryView {
         if let Some(name) = chosen {
             self.plugin = Some(name);
             self.search.clear();
+        }
+        if reload {
+            self.catalog = Catalog::Unknown;
+            return;
         }
         match run {
             Some(Ok(args)) => match volatility.start(dump, &current.name, args) {
@@ -1141,9 +1216,9 @@ impl MemoryView {
         }
         if let Some(run) = rerun {
             self.plugin = Some(run.plugin.clone());
-            if let Catalog::Ready(_, plugins) = &self.catalog {
+            if let Catalog::Ready(_, catalog) = &self.catalog {
                 self.values
-                    .insert(run.plugin.clone(), args_values(&run, plugins));
+                    .insert(run.plugin.clone(), args_values(&run, &catalog.plugins));
             }
         }
         if let Some(id) = open {

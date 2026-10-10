@@ -25,6 +25,11 @@ table when importing them.
   **Results**, so earlier results open again at once. Runs show live
   progress, can be cancelled, and are set up again from their right-click
   menu.
+- **Community plugins.** Volatility 3 plugins (`.py` files) put in
+  `volatility-plugins` of the data folder (**Community → Open community
+  plugins folder** in the Memory tab) are listed after Volatility's own,
+  with their options; plugins that fail to load are named with the error
+  count. They are ordinary Python and run as the user, outside any sandbox.
 - **Results.** Columns colored by type (addresses, numbers, flags, text),
   process trees indented, a row filter, copy as tab-separated text, sideways
   scrolling for wide results, and the selected row's full values in Details.

@@ -418,6 +418,62 @@ pub struct PluginInfo {
     pub name: String,
     pub help: String,
     pub options: Vec<PluginOption>,
+    /// From the community plugins folder, not Volatility itself.
+    pub community: bool,
+}
+
+/// The plugins Volatility can run, and the community plugin modules that
+/// failed to load.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PluginCatalog {
+    pub plugins: Vec<PluginInfo>,
+    pub failures: Vec<String>,
+}
+
+/// Folder of community Volatility 3 plugins (`.py` files), passed to
+/// Volatility with `-p`. They run as the user, outside any sandbox.
+pub fn plugins_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("volatility-plugins")
+}
+
+/// Names, sizes and times of the Python files under `dir`: a changed folder
+/// lists its plugins again. `None` when it holds none.
+fn plugins_fingerprint(dir: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            if metadata.is_dir() {
+                walk(&path, base, out);
+            } else if path.extension().is_some_and(|ext| ext == "py") {
+                let modified = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0, |time| time.as_nanos());
+                out.push(format!(
+                    "{} {} {modified}",
+                    path.strip_prefix(base).unwrap_or(&path).display(),
+                    metadata.len()
+                ));
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(dir, dir, &mut files);
+    if files.is_empty() {
+        return None;
+    }
+    files.sort();
+    let digest = Sha256::digest(files.join("\n").as_bytes());
+    Some(digest.iter().take(8).map(|b| format!("{b:02x}")).collect())
 }
 
 impl PluginInfo {
@@ -500,6 +556,7 @@ fn parse_int(text: &str) -> Option<i128> {
 pub struct Volatility {
     python: PathBuf,
     root: PathBuf,
+    community: PathBuf,
     pub version: String,
 }
 
@@ -525,6 +582,7 @@ impl Volatility {
         Ok(Volatility {
             python,
             root,
+            community: plugins_dir(data_dir),
             version: installed,
         })
     }
@@ -543,16 +601,25 @@ impl Volatility {
         command
     }
 
-    /// Every plugin with its options; cached per Volatility version.
-    pub fn plugins(&self) -> Result<Vec<PluginInfo>, String> {
-        let cache = self.root.join(format!("plugins-{}.json", self.version));
+    /// Every plugin with its options, community ones included; cached per
+    /// Volatility version and community folder contents.
+    pub fn plugins(&self) -> Result<PluginCatalog, String> {
+        let fingerprint = plugins_fingerprint(&self.community);
+        let cache = self.root.join(format!(
+            "catalog-{}-{}.json",
+            self.version,
+            fingerprint.as_deref().unwrap_or("official")
+        ));
         if let Ok(bytes) = fs::read(&cache)
-            && let Ok(plugins) = serde_json::from_slice(&bytes)
+            && let Ok(catalog) = serde_json::from_slice(&bytes)
         {
-            return Ok(plugins);
+            return Ok(catalog);
         }
-        let output = self
-            .command("describe")
+        let mut command = self.command("describe");
+        if fingerprint.is_some() {
+            command.arg(&self.community);
+        }
+        let output = command
             .output()
             .map_err(|e| format!("{}: {e}", self.python.display()))?;
         if !output.status.success() {
@@ -562,10 +629,20 @@ impl Volatility {
                 message.lines().last().unwrap_or("no message")
             ));
         }
-        let plugins: Vec<PluginInfo> =
+        let catalog: PluginCatalog =
             serde_json::from_slice(&output.stdout).map_err(|e| format!("plugin list: {e}"))?;
+        // One cached catalog: drop those of other versions or folder contents.
+        for entry in fs::read_dir(&self.root).into_iter().flatten().flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if (name.starts_with("catalog-") || name.starts_with("plugins-"))
+                && name.ends_with(".json")
+            {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
         let _ = fs::write(&cache, &output.stdout);
-        Ok(plugins)
+        Ok(catalog)
     }
 
     /// Start `plugin` on `dump` in the background.
@@ -614,6 +691,9 @@ impl Volatility {
             .arg(run.files())
             .arg("-f")
             .arg(dump.path());
+        if plugins_fingerprint(&self.community).is_some() {
+            command.arg("-p").arg(&self.community);
+        }
         if dump.symbols {
             // The base's own table: nothing to look up online.
             command.arg("-s").arg(dump.symbols_dir()).arg("--offline");
@@ -929,6 +1009,22 @@ mod tests {
         assert!(dump.runs().is_empty());
         delete(&dump).unwrap();
         assert!(list(std::slice::from_ref(&root)).is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn community_folder_changes_are_noticed() {
+        let root = temp("community");
+        let dir = plugins_dir(&root);
+        assert_eq!(plugins_fingerprint(&dir), None, "no folder");
+        fs::create_dir_all(dir.join("sub")).unwrap();
+        fs::write(dir.join("notes.txt"), b"not a plugin").unwrap();
+        assert_eq!(plugins_fingerprint(&dir), None, "no Python files");
+        fs::write(dir.join("sub/one.py"), b"x = 1").unwrap();
+        let first = plugins_fingerprint(&dir).unwrap();
+        assert_eq!(plugins_fingerprint(&dir).as_ref(), Some(&first));
+        fs::write(dir.join("sub/one.py"), b"x = 22").unwrap();
+        assert_ne!(plugins_fingerprint(&dir).unwrap(), first);
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -2,7 +2,9 @@
 # Copyright (c) 2026 MikiMiku (MoreMorePwn)
 # Runs Volatility 3 for Antinomie (python3 -I -c <this> LIB MODE ARGS...).
 #   LIB   directory holding the volatility3 package and its dependencies
-#   MODE  "describe": print every plugin with its options as JSON
+#   MODE  "describe [PLUGIN_DIR]": print every plugin with its options as
+#         JSON, with those of PLUGIN_DIR (community plugins) marked, and the
+#         plugin files that failed to load
 #         "run": run the Volatility CLI with ARGS; "-r antinomie" streams
 #         the result as JSON lines: {"columns": [...]} then {"d", "v"} rows.
 import datetime
@@ -20,10 +22,18 @@ from volatility3.framework.renderers import format_hints  # noqa: E402
 
 
 def describe():
-    import volatility3.plugins
+    import inspect
+    import os
 
+    import volatility3.plugins
+    from volatility3.framework import constants
+
+    community = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else None
+    if community:
+        # As the CLI does for -p: extra folders first in the plugin path.
+        volatility3.plugins.__path__ = [community] + constants.PLUGINS_PATH
     framework.require_interface_version(2, 0, 0)
-    framework.import_files(volatility3.plugins, True)
+    failures = framework.import_files(volatility3.plugins, True)
     kinds = [
         (requirements.BooleanRequirement, "bool"),
         (requirements.IntRequirement, "int"),
@@ -53,8 +63,24 @@ def describe():
                 option["default"] = requirement.default
             options.append(option)
         text = (plugin.__doc__ or "").strip().split("\n\n")[0]
-        plugins.append({"name": name, "help": " ".join(text.split()), "options": options})
-    json.dump(plugins, sys.stdout)
+        try:
+            source = os.path.abspath(inspect.getfile(plugin))
+        except TypeError:
+            source = ""
+        plugins.append({
+            "name": name,
+            "help": " ".join(text.split()),
+            "options": options,
+            "community": bool(community) and source.startswith(community + os.sep),
+        })
+    ours = set()
+    for root, _, files in os.walk(community) if community else ():
+        for file in files:
+            if file.endswith(".py"):
+                relative = os.path.relpath(os.path.join(root, file[:-3]), community)
+                ours.add("volatility3.plugins." + relative.replace(os.sep, "."))
+    failed = sorted(str(name) for name in (failures or []) if str(name) in ours)
+    json.dump({"plugins": plugins, "failures": failed}, sys.stdout)
 
 
 def run():
