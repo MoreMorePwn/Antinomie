@@ -38,7 +38,9 @@ fn main() -> Result<(), String> {
     let mut errors = std::collections::BTreeMap::new();
     let started = Instant::now();
     while offset + 4 <= raw.len() {
-        if offset + 4 + u32::from_le_bytes(raw[offset..offset + 4].try_into().unwrap()) as usize > raw.len() {
+        if offset + 4 + u32::from_le_bytes(raw[offset..offset + 4].try_into().unwrap()) as usize
+            > raw.len()
+        {
             break; // a truncated copy ends mid-packet
         }
         let len = u32::from_le_bytes(raw[offset..offset + 4].try_into().unwrap()) as usize;
