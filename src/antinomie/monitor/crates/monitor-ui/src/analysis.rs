@@ -27,11 +27,13 @@ pub(crate) fn launch_fields(
     if ui.available_width() >= min_pane * 2.0 + spacing {
         ui.columns(2, |columns| {
             fields(&mut columns[0], request, args, env, graphical);
+            crate::theme::section(&mut columns[1], "Analysis");
             selection(&mut columns[1], &mut request.analysis, tools, &mut install);
         });
     } else {
         fields(ui, request, args, env, graphical);
-        ui.separator();
+        ui.add_space(6.0);
+        crate::theme::section(ui, "Analysis");
         selection(ui, &mut request.analysis, tools, &mut install);
     }
     install
@@ -44,34 +46,52 @@ fn fields(
     env: &mut String,
     graphical: bool,
 ) {
-    ui.heading("Program");
-    for (label, value, multiline) in [
-        ("Executable", &mut request.path, false),
-        ("Arguments", args, true),
-        ("Working directory", &mut request.cwd, false),
-        ("Environment", env, true),
-    ] {
-        let label_response = ui.label(label);
-        let edit = if multiline {
-            egui::TextEdit::multiline(value).desired_rows(3)
-        } else {
-            egui::TextEdit::singleline(value)
-        };
-        ui.add(edit.desired_width(f32::INFINITY))
-            .labelled_by(label_response.id)
-            .on_hover_text(match label {
-                "Arguments" => "One argument per line",
-                "Environment" => "One NAME=value entry per line",
-                _ => label,
+    crate::theme::section(ui, "Program");
+    let label_width = ui.text_style_height(&egui::TextStyle::Body) * 8.5;
+    egui::Grid::new("run-program-fields")
+        .num_columns(2)
+        .spacing([12.0, 8.0])
+        .min_col_width(label_width)
+        .show(ui, |ui| {
+            for (label, value, multiline, hint) in [
+                ("Executable", &mut request.path, false, "/path/in/guest"),
+                ("Arguments", args, true, "One argument per line"),
+                ("Working directory", &mut request.cwd, false, "/"),
+                ("Environment", env, true, "One NAME=value entry per line"),
+            ] {
+                let label_response = ui.label(label);
+                let edit = if multiline {
+                    egui::TextEdit::multiline(value).desired_rows(3)
+                } else {
+                    egui::TextEdit::singleline(value)
+                };
+                ui.add(
+                    edit.margin(crate::theme::TEXT_EDIT_MARGIN)
+                        .font(egui::TextStyle::Monospace)
+                        .hint_text(hint)
+                        .desired_width(f32::INFINITY),
+                )
+                .labelled_by(label_response.id)
+                .on_hover_text(match label {
+                    "Arguments" => "One argument per line",
+                    "Environment" => "One NAME=value entry per line",
+                    _ => label,
+                });
+                ui.end_row();
+            }
+            ui.label("User");
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("UID").color(crate::theme::muted()));
+                ui.add(egui::DragValue::new(&mut request.uid).range(0..=u32::MAX));
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("GID").color(crate::theme::muted()));
+                ui.add(egui::DragValue::new(&mut request.gid).range(0..=u32::MAX));
             });
-    }
-    ui.horizontal_wrapped(|ui| {
-        ui.label("UID");
-        ui.add(egui::DragValue::new(&mut request.uid).range(0..=u32::MAX));
-        ui.label("GID");
-        ui.add(egui::DragValue::new(&mut request.gid).range(0..=u32::MAX));
-    });
+            ui.end_row();
+        });
     if graphical {
+        ui.add_space(6.0);
+        crate::theme::section(ui, "Session");
         run_in(ui, &mut request.run_in, request.uid);
     }
 }

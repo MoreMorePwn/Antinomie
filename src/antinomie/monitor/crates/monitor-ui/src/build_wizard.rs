@@ -165,14 +165,26 @@ impl BuildWizard {
                     && build::resolve_mode(self.kind(), self.mode).is_ok()
                     && self.options[self.profile].validate(self.kind()).is_ok();
                 if ui
-                    .add_enabled(ready, egui::Button::new(RichText::new("Build").strong()))
+                    .add_enabled(
+                        ready,
+                        egui::Button::new(
+                            RichText::new("Build").color(theme::palette().primary_text),
+                        )
+                        .fill(theme::primary()),
+                    )
                     .clicked()
                 {
                     self.show_status = true;
                     action = Some(Action::Build(Box::new(self.request())));
                 }
             } else if ui
-                .add_enabled(valid, egui::Button::new("Continue"))
+                .add_enabled(
+                    valid,
+                    egui::Button::new(
+                        RichText::new("Continue").color(theme::palette().primary_text),
+                    )
+                    .fill(theme::primary()),
+                )
                 .clicked()
             {
                 self.page += 1;

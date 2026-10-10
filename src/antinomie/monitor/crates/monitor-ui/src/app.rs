@@ -2878,11 +2878,12 @@ impl MonitorApp {
                 ui.colored_label(theme::error(), reason);
             }
             ui.horizontal(|ui| {
-                let run = ui.add_enabled(
-                    !self.exec.path.trim().is_empty() && self.exec.analysis.validate().is_ok(),
-                    egui::Button::new(format!("{} Run", egui_phosphor::regular::PLAY))
-                        .fill(theme::primary()),
-                );
+                let run = ui
+                    .add_enabled(
+                        !self.exec.path.trim().is_empty() && self.exec.analysis.validate().is_ok(),
+                        primary_button(&format!("{} Run", egui_phosphor::regular::PLAY)),
+                    )
+                    .on_disabled_hover_text("Enter the executable to run");
                 if run.clicked() {
                     match crate::analysis::snapshot(&self.exec, &self.args, &self.env, graphical) {
                         Ok(request) => self.send(Command::Execute(request)),
@@ -2907,6 +2908,9 @@ impl MonitorApp {
                     });
                     self.focus_panel = Some(Panel::StaticAnalysis);
                 }
+                if ui.button("Cancel").clicked() {
+                    self.launch_open = false;
+                }
                 #[cfg(test)]
                 {
                     self.launch_action_rects = Some((run.rect, analyze.rect));
@@ -2917,34 +2921,57 @@ impl MonitorApp {
 
     fn upload_form(&mut self, ui: &mut egui::Ui) {
         ui.add_enabled_ui(self.running(), |ui| {
-            egui::Grid::new("upload").num_columns(2).show(ui, |ui| {
+            dialog_section(ui, "File");
+            form_grid("upload", ui).show(ui, |ui| {
                 ui.label("Host file");
-                ui.add(egui::TextEdit::singleline(&mut self.source).desired_width(290.0));
+                ui.add(
+                    text_field(&mut self.source)
+                        .font(egui::TextStyle::Monospace)
+                        .hint_text("/path/on/this/computer")
+                        .desired_width(320.0),
+                );
                 ui.end_row();
                 ui.label("Guest path");
-                ui.add(egui::TextEdit::singleline(&mut self.destination).desired_width(290.0));
+                ui.add(
+                    text_field(&mut self.destination)
+                        .font(egui::TextStyle::Monospace)
+                        .desired_width(320.0),
+                );
+                ui.end_row();
+                ui.label("Options");
+                ui.vertical(|ui| {
+                    ui.checkbox(&mut self.executable, "Executable");
+                    ui.checkbox(&mut self.overwrite, "Overwrite existing file");
+                });
                 ui.end_row();
             });
-            ui.checkbox(&mut self.executable, "Executable");
-            ui.checkbox(&mut self.overwrite, "Overwrite existing file");
-            ui.separator();
-            if ui
-                .add_enabled(
-                    !self.source.trim().is_empty() && !self.destination.trim().is_empty(),
-                    egui::Button::new(format!("{} Upload", egui_phosphor::regular::UPLOAD_SIMPLE)),
-                )
-                .clicked()
-            {
-                if self.overwrite {
-                    self.confirm = Some(Confirm::Upload {
-                        source: crate::folders::user_path(&self.source),
-                        destination: self.destination.clone(),
-                        executable: self.executable,
-                        vm_id: self.snapshot.active_vm.clone(),
-                    });
-                } else {
-                    self.upload();
+            let mut cancel = false;
+            dialog_footer(ui, |ui| {
+                if ui
+                    .add_enabled(
+                        !self.source.trim().is_empty() && !self.destination.trim().is_empty(),
+                        primary_button(&format!(
+                            "{} Upload",
+                            egui_phosphor::regular::UPLOAD_SIMPLE
+                        )),
+                    )
+                    .clicked()
+                {
+                    if self.overwrite {
+                        self.confirm = Some(Confirm::Upload {
+                            source: crate::folders::user_path(&self.source),
+                            destination: self.destination.clone(),
+                            executable: self.executable,
+                            vm_id: self.snapshot.active_vm.clone(),
+                        });
+                    } else {
+                        self.upload();
+                    }
                 }
+                cancel = ui.button("Cancel").clicked();
+            });
+            if cancel {
+                self.upload_open = false;
             }
         });
     }
@@ -4561,6 +4588,7 @@ impl MonitorApp {
         });
         let show_older = &mut self.show_older_bases;
         egui::Window::new("Download base")
+            .id(Dialog::Download.window_id())
             .open(open)
             .collapsible(false)
             .resizable(true)
@@ -4652,18 +4680,17 @@ impl MonitorApp {
                             .iter()
                             .chain(other.iter())
                             .chain(older.iter().filter(|_| *show_older));
+                        if !current.is_empty() {
+                            theme::section(ui, &format!("For Antinomie {APP_VERSION}"));
+                        }
                         for (index, base) in rows.enumerate() {
                             if index == current.len() && !other.is_empty() {
                                 ui.add_space(6.0);
-                                ui.label(
-                                    RichText::new("Other bases").strong().color(theme::muted()),
-                                );
+                                theme::section(ui, "Other bases");
                             }
                             if index == current.len() + other.len() && *show_older {
                                 ui.add_space(6.0);
-                                ui.label(
-                                    RichText::new("Older bases").strong().color(theme::muted()),
-                                );
+                                theme::section(ui, "Older bases");
                             }
                             egui::Frame::group(ui.style())
                                 .inner_margin(egui::Margin::symmetric(10, 8))
@@ -5156,7 +5183,13 @@ fn download_row(
                         "Built for a newer Antinomie (this is Antinomie {APP_VERSION})"
                     ));
             } else if ui
-                .add_enabled(!busy, egui::Button::new("Download"))
+                .add_enabled(
+                    !busy,
+                    primary_button(&format!(
+                        "{} Download",
+                        egui_phosphor::regular::DOWNLOAD_SIMPLE
+                    )),
+                )
                 .on_disabled_hover_text("Another download is in progress")
                 .clicked()
             {
@@ -5308,6 +5341,7 @@ fn transport_window(
     tunable: bool,
     editable: bool,
 ) {
+    let mut closed = false;
     egui::Window::new("Telemetry transport")
         .id(egui::Id::new("vm_transport"))
         .open(open)
@@ -5321,8 +5355,20 @@ fn transport_window(
             if !editable {
                 ui.colored_label(theme::warn(), "Stop the VM to change these settings.");
             }
-            ui.weak("Save the VM configuration to apply.");
+            let mut close = false;
+            dialog_footer(ui, |ui| {
+                close = ui.button("Done").clicked();
+                ui.label(
+                    RichText::new("Save the VM configuration to apply.").color(theme::muted()),
+                );
+            });
+            if close {
+                closed = true;
+            }
         });
+    if closed {
+        *open = false;
+    }
 }
 
 fn transport_options(
@@ -5339,9 +5385,9 @@ fn transport_options(
              newer bases.",
         );
     }
-    egui::Grid::new("vm_transport_grid")
-        .num_columns(2)
-        .spacing([12.0, 6.0])
+    dialog_section(ui, "Guest to host");
+    form_grid("vm_transport_grid", ui)
+        .min_col_width(ui.text_style_height(&egui::TextStyle::Body) * 11.0)
         .show(ui, |ui| {
             ui.label("Guest buffer per vCPU");
             egui::ComboBox::from_id_salt("vm_ring_kib")
@@ -5386,11 +5432,16 @@ fn transport_options(
             );
             ui.end_row();
         });
-    ui.weak(
-        "Never drop makes a guest system call wait while the host saves \
-         telemetry, so heavy tracing runs slower but nothing is lost. The \
-         event table holds calls still being assembled; finished calls \
-         leave it first. Settings apply at the next VM start.",
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new(
+            "Never drop makes a guest system call wait while the host saves \
+             telemetry, so heavy tracing runs slower but nothing is lost. The \
+             event table holds calls still being assembled; finished calls \
+             leave it first. Settings apply at the next VM start.",
+        )
+        .small()
+        .color(theme::muted()),
     );
 }
 
@@ -7282,6 +7333,375 @@ mod tests {
             .iter()
             .any(|(text, _)| text == "Import base…"));
         assert!(lit(&opened, target), "+ stays lit while its menu is open");
+    }
+
+    fn press(
+        app: &mut MonitorApp,
+        ctx: &egui::Context,
+        size: egui::Vec2,
+        key: egui::Key,
+        modifiers: egui::Modifiers,
+    ) {
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                modifiers,
+                events: vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }],
+                ..Default::default()
+            },
+            |ctx| app.draw(ctx),
+        );
+    }
+
+    /// The color of the first text shape that reads `label`.
+    fn text_color(output: &egui::FullOutput, label: &str) -> Option<egui::Color32> {
+        fn find(shape: &egui::Shape, label: &str) -> Option<egui::Color32> {
+            match shape {
+                egui::Shape::Text(text) if text.galley.text() == label => Some(
+                    text.galley
+                        .job
+                        .sections
+                        .first()
+                        .map_or(text.fallback_color, |section| section.format.color),
+                ),
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| find(shape, label)),
+                _ => None,
+            }
+        }
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| find(&shape.shape, label))
+    }
+
+    #[test]
+    fn escape_closes_the_topmost_dialog_first() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 900.0);
+        let mut app = app();
+        observer_fixture(&mut app);
+        app.settings_open = true;
+        for _ in 0..3 {
+            render(&mut app, &ctx, size);
+        }
+        // Opened later, so drawn on top.
+        app.upload_open = true;
+        for _ in 0..3 {
+            render(&mut app, &ctx, size);
+        }
+        press(
+            &mut app,
+            &ctx,
+            size,
+            egui::Key::Escape,
+            egui::Modifiers::NONE,
+        );
+        assert!(!app.upload_open, "Escape closes the window on top");
+        assert!(app.settings_open, "and only that one");
+        render(&mut app, &ctx, size);
+        press(
+            &mut app,
+            &ctx,
+            size,
+            egui::Key::Escape,
+            egui::Modifiers::NONE,
+        );
+        assert!(!app.settings_open);
+
+        // A confirmation is modal: Escape cancels it and leaves its dialog.
+        app.snapshot.active_vm = None;
+        app.new_image();
+        app.confirm = Some(Confirm::Nat {
+            vm: app.draft.clone(),
+            creating: true,
+        });
+        for _ in 0..3 {
+            render(&mut app, &ctx, size);
+        }
+        press(
+            &mut app,
+            &ctx,
+            size,
+            egui::Key::Escape,
+            egui::Modifiers::NONE,
+        );
+        assert!(app.confirm.is_none());
+        assert!(app.create_open);
+        assert!(app.submitted.is_empty());
+        render(&mut app, &ctx, size);
+        press(
+            &mut app,
+            &ctx,
+            size,
+            egui::Key::Escape,
+            egui::Modifiers::NONE,
+        );
+        assert!(!app.create_open);
+
+        // Every dialog Escape knows about closes.
+        for dialog in Dialog::ALL {
+            let mut app = super::tests::app();
+            match dialog {
+                Dialog::Confirm => app.confirm = Some(Confirm::Delete("vm".into())),
+                Dialog::Name => app.name_action = Some(("vm".into(), false, "VM".into())),
+                Dialog::Transport => {
+                    app.new_image();
+                    app.transport_open = true;
+                }
+                Dialog::Vm => app.new_image(),
+                Dialog::Launch => app.launch_open = true,
+                Dialog::Upload => app.upload_open = true,
+                Dialog::Settings => app.settings_open = true,
+                Dialog::Import => app.import_open = true,
+                Dialog::Download => app.download_open = true,
+                Dialog::Tools => app.tools_open = true,
+                Dialog::Dependencies => app.dependencies.open = true,
+                Dialog::About => app.about_open = true,
+                Dialog::Build => app.build_open = true,
+                Dialog::Attach => app.process_picker.open = true,
+            }
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            for _ in 0..3 {
+                render(&mut app, &ctx, size);
+            }
+            assert!(app.dialog_open(dialog), "{dialog:?}");
+            press(
+                &mut app,
+                &ctx,
+                size,
+                egui::Key::Escape,
+                egui::Modifiers::NONE,
+            );
+            assert!(!app.dialog_open(dialog), "Escape left {dialog:?} open");
+        }
+    }
+
+    #[test]
+    fn toolbar_keeps_the_main_actions_and_menus_reach_the_rest() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 820.0);
+        let mut app = app();
+        observer_fixture(&mut app);
+        app.snapshot.vms[0].nat = true;
+        for _ in 0..3 {
+            render(&mut app, &ctx, size);
+        }
+        let output = render(&mut app, &ctx, size);
+        let shown = texts(&output);
+        let run = shown
+            .iter()
+            .find(|(text, _)| text.ends_with("Run program"))
+            .expect("Run program on the toolbar")
+            .1;
+        let toolbar: Vec<String> = shown
+            .iter()
+            .filter(|(text, rect)| {
+                (rect.center().y - run.center().y).abs() < 6.0 && text.chars().count() > 1
+            })
+            .map(|(text, _)| text.chars().filter(|c| c.is_ascii()).collect())
+            .collect();
+        assert_eq!(
+            toolbar,
+            [
+                "Start",
+                "Stop",
+                "Run program",
+                "Capture all",
+                "Capture network",
+                "Running",
+                "Capture QA"
+            ],
+            "{shown:?}"
+        );
+        // Running VM: Stop is red and Start is grayed out.
+        let colored = |label: &str| {
+            text_color(
+                &output,
+                &shown
+                    .iter()
+                    .find(|(text, _)| text.ends_with(label))
+                    .unwrap()
+                    .0,
+            )
+        };
+        assert_eq!(colored("Stop"), Some(theme::error()));
+        assert_eq!(colored("Start"), Some(theme::muted()));
+        assert_eq!(colored("Run program"), Some(theme::blue()));
+
+        // The actions that left the toolbar are in the menus.
+        for (menu, items) in [
+            ("File", vec!["New VM…", "Exit"]),
+            (
+                "VM",
+                vec![
+                    "Start VM",
+                    "Stop VM",
+                    "Configuration…",
+                    "Reset disk to base…",
+                ],
+            ),
+            (
+                "Run",
+                vec![
+                    "Run program…",
+                    "Upload file…",
+                    "Attach to process…",
+                    "Capture all",
+                    "Stop capture",
+                    "Capture network",
+                ],
+            ),
+            (
+                "Tools",
+                vec!["Settings…", "Analysis tools…", "App dependencies…"],
+            ),
+        ] {
+            click_label(&mut app, &ctx, size, menu);
+            let output = render(&mut app, &ctx, size);
+            let shown = texts(&output);
+            for item in items {
+                assert!(
+                    shown.iter().any(|(text, _)| text == item),
+                    "{menu} menu lacks {item}: {shown:?}"
+                );
+            }
+            click_label(&mut app, &ctx, size, menu);
+        }
+        assert!(app.submitted.is_empty());
+
+        // Shortcuts open the dialogs and stop the VM.
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut app = super::tests::app();
+        observer_fixture(&mut app);
+        render(&mut app, &ctx, size);
+        press(
+            &mut app,
+            &ctx,
+            size,
+            egui::Key::Comma,
+            egui::Modifiers::COMMAND,
+        );
+        assert!(app.settings_open);
+        press(&mut app, &ctx, size, egui::Key::R, egui::Modifiers::COMMAND);
+        assert!(app.launch_open);
+        press(&mut app, &ctx, size, egui::Key::U, egui::Modifiers::COMMAND);
+        assert!(app.upload_open);
+        press(&mut app, &ctx, size, egui::Key::F5, egui::Modifiers::SHIFT);
+        assert!(matches!(app.submitted.as_slice(), [Command::Stop]));
+        // F5 starts the selected VM once none runs.
+        app.snapshot.active_vm = None;
+        app.snapshot.state = VmState::Stopped;
+        press(&mut app, &ctx, size, egui::Key::F5, egui::Modifiers::NONE);
+        assert!(matches!(app.submitted.last(), Some(Command::Start { vm_id }) if vm_id == "vm"));
+    }
+
+    #[test]
+    fn sidebar_shows_each_vm_state_resources_and_latest_run() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 820.0);
+        let mut app = app();
+        observer_fixture(&mut app);
+        app.snapshot.bases.push(test_base("base", true));
+        app.snapshot.vms[0].base_identity = Some("base".into());
+        app.snapshot.vms[0].cpus = 2;
+        app.snapshot.vms[0].ram_mib = 1024;
+        app.snapshot.vms.push(VmConfig {
+            id: "idle".into(),
+            name: "Idle VM".into(),
+            ..VmConfig::default()
+        });
+        let mut sample = run("run-1");
+        sample.request.path = "/usr/bin/sample".into();
+        app.snapshot.runs.push(sample);
+        for _ in 0..3 {
+            render(&mut app, &ctx, size);
+        }
+        let output = render(&mut app, &ctx, size);
+        let shown = texts(&output);
+        let title = shown
+            .iter()
+            .find(|(text, _)| text == "Virtual machines")
+            .unwrap()
+            .1;
+        let sidebar: Vec<&(String, egui::Rect)> = shown
+            .iter()
+            .filter(|(_, rect)| rect.right() <= title.left() + 260.0 && rect.top() > title.bottom())
+            .collect();
+        let row = |name: &str| {
+            sidebar
+                .iter()
+                .find(|(text, _)| text == name)
+                .unwrap_or_else(|| panic!("missing {name}: {sidebar:?}"))
+                .1
+        };
+        let state_beside = |name: &str, state: &str| {
+            let name = row(name);
+            sidebar
+                .iter()
+                .find(|(text, rect)| {
+                    text == state && (rect.center().y - name.center().y).abs() < 6.0
+                })
+                .unwrap_or_else(|| panic!("no {state} beside {name:?}"))
+                .1
+        };
+        state_beside("Capture QA", "Running");
+        state_beside("Idle VM", "Stopped");
+        assert_eq!(text_color(&output, "Running"), Some(theme::good()));
+        let details: Vec<&String> = sidebar.iter().map(|(text, _)| text).collect();
+        assert!(
+            details.iter().any(|text| text.starts_with("Linux 6.12.94")
+                && text.contains("2 CPU")
+                && text.contains("1024 MiB")),
+            "{details:?}"
+        );
+        assert!(
+            details
+                .iter()
+                .any(|text| text.contains("sample") && text.contains("just now")),
+            "{details:?}"
+        );
+        assert!(details.iter().any(|text| text.as_str() == "No recent run"));
+        assert_eq!(
+            app.settings
+                .last_runs
+                .get("vm")
+                .map(|last| last.program.as_str()),
+            Some("/usr/bin/sample")
+        );
+
+        // The base section folds away.
+        assert!(details
+            .iter()
+            .any(|text| text.contains("Linux 6.12.94 · Antinomie")));
+        click_label(&mut app, &ctx, size, "Base images");
+        assert!(app.settings.bases_collapsed);
+        let output = render(&mut app, &ctx, size);
+        assert!(!texts(&output)
+            .iter()
+            .any(|(text, _)| text.contains("Linux 6.12.94 · Antinomie")));
+        assert!(app.selected_base.is_none() && app.submitted.is_empty());
+    }
+
+    #[test]
+    fn relative_times_and_program_names_read_briefly() {
+        assert_eq!(relative_time(5), "just now");
+        assert_eq!(relative_time(125), "2 min ago");
+        assert_eq!(relative_time(7300), "2 h ago");
+        assert_eq!(relative_time(3 * 86400), "3 d ago");
+        assert_eq!(program_name("/usr/bin/sample"), "sample");
+        assert_eq!(program_name("/bin/"), "bin");
+        assert_eq!(program_name("ls"), "ls");
     }
 
     #[test]

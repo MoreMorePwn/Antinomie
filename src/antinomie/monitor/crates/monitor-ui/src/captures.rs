@@ -89,7 +89,8 @@ impl ProcessPicker {
                     });
                     ui.add(
                         egui::TextEdit::singleline(&mut self.filter)
-                            .desired_width(160.0)
+                            .margin(theme::TEXT_EDIT_MARGIN)
+                            .desired_width(180.0)
                             .hint_text("Filter by name or PID"),
                     );
                 });
@@ -175,7 +176,11 @@ impl ProcessPicker {
                     if ui
                         .add_enabled(
                             enabled && self.pending.is_none() && selection_current,
-                            egui::Button::new(format!("{} Attach", egui_phosphor::regular::PLUG)),
+                            egui::Button::new(
+                                RichText::new(format!("{} Attach", egui_phosphor::regular::PLUG))
+                                    .color(theme::palette().primary_text),
+                            )
+                            .fill(theme::primary()),
                         )
                         .clicked()
                     {

@@ -38,17 +38,18 @@ pub(crate) fn show(
                  read-only.",
             );
             ui.add_space(6.0);
+            theme::section(ui, "Tools");
             for tool in tools {
                 ui.separator();
                 ui.horizontal(|ui| {
-                    ui.strong(&tool.name);
-                    ui.weak(&tool.purpose);
+                    ui.label(RichText::new(&tool.name).strong().color(theme::heading()));
+                    ui.label(RichText::new(&tool.purpose).color(theme::muted()));
                 });
                 ui.horizontal_wrapped(|ui| {
                     match (&tool.system, &tool.installed) {
                         (Some(path), installed) => {
                             ui.colored_label(theme::good(), "On this system");
-                            ui.weak(path);
+                            ui.label(RichText::new(path).monospace().color(theme::muted()));
                             if let Some(version) = installed {
                                 ui.weak(format!("(Antinomie's {version} also installed; unused)"));
                             }
@@ -83,11 +84,15 @@ pub(crate) fn show(
                             && ui
                                 .add_enabled(
                                     enabled && !running,
-                                    egui::Button::new(format!(
-                                        "Install {} ({})",
-                                        tool.version,
-                                        size(tool.size)
-                                    )),
+                                    egui::Button::new(
+                                        RichText::new(format!(
+                                            "Install {} ({})",
+                                            tool.version,
+                                            size(tool.size)
+                                        ))
+                                        .color(theme::palette().primary_text),
+                                    )
+                                    .fill(theme::primary()),
                                 )
                                 .clicked()
                         {

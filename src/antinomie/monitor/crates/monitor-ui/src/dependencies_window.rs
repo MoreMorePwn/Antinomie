@@ -124,7 +124,7 @@ impl DependenciesWindow {
                             .chain(report.checks.iter().filter(|check| check.problem.is_none())) {
                             ui.separator();
                             ui.horizontal_wrapped(|ui| {
-                                ui.strong(check.name);
+                                ui.label(egui::RichText::new(check.name).strong().color(theme::heading()));
                                 ui.colored_label(if check.problem.is_some() { theme::warn() } else { theme::good() },
                                     if check.problem.is_some() { "Unavailable" } else { "Ready" });
                             });
@@ -144,7 +144,7 @@ impl DependenciesWindow {
                     });
                 }
                 ui.separator();
-                recheck = ui.add_enabled(self.worker.is_none(), egui::Button::new("Check again")).clicked();
+                recheck = ui.add_enabled(self.worker.is_none(), egui::Button::new(egui::RichText::new("Check again").color(theme::palette().primary_text)).fill(theme::primary())).clicked();
                 ui.weak("Package commands are for Debian/Ubuntu. Install with your system's package manager, then check again. Build tools and optional analysis tools are checked in their own dialogs.");
             });
         if recheck {
