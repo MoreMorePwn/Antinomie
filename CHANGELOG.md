@@ -8,15 +8,15 @@ it runs.
 
 Needs new bases for memory analysis of the VM's own dumps (BusyBox and
 Debian 13 for Antinomie 0.4.0, which carry their kernel's symbol table).
-Bases for 0.3.x still run; their dumps can be analysed by picking a symbol
-table when importing them.
+Bases for 0.3.x still run and can be dumped, but their kernels were built
+without debug information, so Volatility has no symbol table for their dumps.
 
 - **Memory tab.** Beside Network: **Dump memory** writes the running VM's RAM
   to a dump of its recordings (QEMU pauses the guest while it writes: seconds
-  to minutes, by RAM size and disk speed) and lists every dump of the VM. **Import dump…** adds a
-  dump made elsewhere (raw, LiME, ELF core, crash dump, VMware or VirtualBox
-  memory, hibernation file) for Linux, Windows or macOS; the file stays
-  where it is.
+  to minutes, by RAM size and disk speed) and lists every dump of the VM.
+  **Import dump…** adds a dump made elsewhere (raw, LiME, ELF core, crash
+  dump, VMware or VirtualBox memory, hibernation file) for Linux, Windows or
+  macOS; the file stays where it is.
 - **Volatility 3 plugins, as in Volatility Workbench.** Pick any of the
   plugins for the dump's system (searchable, grouped by area), set its
   options in a form built from Volatility's own option list (PIDs, dump
