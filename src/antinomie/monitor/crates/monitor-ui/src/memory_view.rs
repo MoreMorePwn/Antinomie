@@ -550,7 +550,7 @@ impl MemoryView {
             )
             .on_hover_text(
                 "Write the VM's RAM to a dump for analysis. The VM pauses while it is \
-                 written (a few seconds per GiB) and then continues.",
+                 written (seconds to minutes, by RAM size and disk speed) and then continues.",
             )
             .on_disabled_hover_text(why.unwrap_or("Waiting for the VM"))
             .clicked()

@@ -1,0 +1,310 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 MikiMiku (MoreMorePwn)
+//! Memory analysis end to end on a Debian base: boot a VM, start a marked
+//! process, dump the VM's RAM as the Memory tab's Dump memory button does,
+//! and run Volatility plugins on the dump as its Run button does.
+//!
+//! usage: memory-check DATA_DIR BASE_IDENTITY
+//!
+//! DATA_DIR holds the installed base and Volatility 3 (`install-tool DATA_DIR
+//! volatility3`); the VM is left in it, with the dump and the plugin runs.
+use antinomie_monitor_core::{
+    Backend, BackendOptions, Command, ExecRequest, GuestCredentials, Notification, Snapshot,
+    VmConfig,
+    memory::{self, MemoryDump, RunState, Volatility},
+};
+use std::{
+    collections::BTreeMap,
+    fs::{self, File},
+    io::Read,
+    path::{Path, PathBuf},
+    thread,
+    time::{Duration, Instant},
+};
+
+const MARKER: &str = "memtest-marker";
+
+struct Harness {
+    backend: Backend,
+    snapshot: Snapshot,
+    replies: BTreeMap<u64, Result<String, String>>,
+}
+
+impl Harness {
+    fn receive(&mut self) {
+        while let Some(message) = self.backend.try_recv() {
+            match message {
+                Notification::Snapshot(snapshot) => self.snapshot = snapshot,
+                Notification::CommandResult {
+                    id,
+                    success,
+                    message,
+                } => {
+                    self.replies
+                        .insert(id, if success { Ok(message) } else { Err(message) });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn command(&mut self, command: Command) -> Result<String, String> {
+        let id = self.backend.send(command)?;
+        let deadline = Instant::now() + Duration::from_secs(300);
+        loop {
+            self.receive();
+            if let Some(result) = self.replies.remove(&id) {
+                return result;
+            }
+            if Instant::now() >= deadline {
+                return Err(format!("command {id} exceeded its deadline"));
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn wait(
+        &mut self,
+        what: &str,
+        secs: u64,
+        done: impl Fn(&Snapshot) -> bool,
+    ) -> Result<(), String> {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        loop {
+            self.receive();
+            if done(&self.snapshot) {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(format!("{what}: deadline"));
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+}
+
+/// Recording directories holding memory dumps under `dir`.
+fn dump_roots(dir: &Path, depth: usize, roots: &mut Vec<PathBuf>) {
+    if depth == 0 {
+        return;
+    }
+    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        if entry.file_name() == memory::MEMORY_DIR {
+            roots.push(dir.to_path_buf());
+        } else {
+            dump_roots(&path, depth - 1, roots);
+        }
+    }
+}
+
+fn run_plugin(
+    volatility: &Volatility,
+    dump: &MemoryDump,
+    plugin: &str,
+    args: &[&str],
+) -> Result<memory::ResultTable, String> {
+    let started = Instant::now();
+    let handle = volatility.start(dump, plugin, args.iter().map(|s| s.to_string()).collect())?;
+    let deadline = started + Duration::from_secs(900);
+    let run = loop {
+        if let Some(run) = handle.progress().finished {
+            break run;
+        }
+        if Instant::now() >= deadline {
+            handle.cancel();
+            return Err(format!("{plugin}: deadline"));
+        }
+        thread::sleep(Duration::from_millis(200));
+    };
+    if run.state != RunState::Finished {
+        let log = fs::read_to_string(run.dir.join("log.txt")).unwrap_or_default();
+        return Err(format!(
+            "{plugin}: {:?} {:?}\n{}",
+            run.state,
+            run.error,
+            log.lines().rev().take(15).collect::<Vec<_>>().join("\n")
+        ));
+    }
+    let table = memory::read_result(&run.output(), 100_000)?;
+    println!(
+        "{plugin}: {} rows, {} columns, {:.1} s",
+        table.rows.len(),
+        table.columns.len(),
+        started.elapsed().as_secs_f32()
+    );
+    Ok(table)
+}
+
+/// Rows of `table` with `needle` in any value.
+fn rows_with(table: &memory::ResultTable, needle: &str) -> Vec<String> {
+    table
+        .rows
+        .iter()
+        .map(|row| {
+            row.values
+                .iter()
+                .zip(&table.columns)
+                .map(|(value, column)| memory::value_text(column.kind, value))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        })
+        .filter(|line| line.contains(needle))
+        .collect()
+}
+
+fn run() -> Result<(), String> {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let [data, base] = args.as_slice() else {
+        return Err("usage: memory-check DATA_DIR BASE_IDENTITY".into());
+    };
+    let data = PathBuf::from(data);
+    let volatility = Volatility::locate(&data)?;
+    let mut random = [0; 16];
+    File::open("/dev/urandom")
+        .and_then(|mut source| source.read_exact(&mut random))
+        .map_err(|e| e.to_string())?;
+    let password: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+    let mut test = Harness {
+        backend: Backend::new(BackendOptions {
+            data_dir: data.clone(),
+            bundle_dir: data.join("bases").join(base),
+            headless: true,
+            shutdown_timeout: Duration::from_secs(60),
+            ..BackendOptions::default()
+        })?,
+        snapshot: Snapshot::default(),
+        replies: BTreeMap::new(),
+    };
+    test.command(Command::CreateWithCredentials {
+        vm: VmConfig {
+            name: "Memory check".into(),
+            cpus: 4,
+            ram_mib: 4096,
+            disk_gib: 16,
+            base_identity: Some(base.to_string_lossy().into_owned()),
+            ..VmConfig::default()
+        },
+        credentials: GuestCredentials::new("qauser".into(), password)?,
+    })?;
+    test.receive();
+    let vm_id = test
+        .snapshot
+        .vms
+        .iter()
+        .rev()
+        .find(|vm| vm.name == "Memory check")
+        .ok_or("created VM missing")?
+        .id
+        .clone();
+    let booted = Instant::now();
+    test.command(Command::Start { vm_id })?;
+    test.wait("Debian PID1 start", 180, |s| {
+        s.serial_log
+            .as_ref()
+            .and_then(|path| fs::read(path).ok())
+            .is_some_and(|data| data.windows(8).any(|part| part == b"systemd["))
+    })?;
+    // A process to find in the dump: its own name, a listening socket.
+    test.command(Command::Execute(ExecRequest {
+        path: "/bin/bash".into(),
+        args: vec![
+            "-c".into(),
+            format!(
+                "cp /usr/bin/python3 /tmp/{MARKER}; exec /tmp/{MARKER} -c \
+                 'import socket,time; s=socket.socket(); s.bind((\"0.0.0.0\",48151)); \
+                 s.listen(); time.sleep(3600)'"
+            ),
+        ],
+        uid: 1000,
+        gid: 1000,
+        ..ExecRequest::default()
+    }))?;
+    thread::sleep(Duration::from_secs(20));
+    println!("guest up in {:.0} s", booted.elapsed().as_secs_f32());
+
+    let dumped = Instant::now();
+    test.command(Command::DumpMemory)?;
+    test.wait("memory dump", 300, |s| s.memory_dump.is_none())?;
+    println!("dump written in {:.1} s", dumped.elapsed().as_secs_f32());
+    let mut roots = Vec::new();
+    dump_roots(&data.join("vms"), 6, &mut roots);
+    dump_roots(&data, 4, &mut roots);
+    let dump = memory::list(&roots)
+        .into_iter()
+        .find(|dump| dump.vm_name == "Memory check")
+        .ok_or("dump missing")?;
+    println!(
+        "dump {} {} bytes, symbols {}, system {}",
+        dump.id,
+        dump.bytes.unwrap_or(0),
+        dump.symbols,
+        dump.system
+    );
+    if !dump.complete() || !dump.symbols {
+        return Err(format!("dump incomplete or without symbols: {dump:?}"));
+    }
+    // The VM keeps running after the dump.
+    let status = test.command(Command::Execute(ExecRequest {
+        path: "/bin/true".into(),
+        uid: 1000,
+        gid: 1000,
+        ..ExecRequest::default()
+    }));
+    println!("guest still answers after the dump: {}", status.is_ok());
+    status?;
+
+    let catalog = volatility.plugins()?;
+    println!(
+        "{} plugins, {} community failures",
+        catalog.plugins.len(),
+        catalog.failures.len()
+    );
+    let pslist = run_plugin(&volatility, &dump, "linux.pslist.PsList", &[])?;
+    let found = rows_with(&pslist, "memtest-marke");
+    println!("pslist marker rows: {found:#?}");
+    if found.is_empty() {
+        return Err("marked process not in pslist".into());
+    }
+    let pid = found[0].split(" | ").nth(1).unwrap_or_default().to_string();
+    let psaux = run_plugin(&volatility, &dump, "linux.psaux.PsAux", &["--pid", &pid])?;
+    println!("psaux: {:#?}", rows_with(&psaux, MARKER));
+    let sockets = run_plugin(
+        &volatility,
+        &dump,
+        "linux.sockstat.Sockstat",
+        &["--pids", &pid],
+    )?;
+    let listening = rows_with(&sockets, "48151");
+    println!("sockstat: {listening:#?}");
+    if listening.is_empty() {
+        return Err("marked socket not in sockstat".into());
+    }
+    let tree = run_plugin(&volatility, &dump, "linux.pstree.PsTree", &[])?;
+    println!(
+        "pstree rows nested: {}",
+        tree.rows.iter().filter(|r| r.depth > 0).count()
+    );
+    for plugin in [
+        "linux.lsmod.Lsmod",
+        "linux.mountinfo.MountInfo",
+        "linux.malware.check_syscall.Check_syscall",
+    ] {
+        if let Err(error) = run_plugin(&volatility, &dump, plugin, &[]) {
+            println!("{error}");
+        }
+    }
+    test.command(Command::Stop)?;
+    println!("MEMORY-CHECK-PASS");
+    Ok(())
+}
+
+fn main() {
+    if let Err(error) = run() {
+        eprintln!("memory-check: {error}");
+        std::process::exit(1);
+    }
+}

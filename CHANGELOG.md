@@ -4,7 +4,7 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
-## 0.4.0 — unreleased
+## 0.4.0 — 2026-10-11
 
 Needs new bases for memory analysis of the VM's own dumps (BusyBox and
 Debian 13 for Antinomie 0.4.0, which carry their kernel's symbol table).
@@ -12,8 +12,8 @@ Bases for 0.3.x still run; their dumps can be analysed by picking a symbol
 table when importing them.
 
 - **Memory tab.** Beside Network: **Dump memory** writes the running VM's RAM
-  to a dump of its recordings (QEMU pauses the guest while it writes, about a
-  second per GiB) and lists every dump of the VM. **Import dump…** adds a
+  to a dump of its recordings (QEMU pauses the guest while it writes: seconds
+  to minutes, by RAM size and disk speed) and lists every dump of the VM. **Import dump…** adds a
   dump made elsewhere (raw, LiME, ELF core, crash dump, VMware or VirtualBox
   memory, hibernation file) for Linux, Windows or macOS; the file stays
   where it is.
