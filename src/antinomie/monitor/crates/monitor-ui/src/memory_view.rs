@@ -8,8 +8,8 @@ use crate::{
 };
 use antinomie_monitor_core::{
     memory::{
-        self, Column as ResultColumn, ColumnKind, DumpProgress, MemoryDump, OptionKind, Os,
-        PluginCatalog, PluginInfo, PluginRun, ResultTable, RunHandle, RunState, Volatility,
+        self, community, Column as ResultColumn, ColumnKind, DumpProgress, MemoryDump, OptionKind,
+        Os, PluginCatalog, PluginInfo, PluginRun, ResultTable, RunHandle, RunState, Volatility,
     },
     BaseSummary, VmConfig,
 };
@@ -19,7 +19,11 @@ use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::mpsc::{self, Receiver},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -31,6 +35,8 @@ pub(crate) enum MemoryAction {
     Dump,
     /// Install Volatility 3 (Tools → Analysis tools).
     InstallVolatility,
+    /// Look up symbol tables online for dumps without one (a setting).
+    OnlineSymbols(bool),
 }
 
 pub(crate) struct MemoryContext<'a> {
@@ -50,6 +56,10 @@ pub(crate) struct MemoryContext<'a> {
     pub volatility_installing: bool,
     pub bases: &'a [BaseSummary],
     pub font_size: f32,
+    /// Symbol tables of dumps without one are looked up online.
+    pub online_symbols: bool,
+    /// curl, for catalog plugin downloads.
+    pub curl: &'a Path,
 }
 
 enum Catalog {
@@ -62,10 +72,50 @@ enum Catalog {
 struct LoadedResult {
     run: PluginRun,
     table: Result<ResultTable, String>,
-    /// Indices of the rows the filter keeps.
+    /// Indices of the rows the filter keeps, in the chosen order.
     shown: Vec<usize>,
     filter: String,
+    sort: Option<Sort>,
+    /// The shown rows as Volatility prints them, made when first viewed.
+    text: Option<Vec<String>>,
     log: String,
+}
+
+/// A result ordered by one column (header clicks: ascending, descending, as
+/// Volatility gave it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Sort {
+    column: usize,
+    descending: bool,
+}
+
+/// The next order after a click on `column`'s header.
+fn next_sort(sort: Option<Sort>, column: usize) -> Option<Sort> {
+    match sort {
+        Some(Sort {
+            column: current,
+            descending: false,
+        }) if current == column => Some(Sort {
+            column,
+            descending: true,
+        }),
+        Some(Sort {
+            column: current,
+            descending: true,
+        }) if current == column => None,
+        _ => Some(Sort {
+            column,
+            descending: false,
+        }),
+    }
+}
+
+/// A catalog plugin being downloaded.
+struct PluginInstall {
+    /// Received and total octets.
+    progress: Arc<Mutex<(u64, u64)>>,
+    cancel: Arc<AtomicBool>,
+    done: Receiver<Result<(), String>>,
 }
 
 /// The import form.
@@ -98,9 +148,22 @@ pub(crate) struct MemoryView {
     /// Index of the selected row in the loaded result.
     selected_row: Option<usize>,
     show_log: bool,
+    /// The result as Volatility's text instead of a table.
+    text_view: bool,
+    /// Order of the open result.
+    sort: Option<Sort>,
+    /// Plugins of this system are listed (the dump's system until changed).
+    list_os: Option<(String, Os)>,
     import: Option<Import>,
     confirm_delete: Option<String>,
     status: Option<(String, bool)>,
+    catalog_open: bool,
+    installs: BTreeMap<String, PluginInstall>,
+    catalog_status: Option<(String, bool)>,
+    /// System of each installed catalog plugin, by its folder name.
+    community_os: BTreeMap<String, Os>,
+    /// Installed catalog plugins, read when the catalog opens or changes.
+    catalog_installed: Option<Vec<community::Installed>>,
 }
 
 impl Default for MemoryView {
@@ -123,9 +186,17 @@ impl Default for MemoryView {
             filter: String::new(),
             selected_row: None,
             show_log: false,
+            text_view: false,
+            sort: None,
+            list_os: None,
             import: None,
             confirm_delete: None,
             status: None,
+            catalog_open: false,
+            installs: BTreeMap::new(),
+            catalog_status: None,
+            community_os: BTreeMap::new(),
+            catalog_installed: None,
         }
     }
 }
@@ -134,6 +205,9 @@ impl Drop for MemoryView {
     fn drop(&mut self) {
         for job in &self.jobs {
             job.cancel();
+        }
+        for install in self.installs.values() {
+            install.cancel.store(true, Ordering::Relaxed);
         }
         if let Some(mut child) = self.import.as_mut().and_then(|import| import.picker.take()) {
             let _ = child.kill();
@@ -182,6 +256,9 @@ fn dump_detail(dump: &MemoryDump) -> String {
     let size = dump.bytes.map(format_size).unwrap_or_else(|| "…".into());
     if let Some(error) = &dump.error {
         return format!("Failed: {error}");
+    }
+    if dump.missing() {
+        return format!("{size} · file missing");
     }
     if dump.imported {
         format!("Imported · {size} · {}", dump.system)
@@ -245,15 +322,20 @@ fn load_result(run: PluginRun) -> LoadedResult {
         table,
         shown,
         filter: String::new(),
+        sort: None,
+        text: None,
         log,
     }
 }
 
-fn filter_rows(result: &mut LoadedResult, filter: &str) {
-    if result.filter == filter {
+/// Keep the rows matching `filter`, in the order of `sort`.
+fn filter_rows(result: &mut LoadedResult, filter: &str, sort: Option<Sort>) {
+    if result.filter == filter && result.sort == sort {
         return;
     }
     result.filter = filter.to_owned();
+    result.sort = sort;
+    result.text = None;
     let Ok(table) = &result.table else {
         return;
     };
@@ -272,6 +354,9 @@ fn filter_rows(result: &mut LoadedResult, filter: &str) {
                     })
         })
         .collect();
+    if let Some(sort) = sort {
+        memory::sort_rows(table, &mut result.shown, sort.column, sort.descending);
+    }
 }
 
 /// One row as tab-separated text.
@@ -357,6 +442,9 @@ impl MemoryView {
     }
 
     fn open_run(&mut self, id: Option<String>) {
+        if self.selected_run != id {
+            self.sort = None;
+        }
         self.selected_run = id.clone();
         self.selected_row = None;
         self.show_log = false;
@@ -387,7 +475,7 @@ impl MemoryView {
             if Some(&id) == self.selected_run.as_ref() {
                 let filter = self.filter.clone();
                 result.filter = "\u{0}".into();
-                filter_rows(&mut result, &filter);
+                filter_rows(&mut result, &filter, self.sort);
                 self.result = Some(result);
             }
             self.loading = None;
@@ -397,6 +485,10 @@ impl MemoryView {
             _ => None,
         };
         if let Some(listed) = listed {
+            self.community_os = community::installed(&memory::plugins_dir(data_dir))
+                .into_iter()
+                .map(|installed| (installed.plugin.id, installed.plugin.os))
+                .collect();
             self.catalog = match listed {
                 Ok((volatility, plugins)) => Catalog::Ready(volatility, plugins),
                 Err(error) => Catalog::Failed(error),
@@ -413,6 +505,28 @@ impl MemoryView {
                 let _ = sender.send(loaded);
             });
             self.catalog = Catalog::Loading(receiver);
+        }
+        let mut installed = Vec::new();
+        self.installs
+            .retain(|id, install| match install.done.try_recv() {
+                Ok(result) => {
+                    installed.push((id.clone(), result));
+                    false
+                }
+                Err(mpsc::TryRecvError::Empty) => true,
+                Err(mpsc::TryRecvError::Disconnected) => false,
+            });
+        for (id, result) in installed {
+            self.catalog_status = Some(match result {
+                Ok(()) => (format!("{id} installed: its plugins are listed"), false),
+                Err(error) => (format!("{id}: {error}"), true),
+            });
+            // List the plugins again, with the new ones.
+            self.catalog = Catalog::Unknown;
+            self.catalog_installed = None;
+        }
+        if !self.installs.is_empty() {
+            ctx.request_repaint_after(Duration::from_millis(200));
         }
         let mut finished = Vec::new();
         self.jobs.retain(|job| match job.progress().finished {
@@ -439,6 +553,10 @@ impl MemoryView {
                     false,
                 ),
                 RunState::Cancelled => (format!("{} cancelled", run.short_name()), false),
+                // The open result shows why; others say it here.
+                _ if self.selected_run.as_deref() == Some(run.id.as_str()) => {
+                    (format!("{} failed", run.short_name()), true)
+                }
                 _ => (
                     format!(
                         "{} failed: {}",
@@ -515,6 +633,7 @@ impl MemoryView {
                 }
             });
         self.import_window(ui.ctx(), &cx);
+        self.catalog_window(ui.ctx(), &cx);
         action
     }
 
@@ -825,7 +944,9 @@ impl MemoryView {
             );
             return action;
         }
-        self.plugin_bar(ui, &dump, cx.data_dir, cx.font_size);
+        if let Some(next) = self.plugin_bar(ui, &dump, cx) {
+            action = Some(next);
+        }
         if let Some((message, error)) = &self.status {
             ui.colored_label(
                 if *error {
@@ -856,17 +977,33 @@ impl MemoryView {
         &mut self,
         ui: &mut egui::Ui,
         dump: &MemoryDump,
-        data_dir: &Path,
-        font_size: f32,
-    ) {
+        cx: &MemoryContext<'_>,
+    ) -> Option<MemoryAction> {
+        let (data_dir, font_size) = (cx.data_dir, cx.font_size);
         let Catalog::Ready(volatility, catalog) = &self.catalog else {
-            return;
+            return None;
         };
+        let mut action = None;
         let plugins = &catalog.plugins;
         let failures = &catalog.failures;
         let mut reload = false;
+        let list_os = match &self.list_os {
+            Some((id, os)) if id == &dump.id => *os,
+            _ => dump.os,
+        };
+        let community_os = &self.community_os;
+        // A catalog plugin's system is in its manifest; others' in their name.
+        let os_of = |plugin: &PluginInfo| {
+            plugin.os().or_else(|| {
+                plugin
+                    .community
+                    .then(|| plugin.name.split('.').next())
+                    .flatten()
+                    .and_then(|id| community_os.get(id).copied())
+            })
+        };
         let applies = |plugin: &&PluginInfo| {
-            plugin.os().is_none_or(|os| os == dump.os)
+            os_of(plugin).is_none_or(|os| os == list_os)
                 && !matches!(
                     plugin.name.as_str(),
                     "configwriter.ConfigWriter"
@@ -874,29 +1011,45 @@ impl MemoryView {
                         | "frameworkinfo.FrameworkInfo"
                 )
         };
-        if self
-            .plugin
-            .as_ref()
-            .is_none_or(|name| !plugins.iter().any(|plugin| &plugin.name == name))
-        {
-            let default = format!("{}.pslist.PsList", dump.os.prefix());
+        if self.plugin.as_ref().is_none_or(|name| {
+            !plugins
+                .iter()
+                .any(|plugin| &plugin.name == name && applies(&plugin))
+        }) {
+            let default = format!("{}.pslist.PsList", list_os.prefix());
             self.plugin = plugins
                 .iter()
                 .find(|plugin| plugin.name == default)
                 .or_else(|| plugins.iter().find(applies))
                 .map(|plugin| plugin.name.clone());
         }
-        let Some(current) = self
+        let current = self
             .plugin
             .as_ref()
             .and_then(|name| plugins.iter().find(|plugin| &plugin.name == name))
-            .cloned()
-        else {
-            return;
-        };
+            .cloned()?;
         let mut chosen = None;
         let mut run = None;
+        let mut chosen_os = None;
         ui.horizontal(|ui| {
+            for os in Os::ALL {
+                if ui
+                    .selectable_label(list_os == os, os.label())
+                    .on_hover_text(format!("List the plugins for {} dumps", os.label()))
+                    .clicked()
+                {
+                    chosen_os = Some(os);
+                }
+            }
+            if list_os != dump.os {
+                ui.label(RichText::new(egui_phosphor::regular::WARNING).color(theme::warn()))
+                    .on_hover_text(format!(
+                        "This dump is {}: {} plugins will not find what they look for",
+                        dump.os.label(),
+                        list_os.label()
+                    ));
+            }
+            ui.separator();
             ui.label(RichText::new("Plugin").color(theme::muted()));
             egui::ComboBox::from_id_salt("memory_plugin")
                 .width(360.0)
@@ -929,7 +1082,8 @@ impl MemoryView {
                             continue;
                         }
                         let area = if plugin.community {
-                            format!("community · {}", plugin_area(&plugin.name))
+                            let os = os_of(plugin).map_or("generic", Os::prefix);
+                            format!("community · {os}")
                         } else {
                             plugin_area(&plugin.name)
                         };
@@ -971,6 +1125,29 @@ impl MemoryView {
                 let values = self.values.get(&current.name).cloned().unwrap_or_default();
                 run = Some(memory::plugin_args(&current, &values));
             }
+            ui.menu_button(egui_phosphor::regular::GEAR, |ui| {
+                ui.set_max_width(440.0);
+                let mut online = cx.online_symbols;
+                if ui
+                    .checkbox(&mut online, "Look up symbol tables online")
+                    .changed()
+                {
+                    action = Some(MemoryAction::OnlineSymbols(online));
+                }
+                ui.label(
+                    RichText::new(format!(
+                        "For Linux and macOS dumps without a symbol table of their own (imported \
+                         dumps): after Volatility's folders, the table of the dump's kernel is \
+                         looked up by its banner in {} on GitHub, about 11,000 distribution \
+                         kernels, and kept in Volatility's cache. Dumps of Antinomie's VMs carry \
+                         their base's table and stay offline.",
+                        memory::ONLINE_SYMBOLS_NAME
+                    ))
+                    .color(theme::muted()),
+                );
+            })
+            .response
+            .on_hover_text("Memory analysis options");
             let community = plugins.iter().filter(|plugin| plugin.community).count();
             let label = if failures.is_empty() {
                 format!(
@@ -1005,6 +1182,17 @@ impl MemoryView {
                     }
                 }
                 ui.separator();
+                if ui
+                    .button(format!(
+                        "{} Plugin catalog…",
+                        egui_phosphor::regular::STOREFRONT
+                    ))
+                    .on_hover_text("Download community plugins checked for this Volatility")
+                    .clicked()
+                {
+                    self.catalog_open = true;
+                    ui.close_menu();
+                }
                 if ui.button("Open community plugins folder").clicked() {
                     let dir = memory::plugins_dir(data_dir);
                     let opened = std::fs::create_dir_all(&dir)
@@ -1024,7 +1212,8 @@ impl MemoryView {
                     ui.close_menu();
                 }
             });
-            ui.colored_label(theme::muted(), &current.help)
+            // Truncated: a long description must not widen the tab.
+            ui.add(egui::Label::new(RichText::new(&current.help).color(theme::muted())).truncate())
                 .on_hover_text(&current.help);
         });
         if !current.options.is_empty() {
@@ -1102,25 +1291,31 @@ impl MemoryView {
             self.plugin = Some(name);
             self.search.clear();
         }
+        if let Some(os) = chosen_os {
+            self.list_os = Some((dump.id.clone(), os));
+        }
         if reload {
             self.catalog = Catalog::Unknown;
-            return;
+            return action;
         }
         match run {
-            Some(Ok(args)) => match volatility.start(dump, &current.name, args) {
-                Ok(job) => {
-                    let id = job.run.id.clone();
-                    self.jobs.push(job);
-                    self.reload_runs();
-                    self.selected_run = Some(id);
-                    self.result = None;
-                    self.status = None;
+            Some(Ok(args)) => {
+                match volatility.start(dump, &current.name, args, cx.online_symbols) {
+                    Ok(job) => {
+                        let id = job.run.id.clone();
+                        self.jobs.push(job);
+                        self.reload_runs();
+                        self.selected_run = Some(id);
+                        self.result = None;
+                        self.status = None;
+                    }
+                    Err(error) => self.status = Some((error, true)),
                 }
-                Err(error) => self.status = Some((error, true)),
-            },
+            }
             Some(Err(error)) => self.status = Some((error, true)),
             None => {}
         }
+        action
     }
 
     fn run_list(&mut self, ui: &mut egui::Ui, font_size: f32) {
@@ -1155,10 +1350,18 @@ impl MemoryView {
                         font_size,
                     )
                     .on_hover_text(format!(
-                        "{} {}\nStarted {}",
+                        "{} {}\nStarted {}{}",
                         run.plugin,
                         args_summary(run),
-                        format_date(run.started_ms / 1000)
+                        format_date(run.started_ms / 1000),
+                        if run.symbols_online.is_some() {
+                            format!(
+                                "\nSymbol table looked up online ({})",
+                                memory::ONLINE_SYMBOLS_NAME
+                            )
+                        } else {
+                            String::new()
+                        }
                     ));
                     if row.clicked() {
                         open = Some(run.id.clone());
@@ -1272,40 +1475,22 @@ impl MemoryView {
             return;
         }
         let filter = self.filter.clone();
+        let sort = self.sort;
         let Some(result) = self.result.as_mut() else {
             return;
         };
-        filter_rows(result, &filter);
+        filter_rows(result, &filter, sort);
         let mut status = None;
+        // The controls keep their size; the title takes what is left.
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(&result.run.plugin)
-                    .font(theme::mono(font_size - 1.0))
-                    .color(theme::heading()),
-            );
-            if !result.run.args.is_empty() {
-                ui.label(
-                    RichText::new(args_summary(&result.run))
-                        .font(theme::mono(font_size - 1.0))
-                        .color(theme::value(ValueKind::Flags)),
-                );
-            }
-            if let Ok(table) = &result.table {
-                ui.colored_label(
-                    theme::muted(),
-                    if result.shown.len() == table.rows.len() {
-                        format!("{} rows", table.rows.len())
-                    } else {
-                        format!("{} of {} rows", result.shown.len(), table.rows.len())
-                    },
-                );
-                if table.truncated {
-                    ui.colored_label(theme::warn(), format!("(first {RESULT_LIMIT} shown)"));
-                }
-            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.toggle_value(&mut self.show_log, "Messages")
                     .on_hover_text("Volatility's messages for this run");
+                ui.selectable_value(&mut self.text_view, true, "Text")
+                    .on_hover_text("The result as Volatility prints it");
+                ui.selectable_value(&mut self.text_view, false, "Table")
+                    .on_hover_text("Columns colored by type; click a column name to sort");
+                ui.separator();
                 let files = std::fs::read_dir(result.run.files())
                     .map(|mut entries| entries.next().is_some())
                     .unwrap_or(false);
@@ -1322,28 +1507,82 @@ impl MemoryView {
                 if let Ok(table) = &result.table {
                     if ui
                         .button(format!("{} Copy", egui_phosphor::regular::COPY))
-                        .on_hover_text("Copy the shown rows as tab-separated text")
+                        .on_hover_text(if self.text_view {
+                            "Copy the shown rows as Volatility's text"
+                        } else {
+                            "Copy the shown rows as tab-separated text"
+                        })
                         .clicked()
                     {
-                        ui.ctx()
-                            .copy_text(result_tsv(&table.columns, table, &result.shown));
+                        ui.ctx().copy_text(if self.text_view {
+                            memory::result_text(table, &result.shown)
+                        } else {
+                            result_tsv(&table.columns, table, &result.shown)
+                        });
                     }
                 }
                 ui.add(
                     egui::TextEdit::singleline(&mut self.filter)
                         .hint_text(format!("{} Filter rows", egui_phosphor::regular::FUNNEL))
                         .margin(theme::TEXT_EDIT_MARGIN)
-                        .desired_width(200.0),
+                        .desired_width(180.0),
                 );
-            });
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    let mut title = egui::text::LayoutJob::default();
+                    let mono = theme::mono(font_size - 1.0);
+                    title.append(
+                        &result.run.plugin,
+                        0.0,
+                        egui::TextFormat::simple(mono.clone(), theme::heading()),
+                    );
+                    if !result.run.args.is_empty() {
+                        title.append(
+                            &args_summary(&result.run),
+                            8.0,
+                            egui::TextFormat::simple(mono, theme::value(ValueKind::Flags)),
+                        );
+                    }
+                    if let Ok(table) = &result.table {
+                        let rows = if result.shown.len() == table.rows.len() {
+                            format!("{} rows", table.rows.len())
+                        } else {
+                            format!("{} of {} rows", result.shown.len(), table.rows.len())
+                        };
+                        title.append(
+                            &rows,
+                            10.0,
+                            egui::TextFormat::simple(
+                                egui::TextStyle::Body.resolve(ui.style()),
+                                theme::muted(),
+                            ),
+                        );
+                        if table.truncated {
+                            title.append(
+                                &format!("(first {RESULT_LIMIT} shown)"),
+                                6.0,
+                                egui::TextFormat::simple(
+                                    egui::TextStyle::Body.resolve(ui.style()),
+                                    theme::warn(),
+                                ),
+                            );
+                        }
+                    }
+                    let hover = title.text.clone();
+                    ui.add(egui::Label::new(title).truncate())
+                        .on_hover_text(hover);
+                });
+            })
         });
         if let Some(error) = status {
             self.status = Some((error, true));
         }
         if result.run.state == RunState::Failed {
-            ui.colored_label(
-                theme::error(),
-                result.run.error.as_deref().unwrap_or("Volatility failed"),
+            ui.add(
+                egui::Label::new(
+                    RichText::new(result.run.error.as_deref().unwrap_or("Volatility failed"))
+                        .color(theme::error()),
+                )
+                .wrap(),
             );
             self.show_log = true;
         }
@@ -1372,7 +1611,10 @@ impl MemoryView {
         let table = match &result.table {
             Ok(table) => table,
             Err(error) => {
-                ui.colored_label(theme::muted(), format!("No result saved: {error}"));
+                // A failed run's reason is shown above.
+                if result.run.state != RunState::Failed {
+                    ui.colored_label(theme::muted(), format!("No result saved: {error}"));
+                }
                 return;
             }
         };
@@ -1384,6 +1626,36 @@ impl MemoryView {
             ui.colored_label(theme::muted(), "The plugin found nothing in this dump.");
         }
         let mono = theme::mono(font_size - 1.0);
+        if self.text_view {
+            let lines = result.text.get_or_insert_with(|| {
+                memory::result_text(table, &result.shown)
+                    .lines()
+                    .map(str::to_owned)
+                    .collect()
+            });
+            let line_height = ui.fonts(|fonts| fonts.row_height(&mono)) + 2.0;
+            egui::Frame::new()
+                .fill(theme::bg())
+                .corner_radius(4.0)
+                .inner_margin(egui::Margin::symmetric(10, 6))
+                .show(ui, |ui| {
+                    egui::ScrollArea::both()
+                        .id_salt(("memory_result_text", &result.run.id))
+                        .auto_shrink([false, false])
+                        .show_rows(ui, line_height, lines.len(), |ui, range| {
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            for line in &lines[range] {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(expand_tabs(line)).font(mono.clone()),
+                                    )
+                                    .extend(),
+                                );
+                            }
+                        });
+                });
+            return;
+        }
         let char_width = ui.fonts(|fonts| fonts.glyph_width(&mono, '0'));
         let row_height = theme::row_height(font_size);
         let widths = column_widths(table, char_width);
@@ -1392,8 +1664,11 @@ impl MemoryView {
         // scrolls sideways; otherwise the last column takes the rest.
         let fits = total <= ui.available_width();
         let indent = 14.0;
+        // Sorted rows lose their tree: shown flat.
+        let nested = result.sort.is_none();
         let selected_row = self.selected_row;
         let mut clicked_row = None;
+        let mut clicked_header = None;
         egui::ScrollArea::horizontal()
             .id_salt(("memory_result_wide", &result.run.id))
             .auto_shrink([false, false])
@@ -1424,11 +1699,34 @@ impl MemoryView {
                 }
                 builder
                     .header(row_height + 4.0, |mut header| {
-                        for column in &table.columns {
+                        for (index, column) in table.columns.iter().enumerate() {
                             header.col(|ui| {
-                                ui.label(
-                                    RichText::new(&column.name).strong().color(theme::heading()),
-                                );
+                                let arrow = match result.sort {
+                                    Some(sort) if sort.column == index && sort.descending => {
+                                        format!(" {}", egui_phosphor::regular::CARET_DOWN)
+                                    }
+                                    Some(sort) if sort.column == index => {
+                                        format!(" {}", egui_phosphor::regular::CARET_UP)
+                                    }
+                                    _ => String::new(),
+                                };
+                                let response = ui
+                                    .add(
+                                        egui::Label::new(
+                                            RichText::new(format!("{}{arrow}", column.name))
+                                                .strong()
+                                                .color(theme::heading()),
+                                        )
+                                        .truncate()
+                                        .sense(egui::Sense::click()),
+                                    )
+                                    .on_hover_text(
+                                        "Sort: ascending, descending, then as Volatility gave it",
+                                    )
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                                if response.clicked() {
+                                    clicked_header = Some(index);
+                                }
                             });
                         }
                     })
@@ -1441,7 +1739,7 @@ impl MemoryView {
                                 data.values.iter().zip(&table.columns).enumerate()
                             {
                                 row.col(|ui| {
-                                    if index == 0 && data.depth > 0 {
+                                    if nested && index == 0 && data.depth > 0 {
                                         ui.add_space(f32::from(data.depth) * indent);
                                         ui.label(
                                             RichText::new("└")
@@ -1488,6 +1786,9 @@ impl MemoryView {
             });
         if clicked_row.is_some() {
             self.selected_row = clicked_row;
+        }
+        if let Some(column) = clicked_header {
+            self.sort = next_sort(self.sort, column);
         }
     }
 
@@ -1618,22 +1919,36 @@ impl MemoryView {
                         ui.end_row();
                         ui.label("Symbol table");
                         ui.add_enabled_ui(import.os == Os::Linux, |ui| {
+                            let automatic = if cx.online_symbols {
+                                "Find it: Volatility's folders, then online"
+                            } else {
+                                "Find it in Volatility's folders"
+                            };
                             let selected = import
                                 .base
                                 .as_ref()
                                 .and_then(|dir| with_symbols.iter().find(|base| &base.directory == dir))
-                                .map_or("Let Volatility find one", |base| base.label.as_str());
+                                .map_or(automatic.to_owned(), |base| base_choice(base));
                             egui::ComboBox::from_id_salt("memory_import_symbols")
-                                .width(320.0)
+                                .width(360.0)
                                 .selected_text(selected)
                                 .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut import.base, None, "Let Volatility find one");
-                                    for base in &with_symbols {
-                                        ui.selectable_value(
-                                            &mut import.base,
-                                            Some(base.directory.clone()),
-                                            &base.label,
-                                        );
+                                    ui.selectable_value(&mut import.base, None, automatic);
+                                    for base in cx.bases {
+                                        let has = with_symbols
+                                            .iter()
+                                            .any(|other| other.directory == base.directory);
+                                        ui.add_enabled_ui(has, |ui| {
+                                            ui.selectable_value(
+                                                &mut import.base,
+                                                Some(base.directory.clone()),
+                                                base_choice(base),
+                                            )
+                                            .on_disabled_hover_text(
+                                                "Built before Antinomie 0.4.0: its kernel has no \
+                                                 symbol table. Download the 0.4.0 base for one.",
+                                            );
+                                        });
                                     }
                                 });
                         });
@@ -1643,7 +1958,7 @@ impl MemoryView {
                     theme::muted(),
                     match import.os {
                         Os::Windows => "Windows symbols are downloaded from Microsoft's symbol server when a plugin first needs them.",
-                        Os::Linux => "Linux dumps need the symbol table of their exact kernel: pick the base the dump was taken from.",
+                        Os::Linux => "Linux dumps need the symbol table of their exact kernel: pick the base a dump of an Antinomie VM was taken from; for other machines, Volatility finds distribution kernels' tables.",
                         Os::Mac => "macOS dumps need a symbol table for their kernel in Volatility's symbol folders.",
                     },
                 );
@@ -1704,6 +2019,250 @@ impl MemoryView {
         }
     }
 
+    fn catalog_window(&mut self, ctx: &egui::Context, cx: &MemoryContext<'_>) {
+        if !self.catalog_open {
+            return;
+        }
+        let plugins_dir = memory::plugins_dir(cx.data_dir);
+        let installed = self
+            .catalog_installed
+            .get_or_insert_with(|| community::installed(&plugins_dir))
+            .clone();
+        let entries = community::catalog();
+        let mut open = true;
+        let mut install = None;
+        let mut remove = None;
+        egui::Window::new("Community plugin catalog")
+            .id(egui::Id::new("memory_plugin_catalog"))
+            .collapsible(false)
+            .resizable(true)
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(ctx.screen_rect().center())
+            .default_width(680.0)
+            .default_height(560.0)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(
+                            "Volatility 3 plugins by other authors. Each is downloaded from its \
+                             author's repository at the commit listed and checked against its \
+                             SHA-256; Antinomie only applies the compatibility edits shown. They \
+                             are ordinary Python and run as you, outside any sandbox: read the \
+                             source before installing.",
+                        )
+                        .color(theme::muted()),
+                    )
+                    .wrap(),
+                );
+                if let Some((message, error)) = &self.catalog_status {
+                    ui.colored_label(
+                        if *error {
+                            theme::error()
+                        } else {
+                            theme::good()
+                        },
+                        message,
+                    );
+                }
+                ui.add_space(6.0);
+                let entries = match &entries {
+                    Ok(entries) => entries,
+                    Err(error) => {
+                        ui.colored_label(theme::error(), error);
+                        return;
+                    }
+                };
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for plugin in entries {
+                            let present = installed.iter().find(|i| i.plugin.id == plugin.id);
+                            egui::Frame::new()
+                                .fill(theme::raised())
+                                .corner_radius(6.0)
+                                .inner_margin(egui::Margin::symmetric(12, 10))
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(RichText::new(&plugin.name).strong());
+                                        ui.colored_label(
+                                            theme::muted(),
+                                            format!("by {}", plugin.author),
+                                        );
+                                        ui.label(
+                                            RichText::new(plugin.os.label())
+                                                .small()
+                                                .color(theme::value(ValueKind::Name)),
+                                        );
+                                        ui.label(
+                                            RichText::new(&plugin.license)
+                                                .small()
+                                                .color(theme::value(ValueKind::Flags)),
+                                        );
+                                    });
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(&plugin.summary).color(theme::text()),
+                                        )
+                                        .wrap(),
+                                    );
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "{} {}",
+                                            egui_phosphor::regular::CHECK_CIRCLE,
+                                            plugin.tested
+                                        ))
+                                        .small()
+                                        .color(theme::muted()),
+                                    );
+                                    for caveat in &plugin.caveats {
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(format!(
+                                                    "{} {caveat}",
+                                                    egui_phosphor::regular::WARNING
+                                                ))
+                                                .small()
+                                                .color(theme::warn()),
+                                            )
+                                            .wrap(),
+                                        );
+                                    }
+                                    for need in &plugin.requires {
+                                        ui.label(
+                                            RichText::new(format!("Needs {need}"))
+                                                .small()
+                                                .color(theme::warn()),
+                                        );
+                                    }
+                                    for file in &plugin.files {
+                                        for edit in &file.edits {
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "Compatibility edit in {}: {} → {}",
+                                                    file.to, edit.find, edit.replace
+                                                ))
+                                                .small()
+                                                .font(theme::mono(cx.font_size - 3.0))
+                                                .color(theme::muted()),
+                                            );
+                                        }
+                                    }
+                                    ui.add_space(4.0);
+                                    ui.horizontal(|ui| {
+                                        if let Some(job) = self.installs.get(&plugin.id) {
+                                            let (got, total) =
+                                                *job.progress.lock().expect("install progress");
+                                            ui.add(
+                                                egui::ProgressBar::new(
+                                                    got as f32 / total.max(1) as f32,
+                                                )
+                                                .desired_width(160.0),
+                                            );
+                                            if ui.button("Cancel").clicked() {
+                                                job.cancel.store(true, Ordering::Relaxed);
+                                            }
+                                        } else if let Some(present) = present {
+                                            if present.outdated(entries)
+                                                && ui.button("Update").clicked()
+                                            {
+                                                install = Some(plugin.clone());
+                                            }
+                                            ui.colored_label(theme::good(), "Installed");
+                                            if ui.button("Remove").clicked() {
+                                                remove = Some(plugin.id.clone());
+                                            }
+                                        } else if ui
+                                            .add(
+                                                egui::Button::new(
+                                                    RichText::new(format!(
+                                                        "{} Install",
+                                                        egui_phosphor::regular::DOWNLOAD_SIMPLE
+                                                    ))
+                                                    .color(theme::palette().primary_text),
+                                                )
+                                                .fill(theme::primary()),
+                                            )
+                                            .clicked()
+                                        {
+                                            install = Some(plugin.clone());
+                                        }
+                                        ui.hyperlink_to(
+                                            format!(
+                                                "Source {}",
+                                                egui_phosphor::regular::ARROW_SQUARE_OUT
+                                            ),
+                                            plugin.source_url(),
+                                        )
+                                        .on_hover_text(
+                                            format!(
+                                                "{} at commit {}",
+                                                plugin.repo,
+                                                &plugin.commit[..12]
+                                            ),
+                                        );
+                                        ui.colored_label(
+                                            theme::muted(),
+                                            format_size(plugin.size()),
+                                        );
+                                    });
+                                });
+                            ui.add_space(8.0);
+                        }
+                    });
+            });
+        if let Some(plugin) = install {
+            let progress = Arc::new(Mutex::new((0, plugin.size())));
+            let cancel = Arc::new(AtomicBool::new(false));
+            let (sender, done) = mpsc::channel();
+            let (curl, staging) = (
+                cx.curl.to_path_buf(),
+                antinomie_monitor_core::analysis_tools::tools_dir(cx.data_dir).join(".downloads"),
+            );
+            let (shared, stop, id) = (progress.clone(), cancel.clone(), plugin.id.clone());
+            std::thread::spawn(move || {
+                let result = community::install(
+                    &curl,
+                    &plugins_dir,
+                    &staging,
+                    &plugin,
+                    &stop,
+                    |got, total| {
+                        if let Ok(mut progress) = shared.lock() {
+                            *progress = (got, total);
+                        }
+                    },
+                );
+                let _ = sender.send(result);
+            });
+            self.catalog_status = None;
+            self.installs.insert(
+                id,
+                PluginInstall {
+                    progress,
+                    cancel,
+                    done,
+                },
+            );
+        }
+        if let Some(id) = remove {
+            self.catalog_status = Some(
+                match community::remove(&memory::plugins_dir(cx.data_dir), &id) {
+                    Ok(()) => (format!("{id} removed"), false),
+                    Err(error) => (error, true),
+                },
+            );
+            self.catalog_installed = None;
+            self.catalog = Catalog::Unknown;
+        }
+        if !open || ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.catalog_open = false;
+            self.catalog_installed = None;
+            ctx.request_repaint();
+        }
+    }
+
     fn poll_picker(&mut self) {
         let Some(import) = self.import.as_mut() else {
             return;
@@ -1727,6 +2286,31 @@ impl MemoryView {
             import.path = path.to_owned();
         }
     }
+}
+
+/// A base in the symbol table list: its name and the version it is for.
+fn base_choice(base: &BaseSummary) -> String {
+    match &base.min_app_version {
+        Some(version) => format!("{} · Antinomie {version}", base.label),
+        None => base.label.clone(),
+    }
+}
+
+/// Tabs to the next multiple of 8 columns, as a terminal shows them.
+fn expand_tabs(line: &str) -> String {
+    let mut out = String::with_capacity(line.len() + 16);
+    let mut column = 0;
+    for ch in line.chars() {
+        if ch == '\t' {
+            let next = (column / 8 + 1) * 8;
+            out.extend(std::iter::repeat_n(' ', next - column));
+            column = next;
+        } else {
+            out.push(ch);
+            column += 1;
+        }
+    }
+    out
 }
 
 fn memory_symbols_file() -> &'static str {
@@ -1897,11 +2481,42 @@ mod tests {
             table: Ok(table),
             shown: vec![0, 1],
             filter: String::new(),
+            sort: None,
+            text: Some(Vec::new()),
             log: String::new(),
         };
-        filter_rows(&mut loaded, "SH");
+        filter_rows(&mut loaded, "SH", None);
         assert_eq!(loaded.shown, vec![1]);
-        filter_rows(&mut loaded, "");
+        assert!(loaded.text.is_none(), "the text follows the filter");
+        filter_rows(&mut loaded, "", None);
         assert_eq!(loaded.shown, vec![0, 1]);
+        let descending = Some(Sort {
+            column: 0,
+            descending: true,
+        });
+        filter_rows(&mut loaded, "", descending);
+        assert_eq!(loaded.shown, vec![1, 0]);
+    }
+
+    #[test]
+    fn column_clicks_sort_up_then_down_then_back() {
+        let up = next_sort(None, 2);
+        assert_eq!(
+            up,
+            Some(Sort {
+                column: 2,
+                descending: false
+            })
+        );
+        let down = next_sort(up, 2);
+        assert!(down.is_some_and(|sort| sort.descending));
+        assert_eq!(next_sort(down, 2), None);
+        assert_eq!(next_sort(down, 0).map(|sort| sort.column), Some(0));
+    }
+
+    #[test]
+    fn text_view_expands_tabs_like_a_terminal() {
+        assert_eq!(expand_tabs("PID\tCOMM"), "PID     COMM");
+        assert_eq!(expand_tabs("12345678\tx"), "12345678        x");
     }
 }

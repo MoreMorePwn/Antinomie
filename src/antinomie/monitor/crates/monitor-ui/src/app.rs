@@ -40,8 +40,10 @@ struct Settings {
     hidden_trace_categories: Vec<SyscallGroup>,
     /// Light palette instead of the dark one.
     light_theme: bool,
-    /// Compact table rows (Comfortable when false).
+    /// Compact spacing and table rows (Comfortable when false).
     compact: bool,
+    /// Memory tab: look up symbol tables online for dumps without one.
+    memory_online_symbols: bool,
     /// Sidebar sections folded away.
     vms_collapsed: bool,
     bases_collapsed: bool,
@@ -70,6 +72,7 @@ impl Default for Settings {
             hidden_trace_categories: Vec::new(),
             light_theme: false,
             compact: true,
+            memory_online_symbols: true,
             vms_collapsed: false,
             bases_collapsed: false,
             last_runs: BTreeMap::new(),
@@ -268,7 +271,7 @@ impl MonitorApp {
         }
         settings.font_size = settings.font_size.clamp(12.0, 24.0);
         theme::apply(&cc.egui_ctx, settings.light_theme);
-        theme::set_compact(settings.compact);
+        theme::set_compact(&cc.egui_ctx, settings.compact);
         theme::text_size(&cc.egui_ctx, settings.font_size);
         options.bundle_dir = crate::folders::user_path(&settings.bundle);
         options.capture_quota_size = u64::from(settings.quota_gib) * 1024 * 1024 * 1024;
@@ -4476,13 +4479,17 @@ impl MonitorApp {
                             }
                         }
                         ui.end_row();
-                        ui.label("Table rows");
+                        ui.label("Density");
                         ui.horizontal(|ui| {
                             let before = self.settings.compact;
-                            ui.selectable_value(&mut self.settings.compact, true, "Compact");
-                            ui.selectable_value(&mut self.settings.compact, false, "Comfortable");
+                            ui.selectable_value(&mut self.settings.compact, true, "Compact")
+                                .on_hover_text("Tight rows and spacing: more on screen");
+                            ui.selectable_value(&mut self.settings.compact, false, "Comfortable")
+                                .on_hover_text(
+                                    "Taller rows, roomier spacing and margins everywhere",
+                                );
                             if self.settings.compact != before {
-                                theme::set_compact(self.settings.compact);
+                                theme::set_compact(ctx, self.settings.compact);
                             }
                         });
                         ui.end_row();
@@ -5196,6 +5203,8 @@ impl MonitorApp {
                         volatility_installing: installing,
                         bases: &self.snapshot.bases,
                         font_size: self.settings.font_size,
+                        online_symbols: self.settings.memory_online_symbols,
+                        curl: &self.options.curl,
                     },
                 );
                 match action {
@@ -5204,6 +5213,9 @@ impl MonitorApp {
                         self.send(Command::InstallTool {
                             id: "volatility3".into(),
                         })
+                    }
+                    Some(crate::memory_view::MemoryAction::OnlineSymbols(on)) => {
+                        self.settings.memory_online_symbols = on;
                     }
                     None => {}
                 }

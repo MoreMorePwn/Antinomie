@@ -239,7 +239,7 @@ pub(crate) fn spawn_download(
         .map_err(|e| format!("starting curl: {e}"))
 }
 
-fn wait_download(child: &mut std::process::Child, url: &str) -> Result<(), String> {
+pub(crate) fn wait_download(child: &mut std::process::Child, url: &str) -> Result<(), String> {
     let status = child.wait().map_err(|e| e.to_string())?;
     if status.success() {
         return Ok(());

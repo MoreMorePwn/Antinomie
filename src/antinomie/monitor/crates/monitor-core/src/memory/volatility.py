@@ -10,8 +10,11 @@
 import datetime
 import json
 import sys
+import warnings
 
 sys.path.insert(0, sys.argv[1])
+# Volatility's notices about its own renamed classes: not for the analyst.
+warnings.simplefilter("ignore", FutureWarning)
 mode = sys.argv[2]
 sys.argv = ["vol"] + sys.argv[3:]
 
@@ -113,7 +116,7 @@ def run():
             return []
 
         def render(self, grid):
-            out = sys.stdout
+            out = results
             columns = [
                 {"name": column.name, "type": kind(column.type)} for column in grid.columns
             ]
@@ -149,6 +152,10 @@ def run():
                 grid.visit(None, visit, None)
             out.flush()
 
+    # The result stream is the real stdout; what plugins print themselves
+    # goes to the messages (stderr) instead of breaking the JSON lines.
+    results = sys.stdout
+    sys.stdout = sys.stderr
     cli.main()
 
 

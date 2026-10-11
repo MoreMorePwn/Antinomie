@@ -36,6 +36,16 @@ kernel's symbol table; the tool is not part of any base. The symbol table
 (`symbols.json.xz`) describes the base's Linux kernel and ships with it under
 the kernel's GPL-2.0.
 
+The Memory tab's community plugin catalog lists third-party Volatility 3
+plugins by their upstream repository, a pinned commit and the SHA-256 of each
+file; installing one downloads it from that repository into the user's data
+folder, with its license file (Apache-2.0, GPL-3.0 or MIT, as listed), and
+applies the small compatibility edits the catalog shows. Antinomie does not
+redistribute them. Symbol tables of dumps without their own are looked up,
+when the user allows it, in Abyss-W4tcher/volatility3-symbols on GitHub by
+Volatility itself; they are downloaded to Volatility's cache and not
+redistributed.
+
 ## Embedded UI assets
 
 The UI uses the DejaVu fonts (text and data), egui default fonts as fallbacks and the regular egui-phosphor icon font.

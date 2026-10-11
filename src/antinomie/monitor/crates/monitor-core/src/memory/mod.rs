@@ -13,6 +13,7 @@
 //! every earlier result can be opened again without running it again.
 use serde::{Deserialize, Serialize};
 use std::{
+    cmp::Ordering,
     fs::{self, File},
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
@@ -37,6 +38,15 @@ pub const LOG_FILE: &str = "log.txt";
 pub const FILES_DIR: &str = "files";
 /// The Volatility launcher and result renderer (python3 -I -c).
 const LAUNCHER: &str = include_str!("volatility.py");
+/// Prebuilt Linux and macOS symbol tables of distribution kernels (about
+/// 11,000), looked up by kernel banner when a dump has no table of its own:
+/// <https://github.com/Abyss-W4tcher/volatility3-symbols>.
+pub const ONLINE_SYMBOLS: &str =
+    "https://github.com/Abyss-W4tcher/volatility3-symbols/raw/master/banners/banners.json";
+/// Shown with runs that looked up their symbol table online.
+pub const ONLINE_SYMBOLS_NAME: &str = "Abyss-W4tcher/volatility3-symbols";
+
+pub mod community;
 
 fn unix_ms() -> u64 {
     std::time::SystemTime::now()
@@ -115,6 +125,10 @@ impl MemoryDump {
     }
     pub fn complete(&self) -> bool {
         self.finished_ms.is_some() && self.error.is_none()
+    }
+    /// The dump file is gone (an imported file moved or deleted).
+    pub fn missing(&self) -> bool {
+        self.complete() && !self.path().is_file()
     }
     fn summary_path(&self) -> PathBuf {
         self.dir.join(SUMMARY_FILE)
@@ -347,6 +361,9 @@ pub struct PluginRun {
     pub rows: u64,
     /// The last error Volatility reported, for a failed run.
     pub error: Option<String>,
+    /// The symbol table index searched online, when the dump had none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbols_online: Option<String>,
     /// Its folder (not saved).
     #[serde(skip)]
     pub dir: PathBuf,
@@ -645,15 +662,21 @@ impl Volatility {
         Ok(catalog)
     }
 
-    /// Start `plugin` on `dump` in the background.
+    /// Start `plugin` on `dump` in the background. A Linux or macOS dump
+    /// without its own symbol table has it looked up online when
+    /// `online_symbols` is set (after Volatility's local folders).
     pub fn start(
         &self,
         dump: &MemoryDump,
         plugin: &str,
         args: Vec<String>,
+        online_symbols: bool,
     ) -> Result<RunHandle, String> {
         if !dump.complete() {
             return Err("this dump is not complete".into());
+        }
+        if dump.missing() {
+            return Err(format!("the dump file is gone: {}", dump.path().display()));
         }
         if plugin.is_empty()
             || !plugin
@@ -661,6 +684,23 @@ impl Volatility {
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'_')
         {
             return Err(format!("invalid plugin name {plugin:?}"));
+        }
+        // The dump's own table, and those community plugins bring;
+        // Volatility separates its symbol folders with semicolons.
+        let mut dirs = community::symbol_dirs(&self.community);
+        if dump.symbols {
+            dirs.insert(0, dump.symbols_dir());
+        }
+        let mut symbol_dirs: Option<std::ffi::OsString> = None;
+        for dir in dirs {
+            if dir.as_os_str().as_encoded_bytes().contains(&b';') {
+                return Err(format!("{}: a ';' in the path", dir.display()));
+            }
+            let joined = symbol_dirs.get_or_insert_with(Default::default);
+            if !joined.is_empty() {
+                joined.push(";");
+            }
+            joined.push(dir);
         }
         let runs = dump.dir.join(RUNS_DIR);
         crate::storage::private_dir(&runs).map_err(|e| format!("{}: {e}", runs.display()))?;
@@ -670,6 +710,8 @@ impl Volatility {
             plugin: plugin.into(),
             args,
             started_ms: unix_ms(),
+            symbols_online: (online_symbols && !dump.symbols && dump.os != Os::Windows)
+                .then(|| ONLINE_SYMBOLS.to_owned()),
             ..PluginRun::default()
         };
         let run = PluginRun {
@@ -694,9 +736,14 @@ impl Volatility {
         if plugins_fingerprint(&self.community).is_some() {
             command.arg("-p").arg(&self.community);
         }
+        if let Some(dirs) = &symbol_dirs {
+            command.arg("-s").arg(dirs);
+        }
         if dump.symbols {
             // The base's own table: nothing to look up online.
-            command.arg("-s").arg(dump.symbols_dir()).arg("--offline");
+            command.arg("--offline");
+        } else if let Some(index) = &run.symbols_online {
+            command.arg("--remote-isf-url").arg(index);
         }
         command.arg(plugin).args(&run.args);
         let output = File::create(run.output()).map_err(|e| format!("plugin output: {e}"))?;
@@ -779,8 +826,15 @@ fn watch(
     process: Arc<Mutex<Option<Child>>>,
 ) {
     let mut log = File::create(run.log()).ok();
+    if let (Some(log), Some(_)) = (log.as_mut(), &run.symbols_online) {
+        let _ = writeln!(
+            log,
+            "Symbol table: Volatility's folders, then {ONLINE_SYMBOLS_NAME} (online)"
+        );
+    }
     let mut reader = BufReader::new(stderr);
     let mut last_error = None;
+    let mut no_symbols = false;
     let mut line = Vec::new();
     // Progress lines end in a carriage return, messages in a newline.
     loop {
@@ -813,6 +867,7 @@ fn watch(
             if text.contains("rror") || text.starts_with("Unsatisfied") {
                 last_error = Some(text.trim().to_owned());
             }
+            no_symbols |= text.contains("symbol_table_name");
         }
         if ended {
             break;
@@ -832,8 +887,11 @@ fn watch(
     } else if status.is_some_and(|status| status.success()) {
         RunState::Finished
     } else {
-        run.error =
-            Some(last_error.unwrap_or_else(|| "Volatility failed; see its messages".into()));
+        run.error = Some(if no_symbols {
+            no_symbols_message(&run)
+        } else {
+            last_error.unwrap_or_else(|| "Volatility failed; see its messages".into())
+        });
         RunState::Failed
     };
     let _ = run.save();
@@ -842,9 +900,30 @@ fn watch(
     }
 }
 
+/// Why a run found no symbol table, and what helps.
+fn no_symbols_message(run: &PluginRun) -> String {
+    if run.symbols_online.is_some() {
+        format!(
+            "No symbol table matches this dump's kernel, in Volatility's folders or in \
+             {ONLINE_SYMBOLS_NAME}. Run banners.Banners to see the kernel; its table can \
+             be made with dwarf2json from the kernel's debug package."
+        )
+    } else {
+        "No symbol table matches this dump's kernel. Turn on online symbol tables in the \
+         Memory tab, or import the dump with the table of the base it was taken from."
+            .into()
+    }
+}
+
 fn count_rows(path: &Path) -> u64 {
     File::open(path)
-        .map(|file| BufReader::new(file).lines().skip(1).count() as u64)
+        .map(|file| {
+            BufReader::new(file)
+                .lines()
+                .map_while(Result::ok)
+                .filter(|line| line.starts_with("{\"d\":"))
+                .count() as u64
+        })
         .unwrap_or(0)
 }
 
@@ -915,9 +994,10 @@ pub fn read_result(path: &Path, limit: usize) -> Result<ResultTable, String> {
             table.truncated = true;
             break;
         }
-        // A run cut short can leave a partial last line.
+        // A run cut short can leave a partial last line, and results saved
+        // before plugin prints were kept out of them can hold such lines.
         let Ok(row) = serde_json::from_str::<Row>(&line) else {
-            break;
+            continue;
         };
         table.rows.push(ResultRow {
             depth: row.d,
@@ -949,6 +1029,83 @@ pub fn value_text(kind: ColumnKind, value: &serde_json::Value) -> String {
         Value::String(text) => text.clone(),
         Value::Array(_) => value.to_string(),
     }
+}
+
+/// An absent value (`N/A`, unreadable...) or none at all.
+fn is_absent(value: &serde_json::Value) -> bool {
+    value.is_null() || value.get("absent").is_some()
+}
+
+/// Order of two values of one column: numbers by value, text ignoring case,
+/// then the rest by their text.
+pub fn compare_values(a: &serde_json::Value, b: &serde_json::Value) -> Ordering {
+    use serde_json::Value;
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => match (x.as_i64(), y.as_i64()) {
+            (Some(x), Some(y)) => x.cmp(&y),
+            _ => match (x.as_u64(), y.as_u64()) {
+                (Some(x), Some(y)) => x.cmp(&y),
+                _ => {
+                    let (x, y) = (x.as_f64().unwrap_or(0.0), y.as_f64().unwrap_or(0.0));
+                    x.partial_cmp(&y).unwrap_or(Ordering::Equal)
+                }
+            },
+        },
+        (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
+        (Value::String(x), Value::String(y)) => x
+            .to_lowercase()
+            .cmp(&y.to_lowercase())
+            .then_with(|| x.cmp(y)),
+        (Value::Number(_), _) => Ordering::Less,
+        (_, Value::Number(_)) => Ordering::Greater,
+        _ => a.to_string().cmp(&b.to_string()),
+    }
+}
+
+/// `rows` (indices into `table.rows`) ordered by `column`; rows of equal
+/// value keep their order, and absent values stay last either way.
+pub fn sort_rows(table: &ResultTable, rows: &mut [usize], column: usize, descending: bool) {
+    let value = |row: usize| table.rows[row].values.get(column);
+    rows.sort_by(|&a, &b| match (value(a), value(b)) {
+        (Some(x), Some(y)) => match (is_absent(x), is_absent(y)) {
+            (false, false) if descending => compare_values(y, x),
+            (false, false) => compare_values(x, y),
+            (x, y) => x.cmp(&y),
+        },
+        (x, y) => y.is_some().cmp(&x.is_some()),
+    });
+}
+
+/// `rows` of the result as Volatility prints them by default (its quick text
+/// renderer): a header line, then tab-separated values, nested rows marked
+/// with a `*` per level.
+pub fn result_text(table: &ResultTable, rows: &[usize]) -> String {
+    use std::fmt::Write as _;
+    let mut text = String::from("\n");
+    let names: Vec<&str> = table.columns.iter().map(|c| c.name.as_str()).collect();
+    text.push_str(&names.join("\t"));
+    text.push('\n');
+    for &index in rows {
+        let row = &table.rows[index];
+        text.push('\n');
+        if row.depth > 0 {
+            let _ = write!(text, "{} ", "*".repeat(row.depth as usize));
+        }
+        let values: Vec<String> = row
+            .values
+            .iter()
+            .zip(&table.columns)
+            .map(|(value, column)| match value {
+                // As Python prints them.
+                serde_json::Value::Bool(true) => "True".into(),
+                serde_json::Value::Bool(false) => "False".into(),
+                _ => value_text(column.kind, value),
+            })
+            .collect();
+        text.push_str(&values.join("\t"));
+    }
+    text.push('\n');
+    text
 }
 
 #[cfg(test)]
@@ -1171,6 +1328,67 @@ mod tests {
         let one = read_result(&path, 1).unwrap();
         assert!(one.truncated && one.rows.len() == 1);
         assert_eq!(count_rows(&path), 3);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn sample_table() -> ResultTable {
+        use serde_json::json;
+        let column = |name: &str, kind| Column {
+            name: name.into(),
+            kind,
+        };
+        let row = |depth, values: Vec<serde_json::Value>| ResultRow { depth, values };
+        ResultTable {
+            columns: vec![
+                column("PID", ColumnKind::Int),
+                column("COMM", ColumnKind::Str),
+            ],
+            rows: vec![
+                row(0, vec![json!(10), json!("sshd")]),
+                row(1, vec![json!(200), json!("Bash")]),
+                row(
+                    0,
+                    vec![json!({"absent": "NotApplicableValue"}), json!("kthreadd")],
+                ),
+                row(0, vec![json!(9), json!("agetty")]),
+            ],
+            truncated: false,
+        }
+    }
+
+    #[test]
+    fn result_rows_sort_by_value_with_absent_values_last() {
+        let table = sample_table();
+        let mut rows = vec![0, 1, 2, 3];
+        sort_rows(&table, &mut rows, 0, false);
+        assert_eq!(rows, vec![3, 0, 1, 2]);
+        sort_rows(&table, &mut rows, 0, true);
+        assert_eq!(rows, vec![1, 0, 3, 2]);
+        sort_rows(&table, &mut rows, 1, false);
+        assert_eq!(rows, vec![3, 1, 2, 0], "text ignores case");
+    }
+
+    #[test]
+    fn results_render_as_volatility_text() {
+        let table = sample_table();
+        assert_eq!(
+            result_text(&table, &[0, 1, 2]),
+            "\nPID\tCOMM\n\n10\tsshd\n* 200\tBash\nN/A\tkthreadd\n"
+        );
+    }
+
+    #[test]
+    fn lines_a_plugin_printed_among_the_rows_are_skipped() {
+        let root = temp("stray");
+        let path = root.join(OUTPUT_FILE);
+        fs::write(
+            &path,
+            "{\"columns\":[{\"name\":\"A\",\"type\":\"str\"}]}\n\
+             Searching from 11 Oct 2026\n{\"d\":0,\"v\":[\"x\"]}\n{\"d\":0,\"v\":[\"y\"]}\n",
+        )
+        .unwrap();
+        assert_eq!(read_result(&path, 10).unwrap().rows.len(), 2);
+        assert_eq!(count_rows(&path), 2);
         fs::remove_dir_all(root).unwrap();
     }
 }

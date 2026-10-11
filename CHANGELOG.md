@@ -4,6 +4,44 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
+## 0.4.1 — unreleased
+
+- **Symbol tables online.** Linux and macOS dumps without a symbol table of
+  their own (imported dumps of other machines) have their kernel's table
+  looked up by its banner in Abyss-W4tcher/volatility3-symbols, about 11,000
+  distribution kernels (Ubuntu, Debian, Kali, Alma, Rocky), after
+  Volatility's own folders; downloaded tables stay in Volatility's cache. On
+  by default, in the Memory tab's options (gear); dumps of Antinomie's VMs
+  keep their base's table and stay offline. A dump whose kernel is nowhere
+  says so, and how to make its table.
+- **Community plugin catalog.** Community → Plugin catalog lists Volatility 3
+  plugins by other authors that run on this Volatility: GnuPG agent secrets
+  (Kudelski Security; recovered a cached passphrase on Debian 13), OpenSSH
+  session keys (Fox-IT; for older OpenSSH, found none with OpenSSH 10),
+  BitLocker keys and Notepad and KUSER time for Windows dumps, each with what
+  was tested and its known limits. Install downloads each from its
+  author's repository at a pinned commit, checks every file's SHA-256 and
+  applies only the compatibility edits shown; Update and Remove as listed.
+  Plugins that bring symbol tables have them found.
+- **Plugins for another system.** Linux, Windows or macOS above the plugin
+  list: the dump's own system by default, with a warning when another is
+  chosen.
+- **Results.** Click a column name to sort ascending, again descending, a
+  third time back to Volatility's order (sorted results are shown flat).
+  **Text** shows a result as Volatility prints it, tab-aligned with `*` for
+  nested rows; Copy follows the view.
+- **Comfortable density everywhere.** Settings → Density (was Table rows):
+  Comfortable now also widens spacing, padding and tab margins, not only
+  table rows.
+- **Fixes.** A long plugin description no longer widens the Memory tab and
+  pushes its controls off screen; the result header keeps its controls and
+  shortens the plugin name instead. The import dialog lists every base,
+  those without a symbol table greyed with the reason. Volatility's own
+  deprecation notices no longer fill a run's messages. A plugin that prints
+  text itself no longer loses its result rows (the text goes to its
+  messages). An imported dump whose file was moved or deleted says "file
+  missing" and is not run.
+
 ## 0.4.0 — 2026-10-11
 
 Needs new bases for memory analysis of the VM's own dumps (BusyBox and

@@ -1,0 +1,172 @@
+{
+  "schema": 1,
+  "volatility": "2.28.2",
+  "plugins": [
+    {
+      "id": "fox_openssh",
+      "name": "OpenSSH session keys",
+      "author": "Fox-IT",
+      "license": "Apache-2.0",
+      "os": "linux",
+      "summary": "Recovers OpenSSH session keys (cipher, key and IV) from ssh and sshd processes, to decrypt captured SSH traffic.",
+      "requires": [],
+      "repo": "https://github.com/fox-it/OpenSSH-Session-Key-Recovery",
+      "commit": "78f7955b1e1fccb4b1a7e2382e0ed5a7c8becea3",
+      "files": [
+        {
+          "from": "volatility3/openssh_sessionkeys.py",
+          "to": "openssh_sessionkeys.py",
+          "size": 10998,
+          "sha256": "e104cd1a65b14acab903cdebc7956d2f43ec6c4c84f204a51d9ec65397c05a70",
+          "edits": [
+            {
+              "find": "plugin = pslist.PsList, version = (2, 2, 0)",
+              "replace": "plugin = pslist.PsList, version = (4, 0, 0)"
+            }
+          ],
+          "edited_sha256": "c68deb20ee6f5a0a1e5ab4c45bc4c3857f03227c9d7291e9f41cb2cd02c43f66"
+        },
+        {
+          "from": "volatility3/symbols/openssh64.json",
+          "to": "symbols/openssh64.json",
+          "size": 6421,
+          "sha256": "f7f11f50707ab6ce5f5748d7785db3d7527292658041bd7bdbaac151db8b9934"
+        },
+        {
+          "from": "volatility3/symbols/openssh32.json",
+          "to": "symbols/openssh32.json",
+          "size": 6419,
+          "sha256": "d9e82aafef92cd9bd14aadc75f42766f1b8ef48d0c6a3ba6b02ded36587ac568"
+        },
+        {
+          "from": "LICENSE",
+          "to": "LICENSE",
+          "size": 11357,
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        }
+      ],
+      "tested": "Runs on Volatility 2.28.2 (Debian 13 dump)",
+      "caveats": [
+        "Found no keys of an OpenSSH 10 session (Debian 13): its structures are those of older OpenSSH releases"
+      ]
+    },
+    {
+      "id": "kudelski_gpg",
+      "name": "GnuPG agent secrets",
+      "author": "Kudelski Security",
+      "license": "GPL-3.0",
+      "os": "linux",
+      "summary": "Decrypts gpg-agent cache items, such as cached passphrases (GPGItem), and finds partial passphrases with older libgcrypt (GPGPassphrase), in a Linux dump.",
+      "requires": [
+        "cryptography (python3-cryptography) for GPGItem"
+      ],
+      "repo": "https://github.com/kudelskisecurity/volatility-gpg",
+      "commit": "10a50f0b9c08dfd62c72d9dc5794b1926691564b",
+      "files": [
+        {
+          "from": "linux/gpg_partial.py",
+          "to": "gpg_partial.py",
+          "size": 3368,
+          "sha256": "236d6ed8fc33cff00fd4e2ae375464a9645fbd692cf080f31bc90e1d076aa1db",
+          "edits": [
+            {
+              "find": "plugin=pslist.PsList, version=(2, 0, 0)",
+              "replace": "plugin=pslist.PsList, version=(4, 0, 0)"
+            }
+          ],
+          "edited_sha256": "31f6c21a637227a0931300bc8098d7f0ccf7c531420ce3351a6e692f1b831976"
+        },
+        {
+          "from": "linux/gpg_full.py",
+          "to": "gpg_full.py",
+          "size": 9769,
+          "sha256": "87f9cffd922f9c7a01487aaea3a4a90bcc4c3c69a73d97b1244fa66b2878dc7e",
+          "edits": [
+            {
+              "find": "plugin=pslist.PsList, version=(2, 0, 0)",
+              "replace": "plugin=pslist.PsList, version=(4, 0, 0)"
+            }
+          ],
+          "edited_sha256": "b2bfc1ebec0eb6d274f1b7b6cb870f7d7bb5766fe080ad3ce546d186932c7397"
+        },
+        {
+          "from": "LICENSE",
+          "to": "LICENSE",
+          "size": 35149,
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        }
+      ],
+      "tested": "GPGItem recovered a passphrase cached by gpg-agent on Debian 13 (Volatility 2.28.2)",
+      "caveats": [
+        "GPGPassphrase only works with libgcrypt older than 1.8.9 (Debian 13 has 1.11)"
+      ]
+    },
+    {
+      "id": "lorelyai_bitlocker",
+      "name": "BitLocker keys",
+      "author": "lorelyai",
+      "license": "GPL-3.0",
+      "os": "windows",
+      "summary": "Scans a Windows dump for BitLocker full volume encryption keys (FVEK), optionally writing them for dislocker.",
+      "requires": [],
+      "repo": "https://github.com/lorelyai/volatility3-bitlocker",
+      "commit": "d2afab51fea4878db8a79cef835176360d19b901",
+      "files": [
+        {
+          "from": "bitlocker.py",
+          "to": "bitlocker.py",
+          "size": 15518,
+          "sha256": "1cda3c680e665898051dba1f9a638c42a4a711b65da74c8539995ad543a7ffb7"
+        },
+        {
+          "from": "LICENSE",
+          "to": "LICENSE",
+          "size": 35149,
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        }
+      ],
+      "tested": "Loads on Volatility 2.28.2; not yet run on a Windows dump",
+      "caveats": []
+    },
+    {
+      "id": "spitfire_windows",
+      "name": "Notepad and KUSER time",
+      "author": "spitfirerxf",
+      "license": "MIT",
+      "os": "windows",
+      "summary": "Notepad: text from notepad.exe memory. KUserParse: system time and settings from KUSER_SHARED_DATA.",
+      "requires": [],
+      "repo": "https://github.com/spitfirerxf/vol3-plugins",
+      "commit": "0d3968a05113096e35e4484febbb142221031acb",
+      "files": [
+        {
+          "from": "notepad.py",
+          "to": "notepad.py",
+          "size": 4497,
+          "sha256": "2b74dc126438f16087ab2d89ca211f227089e5f3bdca2b2d1db85df01dc05ae6"
+        },
+        {
+          "from": "kusertime.py",
+          "to": "kusertime.py",
+          "size": 3569,
+          "sha256": "b736c1fb6cdd9c06cb49ec7e5f0684e7ba98076eeb546a6c069475a64e409db5",
+          "edits": [
+            {
+              "find": "plugin=info.Info, version=(1, 0, 0)",
+              "replace": "plugin=info.Info, version=(2, 0, 0)"
+            }
+          ],
+          "edited_sha256": "eb51834071bdb4fda9cbe7bc8665442f0ec8518b152955f57e52cee2df5e8099"
+        },
+        {
+          "from": "LICENSE",
+          "to": "LICENSE",
+          "size": 1068,
+          "sha256": "4ca6889fcc329fd82055df43ed3c2318e58dc88de5ed0b9c158f1625f2e388fe"
+        }
+      ],
+      "tested": "Loads on Volatility 2.28.2; not yet run on a Windows dump",
+      "caveats": []
+    }
+  ]
+}

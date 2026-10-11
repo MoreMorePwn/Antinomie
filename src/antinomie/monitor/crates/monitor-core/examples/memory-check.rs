@@ -8,6 +8,12 @@
 //!
 //! DATA_DIR holds the installed base and Volatility 3 (`install-tool DATA_DIR
 //! volatility3`); the VM is left in it, with the dump and the plugin runs.
+//!
+//! With `ANTINOMIE_QA_COMMUNITY=1` the guest also caches a GnuPG passphrase
+//! and opens an SSH session before the dump, and the catalog's GnuPG and
+//! OpenSSH plugins (installed in DATA_DIR) must find them. The SSH session
+//! (`ANTINOMIE_QA_SSH=USER:AUTHORIZED_KEYS`) needs a throwaway sshd on the
+//! host's 127.0.0.1:22222 reading that keys file.
 use antinomie_monitor_core::{
     Backend, BackendOptions, Command, ExecRequest, GuestCredentials, Notification, Snapshot,
     VmConfig,
@@ -23,11 +29,15 @@ use std::{
 };
 
 const MARKER: &str = "memtest-marker";
+/// Cached by gpg-agent in the community check; the partial plugin shows 8.
+const GPG_PASSPHRASE: &str = "qa-pass-7319";
 
 struct Harness {
     backend: Backend,
     snapshot: Snapshot,
     replies: BTreeMap<u64, Result<String, String>>,
+    /// Terminal output of every guest program, together.
+    output: Vec<u8>,
 }
 
 impl Harness {
@@ -43,6 +53,7 @@ impl Harness {
                     self.replies
                         .insert(id, if success { Ok(message) } else { Err(message) });
                 }
+                Notification::Terminal { data, .. } => self.output.extend(data),
                 _ => {}
             }
         }
@@ -83,6 +94,48 @@ impl Harness {
     }
 }
 
+impl Harness {
+    fn wait_output(&mut self, marker: &str, secs: u64) -> Result<(), String> {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        loop {
+            self.receive();
+            if self
+                .output
+                .windows(marker.len())
+                .any(|part| part == marker.as_bytes())
+            {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(format!(
+                    "{marker} missing; guest output: {}",
+                    String::from_utf8_lossy(&self.output)
+                ));
+            }
+            thread::sleep(Duration::from_millis(200));
+        }
+    }
+}
+
+/// The host's sshd for the SSH check: its user and authorized keys file.
+fn ssh_target() -> Result<Option<(String, PathBuf)>, String> {
+    let Some(value) = std::env::var_os("ANTINOMIE_QA_SSH") else {
+        return Ok(None);
+    };
+    let value = value.to_string_lossy().into_owned();
+    let (user, keys) = value
+        .split_once(':')
+        .ok_or("ANTINOMIE_QA_SSH is USER:AUTHORIZED_KEYS")?;
+    if user.is_empty()
+        || !user
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+    {
+        return Err("bad ANTINOMIE_QA_SSH user".into());
+    }
+    Ok(Some((user.to_owned(), PathBuf::from(keys))))
+}
+
 /// Recording directories holding memory dumps under `dir`.
 fn dump_roots(dir: &Path, depth: usize, roots: &mut Vec<PathBuf>) {
     if depth == 0 {
@@ -108,7 +161,12 @@ fn run_plugin(
     args: &[&str],
 ) -> Result<memory::ResultTable, String> {
     let started = Instant::now();
-    let handle = volatility.start(dump, plugin, args.iter().map(|s| s.to_string()).collect())?;
+    let handle = volatility.start(
+        dump,
+        plugin,
+        args.iter().map(|s| s.to_string()).collect(),
+        false,
+    )?;
     let deadline = started + Duration::from_secs(900);
     let run = loop {
         if let Some(run) = handle.progress().finished {
@@ -163,6 +221,7 @@ fn run() -> Result<(), String> {
     };
     let data = PathBuf::from(data);
     let volatility = Volatility::locate(&data)?;
+    let community = std::env::var_os("ANTINOMIE_QA_COMMUNITY").is_some();
     let mut random = [0; 16];
     File::open("/dev/urandom")
         .and_then(|mut source| source.read_exact(&mut random))
@@ -178,6 +237,7 @@ fn run() -> Result<(), String> {
         })?,
         snapshot: Snapshot::default(),
         replies: BTreeMap::new(),
+        output: Vec::new(),
     };
     test.command(Command::CreateWithCredentials {
         vm: VmConfig {
@@ -185,6 +245,8 @@ fn run() -> Result<(), String> {
             cpus: 4,
             ram_mib: 4096,
             disk_gib: 16,
+            // The SSH check reaches the host through NAT.
+            nat: community,
             base_identity: Some(base.to_string_lossy().into_owned()),
             ..VmConfig::default()
         },
@@ -223,6 +285,79 @@ fn run() -> Result<(), String> {
         gid: 1000,
         ..ExecRequest::default()
     }))?;
+    if community {
+        // A signing key whose passphrase gpg-agent then caches.
+        test.command(Command::Execute(ExecRequest {
+            path: "/bin/bash".into(),
+            args: vec![
+                "-c".into(),
+                format!(
+                    "export HOME=/home/qauser GNUPGHOME=/home/qauser/.gnupg; \
+                     mkdir -p -m 700 $GNUPGHOME; \
+                     gpg --batch --pinentry-mode loopback --passphrase '{GPG_PASSPHRASE}' \
+                     --quick-gen-key 'QA <qa@example.org>' ed25519 sign never && \
+                     echo signed | gpg --batch --pinentry-mode loopback \
+                     --passphrase '{GPG_PASSPHRASE}' --sign > /tmp/signed.gpg && \
+                     echo GPG-READY; sleep 3600"
+                ),
+            ],
+            uid: 1000,
+            gid: 1000,
+            ..ExecRequest::default()
+        }))?;
+        // An open SSH session (its session keys in the client's memory) to a
+        // throwaway sshd on the host: ANTINOMIE_QA_SSH=USER:AUTHORIZED_KEYS
+        // names its user and the file it reads keys from, at 127.0.0.1:22222.
+        // The guest's key is allowed to run only `echo; sleep`.
+        if let Some(user) = ssh_target()?.map(|(user, _)| user) {
+            test.command(Command::Execute(ExecRequest {
+                path: "/bin/bash".into(),
+                args: vec![
+                    "-c".into(),
+                    format!(
+                        "export HOME=/root DEBIAN_FRONTEND=noninteractive; \
+                         for n in $(seq 90); do ip route | grep -q default && break; \
+                         sleep 2; done; \
+                         command -v ssh >/dev/null || {{ \
+                         echo 'nameserver 10.0.2.3' > /etc/resolv.conf; \
+                         apt-get update -qq && apt-get install -y -qq openssh-client \
+                         >/dev/null; }}; \
+                         su - qauser -c 'mkdir -p ~/.ssh; \
+                         ssh-keygen -q -t ed25519 -N \"\" -f ~/.ssh/id_qa; \
+                         echo PUBKEY: $(cat ~/.ssh/id_qa.pub); \
+                         until ssh -T -i ~/.ssh/id_qa -o StrictHostKeyChecking=no \
+                         -o UserKnownHostsFile=/dev/null -o BatchMode=yes \
+                         -p 22222 {user}@10.0.2.2; do sleep 2; done'"
+                    ),
+                ],
+                uid: 0,
+                gid: 0,
+                ..ExecRequest::default()
+            }))?;
+        }
+    }
+    if community {
+        test.wait_output("GPG-READY", 600)?;
+        println!("guest: GPG-READY");
+        if let Some((_, keys)) = ssh_target()? {
+            test.wait_output("PUBKEY: ", 600)?;
+            let text = String::from_utf8_lossy(&test.output).into_owned();
+            let key = text
+                .split("PUBKEY: ")
+                .nth(1)
+                .and_then(|rest| rest.lines().next())
+                .map(str::trim)
+                .filter(|key| key.starts_with("ssh-ed25519 "))
+                .ok_or("guest SSH key missing")?;
+            fs::write(
+                &keys,
+                format!("restrict,command=\"echo SSH-SESSION-OPEN; sleep 3600\" {key}\n"),
+            )
+            .map_err(|e| format!("{}: {e}", keys.display()))?;
+            test.wait_output("SSH-SESSION-OPEN", 120)?;
+            println!("guest: SSH session open");
+        }
+    }
     thread::sleep(Duration::from_secs(20));
     println!("guest up in {:.0} s", booted.elapsed().as_secs_f32());
 
@@ -295,6 +430,26 @@ fn run() -> Result<(), String> {
     ] {
         if let Err(error) = run_plugin(&volatility, &dump, plugin, &[]) {
             println!("{error}");
+        }
+    }
+    if community {
+        // GPGItem decrypts gpg-agent's cache (needs python3-cryptography).
+        let full = run_plugin(&volatility, &dump, "kudelski_gpg.gpg_full.GPGItem", &[])?;
+        let found = rows_with(&full, GPG_PASSPHRASE);
+        println!("gpg_full: {found:#?}");
+        if found.is_empty() {
+            return Err("cached GnuPG passphrase not found".into());
+        }
+        // Reported only: libgcrypt 1.8.9 and later defeat GPGPassphrase, and
+        // the OpenSSH plugin knows older OpenSSH structures.
+        for plugin in [
+            "kudelski_gpg.gpg_partial.GPGPassphrase",
+            "fox_openssh.openssh_sessionkeys.SSHKeys",
+        ] {
+            match run_plugin(&volatility, &dump, plugin, &[]) {
+                Ok(table) => println!("{plugin}: {} rows", table.rows.len()),
+                Err(error) => println!("{error}"),
+            }
         }
     }
     test.command(Command::Stop)?;

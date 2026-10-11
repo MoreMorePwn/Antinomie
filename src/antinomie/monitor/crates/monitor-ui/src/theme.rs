@@ -169,9 +169,34 @@ pub fn value(kind: ValueKind) -> Color32 {
     }
 }
 
-/// Table row density (Settings): compact by default.
-pub fn set_compact(compact: bool) {
+/// Density (Settings): compact by default. Comfortable gives taller table
+/// rows and roomier spacing, padding and margins everywhere.
+pub fn set_compact(ctx: &egui::Context, compact: bool) {
     COMPACT.store(compact, Ordering::Relaxed);
+    ctx.style_mut(density);
+}
+
+/// Spacing of the current density.
+fn density(style: &mut egui::Style) {
+    let roomy = !is_compact();
+    let body = style
+        .text_styles
+        .get(&TextStyle::Body)
+        .map_or(16.0, |font| font.size);
+    if roomy {
+        style.spacing.item_spacing = egui::vec2(10.0, 9.0);
+        style.spacing.button_padding = egui::vec2(12.0, 7.0);
+        style.spacing.menu_margin = egui::Margin::same(10);
+        // Also the margin of every tab's content (egui_dock follows it).
+        style.spacing.window_margin = egui::Margin::same(18);
+        style.spacing.interact_size.y = body + 18.0;
+    } else {
+        style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+        style.spacing.button_padding = egui::vec2(10.0, 5.0);
+        style.spacing.menu_margin = egui::Margin::same(8);
+        style.spacing.window_margin = egui::Margin::same(12);
+        style.spacing.interact_size.y = body + 12.0;
+    }
 }
 pub fn is_compact() -> bool {
     COMPACT.load(Ordering::Relaxed)
@@ -277,10 +302,7 @@ pub fn apply(ctx: &egui::Context, light: bool) {
     style.visuals.widgets.active.weak_bg_fill = palette.primary;
     style.visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, palette.primary_text);
     style.visuals.widgets.open.bg_fill = palette.hover;
-    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-    style.spacing.button_padding = egui::vec2(10.0, 5.0);
-    style.spacing.menu_margin = egui::Margin::same(8);
-    style.spacing.window_margin = egui::Margin::same(12);
+    density(&mut style);
     let size = style
         .text_styles
         .get(&TextStyle::Body)
@@ -307,7 +329,7 @@ pub(crate) fn text_size(ctx: &egui::Context, size: f32) {
         style
             .text_styles
             .insert(TextStyle::Monospace, FontId::monospace(size - 1.0));
-        style.spacing.interact_size.y = size + 12.0;
+        density(style);
     });
 }
 
