@@ -102,6 +102,39 @@ impl Driver {
             thread::sleep(Duration::from_millis(50));
         }
     }
+    /// Launches `request` and returns its run. A guest that has just booted
+    /// may not have its terminal devices yet, so a failed launch is retried
+    /// until the boot deadline.
+    fn launch(&mut self, request: ExecRequest) -> Result<String, String> {
+        let deadline = Instant::now() + Duration::from_secs(self.boot_secs);
+        loop {
+            let before: Vec<String> = self
+                .snapshot
+                .runs
+                .iter()
+                .map(|run| run.id.clone())
+                .collect();
+            match self.command(Command::Execute(request.clone())) {
+                Ok(_) => {
+                    return self
+                        .snapshot
+                        .runs
+                        .iter()
+                        .find(|run| {
+                            !before.contains(&run.id)
+                                && Some(run.boot_id.as_str()) == self.snapshot.boot_id.as_deref()
+                        })
+                        .map(|run| run.id.clone())
+                        .ok_or_else(|| "launched run missing".into());
+                }
+                Err(error) if Instant::now() < deadline => {
+                    eprintln!("launch retried: {error}");
+                    thread::sleep(Duration::from_secs(2));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
     fn current_run(&self) -> Result<String, String> {
         self.snapshot
             .runs
@@ -157,13 +190,27 @@ fn run() -> Result<(), String> {
         },
         boot_secs: if debian { 180 } else { 40 },
     };
-    driver.command(Command::Create(VmConfig {
+    let vm = VmConfig {
         name: "Snapshot qualification".into(),
         cpus: 4,
         ram_mib: if debian { 4096 } else { 1024 },
         disk_gib: if debian { 16 } else { 2 },
         ..VmConfig::default()
-    }))?;
+    };
+    driver.command(if debian {
+        // A Debian base asks for the guest user's account.
+        let mut random = [0; 16];
+        std::fs::File::open("/dev/urandom")
+            .and_then(|mut source| std::io::Read::read_exact(&mut source, &mut random))
+            .map_err(|error| error.to_string())?;
+        let password = random.iter().map(|byte| format!("{byte:02x}")).collect();
+        Command::CreateWithCredentials {
+            vm,
+            credentials: GuestCredentials::new("qauser".into(), password)?,
+        }
+    } else {
+        Command::Create(vm)
+    })?;
     let vm = driver.snapshot.vms.first().ok_or("VM missing")?.id.clone();
     driver.command(Command::Start { vm_id: vm.clone() })?;
     let deadline = Instant::now() + Duration::from_secs(driver.boot_secs);
@@ -184,8 +231,13 @@ fn run() -> Result<(), String> {
     }
     driver.guest_ready()?;
     driver.command(Command::CaptureAll)?;
-    driver.command(Command::Execute(ExecRequest {path:"/bin/sh".into(),args:vec!["-c".into(),"n=7; echo SNAP_READY; while IFS= read -r line; do case \"$line\" in A) echo A >/tmp/snapshot-value; sync; echo SET_A;; B) echo B >/tmp/snapshot-value; sync; echo SET_B;; get) cat /tmp/snapshot-value; echo DISK_DONE;; inc) n=$((n+1)); echo COUNT_$n;; *) echo TICK_$line;; esac; done".into()],cwd:"/".into(),env:vec!["PATH=/bin:/sbin:/usr/bin:/usr/sbin".into()],uid:1000,gid:1000,analysis:Default::default(),run_in:RunIn::AppTerminal}))?;
-    let run = driver.current_run()?;
+    // On disk for the disk restore: Debian keeps /tmp in memory.
+    let value = if debian {
+        "/var/tmp/snapshot-value"
+    } else {
+        "/tmp/snapshot-value"
+    };
+    let run = driver.launch(ExecRequest {path:"/bin/sh".into(),args:vec!["-c".into(),format!("n=7; echo SNAP_READY; while IFS= read -r line; do case \"$line\" in A) echo A >{value}; sync; echo SET_A;; B) echo B >{value}; sync; echo SET_B;; get) cat {value}; echo DISK_DONE;; inc) n=$((n+1)); echo COUNT_$n;; *) echo TICK_$line;; esac; done")],cwd:"/".into(),env:vec!["PATH=/bin:/sbin:/usr/bin:/usr/sbin".into()],uid:1000,gid:1000,analysis:Default::default(),run_in:RunIn::AppTerminal})?;
     driver.marker(&run, "SNAP_READY")?;
     driver.input(&run, "A", "SET_A")?;
     let original_boot = driver.snapshot.boot_id.clone();
@@ -252,20 +304,16 @@ fn run() -> Result<(), String> {
         confirmed: true,
     })?;
     driver.guest_ready()?;
-    driver.command(Command::Execute(ExecRequest {
+    let rebooted = driver.launch(ExecRequest {
         path: "/bin/sh".into(),
-        args: vec![
-            "-c".into(),
-            "cat /tmp/snapshot-value; echo DISK_REBOOT_DONE".into(),
-        ],
+        args: vec!["-c".into(), format!("cat {value}; echo DISK_REBOOT_DONE")],
         cwd: "/".into(),
         env: vec!["PATH=/bin".into()],
         uid: 1000,
         gid: 1000,
         analysis: Default::default(),
         run_in: RunIn::AppTerminal,
-    }))?;
-    let rebooted = driver.current_run()?;
+    })?;
     driver.marker(&rebooted, "A\r\nDISK_REBOOT_DONE")?;
     driver.command(Command::Stop)?;
     driver.command(Command::DeleteVmSnapshot {
