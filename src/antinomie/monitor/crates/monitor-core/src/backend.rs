@@ -3816,7 +3816,9 @@ impl Worker {
                 let cookie = session.run_cookie(&run_id)?;
                 let run = session.runs.get(&cookie).ok_or("unknown run")?;
                 if run.summary.terminal_eof {
-                    return Err("terminal is closed".into());
+                    // Nothing to size: a program that detached (a daemon)
+                    // closed it, as its window opened. Not an error.
+                    return Ok(String::new());
                 }
                 let mut args = control::with_session(run.summary.session_id);
                 args.extend(rows.to_le_bytes());

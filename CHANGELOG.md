@@ -41,6 +41,9 @@ transport reconnect require a new guest base with contract revision 14 / ABI9.
   to the VM's disk size ("Guest filesystem resize failed" at first boot): a
   16 GiB Debian VM kept the base's smaller filesystem. It now grows online at
   every boot; bases must be rebuilt.
+- **A detached program's terminal no longer reports errors.** Resizing the
+  terminal of a program that closed it (a daemon, as its window opened) was
+  logged as "terminal is closed".
 - **stall-check** (example): freeze a guest's QEMU and check that the app
   reconnects.
 - **run-dump** (example): print a recorded run's system calls.
