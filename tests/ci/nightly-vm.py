@@ -28,14 +28,20 @@ def app_version():
     raise SystemExit("no workspace version in Cargo.toml")
 
 
+def release(version):
+    return tuple(int(part) for part in version.split("."))
+
+
 def download_base(version, target):
     with urllib.request.urlopen(f"{BUCKET}/index.json", timeout=60) as reply:
         catalog = json.load(reply)
+    # The newest base this version runs: a patch release keeps its minor's bases.
     bases = [base for base in catalog["bases"]
-             if base["kind"] == "busybox" and base.get("min_app_version") == version]
+             if base["kind"] == "busybox" and base.get("min_app_version")
+             and release(base["min_app_version"]) <= release(version)]
     if not bases:
         raise SystemExit(f"no BusyBox base for Antinomie {version} in the catalog")
-    base = max(bases, key=lambda base: base["created"])
+    base = max(bases, key=lambda base: (release(base["min_app_version"]), base["created"]))
     directory = target / base["identity"]
     directory.mkdir(parents=True, exist_ok=True)
     for file in base["files"]:
@@ -46,7 +52,8 @@ def download_base(version, target):
                 path.write_bytes(reply.read())
         if hashlib.sha256(path.read_bytes()).hexdigest() != file["sha256"]:
             raise SystemExit(f"{file['name']} does not match the catalog SHA-256")
-    print(f"base {base['identity'][:16]} ({base['label']}, Antinomie {version})", flush=True)
+    print(f"base {base['identity'][:16]} ({base['label']}, "
+          f"Antinomie {base['min_app_version']})", flush=True)
     return directory
 
 
