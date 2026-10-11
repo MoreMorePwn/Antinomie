@@ -190,12 +190,36 @@ fn density(style: &mut egui::Style) {
         // Also the margin of every tab's content (egui_dock follows it).
         style.spacing.window_margin = egui::Margin::same(18);
         style.spacing.interact_size.y = body + 18.0;
+        // Room between a menu item and its shortcut.
+        style.spacing.menu_width = 260.0;
     } else {
         style.spacing.item_spacing = egui::vec2(8.0, 6.0);
         style.spacing.button_padding = egui::vec2(10.0, 5.0);
         style.spacing.menu_margin = egui::Margin::same(8);
         style.spacing.window_margin = egui::Margin::same(12);
         style.spacing.interact_size.y = body + 12.0;
+        style.spacing.menu_width = 220.0;
+    }
+}
+
+/// The dock's tab bars at the current density: taller than egui_dock's
+/// default, so tab names do not touch the bar's edges.
+pub fn dock_style(style: &egui::Style) -> egui_dock::Style {
+    let mut dock = egui_dock::Style::from_egui(style);
+    let body = style
+        .text_styles
+        .get(&TextStyle::Body)
+        .map_or(16.0, |font| font.size);
+    dock.tab_bar.height = body + if is_compact() { 12.0 } else { 18.0 };
+    dock
+}
+
+/// A dock tab's name with room on both sides (egui_dock pads only 8 points).
+pub fn tab_title(title: &str) -> String {
+    if is_compact() {
+        format!(" {title} ")
+    } else {
+        format!("  {title}  ")
     }
 }
 pub fn is_compact() -> bool {
@@ -219,8 +243,12 @@ pub fn mono(size: f32) -> FontId {
 /// cramped.
 pub const TEXT_EDIT_MARGIN: egui::Margin = egui::Margin::symmetric(8, 5);
 
-/// A section heading in the heading color.
+/// A section heading in the heading color, with room above it when it
+/// follows something in a column.
 pub fn section(ui: &mut egui::Ui, title: &str) -> egui::Response {
+    if !ui.layout().main_dir().is_horizontal() && ui.min_rect().height() > 1.0 {
+        ui.add_space(if is_compact() { 4.0 } else { 8.0 });
+    }
     ui.label(egui::RichText::new(title).strong().color(heading()))
 }
 

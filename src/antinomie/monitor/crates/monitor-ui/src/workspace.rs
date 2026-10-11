@@ -378,8 +378,10 @@ impl WorkspaceLayout {
             layout: self,
             surface,
         };
+        let dock_style = theme::dock_style(ui.style());
         DockArea::new(&mut local)
             .id(egui::Id::new(("native-dock", surface.0)))
+            .style(dock_style)
             .draggable_tabs(false)
             .show_leaf_close_all_buttons(false)
             .show_leaf_collapse_buttons(false)
@@ -631,7 +633,7 @@ struct Viewer<'a> {
 impl TabViewer for Viewer<'_> {
     type Tab = Panel;
     fn title(&mut self, tab: &mut Panel) -> egui::WidgetText {
-        self.app.panel_title(tab).into()
+        theme::tab_title(&self.app.panel_title(tab)).into()
     }
     fn id(&mut self, tab: &mut Panel) -> egui::Id {
         egui::Id::new(format!("{tab:?}"))

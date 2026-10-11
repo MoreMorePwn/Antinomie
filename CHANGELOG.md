@@ -23,6 +23,9 @@ transport reconnect require a new guest base with contract revision 14 / ABI9.
 - **Snapshots** on the toolbar; the snapshot window keeps a margin to the app's
   edges and room inside its graph nodes. Memory dumps and snapshot or reconnect
   operations never overlap.
+- **More room everywhere**: taller tab bars with space around tab names,
+  menus wide enough that shortcuts stand apart from their items, space above
+  section headings, and roomier syscall category chips (Comfortable density).
 - **Malware samples** (Tools): the newest MalwareBazaar uploads as soon as
   the window opens; one search box for a family, tag, file type or hash, with
   your own free API key; File type, Architecture, Family and Tags dropdowns

@@ -1870,6 +1870,8 @@ impl MonitorApp {
             .show(ctx, |ui| {
                 egui::menu::bar(ui, |ui| {
                     ui.menu_button("File", |ui| {
+                        // Room between an item and its shortcut.
+                        ui.set_min_width(ui.spacing().menu_width);
                         if ui
                             .add_enabled(stopped, item("New VM…", Some(keys::NEW_VM)))
                             .clicked()
@@ -1878,6 +1880,8 @@ impl MonitorApp {
                             ui.close_menu();
                         }
                         ui.menu_button("Add base", |ui| {
+                            // Room between an item and its shortcut.
+                            ui.set_min_width(ui.spacing().menu_width);
                             if ui
                                 .add_enabled(stopped, item("Import base…", None))
                                 .clicked()
@@ -1901,6 +1905,8 @@ impl MonitorApp {
                         }
                     });
                     ui.menu_button("VM", |ui| {
+                        // Room between an item and its shortcut.
+                        ui.set_min_width(ui.spacing().menu_width);
                         if ui
                             .add_enabled(
                                 self.can_start_vm(),
@@ -1994,6 +2000,8 @@ impl MonitorApp {
                         }
                     });
                     ui.menu_button("Run", |ui| {
+                        // Room between an item and its shortcut.
+                        ui.set_min_width(ui.spacing().menu_width);
                         if ui
                             .add_enabled(
                                 self.running(),
@@ -2063,6 +2071,8 @@ impl MonitorApp {
                         }
                     });
                     ui.menu_button("View", |ui| {
+                        // Room between an item and its shortcut.
+                        ui.set_min_width(ui.spacing().menu_width);
                         for view in [
                             Panel::Trace,
                             Panel::Network,
@@ -2084,6 +2094,8 @@ impl MonitorApp {
                         }
                     });
                     ui.menu_button("Tools", |ui| {
+                        // Room between an item and its shortcut.
+                        ui.set_min_width(ui.spacing().menu_width);
                         if ui.add(item("Settings…", Some(keys::SETTINGS))).clicked() {
                             self.settings_open = true;
                             ui.close_menu();
@@ -2116,6 +2128,8 @@ impl MonitorApp {
                         }
                     });
                     ui.menu_button("Help", |ui| {
+                        // Room between an item and its shortcut.
+                        ui.set_min_width(ui.spacing().menu_width);
                         if ui.button("About Antinomie").clicked() {
                             self.about_open = true;
                             ui.close_menu();
@@ -3514,15 +3528,25 @@ impl MonitorApp {
         let hidden = &mut self.settings.hidden_trace_categories;
         // Chips wrap onto a second line instead of overflowing a narrow
         // panel; past two lines (large text) they scroll within those two.
-        let chip_height = egui::TextStyle::Small.resolve(ui.style()).size + 6.0;
+        let roomy = !theme::is_compact();
+        let chip_height =
+            egui::TextStyle::Small.resolve(ui.style()).size + if roomy { 10.0 } else { 6.0 };
         egui::ScrollArea::vertical()
             .id_salt("trace_categories")
-            .max_height(chip_height * 2.0 + 5.0)
+            .max_height(chip_height * 2.0 + if roomy { 8.0 } else { 5.0 })
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
-                    ui.spacing_mut().button_padding = egui::vec2(7.0, 1.0);
+                    ui.spacing_mut().item_spacing = if roomy {
+                        egui::vec2(8.0, 6.0)
+                    } else {
+                        egui::vec2(5.0, 4.0)
+                    };
+                    ui.spacing_mut().button_padding = if roomy {
+                        egui::vec2(10.0, 2.0)
+                    } else {
+                        egui::vec2(7.0, 1.0)
+                    };
                     ui.spacing_mut().interact_size.y = chip_height;
                     let all_shown = hidden.is_empty();
                     let all = egui::Button::new(RichText::new("All").small().color(if all_shown {
@@ -7482,7 +7506,8 @@ mod tests {
                 egui::Shape::Text(text) => {
                     let rect = text.visual_bounding_rect();
                     if clip.contains_rect(rect) {
-                        texts.push((text.galley.text().to_owned(), rect));
+                        // Dock tab names carry padding spaces.
+                        texts.push((text.galley.text().trim().to_owned(), rect));
                     }
                 }
                 egui::Shape::Vec(shapes) => {
