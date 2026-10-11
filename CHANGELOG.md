@@ -32,6 +32,13 @@ transport reconnect require a new guest base with contract revision 14 / ABI9.
   guest drops records instead of waiting on every system call; never-drop
   resumes once the host catches up, and the status bar says so. Twenty
   `ls -la /usr/bin` under Capture All on GNOME: 106 s before, 0.7 s now.
+- **A guest that stops answering is reconnected.** When its heartbeat
+  stalls (its vCPUs starved by a busy host), the transport gave up for good
+  ("Connection timed out") until the VM was restarted. The app now waits
+  30 s instead of 10 before giving up, then reconnects by itself (VM >
+  Reconnect telemetry, retried 2, 4, 8, 16 s apart) and says so.
+- **stall-check** (example): freeze a guest's QEMU and check that the app
+  reconnects.
 - **run-dump** (example): print a recorded run's system calls.
 - **More room everywhere**: taller tab bars with space around tab names,
   menus wide enough that shortcuts stand apart from their items, space above

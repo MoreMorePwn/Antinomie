@@ -192,7 +192,9 @@ impl Transport {
             ram_size: ram,
             bootstrap_gpa: bootstrap,
             init_timeout_ms: 20000,
-            health_timeout_ms: 10000,
+            // A guest whose vCPUs get no host time (a host under heavy load:
+            // a 17 s stall was seen with Capture All of a desktop) is not dead.
+            health_timeout_ms: 30000,
             host_timeout_ms: 60000,
             poll_mode: 0,
             poll_sleep_us: 50,

@@ -101,6 +101,7 @@ impl Backend {
                     last_publish: Instant::now(),
                     latest_snapshot: worker_snapshot,
                     guest_epoch: worker_epoch,
+                    reconnect: (0, None),
                 }
                 .run();
             })
@@ -1587,6 +1588,20 @@ struct Worker {
     last_publish: Instant,
     latest_snapshot: Arc<Mutex<Option<Snapshot>>>,
     guest_epoch: Arc<AtomicU64>,
+    /// Automatic reconnection after the guest stopped answering (see
+    /// [`stalled`]): failed attempts so far and when to try next.
+    reconnect: (u32, Option<Instant>),
+}
+
+/// Attempts at reconnecting a guest that stopped answering, before the VM is
+/// reported failed; they are spaced 2, 4, 8, 16 s apart.
+const RECONNECT_ATTEMPTS: u32 = 5;
+
+/// The transport gave up on a guest whose heartbeat stopped: its vCPUs got no
+/// host time (a host under heavy load) or the guest hung. The guest is often
+/// fine once it runs again, so the app reconnects instead of failing the VM.
+fn stalled(error: &str) -> bool {
+    error.starts_with("transport:") && error.contains("(os error 110)")
 }
 
 struct ToolJob {
@@ -2074,6 +2089,7 @@ impl Worker {
                 continue;
             }
             let mut exited = false;
+            let mut notice = None;
             if let Some(session) = self.session.as_mut() {
                 match session.process.child.try_wait() {
                     Ok(Some(status)) => {
@@ -2085,10 +2101,19 @@ impl Worker {
                             ));
                         }
                     }
+                    // Waiting to reconnect: the transport would only fail again.
+                    Ok(None) if self.reconnect.1.is_some() => {}
                     Ok(None) => {
                         if let Err(e) = session.pump(&mut self.snapshot, &self.sender) {
-                            self.snapshot.last_error = Some(e);
-                            self.snapshot.state = VmState::Failed;
+                            if stalled(&e) && self.reconnect.0 < RECONNECT_ATTEMPTS {
+                                self.reconnect.1 = Some(Instant::now());
+                                notice = Some(format!(
+                                    "The guest stopped answering ({e}); reconnecting telemetry…"
+                                ));
+                            } else {
+                                self.snapshot.last_error = Some(e);
+                                self.snapshot.state = VmState::Failed;
+                            }
                         }
                     }
                     Err(e) => {
@@ -2096,6 +2121,44 @@ impl Worker {
                         exited = true;
                     }
                 }
+            }
+            if !exited
+                && self.session.is_some()
+                && self.reconnect.1.is_some_and(|at| Instant::now() >= at)
+            {
+                match self.reconnect_transport() {
+                    Ok(message) => {
+                        notice = Some(format!("The guest answers again. {message}"));
+                        self.snapshot.last_error = None;
+                        self.reconnect = (0, None);
+                    }
+                    Err(error) => {
+                        let attempts = self.reconnect.0 + 1;
+                        if attempts >= RECONNECT_ATTEMPTS || self.session.is_none() {
+                            self.snapshot.last_error = Some(format!(
+                                "the guest stopped answering and {attempts} reconnections \
+                                 failed: {error}"
+                            ));
+                            self.snapshot.state = VmState::Failed;
+                            self.reconnect = (attempts, None);
+                        } else {
+                            self.reconnect = (
+                                attempts,
+                                Some(Instant::now() + Duration::from_secs(1 << attempts)),
+                            );
+                        }
+                    }
+                }
+                self.publish();
+            }
+            if let Some(message) = notice {
+                // Shown in the status line and the Activity log, like a
+                // command's result.
+                self.emit(Notification::CommandResult {
+                    id: 0,
+                    success: true,
+                    message,
+                });
             }
             // While QEMU writes a memory dump the guest is paused: no guest
             // requests until it runs again.
@@ -3993,6 +4056,7 @@ mod tests {
             last_publish: Instant::now(),
             latest_snapshot: Arc::new(Mutex::new(None)),
             guest_epoch: Arc::new(AtomicU64::new(0)),
+            reconnect: (0, None),
         }
     }
 
@@ -4271,6 +4335,7 @@ mod tests {
             last_publish: Instant::now(),
             latest_snapshot: Arc::new(Mutex::new(None)),
             guest_epoch: Arc::new(AtomicU64::new(0)),
+            reconnect: (0, None),
         };
         for command in [
             Command::Create(VmConfig {
@@ -4353,6 +4418,7 @@ mod tests {
             last_publish: Instant::now(),
             latest_snapshot: Arc::new(Mutex::new(None)),
             guest_epoch: Arc::new(AtomicU64::new(0)),
+            reconnect: (0, None),
         };
         worker
             .command(Command::Create(VmConfig {
@@ -4446,6 +4512,7 @@ mod tests {
             last_publish: Instant::now(),
             latest_snapshot: Arc::new(Mutex::new(None)),
             guest_epoch: Arc::new(AtomicU64::new(0)),
+            reconnect: (0, None),
         };
         for guest in [false, true] {
             let source = root.join(if guest { "debian" } else { "busybox" });
@@ -4589,6 +4656,7 @@ mod tests {
             last_publish: Instant::now(),
             latest_snapshot: Arc::new(Mutex::new(None)),
             guest_epoch: Arc::new(AtomicU64::new(0)),
+            reconnect: (0, None),
         };
         assert!(
             worker
