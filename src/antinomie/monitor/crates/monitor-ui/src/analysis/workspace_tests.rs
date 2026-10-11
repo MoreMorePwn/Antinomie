@@ -295,6 +295,51 @@ fn stale_preview_and_category_switch_cannot_replace_selected_evidence() {
 }
 
 #[test]
+fn export_controls_emit_report_scoped_actions_and_wrap_long_failure_reason() {
+    let mut report = fixture();
+    report.reason =
+        Some("The worker retained partial evidence after its time budget expired. ".repeat(12));
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let mut state = WorkspaceState::default();
+    let size = egui::vec2(800.0, 900.0);
+    let mut output = render(&ctx, &report, &mut state, size, Vec::new(), None).0;
+    for _ in 0..2 {
+        output = render(&ctx, &report, &mut state, size, Vec::new(), None).0;
+    }
+    let reason = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == report.reason.as_deref().unwrap() => {
+                Some(text)
+            }
+            _ => None,
+        })
+        .expect("full failure reason is rendered");
+    assert!(
+        reason.galley.rows.len() > 1,
+        "failure reasons wrap instead of truncating"
+    );
+    let pos = texts(&output)
+        .into_iter()
+        .find(|(text, _)| text == "Open result directory")
+        .unwrap()
+        .1
+        .center();
+    assert_eq!(
+        click(&ctx, &report, &mut state, size, pos),
+        Some(ReportAction::ShowDirectory {
+            report_id: report.id.clone()
+        })
+    );
+    // Rendering produces UI values only and never launches an export or tool.
+    assert!(render(&ctx, &report, &mut state, size, Vec::new(), None)
+        .1
+        .is_none());
+}
+
+#[test]
 #[ignore = "native X11 workspace preview, synthetic evidence, exits automatically"]
 fn native_analysis_workspace_fixture() {
     use std::time::{Duration, Instant};

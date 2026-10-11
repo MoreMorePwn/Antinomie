@@ -135,7 +135,6 @@ fn ghidra_run(
             "AntinomieExport.java",
             "/tmp/decompiled.txt",
             &export,
-            "-deleteProject",
             "-analysisTimeoutPerFile",
             &analysis,
             "-max-cpu",
@@ -181,6 +180,27 @@ fn ghidra_run(
     let (functions, lines, listing) =
         write_source(listings, &text, object_base(specimen), run.timed_out)?;
     finish(section, listing, version, functions, lines, "Ghidra");
+    // Keep the actual project database, not merely the decompiled preview.
+    // Analysis still writes into bounded tmpfs; only a checked bundle crosses
+    // into retained output after Ghidra has closed its database.
+    let retained = if run.success && !run.timed_out {
+        super::export::copy_project(
+            Path::new("/tmp/ghidra-project"),
+            Path::new("/output/artifacts/ghidra"),
+        )
+    } else {
+        Err("Ghidra did not finish cleanly; native project is unavailable".into())
+    };
+    if let Err(error) = retained {
+        section.state = AnalysisSectionState::Partial;
+        section
+            .summary
+            .push_str(&format!("; native project not retained: {error}"));
+    } else {
+        section
+            .summary
+            .push_str("; native Ghidra project retained for export/open");
+    }
     Ok(())
 }
 

@@ -1,7 +1,7 @@
 //! Opt-in launch selection and retained, run-addressed analysis evidence.
 use antinomie_monitor_core::{
-    analysis_tools::ToolStatus, AnalysisKind, AnalysisReport, AnalysisSectionState,
-    AnalysisSelection, AnalysisState, ExecRequest, RunIn,
+    analysis_tools::ToolStatus, AnalysisExportFormat, AnalysisKind, AnalysisReport,
+    AnalysisSectionState, AnalysisSelection, AnalysisState, ExecRequest, RunIn,
 };
 use eframe::egui;
 mod entropy;
@@ -29,14 +29,40 @@ pub(crate) fn launch_fields(
             fields(&mut columns[0], request, args, env, graphical);
             crate::theme::section(&mut columns[1], "Analysis");
             selection(&mut columns[1], &mut request.analysis, tools, &mut install);
+            capture_selection(&mut columns[1], request);
         });
     } else {
         fields(ui, request, args, env, graphical);
         ui.add_space(6.0);
         crate::theme::section(ui, "Analysis");
         selection(ui, &mut request.analysis, tools, &mut install);
+        capture_selection(ui, request);
     }
     install
+}
+
+fn capture_selection(ui: &mut egui::Ui, request: &mut ExecRequest) {
+    ui.add_space(12.0);
+    crate::theme::section(ui, "Memory");
+    ui.checkbox(&mut request.memory_dump_on_exit, "Memory Dump on Exit")
+        .on_hover_text("Dump VM RAM after the process tree exits. This is post-exit VM memory, not a process core.");
+    let mut unsupported = false;
+    ui.add_enabled(
+        false,
+        egui::Checkbox::new(&mut unsupported, "Core Dump on Exit"),
+    )
+    .on_disabled_hover_text("Requires guest support planned for 0.6.0");
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new("Core dumps on exit require guest support planned for 0.6.0.")
+                .weak(),
+        )
+        .wrap(),
+    );
+    ui.add_space(12.0);
+    crate::theme::section(ui, "Network");
+    ui.checkbox(&mut request.capture_network, "Capture network from start until tree exits")
+        .on_hover_text("Record VM network packets during this run. Packets are VM-wide, not attributed to this process.");
 }
 
 fn fields(
@@ -235,6 +261,17 @@ pub(crate) fn snapshot(
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ReportAction {
+    Export {
+        report_id: String,
+        kind: Option<AnalysisKind>,
+        format: AnalysisExportFormat,
+    },
+    ShowDirectory {
+        report_id: String,
+    },
+    OpenGhidra {
+        report_id: String,
+    },
     Cancel(String),
     OpenSection {
         report_id: String,

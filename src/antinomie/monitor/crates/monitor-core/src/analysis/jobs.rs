@@ -141,6 +141,15 @@ impl Jobs {
                     REPORT_MAX_SIZE as u64
                         + 64 * 1024 * 1024
                         + super::listing::LISTINGS_MAX_TOTAL
+                        + if report
+                            .sections
+                            .iter()
+                            .any(|section| section.kind == AnalysisKind::Decompilation)
+                        {
+                            super::export::PROJECT_MAX_SIZE
+                        } else {
+                            0
+                        }
                         + 8192,
                 )
                 .ok_or("analysis quota overflow")?;
@@ -278,7 +287,8 @@ impl Jobs {
             .into_iter()
             .map(|name| fs::metadata(job.directory.join(name)).map_or(0, |m| m.len()))
             .sum::<u64>()
-            .saturating_add(directory_len(&job.directory.join("output/listings")).unwrap_or(0));
+            .saturating_add(directory_len(&job.directory.join("output/listings")).unwrap_or(0))
+            .saturating_add(directory_len(&job.directory.join("output/artifacts")).unwrap_or(0));
         if matches!(
             job.report.state,
             AnalysisState::Cancelled | AnalysisState::Partial | AnalysisState::Unavailable
@@ -623,6 +633,10 @@ fn spawn_worker_binary(
     let listings = output.join("listings");
     fs::create_dir(&listings).map_err(|e| e.to_string())?;
     fs::set_permissions(&listings, fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
+    let artifacts = output.join("artifacts");
+    fs::create_dir(&artifacts).map_err(|e| e.to_string())?;
+    fs::set_permissions(&artifacts, fs::Permissions::from_mode(0o700))
+        .map_err(|e| e.to_string())?;
     let has = |kind| job.report.sections.iter().any(|s| s.kind == kind);
     let decompiler = has(AnalysisKind::Decompilation);
     // capa unpacks itself into /tmp before it runs.
@@ -747,7 +761,10 @@ fn spawn_worker_binary(
     .arg("/output/report.json")
     .arg("--bind")
     .arg(&listings)
-    .arg("/output/listings");
+    .arg("/output/listings")
+    .arg("--bind")
+    .arg(&artifacts)
+    .arg("/output/artifacts");
     // Analysis tools Antinomie installed, read-only.
     if let Some(tools) = tools.filter(|tools| tools.is_dir()) {
         cmd.arg("--ro-bind")
@@ -1185,6 +1202,24 @@ mod tests {
                 section.summary
             );
             assert!(!section.entries.iter().any(|row| row.label == "Engine"));
+        }
+        if std::env::var_os("ANTINOMIE_TEST_REQUIRE_GHIDRA_PROJECT").is_some() {
+            let project = super::super::retained_ghidra_project(&directory, &report.id)
+                .expect("real headless Ghidra must retain its native project");
+            assert!(project.is_file());
+            let destination = directory.join("native-project-export");
+            let exported = super::super::export_analysis(
+                &directory,
+                &report.id,
+                Some(AnalysisKind::Decompilation),
+                super::super::AnalysisExportFormat::GhidraProject,
+                &destination,
+            )
+            .expect("actual Ghidra database must export");
+            assert_eq!(exported, destination);
+            assert!(destination.join("antinomie.gpr").is_file());
+            assert!(destination.join("antinomie.rep").is_dir());
+            assert!(project.is_file(), "export preserves retained evidence");
         }
         let disassembly = report
             .sections

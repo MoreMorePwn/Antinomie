@@ -237,7 +237,7 @@ fn run() -> Result<(), String> {
     } else {
         "/tmp/snapshot-value"
     };
-    let run = driver.launch(ExecRequest {path:"/bin/sh".into(),args:vec!["-c".into(),format!("n=7; echo SNAP_READY; while IFS= read -r line; do case \"$line\" in A) echo A >{value}; sync; echo SET_A;; B) echo B >{value}; sync; echo SET_B;; get) cat {value}; echo DISK_DONE;; inc) n=$((n+1)); echo COUNT_$n;; *) echo TICK_$line;; esac; done")],cwd:"/".into(),env:vec!["PATH=/bin:/sbin:/usr/bin:/usr/sbin".into()],uid:1000,gid:1000,analysis:Default::default(),run_in:RunIn::AppTerminal})?;
+    let run = driver.launch(ExecRequest {path:"/bin/sh".into(),args:vec!["-c".into(),format!("n=7; echo SNAP_READY; while IFS= read -r line; do case \"$line\" in A) echo A >{value}; sync; echo SET_A;; B) echo B >{value}; sync; echo SET_B;; get) cat {value}; echo DISK_DONE;; inc) n=$((n+1)); echo COUNT_$n;; *) echo TICK_$line;; esac; done")],cwd:"/".into(),env:vec!["PATH=/bin:/sbin:/usr/bin:/usr/sbin".into()],uid:1000,gid:1000,analysis:Default::default(),run_in:RunIn::AppTerminal,..Default::default()})?;
     driver.marker(&run, "SNAP_READY")?;
     driver.input(&run, "A", "SET_A")?;
     let original_boot = driver.snapshot.boot_id.clone();
@@ -313,6 +313,7 @@ fn run() -> Result<(), String> {
         gid: 1000,
         analysis: Default::default(),
         run_in: RunIn::AppTerminal,
+        ..Default::default()
     })?;
     driver.marker(&rebooted, "A\r\nDISK_REBOOT_DONE")?;
     driver.command(Command::Stop)?;

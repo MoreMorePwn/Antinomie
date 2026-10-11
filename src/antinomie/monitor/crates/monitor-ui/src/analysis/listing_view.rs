@@ -83,7 +83,7 @@ pub(super) fn show(
         });
         return action;
     }
-    let mono = FontId::monospace(ui.text_style_height(&egui::TextStyle::Monospace) - 2.0);
+    let mono = egui::TextStyle::Monospace.resolve(ui.style());
     let row_height = mono.size + 10.0;
     let loaded = page.start..page.start + page.rows.len() as u64;
     let mut needed = None;
@@ -97,12 +97,12 @@ pub(super) fn show(
             ),
             (
                 "Instruction",
-                Column::remainder().at_least(200.0).clip(true),
+                Column::initial(800.0).at_least(350.0).clip(true),
             ),
         ],
         AnalysisKind::Decompilation => &[
             ("Line", Column::exact(mono.size * 4.0)),
-            ("Code", Column::remainder().at_least(240.0).clip(true)),
+            ("Code", Column::initial(1000.0).at_least(600.0).clip(true)),
         ],
         AnalysisKind::Strings => &[
             ("Offset", Column::exact(mono.size * 8.0)),
@@ -115,53 +115,64 @@ pub(super) fn show(
             ("Value", Column::remainder().at_least(200.0).clip(true)),
         ],
     };
-    ui.push_id(("listing-table", kind_salt(kind)), |ui| {
-        // Rows select on click; text selection would swallow it.
-        ui.style_mut().interaction.selectable_labels = false;
-        let height = ui.available_height().max(row_height);
-        let mut table = TableBuilder::new(ui)
-            .id_salt(("listing", kind_salt(kind)))
-            .striped(kind != AnalysisKind::Decompilation)
-            .resizable(true)
-            .sense(egui::Sense::click())
-            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .max_scroll_height(height);
-        for (_, column) in columns {
-            table = table.column(*column);
-        }
-        table
-            .header(row_height, |mut header| {
-                for (title, _) in columns {
-                    header.col(|ui| {
-                        ui.strong(*title);
-                    });
+    egui::ScrollArea::horizontal()
+        .id_salt(("listing-horizontal", kind_salt(kind)))
+        .show(ui, |ui| {
+            ui.push_id(("listing-table", kind_salt(kind)), |ui| {
+                // Rows select on click; text selection would swallow it.
+                ui.style_mut().interaction.selectable_labels = false;
+                let height = ui.available_height().max(row_height);
+                let mut table = TableBuilder::new(ui)
+                    .id_salt(("listing", kind_salt(kind)))
+                    .striped(kind != AnalysisKind::Decompilation)
+                    .resizable(true)
+                    .sense(egui::Sense::click())
+                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                    .max_scroll_height(height);
+                for (_, column) in columns {
+                    table = table.column(*column);
                 }
-            })
-            .body(|body| {
-                body.rows(row_height, page.total as usize, |mut row| {
-                    let index = row.index() as u64;
-                    let Some((listing_index, entry)) = loaded
-                        .contains(&index)
-                        .then(|| &page.rows[(index - page.start) as usize])
-                    else {
-                        needed.get_or_insert(index);
-                        row.col(|ui| {
-                            ui.weak("…");
+                table
+                    .header(row_height, |mut header| {
+                        for (title, _) in columns {
+                            header.col(|ui| {
+                                ui.strong(*title);
+                            });
+                        }
+                    })
+                    .body(|body| {
+                        body.rows(row_height, page.total as usize, |mut row| {
+                            let index = row.index() as u64;
+                            let Some((listing_index, entry)) = loaded
+                                .contains(&index)
+                                .then(|| &page.rows[(index - page.start) as usize])
+                            else {
+                                needed.get_or_insert(index);
+                                row.col(|ui| {
+                                    ui.weak("…");
+                                });
+                                return;
+                            };
+                            let selected = state
+                                .selected
+                                .as_ref()
+                                .is_some_and(|(selected, _)| selected == listing_index);
+                            row.set_selected(selected);
+                            cells(&mut row, kind, entry, &mono);
+                            row.response().context_menu(|ui| {
+                                if ui.button("Copy complete retained row").clicked() {
+                                    ui.ctx()
+                                        .copy_text(format!("{}\n{}", entry.label, entry.value));
+                                    ui.close_menu();
+                                }
+                            });
+                            if row.response().clicked() {
+                                clicked = Some((*listing_index, entry.clone()));
+                            }
                         });
-                        return;
-                    };
-                    let selected = state
-                        .selected
-                        .as_ref()
-                        .is_some_and(|(selected, _)| selected == listing_index);
-                    row.set_selected(selected);
-                    cells(&mut row, kind, entry, &mono);
-                    if row.response().clicked() {
-                        clicked = Some((*listing_index, entry.clone()));
-                    }
-                });
+                    });
             });
-    });
+        });
     if let Some(selection) = clicked {
         state.selected = Some(selection);
     }
@@ -251,7 +262,8 @@ fn cells(
                 };
                 job.append(&format!("{mnemonic:<8} "), 0.0, format(mono, color));
                 job.append(operands, 0.0, format(mono, theme::text()));
-                ui.add(egui::Label::new(job).truncate());
+                ui.add(egui::Label::new(job).truncate())
+                    .on_hover_text(format!("{mnemonic} {operands}"));
             });
         }
         (AnalysisKind::Decompilation, Some(AnalysisData::SourceLine { line, .. })) => {
@@ -259,7 +271,8 @@ fn cells(
                 ui.label(mono_text(line.to_string(), mono, theme::muted()));
             });
             row.col(|ui| {
-                ui.add(egui::Label::new(highlight(&entry.value, mono)).truncate());
+                ui.add(egui::Label::new(highlight(&entry.value, mono)).truncate())
+                    .on_hover_text(&entry.value);
             });
         }
         (

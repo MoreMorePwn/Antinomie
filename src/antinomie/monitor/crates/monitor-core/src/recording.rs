@@ -240,6 +240,9 @@ fn archive_index(
                 if cancel.load(Ordering::Relaxed) {
                     return Err(RecordingError::Limit("archive read cancelled"));
                 }
+                if reader.stream_position()? >= length {
+                    break;
+                }
                 let (offset, packet) = match next_packet(&mut reader) {
                     Ok(Some(next)) => next,
                     Ok(None) => break,
@@ -251,6 +254,9 @@ fn archive_index(
                     }
                     Err(error) => return Err(error),
                 };
+                if reader.stream_position()? > length {
+                    break;
+                }
                 indexed = reader.stream_position()?;
                 if let Some(key) = invocation_key(&packet) {
                     let key = key_blob(key);
@@ -287,6 +293,84 @@ fn archive_index(
 }
 
 impl Recording {
+    /// Count indexed calls for page navigation without loading all call previews.
+    pub fn invocation_count_cancellable(
+        &self,
+        pid: Option<u32>,
+        cancel: &AtomicBool,
+    ) -> Result<u64, RecordingError> {
+        let (connection, _) = archive_index(&self.directory, cancel)?;
+        let count: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM invocations WHERE (?1 IS NULL OR pid=?1)",
+            rusqlite::params![pid],
+            |row| row.get(0),
+        )?;
+        u64::try_from(count).map_err(|_| RecordingError::Limit("negative invocation count"))
+    }
+
+    /// Reconstruct the descriptive process tree up to a fixed raw-file boundary.
+    /// Lifecycle loss and PID reuse can limit this view; run ownership still uses cookies.
+    pub fn process_tree_cancellable(
+        &self,
+        root_pid: u32,
+        path: &str,
+        cancel: &AtomicBool,
+    ) -> Result<(Vec<crate::capture_processes::CaptureProcess>, Vec<String>), RecordingError> {
+        let mut tracker = crate::capture_processes::ProcessTracker::default();
+        tracker.name_launched(root_pid, path);
+        let mut issues = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut reader = BufReader::new(archive_io::open_regular(
+            &self.directory,
+            Path::new("telemetry.raw"),
+        )?);
+        let boundary = reader.get_ref().metadata()?.len();
+        let mut assembler = Assembler::open_archive(self.directory.join("objects"))
+            .map_err(|_| RecordingError::Limit("cannot open archived objects"))?;
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(RecordingError::Limit("archive read cancelled"));
+            }
+            if reader.stream_position()? >= boundary {
+                break;
+            }
+            let packet = match next_packet(&mut reader) {
+                Ok(Some((_, packet))) if reader.stream_position()? <= boundary => packet,
+                Ok(_) => break,
+                Err(RecordingError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    issues.push("Unfinished record: showing complete saved packets only".into());
+                    break;
+                }
+                Err(e) => return Err(e),
+            };
+            let (header, _) = parser::parse_packet(&packet)
+                .map_err(|_| RecordingError::Limit("invalid process-tree packet"))?;
+            seen.insert(header.pid);
+            if seen.len() > 65536 {
+                return Err(RecordingError::Limit(
+                    "process tree exceeds 65536 processes",
+                ));
+            }
+            tracker.packet(&header);
+            // Only exec names and lifecycle records need object assembly.
+            if header.phase == 3 || (header.phase == 1 && matches!(header.syscall_nr, 59 | 322)) {
+                match assembler.ingest(&packet) {
+                    Ok(Some(event)) => tracker.event(&event),
+                    Ok(None) => {}
+                    Err(e) if issues.len() < 32 => issues.push(e.to_string()),
+                    Err(_) => {}
+                }
+            }
+        }
+        let list = tracker.list();
+        if list.len() > 65536 {
+            return Err(RecordingError::Limit(
+                "process tree exceeds 65536 processes",
+            ));
+        }
+        Ok((list, issues))
+    }
+
     /// Cursor is a raw-file byte offset returned by the previous page, not a row number.
     /// Rebuildable SQLite cache is outside capture with a 2 MiB page cache and
     /// disk budget twice the raw size plus 1 MiB, capped at 16 GiB.
@@ -437,7 +521,12 @@ impl Recording {
         file.seek(SeekFrom::Start(offset))?;
         let mut records = Vec::with_capacity(limit);
         let mut output_len = 0;
+        let mut unfinished = false;
         while records.len() < limit && file.stream_position()? < size && output_len < 65536 {
+            if size - file.stream_position()? < 5 {
+                unfinished = true;
+                break;
+            }
             let mut prefix = [0; 5];
             file.read_exact(&mut prefix)?;
             let data_len = u32::from_le_bytes(
@@ -449,6 +538,10 @@ impl Recording {
                 return Err(RecordingError::Limit(
                     "terminal journal record exceeds limit",
                 ));
+            }
+            if data_len as u64 > size - file.stream_position()? {
+                unfinished = true;
+                break;
             }
             let mut data = vec![0; data_len];
             file.read_exact(&mut data)?;
@@ -468,7 +561,7 @@ impl Recording {
         let cursor = file.stream_position()?;
         Ok(TerminalPage {
             records,
-            next_offset: (cursor < size).then_some(cursor),
+            next_offset: (!unfinished && cursor < size).then_some(cursor),
         })
     }
 
@@ -964,6 +1057,12 @@ mod tests {
                 .collect::<std::collections::BTreeSet<_>>()
         };
         assert_eq!(calls(&recording).len(), 10);
+        assert_eq!(
+            recording
+                .invocation_count_cancellable(None, &AtomicBool::new(false))
+                .unwrap(),
+            10
+        );
         // The rest of that packet and more calls arrive.
         raw.write_all(&pending[pending.len() / 2..]).unwrap();
         write(&mut raw, event_packet(10, 2, 5, 2));
@@ -972,6 +1071,12 @@ mod tests {
         }
         raw.sync_all().unwrap();
         assert_eq!(calls(&recording).len(), 15);
+        assert_eq!(
+            recording
+                .invocation_count_cancellable(None, &AtomicBool::new(false))
+                .unwrap(),
+            15
+        );
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -1028,6 +1133,13 @@ mod tests {
             }
         }
         assert_eq!(seen.len(), 3000);
+        assert_eq!(
+            recording
+                .invocation_count_cancellable(None, &AtomicBool::new(false))
+                .unwrap()
+                .div_ceil(100),
+            30
+        );
         let (index, _) = archive_index(&directory, &AtomicBool::new(false)).unwrap();
         let pages: i64 = index
             .pragma_query_value(None, "page_count", |row| row.get(0))
@@ -1039,6 +1151,42 @@ mod tests {
         assert!(
             recording
                 .invocation_page_cancellable(0, 7, &AtomicBool::new(true))
+                .is_err()
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn unfinished_terminal_keeps_complete_output_and_partial_tree_has_warning() {
+        let directory = std::env::temp_dir().join(format!("ant-partial-{}", storage::unique_id()));
+        storage::private_dir(&directory).unwrap();
+        let mut journal = vec![1, 3, 0, 0, 0];
+        journal.extend(b"abc");
+        journal.extend([1, 5, 0, 0, 0, b'x']);
+        fs::write(directory.join("terminal.journal"), journal).unwrap();
+        let mut packet = event_packet(1, 1, 1, 1);
+        packet[72..76].copy_from_slice(&123u32.to_le_bytes());
+        packet[76..80].copy_from_slice(&123u32.to_le_bytes());
+        let mut raw = (packet.len() as u32).to_le_bytes().to_vec();
+        raw.extend(&packet);
+        raw.extend((packet.len() as u32).to_le_bytes());
+        raw.extend(&packet[..40]);
+        fs::write(directory.join("telemetry.raw"), raw).unwrap();
+        storage::atomic_json(&directory.join("manifest.json"), &serde_json::json!({})).unwrap();
+        let recording = open_recording(&directory).unwrap();
+        let terminal = recording.terminal_replay(0, 32).unwrap();
+        assert!(
+            matches!(terminal.records.as_slice(), [TerminalRecord::Output(data)] if data == b"abc")
+        );
+        assert!(terminal.next_offset.is_none());
+        let (tree, issues) = recording
+            .process_tree_cancellable(123, "/bin/test", &AtomicBool::new(false))
+            .unwrap();
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree[0].name, "test");
+        assert!(issues.iter().any(|text| text.contains("Unfinished")));
+        assert!(
+            recording
+                .process_tree_cancellable(123, "/bin/test", &AtomicBool::new(true))
                 .is_err()
         );
         fs::remove_dir_all(directory).unwrap();

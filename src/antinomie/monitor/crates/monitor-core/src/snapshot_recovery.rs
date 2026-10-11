@@ -115,6 +115,7 @@ impl Session {
             }),
         )?;
         let mut runs = BTreeMap::new();
+        let mut run_artifacts = BTreeMap::new();
         for mut summary in checkpoint.runs {
             let cookie = summary.root_task_cookie;
             if cookie == 0 || summary.session_id == 0 || runs.contains_key(&cookie) {
@@ -126,21 +127,42 @@ impl Session {
             summary.directory = boot_dir.join("runs").join(&summary.id);
             summary.analysis = None;
             // Guest RUN_STATUS reconciles execution after the attachment is ready.
+            let execution_generation = summary
+                .execution
+                .as_ref()
+                .map_or(0, |status| status.generation);
+            let tree_complete = summary.execution.as_ref().is_some_and(|status| {
+                matches!(
+                    crate::execution::state(status),
+                    RunState::Finished | RunState::Stopped
+                )
+            });
             summary.state = RunState::Unknown;
+            // Checkpoint status belongs to the old timeline. Only a fresh
+            // RUN_STATUS can authorize post-restore exit actions.
+            summary.execution = None;
             let mut run = ProgramRun::new(summary, options.capture_quota_size)?;
             run.boot_bundle_identity = bundle.base_identity.clone();
             run.disk_base_identity = disk_bundle.base_identity.clone();
-            run.execution_generation = run
-                .summary
-                .execution
-                .as_ref()
-                .map_or(0, |execution| execution.generation);
+            run.execution_generation = execution_generation;
             run.assembler
                 .set_event_table(vm.transport.event_table as usize);
             storage::atomic_json(
                 &run.summary.directory.join("resume-boundary.json"),
                 &serde_json::json!({"issue":RESUME_BOUNDARY}),
             )?;
+            let mut owner = RunArtifactOwner::new(&run.summary);
+            owner.tree_complete = tree_complete;
+            if tree_complete && run.summary.request.memory_dump_on_exit {
+                owner.summary.memory_state = RunArtifactState::Interrupted;
+                owner.issue("the run already ended in the checkpoint; its previous post-exit RAM action is not replayed".into());
+            }
+            if run.summary.request.capture_network {
+                owner.summary.network_state = RunArtifactState::Interrupted;
+                owner.issue("snapshot recovery starts a fresh VM-wide network segment; the saved interval is not replayed".into());
+            }
+            owner.save()?;
+            run_artifacts.insert(cookie, owner);
             runs.insert(cookie, run);
         }
         let mut captures = BTreeMap::new();
@@ -184,6 +206,7 @@ impl Session {
             bundle,
             disk_bundle,
             runs,
+            run_artifacts,
             captures,
             pending_capture_id: None,
             boot_id,
@@ -285,6 +308,19 @@ impl Worker {
         request: SnapshotRequest,
     ) -> Result<String, String> {
         let result = self.take_vm_snapshot(id, &request);
+        let capture_resume = self
+            .session
+            .as_mut()
+            .map(|session| session.resume_run_network(&self.options))
+            .transpose();
+        if let Err(error) = capture_resume {
+            self.snapshot.last_error = Some(error.clone());
+            self.emit(Notification::CommandResult {
+                id: 0,
+                success: false,
+                message: error,
+            });
+        }
         self.snapshot.vm_snapshot_progress = None;
         if let Err(error) = self.refresh_vm_snapshots(id) {
             self.snapshot.last_error = Some(error);
@@ -318,6 +354,11 @@ impl Worker {
         }
         if running && self.snapshot.network_capture.is_some() {
             self.stop_network_capture()?;
+        }
+        if running {
+            self.session.as_mut().ok_or("VM is stopped")?.suspend_run_network(
+                "snapshot boundary: VM-wide network capture paused; a fresh segment resumes afterwards",
+            )?;
         }
         self.snapshot_stage(id, "Preparing checkpoint");
         let consistency = if full {
@@ -430,6 +471,16 @@ impl Worker {
         save_current: Option<SnapshotRequest>,
     ) -> Result<String, String> {
         let result = self.restore_vm_snapshot_inner(id, snapshot_id, boot_from_disk, save_current);
+        if let Some(session) = self.session.as_mut()
+            && let Err(error) = session.resume_run_network(&self.options)
+        {
+            self.snapshot.last_error = Some(error.clone());
+            self.emit(Notification::CommandResult {
+                id: 0,
+                success: false,
+                message: error,
+            });
+        }
         self.snapshot.vm_snapshot_progress = None;
         if let Err(error) = self.refresh_vm_snapshots(id) {
             self.snapshot.last_error = Some(error);
@@ -485,6 +536,9 @@ impl Worker {
         }
         if self.snapshot.network_capture.is_some() {
             self.stop_network_capture()?;
+        }
+        if let Some(session) = self.session.as_mut() {
+            session.suspend_run_network("snapshot restore seals the previous network interval")?;
         }
         let prepared = snapshots::prepare_restore(&self.options, &vm, snapshot_id, !resume)?;
         if (prepared.mode == VmSnapshotMode::Full) != resume
@@ -556,6 +610,14 @@ impl Worker {
             snapshots::commit_restore(&self.options, &vm, &prepared)?;
             session.process.resume()?;
             session.transport.resume_heartbeats()?;
+            if let Err(error) = session.resume_run_network(&self.options) {
+                self.snapshot.last_error = Some(error.clone());
+                self.emit(Notification::CommandResult {
+                    id: 0,
+                    success: false,
+                    message: error,
+                });
+            }
             session.capture.manifest(
                 &session.vm,
                 &session.bundle,
@@ -607,11 +669,15 @@ impl Worker {
         }
         let _transition = self.begin_guest_transition()?;
         let mut old = self.session.take().ok_or("VM is stopped")?;
+        if let Err(error) = old.suspend_run_network(
+            "transport reconnect seals the previous network interval; a fresh segment resumes afterwards",
+        ) {
+            return self.reconnect_failed(old, error);
+        }
         let report = match old.transport.reconnect(RESUME_TIMEOUT_MS) {
             Ok(report) => report,
             Err(error) => {
-                self.session = Some(old);
-                return Err(error);
+                return self.reconnect_failed(old, error);
             }
         };
         old.forget_unanswered();
@@ -621,16 +687,14 @@ impl Worker {
         {
             Ok(checkpoint) => checkpoint,
             Err(error) => {
-                self.session = Some(old);
-                return Err(error);
+                return self.reconnect_failed(old, error);
             }
         };
         if let Err(error) = old.finalize("reconnect-boundary", &mut self.snapshot) {
-            self.session = Some(old);
-            return Err(error);
+            return self.reconnect_failed(old, error);
         }
         let id = old.vm.id.clone();
-        let fresh = match Session::restored(
+        let mut fresh = match Session::restored(
             &self.options,
             old.vm,
             old.bundle,
@@ -649,6 +713,14 @@ impl Worker {
                 return Err(error);
             }
         };
+        if let Err(error) = fresh.resume_run_network(&self.options) {
+            self.snapshot.last_error = Some(error.clone());
+            self.emit(Notification::CommandResult {
+                id: 0,
+                success: false,
+                message: error,
+            });
+        }
         let receipt = storage::atomic_json(
             &fresh.capture.directory.join("reconnect.json"),
             &serde_json::json!({
@@ -672,5 +744,13 @@ impl Worker {
         receipt?;
         self.refresh_vm_snapshots(&id)?;
         Ok("Transport reconnected in a new recording timeline; unresolved commands were not retried".into())
+    }
+    fn reconnect_failed(&mut self, mut old: Session, error: String) -> Result<String, String> {
+        let resume = old.resume_run_network(&self.options);
+        self.session = Some(old);
+        match resume {
+            Ok(()) => Err(error),
+            Err(resume) => Err(format!("{error}; run network capture recovery: {resume}")),
+        }
     }
 }

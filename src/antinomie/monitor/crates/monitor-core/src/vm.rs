@@ -15,6 +15,16 @@ use std::{
     time::Duration,
 };
 
+fn user_network_backend(vm: &VmConfig) -> Option<&'static str> {
+    if vm.isolated_network {
+        Some("user,id=net0,restrict=on")
+    } else if vm.nat {
+        Some("user,id=net0")
+    } else {
+        None
+    }
+}
+
 struct UnstartedRuntime {
     path: PathBuf,
     started: bool,
@@ -436,14 +446,9 @@ impl VmProcess {
         if let Some(initrd) = &bundle.initrd {
             cmd.arg("-initrd").arg(initrd);
         }
-        if vm.nat {
+        if let Some(netdev) = user_network_backend(vm) {
             // Network captures attach a filter-dump to net0 over QMP.
-            cmd.args([
-                "-netdev",
-                "user,id=net0",
-                "-device",
-                "virtio-net-pci,netdev=net0",
-            ]);
+            cmd.args(["-netdev", netdev, "-device", "virtio-net-pci,netdev=net0"]);
         } else {
             cmd.args(["-nic", "none"]);
         }
@@ -632,7 +637,11 @@ impl VmProcess {
         } else {
             None
         };
-        let value = serde_json::json!({"launch_policy":2,"host_identity":host_identity,"qemu":String::from_utf8_lossy(&output.stdout),"machine":"q35,max-ram-below-4g=4G","cpus":vm.cpus,"ram_mib":vm.ram_mib,"nat":vm.nat,"launch":vm.launch,"transport":vm.transport,"acceleration":acceleration,"force_tcg":options.force_tcg,"headless":options.headless,"bootstrap_gpa":options.bootstrap_gpa,"bundle_identity":bundle.base_identity,"kernel_append":bundle.kernel_append,"kernel_version":bundle.kernel_version});
+        let mut value = serde_json::json!({"launch_policy":2,"host_identity":host_identity,"qemu":String::from_utf8_lossy(&output.stdout),"machine":"q35,max-ram-below-4g=4G","cpus":vm.cpus,"ram_mib":vm.ram_mib,"nat":vm.nat,"launch":vm.launch,"transport":vm.transport,"acceleration":acceleration,"force_tcg":options.force_tcg,"headless":options.headless,"bootstrap_gpa":options.bootstrap_gpa,"bundle_identity":bundle.base_identity,"kernel_append":bundle.kernel_append,"kernel_version":bundle.kernel_version});
+        // Keep pre-isolation checkpoints compatible for unchanged network setups.
+        if vm.isolated_network {
+            value["isolated_network"] = serde_json::Value::Bool(true);
+        }
         let digest = Sha256::digest(serde_json::to_vec(&value).map_err(|e| e.to_string())?);
         Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
     }
@@ -942,6 +951,18 @@ mod tests {
         failed.force_stop().unwrap();
     }
     use crate::api::{DisplayResolution, GuestProfile};
+
+    #[test]
+    fn isolated_network_overrides_nat_without_forwarding() {
+        let mut vm = VmConfig::default();
+        assert_eq!(user_network_backend(&vm), None);
+        vm.nat = true;
+        assert_eq!(user_network_backend(&vm), Some("user,id=net0"));
+        vm.isolated_network = true;
+        assert_eq!(user_network_backend(&vm), Some("user,id=net0,restrict=on"));
+        vm.nat = false;
+        assert_eq!(user_network_backend(&vm), Some("user,id=net0,restrict=on"));
+    }
 
     #[test]
     fn stale_guest_ram_is_removed_but_open_ram_is_kept() {

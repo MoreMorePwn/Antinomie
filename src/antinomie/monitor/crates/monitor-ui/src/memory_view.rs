@@ -404,6 +404,14 @@ fn open_directory(path: &Path) -> Result<(), String> {
 }
 
 impl MemoryView {
+    pub(crate) fn open_dump(&mut self, directory: &std::path::Path) {
+        self.select(
+            directory
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned()),
+        );
+        self.dumps_for = None;
+    }
     fn scan(&mut self, roots: &[PathBuf]) {
         self.dumps = memory::list(roots);
         self.dumps_for = Some(roots.to_vec());
@@ -418,6 +426,15 @@ impl MemoryView {
                 .find(|dump| dump.complete())
                 .or(self.dumps.first());
             self.select(first.map(|dump| dump.id.clone()));
+        } else {
+            // A run link can select an ID before this refreshed list contains it.
+            self.reload_runs();
+            let selected = self
+                .selected_run
+                .clone()
+                .filter(|id| self.runs.iter().any(|run| &run.id == id))
+                .or_else(|| self.runs.first().map(|run| run.id.clone()));
+            self.open_run(selected);
         }
     }
 
@@ -741,30 +758,28 @@ impl MemoryView {
                     } else {
                         theme::text()
                     };
-                    let row = capture_row(
-                        ui,
-                        selected,
-                        (&dump_title(dump), color),
-                        &dump_detail(dump),
-                        font_size,
-                    )
-                    .on_hover_text(format!(
-                        "{}\n{}{}",
-                        dump.path().display(),
-                        dump.boot_id
-                            .as_ref()
-                            .map(|boot| format!("Boot {boot}\n"))
-                            .unwrap_or_default(),
-                        if dump.symbols {
-                            "Symbol table of its base included"
-                        } else {
-                            "No symbol table: Volatility looks for one itself"
-                        }
-                    ));
+                    let title = crate::evidence::title(ui, &dump.dir, &dump_title(dump));
+                    let row =
+                        capture_row(ui, selected, (&title, color), &dump_detail(dump), font_size)
+                            .on_hover_text(format!(
+                                "{}\n{}{}",
+                                dump.path().display(),
+                                dump.boot_id
+                                    .as_ref()
+                                    .map(|boot| format!("Boot {boot}\n"))
+                                    .unwrap_or_default(),
+                                if dump.symbols {
+                                    "Symbol table of its base included"
+                                } else {
+                                    "No symbol table: Volatility looks for one itself"
+                                }
+                            ));
                     if row.clicked() {
                         select = Some(dump.id.clone());
                     }
                     row.context_menu(|ui| {
+                        crate::evidence::menu(ui, &dump.dir);
+                        ui.separator();
                         if ui.button("Open folder").clicked() {
                             if let Err(error) = open_directory(&dump.dir) {
                                 self.status = Some((error, true));
@@ -1342,6 +1357,7 @@ impl MemoryView {
                         title.push(' ');
                         title.push_str(&args_summary(run));
                     }
+                    let title = crate::evidence::title(ui, &run.dir, &title);
                     let row = capture_row(
                         ui,
                         self.selected_run.as_ref() == Some(&run.id),
@@ -1367,6 +1383,8 @@ impl MemoryView {
                         open = Some(run.id.clone());
                     }
                     row.context_menu(|ui| {
+                        crate::evidence::menu(ui, &run.dir);
+                        ui.separator();
                         if let Some(job) = job {
                             if ui.button("Cancel run").clicked() {
                                 job.cancel();

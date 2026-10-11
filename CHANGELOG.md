@@ -4,11 +4,36 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
-## 0.5.0 — unreleased
+## 0.5.0 — 2026-10-12
 
 Existing bases still cold boot and support disk checkpoints. Full snapshots and
 transport reconnect require a new guest base with contract revision 14 / ABI9.
 
+- **Evidence controls.** Dump memory and Core dump sit beside Capture network.
+  Saved runs, captures, dumps, Volatility results and static reports have names,
+  tags and result-directory actions. Names and tags preserve original files.
+- **Launch evidence.** Optional network capture starts before launch and stops
+  after the entire process tree exits. Manual captures remain independent.
+  Optional Memory Dump on Exit records VM RAM after tree exit; freed process
+  memory may already be gone. Core Dump on Exit is deferred to 0.6.0 guest work.
+- **Core dumps.** Import Linux x86-64 ELF process cores: select a thread for
+  registers, browse mappings and their available hex data, recover file mappings
+  and auxiliary notes, and request disassembly using an optional matching binary.
+  Original files stay in place. QEMU physical RAM belongs in Memory instead.
+  Unwinding, a process-core decompiler and other core ABIs are not implemented.
+- **Readable static results and exports.** Wider details, horizontally scrollable
+  code and wrapped messages; export retained sections or reports as text/JSON.
+  Ghidra analysis retains its native project for export and opening a working
+  copy in Ghidra. Reports show related runs; runs mark available static analysis.
+- **Run history.** Saved descendant trees, child selection, trace page counts
+  (100 calls per page), and available data from unfinished recordings.
+  The Run program dialog uses more vertical space.
+- **Isolated network.** QEMU restricted user networking permits guest-local
+  networking and packet capture without outbound access or host forwarding.
+  Disconnected remains the default; unrestricted NAT is still explicit.
+- **Recovery.** Run captures resume in fresh segments after transport reconnect
+  and unsuccessful snapshot recovery when the original VM survives. Ambiguous
+  RAM-dump QMP outcomes retain their files and pause until reconciled.
 - Native snapshot manager with disk or disk + memory capture, branching graph,
   current working state, rename and dependency-safe hiding.
 - Restore by rebooting from disk or resuming saved RAM/CPU/devices. Confirmation

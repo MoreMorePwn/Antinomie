@@ -164,7 +164,7 @@ impl Column {
                         },
                     ) => name.clone(),
                     _ => entry.label.clone(),
-                }
+                };
             }
             Self::Value => return entry.value.clone(),
             _ => {}

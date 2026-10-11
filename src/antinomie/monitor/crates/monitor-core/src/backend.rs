@@ -19,7 +19,7 @@ use crate::{
 use std::{
     collections::{BTreeMap, VecDeque},
     fs::{self, File},
-    io::Read,
+    io::{BufReader, Read, Seek, SeekFrom},
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -353,6 +353,8 @@ struct Session {
     bundle: Bundle,
     disk_bundle: Bundle,
     runs: BTreeMap<u64, ProgramRun>,
+    /// Host-owned side effects keyed by root cookie, independent of terminal EOF.
+    run_artifacts: BTreeMap<u64, RunArtifactOwner>,
     captures: BTreeMap<String, CaptureSession>,
     pending_capture_id: Option<String>,
     boot_id: String,
@@ -382,6 +384,63 @@ struct Session {
     last_status_query: Instant,
     persisted_packets: u64,
     kernel_probe: KernelProbe,
+}
+
+struct RunArtifactOwner {
+    directory: PathBuf,
+    summary: RunArtifacts,
+    network: Option<crate::network::NetworkCapture>,
+    tree_complete: bool,
+    last_network_stop: Option<Instant>,
+}
+
+impl RunArtifactOwner {
+    fn new(run: &RunSummary) -> Self {
+        Self {
+            directory: run.directory.clone(),
+            summary: RunArtifacts {
+                run_id: run.id.clone(),
+                vm_id: run.vm_id.clone(),
+                boot_id: run.boot_id.clone(),
+                memory_state: if run.request.memory_dump_on_exit {
+                    RunArtifactState::WaitingForTreeExit
+                } else {
+                    RunArtifactState::Disabled
+                },
+                ..RunArtifacts::default()
+            },
+            network: None,
+            tree_complete: false,
+            last_network_stop: None,
+        }
+    }
+    fn save(&self) -> Result<(), String> {
+        storage::atomic_json(&self.directory.join("artifacts.json"), &self.summary)
+            .map_err(|error| format!("run artifacts: {error}"))
+    }
+    fn issue(&mut self, issue: String) {
+        let issue: String = issue.chars().take(1024).collect();
+        if self.summary.issues.len() < 16 && !self.summary.issues.contains(&issue) {
+            self.summary.issues.push(issue);
+        }
+    }
+    fn observe(&mut self, execution: Option<&RunExecution>) -> bool {
+        if self.tree_complete
+            || !execution.is_some_and(|execution| {
+                matches!(
+                    crate::execution::state(execution),
+                    RunState::Finished | RunState::Stopped
+                )
+            })
+        {
+            return false;
+        }
+        self.tree_complete = true;
+        if self.summary.memory_state == RunArtifactState::WaitingForTreeExit {
+            self.summary.memory_state = RunArtifactState::Queued;
+        }
+        true
+    }
 }
 /// Capture All of a busy guest (a desktop) can produce telemetry faster than
 /// the host decodes and saves it. Never-drop sends then make every traced
@@ -433,6 +492,135 @@ enum KernelProbe {
 /// Retry interval while the guest control service is not yet registered.
 const KERNEL_PROBE_RETRY: Duration = Duration::from_secs(1);
 impl Session {
+    fn failed_run_launch(
+        &mut self,
+        run: &mut ProgramRun,
+        mut owner: RunArtifactOwner,
+        error: String,
+    ) -> String {
+        let mut issues = vec![error];
+        owner.tree_complete = true;
+        if owner.network.is_some() {
+            if let Err(error) = self.stop_run_network(&mut owner) {
+                issues.push(error);
+            }
+            owner.summary.network_state = RunArtifactState::Failed;
+        }
+        if owner.summary.memory_state != RunArtifactState::Disabled {
+            owner.summary.memory_state = RunArtifactState::Failed;
+        }
+        for error in &issues {
+            owner.issue(error.clone());
+        }
+        if let Err(error) = owner.save() {
+            issues.push(error);
+        }
+        run.storage_error(issues.join("; "));
+        if let Err(error) = run.persist_summary() {
+            issues.push(error);
+        }
+        if owner.network.is_some() {
+            // Cookie zero is never a valid execution identity. Retain cleanup
+            // ownership across timeout and prohibit another ambiguous launch.
+            self.run_artifacts.insert(0, owner);
+        }
+        issues.join("; ")
+    }
+    fn start_run_network(
+        &mut self,
+        options: &BackendOptions,
+        owner: &mut RunArtifactOwner,
+    ) -> Result<(), String> {
+        if owner.summary.network_captures.len() >= 256 {
+            return Err("this run reached the 256 network-segment limit".into());
+        }
+        let capture = prepare_network_capture(options, self)?;
+        owner.summary.network_captures.push(capture.file.clone());
+        owner.summary.network_state = RunArtifactState::Recording;
+        owner.network = Some(capture);
+        if let Err(error) = owner.save() {
+            let cleanup = owner.network.take().map(finish_network_summary);
+            return Err(format!("{error}; capture cleanup: {cleanup:?}"));
+        }
+        let capture = owner.network.as_ref().ok_or("missing run capture owner")?;
+        if let Err(error) =
+            crate::network::filter_dump_add(capture).and_then(|command| self.process.qmp(&command))
+        {
+            let cleanup = self.stop_run_network(owner);
+            owner.summary.network_state = RunArtifactState::Failed;
+            owner.issue(format!(
+                "network capture start: {error}; cleanup: {cleanup:?}"
+            ));
+            return Err(format!(
+                "network capture start: {error}; cleanup: {cleanup:?}"
+            ));
+        }
+        Ok(())
+    }
+    fn stop_run_network(&mut self, owner: &mut RunArtifactOwner) -> Result<(), String> {
+        let Some(capture) = owner.network.as_ref() else {
+            return Ok(());
+        };
+        owner.last_network_stop = Some(Instant::now());
+        // Only this owner's QOM object is removed. Manual and other runs' objects remain.
+        remove_network_filter(&self.process, capture)?;
+        // Retain ownership until final metadata is durable; cleanup can retry
+        // after a transient write failure even though QEMU closed the filter.
+        let bytes = finish_network_summary(capture.clone())?;
+        owner.network = None;
+        self.network_bytes_done = self.network_bytes_done.saturating_add(bytes);
+        self.network_bytes = self.network_bytes.max(self.network_bytes_done);
+        if owner.summary.network_state != RunArtifactState::Failed {
+            owner.summary.network_state = RunArtifactState::Complete;
+        }
+        owner.save()
+    }
+    fn suspend_run_network(&mut self, reason: &str) -> Result<(), String> {
+        let cookies: Vec<_> = self.run_artifacts.keys().copied().collect();
+        for cookie in cookies {
+            let Some(mut owner) = self.run_artifacts.remove(&cookie) else {
+                continue;
+            };
+            let result = if owner.network.is_some() {
+                self.stop_run_network(&mut owner).and_then(|()| {
+                    owner.summary.network_state = RunArtifactState::Interrupted;
+                    owner.issue(reason.into());
+                    owner.save()
+                })
+            } else {
+                Ok(())
+            };
+            self.run_artifacts.insert(cookie, owner);
+            result?;
+        }
+        Ok(())
+    }
+    fn resume_run_network(&mut self, options: &BackendOptions) -> Result<(), String> {
+        let cookies: Vec<_> = self.run_artifacts.keys().copied().collect();
+        let mut issues = Vec::new();
+        for cookie in cookies {
+            let Some(mut owner) = self.run_artifacts.remove(&cookie) else {
+                continue;
+            };
+            if !owner.tree_complete
+                && owner.summary.network_state == RunArtifactState::Interrupted
+                && let Err(error) = self.start_run_network(options, &mut owner)
+            {
+                owner.summary.network_state = RunArtifactState::Failed;
+                owner.issue(error.clone());
+                issues.push(error);
+                if let Err(error) = owner.save() {
+                    issues.push(error);
+                }
+            }
+            self.run_artifacts.insert(cookie, owner);
+        }
+        if issues.is_empty() {
+            Ok(())
+        } else {
+            Err(issues.join("; "))
+        }
+    }
     fn stored_len(&self) -> u64 {
         self.capture
             .bytes
@@ -1371,6 +1559,35 @@ impl Session {
         }
     }
     fn finalize(&mut self, state: &str, snapshot: &mut Snapshot) -> Result<(), String> {
+        // QEMU has ended (or host ownership is being sealed at a restore boundary).
+        // A queued post-exit dump cannot be claimed to have succeeded here.
+        for owner in self.run_artifacts.values_mut() {
+            if let Some(capture) = owner.network.take() {
+                // At VM exit QEMU already closed it; no object-del is necessary.
+                if let Err(error) = finish_network_summary(capture) {
+                    owner.issue(error.clone());
+                    snapshot.last_error = Some(error);
+                }
+                owner.summary.network_state = RunArtifactState::Interrupted;
+                owner.issue(format!(
+                    "VM recording ended ({state}) before capture completed"
+                ));
+            }
+            if matches!(
+                owner.summary.memory_state,
+                RunArtifactState::WaitingForTreeExit
+                    | RunArtifactState::Queued
+                    | RunArtifactState::InProgress
+            ) {
+                owner.summary.memory_state = RunArtifactState::Interrupted;
+                owner.issue(format!(
+                    "VM recording ended ({state}) before post-exit RAM dump completed"
+                ));
+            }
+            if let Err(error) = owner.save() {
+                snapshot.last_error = Some(error);
+            }
+        }
         self.analysis.shutdown();
         self.analysis_updates(snapshot, &mpsc::sync_channel(1).0);
         for cookie in std::mem::take(&mut self.late_reads).into_values() {
@@ -2237,6 +2454,7 @@ impl Worker {
             self.poll_tool();
             self.check_network_capture();
             self.check_memory_dump();
+            self.check_run_artifacts();
             if self.last_publish.elapsed() >= Duration::from_millis(250) {
                 self.publish();
             }
@@ -3013,6 +3231,7 @@ impl Worker {
                 bundle,
                 disk_bundle,
                 runs: BTreeMap::new(),
+                run_artifacts: BTreeMap::new(),
                 captures: BTreeMap::new(),
                 pending_capture_id: None,
                 boot_id,
@@ -3052,45 +3271,25 @@ impl Worker {
     /// frame to a new pcap in the boot recording, outside the guest.
     fn start_network_capture(&mut self) -> Result<String, String> {
         let session = self.session.as_ref().ok_or("VM is stopped")?;
-        if !session.vm.nat {
-            return Err(
-                "this VM has no network: turn on NAT network in its settings and restart it".into(),
-            );
-        }
         if self.snapshot.network_capture.is_some() {
             return Err("a network capture is already running".into());
         }
-        if session.available() == 0 {
-            return Err("the recording quota of this boot is full".into());
-        }
-        let boot_dir = crate::locations::locations(&self.options, &session.vm.id)?
-            .recording_directory
-            .join("boots")
-            .join(&session.boot_id);
-        let capture = crate::network::NetworkCapture::new(
-            &boot_dir,
-            &session.boot_id,
-            &storage::unique_id(),
-            unix_ms(),
-        );
-        let dir = capture.file.parent().ok_or("network capture folder")?;
-        storage::private_dir(dir).map_err(|e| format!("network capture folder: {e}"))?;
-        // QEMU truncates the file it is given and keeps its mode: private.
-        use std::os::unix::fs::OpenOptionsExt;
-        fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&capture.file)
-            .map_err(|e| format!("network capture file: {e}"))?;
-        // The summary first, so an app that ends mid-capture still lists it.
-        crate::network::save_summary(&capture)?;
+        let capture = prepare_network_capture(&self.options, session)?;
         if let Err(error) = crate::network::filter_dump_add(&capture)
             .and_then(|command| session.process.qmp(&command))
         {
-            let _ = fs::remove_file(capture.summary_path());
-            let _ = fs::remove_file(&capture.file);
-            return Err(format!("network capture: {error}"));
+            let cleanup = remove_network_filter(&session.process, &capture);
+            if cleanup.is_ok() {
+                let saved = finish_network_summary(capture);
+                return Err(format!(
+                    "network capture start: {error}; stopped summary: {saved:?}"
+                ));
+            }
+            // Keep ownership visible so Stop capture can retry an uncertain add.
+            self.snapshot.network_capture = Some(capture);
+            return Err(format!(
+                "network capture start: {error}; cleanup: {cleanup:?}"
+            ));
         }
         self.snapshot.network_capture = Some(capture);
         // Publish the changed toggle before acknowledging the command, so
@@ -3105,14 +3304,11 @@ impl Worker {
             .network_capture
             .as_ref()
             .ok_or("no network capture is running")?;
-        session
-            .process
-            .qmp(&crate::network::filter_dump_del(capture))
-            .map_err(|error| format!("network capture stop: {error}"))?;
+        remove_network_filter(&session.process, capture)?;
         let finished = end_network_capture(&mut self.snapshot);
         if let (Ok(bytes), Some(session)) = (&finished, self.session.as_mut()) {
             session.network_bytes_done = session.network_bytes_done.saturating_add(*bytes);
-            session.network_bytes = session.network_bytes_done;
+            session.network_bytes = session.network_bytes.max(session.network_bytes_done);
         }
         self.publish();
         let bytes = finished?;
@@ -3124,6 +3320,9 @@ impl Worker {
     /// Start writing the running VM's RAM to a new memory dump; QEMU writes
     /// it in the background and pauses the guest until it is done.
     fn start_memory_dump(&mut self) -> Result<String, String> {
+        self.start_memory_dump_for(None)
+    }
+    fn start_memory_dump_for(&mut self, owner_cookie: Option<u64>) -> Result<String, String> {
         let session = self.session.as_mut().ok_or("VM is stopped")?;
         if self.snapshot.memory_dump.is_some() {
             return Err("a memory dump is already being written".into());
@@ -3142,14 +3341,66 @@ impl Worker {
             system,
             bundle.symbols.as_deref(),
         )?;
+        if let Some(cookie) = owner_cookie {
+            let owner = session
+                .run_artifacts
+                .get_mut(&cookie)
+                .ok_or("missing RAM dump owner")?;
+            owner.summary.memory_dump = Some(dump.dir.clone());
+            owner.summary.memory_state = RunArtifactState::InProgress;
+            if let Err(error) = owner.save() {
+                let cleanup = crate::memory::delete(&dump);
+                return Err(format!("{error}; dump cleanup: {cleanup:?}"));
+            }
+        }
         // QEMU stops the guest while it writes: a silent guest is expected.
-        session.transport.set_guest_paused(true)?;
-        if let Err(error) =
-            crate::memory::dump_command(&dump).and_then(|command| session.process.qmp(&command))
-        {
-            let _ = session.transport.set_guest_paused(false);
-            let _ = crate::memory::delete(&dump);
-            return Err(format!("memory dump: {error}"));
+        if let Err(error) = session.transport.set_guest_paused(true) {
+            let cleanup = crate::memory::delete(&dump);
+            return Err(format!(
+                "memory dump pause: {error}; dump cleanup: {cleanup:?}"
+            ));
+        }
+        let command = match crate::memory::dump_command(&dump) {
+            Ok(command) => command,
+            Err(error) => {
+                let resumed = session.transport.set_guest_paused(false);
+                let cleanup = crate::memory::delete(&dump);
+                return Err(format!(
+                    "memory dump command: {error}; transport resume: {resumed:?}; dump cleanup: {cleanup:?}"
+                ));
+            }
+        };
+        let mut warning = None;
+        if let Err(error) = session.process.qmp(&command) {
+            if !qmp_outcome_unknown(&error) {
+                let resumed = session.transport.set_guest_paused(false);
+                let cleanup = crate::memory::delete(&dump);
+                return Err(format!(
+                    "memory dump: {error}; transport resume: {resumed:?}; dump cleanup: {cleanup:?}"
+                ));
+            }
+            let status = session
+                .process
+                .qmp(&serde_json::json!({"execute":"query-dump"}))
+                .and_then(|reply| memory_query_status(&reply));
+            let message = format!(
+                "memory dump acknowledgement unresolved: {error}; reconciliation: {status:?}; artifacts retained"
+            );
+            if matches!(
+                status,
+                Ok(crate::memory::DumpStatus::Failed | crate::memory::DumpStatus::None)
+            ) {
+                let resumed = session.transport.set_guest_paused(false);
+                let mut failed = dump;
+                failed.error = Some(message.clone());
+                let saved = failed.save();
+                return Err(format!(
+                    "{message}; transport resume: {resumed:?}; failed dump summary: {saved:?}"
+                ));
+            }
+            // Active/completed or still unknown: preserve both paused-guest
+            // accounting and the dump owner until a later query proves an end.
+            warning = Some(message);
         }
         session.last_memory_check = Instant::now();
         let total = u64::from(session.vm.ram_mib) << 20;
@@ -3158,6 +3409,24 @@ impl Worker {
             completed: 0,
             total,
         });
+        if let Some(message) = warning {
+            if let Some(cookie) = owner_cookie
+                && let Some(owner) = session.run_artifacts.get_mut(&cookie)
+            {
+                owner.issue(message.clone());
+                if let Err(error) = owner.save() {
+                    self.snapshot.last_error = Some(error);
+                }
+            }
+            self.snapshot.last_error = Some(message.clone());
+            self.emit(Notification::CommandResult {
+                id: 0,
+                success: false,
+                message: message.clone(),
+            });
+            self.publish();
+            return Ok(message);
+        }
         self.publish();
         Ok("memory dump started: the VM is paused while its RAM is written".into())
     }
@@ -3175,7 +3444,7 @@ impl Worker {
         let status = session
             .process
             .qmp(&serde_json::from_str(crate::memory::QUERY_DUMP).unwrap_or_default())
-            .map(|reply| crate::memory::dump_status(&reply));
+            .and_then(|reply| memory_query_status(&reply));
         let mut dump = progress.dump.clone();
         let message = match status {
             Ok(crate::memory::DumpStatus::Active { completed, total }) => {
@@ -3185,53 +3454,203 @@ impl Worker {
             }
             Ok(crate::memory::DumpStatus::Completed) => {
                 dump.finished_ms = Some(unix_ms());
-                dump.bytes = fs::metadata(dump.path()).ok().map(|m| m.len());
-                format!(
-                    "memory dump written ({:.1} GB)",
-                    dump.bytes.unwrap_or(0) as f64 / 1e9
-                )
+                match completed_memory_dump_size(&dump) {
+                    Ok(size) => dump.bytes = Some(size),
+                    Err(error) => dump.error = Some(format!("completed memory dump file: {error}")),
+                }
+                if let Some(error) = dump.error.as_ref() {
+                    format!("memory dump failed: {error}")
+                } else {
+                    format!(
+                        "memory dump written ({:.1} GB)",
+                        dump.bytes.unwrap_or(0) as f64 / 1e9
+                    )
+                }
             }
             Ok(_) => {
                 dump.error = Some("QEMU could not write the memory dump".into());
                 "memory dump failed".into()
             }
             Err(error) => {
-                dump.error = Some(error.clone());
-                format!("memory dump: {error}")
+                // QMP loss is not proof that a background operation stopped.
+                // Keep the owned file/progress and retry; no guest commands
+                // run against a VM whose paused state remains unresolved.
+                let message = format!(
+                    "memory dump status unresolved: {error}; artifacts retained; retrying QMP"
+                );
+                self.snapshot.last_error = Some(message.clone());
+                for owner in session.run_artifacts.values_mut() {
+                    if owner.summary.memory_dump.as_ref() == Some(&dump.dir) {
+                        owner.issue(message.clone());
+                        if let Err(error) = owner.save() {
+                            self.snapshot.last_error = Some(error);
+                        }
+                    }
+                }
+                return;
             }
         };
         if let Err(error) = session.transport.set_guest_paused(false) {
             self.snapshot.last_error = Some(format!("after the memory dump: {error}"));
         }
         if let Err(error) = dump.save() {
+            dump.error
+                .get_or_insert_with(|| format!("memory dump summary: {error}"));
             self.snapshot.last_error = Some(format!("memory dump summary: {error}"));
         } else if dump.error.is_some() {
             self.snapshot.last_error = Some(message);
         }
+        for owner in session.run_artifacts.values_mut() {
+            if owner.summary.memory_dump.as_ref() == Some(&dump.dir)
+                && owner.summary.memory_state == RunArtifactState::InProgress
+            {
+                owner.summary.memory_state = if dump.error.is_some() {
+                    RunArtifactState::Failed
+                } else {
+                    RunArtifactState::Complete
+                };
+                if let Some(error) = dump.error.as_ref() {
+                    owner.issue(error.clone());
+                }
+                if let Err(error) = owner.save() {
+                    self.snapshot.last_error = Some(error);
+                }
+            }
+        }
         self.snapshot.memory_dump = None;
         self.publish();
+    }
+    /// React once to fresh guest tree-completion status. Neither root exit nor
+    /// terminal EOF can authorize these actions while descendants still live.
+    fn check_run_artifacts(&mut self) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let cookies: Vec<_> = session.run_artifacts.keys().copied().collect();
+        let mut issues = Vec::new();
+        for cookie in cookies {
+            let Some(mut owner) = session.run_artifacts.remove(&cookie) else {
+                continue;
+            };
+            let changed = owner.observe(
+                session
+                    .runs
+                    .get(&cookie)
+                    .and_then(|run| run.summary.execution.as_ref()),
+            );
+            if owner.tree_complete
+                && owner.network.is_some()
+                && owner
+                    .last_network_stop
+                    .is_none_or(|at| at.elapsed() >= Duration::from_secs(1))
+                && let Err(error) = session.stop_run_network(&mut owner)
+            {
+                let new_issue = !owner.summary.issues.contains(&error);
+                owner.issue(error.clone());
+                if new_issue {
+                    issues.push(error);
+                }
+                if let Err(error) = owner.save() {
+                    issues.push(error);
+                }
+            }
+            if changed && let Err(error) = owner.save() {
+                issues.push(error);
+            }
+            if cookie != 0 || owner.network.is_some() {
+                session.run_artifacts.insert(cookie, owner);
+            }
+        }
+        let queued = session.run_artifacts.iter().find_map(|(cookie, owner)| {
+            (owner.summary.memory_state == RunArtifactState::Queued).then_some(*cookie)
+        });
+        if self.snapshot.memory_dump.is_none()
+            && self.snapshot.vm_snapshot_progress.is_none()
+            && self.snapshot.state == VmState::Running
+            && let Some(cookie) = queued
+            && let Err(error) = self.start_memory_dump_for(Some(cookie))
+        {
+            if let Some(owner) = self
+                .session
+                .as_mut()
+                .and_then(|session| session.run_artifacts.get_mut(&cookie))
+            {
+                owner.summary.memory_state = RunArtifactState::Failed;
+                owner.issue(format!("post-exit RAM dump: {error}"));
+                if let Err(error) = owner.save() {
+                    issues.push(error);
+                }
+            }
+            issues.push(format!("post-exit RAM dump: {error}"));
+        }
+        for message in issues {
+            self.snapshot.last_error = Some(message.clone());
+            self.emit(Notification::CommandResult {
+                id: 0,
+                success: false,
+                message,
+            });
+        }
     }
     /// About once a second: measure the running network capture and stop it
     /// when the recordings of this boot have used up the quota.
     fn check_network_capture(&mut self) {
-        let (Some(session), Some(capture)) = (
-            self.session.as_mut(),
-            self.snapshot.network_capture.as_ref(),
-        ) else {
+        let Some(session) = self.session.as_mut() else {
             return;
         };
+        if self.snapshot.network_capture.is_none()
+            && session
+                .run_artifacts
+                .values()
+                .all(|owner| owner.network.is_none())
+        {
+            return;
+        }
         if session.last_network_check.elapsed() < Duration::from_secs(1) {
             return;
         }
         session.last_network_check = Instant::now();
-        let live = fs::metadata(&capture.file).map_or(0, |metadata| metadata.len());
+        let live = self
+            .snapshot
+            .network_capture
+            .iter()
+            .chain(
+                session
+                    .run_artifacts
+                    .values()
+                    .filter_map(|owner| owner.network.as_ref()),
+            )
+            .map(|capture| fs::metadata(&capture.file).map_or(0, |metadata| metadata.len()))
+            .fold(0u64, u64::saturating_add);
         session.network_bytes = session.network_bytes_done.saturating_add(live);
         if session.available() > 0 {
             return;
         }
-        let result = self.stop_network_capture();
+        let cookies: Vec<_> = session.run_artifacts.keys().copied().collect();
+        for cookie in cookies {
+            let Some(mut owner) = session.run_artifacts.remove(&cookie) else {
+                continue;
+            };
+            if owner.network.is_some() {
+                let result = session.stop_run_network(&mut owner);
+                owner.summary.network_state = RunArtifactState::Failed;
+                owner.issue("network capture reached the recording quota before tree exit".into());
+                if let Err(error) = result {
+                    owner.issue(error);
+                }
+                if let Err(error) = owner.save() {
+                    self.snapshot.last_error = Some(error);
+                }
+            }
+            session.run_artifacts.insert(cookie, owner);
+        }
+        let result = if self.snapshot.network_capture.is_some() {
+            self.stop_network_capture()
+        } else {
+            Ok(String::new())
+        };
         self.snapshot.last_error = Some(match result {
-            Ok(_) => "network capture stopped: the recording quota is full".into(),
+            Ok(_) => "network captures stopped: the recording quota is full".into(),
             Err(error) => format!("network capture reached the recording quota; {error}"),
         });
         self.publish();
@@ -3504,6 +3923,19 @@ impl Worker {
                 Ok("capture admission stopped; programs continue running and late observation tails remain recordable".into())
             }
             Command::Execute(request) => {
+                if session.run_artifacts.contains_key(&0) {
+                    return Err("a failed launch still owns an unresolved network capture; wait for cleanup or restart the VM".into());
+                }
+                if (request.capture_network || request.memory_dump_on_exit)
+                    && !self
+                        .snapshot
+                        .guest_kernel
+                        .as_ref()
+                        .and_then(|kernel| kernel.revision)
+                        .is_some_and(|revision| revision >= 14)
+                {
+                    return Err("run-to-exit capture and post-exit RAM dump require a revision-14 base for Antinomie 0.5.0".into());
+                }
                 if session.runs.len() >= 64 {
                     return Err("this VM boot reached the 64-run limit; restart the VM before another launch".into());
                 }
@@ -3560,34 +3992,45 @@ impl Worker {
                 run.summary.recording_error = None;
                 run.boot_bundle_identity = session.bundle.base_identity.clone();
                 run.disk_base_identity = session.disk_bundle.base_identity.clone();
-                let reply = session.request(
-                    control::EXEC,
-                    &args,
-                    &mut self.snapshot,
-                    &self.sender,
-                    timeout,
-                );
-                let reply = match reply {
-                    Ok(reply) => reply,
-                    Err(error) => {
-                        run.storage_error(format!("execution acknowledgement failed: {error}; launch outcome may be unknown"));
-                        let _ = run.persist_summary();
-                        return Err(error);
-                    }
+                let mut artifacts = RunArtifactOwner::new(&run.summary);
+                let prepared = if request.capture_network {
+                    session.start_run_network(&self.options, &mut artifacts)
+                } else {
+                    artifacts.save()
                 };
-                if reply.len() != if inline_acquisition { 48 } else { 24 }
-                    || u32_at(&reply, 20).map_err(|e| e.to_string())? != 0
-                {
-                    return Err("invalid execution reply".into());
+                if let Err(error) = prepared {
+                    return Err(session.failed_run_launch(&mut run, artifacts, error));
                 }
-                let id = u64_at(&reply, 0).map_err(|e| e.to_string())?;
-                let cookie = u64_at(&reply, 8).map_err(|e| e.to_string())?;
-                let pid = u32_at(&reply, 16).map_err(|e| e.to_string())?;
-                if cookie == 0 || session.runs.contains_key(&cookie) {
-                    return Err(
-                        "invalid or reused execution root identity; launch outcome unknown".into(),
-                    );
-                }
+                let acknowledged = (|| -> Result<(Vec<u8>, u64, u64, u32), String> {
+                    let reply = session.request(
+                        control::EXEC,
+                        &args,
+                        &mut self.snapshot,
+                        &self.sender,
+                        timeout,
+                    )?;
+                    if reply.len() != if inline_acquisition { 48 } else { 24 }
+                        || u32_at(&reply, 20).map_err(|e| e.to_string())? != 0
+                    {
+                        return Err("invalid execution reply".into());
+                    }
+                    let id = u64_at(&reply, 0).map_err(|e| e.to_string())?;
+                    let cookie = u64_at(&reply, 8).map_err(|e| e.to_string())?;
+                    let pid = u32_at(&reply, 16).map_err(|e| e.to_string())?;
+                    if cookie == 0 || session.runs.contains_key(&cookie) {
+                        return Err(
+                            "invalid or reused execution root identity; launch outcome unknown"
+                                .into(),
+                        );
+                    }
+                    Ok((reply, id, cookie, pid))
+                })();
+                let (reply, id, cookie, pid) = match acknowledged {
+                    Ok(acknowledged) => acknowledged,
+                    Err(error) => return Err(session.failed_run_launch(&mut run, artifacts,
+                        format!("execution acknowledgement failed: {error}; launch outcome may be unknown"))),
+                };
+                session.run_artifacts.insert(cookie, artifacts);
                 run.summary.session_id = id;
                 run.summary.root_task_cookie = cookie;
                 run.summary.pid = pid;
@@ -3596,14 +4039,16 @@ impl Worker {
                     let acquisition = if inline_acquisition {
                         control::acquisition(&reply[24..])
                     } else if supported {
-                        session
-                            .request(
-                                control::ACQUIRE,
-                                &control::acquire(&request.path, request.uid, request.gid)?,
-                                &mut self.snapshot,
-                                &self.sender,
-                                timeout,
-                            )
+                        control::acquire(&request.path, request.uid, request.gid)
+                            .and_then(|args| {
+                                session.request(
+                                    control::ACQUIRE,
+                                    &args,
+                                    &mut self.snapshot,
+                                    &self.sender,
+                                    timeout,
+                                )
+                            })
                             .and_then(|reply| control::acquisition(&reply))
                     } else {
                         Err(
@@ -4013,11 +4458,170 @@ fn unix_ms() -> u64 {
 /// VM gone) with its size, and count its packets on a background thread so
 /// a large capture does not pause the transport. Returns the bytes.
 fn end_network_capture(snapshot: &mut Snapshot) -> Result<u64, String> {
-    let Some(mut capture) = snapshot.network_capture.take() else {
+    let Some(capture) = snapshot.network_capture.take() else {
         return Ok(0);
     };
+    finish_network_summary(capture)
+}
+
+fn prepare_network_capture(
+    options: &BackendOptions,
+    session: &Session,
+) -> Result<crate::network::NetworkCapture, String> {
+    if !session.vm.nat && !session.vm.isolated_network {
+        return Err("this VM has no network: select NAT or isolated network and restart it".into());
+    }
+    if session.available() == 0 {
+        return Err("the recording quota of this boot is full".into());
+    }
+    let boot_dir = crate::locations::locations(options, &session.vm.id)?
+        .recording_directory
+        .join("boots")
+        .join(&session.boot_id);
+    let capture = crate::network::NetworkCapture::new(
+        &boot_dir,
+        &session.boot_id,
+        &storage::unique_id(),
+        unix_ms(),
+    );
+    let dir = capture.file.parent().ok_or("network capture folder")?;
+    storage::private_dir(dir).map_err(|error| format!("network capture folder: {error}"))?;
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&capture.file)
+        .map_err(|error| format!("network capture file: {error}"))?;
+    if let Err(error) = crate::network::save_summary(&capture) {
+        let cleanup = fs::remove_file(&capture.file);
+        return Err(format!(
+            "network capture summary: {error}; empty file cleanup: {cleanup:?}"
+        ));
+    }
+    Ok(capture)
+}
+
+fn remove_network_filter(
+    process: &VmProcess,
+    capture: &crate::network::NetworkCapture,
+) -> Result<(), String> {
+    if let Err(error) = process.qmp(&crate::network::filter_dump_del(capture)) {
+        // A timed-out object-add/delete may have succeeded. Confirm absence
+        // instead of abandoning ownership or confusing another run's object.
+        let objects = process
+            .qmp(&serde_json::json!({
+                "execute":"qom-list", "arguments":{"path":"/objects"}
+            }))
+            .map_err(|query| format!("network capture stop: {error}; ownership query: {query}"))?;
+        if network_filter_present(&objects, &capture.object_id())? {
+            return Err(format!(
+                "network capture stop: {error}; filter is still active"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn network_filter_present(objects: &serde_json::Value, object_id: &str) -> Result<bool, String> {
+    // VmProcess::qmp already unwraps the QMP return envelope.
+    let entries = objects
+        .as_array()
+        .ok_or("invalid network capture ownership reply")?;
+    let mut present = false;
+    for entry in entries {
+        let name = entry["name"]
+            .as_str()
+            .ok_or("network capture ownership entry has no name")?;
+        present |= name == object_id;
+    }
+    Ok(present)
+}
+
+fn qmp_outcome_unknown(error: &str) -> bool {
+    // QMP protocol errors prove command rejection. Transport/read failures
+    // may happen after the command executed and cannot authorize deletion.
+    !error.starts_with("QMP error:")
+}
+
+fn memory_query_status(reply: &serde_json::Value) -> Result<crate::memory::DumpStatus, String> {
+    match reply["status"].as_str() {
+        Some("active")
+            if reply["completed"].as_u64().is_some() && reply["total"].as_u64().is_some() =>
+        {
+            Ok(crate::memory::dump_status(reply))
+        }
+        Some("completed" | "failed" | "none") => Ok(crate::memory::dump_status(reply)),
+        _ => Err("invalid memory dump status reply; operation outcome remains unknown".into()),
+    }
+}
+
+fn completed_memory_dump_size(dump: &crate::memory::MemoryDump) -> Result<u64, String> {
+    let mut file = crate::archive_io::open_regular(&dump.dir, &dump.path())
+        .map_err(|error| error.to_string())?;
+    let size = file.metadata().map_err(|error| error.to_string())?.len();
+    let mut header = [0; 64];
+    file.read_exact(&mut header)
+        .map_err(|error| format!("ELF header: {error}"))?;
+    // This launcher produces x86-64 QEMU ELF cores. Check the actual regular
+    // artifact, rather than trusting a QMP completion flag or a guessed size.
+    if size <= header.len() as u64
+        || &header[..4] != b"\x7fELF"
+        || header[4..7] != [2, 1, 1]
+        || u16::from_le_bytes([header[16], header[17]]) != 4
+        || u16::from_le_bytes([header[18], header[19]]) != 62
+    {
+        return Err("expected a nonempty x86-64 ELF core dump".into());
+    }
+    // QEMU's physical ELF can report e_ehsize=8. Its actual ELF64 header and
+    // program table still follow the standard layout, so validate the table
+    // and file-backed extents instead of rejecting that producer field.
+    let table_offset = u64_at(&header, 32).map_err(|error| error.to_string())?;
+    let entry_size = u16::from_le_bytes([header[54], header[55]]);
+    let entry_count = u16::from_le_bytes([header[56], header[57]]);
+    let table_end = table_offset.checked_add(u64::from(entry_size) * u64::from(entry_count));
+    if entry_size != 56
+        || entry_count == 0
+        || table_offset < 64
+        || table_end.is_none_or(|end| end > size)
+    {
+        return Err("ELF program table is missing or exceeds the completed file".into());
+    }
+    let mut reader = BufReader::new(file);
+    reader
+        .seek(SeekFrom::Start(table_offset))
+        .map_err(|error| error.to_string())?;
+    let mut load = false;
+    for _ in 0..entry_count {
+        let mut entry = [0; 56];
+        reader
+            .read_exact(&mut entry)
+            .map_err(|error| format!("ELF program entry: {error}"))?;
+        let read64 = |offset| u64_at(&entry, offset).map_err(|error| error.to_string());
+        let offset = read64(8)?;
+        let file_size = read64(32)?;
+        let memory_size = read64(40)?;
+        if file_size > 0 && offset.checked_add(file_size).is_none_or(|end| end > size) {
+            return Err("ELF segment exceeds the completed file; RAM artifact is truncated".into());
+        }
+        if u32_at(&entry, 0).map_err(|error| error.to_string())? == 1 {
+            if file_size > memory_size {
+                return Err("ELF load extent exceeds its memory extent".into());
+            }
+            load |= file_size > 0 && memory_size > 0;
+        }
+    }
+    if !load {
+        return Err("ELF core contains no file-backed memory load segment".into());
+    }
+    Ok(size)
+}
+
+fn finish_network_summary(mut capture: crate::network::NetworkCapture) -> Result<u64, String> {
     capture.stopped_ms = Some(unix_ms());
-    let bytes = fs::metadata(&capture.file).map_or(0, |metadata| metadata.len());
+    let bytes = fs::metadata(&capture.file)
+        .map_err(|error| format!("network capture final size: {error}"))?
+        .len();
     capture.bytes = Some(bytes);
     crate::network::save_summary(&capture)
         .map_err(|error| format!("network capture summary: {error}"))?;
@@ -4051,6 +4655,163 @@ fn remaining_request_budget(deadline: Instant, maximum: Duration) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lifecycle_qmp_reconciliation_uses_payload_and_preserves_unknown_dump_outcomes() {
+        let direct = serde_json::json!([{"name":"manual","type":"child<filter-dump>"}, {"name":"owned","type":"child<filter-dump>"}]);
+        assert!(network_filter_present(&direct, "owned").unwrap());
+        assert!(!network_filter_present(&direct, "already-deleted").unwrap());
+        assert!(network_filter_present(&serde_json::json!({"return":direct}), "owned").is_err());
+        assert!(network_filter_present(&serde_json::json!([{}]), "owned").is_err());
+        assert!(!qmp_outcome_unknown("QMP error: command rejected"));
+        assert!(qmp_outcome_unknown("QMP read: timed out"));
+        assert!(qmp_outcome_unknown("QMP connect: socket missing"));
+        assert_eq!(
+            memory_query_status(&serde_json::json!({"status":"active","completed":3,"total":9}))
+                .unwrap(),
+            crate::memory::DumpStatus::Active {
+                completed: 3,
+                total: 9
+            }
+        );
+        assert_eq!(
+            memory_query_status(&serde_json::json!({"status":"none"})).unwrap(),
+            crate::memory::DumpStatus::None
+        );
+        assert_eq!(
+            memory_query_status(&serde_json::json!({"status":"failed"})).unwrap(),
+            crate::memory::DumpStatus::Failed
+        );
+        assert!(memory_query_status(&serde_json::json!({})).is_err());
+        assert!(memory_query_status(&serde_json::json!({"status":"active"})).is_err());
+    }
+
+    #[test]
+    fn lifecycle_completed_dump_requires_a_regular_nonempty_elf_core() {
+        let root = std::env::temp_dir().join(format!("ant-dump-check-{}", storage::unique_id()));
+        storage::private_dir(&root).unwrap();
+        let dump = crate::memory::MemoryDump {
+            dir: root.clone(),
+            file: "memory.elf".into(),
+            ..Default::default()
+        };
+        assert!(completed_memory_dump_size(&dump).is_err());
+        fs::write(dump.path(), b"").unwrap();
+        assert!(completed_memory_dump_size(&dump).is_err());
+        fs::write(dump.path(), vec![0; 256]).unwrap();
+        assert!(completed_memory_dump_size(&dump).is_err());
+        let mut elf = vec![0; 128];
+        elf[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+        elf[16..18].copy_from_slice(&4u16.to_le_bytes());
+        elf[18..20].copy_from_slice(&62u16.to_le_bytes());
+        elf[52..54].copy_from_slice(&64u16.to_le_bytes());
+        elf[32..40].copy_from_slice(&64u64.to_le_bytes());
+        elf[54..56].copy_from_slice(&56u16.to_le_bytes());
+        elf[56..58].copy_from_slice(&1u16.to_le_bytes());
+        elf[64..68].copy_from_slice(&1u32.to_le_bytes());
+        elf[72..80].copy_from_slice(&120u64.to_le_bytes());
+        elf[96..104].copy_from_slice(&8u64.to_le_bytes());
+        elf[104..112].copy_from_slice(&8u64.to_le_bytes());
+        fs::write(dump.path(), &elf).unwrap();
+        assert_eq!(completed_memory_dump_size(&dump).unwrap(), 128);
+        // Observed on the installed QEMU physical-memory producer.
+        elf[52..54].copy_from_slice(&8u16.to_le_bytes());
+        fs::write(dump.path(), &elf).unwrap();
+        assert_eq!(completed_memory_dump_size(&dump).unwrap(), 128);
+        elf[96..104].copy_from_slice(&32u64.to_le_bytes());
+        elf[104..112].copy_from_slice(&32u64.to_le_bytes());
+        fs::write(dump.path(), &elf).unwrap();
+        assert!(
+            completed_memory_dump_size(&dump)
+                .unwrap_err()
+                .contains("truncated")
+        );
+        fs::remove_file(dump.path()).unwrap();
+        fs::create_dir(dump.path()).unwrap();
+        assert!(completed_memory_dump_size(&dump).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn artifact_run(directory: PathBuf) -> RunSummary {
+        RunSummary {
+            id: "artifact-run".into(),
+            vm_id: "vm".into(),
+            boot_id: "boot".into(),
+            session_id: 1,
+            root_task_cookie: 2,
+            pid: 3,
+            request: ExecRequest {
+                memory_dump_on_exit: true,
+                capture_network: true,
+                ..Default::default()
+            },
+            directory,
+            terminal_eof: true,
+            state: RunState::Running,
+            recording_error: None,
+            execution: None,
+            analysis: None,
+        }
+    }
+
+    #[test]
+    fn run_artifacts_wait_for_descendants_and_async_drain_then_queue_once() {
+        let run = artifact_run(PathBuf::new());
+        let mut owner = RunArtifactOwner::new(&run);
+        // Terminal EOF and root exit occur while a detached child still runs.
+        let mut status = RunExecution {
+            generation: 1,
+            live_task_count: 1,
+            pending_async_count: 0,
+            flags: 1,
+            root_wait_status: Some(0),
+            root_exit: Some(WaitStatus::Exited { code: 0 }),
+            async_loss_count: 0,
+            total_task_count: 2,
+        };
+        assert!(!owner.observe(None));
+        assert!(!owner.observe(Some(&status)));
+        assert_eq!(
+            owner.summary.memory_state,
+            RunArtifactState::WaitingForTreeExit
+        );
+        status.live_task_count = 0;
+        status.pending_async_count = 1;
+        status.flags = 3;
+        assert!(!owner.observe(Some(&status)));
+        status.pending_async_count = 0;
+        status.flags = 19; // async loss prevents a proven drained tree.
+        assert!(!owner.observe(Some(&status)));
+        status.flags = 11;
+        assert!(owner.observe(Some(&status)));
+        assert_eq!(owner.summary.memory_state, RunArtifactState::Queued);
+        owner.summary.memory_state = RunArtifactState::Complete;
+        assert!(!owner.observe(Some(&status)));
+        assert_eq!(owner.summary.memory_state, RunArtifactState::Complete);
+    }
+
+    #[test]
+    fn run_artifacts_sidecar_load_is_optional_bounded_and_retains_failures() {
+        let root = std::env::temp_dir().join(format!("ant-artifacts-{}", storage::unique_id()));
+        storage::private_dir(&root).unwrap();
+        assert_eq!(RunArtifacts::load(&root).unwrap(), None);
+        let run = artifact_run(root.clone());
+        let mut owner = RunArtifactOwner::new(&run);
+        owner.summary.memory_dump = Some(root.join("memory/evidence"));
+        owner.summary.memory_state = RunArtifactState::Failed;
+        owner.issue("disk full".into());
+        owner.save().unwrap();
+        assert_eq!(RunArtifacts::load(&root).unwrap(), Some(owner.summary));
+        fs::write(root.join("artifacts.json"), b"{broken").unwrap();
+        assert!(RunArtifacts::load(&root).is_err());
+        fs::write(root.join("artifacts.json"), vec![b' '; 256 * 1024 + 1]).unwrap();
+        assert!(
+            RunArtifacts::load(&root)
+                .unwrap_err()
+                .contains("size limit")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 
     fn download_worker(root: PathBuf) -> Worker {
         let (_commands, receiver) = mpsc::sync_channel(1);

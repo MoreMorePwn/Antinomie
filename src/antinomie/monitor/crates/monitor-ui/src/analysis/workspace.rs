@@ -4,8 +4,8 @@ use super::{
     section_title, ReportAction,
 };
 use antinomie_monitor_core::{
-    AnalysisData, AnalysisEntry, AnalysisKind, AnalysisListingPage, AnalysisReport,
-    AnalysisSection, AnalysisSpecimenPage, AnalysisState,
+    AnalysisData, AnalysisEntry, AnalysisExportFormat, AnalysisKind, AnalysisListingPage,
+    AnalysisReport, AnalysisSection, AnalysisSpecimenPage, AnalysisState,
 };
 use eframe::egui;
 use egui_extras::{Column as TableColumn, TableBuilder};
@@ -80,7 +80,7 @@ fn render(
     };
     state.bind(&report.id);
     let mut action = None;
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.strong(format!("{:?}", report.state));
         if matches!(
             report.state,
@@ -105,12 +105,15 @@ fn render(
             ));
     });
     if let Some(reason) = &report.reason {
-        ui.add(
-            egui::Label::new(egui::RichText::new(reason).color(crate::theme::muted())).truncate(),
-        )
-        .on_hover_text(reason);
+        ui.add(egui::Label::new(egui::RichText::new(reason).color(crate::theme::warn())).wrap())
+            .on_hover_text(reason);
     }
     super::progress_banner(ui, report);
+    if forced.is_none() && state.kind.is_none() {
+        if let Some(next) = export_controls(ui, report, None) {
+            return Some(next);
+        }
+    }
     ui.separator();
     if forced.is_none() && ui.available_width() >= 900.0 {
         ui.horizontal_top(|ui| {
@@ -154,6 +157,43 @@ fn render(
             action = Some(next);
         }
     }
+    action
+}
+
+/// Export operations are explicit UI actions; no file or tool IO runs here.
+fn export_controls(
+    ui: &mut egui::Ui,
+    report: &AnalysisReport,
+    kind: Option<AnalysisKind>,
+) -> Option<ReportAction> {
+    let mut action = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.menu_button(if kind.is_some() { "Export category…" } else { "Export report…" }, |ui| {
+            for (label, format) in [("Plain text (.txt)", AnalysisExportFormat::Text), ("Structured results (.json)", AnalysisExportFormat::Json)] {
+                if ui.button(label).clicked() {
+                    action = Some(ReportAction::Export { report_id: report.id.clone(), kind, format });
+                    ui.close_menu();
+                }
+            }
+            if kind.is_none() || kind == Some(AnalysisKind::Decompilation) {
+                let retained = report.sections.iter().any(|s| s.summary.contains("native Ghidra project retained"));
+                if ui.add_enabled(retained, egui::Button::new("Native Ghidra project (.gpr + .rep)"))
+                    .on_disabled_hover_text("A native project is available after a successful Ghidra analysis with project retention. Older and radare2 reports export as text.").clicked() {
+                    action = Some(ReportAction::Export { report_id: report.id.clone(), kind: Some(AnalysisKind::Decompilation), format: AnalysisExportFormat::GhidraProject });
+                    ui.close_menu();
+                }
+                if ui.add_enabled(retained, egui::Button::new("Open in Ghidra"))
+                    .on_disabled_hover_text("No native Ghidra project retained for this report").clicked() {
+                    action = Some(ReportAction::OpenGhidra { report_id: report.id.clone() });
+                    ui.close_menu();
+                }
+            }
+        });
+        if ui.button("Open result directory").on_hover_text("Show retained report, specimen, complete listings and any native artifacts").clicked() {
+            action = Some(ReportAction::ShowDirectory { report_id: report.id.clone() });
+        }
+        ui.weak("Exports include all retained rows");
+    });
     action
 }
 
@@ -274,6 +314,10 @@ fn results(
         }
     });
     ui.add(egui::Label::new(&section.summary).wrap());
+    if let Some(next) = export_controls(ui, report, Some(kind)) {
+        return Some(next);
+    }
+    ui.add_space(6.0);
     if section.summary.contains("Tools > Analysis tools")
         && section.state != antinomie_monitor_core::AnalysisSectionState::Complete
         && ui.button("Install analysis tools…").clicked()
@@ -295,7 +339,7 @@ fn results(
         if wide {
             ui.horizontal_top(|ui| {
                 let height = ui.available_height();
-                let width = (ui.available_width() * 0.7).max(300.0);
+                let width = (ui.available_width() * 0.64).max(300.0);
                 ui.allocate_ui_with_layout(
                     egui::vec2(width, height),
                     egui::Layout::top_down(egui::Align::Min),
@@ -413,7 +457,7 @@ fn results(
     if wide {
         ui.horizontal_top(|ui| {
             let height = ui.available_height();
-            let width = (ui.available_width() - 310.0).max(200.0);
+            let width = (ui.available_width() * 0.64).max(300.0);
             ui.allocate_ui_with_layout(
                 egui::vec2(width, height),
                 egui::Layout::top_down(egui::Align::Min),
@@ -501,7 +545,10 @@ fn overview(
                     ui.label(format!(
                         "{} / {} rows",
                         state_word(report, section),
-                        section.entries.len()
+                        section
+                            .listing
+                            .as_ref()
+                            .map_or(section.entries.len() as u64, |listing| listing.rows)
                     ));
                     if ui
                         .button(egui_phosphor::regular::ARROW_SQUARE_OUT)
@@ -514,8 +561,7 @@ fn overview(
                         });
                     }
                 });
-                ui.add(egui::Label::new(&section.summary).truncate())
-                    .on_hover_text(&section.summary);
+                ui.add(egui::Label::new(&section.summary).wrap());
             }
         });
     action
@@ -694,7 +740,7 @@ fn copy_value(ui: &mut egui::Ui, label: &str, value: &str) {
             ui.ctx().copy_text(value.to_owned());
         }
     });
-    ui.add(egui::Label::new(value).wrap());
+    ui.add(egui::Label::new(egui::RichText::new(value).monospace()).wrap());
 }
 
 fn identity_value(ui: &mut egui::Ui, label: &str, value: &str) {
@@ -707,8 +753,7 @@ fn identity_value(ui: &mut egui::Ui, label: &str, value: &str) {
         {
             ui.ctx().copy_text(value.to_owned());
         }
-        ui.add(egui::Label::new(value).truncate())
-            .on_hover_text(value);
+        ui.add(egui::Label::new(value).wrap());
     });
 }
 
@@ -720,7 +765,12 @@ fn detail(
     preview: Option<&Result<AnalysisSpecimenPage, String>>,
 ) -> Option<ReportAction> {
     let Some(entry) = entry else {
-        ui.label("No row selected.");
+        ui.add(
+            egui::Label::new(
+                "Select a result to read its complete retained value, evidence and bytes here.",
+            )
+            .wrap(),
+        );
         return None;
     };
     let mut action = None;

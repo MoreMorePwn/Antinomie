@@ -329,7 +329,7 @@ impl PacketList {
 }
 
 impl NetworkView {
-    fn open(&mut self, path: Option<PathBuf>) {
+    pub(crate) fn open(&mut self, path: Option<PathBuf>) {
         if self.list.path != path {
             self.list = PacketList::new(path);
         }
@@ -632,7 +632,7 @@ impl NetworkView {
             let why = if !cx.running {
                 Some("Start the VM to capture its network traffic")
             } else if !cx.nat {
-                Some("This VM has no network: turn on NAT network in its settings and restart it")
+                Some("Choose Isolated or NAT network in the VM settings and restart it")
             } else {
                 None
             };
@@ -661,7 +661,11 @@ impl NetworkView {
                 if let Some(active) = cx.active {
                     let selected = self.list.path.as_ref() == Some(&active.file);
                     let loaded = selected.then_some(self.list.packets.len());
-                    let title = format!("{} Live capture", egui_phosphor::regular::RECORD);
+                    let title = crate::evidence::title(
+                        ui,
+                        &active.file.with_extension("metadata"),
+                        &format!("{} Live capture", egui_phosphor::regular::RECORD),
+                    );
                     if capture_row(
                         ui,
                         selected,
@@ -684,11 +688,15 @@ impl NetworkView {
                     let selected = self.list.path.as_ref() == Some(&capture.file);
                     // The date in UTC; the zone is in the hover text.
                     let started = format_date(capture.started_ms / 1000);
-                    let title = started.trim_end_matches(" UTC");
+                    let title = crate::evidence::title(
+                        ui,
+                        &capture.file.with_extension("metadata"),
+                        started.trim_end_matches(" UTC"),
+                    );
                     if capture_row(
                         ui,
                         selected,
-                        (title, theme::text()),
+                        (&title, theme::text()),
                         &capture_detail(capture, false, None),
                         font_size,
                     )
@@ -713,11 +721,26 @@ impl NetworkView {
     }
 
     fn packets(&mut self, ui: &mut egui::Ui, is_live: bool, cx: &NetworkContext<'_>) {
+        if let Some(path) = self.list.path.clone() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(crate::evidence::title(
+                    ui,
+                    &path.with_extension("metadata"),
+                    &path.file_name().unwrap_or_default().to_string_lossy(),
+                ));
+                crate::evidence::controls(ui, &path.with_extension("metadata"));
+                if ui.button("Open PCAP directory").clicked() {
+                    if let Some(parent) = path.parent() {
+                        crate::evidence::reveal(ui.ctx(), parent);
+                    }
+                }
+            });
+        }
         if self.list.path.is_none() {
             empty_state(
                 ui,
                 if !cx.nat {
-                    "The VM has no network (NAT is off). With NAT on, a network capture \
+                    "The VM is disconnected. With Isolated or NAT network, a capture \
                      records every packet of its network interface, outside the guest."
                 } else if self.captures.is_empty() && cx.active.is_none() {
                     "No network captures yet. Start a capture to record every packet of \

@@ -15,6 +15,11 @@ OUT="${1:?usage: scripts/build-release.sh OUTPUT_DIR}"
 MONITOR="$REPO/src/antinomie/monitor"
 CARGO_DIR="${CARGO_HOME:-$HOME/.cargo}"
 RUSTUP_DIR="${RUSTUP_HOME:-$HOME/.rustup}"
+TARGET_DIR="${CARGO_TARGET_DIR:-$MONITOR/target}"
+# Resolve relative Cargo targets exactly as the build working directory does.
+if [[ "$TARGET_DIR" != /* ]]; then
+    TARGET_DIR="$MONITOR/$TARGET_DIR"
+fi
 
 # The last matching remapping wins: the home directory first, then the
 # more specific locations below it.
@@ -23,15 +28,17 @@ export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$HOME=/home/builder \
 --remap-path-prefix=$REPO=/antinomie"
 (cd "$MONITOR" && cargo build --release --locked)
 
-version="$("$MONITOR/target/release/antinomie-monitor" --version | awk '{print $2}')"
+version="$("$TARGET_DIR/release/antinomie-monitor" --version | awk '{print $2}')"
 name="antinomie-$version"
 stage="$(mktemp -d)"
 trap 'rm -rf -- "$stage"' EXIT
 package="$stage/$name"
 mkdir -p "$package"
-cp "$MONITOR/target/release/antinomie-monitor" "$package/"
+cp "$TARGET_DIR/release/antinomie-monitor" "$package/"
 strip "$package/antinomie-monitor"
-if strings "$package/antinomie-monitor" | grep -qF "$HOME"; then
+# Read the entire stream: grep -q can hide a match behind strings' SIGPIPE
+# when pipefail is enabled.
+if strings "$package/antinomie-monitor" | grep -F "$HOME" >/dev/null; then
     echo "build-release: the executable still names $HOME; refusing to package" >&2
     exit 1
 fi

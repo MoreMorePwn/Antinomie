@@ -12,7 +12,21 @@ use std::{
     thread,
 };
 
+pub(crate) type ProcessTreeResult = Result<
+    (
+        Vec<antinomie_monitor_core::capture_processes::CaptureProcess>,
+        Vec<String>,
+    ),
+    String,
+>;
+
 pub(crate) enum Request {
+    ProcessTree {
+        run_id: String,
+        directory: PathBuf,
+        root_pid: u32,
+        path: String,
+    },
     ListCaptures {
         options: BackendOptions,
         vm_id: String,
@@ -70,6 +84,10 @@ pub(crate) struct TerminalReplay {
 }
 
 pub(crate) enum Answer {
+    ProcessTree {
+        run_id: String,
+        result: ProcessTreeResult,
+    },
     ListCaptures {
         vm_id: String,
         generation: u64,
@@ -85,6 +103,7 @@ pub(crate) enum Answer {
     Invocations {
         generation: u64,
         offset: u64,
+        total: Option<u64>,
         result: Result<InvocationPage, String>,
     },
     Terminal {
@@ -133,6 +152,27 @@ impl ArchiveWorker {
                         break;
                     }
                     let answer = match request {
+                        Request::ProcessTree {
+                            run_id,
+                            directory,
+                            root_pid,
+                            path,
+                        } => Answer::ProcessTree {
+                            run_id,
+                            result: Ok(recording::Recording {
+                                directory,
+                                manifest: serde_json::Value::Null,
+                                events: Vec::new(),
+                            })
+                            .and_then(|recording| {
+                                recording.process_tree_cancellable(
+                                    root_pid,
+                                    &path,
+                                    &worker_cancelled,
+                                )
+                            })
+                            .map_err(|e| e.to_string()),
+                        },
                         Request::ListCaptures {
                             options,
                             vm_id,
@@ -161,22 +201,34 @@ impl ArchiveWorker {
                             offset,
                             capture,
                             pid,
-                        } => Answer::Invocations {
-                            generation,
-                            offset,
-                            result: (if capture {
+                        } => {
+                            let opened = if capture {
                                 antinomie_monitor_core::capture::open_capture_recording_cancellable(
                                     &directory,
                                     &worker_cancelled,
                                 )
                             } else {
                                 recording::open_recording_cancellable(&directory, &worker_cancelled)
-                            })
-                            .and_then(|r| {
-                                r.process_page_cancellable(offset, 256, pid, &worker_cancelled)
-                            })
-                            .map_err(|e| e.to_string()),
-                        },
+                            };
+                            let total = opened.as_ref().ok().and_then(|r| {
+                                r.invocation_count_cancellable(pid, &worker_cancelled).ok()
+                            });
+                            Answer::Invocations {
+                                generation,
+                                offset,
+                                total,
+                                result: opened
+                                    .and_then(|r| {
+                                        r.process_page_cancellable(
+                                            offset,
+                                            100,
+                                            pid,
+                                            &worker_cancelled,
+                                        )
+                                    })
+                                    .map_err(|e| e.to_string()),
+                            }
+                        }
                         Request::Terminal {
                             run_id,
                             generation,

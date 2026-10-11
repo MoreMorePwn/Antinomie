@@ -204,6 +204,11 @@ pub struct MonitorApp {
     transport_open: bool,
     network_view: crate::network_view::NetworkView,
     memory_view: crate::memory_view::MemoryView,
+    core_view: crate::core_view::CoreView,
+    run_tree: Option<(String, crate::archive::ProcessTreeResult)>,
+    run_tree_pending: Option<String>,
+    archive_total: Option<u64>,
+    evidence_jobs: crate::evidence_jobs::EvidenceJobs,
     /// Whether the Details panel shows the selected packet or syscall.
     pub(crate) details_follow: crate::workspace::DetailsFollow,
     /// Process tree of a selected capture that is not live (processes.json).
@@ -324,6 +329,11 @@ impl MonitorApp {
             transport_open: false,
             network_view: Default::default(),
             memory_view: Default::default(),
+            core_view: Default::default(),
+            run_tree: None,
+            run_tree_pending: None,
+            archive_total: None,
+            evidence_jobs: Default::default(),
             details_follow: Default::default(),
             archived_processes: None,
             capture_history: Vec::new(),
@@ -918,10 +928,9 @@ impl MonitorApp {
 
     /// The running VM has NAT networking.
     fn running_nat(&self) -> bool {
-        self.snapshot
-            .vms
-            .iter()
-            .any(|vm| Some(&vm.id) == self.snapshot.active_vm.as_ref() && vm.nat)
+        self.snapshot.vms.iter().any(|vm| {
+            Some(&vm.id) == self.snapshot.active_vm.as_ref() && (vm.nat || vm.isolated_network)
+        })
     }
 
     /// A network capture can be started or stopped now.
@@ -946,7 +955,7 @@ impl MonitorApp {
         if self.snapshot.network_capture.is_some() {
             "Stop network capture"
         } else if self.running() && !self.running_nat() {
-            "Capture network (needs NAT network: turn it on in the VM settings)"
+            "Capture network (choose Isolated or NAT network in VM settings)"
         } else {
             "Capture network"
         }
@@ -981,6 +990,11 @@ impl MonitorApp {
     fn queue_archive(&mut self, request: Request) {
         if let Some(old) = self.pending_archive.replace(request) {
             match old {
+                Request::ProcessTree { run_id, .. }
+                    if self.run_tree_pending.as_ref() == Some(&run_id) =>
+                {
+                    self.run_tree_pending = None;
+                }
                 Request::Invocations { generation, .. }
                     if generation == self.archive_generation =>
                 {
@@ -1016,6 +1030,10 @@ impl MonitorApp {
             self.inspector.pending = false;
             self.archive_error = Some("Archive worker unavailable".into());
             match request {
+                Request::ProcessTree { run_id, .. } => {
+                    self.run_tree_pending = None;
+                    self.run_tree = Some((run_id, Err("Archive worker unavailable".into())));
+                }
                 Request::Specimen {
                     view_key,
                     generation,
@@ -1039,6 +1057,11 @@ impl MonitorApp {
                     self.inspector.pending = false;
                     self.archive_error = Some("Archive worker disconnected".into());
                     match request {
+                        Request::ProcessTree { run_id, .. } => {
+                            self.run_tree_pending = None;
+                            self.run_tree =
+                                Some((run_id, Err("Archive worker disconnected".into())));
+                        }
                         Request::Specimen {
                             view_key,
                             generation,
@@ -1072,6 +1095,8 @@ impl MonitorApp {
         self.selected_analysis = None;
         self.analysis_views.remove("workspace");
         self.selected_run = id;
+        self.run_tree = None;
+        self.run_tree_pending = None;
         self.pending_archive = None;
         self.reset_trace_selection();
         if self.offline_run().is_some() {
@@ -1092,6 +1117,7 @@ impl MonitorApp {
         self.archive_page.clear();
         self.archive_previous.clear();
         self.archive_next = None;
+        self.archive_total = None;
         self.archive_offset = 0;
         self.archive_pending = false;
         self.archive_error = None;
@@ -1111,9 +1137,7 @@ impl MonitorApp {
             directory,
             offset,
             capture: self.selected_capture.is_some(),
-            pid: self
-                .selected_process
-                .filter(|_| self.selected_capture.is_some()),
+            pid: self.selected_process,
         };
         self.queue_archive(request);
         self.archive_pending = true;
@@ -1261,7 +1285,7 @@ impl MonitorApp {
                             row.set_selected(self.selected_run.as_ref() == Some(&run.id));
                             row.col(|ui| {
                                 ui.add(
-                                    egui::Label::new(&run.request.path)
+                                    egui::Label::new(format!("{}{}", crate::evidence::title(ui, &run.directory, &run.request.path), if run.analysis.is_some() { "  [static analysis]" } else { "" }))
                                         .selectable(false)
                                         .sense(egui::Sense::hover())
                                         .truncate(),
@@ -1332,6 +1356,7 @@ impl MonitorApp {
                                 }
                             });
                             let response = row.response();
+                            response.context_menu(|ui| crate::evidence::menu(ui, &run.directory));
                             if response.clicked() || response.double_clicked() {
                                 inspect = Some((run.id.clone(), response.double_clicked()));
                             }
@@ -1352,43 +1377,178 @@ impl MonitorApp {
             .as_deref()
             .and_then(|id| runs.iter().find(|run| run.id == id))
         {
-            egui::ScrollArea::both()
-                .id_salt("launch_metadata")
+            ui.horizontal_wrapped(|ui| {
+                crate::evidence::controls(ui, &run.directory);
+                if run.analysis.is_some() && ui.button("Open static analysis").clicked() {
+                    self.selected_analysis = None;
+                    self.focus_panel = Some(Panel::StaticAnalysis);
+                }
+            });
+            self.run_artifacts_view(ui, run);
+            self.run_tree_view(ui, run);
+            egui::CollapsingHeader::new("Launch details")
+                .default_open(false)
                 .show(ui, |ui| {
-                    egui::Grid::new("run_metadata")
-                        .num_columns(2)
+                    egui::ScrollArea::both()
+                        .id_salt("launch_metadata")
                         .show(ui, |ui| {
-                            for (label, value) in [
-                                ("Executable", run.request.path.clone()),
-                                ("Arguments", format!("{:?}", run.request.args)),
-                                ("Working directory", run.request.cwd.clone()),
-                                ("Environment", run.request.env.join("\n")),
-                                ("Run in", run.request.run_in.label().to_owned()),
-                                (
-                                    "UID / GID",
-                                    format!("{} / {}", run.request.uid, run.request.gid),
-                                ),
-                                ("Run", run.id.clone()),
-                                ("Boot", run.boot_id.clone()),
-                                (
-                                    "Session / root task / PID",
-                                    format!(
-                                        "{} / {} / {}",
-                                        run.session_id, run.root_task_cookie, run.pid
-                                    ),
-                                ),
-                                ("Tree", execution_detail(run)),
-                                ("Root exit", root_exit(run)),
-                                ("Recording", run.directory.display().to_string()),
-                            ] {
-                                ui.label(label);
-                                ui.add(egui::Label::new(value).selectable(true));
-                                ui.end_row();
-                            }
+                            egui::Grid::new("run_metadata")
+                                .num_columns(2)
+                                .show(ui, |ui| {
+                                    for (label, value) in [
+                                        ("Executable", run.request.path.clone()),
+                                        ("Arguments", format!("{:?}", run.request.args)),
+                                        ("Working directory", run.request.cwd.clone()),
+                                        ("Environment", run.request.env.join("\n")),
+                                        ("Run in", run.request.run_in.label().to_owned()),
+                                        (
+                                            "UID / GID",
+                                            format!("{} / {}", run.request.uid, run.request.gid),
+                                        ),
+                                        ("Run", run.id.clone()),
+                                        ("Boot", run.boot_id.clone()),
+                                        (
+                                            "Session / root task / PID",
+                                            format!(
+                                                "{} / {} / {}",
+                                                run.session_id, run.root_task_cookie, run.pid
+                                            ),
+                                        ),
+                                        ("Tree", execution_detail(run)),
+                                        ("Root exit", root_exit(run)),
+                                        ("Recording", run.directory.display().to_string()),
+                                    ] {
+                                        ui.label(label);
+                                        ui.add(egui::Label::new(value).selectable(true));
+                                        ui.end_row();
+                                    }
+                                });
                         });
                 });
         } else if runs.is_empty() {
             ui.colored_label(theme::muted(), "No retained runs for this VM");
+        }
+    }
+
+    fn run_artifacts_view(&mut self, ui: &mut egui::Ui, run: &RunSummary) {
+        let cache_id = egui::Id::new(("run-artifacts", &run.directory));
+        let cached = ui.ctx().data_mut(|data| {
+            type Cached = (
+                Instant,
+                Result<Option<antinomie_monitor_core::RunArtifacts>, String>,
+            );
+            let cached = data.get_temp_mut_or_insert_with::<Cached>(cache_id, || {
+                (
+                    Instant::now(),
+                    antinomie_monitor_core::RunArtifacts::load(&run.directory),
+                )
+            });
+            if cached.0.elapsed() >= Duration::from_secs(1) {
+                *cached = (
+                    Instant::now(),
+                    antinomie_monitor_core::RunArtifacts::load(&run.directory),
+                );
+            }
+            cached.1.clone()
+        });
+        match cached {
+            Ok(Some(artifacts))
+                if artifacts.run_id == run.id
+                    && artifacts.vm_id == run.vm_id
+                    && artifacts.boot_id == run.boot_id =>
+            {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(format!(
+                        "Network: {:?} · Post-exit RAM: {:?}",
+                        artifacts.network_state, artifacts.memory_state
+                    ));
+                    for (index, file) in artifacts.network_captures.iter().enumerate() {
+                        if ui.link(format!("Network segment {}", index + 1)).clicked() {
+                            self.network_view.open(Some(file.clone()));
+                            self.focus_panel = Some(Panel::Network);
+                        }
+                    }
+                    if let Some(directory) = &artifacts.memory_dump {
+                        if ui.link("Open memory dump").clicked() {
+                            self.memory_view.open_dump(directory);
+                            self.focus_panel = Some(Panel::Memory);
+                        }
+                    }
+                });
+                for issue in &artifacts.issues {
+                    ui.colored_label(theme::warn(), issue);
+                }
+            }
+            Ok(Some(_)) => {
+                ui.colored_label(
+                    theme::warn(),
+                    "Artifact metadata identity does not match this run",
+                );
+            }
+            Ok(None) => {}
+            Err(error) => {
+                ui.colored_label(theme::warn(), error);
+            }
+        }
+    }
+
+    fn run_tree_view(&mut self, ui: &mut egui::Ui, run: &RunSummary) {
+        ui.horizontal_wrapped(|ui| {
+            ui.strong("Recorded process tree");
+            if ui.button("Refresh tree").clicked() {
+                self.run_tree = None;
+            }
+            ui.colored_label(
+                theme::muted(),
+                "Through the last saved packet; refresh ongoing runs",
+            );
+        });
+        if self.run_tree.as_ref().is_none_or(|(id, _)| id != &run.id)
+            && self.run_tree_pending.is_none()
+            && self.pending_archive.is_none()
+            && !self.archive_pending
+        {
+            self.queue_archive(Request::ProcessTree {
+                run_id: run.id.clone(),
+                directory: run.directory.clone(),
+                root_pid: run.pid,
+                path: run.request.path.clone(),
+            });
+            self.run_tree_pending = Some(run.id.clone());
+        }
+        let tree = self
+            .run_tree
+            .as_ref()
+            .filter(|(id, _)| id == &run.id)
+            .map(|(_, result)| result.clone());
+        match tree {
+            Some(Ok((processes, issues))) => {
+                for issue in issues {
+                    ui.colored_label(theme::warn(), issue);
+                }
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), ui.available_height().min(220.0)),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        if let Some(selection) = captures::process_tree(
+                            ui,
+                            &processes,
+                            self.selected_process,
+                            self.settings.font_size,
+                        ) {
+                            self.select_process(selection);
+                            self.focus_trace();
+                        }
+                    },
+                );
+            }
+            Some(Err(error)) => {
+                ui.colored_label(theme::warn(), error);
+            }
+            None => {
+                ui.spinner();
+                ui.label("Reading saved lifecycle records…");
+            }
         }
     }
 
@@ -1636,6 +1796,7 @@ impl MonitorApp {
             Answer::Invocations {
                 generation,
                 offset,
+                total,
                 result,
             } if generation == self.archive_generation
                 && self.trace_archive_directory().is_some() =>
@@ -1643,6 +1804,7 @@ impl MonitorApp {
                 self.archive_pending = false;
                 match result {
                     Ok(page) => {
+                        self.archive_total = total;
                         self.archive_page = page.invocations;
                         self.archive_offset = offset;
                         self.archive_next = page.next_offset;
@@ -1650,6 +1812,14 @@ impl MonitorApp {
                             (!page.issues.is_empty()).then(|| page.issues.join("; "));
                     }
                     Err(error) => self.archive_error = Some(error),
+                }
+            }
+            Answer::ProcessTree { run_id, result } => {
+                if self.run_tree_pending.as_ref() == Some(&run_id)
+                    && self.selected_run.as_ref() == Some(&run_id)
+                {
+                    self.run_tree_pending = None;
+                    self.run_tree = Some((run_id, result));
                 }
             }
             Answer::Captured {
@@ -2090,6 +2260,7 @@ impl MonitorApp {
                             Panel::Trace,
                             Panel::Network,
                             Panel::Memory,
+                            Panel::CoreDump,
                             Panel::StaticAnalysis,
                             Panel::RunHistory,
                             Panel::Details,
@@ -2292,6 +2463,16 @@ impl MonitorApp {
                             ) {
                                 self.toggle_network_capture();
                             }
+                            if tool_button(ui, ToolButton {
+                                icon: egui_phosphor::regular::DATABASE, label: "Dump memory",
+                                tooltip: "Save the running VM's RAM", enabled: self.running() && !self.closing && self.snapshot.memory_dump.is_none(),
+                                tone: theme::info(), strong: false, active: self.snapshot.memory_dump.is_some(),
+                            }) { self.send(Command::DumpMemory); self.focus_panel = Some(Panel::Memory); }
+                            if tool_button(ui, ToolButton {
+                                icon: egui_phosphor::regular::FILE, label: "Core dump",
+                                tooltip: "Import and inspect a process core; automatic acquisition needs the 0.6.0 guest update",
+                                enabled: self.selected.is_some(), tone: theme::info(), strong: false, active: false,
+                            }) { self.focus_panel = Some(Panel::CoreDump); }
                             if ui.available_width() > 160.0 {
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
@@ -2421,7 +2602,9 @@ impl MonitorApp {
             (vm.ram_mib.to_string(), number),
             (" MiB".into(), theme::muted()),
         ]);
-        if vm.nat {
+        if vm.isolated_network {
+            machine.push((" · Isolated network".into(), theme::good()));
+        } else if vm.nat {
             machine.push((" · ".into(), theme::muted()));
             machine.push(("NAT".into(), theme::info()));
         }
@@ -2471,7 +2654,13 @@ impl MonitorApp {
                 vm.cpus,
                 vm.ram_mib,
                 vm.disk_gib,
-                if vm.nat { "NAT" } else { "disconnected" }
+                if vm.isolated_network {
+                    "isolated"
+                } else if vm.nat {
+                    "NAT"
+                } else {
+                    "disconnected"
+                }
             ));
             if let Some(last) = self.settings.last_runs.get(&vm.id) {
                 ui.label(format!("Latest run: {}", last.program));
@@ -3183,6 +3372,7 @@ impl MonitorApp {
             .snapshot
             .events
             .iter()
+            .filter(|event| self.selected_process.is_none_or(|pid| event.pid == pid))
             .filter(|event| {
                 self.selected_run.as_ref().is_none_or(|id| {
                     self.snapshot
@@ -3232,7 +3422,7 @@ impl MonitorApp {
                     ))
                     .desired_width(150.0),
             )
-            .on_hover_text("Show calls whose name, TID or info contains this text");
+            .on_hover_text("Show calls whose name, TID or info contains this text (saved traces: filters the current page)");
             if self.trace_archive_directory().is_some() {
                 if icon(
                     ui,
@@ -3262,6 +3452,9 @@ impl MonitorApp {
                     !self.archive_pending,
                 ) {
                     self.request_page(self.archive_offset);
+                }
+                if let Some(total) = self.archive_total {
+                    ui.label(format!("Page {} of {} · 100 calls/page · {total} saved calls", self.archive_previous.len() + 1, total.div_ceil(100).max(1)));
                 }
                 ui.label(if self.archive_pending {
                     "Reading archive..."
@@ -3882,6 +4075,8 @@ impl MonitorApp {
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
+        crate::evidence::dialogs(ctx);
+        self.evidence_jobs.show(ctx);
         if self.vm_snapshots.open {
             let tree = self
                 .vm_snapshots
@@ -4119,7 +4314,8 @@ impl MonitorApp {
                 .collapsible(false)
                 .resizable(true)
                 .default_width(1000.0)
-                .default_height(540.0)
+                .default_height((ctx.screen_rect().height() - 100.0).max(240.0))
+                .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 32.0))
                 .max_width((ctx.screen_rect().width() - 50.0).max(300.0))
                 .max_height((ctx.screen_rect().height() - 90.0).max(200.0))
                 .show(ctx, |ui| {
@@ -4266,8 +4462,10 @@ impl MonitorApp {
                         }),
                         Confirm::Nat { mut vm, creating } => {
                             vm.nat = true;
+                            vm.isolated_network = false;
                             if self.draft.id == vm.id {
                                 self.draft.nat = true;
+                                self.draft.isolated_network = false;
                             }
                             if !creating {
                                 if let Err(error) = self.save_vm(vm) {
@@ -4503,11 +4701,16 @@ impl MonitorApp {
                             dialog_section(ui, "Network and telemetry");
                             form_grid("vm_network", ui).show(ui, |ui| {
                                 ui.label("Network");
-                                if ui.checkbox(&mut app.draft.nat, "NAT network").changed()
-                                    && app.draft.nat
-                                {
+                                let mut mode = if app.draft.isolated_network { 1 } else if app.draft.nat { 2 } else { 0 };
+                                let previous = mode;
+                                egui::ComboBox::from_id_salt("network-mode").selected_text(["Disconnected", "Isolated", "NAT (Internet)"][mode])
+                                    .show_ui(ui, |ui| { for (value, label) in ["Disconnected", "Isolated", "NAT (Internet)"].iter().enumerate() {
+                                        ui.selectable_value(&mut mode, value, *label);
+                                    } });
+                                if mode != previous {
                                     app.draft.nat = false;
-                                    *nat = true;
+                                    app.draft.isolated_network = mode == 1;
+                                    if mode == 2 { *nat = true; }
                                 }
                                 ui.end_row();
                                 ui.label("Transport");
@@ -4522,6 +4725,9 @@ impl MonitorApp {
                                 }
                                 ui.end_row();
                             });
+                            if app.draft.isolated_network {
+                                ui.colored_label(theme::muted(), "Working interface with host/LAN/Internet forwarding blocked. Packet capture remains available.");
+                            }
                             if app.draft.nat {
                                 ui.colored_label(
                                     theme::warn(),
@@ -4992,6 +5198,36 @@ impl MonitorApp {
 
     fn analysis_action(&mut self, view_key: &str, action: Option<crate::analysis::ReportAction>) {
         match action {
+            Some(crate::analysis::ReportAction::Export {
+                report_id,
+                kind,
+                format,
+            }) => {
+                if let Some(directory) = self.analysis_directory(&report_id) {
+                    self.evidence_jobs
+                        .export(directory, report_id, kind, format);
+                } else {
+                    self.status = "Retained result directory is unavailable".into();
+                }
+            }
+            Some(crate::analysis::ReportAction::ShowDirectory { report_id }) => {
+                if let Some(directory) = self.analysis_directory(&report_id) {
+                    self.evidence_jobs.reveal(directory);
+                } else {
+                    self.status = "Retained result directory is unavailable".into();
+                }
+            }
+            Some(crate::analysis::ReportAction::OpenGhidra { report_id }) => {
+                if let Some(directory) = self.analysis_directory(&report_id) {
+                    self.evidence_jobs.open_ghidra(
+                        directory,
+                        report_id,
+                        self.options.data_dir.join("tools"),
+                    );
+                } else {
+                    self.status = "Retained result directory is unavailable".into();
+                }
+            }
             Some(crate::analysis::ReportAction::Cancel(analysis_id)) => {
                 self.send(Command::CancelAnalysis { analysis_id })
             }
@@ -5317,11 +5553,9 @@ impl MonitorApp {
                 let recording_roots = locations
                     .map(|location| location.recording_directories.as_slice())
                     .unwrap_or_default();
-                let nat = self
-                    .snapshot
-                    .vms
-                    .iter()
-                    .any(|config| Some(&config.id) == vm.as_ref() && config.nat);
+                let nat = self.snapshot.vms.iter().any(|config| {
+                    Some(&config.id) == vm.as_ref() && (config.nat || config.isolated_network)
+                });
                 let action = self.network_view.show(
                     ui,
                     NetworkContext {
@@ -5343,6 +5577,16 @@ impl MonitorApp {
                         NetworkAction::Stop => Command::StopNetworkCapture,
                     });
                 }
+            }
+            Panel::CoreDump => {
+                let roots = self
+                    .snapshot
+                    .vm_locations
+                    .iter()
+                    .find(|location| Some(&location.vm_id) == self.selected.as_ref())
+                    .map(|location| location.recording_directories.clone())
+                    .unwrap_or_default();
+                self.core_view.show(ui, &roots);
             }
             Panel::Memory => {
                 let vm_id = self.selected.clone();
@@ -5430,45 +5674,69 @@ impl MonitorApp {
                 self.analysis_action(&key, action);
             }
             Panel::StaticAnalysis => {
-                ui.horizontal(|ui| {
-                    ui.colored_label(theme::muted(), "Report");
-                    let current = self.selected_analysis.as_deref().map_or_else(
-                        || "Selected run".to_owned(),
-                        |id| {
-                            self.snapshot
-                                .analysis_reports
-                                .iter()
-                                .find(|report| report.id == id)
-                                .map_or_else(|| id.to_owned(), |report| report.source_path.clone())
-                        },
-                    );
+                let mut reports = BTreeMap::new();
+                for run in self.snapshot.runs.iter().chain(&self.history) {
+                    if let Some(report) = &run.analysis {
+                        reports.entry(report.id.clone()).or_insert_with(|| {
+                            format!("{} — run {} ({:?})", run.request.path, run.id, report.state)
+                        });
+                    }
+                }
+                for report in &self.snapshot.analysis_reports {
+                    reports.entry(report.id.clone()).or_insert_with(|| {
+                        format!(
+                            "{} — analysis only ({:?})",
+                            report.source_path, report.state
+                        )
+                    });
+                }
+                let current = self
+                    .selected_analysis
+                    .as_ref()
+                    .and_then(|id| reports.get(id))
+                    .cloned()
+                    .unwrap_or_else(|| "Selected run".into());
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Report");
                     egui::ComboBox::from_id_salt("analysis-source")
                         .selected_text(current)
-                        .width((ui.available_width() - 8.0).clamp(160.0, 420.0))
+                        .width(420.0)
                         .truncate()
                         .show_ui(ui, |ui| {
                             ui.selectable_value(&mut self.selected_analysis, None, "Selected run");
-                            for report in &self.snapshot.analysis_reports {
+                            for (id, label) in &reports {
+                                let label = self
+                                    .analysis_directory(id)
+                                    .map(|dir| crate::evidence::title(ui, &dir, label))
+                                    .unwrap_or_else(|| label.clone());
                                 ui.selectable_value(
                                     &mut self.selected_analysis,
-                                    Some(report.id.clone()),
-                                    format!("{} ({:?})", report.source_path, report.state),
+                                    Some(id.clone()),
+                                    label,
                                 );
                             }
                         });
                 });
-                let shown = match self.selected_analysis.as_deref() {
-                    Some(id) => Some(id),
-                    None => self.selected_run.as_deref().and_then(|id| {
-                        self.snapshot
-                            .runs
-                            .iter()
-                            .chain(&self.history)
-                            .find(|run| run.id == id)
-                            .and_then(|run| run.analysis.as_ref())
-                            .map(|report| report.id.as_str())
-                    }),
-                };
+                let shown = self.selected_analysis.clone().or_else(|| {
+                    self.selected_run
+                        .as_deref()
+                        .and_then(|id| {
+                            if self.archive_selected {
+                                self.history
+                                    .iter()
+                                    .find(|run| run.id == id)
+                                    .or_else(|| self.run(id))
+                            } else {
+                                self.run(id)
+                            }
+                        })
+                        .and_then(|run| run.analysis.as_ref())
+                        .map(|r| r.id.clone())
+                });
+                let report = shown
+                    .as_deref()
+                    .and_then(|id| self.analysis_report(id))
+                    .cloned();
                 crate::analysis::other_progress(
                     ui,
                     self.snapshot
@@ -5477,47 +5745,50 @@ impl MonitorApp {
                         .chain(&self.history)
                         .filter_map(|run| run.analysis.as_ref())
                         .chain(&self.snapshot.analysis_reports),
-                    shown,
+                    shown.as_deref(),
                 );
-                if let Some(id) = self.selected_analysis.as_deref() {
-                    let report = self
+                if let Some(id) = shown.as_deref() {
+                    if let Some(directory) = self.analysis_directory(id) {
+                        crate::evidence::controls(ui, &directory);
+                    }
+                    let related: Vec<_> = self
                         .snapshot
-                        .analysis_reports
+                        .runs
                         .iter()
-                        .find(|report| report.id == id);
-                    let view = self.analysis_views.entry("workspace".into()).or_default();
-                    view.bind(report.map(|report| report.id.as_str()));
-                    let action = crate::analysis::workspace(
-                        ui,
-                        report,
-                        &mut view.state,
-                        view.preview.as_ref(),
-                        view.listing.as_ref(),
-                    );
-                    self.analysis_action("workspace", action);
-                    return;
+                        .chain(&self.history)
+                        .filter(|run| run.analysis.as_ref().is_some_and(|r| r.id == id))
+                        .map(|run| (run.id.clone(), run.request.path.clone()))
+                        .collect();
+                    ui.horizontal_wrapped(|ui| {
+                        if related.is_empty() {
+                            ui.colored_label(
+                                theme::muted(),
+                                "Analysis only — no program run linked",
+                            );
+                        } else {
+                            ui.label("Related runs:");
+                            let mut seen = std::collections::BTreeSet::new();
+                            for (run_id, path) in related {
+                                if seen.insert(run_id.clone())
+                                    && ui.link(format!("{path} ({run_id})")).clicked()
+                                {
+                                    self.select_run(Some(run_id));
+                                    self.focus_panel = Some(Panel::RunHistory);
+                                }
+                            }
+                        }
+                    });
                 }
-                if let Some(id) = self.selected_run.as_deref() {
-                    let live = self.snapshot.runs.iter().find(|run| run.id == id);
-                    let run = if self.archive_selected {
-                        self.history.iter().find(|run| run.id == id).or(live)
-                    } else {
-                        live.or_else(|| self.history.iter().find(|run| run.id == id))
-                    };
-                    let report = run.and_then(|run| run.analysis.as_ref());
-                    let view = self.analysis_views.entry("workspace".into()).or_default();
-                    view.bind(report.map(|report| report.id.as_str()));
-                    let action = crate::analysis::workspace(
-                        ui,
-                        report,
-                        &mut view.state,
-                        view.preview.as_ref(),
-                        view.listing.as_ref(),
-                    );
-                    self.analysis_action("workspace", action);
-                } else {
-                    crate::analysis::no_report(ui, false);
-                }
+                let view = self.analysis_views.entry("workspace".into()).or_default();
+                view.bind(report.as_ref().map(|report| report.id.as_str()));
+                let action = crate::analysis::workspace(
+                    ui,
+                    report.as_ref(),
+                    &mut view.state,
+                    view.preview.as_ref(),
+                    view.listing.as_ref(),
+                );
+                self.analysis_action("workspace", action);
             }
             Panel::RunHistory => self.run_history(ui),
             Panel::Details => match self.details_follow.of(ui.ctx()) {
@@ -7011,6 +7282,11 @@ mod tests {
             transport_open: false,
             network_view: Default::default(),
             memory_view: Default::default(),
+            core_view: Default::default(),
+            run_tree: None,
+            run_tree_pending: None,
+            archive_total: None,
+            evidence_jobs: Default::default(),
             details_follow: Default::default(),
             archived_processes: None,
             capture_history: Vec::new(),
@@ -7115,6 +7391,49 @@ mod tests {
             ..VmConfig::default()
         });
     }
+    #[test]
+    fn selecting_another_run_cancels_queued_tree_and_stale_answer() {
+        let mut app = app();
+        observer_fixture(&mut app);
+        app.snapshot.runs.extend([run("old"), run("new")]);
+        app.run_tree_pending = Some("old".into());
+        app.pending_archive = Some(Request::ProcessTree {
+            run_id: "old".into(),
+            directory: PathBuf::new(),
+            root_pid: 42,
+            path: "/bin/a".into(),
+        });
+        app.select_run(Some("new".into()));
+        assert!(app.run_tree_pending.is_none());
+        assert!(app.run_tree.is_none());
+        app.handle_archive_answer(Answer::ProcessTree {
+            run_id: "old".into(),
+            result: Ok((Vec::new(), Vec::new())),
+        });
+        assert!(app.run_tree.is_none());
+    }
+
+    #[test]
+    fn run_descendant_filter_applies_to_live_and_saved_trace_requests() {
+        let mut app = app();
+        observer_fixture(&mut app);
+        app.snapshot.runs.push(run("tree"));
+        app.select_run(Some("tree".into()));
+        let mut child = event(1, 0);
+        child.pid = 99;
+        child.tid = 99;
+        child.task_cookie = 99;
+        app.snapshot.events = vec![event(1, 0), child];
+        app.select_process(captures::ProcessSelection::Process(99));
+        assert_eq!(app.invocations().len(), 1);
+        assert_eq!(app.invocations()[0].entry.as_ref().unwrap().pid, 99);
+        app.archive_selected = true;
+        app.request_page(0);
+        assert!(matches!(
+            app.pending_archive,
+            Some(Request::Invocations { pid: Some(99), .. })
+        ));
+    }
 
     fn observer(id: &str, state: CaptureState) -> CaptureSummary {
         CaptureSummary {
@@ -7177,6 +7496,7 @@ mod tests {
         app.handle_archive_answer(Answer::Invocations {
             generation,
             offset: 0,
+            total: None,
             result: Ok(antinomie_monitor_core::InvocationPage {
                 invocations: pair_events(&[event(1, 9)]),
                 next_offset: None,
@@ -7203,6 +7523,7 @@ mod tests {
         app.handle_archive_answer(Answer::Invocations {
             generation,
             offset: 0,
+            total: None,
             result: Ok(antinomie_monitor_core::InvocationPage {
                 invocations: pair_events(&[event(1, 4)]),
                 next_offset: Some(64),
@@ -8259,8 +8580,8 @@ mod tests {
                 "Run program",
                 "Capture all",
                 "Capture network",
-                "Running",
-                "Capture QA"
+                "Dump memory",
+                "Core dump"
             ],
             "{shown:?}"
         );
@@ -10199,6 +10520,7 @@ mod tests {
         app.handle_archive_answer(Answer::Invocations {
             generation: generation.wrapping_sub(1),
             offset: 99,
+            total: None,
             result: Ok(antinomie_monitor_core::InvocationPage {
                 invocations: pair_events(&[event(2, 3)]),
                 next_offset: None,
@@ -10220,6 +10542,7 @@ mod tests {
         app.handle_archive_answer(Answer::Invocations {
             generation,
             offset: 99,
+            total: None,
             result: Ok(antinomie_monitor_core::InvocationPage {
                 invocations: pair_events(&[event(2, 3)]),
                 next_offset: None,
@@ -10520,8 +10843,8 @@ mod tests {
         ));
         let metadata = texts(&output)
             .into_iter()
-            .find(|(label, _)| label == "Working directory")
-            .expect("metadata visible below history rows");
+            .find(|(label, _)| label == "Launch details")
+            .expect("expandable launch details visible below history rows");
         assert!(metadata.1.bottom() < screen.bottom());
     }
 

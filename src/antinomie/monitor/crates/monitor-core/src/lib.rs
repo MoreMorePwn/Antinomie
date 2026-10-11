@@ -1,5 +1,6 @@
 pub mod analysis;
 pub mod analysis_tools;
+pub mod annotations;
 pub mod api;
 mod archive_io;
 mod backend;
@@ -9,6 +10,7 @@ mod builder_vm;
 pub mod capture;
 pub mod capture_processes;
 mod control;
+pub mod core_dump;
 pub mod dependencies;
 mod display;
 pub mod distribution;

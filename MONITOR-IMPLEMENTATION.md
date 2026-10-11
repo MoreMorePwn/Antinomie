@@ -33,6 +33,29 @@ V7-only restriction; older requirements remain recorded for their releases.
 - V7 no snapshot/reconnect. No next transport version. Existing transport API
   is opaque; frontend/backend never manage CPU rings.
 
+## Accepted ANT-T0055 host evidence update (0.5.0)
+
+User authorized inspection, completion and release of current 0.5.0, with guest
+acquisition work deferred to 0.6.0. Static-analysis priority is result readability.
+This extends the existing revision-14 / ABI9 snapshot baseline without changing
+the guest contract. Host launch controls optionally own a separate network filter
+from before execution through whole-tree exit and queue one post-exit VM RAM dump.
+Snapshot/reconnect boundaries split captures into new retained segments.
+
+Evidence labels are bounded sidecars; recorded IDs and paths never change.
+Full retained static text/JSON and native Ghidra project exports preserve partial
+status, reject unsafe paths and never overwrite existing output. Opening Ghidra
+uses an exported working copy. Saved trees and numbered 100-call trace pages read
+a bounded snapshot of ongoing archives. Imported process cores use bounded,
+file-backed Linux ELF64/x86-64 inspection, thread registers, mappings and on-demand
+disassembly; missing pages remain explicit. They are separate from physical RAM.
+
+Isolated networking uses QEMU user networking with restrict=on, no forwarding,
+TFTP or SMB. Exact process core capture before exit, all-thread register freezing
+and pre-free memory capture require new guest support and remain 0.6.0 backlog.
+No guest rebuild is necessary for these host additions; already-built current
+0.5.0 bases are reused. The documentation acceptance record is ANT-T0055.
+
 ## Ownership
 
 ### Accepted ANT-T0042 Update

@@ -264,9 +264,13 @@ pub(super) fn history(
                         row.set_selected(selected == Some(capture.id.as_str()));
                         row.col(|ui| {
                             ui.add(
-                                egui::Label::new(scope(&capture.scope))
-                                    .selectable(false)
-                                    .truncate(),
+                                egui::Label::new(crate::evidence::title(
+                                    ui,
+                                    &capture.directory,
+                                    &scope(&capture.scope),
+                                ))
+                                .selectable(false)
+                                .truncate(),
                             )
                             .on_hover_text(&capture.id);
                         });
@@ -282,6 +286,7 @@ pub(super) fn history(
                             .on_hover_text(status(capture.state));
                         });
                         let response = row.response();
+                        response.context_menu(|ui| crate::evidence::menu(ui, &capture.directory));
                         if response.clicked() || response.double_clicked() {
                             action = Some((capture.id.clone(), response.double_clicked()));
                         }
@@ -291,6 +296,7 @@ pub(super) fn history(
     ui.separator();
     if let Some(capture) = selected.and_then(|id| captures.iter().find(|capture| capture.id == id))
     {
+        crate::evidence::controls(ui, &capture.directory);
         egui::CollapsingHeader::new("Capture details")
             .id_salt("capture_metadata")
             .default_open(false)
@@ -359,6 +365,19 @@ pub(super) fn process_tree(
 ) -> Option<ProcessSelection> {
     let mut action = None;
     let rows = tree_rows(processes);
+    if rows.iter().any(|(process, depth)| {
+        *depth == 0
+            && process.parent_pid != 0
+            && process.parent_pid != process.pid
+            && processes
+                .iter()
+                .any(|parent| parent.pid == process.parent_pid)
+    }) {
+        ui.colored_label(
+            theme::warn(),
+            "PID reuse or incomplete ancestry: cyclic components shown as detached roots",
+        );
+    }
     let guides = tree_guides(&rows);
     ui.horizontal_wrapped(|ui| {
         theme::section(ui, "Processes");
@@ -552,7 +571,17 @@ fn tree_rows(processes: &[CaptureProcess]) -> Vec<(&CaptureProcess, usize)> {
     let mut rows = Vec::new();
     let mut visited = std::collections::BTreeSet::new();
     let mut stack: Vec<(&CaptureProcess, usize)> = roots.iter().rev().map(|p| (*p, 0)).collect();
-    while let Some((process, depth)) = stack.pop() {
+    loop {
+        let Some((process, depth)) = stack.pop() else {
+            if let Some(process) = processes
+                .iter()
+                .find(|process| !visited.contains(&process.pid))
+            {
+                stack.push((process, 0));
+                continue;
+            }
+            break;
+        };
         if !visited.insert(process.pid) {
             continue;
         }
@@ -631,6 +660,36 @@ fn process_hover(process: &CaptureProcess) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reused_pid_cycle_keeps_all_observed_processes_visible() {
+        let processes = vec![
+            CaptureProcess {
+                pid: 100,
+                parent_pid: 200,
+                ..Default::default()
+            },
+            CaptureProcess {
+                pid: 200,
+                parent_pid: 100,
+                ..Default::default()
+            },
+            CaptureProcess {
+                pid: 300,
+                parent_pid: 200,
+                ..Default::default()
+            },
+        ];
+        let rows = tree_rows(&processes);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].1, 0);
+        assert_eq!(
+            rows.iter()
+                .map(|(process, _)| process.pid)
+                .collect::<std::collections::BTreeSet<_>>(),
+            [100, 200, 300].into()
+        );
+    }
 
     fn process(pid: u32, parent_pid: u32) -> CaptureProcess {
         CaptureProcess {

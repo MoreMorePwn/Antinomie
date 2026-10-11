@@ -118,6 +118,12 @@ mod guest_tests {
         )
         .unwrap();
         assert_eq!(vm.base_identity, None);
+        assert!(!vm.isolated_network);
+        let request: ExecRequest = serde_json::from_str(
+            r#"{"path":"/bin/sh","args":[],"cwd":"/tmp","env":[],"uid":1000,"gid":1000}"#,
+        )
+        .unwrap();
+        assert!(!request.capture_network && !request.memory_dump_on_exit);
         assert!(!serde_json::to_string(&vm).unwrap().contains("password"));
     }
 }
@@ -261,6 +267,10 @@ pub struct VmConfig {
     pub ram_mib: u32,
     pub disk_gib: u32,
     pub nat: bool,
+    /// User-mode networking without routes to the host or external networks.
+    /// Takes precedence over `nat` when both are enabled.
+    #[serde(default)]
+    pub isolated_network: bool,
     /// Host parent for newly created VM disk directories; None uses data_dir.
     #[serde(default)]
     pub disk_root: Option<PathBuf>,
@@ -284,6 +294,7 @@ impl Default for VmConfig {
             ram_mib: 2048,
             disk_gib: 8,
             nat: false,
+            isolated_network: false,
             disk_root: None,
             recording_root: None,
             base_identity: None,
@@ -398,6 +409,77 @@ pub struct ExecRequest {
     /// the app terminal.
     #[serde(default)]
     pub run_in: RunIn,
+    /// Capture VM-wide network traffic for this run until its entire tree ends.
+    #[serde(default)]
+    pub capture_network: bool,
+    /// Take VM RAM after authoritative tree completion (not a process core).
+    #[serde(default)]
+    pub memory_dump_on_exit: bool,
+}
+
+/// Persisted `artifacts.json` in a run directory links independently retained evidence.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct RunArtifacts {
+    pub run_id: String,
+    pub vm_id: String,
+    pub boot_id: String,
+    /// VM-wide packet captures; snapshot boundaries start new segments.
+    pub network_captures: Vec<PathBuf>,
+    pub network_state: RunArtifactState,
+    /// Directory containing `dump.json` and the post-exit VM `memory.elf`.
+    pub memory_dump: Option<PathBuf>,
+    pub memory_state: RunArtifactState,
+    pub issues: Vec<String>,
+}
+
+impl RunArtifacts {
+    /// Load retained sidecar evidence. Older runs have no sidecar and return None.
+    /// Reject oversized/malformed metadata instead of allocating unbounded input.
+    pub fn load(directory: &std::path::Path) -> Result<Option<Self>, String> {
+        use std::io::Read;
+        let file = match crate::archive_io::open_regular(
+            directory,
+            std::path::Path::new("artifacts.json"),
+        ) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(format!("run artifacts: {error}")),
+        };
+        const METADATA_LIMIT: u64 = 256 * 1024;
+        let mut data = Vec::new();
+        file.take(METADATA_LIMIT + 1)
+            .read_to_end(&mut data)
+            .map_err(|error| format!("run artifacts: {error}"))?;
+        if data.len() as u64 > METADATA_LIMIT {
+            return Err("run artifacts exceed the metadata size limit".into());
+        }
+        let artifacts: Self =
+            serde_json::from_slice(&data).map_err(|error| format!("run artifacts: {error}"))?;
+        if artifacts.network_captures.len() > 256
+            || artifacts.issues.len() > 16
+            || [&artifacts.run_id, &artifacts.vm_id, &artifacts.boot_id]
+                .iter()
+                .any(|id| id.len() > 128)
+        {
+            return Err("run artifacts exceed the metadata item limits".into());
+        }
+        Ok(Some(artifacts))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunArtifactState {
+    #[default]
+    Disabled,
+    WaitingForTreeExit,
+    Recording,
+    Queued,
+    InProgress,
+    Complete,
+    Interrupted,
+    Failed,
 }
 
 /// Where a launched program runs. The guest desktop choices need a graphical
@@ -865,6 +947,8 @@ impl Default for ExecRequest {
             gid: 1000,
             analysis: crate::analysis::AnalysisSelection::default(),
             run_in: RunIn::default(),
+            capture_network: false,
+            memory_dump_on_exit: false,
         }
     }
 }
