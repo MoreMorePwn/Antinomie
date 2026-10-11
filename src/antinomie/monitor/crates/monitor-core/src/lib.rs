@@ -23,6 +23,7 @@ pub mod observation;
 pub mod parser;
 pub mod recording;
 mod run;
+pub mod samples;
 pub mod snapshots;
 pub mod storage;
 pub mod syscall_groups;

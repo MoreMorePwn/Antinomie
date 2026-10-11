@@ -184,6 +184,7 @@ pub struct MonitorApp {
     about_open: bool,
     tools_open: bool,
     vm_snapshots: crate::snapshots::SnapshotManager,
+    samples: crate::samples_view::SamplesView,
     dependencies: crate::dependencies_window::DependenciesWindow,
     /// Download base: also list bases for earlier Antinomie versions.
     show_older_bases: bool,
@@ -307,6 +308,7 @@ impl MonitorApp {
             about_open: false,
             tools_open: false,
             vm_snapshots: crate::snapshots::SnapshotManager::default(),
+            samples: crate::samples_view::SamplesView::default(),
             dependencies,
             show_older_bases: false,
             build_wizard: build_wizard::BuildWizard::default(),
@@ -415,6 +417,7 @@ impl MonitorApp {
             Command::AttachProcess { .. } | Command::CaptureAll | Command::StopCapture { .. }
         );
         let process_list = matches!(&command, Command::ListProcesses { .. });
+        let sample = matches!(&command, Command::UploadSample { .. });
         let network = matches!(
             &command,
             Command::StartNetworkCapture | Command::StopNetworkCapture
@@ -452,6 +455,9 @@ impl MonitorApp {
                     }
                     if launch {
                         self.pending_launch = Some(id);
+                    }
+                    if sample {
+                        self.samples.sent(id);
                     }
                     self.status = "Request queued".into();
                 }
@@ -492,6 +498,7 @@ impl MonitorApp {
             }
         }
         let mut activity = Vec::new();
+        let mut follow_ups = Vec::new();
         let mut analysis_changed = false;
         let was_offline = self.trace_archive_directory().is_some();
         if let Some(backend) = &self.backend {
@@ -556,6 +563,9 @@ impl MonitorApp {
                         message,
                     }) => {
                         self.vm_snapshots.complete(id, success, &message);
+                        if let Some(run) = self.samples.complete(id, success, &message) {
+                            follow_ups.push(Command::Execute(run));
+                        }
                         if self.pending_observer == Some(id) {
                             self.pending_observer = None;
                         }
@@ -672,6 +682,10 @@ impl MonitorApp {
         }
         for (level, message) in activity {
             self.log(level, message);
+        }
+        // A sample sent into the guest that is to run next.
+        for command in follow_ups {
+            self.send(command);
         }
         if !was_offline && self.trace_archive_directory().is_some() {
             self.request_page(0);
@@ -2076,6 +2090,16 @@ impl MonitorApp {
                         }
                         if ui.button("Analysis tools…").clicked() {
                             self.tools_open = true;
+                            ui.close_menu();
+                        }
+                        if ui
+                            .button(format!(
+                                "{} Malware samples…",
+                                egui_phosphor::regular::BIOHAZARD
+                            ))
+                            .clicked()
+                        {
+                            self.samples.open = true;
                             ui.close_menu();
                         }
                         if ui.button("App dependencies…").clicked() {
@@ -3907,6 +3931,32 @@ impl MonitorApp {
             }
             self.tools_open = open;
         }
+        if self.samples.open {
+            let vm = self.selected_vm().cloned();
+            let action = self.samples.show(
+                ctx,
+                &crate::samples_view::SamplesContext {
+                    data_dir: &self.options.data_dir,
+                    curl: &self.options.curl,
+                    running: self.running(),
+                    vm_name: vm.as_ref().map(|vm| vm.name.as_str()),
+                    nat: vm.as_ref().is_some_and(|vm| vm.nat),
+                    font_size: self.settings.font_size,
+                },
+            );
+            if let Some(crate::samples_view::SamplesAction::Push {
+                sha256,
+                destination,
+                ..
+            }) = action
+            {
+                self.send(Command::UploadSample {
+                    sha256,
+                    destination,
+                    executable: true,
+                });
+            }
+        }
         if self.about_open {
             let mut open = true;
             egui::Window::new("About Antinomie")
@@ -4684,6 +4734,7 @@ impl MonitorApp {
             Dialog::Import => self.import_open,
             Dialog::Download => self.download_open,
             Dialog::Tools => self.tools_open,
+            Dialog::Samples => self.samples.open,
             Dialog::Snapshots => self.vm_snapshots.open,
             Dialog::SnapshotDecision => self.vm_snapshots.decision_open(),
             Dialog::Dependencies => self.dependencies.open,
@@ -4710,6 +4761,7 @@ impl MonitorApp {
             Dialog::Import => self.import_open = false,
             Dialog::Download => self.download_open = false,
             Dialog::Tools => self.tools_open = false,
+            Dialog::Samples => self.samples.open = false,
             Dialog::Snapshots | Dialog::SnapshotDecision => self.vm_snapshots.close(),
             Dialog::Dependencies => self.dependencies.open = false,
             Dialog::About => self.about_open = false,
@@ -6312,6 +6364,7 @@ enum Dialog {
     Import,
     Download,
     Tools,
+    Samples,
     Snapshots,
     SnapshotDecision,
     Dependencies,
@@ -6321,7 +6374,7 @@ enum Dialog {
 }
 
 impl Dialog {
-    const ALL: [Dialog; 16] = [
+    const ALL: [Dialog; 17] = [
         Dialog::Confirm,
         Dialog::Name,
         Dialog::Transport,
@@ -6332,6 +6385,7 @@ impl Dialog {
         Dialog::Import,
         Dialog::Download,
         Dialog::Tools,
+        Dialog::Samples,
         Dialog::Snapshots,
         Dialog::SnapshotDecision,
         Dialog::Dependencies,
@@ -6353,6 +6407,7 @@ impl Dialog {
             Dialog::Import => "import_base",
             Dialog::Download => "download_base",
             Dialog::Tools => crate::tools_window::WINDOW_ID,
+            Dialog::Samples => crate::samples_view::WINDOW_ID,
             Dialog::Snapshots => crate::snapshots::WINDOW_ID,
             Dialog::SnapshotDecision => "snapshot_decision",
             Dialog::Dependencies => crate::dependencies_window::WINDOW_ID,
@@ -6878,6 +6933,7 @@ mod tests {
             about_open: false,
             tools_open: false,
             vm_snapshots: crate::snapshots::SnapshotManager::default(),
+            samples: crate::samples_view::SamplesView::default(),
             dependencies: crate::dependencies_window::DependenciesWindow::ready_for_test(),
             show_older_bases: false,
             build_wizard: build_wizard::BuildWizard::default(),
@@ -8076,6 +8132,7 @@ mod tests {
                 Dialog::Import => app.import_open = true,
                 Dialog::Download => app.download_open = true,
                 Dialog::Tools => app.tools_open = true,
+                Dialog::Samples => app.samples.open = true,
                 Dialog::Dependencies => app.dependencies.open = true,
                 Dialog::About => app.about_open = true,
                 Dialog::Build => app.build_open = true,

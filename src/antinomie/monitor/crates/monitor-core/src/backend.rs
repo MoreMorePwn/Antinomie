@@ -181,10 +181,89 @@ impl Drop for Backend {
     }
 }
 
+/// Send `total` bytes from `source` to a new guest file through the upload
+/// protocol; `target` is the guest path, overwrite and executable.
+#[allow(clippy::too_many_arguments)]
+fn upload_stream(
+    session: &mut Session,
+    snapshot: &mut Snapshot,
+    sender: &SyncSender<Notification>,
+    stopping: &AtomicBool,
+    timeout: Duration,
+    source: &mut dyn Read,
+    total: u64,
+    (destination, overwrite, executable): (&str, bool, bool),
+) -> Result<String, String> {
+    let reply = session.request(
+        control::UPLOAD_BEGIN,
+        &control::upload_begin(destination, total, overwrite, executable)?,
+        snapshot,
+        sender,
+        timeout,
+    )?;
+    if reply.len() != 8 {
+        return Err("invalid upload begin reply".into());
+    }
+    let upload = u64_at(&reply, 0).map_err(|e| e.to_string())?;
+    let result = (|| -> Result<(), String> {
+        let chunk_size = session
+            .transport
+            .command_limit
+            .saturating_sub(24)
+            .min(64 * 1024);
+        if chunk_size == 0 {
+            return Err("transport has no upload payload capacity".into());
+        }
+        let mut chunk = vec![0; chunk_size];
+        let mut offset = 0u64;
+        while offset < total {
+            if stopping.load(Ordering::Relaxed) {
+                return Err("upload aborted for VM shutdown; partial destination remains".into());
+            }
+            let used = usize::try_from((total - offset).min(chunk_size as u64))
+                .map_err(|_| "upload size overflow")?;
+            source
+                .read_exact(&mut chunk[..used])
+                .map_err(|e| e.to_string())?;
+            let mut args = control::with_session(upload);
+            args.extend(offset.to_le_bytes());
+            args.extend(&chunk[..used]);
+            let reply = session.request(control::UPLOAD_CHUNK, &args, snapshot, sender, timeout)?;
+            if reply.len() != 8 || u64_at(&reply, 0).map_err(|e| e.to_string())? != used as u64 {
+                return Err("guest reported a partial upload write".into());
+            }
+            offset += used as u64;
+        }
+        session.request(
+            control::UPLOAD_COMMIT,
+            &control::with_session(upload),
+            snapshot,
+            sender,
+            timeout,
+        )?;
+        Ok(())
+    })();
+    if let Err(e) = result {
+        let abort = session.request(
+            control::UPLOAD_ABORT,
+            &control::with_session(upload),
+            snapshot,
+            sender,
+            Duration::from_secs(2),
+        );
+        return Err(match abort {
+            Ok(_) => e,
+            Err(a) => format!("{e}; abort failed: {a}"),
+        });
+    }
+    Ok(format!("uploaded {total} bytes to {destination}"))
+}
+
 fn guest_scoped_command(command: &Command) -> bool {
     matches!(
         command,
         Command::Upload { .. }
+            | Command::UploadSample { .. }
             | Command::Execute(_)
             | Command::AnalyzeOnly { .. }
             | Command::TerminalInput { .. }
@@ -2035,6 +2114,7 @@ impl Worker {
                 command,
                 Command::Execute(_)
                     | Command::Upload { .. }
+                    | Command::UploadSample { .. }
                     | Command::AnalyzeOnly { .. }
                     | Command::TerminalInput { .. }
                     | Command::TerminalResize { .. }
@@ -3499,79 +3579,47 @@ impl Worker {
                     return Err("upload source must be a regular file".into());
                 }
                 let total = metadata.len();
-                let reply = session.request(
-                    control::UPLOAD_BEGIN,
-                    &control::upload_begin(&destination, total, overwrite, executable)?,
+                upload_stream(
+                    session,
                     &mut self.snapshot,
                     &self.sender,
+                    &self.stopping,
                     timeout,
+                    &mut file,
+                    total,
+                    (&destination, overwrite, executable),
+                )
+            }
+            Command::UploadSample {
+                sha256,
+                destination,
+                executable,
+            } => {
+                // Decrypted in memory only; the host keeps the archive.
+                let archive = crate::samples::archive_path(&self.options.data_dir, &sha256)?;
+                let bytes = crate::samples::open_sample(&archive, &sha256)?;
+                let message = upload_stream(
+                    session,
+                    &mut self.snapshot,
+                    &self.sender,
+                    &self.stopping,
+                    timeout,
+                    &mut bytes.as_slice(),
+                    bytes.len() as u64,
+                    (&destination, false, executable),
                 )?;
-                if reply.len() != 8 {
-                    return Err("invalid upload begin reply".into());
-                }
-                let upload = u64_at(&reply, 0).map_err(|e| e.to_string())?;
-                let result = (|| -> Result<(), String> {
-                    let chunk_size = session
-                        .transport
-                        .command_limit
-                        .saturating_sub(24)
-                        .min(64 * 1024);
-                    if chunk_size == 0 {
-                        return Err("transport has no upload payload capacity".into());
-                    }
-                    let mut chunk = vec![0; chunk_size];
-                    let mut offset = 0u64;
-                    while offset < total {
-                        if self.stopping.load(Ordering::Relaxed) {
-                            return Err(
-                                "upload aborted for VM shutdown; partial destination remains"
-                                    .into(),
-                            );
-                        }
-                        let used = usize::try_from((total - offset).min(chunk_size as u64))
-                            .map_err(|_| "upload size overflow")?;
-                        file.read_exact(&mut chunk[..used])
-                            .map_err(|e| e.to_string())?;
-                        let mut args = control::with_session(upload);
-                        args.extend(offset.to_le_bytes());
-                        args.extend(&chunk[..used]);
-                        let reply = session.request(
-                            control::UPLOAD_CHUNK,
-                            &args,
-                            &mut self.snapshot,
-                            &self.sender,
-                            timeout,
-                        )?;
-                        if reply.len() != 8
-                            || u64_at(&reply, 0).map_err(|e| e.to_string())? != used as u64
-                        {
-                            return Err("guest reported a partial upload write".into());
-                        }
-                        offset += used as u64;
-                    }
-                    session.request(
-                        control::UPLOAD_COMMIT,
-                        &control::with_session(upload),
-                        &mut self.snapshot,
-                        &self.sender,
-                        timeout,
-                    )?;
-                    Ok(())
-                })();
-                if let Err(e) = result {
-                    let abort = session.request(
-                        control::UPLOAD_ABORT,
-                        &control::with_session(upload),
-                        &mut self.snapshot,
-                        &self.sender,
-                        Duration::from_secs(2),
-                    );
-                    return Err(match abort {
-                        Ok(_) => e,
-                        Err(a) => format!("{e}; abort failed: {a}"),
-                    });
-                }
-                Ok(format!("uploaded {total} bytes to {destination}"))
+                drop(bytes);
+                crate::samples::record_push(
+                    &self.options.data_dir,
+                    &sha256,
+                    crate::samples::Push {
+                        vm_id: session.vm.id.clone(),
+                        vm_name: session.vm.name.clone(),
+                        path: destination.clone(),
+                        at_ms: 0,
+                    },
+                )?;
+                Ok(message)
             }
             Command::TerminalInput { run_id, data } => {
                 let cookie = session.run_cookie(&run_id)?;

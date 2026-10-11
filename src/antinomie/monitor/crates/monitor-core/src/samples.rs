@@ -1,0 +1,589 @@
+//! Malware samples from MalwareBazaar (abuse.ch), for running in a VM.
+//!
+//! Antinomie hosts no samples: it searches MalwareBazaar with the user's own
+//! API key and downloads a sample on request, as the encrypted archive
+//! MalwareBazaar serves (AES, password `infected`). The archive is kept as is
+//! in `<data>/samples`; the sample is only ever decrypted in memory, to check
+//! its SHA-256 and to stream it into a guest. It is never written to, unpacked
+//! on or run on the host.
+use serde::{Deserialize, Serialize};
+use std::{
+    fs,
+    io::{Read, Write},
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+};
+
+/// MalwareBazaar's API: every call is a POST with an `Auth-Key` header.
+pub const BAZAAR_API: &str = "https://mb-api.abuse.ch/api/v1/";
+/// Where a free API key is made.
+pub const BAZAAR_KEYS: &str = "https://auth.abuse.ch/";
+/// The password of MalwareBazaar's archives.
+pub const ARCHIVE_PASSWORD: &str = "infected";
+/// Samples larger than this are refused (decrypted in memory).
+pub const MAX_SAMPLE: u64 = 256 * 1024 * 1024;
+const KEYS_FILE: &str = "api-keys.json";
+
+/// Folder of downloaded sample archives and their records.
+pub fn samples_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("samples")
+}
+
+/// A MalwareBazaar search.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Query {
+    /// The newest additions.
+    Recent,
+    Tag(String),
+    /// Malware family, as MalwareBazaar names it (`Mirai`, `XorDDoS`).
+    Signature(String),
+    /// `elf`, `exe`, `sh`...
+    FileType(String),
+    /// SHA-256, SHA-1 or MD5.
+    Hash(String),
+}
+
+impl Query {
+    fn form(&self, limit: u32) -> Vec<(&'static str, String)> {
+        let limit = limit.clamp(1, 1000).to_string();
+        match self {
+            Query::Recent => vec![("query", "get_recent".into()), ("selector", "100".into())],
+            Query::Tag(tag) => vec![
+                ("query", "get_taginfo".into()),
+                ("tag", tag.trim().into()),
+                ("limit", limit),
+            ],
+            Query::Signature(name) => vec![
+                ("query", "get_siginfo".into()),
+                ("signature", name.trim().into()),
+                ("limit", limit),
+            ],
+            Query::FileType(kind) => vec![
+                ("query", "get_file_type".into()),
+                ("file_type", kind.trim().into()),
+                ("limit", limit),
+            ],
+            Query::Hash(hash) => vec![("query", "get_info".into()), ("hash", hash.trim().into())],
+        }
+    }
+}
+
+/// A sample as MalwareBazaar lists it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SampleInfo {
+    pub sha256_hash: String,
+    pub md5_hash: String,
+    pub file_name: String,
+    pub file_size: u64,
+    pub file_type: String,
+    pub file_type_mime: String,
+    /// Malware family.
+    pub signature: Option<String>,
+    #[serde(deserialize_with = "null_as_empty")]
+    pub tags: Vec<String>,
+    pub first_seen: String,
+    pub reporter: String,
+    /// CPU architecture (hash lookups only), such as `x86_64` or `ARM`.
+    pub file_arch: Option<String>,
+}
+
+fn null_as_empty<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    Ok(Option::<Vec<String>>::deserialize(d)?.unwrap_or_default())
+}
+
+impl SampleInfo {
+    /// An ELF file, as MalwareBazaar's file type says.
+    pub fn is_elf(&self) -> bool {
+        self.file_type.eq_ignore_ascii_case("elf")
+    }
+    /// Runs in Antinomie's x86-64 guests: an x86-64 ELF, or an ELF whose
+    /// architecture MalwareBazaar does not list (checked after download).
+    pub fn may_run(&self) -> bool {
+        self.is_elf()
+            && self.file_arch.as_deref().is_none_or(|arch| {
+                matches!(
+                    arch.to_ascii_lowercase().as_str(),
+                    "x86_64" | "amd64" | "x86-64"
+                )
+            })
+    }
+}
+
+#[derive(Deserialize)]
+struct Reply {
+    query_status: String,
+    #[serde(default)]
+    data: Option<Vec<SampleInfo>>,
+}
+
+/// What MalwareBazaar answered, in words.
+fn status_text(status: &str) -> String {
+    match status {
+        "no_results" | "tag_not_found" | "signature_not_found" | "hash_not_found" => {
+            "nothing found".into()
+        }
+        "unknown_auth_key" | "wrong_auth_key" | "user_blacklisted" | "missing_auth_key" => {
+            "MalwareBazaar refused the API key".into()
+        }
+        "file_not_found" => "MalwareBazaar has no such sample".into(),
+        "illegal_hash"
+        | "illegal_sha256_hash"
+        | "illegal_tag"
+        | "illegal_signature"
+        | "illegal_file_type" => format!("MalwareBazaar did not accept the search ({status})"),
+        other => format!("MalwareBazaar: {other}"),
+    }
+}
+
+/// Parse a search reply; "nothing found" is an empty list.
+pub fn parse_reply(body: &[u8]) -> Result<Vec<SampleInfo>, String> {
+    let reply: Reply =
+        serde_json::from_slice(body).map_err(|e| format!("MalwareBazaar reply: {e}"))?;
+    match reply.query_status.as_str() {
+        "ok" => Ok(reply.data.unwrap_or_default()),
+        "no_results" | "tag_not_found" | "signature_not_found" | "hash_not_found" => Ok(Vec::new()),
+        status => Err(status_text(status)),
+    }
+}
+
+/// A curl POST to MalwareBazaar; the key is passed on stdin, never on the
+/// command line where other processes could read it.
+fn post(
+    curl: &Path,
+    key: &str,
+    form: &[(&str, String)],
+    output: Option<&Path>,
+) -> Result<Vec<u8>, String> {
+    crate::dependencies::require_tool(curl, "curl")?;
+    if key.trim().is_empty() || key.contains(['\r', '\n']) {
+        return Err("set a MalwareBazaar API key first".into());
+    }
+    let mut command = Command::new(curl);
+    command.args([
+        "-sS",
+        "--proto",
+        "=https",
+        "--max-time",
+        "300",
+        "-X",
+        "POST",
+        "-H",
+        "@-",
+    ]);
+    for (name, value) in form {
+        command
+            .arg("--data-urlencode")
+            .arg(format!("{name}={value}"));
+    }
+    if let Some(path) = output {
+        command.arg("-o").arg(path);
+    }
+    let mut child = command
+        .arg(BAZAAR_API)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("curl: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = writeln!(stdin, "Auth-Key: {}", key.trim());
+    }
+    let done = child.wait_with_output().map_err(|e| format!("curl: {e}"))?;
+    if !done.status.success() {
+        let message = String::from_utf8_lossy(&done.stderr);
+        return Err(format!(
+            "MalwareBazaar: {}",
+            message.lines().last().unwrap_or("request failed").trim()
+        ));
+    }
+    Ok(done.stdout)
+}
+
+/// Search MalwareBazaar (at most `limit` samples, 1 to 1000).
+pub fn search(
+    curl: &Path,
+    key: &str,
+    query: &Query,
+    limit: u32,
+) -> Result<Vec<SampleInfo>, String> {
+    parse_reply(&post(curl, key, &query.form(limit), None)?)
+}
+
+/// A downloaded sample: its MalwareBazaar record, where it came from and
+/// where it went.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StoredSample {
+    pub info: SampleInfo,
+    pub source: String,
+    /// Milliseconds since the Unix epoch.
+    pub downloaded_ms: u64,
+    /// Every time it was sent into a VM.
+    pub pushes: Vec<Push>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Push {
+    pub vm_id: String,
+    pub vm_name: String,
+    pub path: String,
+    pub at_ms: u64,
+}
+
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |time| time.as_millis() as u64)
+}
+
+fn is_sha256(text: &str) -> bool {
+    text.len() == 64 && text.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// The archive of a downloaded sample.
+pub fn archive_path(data_dir: &Path, sha256: &str) -> Result<PathBuf, String> {
+    if !is_sha256(sha256) {
+        return Err(format!("not a SHA-256: {sha256:?}"));
+    }
+    Ok(samples_dir(data_dir).join(format!("{}.zip", sha256.to_ascii_lowercase())))
+}
+
+fn record_path(data_dir: &Path, sha256: &str) -> Result<PathBuf, String> {
+    Ok(archive_path(data_dir, sha256)?.with_extension("json"))
+}
+
+/// The sample inside an archive, decrypted in memory and checked against its
+/// SHA-256; nothing is written to disk.
+pub fn open_sample(archive: &Path, sha256: &str) -> Result<Vec<u8>, String> {
+    use sha2::{Digest, Sha256};
+    let file = fs::File::open(archive).map_err(|e| format!("{}: {e}", archive.display()))?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("sample archive: {e}"))?;
+    if zip.len() != 1 {
+        return Err(format!(
+            "the archive holds {} files, not one sample",
+            zip.len()
+        ));
+    }
+    let mut entry = zip
+        .by_index_decrypt(0, ARCHIVE_PASSWORD.as_bytes())
+        .map_err(|e| format!("sample archive: {e}"))?;
+    if entry.size() > MAX_SAMPLE {
+        return Err(format!(
+            "the sample is larger than {} MiB",
+            MAX_SAMPLE >> 20
+        ));
+    }
+    let mut bytes = Vec::with_capacity(entry.size() as usize);
+    entry
+        .by_ref()
+        .take(MAX_SAMPLE + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("sample archive: {e}"))?;
+    let digest: String = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    if !digest.eq_ignore_ascii_case(sha256) {
+        return Err("the sample does not match its SHA-256".into());
+    }
+    Ok(bytes)
+}
+
+/// The architecture an ELF header names, for the record.
+pub fn elf_arch(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.len() < 20 || &bytes[..4] != b"\x7fELF" {
+        return None;
+    }
+    let little = bytes[5] == 1;
+    let machine = if little {
+        u16::from_le_bytes([bytes[18], bytes[19]])
+    } else {
+        u16::from_be_bytes([bytes[18], bytes[19]])
+    };
+    Some(match machine {
+        0x3e => "x86_64",
+        0x03 => "x86",
+        0x28 => "ARM",
+        0xb7 => "AArch64",
+        0x08 => "MIPS",
+        0x14 | 0x15 => "PowerPC",
+        0x2b => "SPARC",
+        0xf3 => "RISC-V",
+        0x2a => "SuperH",
+        0x04 => "m68k",
+        _ => "other",
+    })
+}
+
+/// Download one sample's archive, check it and keep it with its record.
+pub fn download(
+    curl: &Path,
+    key: &str,
+    data_dir: &Path,
+    info: &SampleInfo,
+) -> Result<StoredSample, String> {
+    let archive = archive_path(data_dir, &info.sha256_hash)?;
+    let dir = samples_dir(data_dir);
+    crate::storage::private_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let partial = archive.with_extension("zip.part");
+    let form = [
+        ("query", "get_file".to_owned()),
+        ("sha256_hash", info.sha256_hash.to_ascii_lowercase()),
+    ];
+    let result = (|| {
+        post(curl, key, &form, Some(&partial))?;
+        let head = fs::read(&partial)
+            .map(|bytes| bytes.into_iter().take(1).collect::<Vec<_>>())
+            .map_err(|e| e.to_string())?;
+        if head.first() == Some(&b'{') {
+            // An error answered as JSON instead of the archive.
+            let body = fs::read(&partial).map_err(|e| e.to_string())?;
+            return Err(parse_reply(&body)
+                .err()
+                .unwrap_or_else(|| "MalwareBazaar sent no archive".into()));
+        }
+        let bytes = open_sample(&partial, &info.sha256_hash)?;
+        let mut info = info.clone();
+        if let Some(arch) = elf_arch(&bytes) {
+            info.file_arch = Some(arch.into());
+        }
+        drop(bytes);
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&partial, fs::Permissions::from_mode(0o600))
+            .map_err(|e| e.to_string())?;
+        fs::rename(&partial, &archive).map_err(|e| e.to_string())?;
+        let stored = StoredSample {
+            info,
+            source: "MalwareBazaar".into(),
+            downloaded_ms: unix_ms(),
+            pushes: Vec::new(),
+        };
+        save(data_dir, &stored)?;
+        Ok(stored)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&partial);
+    }
+    result
+}
+
+fn save(data_dir: &Path, stored: &StoredSample) -> Result<(), String> {
+    crate::storage::atomic_json(&record_path(data_dir, &stored.info.sha256_hash)?, stored)
+}
+
+/// Downloaded samples, newest first.
+pub fn stored(data_dir: &Path) -> Vec<StoredSample> {
+    let mut found: Vec<StoredSample> = fs::read_dir(samples_dir(data_dir))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+        .filter_map(|entry| serde_json::from_slice(&fs::read(entry.path()).ok()?).ok())
+        .filter(|sample: &StoredSample| {
+            archive_path(data_dir, &sample.info.sha256_hash).is_ok_and(|path| path.is_file())
+        })
+        .collect();
+    found.sort_by_key(|sample| std::cmp::Reverse(sample.downloaded_ms));
+    found
+}
+
+/// Note that a sample was sent into a VM.
+pub fn record_push(data_dir: &Path, sha256: &str, push: Push) -> Result<(), String> {
+    let path = record_path(data_dir, sha256)?;
+    let mut stored: StoredSample =
+        serde_json::from_slice(&fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?)
+            .map_err(|e| e.to_string())?;
+    stored.pushes.push(Push {
+        at_ms: unix_ms(),
+        ..push
+    });
+    save(data_dir, &stored)
+}
+
+/// Delete a downloaded sample and its record.
+pub fn delete(data_dir: &Path, sha256: &str) -> Result<(), String> {
+    let archive = archive_path(data_dir, sha256)?;
+    for path in [archive.clone(), archive.with_extension("json")] {
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("{}: {error}", path.display())),
+        }
+    }
+    Ok(())
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
+struct Keys {
+    malwarebazaar: String,
+}
+
+/// The MalwareBazaar API key saved in the data folder (readable by the user
+/// only), or an empty string.
+pub fn api_key(data_dir: &Path) -> String {
+    fs::read(samples_dir(data_dir).join(KEYS_FILE))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Keys>(&bytes).ok())
+        .map(|keys| keys.malwarebazaar)
+        .unwrap_or_default()
+}
+
+pub fn save_api_key(data_dir: &Path, key: &str) -> Result<(), String> {
+    let dir = samples_dir(data_dir);
+    crate::storage::private_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let path = dir.join(KEYS_FILE);
+    let keys = Keys {
+        malwarebazaar: key.trim().to_owned(),
+    };
+    crate::storage::atomic_json(&path, &keys)?;
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())
+}
+
+/// Searches worth trying for samples that run in the x86-64 guests.
+pub const STARTERS: &[(&str, &str)] = &[
+    (
+        "XorDDoS",
+        "DDoS botnet with a rootkit, x86-64 builds common",
+    ),
+    ("Kinsing", "cryptominer dropper attacking container hosts"),
+    ("BPFDoor", "passive backdoor using a BPF socket filter"),
+    (
+        "Mirai",
+        "IoT botnet; pick x86-64 builds, most are ARM or MIPS",
+    ),
+    ("Gafgyt", "IoT DDoS botnet; pick x86-64 builds"),
+    ("Tsunami", "IRC DDoS bot (Kaiten)"),
+    ("CoinMiner", "XMRig-based miners"),
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "ant-samples-{name}-{}",
+            crate::storage::unique_id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn sha256(bytes: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    /// An archive as MalwareBazaar makes them: one AES-encrypted file.
+    fn archive(path: &Path, name: &str, bytes: &[u8]) {
+        use zip::write::SimpleFileOptions;
+        let mut writer = zip::ZipWriter::new(fs::File::create(path).unwrap());
+        writer
+            .start_file(
+                name,
+                SimpleFileOptions::default()
+                    .with_aes_encryption(zip::AesMode::Aes128, ARCHIVE_PASSWORD),
+            )
+            .unwrap();
+        writer.write_all(bytes).unwrap();
+        writer.finish().unwrap();
+    }
+
+    #[test]
+    fn search_replies_are_parsed_with_missing_fields() {
+        let body = br#"{"query_status":"ok","data":[{"sha256_hash":"ab","file_name":"x.elf",
+            "file_size":12,"file_type":"elf","signature":"Mirai","tags":null,
+            "first_seen":"2026-10-01 10:00:00","unknown":1}]}"#;
+        let found = parse_reply(body).unwrap();
+        assert_eq!(found.len(), 1);
+        assert!(found[0].tags.is_empty() && found[0].is_elf() && found[0].may_run());
+        assert!(
+            parse_reply(br#"{"query_status":"no_results"}"#)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            parse_reply(br#"{"query_status":"unknown_auth_key"}"#)
+                .unwrap_err()
+                .contains("API key")
+        );
+        let arm = SampleInfo {
+            file_type: "elf".into(),
+            file_arch: Some("ARM".into()),
+            ..SampleInfo::default()
+        };
+        assert!(!arm.may_run());
+    }
+
+    #[test]
+    fn queries_become_bazaar_forms() {
+        let form = Query::Signature(" XorDDoS ".into()).form(5000);
+        assert_eq!(form[0], ("query", "get_siginfo".into()));
+        assert_eq!(form[1], ("signature", "XorDDoS".into()));
+        assert_eq!(form[2], ("limit", "1000".into()));
+    }
+
+    #[test]
+    fn samples_are_opened_in_memory_and_checked() {
+        let root = temp("open");
+        let sample = b"\x7fELF\x02\x01\x01\0\0\0\0\0\0\0\0\0\x02\0\x3e\0rest of a program";
+        let path = root.join("a.zip");
+        archive(&path, "a.elf", sample);
+        assert_eq!(open_sample(&path, &sha256(sample)).unwrap(), sample);
+        assert!(open_sample(&path, &"0".repeat(64)).is_err());
+        assert_eq!(elf_arch(sample), Some("x86_64"));
+        assert_eq!(elf_arch(b"MZ"), None);
+        // Only the archive is on disk.
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stored_samples_keep_their_record_and_pushes() {
+        let root = temp("stored");
+        let bytes = b"sample";
+        let hash = sha256(bytes);
+        let dir = samples_dir(&root);
+        fs::create_dir_all(&dir).unwrap();
+        archive(&archive_path(&root, &hash).unwrap(), "s", bytes);
+        save(
+            &root,
+            &StoredSample {
+                info: SampleInfo {
+                    sha256_hash: hash.clone(),
+                    ..SampleInfo::default()
+                },
+                source: "MalwareBazaar".into(),
+                downloaded_ms: 1,
+                pushes: Vec::new(),
+            },
+        )
+        .unwrap();
+        record_push(
+            &root,
+            &hash,
+            Push {
+                vm_id: "vm".into(),
+                path: "/tmp/s".into(),
+                ..Push::default()
+            },
+        )
+        .unwrap();
+        let found = stored(&root);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].pushes[0].path, "/tmp/s");
+        assert!(archive_path(&root, "../x").is_err());
+        delete(&root, &hash).unwrap();
+        assert!(stored(&root).is_empty());
+        save_api_key(&root, " key ").unwrap();
+        assert_eq!(api_key(&root), "key");
+        fs::remove_dir_all(root).unwrap();
+    }
+}

@@ -927,6 +927,13 @@ pub enum Command {
         overwrite: bool,
         executable: bool,
     },
+    /// Send a downloaded malware sample into the guest: decrypted in memory
+    /// from its archive (never written on the host) into a new guest file.
+    UploadSample {
+        sha256: String,
+        destination: String,
+        executable: bool,
+    },
     Execute(ExecRequest),
     AnalyzeOnly {
         path: String,

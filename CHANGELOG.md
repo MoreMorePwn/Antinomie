@@ -20,6 +20,18 @@ transport reconnect require a new guest base with contract revision 14 / ABI9.
   archives. Disk operations use durable journals and preserve interrupted work.
 - Snapshot-aware VM duplication flattens the current branch. Reset, disk resizing
   and data relocation are guarded while checkpoint dependencies exist.
+- **Snapshots** on the toolbar; the snapshot window keeps a margin to the app's
+  edges and room inside its graph nodes. Memory dumps and snapshot or reconnect
+  operations never overlap.
+- **Malware samples** (Tools): search MalwareBazaar by family, tag, file type
+  or hash with your own free API key (ELF only by default; one-click families
+  that run on x86-64 Linux), download samples, and send them into the running
+  VM, or send and run them as the guest user or root, recorded like any
+  program. Samples stay in MalwareBazaar's encrypted archives in the data
+  folder and are decrypted only in memory to be sent into the guest: nothing is
+  unpacked or run on the host. Each sample shows its processor (only x86-64
+  runs in the guests), warns when the VM has NAT on, and keeps every VM it was
+  sent into.
 
 ## 0.4.1 — 2026-10-11
 

@@ -147,9 +147,12 @@ impl SnapshotManager {
             .collapsible(false)
             .default_size([1040.0, 590.0])
             .min_size([320.0, 260.0])
+            // A margin all round: the window never touches the app's edges.
             .max_size(
-                (ctx.screen_rect().size() - egui::vec2(24.0, 48.0)).max(egui::vec2(320.0, 260.0)),
+                (ctx.screen_rect().size() - egui::vec2(96.0, 140.0)).max(egui::vec2(320.0, 260.0)),
             )
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(ctx.screen_rect().center())
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     if ui
@@ -238,7 +241,14 @@ impl SnapshotManager {
                     self.selected = None;
                 }
                 let width = ui.available_width();
-                let height = (ui.available_height() - 24.0).max(140.0);
+                // Leave the hint line below the view its full height, or the
+                // window grows a little every frame.
+                let footer = ui.text_style_height(&egui::TextStyle::Body)
+                    + 2.0 * ui.spacing().item_spacing.y
+                    + 8.0;
+                // Capped, so the window settles with a margin to the app's edges.
+                let cap = (ui.ctx().screen_rect().height() * 0.6).max(140.0);
+                let height = (ui.available_height() - footer).clamp(140.0, cap);
                 if width >= 740.0 {
                     ui.horizontal_top(|ui| {
                         ui.allocate_ui_with_layout(
@@ -246,12 +256,23 @@ impl SnapshotManager {
                             egui::Layout::top_down(egui::Align::Min),
                             |ui| self.view(ui, tree, height),
                         );
-                        ui.separator();
+                        // As tall as the view: a separator would take all the
+                        // height left and stretch the window.
+                        let (line, _) = ui.allocate_exact_size(
+                            egui::vec2(ui.spacing().item_spacing.x * 2.0 + 1.0, height),
+                            egui::Sense::hover(),
+                        );
+                        ui.painter().vline(
+                            line.center().x,
+                            line.y_range(),
+                            ui.visuals().widgets.noninteractive.bg_stroke,
+                        );
                         ui.allocate_ui_with_layout(
                             egui::vec2(280.0, height),
                             egui::Layout::top_down(egui::Align::Min),
                             |ui| {
                                 egui::ScrollArea::vertical()
+                                    .max_height(height)
                                     .show(ui, |ui| self.details(ui, tree, enabled));
                             },
                         );
@@ -761,19 +782,21 @@ fn paint_node(
         return;
     }
     let font = egui::FontId::proportional(font_size.clamp(12.0, 24.0));
+    // Room between the text and the node's border, growing with the zoom.
+    let pad = (rect.height() * 0.1).clamp(4.0, 12.0);
     let mut job = egui::text::LayoutJob::simple(
         name.to_owned(),
         font,
         theme::text(),
-        (rect.width() - 8.0).max(1.0),
+        (rect.width() - 2.0 * pad).max(1.0),
     );
     job.wrap.max_rows = 1;
     let galley = painter.layout_job(job);
-    let clip = painter.with_clip_rect(painter.clip_rect().intersect(rect.shrink(2.0)));
-    clip.galley(rect.min + egui::vec2(4.0, 4.0), galley, theme::text());
+    let clip = painter.with_clip_rect(painter.clip_rect().intersect(rect.shrink(pad / 2.0)));
+    clip.galley(rect.min + egui::vec2(pad, pad), galley, theme::text());
     if rect.height() >= 32.0 {
         clip.text(
-            rect.left_bottom() + egui::vec2(4.0, -4.0),
+            rect.left_bottom() + egui::vec2(pad, -pad),
             egui::Align2::LEFT_BOTTOM,
             detail,
             egui::FontId::proportional((font_size * 0.81).clamp(12.0, 24.0)),
