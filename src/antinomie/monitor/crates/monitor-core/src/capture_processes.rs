@@ -61,6 +61,16 @@ fn file_name(path: &str) -> String {
 }
 
 impl ProcessTracker {
+    /// Restore descriptive checkpoint baselines; pending exec observations are not replayed.
+    pub(crate) fn restore_baseline(&mut self, processes: Vec<CaptureProcess>) {
+        self.processes = processes
+            .into_iter()
+            .map(|process| (process.pid, process))
+            .collect();
+        self.exec_paths.clear();
+        self.changed = true;
+    }
+
     /// Processes running when the capture started.
     pub fn seed(&mut self, processes: &[GuestProcess]) {
         for process in processes {

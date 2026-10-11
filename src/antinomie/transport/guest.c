@@ -30,6 +30,7 @@ static struct ant_cpu *cpus;
 static struct ant_control *control;
 static struct ant_queue *directory;
 static struct ant_region *region;
+static struct ant_boot *boot;
 static u32 queue_count;
 static u32 ring_size = ANT_TELEMETRY_RING_DEFAULT;
 static bool ready, broken;
@@ -50,6 +51,65 @@ static u64 request_tail, request_head_seen, response_head, response_tail_seen;
 static u64 last_heartbeat;
 static unsigned long host_seen;
 static bool host_attached;
+
+/* Only the ordered control worker writes command cursors and the ack. The
+ * host holds all RAM backing file locks and publishes no commands until ack.
+ * This deliberately does not touch any per-CPU telemetry producer state.
+ */
+static bool service_resume(void)
+{
+	u64 nonce = ANT_ACQ(&boot->resume_request);
+	u64 cursor, seen, head, reply_tail, floor;
+	int error = 0;
+
+	if (!nonce || nonce == ANT_ACQ(&boot->resume_ack))
+		return false;
+	floor = max(last_request_id, ANT_ACQ(&boot->resume_sequence_floor));
+	cursor = request_tail;
+	seen = request_head_seen;
+	head = ANT_ACQ(&control->requests.head);
+	reply_tail = ANT_ACQ(&control->responses.tail);
+	if (broken || (head & 7) || head < cursor || head - cursor > ANT_COMMAND_RING_SIZE ||
+	    (reply_tail & 7) || reply_tail > response_head ||
+	    response_head - reply_tail > ANT_COMMAND_RING_SIZE) {
+		error = -EPROTO;
+		goto acknowledge;
+	}
+	while (cursor != head) {
+		struct ant_message req;
+
+		error = ant_peek(&control->requests, region->request_data,
+			ANT_COMMAND_RING_SIZE, ANT_MAX_COMMAND_LEN, cursor, &seen, &req);
+		if (error || !req.id || !req.opcode || req.status) {
+			error = -EPROTO;
+			goto acknowledge;
+		}
+		floor = max(floor, req.id);
+		cursor += ant_span(req.payload_len);
+	}
+	boot->discarded_request_bytes = head - request_tail;
+	boot->discarded_reply_bytes = response_head - reply_tail;
+	request_tail = head;
+	request_head_seen = head;
+	last_request_id = floor;
+	ANT_REL(&control->requests.tail, request_tail);
+	/* A new heartbeat establishes liveness independently of rolled-back time. */
+	host_seen = jiffies;
+	last_heartbeat = ANT_ACQ(&control->host_heartbeat);
+	host_attached = true;
+	ANT_REL(&boot->owner, nonce);
+acknowledge:
+	if (error) {
+		broken = true;
+		control->health |= ANT_HEALTH_RING_FAULT;
+		boot->discarded_request_bytes = 0;
+		boot->discarded_reply_bytes = 0;
+	}
+	boot->resume_sequence_ack = floor;
+	boot->resume_status = error;
+	ANT_REL(&boot->resume_ack, nonce);
+	return true;
+}
 
 /* antinomie_ring_kib=<KiB>: per-CPU telemetry ring size, a power of two. */
 static int __init ant_ring_param(char *arg)
@@ -237,7 +297,14 @@ static void service_commands(void)
 	for (budget = 0; budget < 16; budget++) {
 		struct ant_message req, resp = { 0 };
 		size_t payload_len = 0;
-		int error = ant_peek(&control->requests, region->request_data,
+		int error;
+
+		/* A request arriving during a sleeping handler is fenced before the
+		 * next handler. Already executing effects are not retried or undone.
+		 */
+		if (service_resume())
+			return;
+		error = ant_peek(&control->requests, region->request_data,
 			ANT_COMMAND_RING_SIZE, ANT_MAX_COMMAND_LEN, request_tail, &request_head_seen, &req);
 		if (error == -EAGAIN) return;
 		if (error) goto fault;
@@ -283,6 +350,7 @@ static void control_tick(struct work_struct *work)
 	u64 heartbeat = ANT_ACQ(&control->host_heartbeat);
 	u32 timeout_ms = ANT_ACQ(&control->host_timeout_ms);
 	u32 i;
+	service_resume();
 	if (!timeout_ms) timeout_ms = ANT_HOST_TIMEOUT_DEFAULT_MS;
 	if (timeout_ms > ANT_HOST_TIMEOUT_MAX_MS) {
 		control->health |= ANT_HEALTH_BAD_CONFIG;
@@ -308,10 +376,12 @@ static void control_tick(struct work_struct *work)
 static int __init ant_guest_init(void)
 {
 	struct page *pages;
-	struct ant_boot *boot;
 	u32 cpu, index = 0;
 	int error = -ENOMEM;
 	BUILD_BUG_ON(sizeof(struct ant_queue) != 192);
+	BUILD_BUG_ON(sizeof(struct ant_boot) != 256);
+	BUILD_BUG_ON(offsetof(struct ant_boot, resume_request) != 128);
+	BUILD_BUG_ON(offsetof(struct ant_boot, resume_ack) != 192);
 	BUILD_BUG_ON(sizeof(struct ant_geometry) != 64);
 	BUILD_BUG_ON(offsetof(struct ant_control, guest_heartbeat) != 64);
 	BUILD_BUG_ON(offsetof(struct ant_control, host_heartbeat) != 128);

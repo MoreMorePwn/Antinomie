@@ -4,6 +4,23 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
+## 0.5.0 — unreleased
+
+Existing bases still cold boot and support disk checkpoints. Full snapshots and
+transport reconnect require a new guest base with contract revision 14 / ABI9.
+
+- Native snapshot manager with disk or disk + memory capture, branching graph,
+  current working state, rename and dependency-safe hiding.
+- Restore by rebooting from disk or resuming saved RAM/CPU/devices. Confirmation
+  can save the current state first. Full resume initially requires the original
+  host, QEMU, kernel and hardware configuration.
+- Guest acknowledgement fences transport reattachment without resetting per-CPU
+  telemetry. Unresolved commands are reported and never automatically retried.
+- Full restore and reconnect create fresh recording timelines and retain old
+  archives. Disk operations use durable journals and preserve interrupted work.
+- Snapshot-aware VM duplication flattens the current branch. Reset, disk resizing
+  and data relocation are guarded while checkpoint dependencies exist.
+
 ## 0.4.1 — 2026-10-11
 
 - **Symbol tables online.** Linux and macOS dumps without a symbol table of

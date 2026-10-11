@@ -1,0 +1,176 @@
+From 90896cea133b546d379455c4f421c39adace58a9 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Sat, 10 Oct 2026 21:46:52 +0700
+Subject: [PATCH] antinomie: add fenced guest reattachment for snapshot
+ recovery
+
+---
+ kernel/antinomie/abi.h          | 12 +++++-
+ kernel/antinomie/control_wire.h |  4 +-
+ kernel/antinomie/guest.c        | 74 ++++++++++++++++++++++++++++++++-
+ 3 files changed, 85 insertions(+), 5 deletions(-)
+
+diff --git a/kernel/antinomie/abi.h b/kernel/antinomie/abi.h
+index 81779595a..cf82ddeb4 100644
+--- a/kernel/antinomie/abi.h
++++ b/kernel/antinomie/abi.h
+@@ -11,7 +11,7 @@
+ 
+ /* Wire profile: x86-64, little endian. Memory translation is supplied by host. */
+ #define ANT_MAGIC 0x354e5441U
+-#define ANT_ABI 8U
++#define ANT_ABI 9U
+ #define ANT_MAX_CPUS 256U
+ #define ANT_CONTROL_SIZE 1048576U
+ #define ANT_REQUEST_OFFSET 4096U
+@@ -45,6 +45,16 @@ struct ant_boot {
+ 	__u8 pad[32];
+ 	__u64 owner;
+ 	__u8 owner_pad[56];
++	/* Host writes the sequence fence before publishing a fresh request nonce.
++	 * The guest control worker acknowledges after fencing command traffic.
++	 * Telemetry producer state is never reset by attachment.
++	 */
++	__u64 resume_request, resume_sequence_floor;
++	__u8 resume_request_pad[48];
++	__u64 resume_ack, resume_sequence_ack;
++	__u64 discarded_request_bytes, discarded_reply_bytes;
++	__s32 resume_status;
++	__u8 resume_ack_pad[28];
+ } __attribute__((aligned(64)));
+ 
+ /* Descriptor, producer and consumer each occupy their own cache line. */
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index c2afb0e78..88996d014 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -11,8 +11,8 @@
+  */
+ #define ANTC_VERSION 1
+ /* Contract revision of the guest's observable behaviour (native-schema-slices). */
+-/* Revision 13: transport ABI 8 (antinomie_ring_kib= ring size, host send wait). */
+-#define ANTC_REVISION 13
++/* Revision 14: transport ABI 9 (reattachment and snapshot resume mailbox). */
++#define ANTC_REVISION 14
+ #define ANTC_HEADER_SIZE 8
+ #define ANTC_UPLOAD_BEGIN 0x1001
+ #define ANTC_UPLOAD_CHUNK 0x1002
+diff --git a/kernel/antinomie/guest.c b/kernel/antinomie/guest.c
+index de7a00220..13370d5be 100644
+--- a/kernel/antinomie/guest.c
++++ b/kernel/antinomie/guest.c
+@@ -30,6 +30,7 @@ static struct ant_cpu *cpus;
+ static struct ant_control *control;
+ static struct ant_queue *directory;
+ static struct ant_region *region;
++static struct ant_boot *boot;
+ static u32 queue_count;
+ static u32 ring_size = ANT_TELEMETRY_RING_DEFAULT;
+ static bool ready, broken;
+@@ -51,6 +52,65 @@ static u64 last_heartbeat;
+ static unsigned long host_seen;
+ static bool host_attached;
+ 
++/* Only the ordered control worker writes command cursors and the ack. The
++ * host holds all RAM backing file locks and publishes no commands until ack.
++ * This deliberately does not touch any per-CPU telemetry producer state.
++ */
++static bool service_resume(void)
++{
++	u64 nonce = ANT_ACQ(&boot->resume_request);
++	u64 cursor, seen, head, reply_tail, floor;
++	int error = 0;
++
++	if (!nonce || nonce == ANT_ACQ(&boot->resume_ack))
++		return false;
++	floor = max(last_request_id, ANT_ACQ(&boot->resume_sequence_floor));
++	cursor = request_tail;
++	seen = request_head_seen;
++	head = ANT_ACQ(&control->requests.head);
++	reply_tail = ANT_ACQ(&control->responses.tail);
++	if (broken || (head & 7) || head < cursor || head - cursor > ANT_COMMAND_RING_SIZE ||
++	    (reply_tail & 7) || reply_tail > response_head ||
++	    response_head - reply_tail > ANT_COMMAND_RING_SIZE) {
++		error = -EPROTO;
++		goto acknowledge;
++	}
++	while (cursor != head) {
++		struct ant_message req;
++
++		error = ant_peek(&control->requests, region->request_data,
++			ANT_COMMAND_RING_SIZE, ANT_MAX_COMMAND_LEN, cursor, &seen, &req);
++		if (error || !req.id || !req.opcode || req.status) {
++			error = -EPROTO;
++			goto acknowledge;
++		}
++		floor = max(floor, req.id);
++		cursor += ant_span(req.payload_len);
++	}
++	boot->discarded_request_bytes = head - request_tail;
++	boot->discarded_reply_bytes = response_head - reply_tail;
++	request_tail = head;
++	request_head_seen = head;
++	last_request_id = floor;
++	ANT_REL(&control->requests.tail, request_tail);
++	/* A new heartbeat establishes liveness independently of rolled-back time. */
++	host_seen = jiffies;
++	last_heartbeat = ANT_ACQ(&control->host_heartbeat);
++	host_attached = true;
++	ANT_REL(&boot->owner, nonce);
++acknowledge:
++	if (error) {
++		broken = true;
++		control->health |= ANT_HEALTH_RING_FAULT;
++		boot->discarded_request_bytes = 0;
++		boot->discarded_reply_bytes = 0;
++	}
++	boot->resume_sequence_ack = floor;
++	boot->resume_status = error;
++	ANT_REL(&boot->resume_ack, nonce);
++	return true;
++}
++
+ /* antinomie_ring_kib=<KiB>: per-CPU telemetry ring size, a power of two. */
+ static int __init ant_ring_param(char *arg)
+ {
+@@ -237,7 +297,14 @@ static void service_commands(void)
+ 	for (budget = 0; budget < 16; budget++) {
+ 		struct ant_message req, resp = { 0 };
+ 		size_t payload_len = 0;
+-		int error = ant_peek(&control->requests, region->request_data,
++		int error;
++
++		/* A request arriving during a sleeping handler is fenced before the
++		 * next handler. Already executing effects are not retried or undone.
++		 */
++		if (service_resume())
++			return;
++		error = ant_peek(&control->requests, region->request_data,
+ 			ANT_COMMAND_RING_SIZE, ANT_MAX_COMMAND_LEN, request_tail, &request_head_seen, &req);
+ 		if (error == -EAGAIN) return;
+ 		if (error) goto fault;
+@@ -283,6 +350,7 @@ static void control_tick(struct work_struct *work)
+ 	u64 heartbeat = ANT_ACQ(&control->host_heartbeat);
+ 	u32 timeout_ms = ANT_ACQ(&control->host_timeout_ms);
+ 	u32 i;
++	service_resume();
+ 	if (!timeout_ms) timeout_ms = ANT_HOST_TIMEOUT_DEFAULT_MS;
+ 	if (timeout_ms > ANT_HOST_TIMEOUT_MAX_MS) {
+ 		control->health |= ANT_HEALTH_BAD_CONFIG;
+@@ -308,10 +376,12 @@ static void control_tick(struct work_struct *work)
+ static int __init ant_guest_init(void)
+ {
+ 	struct page *pages;
+-	struct ant_boot *boot;
+ 	u32 cpu, index = 0;
+ 	int error = -ENOMEM;
+ 	BUILD_BUG_ON(sizeof(struct ant_queue) != 192);
++	BUILD_BUG_ON(sizeof(struct ant_boot) != 256);
++	BUILD_BUG_ON(offsetof(struct ant_boot, resume_request) != 128);
++	BUILD_BUG_ON(offsetof(struct ant_boot, resume_ack) != 192);
+ 	BUILD_BUG_ON(sizeof(struct ant_geometry) != 64);
+ 	BUILD_BUG_ON(offsetof(struct ant_control, guest_heartbeat) != 64);
+ 	BUILD_BUG_ON(offsetof(struct ant_control, host_heartbeat) != 128);
+-- 
+2.53.0
+

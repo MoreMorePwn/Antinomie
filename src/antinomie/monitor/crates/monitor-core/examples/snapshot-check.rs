@@ -1,0 +1,286 @@
+//! Real four-vCPU snapshot/reconnect qualification in a disposable data folder.
+//! Usage: snapshot-check BUNDLE WORK_DIR
+use antinomie_monitor_core::*;
+use std::{
+    collections::BTreeMap,
+    path::PathBuf,
+    thread,
+    time::{Duration, Instant},
+};
+struct Driver {
+    backend: Backend,
+    snapshot: Snapshot,
+    terminal: BTreeMap<String, Vec<u8>>,
+}
+impl Driver {
+    fn pump(&mut self) -> Vec<(u64, bool, String)> {
+        let mut replies = Vec::new();
+        while let Some(notification) = self.backend.try_recv() {
+            match notification {
+                Notification::Snapshot(snapshot) => self.snapshot = snapshot,
+                Notification::Terminal { run_id, data, .. } => {
+                    self.terminal.entry(run_id).or_default().extend(data)
+                }
+                Notification::CommandResult {
+                    id,
+                    success,
+                    message,
+                } => replies.push((id, success, message)),
+                _ => {}
+            }
+        }
+        replies
+    }
+    fn command(&mut self, command: Command) -> Result<String, String> {
+        let id = self.backend.send(command)?;
+        let deadline = Instant::now() + Duration::from_secs(360);
+        loop {
+            for (reply, success, message) in self.pump() {
+                if reply == id {
+                    eprintln!("{id}: {message}");
+                    thread::sleep(Duration::from_millis(50));
+                    self.pump();
+                    return if success { Ok(message) } else { Err(message) };
+                }
+            }
+            if Instant::now() > deadline {
+                return Err(format!(
+                    "command {id} timed out: {:?}",
+                    self.snapshot.last_error
+                ));
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+    fn marker(&mut self, id: &str, marker: &str) -> Result<(), String> {
+        let deadline = Instant::now() + Duration::from_secs(40);
+        loop {
+            self.pump();
+            if self.terminal.get(id).is_some_and(|data| {
+                data.windows(marker.len())
+                    .any(|value| value == marker.as_bytes())
+            }) {
+                return Ok(());
+            }
+            if Instant::now() > deadline {
+                return Err(format!(
+                    "marker {marker} missing: {:?}; output {}",
+                    self.snapshot.last_error,
+                    String::from_utf8_lossy(self.terminal.get(id).map_or(&[][..], Vec::as_slice))
+                ));
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+    fn input(&mut self, id: &str, line: &str, marker: &str) -> Result<(), String> {
+        self.terminal.insert(id.into(), Vec::new());
+        self.command(Command::TerminalInput {
+            run_id: id.into(),
+            data: format!("{line}\n").into_bytes(),
+        })?;
+        self.marker(id, marker)
+    }
+    fn guest_ready(&mut self) -> Result<(), String> {
+        let deadline = Instant::now() + Duration::from_secs(40);
+        loop {
+            self.pump();
+            if self.snapshot.serial_log.as_ref().is_some_and(|path| {
+                std::fs::read_to_string(path).is_ok_and(|text| text.contains("BusyBox guest ready"))
+            }) {
+                return Ok(());
+            }
+            if Instant::now() > deadline {
+                return Err("guest userspace did not finish booting".into());
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+    fn current_run(&self) -> Result<String, String> {
+        self.snapshot
+            .runs
+            .iter()
+            .find(|run| Some(run.boot_id.as_str()) == self.snapshot.boot_id.as_deref())
+            .map(|run| run.id.clone())
+            .ok_or_else(|| "no restored terminal owner".into())
+    }
+    fn snapshot(&mut self, vm: &str, name: &str, mode: VmSnapshotMode) -> Result<String, String> {
+        self.command(Command::CreateVmSnapshot {
+            vm_id: vm.into(),
+            request: SnapshotRequest {
+                name: name.into(),
+                description: "qualification fixture".into(),
+                mode,
+            },
+        })?;
+        self.command(Command::RefreshVmSnapshots { vm_id: vm.into() })?;
+        self.snapshot
+            .vm_snapshot_trees
+            .get(vm)
+            .and_then(|tree| tree.nodes.iter().find(|node| node.name == name))
+            .map(|node| node.id.clone())
+            .ok_or_else(|| "checkpoint missing".into())
+    }
+}
+fn run() -> Result<(), String> {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.len() != 2 {
+        return Err("usage: snapshot-check BUNDLE WORK_DIR".into());
+    }
+    let work = PathBuf::from(&args[1]);
+    if work.exists() {
+        return Err("qualification requires a fresh disposable work directory".into());
+    }
+    let options = BackendOptions {
+        data_dir: work.clone(),
+        bundle_dir: PathBuf::from(&args[0]),
+        headless: true,
+        capture_quota_size: 256 * 1024 * 1024,
+        ..BackendOptions::default()
+    };
+    let mut driver = Driver {
+        backend: Backend::new(options)?,
+        snapshot: Snapshot::default(),
+        terminal: BTreeMap::new(),
+    };
+    driver.command(Command::Create(VmConfig {
+        name: "Snapshot qualification".into(),
+        cpus: 4,
+        ram_mib: 1024,
+        disk_gib: 2,
+        ..VmConfig::default()
+    }))?;
+    let vm = driver.snapshot.vms.first().ok_or("VM missing")?.id.clone();
+    driver.command(Command::Start { vm_id: vm.clone() })?;
+    let deadline = Instant::now() + Duration::from_secs(40);
+    loop {
+        driver.pump();
+        if driver
+            .snapshot
+            .guest_kernel
+            .as_ref()
+            .is_some_and(|kernel| kernel.revision.is_some_and(|revision| revision >= 14))
+        {
+            break;
+        }
+        if Instant::now() > deadline {
+            return Err("ABI9 guest probe did not complete".into());
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    driver.guest_ready()?;
+    driver.command(Command::CaptureAll)?;
+    driver.command(Command::Execute(ExecRequest {path:"/bin/sh".into(),args:vec!["-c".into(),"n=7; echo SNAP_READY; while IFS= read -r line; do case \"$line\" in A) echo A >/tmp/snapshot-value; sync; echo SET_A;; B) echo B >/tmp/snapshot-value; sync; echo SET_B;; get) cat /tmp/snapshot-value; echo DISK_DONE;; inc) n=$((n+1)); echo COUNT_$n;; *) echo TICK_$line;; esac; done".into()],cwd:"/".into(),env:vec!["PATH=/bin:/sbin:/usr/bin:/usr/sbin".into()],uid:1000,gid:1000,analysis:Default::default(),run_in:RunIn::AppTerminal}))?;
+    let run = driver.current_run()?;
+    driver.marker(&run, "SNAP_READY")?;
+    driver.input(&run, "A", "SET_A")?;
+    let original_boot = driver.snapshot.boot_id.clone();
+    let full = driver.snapshot(&vm, "Full A", VmSnapshotMode::Full)?;
+    let disk = driver.snapshot(&vm, "Disk A", VmSnapshotMode::Disk)?;
+    driver.input(&run, "B", "SET_B")?;
+    driver.input(&run, "inc", "COUNT_8")?;
+    let future = driver.snapshot(&vm, "Future B", VmSnapshotMode::Disk)?;
+    for iteration in 0..2 {
+        driver.command(Command::RestoreVmSnapshot {
+            vm_id: vm.clone(),
+            snapshot_id: full.clone(),
+            boot_from_disk: false,
+            save_current: None,
+            confirmed: true,
+        })?;
+        if driver.snapshot.boot_id == original_boot {
+            return Err("full restore appended to old timeline".into());
+        }
+        let restored = driver.current_run()?;
+        if restored == run {
+            return Err("restored host run identity was reused".into());
+        }
+        driver.input(&restored, "get", "A\r\nDISK_DONE")?;
+        driver.input(&restored, "inc", "COUNT_8")?;
+        driver.input(&restored, "hello", "TICK_hello")?;
+        if driver.snapshot.health.parser_errors != 0 {
+            return Err("restored parser errors".into());
+        }
+        if !driver
+            .snapshot
+            .captures
+            .iter()
+            .any(|capture| capture.boot_id == driver.snapshot.boot_id.clone().unwrap_or_default())
+        {
+            return Err("restored capture ownership missing".into());
+        }
+        driver.snapshot(&vm, &format!("Branch {iteration}"), VmSnapshotMode::Disk)?;
+    }
+    driver.command(Command::ReconnectTransport)?;
+    let attached = driver.current_run()?;
+    driver.input(&attached, "again", "TICK_again")?;
+    if driver
+        .command(Command::RestoreVmSnapshot {
+            vm_id: vm.clone(),
+            snapshot_id: disk.clone(),
+            boot_from_disk: true,
+            save_current: None,
+            confirmed: false,
+        })
+        .is_ok()
+    {
+        return Err("unconfirmed restore accepted".into());
+    }
+    driver.command(Command::RestoreVmSnapshot {
+        vm_id: vm.clone(),
+        snapshot_id: disk.clone(),
+        boot_from_disk: true,
+        save_current: Some(SnapshotRequest {
+            name: "Saved before restore".into(),
+            description: String::new(),
+            mode: VmSnapshotMode::Disk,
+        }),
+        confirmed: true,
+    })?;
+    driver.guest_ready()?;
+    driver.command(Command::Execute(ExecRequest {
+        path: "/bin/sh".into(),
+        args: vec![
+            "-c".into(),
+            "cat /tmp/snapshot-value; echo DISK_REBOOT_DONE".into(),
+        ],
+        cwd: "/".into(),
+        env: vec!["PATH=/bin".into()],
+        uid: 1000,
+        gid: 1000,
+        analysis: Default::default(),
+        run_in: RunIn::AppTerminal,
+    }))?;
+    let rebooted = driver.current_run()?;
+    driver.marker(&rebooted, "A\r\nDISK_REBOOT_DONE")?;
+    driver.command(Command::Stop)?;
+    driver.command(Command::DeleteVmSnapshot {
+        vm_id: vm.clone(),
+        snapshot_id: full.clone(),
+        confirmed: true,
+    })?;
+    driver.command(Command::RefreshVmSnapshots { vm_id: vm.clone() })?;
+    let tree = driver
+        .snapshot
+        .vm_snapshot_trees
+        .get(&vm)
+        .ok_or("graph missing")?;
+    if !tree.nodes.iter().any(|node| node.id == future)
+        || !tree
+            .nodes
+            .iter()
+            .any(|node| node.id == full && node.deleted)
+        || tree.nodes.len() < 6
+    {
+        return Err("snapshot branches/dependencies lost".into());
+    }
+    std::fs::write(work.join("qualification.json"),serde_json::to_vec_pretty(&serde_json::json!({"passed":true,"cpus":4,"full_restores":2,"disk_reboot":true,"reconnect":true,"graph":tree,"health":driver.snapshot.health})).map_err(|error|error.to_string())?).map_err(|error|error.to_string())?;
+    driver.backend.shutdown()?;
+    println!("four-vCPU snapshot, branch and reconnect qualification passed");
+    Ok(())
+}
+fn main() {
+    if let Err(error) = run() {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+}

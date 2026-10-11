@@ -8,6 +8,7 @@ mod folders;
 mod memory_view;
 mod network_view;
 mod runs;
+mod snapshots;
 mod terminal;
 mod theme;
 mod tools_window;

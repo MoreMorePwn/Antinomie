@@ -41,12 +41,34 @@ struct ant_stats {
 	uint32_t abi, ring_size, send_wait_us, reserved;
 };
 struct ant_limits { size_t max_message_len, max_command_len, max_result_len; };
+struct ant_resume_report {
+	uint64_t attachment, sequence_floor;
+	uint64_t discarded_request_bytes, discarded_reply_bytes;
+};
 
 /* One owning thread per client. Different clients are independent.
  * Every function returns zero/success, an event mask, or negative errno.
- * A client owns one boot session; close does not clear queues or allow reattach.
+ * ABI 7/8 own one cold boot; close does not permit their reattachment. ABI 9
+ * attaches with a fresh guest-acknowledged nonce while holding backing locks.
  */
 int ant_init(const struct ant_options *options, struct ant_client **out_client);
+/* Map/validate/lock and publish ABI 9 resume, without waiting for a paused
+ * guest. Legacy guests attach normally. Finish ABI 9 before ordinary calls. */
+int ant_open_pending(const struct ant_options *options, struct ant_client **out_client);
+/* Sole owner only; no normal calls between begin and finish. Does not replay
+ * commands. In-flight side effects have unknown outcomes after reconnect.
+ * ABI 7/8: -EOPNOTSUPP. Cancel remains sticky. Layout/session must match. */
+int ant_resume_begin(struct ant_client *client);
+/* timeout_ms: 0 selects 30 seconds; negative is invalid. A timeout leaves the
+ * handle pending; close it or finish later, never retry abandoned commands.
+ * Preserves telemetry rings/counters; reports discarded command queue bytes. */
+int ant_resume_finish(struct ant_client *client, int timeout_ms,
+		struct ant_resume_report *report);
+/* Explicit QMP pause lifecycle: block ordinary calls (and their RAM writes),
+ * then resume liveness observation without allowing heartbeat rollback or
+ * legacy reattachment. Sole owner only. Resume may fail on stale geometry. */
+int ant_suspend_heartbeats(struct ant_client *client);
+int ant_resume_heartbeats(struct ant_client *client);
 void ant_close(struct ant_client *client);
 int ant_poll(struct ant_client *client, int timeout_ms);
 int ant_read(struct ant_client *client, void *dst, size_t capacity, size_t *payload_len);
@@ -55,6 +77,7 @@ int ant_command_send(struct ant_client *client, uint32_t opcode,
 int ant_result_read(struct ant_client *client, uint64_t *request_id,
 		int32_t *command_status, void *dst, size_t capacity, size_t *payload_len);
 int ant_get_stats(struct ant_client *client, struct ant_stats *stats);
+/* Immutable limits may also be queried on a pending attachment. */
 int ant_get_limits(struct ant_client *client, struct ant_limits *limits);
 /* Local configuration publication, not acknowledgement of guest application. */
 int ant_set_host_timeout(struct ant_client *client, uint32_t timeout_ms);

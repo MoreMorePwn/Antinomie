@@ -1,3 +1,6 @@
+#[path = "snapshot_recovery.rs"]
+mod snapshot_recovery;
+
 use crate::{
     api::*,
     build,
@@ -29,12 +32,15 @@ use std::{
 
 /// Commands and UI notifications are bounded. Closing always joins the sole owner.
 pub struct Backend {
-    commands: SyncSender<(u64, Command)>,
+    commands: SyncSender<(u64, u64, Command)>,
     notifications: Receiver<Notification>,
     thread: Option<JoinHandle<()>>,
+    /// Exclusive lifetime ownership protects snapshot journals from another app.
+    data_owner: Option<File>,
     closing: Arc<AtomicBool>,
     stopping: Arc<AtomicBool>,
     sequence: AtomicU64,
+    guest_epoch: Arc<AtomicU64>,
     latest_snapshot: Arc<Mutex<Option<Snapshot>>>,
 }
 impl Backend {
@@ -42,6 +48,7 @@ impl Backend {
         storage::migrate_default_data(&options)?;
         storage::private_dir(&options.data_dir).map_err(|e| e.to_string())?;
         options.data_dir = fs::canonicalize(&options.data_dir).map_err(|e| e.to_string())?;
+        let data_owner = acquire_data_owner(&options.data_dir)?;
         let vms = storage::load_vms(&options)?;
         let freed = crate::vm::remove_stale_guest_ram(
             &options,
@@ -66,6 +73,8 @@ impl Backend {
         let (worker_closing, worker_stopping) = (closing.clone(), stopping.clone());
         let latest_snapshot = Arc::new(Mutex::new(None));
         let worker_snapshot = latest_snapshot.clone();
+        let guest_epoch = Arc::new(AtomicU64::new(0));
+        let worker_epoch = guest_epoch.clone();
         let analysis_tools = crate::analysis_tools::statuses(&options.data_dir);
         let thread = thread::Builder::new()
             .name("antinomie-transport".into())
@@ -91,6 +100,7 @@ impl Backend {
                     tool: None,
                     last_publish: Instant::now(),
                     latest_snapshot: worker_snapshot,
+                    guest_epoch: worker_epoch,
                 }
                 .run();
             })
@@ -99,9 +109,11 @@ impl Backend {
             commands,
             notifications,
             thread: Some(thread),
+            data_owner: Some(data_owner),
             closing,
             stopping,
             sequence: AtomicU64::new(0),
+            guest_epoch,
             latest_snapshot,
         })
     }
@@ -120,15 +132,24 @@ impl Backend {
         {
             return Err("terminal input exceeds bounded command size".into());
         }
+        validate_snapshot_command(&command)?;
+        let epoch = self.guest_epoch.load(Ordering::Acquire);
+        if guest_scoped_command(&command) && !epoch.is_multiple_of(2) {
+            return Err(
+                "guest transition in progress; submit the command after recovery completes".into(),
+            );
+        }
         let id = self
             .sequence
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .map_err(|_| "command id exhausted")?
             + 1;
-        self.commands.try_send((id, command)).map_err(|e| match e {
-            TrySendError::Full(_) => String::from("backend command queue full"),
-            TrySendError::Disconnected(_) => String::from("backend owner disconnected"),
-        })?;
+        self.commands
+            .try_send((id, epoch, command))
+            .map_err(|e| match e {
+                TrySendError::Full(_) => String::from("backend command queue full"),
+                TrySendError::Disconnected(_) => String::from("backend owner disconnected"),
+            })?;
         Ok(id)
     }
     pub fn try_recv(&self) -> Option<Notification> {
@@ -143,16 +164,82 @@ impl Backend {
     pub fn shutdown(&mut self) -> Result<(), String> {
         self.closing.store(true, Ordering::Relaxed);
         self.stopping.store(true, Ordering::Relaxed);
-        if let Some(thread) = self.thread.take() {
-            thread.join().map_err(|_| "backend owner thread panicked")?;
-        }
-        Ok(())
+        let result = if let Some(thread) = self.thread.take() {
+            thread
+                .join()
+                .map_err(|_| "backend owner thread panicked".into())
+        } else {
+            Ok(())
+        };
+        self.data_owner.take();
+        result
     }
 }
 impl Drop for Backend {
     fn drop(&mut self) {
         let _ = self.shutdown();
     }
+}
+
+fn guest_scoped_command(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Upload { .. }
+            | Command::Execute(_)
+            | Command::AnalyzeOnly { .. }
+            | Command::TerminalInput { .. }
+            | Command::TerminalRead { .. }
+            | Command::TerminalResize { .. }
+            | Command::TerminalSnapshot { .. }
+            | Command::Signal { .. }
+            | Command::StopRun { .. }
+            | Command::RecorderStats
+            | Command::ListProcesses { .. }
+            | Command::AttachProcess { .. }
+            | Command::CaptureAll
+            | Command::StopCapture { .. }
+            | Command::StartNetworkCapture
+            | Command::StopNetworkCapture
+    )
+}
+fn validate_snapshot_command(command: &Command) -> Result<(), String> {
+    let request = match command {
+        Command::CreateVmSnapshot { request, .. } => Some(request),
+        Command::RestoreVmSnapshot { save_current, .. } => save_current.as_ref(),
+        _ => None,
+    };
+    if let Some(request) = request
+        && (request.name.trim().is_empty()
+            || request.name.len() > 128
+            || request.name.chars().any(char::is_control)
+            || request.description.len() > 4096)
+    {
+        return Err("snapshot name/description exceeds supported bounds".into());
+    }
+    Ok(())
+}
+
+fn acquire_data_owner(directory: &std::path::Path) -> Result<File, String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let owner = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .open(directory.join(".app-owner.lock"))
+        .map_err(|error| error.to_string())?;
+    if !owner
+        .metadata()
+        .map_err(|error| error.to_string())?
+        .is_file()
+    {
+        return Err("data owner lock must be a regular file".into());
+    }
+    rustix::fs::flock(&owner, rustix::fs::FlockOperation::NonBlockingLockExclusive)
+        .map_err(|error| format!("data folder is already in use or cannot be locked: {error}"))?;
+    Ok(owner)
 }
 
 /// Guest host-liveness timeout in never-drop mode (the default is 250 ms).
@@ -1324,7 +1411,7 @@ impl RequestError {
 struct Worker {
     options: BackendOptions,
     snapshot: Snapshot,
-    receiver: Receiver<(u64, Command)>,
+    receiver: Receiver<(u64, u64, Command)>,
     sender: SyncSender<Notification>,
     closing: Arc<AtomicBool>,
     stopping: Arc<AtomicBool>,
@@ -1341,6 +1428,7 @@ struct Worker {
     tool: Option<ToolJob>,
     last_publish: Instant,
     latest_snapshot: Arc<Mutex<Option<Snapshot>>>,
+    guest_epoch: Arc<AtomicU64>,
 }
 
 struct ToolJob {
@@ -1515,6 +1603,13 @@ impl BuildRun {
         crate::kit::prune_kernel_cache(&kernel_cache);
         line("::stage install");
         Ok(())
+    }
+}
+// Odd epochs fence submissions; the owner closes the boundary on every exit.
+struct GuestTransition(Arc<AtomicU64>);
+impl Drop for GuestTransition {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::AcqRel);
     }
 }
 impl Worker {
@@ -1717,6 +1812,17 @@ impl Worker {
     fn run(mut self) {
         self.publish();
         self.load_bases();
+        for id in self
+            .snapshot
+            .vms
+            .iter()
+            .map(|vm| vm.id.clone())
+            .collect::<Vec<_>>()
+        {
+            if let Err(error) = self.refresh_vm_snapshots(&id) {
+                self.snapshot.last_error = Some(error);
+            }
+        }
         self.publish();
         loop {
             if self.closing.load(Ordering::Relaxed) {
@@ -1762,7 +1868,7 @@ impl Worker {
             let mut disconnected = false;
             loop {
                 match received {
-                    Ok((id, command)) => {
+                    Ok((id, epoch, command)) => {
                         let quiet = matches!(
                             command,
                             Command::TerminalRead { .. } | Command::TerminalResize { .. }
@@ -1772,7 +1878,7 @@ impl Worker {
                         let result = if repeated {
                             Ok(String::new())
                         } else {
-                            self.command(command)
+                            self.command_at_epoch(epoch, command)
                         };
                         let success = result.is_ok();
                         let message = result.unwrap_or_else(|e| e);
@@ -1907,6 +2013,20 @@ impl Worker {
             Ok(())
         }
     }
+    fn command_at_epoch(&mut self, epoch: u64, command: Command) -> Result<String, String> {
+        if guest_scoped_command(&command) && epoch != self.guest_epoch.load(Ordering::Acquire) {
+            return Err("command cancelled at snapshot/reconnect boundary; submit it explicitly in the current timeline".into());
+        }
+        self.command(command)
+    }
+    fn begin_guest_transition(&self) -> Result<GuestTransition, String> {
+        self.guest_epoch
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                value.checked_add(2).map(|_| value + 1)
+            })
+            .map_err(|_| "guest command epoch exhausted")?;
+        Ok(GuestTransition(self.guest_epoch.clone()))
+    }
     fn command(&mut self, command: Command) -> Result<String, String> {
         // QEMU keeps the guest paused while it writes a memory dump: a guest
         // command would only time out.
@@ -1925,6 +2045,9 @@ impl Worker {
                     | Command::AttachProcess { .. }
                     | Command::CaptureAll
                     | Command::StopCapture { .. }
+                    | Command::CreateVmSnapshot { .. }
+                    | Command::RestoreVmSnapshot { .. }
+                    | Command::ReconnectTransport
             )
         {
             return Err(
@@ -1932,6 +2055,50 @@ impl Worker {
             );
         }
         match command {
+            Command::RefreshVmSnapshots { vm_id } => {
+                self.refresh_vm_snapshots(&vm_id)?;
+                Ok("Snapshots refreshed".into())
+            }
+            Command::CreateVmSnapshot { vm_id, request } => {
+                self.create_vm_snapshot(&vm_id, request)
+            }
+            Command::RestoreVmSnapshot {
+                vm_id,
+                snapshot_id,
+                boot_from_disk,
+                save_current,
+                confirmed,
+            } => {
+                if !confirmed {
+                    return Err("restore requires confirmation".into());
+                }
+                self.restore_vm_snapshot(&vm_id, &snapshot_id, boot_from_disk, save_current)
+            }
+            Command::RenameVmSnapshot {
+                vm_id,
+                snapshot_id,
+                name,
+            } => {
+                let vm = self.snapshot_vm(&vm_id)?;
+                crate::snapshots::rename(&self.options, &vm, &snapshot_id, &name)?;
+                self.refresh_vm_snapshots(&vm_id)?;
+                Ok("Snapshot renamed".into())
+            }
+            Command::DeleteVmSnapshot {
+                vm_id,
+                snapshot_id,
+                confirmed,
+            } => {
+                if !confirmed {
+                    return Err("snapshot deletion requires confirmation".into());
+                }
+                self.ensure_stopped(&vm_id)?;
+                let vm = self.snapshot_vm(&vm_id)?;
+                crate::snapshots::logical_delete(&self.options, &vm, &snapshot_id)?;
+                self.refresh_vm_snapshots(&vm_id)?;
+                Ok("Snapshot hidden; dependent disk layers retained".into())
+            }
+            Command::ReconnectTransport => self.reconnect_transport(),
             Command::Create(vm) => self.create(vm, None),
             Command::CreateWithCredentials { vm, credentials } => {
                 self.create(vm, Some(credentials))
@@ -2290,9 +2457,17 @@ impl Worker {
                     return Err("persistent VM disks cannot be shrunk".into());
                 }
                 if vm.disk_gib != current.disk_gib {
+                    if !crate::snapshots::list(&self.options, current)?
+                        .nodes
+                        .is_empty()
+                    {
+                        return Err(
+                            "disk resizing is blocked while snapshots retain disk geometry".into(),
+                        );
+                    }
                     let output = std::process::Command::new(&self.options.qemu_img)
                         .arg("resize")
-                        .arg(dir.join("disk.qcow2"))
+                        .arg(crate::snapshots::active_disk(&self.options, current)?)
                         .arg(format!("{}G", vm.disk_gib))
                         .output()
                         .map_err(|e| e.to_string())?;
@@ -2519,11 +2694,8 @@ impl Worker {
         let dir = storage::vm_dir(&self.options, id)?;
         let disk_bundle: Bundle = storage::read_json(&dir.join("bundle.json"))?;
         disk_bundle.verify_installed()?;
-        storage::validate_disk_chain(
-            &self.options,
-            &dir.join("disk.qcow2"),
-            Some(&disk_bundle.base_disk),
-        )?;
+        crate::snapshots::recover_pending(&self.options, &vm)?;
+        crate::snapshots::validate_active(&self.options, &vm, &disk_bundle.base_disk)?;
         storage::validate_guest_transition(&disk_bundle, &bundle)?;
         storage::validate_vm_bundle(&self.options, &vm, &disk_bundle)?;
         storage::validate_vm_bundle(&self.options, &vm, &bundle)?;
@@ -2628,6 +2800,7 @@ impl Worker {
             Ok(session) => {
                 self.session = Some(session);
                 self.snapshot.state = VmState::Running;
+                self.refresh_vm_snapshots(id)?;
                 Ok("VM running; transport attached".into())
             }
             Err(e) => {
@@ -3691,6 +3864,7 @@ mod tests {
             tool: None,
             last_publish: Instant::now(),
             latest_snapshot: Arc::new(Mutex::new(None)),
+            guest_epoch: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -3731,6 +3905,48 @@ mod tests {
         stopped
     }
 
+    #[test]
+    fn snapshot_epoch_cancels_queued_guest_effects_and_keeps_host_actions() {
+        let root = std::env::temp_dir().join(format!("ant-epoch-{}", storage::unique_id()));
+        let mut worker = download_worker(root);
+        let epoch = worker.guest_epoch.load(Ordering::Acquire);
+        let transition = worker.begin_guest_transition().unwrap();
+        let during = worker.guest_epoch.load(Ordering::Acquire);
+        drop(transition);
+        let error = worker
+            .command_at_epoch(
+                epoch,
+                Command::Upload {
+                    source: "unused".into(),
+                    destination: "/tmp/unused".into(),
+                    overwrite: false,
+                    executable: false,
+                },
+            )
+            .unwrap_err();
+        assert!(error.contains("cancelled at snapshot/reconnect boundary"));
+        assert_eq!(
+            worker
+                .command_at_epoch(epoch, Command::CancelDownload)
+                .unwrap_err(),
+            "no base download is running"
+        );
+        let error = worker
+            .command_at_epoch(during, Command::CaptureAll)
+            .unwrap_err();
+        assert!(error.contains("cancelled at snapshot/reconnect boundary"));
+        assert_eq!(worker.guest_epoch.load(Ordering::Acquire), epoch + 2);
+    }
+    #[test]
+    fn data_owner_excludes_other_app_and_releases_on_drop() {
+        let root = std::env::temp_dir().join(format!("ant-owner-{}", storage::unique_id()));
+        fs::create_dir(&root).unwrap();
+        let owner = acquire_data_owner(&root).unwrap();
+        assert!(acquire_data_owner(&root).is_err());
+        drop(owner);
+        assert!(acquire_data_owner(&root).is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn cancel_download_finishes_without_an_error_alert() {
         let root = std::env::temp_dir().join(format!("ant-cancel-{}", storage::unique_id()));
@@ -3926,6 +4142,7 @@ mod tests {
             tool: None,
             last_publish: Instant::now(),
             latest_snapshot: Arc::new(Mutex::new(None)),
+            guest_epoch: Arc::new(AtomicU64::new(0)),
         };
         for command in [
             Command::Create(VmConfig {
@@ -4007,6 +4224,7 @@ mod tests {
             tool: None,
             last_publish: Instant::now(),
             latest_snapshot: Arc::new(Mutex::new(None)),
+            guest_epoch: Arc::new(AtomicU64::new(0)),
         };
         worker
             .command(Command::Create(VmConfig {
@@ -4099,6 +4317,7 @@ mod tests {
             tool: None,
             last_publish: Instant::now(),
             latest_snapshot: Arc::new(Mutex::new(None)),
+            guest_epoch: Arc::new(AtomicU64::new(0)),
         };
         for guest in [false, true] {
             let source = root.join(if guest { "debian" } else { "busybox" });
@@ -4241,6 +4460,7 @@ mod tests {
             tool: None,
             last_publish: Instant::now(),
             latest_snapshot: Arc::new(Mutex::new(None)),
+            guest_epoch: Arc::new(AtomicU64::new(0)),
         };
         assert!(
             worker

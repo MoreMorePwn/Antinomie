@@ -48,7 +48,7 @@ pub(crate) struct Stats {
     /// Sends that found their ring full and waited, and the total wait.
     pub waits: u64,
     pub wait_ns: u64,
-    /// Transport ABI of the guest (7 or 8), per-CPU ring bytes, send wait.
+    /// Transport ABI of the guest (7, 8 or 9), per-CPU ring bytes, send wait.
     pub abi: u32,
     pub ring_size: u32,
     pub send_wait_us: u32,
@@ -60,6 +60,15 @@ struct Limits {
     max_message_len: usize,
     max_command_len: usize,
     max_result_len: usize,
+}
+/// New attachment identity and discarded command traffic; no automatic replay.
+#[derive(Default, Debug, Clone, Copy)]
+#[repr(C)]
+pub(crate) struct ResumeInfo {
+    pub attachment: u64,
+    pub sequence_floor: u64,
+    pub discarded_request_bytes: u64,
+    pub discarded_reply_bytes: u64,
 }
 const _: () = {
     assert!(std::mem::size_of::<Backing>() == 16);
@@ -74,9 +83,15 @@ const _: () = {
     assert!(std::mem::offset_of!(Stats, waits) == 48);
     assert!(std::mem::offset_of!(Stats, health) == 32);
     assert!(std::mem::size_of::<Limits>() == 24);
+    assert!(std::mem::size_of::<ResumeInfo>() == 32);
 };
 unsafe extern "C" {
     fn ant_init(options: *const Options, client: *mut *mut c_void) -> c_int;
+    fn ant_open_pending(options: *const Options, client: *mut *mut c_void) -> c_int;
+    fn ant_resume_begin(client: *mut c_void) -> c_int;
+    fn ant_resume_finish(client: *mut c_void, timeout_ms: c_int, report: *mut ResumeInfo) -> c_int;
+    fn ant_suspend_heartbeats(client: *mut c_void) -> c_int;
+    fn ant_resume_heartbeats(client: *mut c_void) -> c_int;
     fn ant_close(client: *mut c_void);
     fn ant_poll(client: *mut c_void, timeout_ms: c_int) -> c_int;
     fn ant_read(client: *mut c_void, dst: *mut c_void, capacity: usize, len: *mut usize) -> c_int;
@@ -140,6 +155,14 @@ pub(crate) struct Transport {
 }
 impl Transport {
     pub fn open(path: &Path, ram: u64, bootstrap: u64) -> Result<Self, String> {
+        Self::open_mode(path, ram, bootstrap, false)
+    }
+    /// Publish resume before continuing a paused incoming guest. Host
+    /// heartbeats remain unregistered until `finish_resume` succeeds.
+    pub fn open_pending(path: &Path, ram: u64, bootstrap: u64) -> Result<Self, String> {
+        Self::open_mode(path, ram, bootstrap, true)
+    }
+    fn open_mode(path: &Path, ram: u64, bootstrap: u64, pending: bool) -> Result<Self, String> {
         let path =
             CString::new(path.as_os_str().as_bytes()).map_err(|_| "RAM path contains NUL")?;
         let backing = Backing {
@@ -177,7 +200,13 @@ impl Transport {
         };
         let mut ptr = std::ptr::null_mut();
         // SAFETY: All pointed inputs live through ant_init, which copies layout and opens the backing; out is writable.
-        check(unsafe { ant_init(&options, &mut ptr) })?;
+        check(unsafe {
+            if pending {
+                ant_open_pending(&options, &mut ptr)
+            } else {
+                ant_init(&options, &mut ptr)
+            }
+        })?;
         let ptr = NonNull::new(ptr).ok_or("transport returned null client")?;
         let mut limits = Limits::default();
         // SAFETY: Client is initialized on this owner thread, and limits is a valid writable C layout.
@@ -192,7 +221,9 @@ impl Transport {
             unsafe { ant_close(ptr.as_ptr()) };
             return Err("transport limits exceed host bound".into());
         }
-        OWNED.with(|owned| owned.set(ptr.as_ptr()));
+        if !pending {
+            OWNED.with(|owned| owned.set(ptr.as_ptr()));
+        }
         Ok(Self {
             ptr,
             message: vec![0; limits.max_message_len],
@@ -200,6 +231,61 @@ impl Transport {
             command_limit: limits.max_command_len,
             _owner: PhantomData,
         })
+    }
+    /// Sole owner begins recovery; abandon unresolved command results.
+    pub fn begin_resume(&mut self) -> Result<(), String> {
+        // SAFETY: The live client remains on its sole owner thread; no call races it.
+        check(unsafe { ant_resume_begin(self.ptr.as_ptr()) })?;
+        OWNED.with(|owned| {
+            if owned.get() == self.ptr.as_ptr() {
+                owned.set(std::ptr::null_mut());
+            }
+        });
+        Ok(())
+    }
+    /// Wait for guest acknowledgement. Timed-out side effects stay unknown;
+    /// callers must clear pending operations without automatically replaying.
+    pub fn finish_resume(&mut self, timeout_ms: i32) -> Result<ResumeInfo, String> {
+        let mut report = ResumeInfo::default();
+        // SAFETY: Sole owner holds the client; report is writable C layout.
+        check(unsafe { ant_resume_finish(self.ptr.as_ptr(), timeout_ms, &mut report) })?;
+        OWNED.with(|owned| owned.set(self.ptr.as_ptr()));
+        Ok(report)
+    }
+    pub fn reconnect(&mut self, timeout_ms: i32) -> Result<ResumeInfo, String> {
+        // SAFETY: Sole owner holds the client. EINPROGRESS means an earlier
+        // handshake still owns its nonce; continue that wait without replaying
+        // commands or publishing another attachment request.
+        let code = unsafe { ant_resume_begin(self.ptr.as_ptr()) };
+        if code != -rustix::io::Errno::INPROGRESS.raw_os_error() {
+            check(code)?;
+        }
+        OWNED.with(|owned| {
+            if owned.get() == self.ptr.as_ptr() {
+                owned.set(std::ptr::null_mut());
+            }
+        });
+        self.finish_resume(timeout_ms)
+    }
+    /// Disable both writer-wait heartbeats and ordinary transport RAM writes
+    /// during shared-RAM serialization. Call resume even after QMP failure.
+    pub fn suspend_heartbeats(&mut self) -> Result<(), String> {
+        // SAFETY: Sole owner holds the live client; suspension never frees it.
+        check(unsafe { ant_suspend_heartbeats(self.ptr.as_ptr()) })?;
+        OWNED.with(|owned| {
+            if owned.get() == self.ptr.as_ptr() {
+                owned.set(std::ptr::null_mut());
+            }
+        });
+        Ok(())
+    }
+    /// Refresh the explicit pause deadline without accepting heartbeat rewind,
+    /// legacy reattachment, or any previously latched stale error.
+    pub fn resume_heartbeats(&mut self) -> Result<(), String> {
+        // SAFETY: Sole owner holds the client; C validates session/layout.
+        check(unsafe { ant_resume_heartbeats(self.ptr.as_ptr()) })?;
+        OWNED.with(|owned| owned.set(self.ptr.as_ptr()));
+        Ok(())
     }
     pub fn poll(&mut self, timeout: i32) -> Result<i32, String> {
         // SAFETY: Client is live and this wrapper never leaves its sole owning thread.

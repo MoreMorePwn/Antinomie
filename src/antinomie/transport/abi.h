@@ -11,7 +11,7 @@
 
 /* Wire profile: x86-64, little endian. Memory translation is supplied by host. */
 #define ANT_MAGIC 0x354e5441U
-#define ANT_ABI 8U
+#define ANT_ABI 9U
 #define ANT_MAX_CPUS 256U
 #define ANT_CONTROL_SIZE 1048576U
 #define ANT_REQUEST_OFFSET 4096U
@@ -45,6 +45,16 @@ struct ant_boot {
 	__u8 pad[32];
 	__u64 owner;
 	__u8 owner_pad[56];
+	/* Host writes the sequence fence before publishing a fresh request nonce.
+	 * The guest control worker acknowledges after fencing command traffic.
+	 * Telemetry producer state is never reset by attachment.
+	 */
+	__u64 resume_request, resume_sequence_floor;
+	__u8 resume_request_pad[48];
+	__u64 resume_ack, resume_sequence_ack;
+	__u64 discarded_request_bytes, discarded_reply_bytes;
+	__s32 resume_status;
+	__u8 resume_ack_pad[28];
 } __attribute__((aligned(64)));
 
 /* Descriptor, producer and consumer each occupy their own cache line. */

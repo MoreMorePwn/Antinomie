@@ -2,6 +2,8 @@
 
 This brief is the shared implementation contract. User authorized implementation
 on 2026-10-01. Core workers/review use gpt-6.1-sol; bounded support may use Luna.
+The accepted 0.5.0 snapshot/reconnect extension below supersedes the historical
+V7-only restriction; older requirements remain recorded for their releases.
 
 ## Accepted requirements
 
@@ -311,3 +313,25 @@ All final docs in the separate documentation repository. Obsidian
 Mermaid. Declarations/arguments/returns in tables; executable source explained
 using short excerpts with actual filename/line numbers and prose below. Preserve
 unrelated v5 walkthrough edit. Coordinator commits/pushes docs after validation.
+
+## Accepted snapshot and reconnect extension (0.5.0)
+
+The authorized snapshot manager supports disk checkpoints (cold boot recovery)
+and full CPU/RAM/device checkpoints (resume recovery), with a branching native
+graph. External qcow2 layers are frozen; each branch owns a separate writable
+child. A durable manifest and pending-operation journal own active disk selection.
+Live disk capture is crash-consistent; full capture pauses CPUs and suspends host
+RAM writes. Full recovery requires ABI9 and exact QEMU/config/bundle compatibility.
+
+ABI9 adds a host attachment nonce/guest acknowledgement mailbox independent of
+command queues. The guest services it before/between control dispatches, fences
+executed and abandoned request IDs, and preserves per-CPU telemetry producers.
+The host skips stale replies, reads from restored owned tails and never replays
+unresolved side effects. ABI7/8 retain cold attachment and disk checkpoints.
+
+Full restore creates fresh recording IDs/directories, retains restored guest
+run/capture cookies, seals old archives and records incomplete boundary tails.
+Old recordings and saved ancestors remain immutable. Restore confirmation can
+save current state first; failure to save prevents restore. Hidden checkpoints
+retain all disk/memory artifacts until confirmed whole-VM deletion. Snapshot-aware
+reset/data relocation are guarded until their dependency-safe implementations.

@@ -183,6 +183,7 @@ pub struct MonitorApp {
     build_open: bool,
     about_open: bool,
     tools_open: bool,
+    vm_snapshots: crate::snapshots::SnapshotManager,
     dependencies: crate::dependencies_window::DependenciesWindow,
     /// Download base: also list bases for earlier Antinomie versions.
     show_older_bases: bool,
@@ -305,6 +306,7 @@ impl MonitorApp {
             build_open: false,
             about_open: false,
             tools_open: false,
+            vm_snapshots: crate::snapshots::SnapshotManager::default(),
             dependencies,
             show_older_bases: false,
             build_wizard: build_wizard::BuildWizard::default(),
@@ -386,11 +388,23 @@ impl MonitorApp {
     }
 
     fn send(&mut self, command: Command) {
+        let vm_snapshot = matches!(
+            &command,
+            Command::RefreshVmSnapshots { .. }
+                | Command::CreateVmSnapshot { .. }
+                | Command::RestoreVmSnapshot { .. }
+                | Command::RenameVmSnapshot { .. }
+                | Command::DeleteVmSnapshot { .. }
+                | Command::ReconnectTransport
+        );
         if let Err(error) = self
             .dependencies
             .require(&command, &self.options, &self.snapshot)
         {
             self.dependencies.open = true;
+            if vm_snapshot {
+                self.vm_snapshots.result = Some((false, error.clone()));
+            }
             self.status = error.clone();
             self.log("ERROR", error);
             return;
@@ -423,6 +437,10 @@ impl MonitorApp {
         if let Some(backend) = &self.backend {
             match backend.send(command) {
                 Ok(id) => {
+                    if vm_snapshot {
+                        self.vm_snapshots.pending = Some(id);
+                        self.vm_snapshots.result = None;
+                    }
                     if observer {
                         self.pending_observer = Some(id);
                     }
@@ -444,6 +462,9 @@ impl MonitorApp {
             }
         }
         if let Some(error) = failure {
+            if vm_snapshot {
+                self.vm_snapshots.result = Some((false, error.clone()));
+            }
             self.log("ERROR", error);
         }
     }
@@ -534,6 +555,7 @@ impl MonitorApp {
                         success,
                         message,
                     }) => {
+                        self.vm_snapshots.complete(id, success, &message);
                         if self.pending_observer == Some(id) {
                             self.pending_observer = None;
                         }
@@ -1773,9 +1795,21 @@ impl MonitorApp {
             .find(|vm| Some(&vm.id) == self.selected.as_ref())
     }
 
+    fn open_snapshots(&mut self) {
+        if let Some(vm) = self.selected_vm().cloned() {
+            self.vm_snapshots.bind(&vm.id, &vm.name);
+            if self.vm_snapshots.pending.is_none() {
+                self.send(Command::RefreshVmSnapshots { vm_id: vm.id });
+            }
+        }
+    }
+
     /// Menu shortcuts; they wait while a text field or terminal has the
     /// keyboard.
     fn shortcuts(&mut self, ctx: &egui::Context) {
+        if self.vm_snapshots.decision_open() {
+            return;
+        }
         if ctx.memory(|memory| memory.focused().is_some()) {
             return;
         }
@@ -1876,6 +1910,28 @@ impl MonitorApp {
                             .clicked()
                         {
                             self.configure_vm();
+                            ui.close_menu();
+                        }
+                        if ui
+                            .add_enabled(
+                                self.selected.is_some() && !self.closing,
+                                item("Snapshots…", None),
+                            )
+                            .clicked()
+                        {
+                            self.open_snapshots();
+                            ui.close_menu();
+                        }
+                        if ui
+                            .add_enabled(
+                                self.running()
+                                    && !self.closing
+                                    && self.vm_snapshots.pending.is_none(),
+                                item("Reconnect telemetry", None),
+                            )
+                            .clicked()
+                        {
+                            self.send(Command::ReconnectTransport);
                             ui.close_menu();
                         }
                         let vm = self.selected_vm().cloned();
@@ -2103,6 +2159,21 @@ impl MonitorApp {
                                 },
                             ) {
                                 self.send(Command::Stop);
+                            }
+                            ui.separator();
+                            if tool_button(
+                                ui,
+                                ToolButton {
+                                    icon: egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE,
+                                    label: "Snapshots",
+                                    tooltip: "Save, restore and branch this VM's disk and memory",
+                                    enabled: self.selected.is_some() && !self.closing,
+                                    tone: theme::blue(),
+                                    strong: false,
+                                    active: false,
+                                },
+                            ) {
+                                self.open_snapshots();
                             }
                             ui.separator();
                             if tool_button(
@@ -2425,6 +2496,7 @@ impl MonitorApp {
                                         ("Start VM", self.snapshot.active_vm.is_none() && !self.closing, VmAction::Start),
                                         ("Stop VM", active, VmAction::Stop),
                                         ("Configuration…", stopped, VmAction::Configure),
+                                        ("Snapshots…", !self.closing, VmAction::Snapshots),
                                         ("Rename…", !self.closing, VmAction::Rename),
                                         ("Duplicate…", stopped, VmAction::Duplicate),
                                         ("Open directory", true, VmAction::OpenDirectory),
@@ -2658,6 +2730,12 @@ impl MonitorApp {
                     }
                 }
                 VmAction::Stop => self.send(Command::Stop),
+                VmAction::Snapshots => {
+                    self.vm_snapshots.bind(&vm.id, &vm.name);
+                    if self.vm_snapshots.pending.is_none() {
+                        self.send(Command::RefreshVmSnapshots { vm_id: vm.id });
+                    }
+                }
                 VmAction::Configure => {
                     self.credentials.reset();
                     self.draft_generation = self.draft_generation.wrapping_add(1);
@@ -3734,6 +3812,21 @@ impl MonitorApp {
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
+        if self.vm_snapshots.open {
+            let tree = self
+                .vm_snapshots
+                .vm_id
+                .as_ref()
+                .and_then(|id| self.snapshot.vm_snapshot_trees.get(id));
+            let progress = self
+                .snapshot
+                .vm_snapshot_progress
+                .as_ref()
+                .filter(|progress| self.vm_snapshots.vm_id.as_deref() == Some(&progress.vm_id));
+            if let Some(command) = self.vm_snapshots.show(ctx, tree, progress, !self.closing) {
+                self.send(command);
+            }
+        }
         if self.import_open {
             let mut open = true;
             let mut import = false;
@@ -3969,7 +4062,7 @@ impl MonitorApp {
                 ),
                 Confirm::Delete(_) => (
                     "Delete VM",
-                    "Delete this VM configuration and disk? Disk changes will be lost. Retained run recordings and terminal history are preserved.",
+                    "Delete this VM configuration, disk and all snapshots? All saved disk layers and memory states will be lost. Retained run recordings and terminal history are preserved.",
                     "Delete VM",
                     true,
                 ),
@@ -4591,6 +4684,8 @@ impl MonitorApp {
             Dialog::Import => self.import_open,
             Dialog::Download => self.download_open,
             Dialog::Tools => self.tools_open,
+            Dialog::Snapshots => self.vm_snapshots.open,
+            Dialog::SnapshotDecision => self.vm_snapshots.decision_open(),
             Dialog::Dependencies => self.dependencies.open,
             Dialog::About => self.about_open,
             Dialog::Build => self.build_open,
@@ -4615,6 +4710,7 @@ impl MonitorApp {
             Dialog::Import => self.import_open = false,
             Dialog::Download => self.download_open = false,
             Dialog::Tools => self.tools_open = false,
+            Dialog::Snapshots | Dialog::SnapshotDecision => self.vm_snapshots.close(),
             Dialog::Dependencies => self.dependencies.open = false,
             Dialog::About => self.about_open = false,
             Dialog::Build => self.build_open = false,
@@ -6216,6 +6312,8 @@ enum Dialog {
     Import,
     Download,
     Tools,
+    Snapshots,
+    SnapshotDecision,
     Dependencies,
     About,
     Build,
@@ -6223,7 +6321,7 @@ enum Dialog {
 }
 
 impl Dialog {
-    const ALL: [Dialog; 14] = [
+    const ALL: [Dialog; 16] = [
         Dialog::Confirm,
         Dialog::Name,
         Dialog::Transport,
@@ -6234,6 +6332,8 @@ impl Dialog {
         Dialog::Import,
         Dialog::Download,
         Dialog::Tools,
+        Dialog::Snapshots,
+        Dialog::SnapshotDecision,
         Dialog::Dependencies,
         Dialog::About,
         Dialog::Build,
@@ -6253,6 +6353,8 @@ impl Dialog {
             Dialog::Import => "import_base",
             Dialog::Download => "download_base",
             Dialog::Tools => crate::tools_window::WINDOW_ID,
+            Dialog::Snapshots => crate::snapshots::WINDOW_ID,
+            Dialog::SnapshotDecision => "snapshot_decision",
             Dialog::Dependencies => crate::dependencies_window::WINDOW_ID,
             Dialog::About => "about",
             Dialog::Build => "build_base",
@@ -6279,6 +6381,7 @@ enum VmAction {
     Start,
     Stop,
     Configure,
+    Snapshots,
     Rename,
     Duplicate,
     OpenDirectory,
@@ -6774,6 +6877,7 @@ mod tests {
             build_open: false,
             about_open: false,
             tools_open: false,
+            vm_snapshots: crate::snapshots::SnapshotManager::default(),
             dependencies: crate::dependencies_window::DependenciesWindow::ready_for_test(),
             show_older_bases: false,
             build_wizard: build_wizard::BuildWizard::default(),
@@ -7568,9 +7672,11 @@ mod tests {
             render(&mut app, &ctx, size);
         }
         let visible = texts(&render(&mut app, &ctx, size));
-        assert!(visible
-            .iter()
-            .any(|(text, _)| text == "current · Antinomie 0.3.0"));
+        assert!(visible.iter().any(|(text, _)| text
+            == &format!(
+                "current · Antinomie {}",
+                antinomie_monitor_core::first_app_version(APP_REVISION).unwrap()
+            )));
         assert!(!visible
             .iter()
             .any(|(text, _)| text.starts_with("old ·") || text == "legacy"));
@@ -7671,7 +7777,13 @@ mod tests {
     #[test]
     fn base_labels_name_outdated_newer_and_unrecorded_revisions() {
         let mut base = base_summary_for_revision(Some(APP_REVISION));
-        assert_eq!(base_choice_label(&base), "Debian · Antinomie 0.3.0");
+        assert_eq!(
+            base_choice_label(&base),
+            format!(
+                "Debian · Antinomie {}",
+                antinomie_monitor_core::first_app_version(APP_REVISION).unwrap()
+            )
+        );
         base.revision = Some(APP_REVISION - 1);
         assert!(base_choice_label(&base).ends_with(", outdated"));
         base.revision = Some(APP_REVISION + 1);
@@ -7709,7 +7821,12 @@ mod tests {
         let texts = texts(&render(&mut app, &ctx, size));
         let rows: Vec<_> = texts
             .iter()
-            .filter(|(text, _)| text.contains("Linux 6.12.94 · Antinomie 0.3.0"))
+            .filter(|(text, _)| {
+                text.contains(&format!(
+                    "Linux 6.12.94 · Antinomie {}",
+                    antinomie_monitor_core::first_app_version(APP_REVISION).unwrap()
+                ))
+            })
             .map(|(_, rect)| *rect)
             .collect();
         let title = texts
@@ -7963,6 +8080,11 @@ mod tests {
                 Dialog::About => app.about_open = true,
                 Dialog::Build => app.build_open = true,
                 Dialog::Attach => app.process_picker.open = true,
+                Dialog::Snapshots => app.vm_snapshots.bind("vm", "VM"),
+                Dialog::SnapshotDecision => {
+                    app.vm_snapshots.bind("vm", "VM");
+                    app.vm_snapshots.ask_create();
+                }
             }
             let ctx = egui::Context::default();
             theme::install(&ctx);
@@ -8011,6 +8133,7 @@ mod tests {
             [
                 "Start",
                 "Stop",
+                "Snapshots",
                 "Run program",
                 "Capture all",
                 "Capture network",
@@ -8366,12 +8489,18 @@ mod tests {
         assert_eq!(app.draft.base_identity.as_deref(), Some("legacy"));
         assert_eq!(
             base_choice_label(&app.snapshot.bases[0]),
-            "Linux 6.12.94 · Antinomie 0.3.0 (legacy)"
+            format!(
+                "Linux 6.12.94 · Antinomie {} (legacy)",
+                antinomie_monitor_core::first_app_version(APP_REVISION).unwrap()
+            )
         );
         app.snapshot.bases[1].fixed_display = true;
         assert_eq!(
             base_choice_label(&app.snapshot.bases[1]),
-            "Linux 6.12.94 · Antinomie 0.3.0"
+            format!(
+                "Linux 6.12.94 · Antinomie {}",
+                antinomie_monitor_core::first_app_version(APP_REVISION).unwrap()
+            )
         );
     }
 
@@ -8598,6 +8727,67 @@ mod tests {
         let output = draw(&mut path, vec![]);
         assert!(texts(&output).iter().any(|(text, _)| text == "/automatic"));
         assert!(path.is_none());
+    }
+
+    #[test]
+    fn snapshot_decision_blocks_global_shortcuts_without_editor_focus() {
+        let mut app = app();
+        app.selected = Some("vm".into());
+        app.snapshot.active_vm = Some("vm".into());
+        app.snapshot.state = VmState::Running;
+        app.snapshot.vm_snapshot_trees.insert(
+            "vm".into(),
+            antinomie_monitor_core::VmSnapshotTree {
+                vm_id: "vm".into(),
+                capabilities: antinomie_monitor_core::VmSnapshotCapabilities {
+                    can_create_disk: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        app.vm_snapshots.bind("vm", "Test VM");
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 900.0);
+        click_label(&mut app, &ctx, size, "New snapshot…");
+        assert!(app.vm_snapshots.decision_open());
+        ctx.memory_mut(|memory| {
+            if let Some(id) = memory.focused() {
+                memory.surrender_focus(id);
+            }
+        });
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: keys::RUN_PROGRAM.logical_key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: keys::RUN_PROGRAM.modifiers,
+                }],
+                modifiers: keys::RUN_PROGRAM.modifiers,
+                ..Default::default()
+            },
+            |ctx| app.shortcuts(ctx),
+        );
+        assert!(!app.launch_open);
+        app.vm_snapshots.close();
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: keys::RUN_PROGRAM.logical_key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: keys::RUN_PROGRAM.modifiers,
+                }],
+                modifiers: keys::RUN_PROGRAM.modifiers,
+                ..Default::default()
+            },
+            |ctx| app.shortcuts(ctx),
+        );
+        assert!(app.launch_open);
     }
 
     #[test]

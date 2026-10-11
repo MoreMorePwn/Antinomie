@@ -931,6 +931,29 @@ fn migrate_data_with_proc(
         return Ok(());
     }
     let source = fs::canonicalize(source).map_err(|e| e.to_string())?;
+    // The legacy relocation rebases a single disk.qcow2 directly onto its base.
+    // Applying that transformation to a snapshot tree would sever dependencies.
+    for entry in fs::read_dir(&source).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if entry.file_type().map_err(|e| e.to_string())?.is_dir()
+            && crate::snapshots::managed(&entry.path())
+        {
+            return Err(
+                "data migration with snapshot trees is unsupported; source retained".into(),
+            );
+        }
+    }
+    let legacy_vms = source.join("vms");
+    if legacy_vms.is_dir() {
+        for entry in fs::read_dir(&legacy_vms).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            if crate::snapshots::managed(&entry.path()) {
+                return Err(
+                    "data migration with snapshot trees is unsupported; source retained".into(),
+                );
+            }
+        }
+    }
     for entry in fs::read_dir(proc_root)
         .map_err(|e| e.to_string())?
         .flatten()
@@ -1199,6 +1222,9 @@ pub(crate) fn reset_vm_disk(
     vm: &VmConfig,
     bundle: &Bundle,
 ) -> Result<(), String> {
+    if crate::snapshots::managed(directory) {
+        return Err("reset is unavailable while snapshot dependencies exist; duplicate to an independent VM first".into());
+    }
     validate_vm_bundle(options, vm, bundle)?;
     validate_disk_chain(
         options,
@@ -1252,7 +1278,7 @@ pub(crate) fn duplicate_vm(
         validate_boot_display(source, &boot)?;
     }
     let source_dir = vm_dir(options, &source.id)?;
-    let source_disk = source_dir.join("disk.qcow2");
+    let source_disk = crate::snapshots::active_disk(options, source)?;
     if !fs::symlink_metadata(&source_disk)
         .map_err(|e| e.to_string())?
         .file_type()
@@ -1271,7 +1297,7 @@ pub(crate) fn duplicate_vm(
     } else {
         None
     };
-    validate_disk_chain(options, &source_disk, Some(&bundle.base_disk))?;
+    crate::snapshots::validate_active(options, source, &bundle.base_disk)?;
     let mut vm = source.clone();
     vm.id = vm_id(&name);
     vm.name = name;
@@ -1372,7 +1398,7 @@ pub(crate) fn delete_vm(options: &BackendOptions, id: &str) -> Result<(), String
     }
     let bundle: Bundle = read_json(&dir.join("bundle.json"))?;
     bundle.verify_installed()?;
-    validate_disk_chain(options, &dir.join("disk.qcow2"), Some(&bundle.base_disk))?;
+    crate::snapshots::validate_active(options, &config, &bundle.base_disk)?;
     crate::locations::publish(options, &crate::locations::locations(options, id)?)?;
     let mut paths = Vec::new();
     for name in ["disk.qcow2", "config.json", "bundle.json"] {
@@ -1386,6 +1412,11 @@ pub(crate) fn delete_vm(options: &BackendOptions, id: &str) -> Result<(), String
         }
         paths.push(path);
     }
+    paths.extend(crate::snapshots::deletion_paths(
+        options,
+        &config,
+        &bundle.base_disk,
+    )?);
     let account = dir.join("guest-account.json");
     if account.exists() || fs::symlink_metadata(&account).is_ok() {
         crate::guest_account::GuestAccount::load(&dir)?;
@@ -1408,6 +1439,13 @@ pub(crate) fn delete_vm(options: &BackendOptions, id: &str) -> Result<(), String
             fs::rename(path, &target).map_err(|e| e.to_string())?;
             staged.push((path.clone(), target));
         }
+        // Persist both ends of the rename before the discovery tombstone.
+        // Otherwise a crash could retain a deleted registry entry while the
+        // VM's disk/manifest moves were never made durable.
+        sync_json_parent(&staging.join("config.json"))
+            .map_err(|error| format!("VM deletion staging durability: {error}"))?;
+        sync_json_parent(&dir.join("config.json"))
+            .map_err(|error| format!("VM deletion source directory durability: {error}"))?;
         crate::locations::mark_deleted(options, id)
     })();
     if let Err(error) = result {
@@ -1423,13 +1461,31 @@ pub(crate) fn delete_vm(options: &BackendOptions, id: &str) -> Result<(), String
                 rollback_errors.push(rollback.to_string());
             }
         }
-        let _ = fs::remove_dir(&staging);
+        if let Err(error) = fs::remove_dir(&staging) {
+            rollback_errors.push(format!("deletion staging cleanup: {error}"));
+        }
+        if let Err(error) = sync_json_parent(&dir.join("config.json")) {
+            rollback_errors.push(format!("deletion rollback directory durability: {error}"));
+        }
+        if staging.exists()
+            && let Err(error) = sync_json_parent(&staging.join("config.json"))
+        {
+            rollback_errors.push(format!("retained deletion staging durability: {error}"));
+        }
         return Err(format!(
             "{error}; deletion rollback errors {rollback_errors:?}"
         ));
     }
     for (_, target) in staged {
-        fs::remove_file(target).map_err(|e| e.to_string())?;
+        if fs::symlink_metadata(&target)
+            .map_err(|e| e.to_string())?
+            .file_type()
+            .is_dir()
+        {
+            fs::remove_dir_all(target).map_err(|e| e.to_string())?;
+        } else {
+            fs::remove_file(target).map_err(|e| e.to_string())?;
+        }
     }
     fs::remove_dir(staging).map_err(|e| e.to_string())?;
     File::open(&dir)

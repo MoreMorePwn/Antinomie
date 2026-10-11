@@ -9,4 +9,4 @@ done
 cmp "$transport/guest_api.h" "$kernel/include/linux/antinomie.h"
 cmp "$repo/src/antinomie/monitor/protocol/control.h" \
     "$kernel/kernel/antinomie/control_wire.h"
-echo "Kernel/host contracts match; V7 sources unchanged"
+echo "Kernel/host transport and control contracts match"

@@ -171,16 +171,22 @@ fn requirements(
 ) -> Vec<Dependency> {
     use Dependency::*;
     match command {
-        Command::Start { vm_id } => {
+        Command::Start { vm_id } | Command::RestoreVmSnapshot { vm_id, .. } => {
             let launch = snapshot
                 .vms
                 .iter()
                 .find(|vm| &vm.id == vm_id)
                 .map(|vm| vm.launch.clone())
                 .unwrap_or_default();
-            dependencies::vm_requirements(options, &launch)
+            let mut required = dependencies::vm_requirements(options, &launch);
+            if matches!(command, Command::RestoreVmSnapshot { .. }) {
+                required.push(QemuImg);
+            }
+            required
         }
-        Command::Create(_) | Command::Reset { .. } => vec![QemuImg],
+        Command::Create(_) | Command::Reset { .. } | Command::CreateVmSnapshot { .. } => {
+            vec![QemuImg]
+        }
         Command::CreateWithCredentials { .. } => vec![QemuImg, DebianAccount],
         Command::RefreshRemoteBases
         | Command::DownloadBase { .. }
@@ -257,6 +263,40 @@ mod tests {
         window
             .require(&Command::Create(VmConfig::default()), &options, &snapshot)
             .unwrap();
+    }
+
+    #[test]
+    fn snapshot_creation_and_restore_require_disk_tools_but_listing_does_not() {
+        let window = DependenciesWindow::missing_for_test(Dependency::QemuImg);
+        let options = BackendOptions::default();
+        let snapshot = Snapshot::default();
+        let create = Command::CreateVmSnapshot {
+            vm_id: "vm".into(),
+            request: antinomie_monitor_core::SnapshotRequest {
+                name: "Checkpoint".into(),
+                description: String::new(),
+                mode: antinomie_monitor_core::VmSnapshotMode::Disk,
+            },
+        };
+        let restore = Command::RestoreVmSnapshot {
+            vm_id: "vm".into(),
+            snapshot_id: "point".into(),
+            boot_from_disk: true,
+            save_current: None,
+            confirmed: true,
+        };
+        assert!(window.require(&create, &options, &snapshot).is_err());
+        assert!(window.require(&restore, &options, &snapshot).is_err());
+        assert!(window
+            .require(
+                &Command::RefreshVmSnapshots { vm_id: "vm".into() },
+                &options,
+                &snapshot
+            )
+            .is_ok());
+        assert!(window
+            .require(&Command::ReconnectTransport, &options, &snapshot)
+            .is_ok());
     }
 
     #[test]

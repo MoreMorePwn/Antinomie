@@ -145,6 +145,16 @@ int main(int argc,char **argv)
     if(command(ANTC_STOP_RUN,args,16)!=-EINVAL) return 28;
     put64(args+8,UINT64_MAX);
     if(command(ANTC_STOP_RUN,args,16)!=-ESRCH) return 29;
+    if (stats.abi >= 9) {
+        struct ant_resume_report report;
+        if (ant_resume_begin(client) || ant_resume_finish(client,10000,&report) ||
+            !report.attachment) return 40;
+        header(args,0); checked(ANTC_STATS,args,8);
+        ant_close(client); client=NULL;
+        if (ant_init(&options,&client)) return 41;
+        header(args,0); checked(ANTC_STATS,args,8);
+        puts("REATTACH PASS");
+    }
     header(args,0); checked(ANTC_SHUTDOWN,args,8); ant_close(client);
     puts("INTEGRATION PASS"); return 0;
 }

@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <sys/file.h>
 #include <sys/mman.h>
+#include <sys/random.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -17,6 +18,8 @@ struct reader {
 	void *data;
 	__u32 size;
 	__u64 tail, seen_head;
+	__u64 gpa;
+	__u32 cpu_id;
 };
 struct backing {
 	int fd;
@@ -38,6 +41,8 @@ struct ant_client {
 	__u64 session, command_head, command_tail_seen, sequence;
 	__u32 abi;
 	__u64 guest_hb, guest_changed, heartbeat_at;
+	__u64 control_gpa, attachment;
+	bool pending, suspended;
 };
 
 static __u64 now_ns(void)
@@ -62,10 +67,14 @@ static int tick(struct ant_client *c)
 	__u64 t, hb;
 	if (!c) return -EINVAL;
 	if (__atomic_load_n(&c->cancelled, __ATOMIC_RELAXED)) return -ECANCELED;
+	if (c->pending || c->suspended) return -EINPROGRESS;
 	if (c->fatal) return c->fatal;
 	if (ANT_ACQ(&c->boot->magic) != ANT_MAGIC || ANT_ACQ(&c->boot->session) != c->session ||
 	    ANT_ACQ(&c->control->geometry.magic) != ANT_MAGIC || ANT_ACQ(&c->control->geometry.session) != c->session)
 		return failed(c, -ESTALE);
+	if (c->abi >= 9 && (ANT_ACQ(&c->boot->owner) != c->attachment ||
+	    ANT_ACQ(&c->boot->resume_request) != c->attachment ||
+	    ANT_ACQ(&c->boot->resume_ack) != c->attachment)) return failed(c, -ESTALE);
 	t = now_ns();
 	if (t - c->heartbeat_at >= 10000000ULL) {
 		ANT_REL(&c->control->host_heartbeat, t);
@@ -173,7 +182,7 @@ void ant_close(struct ant_client *c)
 	free(c);
 }
 
-int ant_init(const struct ant_options *options, struct ant_client **out)
+int ant_open_pending(const struct ant_options *options, struct ant_client **out)
 {
 	struct ant_client *c;
 	struct ant_boot boot;
@@ -185,6 +194,9 @@ int ant_init(const struct ant_options *options, struct ant_client **out)
 	int error = -ENOMEM, timeout;
 	void *mapping;
 	_Static_assert(sizeof(struct ant_message) == 32, "message ABI");
+	_Static_assert(sizeof(struct ant_boot) == 256, "bootstrap ABI");
+	_Static_assert(offsetof(struct ant_boot, resume_request) == 128, "resume request ABI");
+	_Static_assert(offsetof(struct ant_boot, resume_ack) == 192, "resume ack ABI");
 	_Static_assert(sizeof(struct ant_queue) == 192, "queue ABI");
 	_Static_assert(sizeof(struct ant_geometry) == 64, "geometry ABI");
 	_Static_assert(offsetof(struct ant_control, guest_heartbeat) == 64, "guest state ABI");
@@ -221,13 +233,14 @@ int ant_init(const struct ant_options *options, struct ant_client **out)
 	memcpy(&boot, c->boot, sizeof(boot));
 	error = -EPROTO;
 	/* ABI 7 guests (fixed 256 KiB rings, no send wait) remain supported. */
-	if (boot.magic != ANT_MAGIC || (boot.version != ANT_ABI && boot.version != 7) || boot.profile != 1 ||
+	if (boot.magic != ANT_MAGIC || (boot.version != ANT_ABI && boot.version != 8 && boot.version != 7) || boot.profile != 1 ||
 	    !boot.session || boot.control_size != ANT_CONTROL_SIZE ||
 	    boot.control_gpa > UINT64_MAX - ANT_CONTROL_SIZE ||
 	    overlap(boot.control_gpa, ANT_CONTROL_SIZE, c->bootstrap_gpa, ANT_BOOT_SIZE)) goto fail;
-	if (boot.owner) { error = -EALREADY; goto fail; }
+	if (boot.version < 9 && boot.owner) { error = -EALREADY; goto fail; }
 	c->session = boot.session;
 	c->abi = boot.version;
+	c->control_gpa = boot.control_gpa;
 	error = map_gpa(c, boot.control_gpa, ANT_CONTROL_SIZE, PROT_READ | PROT_WRITE, &mapping);
 	if (error) goto fail;
 	c->region = mapping;
@@ -257,7 +270,8 @@ int ant_init(const struct ant_options *options, struct ant_client **out)
 		    (i && size != descriptors[0].data_size) || d->data_gpa > UINT64_MAX - size ||
 		    overlap(d->data_gpa, size, c->bootstrap_gpa, ANT_BOOT_SIZE) ||
 		    overlap(d->data_gpa, size, boot.control_gpa, ANT_CONTROL_SIZE) ||
-		    (i && d->cpu_id <= descriptors[i - 1].cpu_id) || ANT_ACQ(&directory[i].tail)) goto fail;
+		    (i && d->cpu_id <= descriptors[i - 1].cpu_id) ||
+		    (c->abi < 9 && ANT_ACQ(&directory[i].tail))) goto fail;
 		for (j = 0; j < i; j++)
 			if (overlap(d->data_gpa, size, descriptors[j].data_gpa, size)) goto fail;
 		error = map_gpa(c, d->data_gpa, size, PROT_READ, &mapping);
@@ -265,24 +279,167 @@ int ant_init(const struct ant_options *options, struct ant_client **out)
 		c->readers[i].data = mapping;
 		c->readers[i].size = size;
 		c->readers[i].q = &directory[i];
+		c->readers[i].gpa = d->data_gpa;
+		c->readers[i].cpu_id = d->cpu_id;
 	}
-	if (ANT_ACQ(&c->control->requests.head) || ANT_ACQ(&c->control->requests.tail) ||
-	    ANT_ACQ(&c->control->responses.head) || ANT_ACQ(&c->control->responses.tail)) {
+	if (c->abi < 9 && (ANT_ACQ(&c->control->requests.head) || ANT_ACQ(&c->control->requests.tail) ||
+	    ANT_ACQ(&c->control->responses.head) || ANT_ACQ(&c->control->responses.tail))) {
 		error = -EALREADY; goto fail;
 	}
-	if (!__atomic_compare_exchange_n(&c->boot->owner, &expected, c->session, false,
+	if (c->abi < 9 && !__atomic_compare_exchange_n(&c->boot->owner, &expected, c->session, false,
 		__ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) { error = -EALREADY; goto fail; }
 	c->replies.q = &c->control->responses;
 	c->replies.data = c->region->response_data;
 	ANT_REL(&c->control->host_timeout_ms, options->host_timeout_ms ?: ANT_HOST_TIMEOUT_DEFAULT_MS);
 	c->guest_changed = now_ns();
-	error = tick(c);
+	error = c->abi >= 9 ? ant_resume_begin(c) : tick(c);
 	if (error) goto fail;
 	*out = c;
 	return 0;
 fail:
 	ant_close(c);
 	return error;
+}
+
+int ant_init(const struct ant_options *options, struct ant_client **out)
+{
+	struct ant_resume_report report;
+	int error = ant_open_pending(options, out);
+	if (error) return error;
+	if ((*out)->abi < 9) return 0;
+	error = ant_resume_finish(*out, options->init_timeout_ms, &report);
+	if (error) { ant_close(*out); *out = NULL; }
+	return error;
+}
+
+static int validate_resume_layout(struct ant_client *c)
+{
+	struct ant_boot *b = c->boot;
+	struct ant_geometry *g = &c->control->geometry;
+	unsigned i;
+
+	if (ANT_ACQ(&b->magic) != ANT_MAGIC || b->version != c->abi ||
+	    b->session != c->session || b->control_gpa != c->control_gpa ||
+	    b->control_size != ANT_CONTROL_SIZE || b->profile != 1 ||
+	    ANT_ACQ(&g->magic) != ANT_MAGIC || g->version != c->abi ||
+	    g->session != c->session || g->queue_count != c->count ||
+	    g->size != ANT_CONTROL_SIZE || g->max_message_len != ANT_MAX_MESSAGE_LEN ||
+	    g->max_command_len != ANT_MAX_COMMAND_LEN || g->max_result_len != ANT_MAX_RESULT_LEN ||
+	    c->control->requests.data_gpa != c->control_gpa + ANT_REQUEST_OFFSET ||
+	    c->control->requests.data_size != ANT_COMMAND_RING_SIZE ||
+	    c->control->responses.data_gpa != c->control_gpa + ANT_RESPONSE_OFFSET ||
+	    c->control->responses.data_size != ANT_COMMAND_RING_SIZE) return -ESTALE;
+	for (i = 0; i < c->count; i++) {
+		struct reader *r = &c->readers[i];
+		if (r->q->data_gpa != r->gpa || r->q->data_size != r->size ||
+		    r->q->cpu_id != r->cpu_id) return -ESTALE;
+	}
+	return 0;
+}
+
+int ant_resume_begin(struct ant_client *c)
+{
+	__u64 nonce;
+	int error;
+	ssize_t got;
+
+	if (!c) return -EINVAL;
+	if (c->abi < 9) return -EOPNOTSUPP;
+	if (__atomic_load_n(&c->cancelled, __ATOMIC_RELAXED)) return -ECANCELED;
+	if (c->pending) return -EINPROGRESS;
+	error = validate_resume_layout(c);
+	if (error) return failed(c, error);
+	do {
+		do { got = getrandom(&nonce, sizeof(nonce), 0); } while (got < 0 && errno == EINTR);
+		if (got < 0) return -errno;
+		if (got != sizeof(nonce)) return -EIO;
+	} while (!nonce || nonce == c->attachment || nonce == ANT_ACQ(&c->boot->resume_request) ||
+		 nonce == ANT_ACQ(&c->boot->resume_ack) || nonce == ANT_ACQ(&c->boot->owner));
+	c->attachment = nonce;
+	c->pending = true;
+	/* A fresh namespace fences queued and already executing commands; callers
+	 * must abandon unresolved results, rather than automatically replay them. */
+	ANT_REL(&c->boot->resume_sequence_floor, c->sequence);
+	ANT_REL(&c->boot->resume_request, nonce);
+	return 0;
+}
+
+int ant_suspend_heartbeats(struct ant_client *c)
+{
+	if (!c) return -EINVAL;
+	if (__atomic_load_n(&c->cancelled, __ATOMIC_RELAXED)) return -ECANCELED;
+	c->suspended = true;
+	return 0;
+}
+
+int ant_resume_heartbeats(struct ant_client *c)
+{
+	int error;
+	if (!c) return -EINVAL;
+	if (c->pending) return -EINPROGRESS;
+	error = validate_resume_layout(c);
+	if (error) return failed(c, error);
+	c->guest_changed = now_ns();
+	c->heartbeat_at = 0;
+	c->suspended = false;
+	return tick(c);
+}
+
+int ant_resume_finish(struct ant_client *c, int timeout_ms, struct ant_resume_report *report)
+{
+	__u64 deadline, head, tail;
+	unsigned i;
+	int error;
+
+	if (!c || !report || timeout_ms < 0) return -EINVAL;
+	memset(report, 0, sizeof(*report));
+	if (c->abi < 9) return -EOPNOTSUPP;
+	if (!c->pending) return -EINVAL;
+	deadline = now_ns() + (__u64)(timeout_ms ?: 30000) * 1000000;
+	for (;;) {
+		if (__atomic_load_n(&c->cancelled, __ATOMIC_RELAXED)) return -ECANCELED;
+		error = validate_resume_layout(c);
+		if (error) return failed(c, error);
+		if (ANT_ACQ(&c->boot->resume_request) != c->attachment) return failed(c, -ESTALE);
+		if (ANT_ACQ(&c->boot->resume_ack) == c->attachment) break;
+		if (now_ns() >= deadline) return -ETIMEDOUT;
+		pause_us(1000);
+	}
+	if (c->boot->resume_status) return failed(c,
+		c->boot->resume_status < 0 ? c->boot->resume_status : -EPROTO);
+	if (ANT_ACQ(&c->boot->owner) != c->attachment) return failed(c, -ESTALE);
+	head = ANT_ACQ(&c->control->requests.head);
+	tail = ANT_ACQ(&c->control->requests.tail);
+	if ((head & 7) || head != tail) return failed(c, -EPROTO);
+	c->command_head = head;
+	c->command_tail_seen = tail;
+	head = ANT_ACQ(&c->control->responses.head);
+	tail = ANT_ACQ(&c->control->responses.tail);
+	if ((head & 7) || (tail & 7) || tail > head || head - tail > ANT_COMMAND_RING_SIZE)
+		return failed(c, -EPROTO);
+	c->replies.tail = head;
+	c->replies.seen_head = head;
+	ANT_REL(&c->control->responses.tail, head);
+	for (i = 0; i < c->count; i++) {
+		struct reader *r = &c->readers[i];
+		tail = ANT_ACQ(&r->q->tail);
+		head = ANT_ACQ(&r->q->head);
+		if ((head & 7) || (tail & 7) || tail > head || head - tail > r->size)
+			return failed(c, -EPROTO);
+		r->tail = tail;
+		r->seen_head = head;
+	}
+	c->sequence = c->boot->resume_sequence_ack;
+	c->guest_hb = ANT_ACQ(&c->control->guest_heartbeat);
+	c->guest_changed = now_ns();
+	c->heartbeat_at = 0;
+	c->next = 0;
+	c->fatal = 0;
+	c->pending = false;
+	c->suspended = false;
+	*report = (struct ant_resume_report){ c->attachment, c->sequence,
+		c->boot->discarded_request_bytes, c->boot->discarded_reply_bytes };
+	return tick(c);
 }
 
 static int peek_telemetry(struct ant_client *c, struct reader *r, struct ant_message *msg)
@@ -468,8 +625,10 @@ void ant_cancel(struct ant_client *c)
 int ant_get_limits(struct ant_client *c, struct ant_limits *limits)
 {
 	int error;
-	if (!limits) return -EINVAL;
-	error = tick(c);
+	if (!c || !limits) return -EINVAL;
+	/* Limits are immutable and do not publish a heartbeat. This query is also
+	 * available while a paused incoming guest has not acknowledged resume. */
+	error = c->pending ? validate_resume_layout(c) : tick(c);
 	if (error) return error;
 	*limits = (struct ant_limits){ ANT_MAX_MESSAGE_LEN, ANT_MAX_COMMAND_LEN, ANT_MAX_RESULT_LEN };
 	return 0;

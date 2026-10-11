@@ -7,7 +7,7 @@ use std::{
     fs::{File, OpenOptions},
     io::{Read, Write},
     os::{
-        fd::{AsRawFd, OwnedFd},
+        fd::{AsFd, AsRawFd, OwnedFd},
         unix::{fs::OpenOptionsExt, net::UnixStream},
     },
     path::{Path, PathBuf},
@@ -253,6 +253,30 @@ struct Qmp {
     reader: std::io::BufReader<UnixStream>,
 }
 impl Qmp {
+    fn send_fd(&mut self, stream: &UnixStream) -> Result<(), String> {
+        use rustix::net::{SendAncillaryBuffer, SendAncillaryMessage, SendFlags, sendmsg};
+        let command = b"{\"execute\":\"getfd\",\"arguments\":{\"fdname\":\"antinomie-state\"}}\n";
+        let mut space = [std::mem::MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+        let mut ancillary = SendAncillaryBuffer::new(&mut space);
+        let descriptors = [stream.as_fd()];
+        if !ancillary.push(SendAncillaryMessage::ScmRights(&descriptors)) {
+            return Err("QMP descriptor control buffer is too small".into());
+        }
+        let sent = sendmsg(
+            &self.writer,
+            &[std::io::IoSlice::new(command)],
+            &mut ancillary,
+            SendFlags::NOSIGNAL,
+        )
+        .map_err(|e| format!("QMP descriptor transfer: {e}"))?;
+        if sent < command.len() {
+            self.writer
+                .write_all(&command[sent..])
+                .map_err(|e| e.to_string())?;
+        }
+        self.reply("")?;
+        Ok(())
+    }
     /// Connects, retrying for `wait` while QEMU is still creating the socket.
     fn connect(path: &Path, wait: Duration) -> Result<Self, String> {
         let deadline = std::time::Instant::now() + wait;
@@ -309,6 +333,24 @@ impl VmProcess {
         options: &BackendOptions,
         vm: &VmConfig,
         bundle: &Bundle,
+    ) -> Result<Self, String> {
+        let disk = crate::snapshots::active_disk(options, vm)?;
+        Self::launch_disk(options, vm, bundle, &disk, false)
+    }
+    pub fn launch_incoming(
+        options: &BackendOptions,
+        vm: &VmConfig,
+        bundle: &Bundle,
+        disk: &Path,
+    ) -> Result<Self, String> {
+        Self::launch_disk(options, vm, bundle, disk, true)
+    }
+    fn launch_disk(
+        options: &BackendOptions,
+        vm: &VmConfig,
+        bundle: &Bundle,
+        disk: &Path,
+        incoming: bool,
     ) -> Result<Self, String> {
         vm.launch.validate_for(options)?;
         crate::dependencies::require_vm(options, &vm.launch)?;
@@ -368,8 +410,8 @@ impl VmProcess {
             .arg(&bundle.kernel)
             .arg("-drive")
             .arg(format!(
-                "file={},format=qcow2,if=virtio",
-                qemu_path(&vm_dir(options, &vm.id)?.join("disk.qcow2"))?
+                "file={},format=qcow2,if=virtio,id=osdisk,node-name=antinomie-disk",
+                qemu_path(disk)?
             ))
             .arg("-qmp")
             .arg(format!("unix:{},server=on,wait=off", qemu_path(&qmp_path)?))
@@ -377,6 +419,9 @@ impl VmProcess {
             .stdin(Stdio::null())
             .stdout(Stdio::from(serial))
             .stderr(Stdio::from(stderr));
+        if incoming {
+            cmd.args(["-S", "-incoming", "defer"]);
+        }
         // Guests from revision 13 (Antinomie 0.3.0) size their telemetry rings
         // from the kernel command line; older guests keep 256 KiB rings.
         let mut boot = bundle.clone();
@@ -476,6 +521,259 @@ impl VmProcess {
         let reply = qmp.reply(&format!("{command}\n"))?;
         Ok(reply.get("return").cloned().unwrap_or_default())
     }
+    /// Stops execution and reports whether it was previously running.
+    pub fn pause(&self) -> Result<bool, String> {
+        let status = self.qmp(&serde_json::json!({"execute":"query-status"}))?;
+        let running = status["running"]
+            .as_bool()
+            .ok_or("QMP run status is missing")?;
+        if running {
+            self.qmp(&serde_json::json!({"execute":"stop"}))?;
+        }
+        if self.qmp(&serde_json::json!({"execute":"query-status"}))?["running"].as_bool()
+            != Some(false)
+        {
+            return Err("QEMU failed to pause guest execution".into());
+        }
+        Ok(running)
+    }
+    pub fn resume(&self) -> Result<(), String> {
+        self.qmp(&serde_json::json!({"execute":"cont"}))?;
+        if self.qmp(&serde_json::json!({"execute":"query-status"}))?["running"].as_bool()
+            != Some(true)
+        {
+            return Err("QEMU failed to resume guest execution".into());
+        }
+        Ok(())
+    }
+    /// Pivots the stable virtio frontend to a precreated writable child.
+    pub fn pivot_disk(&self, child: &Path) -> Result<(), String> {
+        let blocks = self.qmp(&serde_json::json!({"execute":"query-block"}))?;
+        let block = blocks
+            .as_array()
+            .ok_or("QMP block list is missing")?
+            .iter()
+            .find(|block| block["device"].as_str() == Some("osdisk"))
+            .ok_or("QMP stable VM disk is missing")?;
+        let node = block["inserted"]["node-name"]
+            .as_str()
+            .ok_or("QMP current disk node is missing")?;
+        // QEMU block node names must fit its 32-byte field, including NUL.
+        let child_node = format!("ant-{}", unique_id().chars().take(24).collect::<String>());
+        let child = child.to_str().ok_or("snapshot disk path must be UTF-8")?;
+        self.qmp(&serde_json::json!({"execute":"blockdev-snapshot-sync","arguments":{"node-name":node,"snapshot-file":child,"snapshot-node-name":child_node,"format":"qcow2","mode":"existing"}}))?;
+        let blocks = self.qmp(&serde_json::json!({"execute":"query-block"}))?;
+        let actual = blocks
+            .as_array()
+            .ok_or("QMP block list is missing")?
+            .iter()
+            .find(|block| block["device"].as_str() == Some("osdisk"))
+            .and_then(|block| block["inserted"]["node-name"].as_str());
+        if actual != Some(child_node.as_str()) {
+            return Err("QMP disk pivot result is uncertain; operation journal retained".into());
+        }
+        Ok(())
+    }
+    /// Full resume requires the same QEMU version and execution configuration.
+    pub fn compatibility_for(
+        options: &BackendOptions,
+        vm: &VmConfig,
+        bundle: &Bundle,
+    ) -> Result<String, String> {
+        use sha2::{Digest, Sha256};
+        let output = Command::new(&options.qemu)
+            .arg("--version")
+            .output()
+            .map_err(|e| format!("QEMU compatibility version: {e}"))?;
+        if !output.status.success() || output.stdout.len() > 8192 {
+            return Err("QEMU compatibility version is unavailable".into());
+        }
+        let acceleration = if options.force_tcg || vm.launch.acceleration == VmAcceleration::Tcg {
+            "tcg"
+        } else if Path::new("/dev/kvm").exists() {
+            "kvm"
+        } else {
+            "tcg"
+        };
+        let host_identity = if acceleration == "kvm" {
+            let machine = std::fs::read_to_string("/etc/machine-id")
+                .map_err(|e| format!("full snapshot host identity is unavailable: {e}"))?;
+            if machine.trim().is_empty() || machine.len() > 128 {
+                return Err("full snapshot host identity is invalid".into());
+            }
+            let cpuinfo = std::fs::read_to_string("/proc/cpuinfo")
+                .map_err(|e| format!("full snapshot CPU identity is unavailable: {e}"))?;
+            let fields: Vec<_> = cpuinfo
+                .split("\n\n")
+                .next()
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    matches!(
+                        name.trim(),
+                        "vendor_id" | "cpu family" | "model" | "stepping" | "flags"
+                    )
+                    .then(|| (name.trim(), value.trim()))
+                })
+                .collect();
+            if fields.len() < 5 {
+                return Err("full snapshot static CPU identity is incomplete".into());
+            }
+            let digest = Sha256::digest(
+                serde_json::to_vec(&(machine.trim(), fields)).map_err(|e| e.to_string())?,
+            );
+            Some(
+                digest
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>(),
+            )
+        } else {
+            None
+        };
+        let value = serde_json::json!({"launch_policy":2,"host_identity":host_identity,"qemu":String::from_utf8_lossy(&output.stdout),"machine":"q35,max-ram-below-4g=4G","cpus":vm.cpus,"ram_mib":vm.ram_mib,"nat":vm.nat,"launch":vm.launch,"transport":vm.transport,"acceleration":acceleration,"force_tcg":options.force_tcg,"headless":options.headless,"bootstrap_gpa":options.bootstrap_gpa,"bundle_identity":bundle.base_identity,"kernel_append":bundle.kernel_append,"kernel_version":bundle.kernel_version});
+        let digest = Sha256::digest(serde_json::to_vec(&value).map_err(|e| e.to_string())?);
+        Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
+    }
+    pub fn save_state(&self, path: &Path) -> Result<(), String> {
+        if self.qmp(&serde_json::json!({"execute":"query-status"}))?["running"].as_bool()
+            != Some(false)
+        {
+            return Err("memory capture requires paused guest execution".into());
+        }
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+            .map_err(|e| format!("snapshot memory file: {e}"))?;
+        self.transfer_state(file, false)
+    }
+    pub fn load_state(&self, path: &Path) -> Result<(), String> {
+        let metadata = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+        if !metadata.file_type().is_file() || metadata.len() == 0 {
+            return Err("snapshot memory file must be a nonempty regular file".into());
+        }
+        self.transfer_state(File::open(path).map_err(|e| e.to_string())?, true)?;
+        if self.qmp(&serde_json::json!({"execute":"query-status"}))?["running"].as_bool()
+            != Some(false)
+        {
+            return Err("incoming migration unexpectedly started execution".into());
+        }
+        Ok(())
+    }
+    fn transfer_state(&self, mut file: File, incoming: bool) -> Result<(), String> {
+        let mut qmp = Qmp::connect(&self.qmp_path, Duration::from_secs(2))?;
+        if !incoming {
+            qmp.reply("{\"execute\":\"migrate-set-capabilities\",\"arguments\":{\"capabilities\":[{\"capability\":\"x-ignore-shared\",\"state\":false}]}}\n")?;
+            let capabilities = qmp.reply("{\"execute\":\"query-migrate-capabilities\"}\n")?;
+            if capabilities["return"]
+                .as_array()
+                .and_then(|values| {
+                    values
+                        .iter()
+                        .find(|value| value["capability"].as_str() == Some("x-ignore-shared"))
+                })
+                .and_then(|value| value["state"].as_bool())
+                != Some(false)
+            {
+                return Err("QEMU cannot guarantee capture of shared guest RAM".into());
+            }
+        }
+        let (mut host, guest) = UnixStream::pair().map_err(|e| e.to_string())?;
+        host.set_read_timeout(Some(Duration::from_secs(30)))
+            .and_then(|_| host.set_write_timeout(Some(Duration::from_secs(30))))
+            .map_err(|e| e.to_string())?;
+        let cancel = host.try_clone().map_err(|e| e.to_string())?;
+        qmp.send_fd(&guest)?;
+        drop(guest);
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let worker = std::thread::Builder::new()
+            .name("antinomie-vm-state".into())
+            .spawn(move || {
+                let result = (|| -> Result<(), String> {
+                    let mut buffer = vec![0u8; 256 * 1024];
+                    loop {
+                        let used = if incoming {
+                            file.read(&mut buffer)
+                        } else {
+                            host.read(&mut buffer)
+                        }
+                        .map_err(|e| format!("snapshot state stream read: {e}"))?;
+                        if used == 0 {
+                            break;
+                        }
+                        if incoming {
+                            host.write_all(&buffer[..used])
+                        } else {
+                            file.write_all(&buffer[..used])
+                        }
+                        .map_err(|e| format!("snapshot state stream write: {e}"))?;
+                    }
+                    if incoming {
+                        host.shutdown(std::net::Shutdown::Write)
+                            .map_err(|e| e.to_string())?;
+                    } else {
+                        file.sync_all()
+                            .map_err(|e| format!("snapshot state durability: {e}"))?;
+                    }
+                    Ok(())
+                })();
+                let _ = sender.send(result);
+            })
+            .map_err(|e| format!("snapshot state worker: {e}"))?;
+        let result = (|| -> Result<(), String> {
+            let operation = if incoming {
+                "migrate-incoming"
+            } else {
+                "migrate"
+            };
+            qmp.reply(&format!(
+                "{}\n",
+                serde_json::json!({"execute":operation,"arguments":{"uri":"fd:antinomie-state"}})
+            ))?;
+            let deadline = std::time::Instant::now() + Duration::from_secs(300);
+            let mut stream_complete = false;
+            loop {
+                if !stream_complete {
+                    match receiver.try_recv() {
+                        Ok(result) => {
+                            result?;
+                            stream_complete = true;
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            return Err("snapshot state worker disconnected".into());
+                        }
+                    }
+                }
+                let migration = qmp.reply("{\"execute\":\"query-migrate\"}\n")?;
+                match migration["return"]["status"].as_str() {
+                    Some("completed") if stream_complete => return Ok(()),
+                    Some("failed" | "cancelled") => {
+                        return Err(format!(
+                            "QEMU snapshot migration failed: {}",
+                            migration["return"]
+                        ));
+                    }
+                    _ => {}
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err("QEMU snapshot migration exceeded 300 seconds".into());
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        })();
+        if result.is_err() {
+            let _ = qmp.reply("{\"execute\":\"migrate_cancel\"}\n");
+            let _ = cancel.shutdown(std::net::Shutdown::Both);
+        }
+        worker
+            .join()
+            .map_err(|_| "snapshot state worker panicked")?;
+        result
+    }
     pub fn force_stop(&mut self) -> Result<(), String> {
         if self.child.try_wait().map_err(|e| e.to_string())?.is_some() {
             return Ok(());
@@ -513,6 +811,136 @@ impl Drop for VmProcess {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn external_state_capture_restores_shared_ram_paused_and_allows_repeated_pivots() {
+        use std::io::{Seek, SeekFrom};
+        struct Fixture(PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                std::fs::remove_dir_all(&self.0).unwrap();
+            }
+        }
+        let root = std::env::temp_dir().join(format!("ant-vm-snapshot-{}", unique_id()));
+        private_dir(&root).unwrap();
+        let _fixture = Fixture(root.clone());
+        let disk = root.join("disk.qcow2");
+        let output = Command::new("qemu-img")
+            .args(["create", "-f", "qcow2"])
+            .arg(&disk)
+            .arg("16M")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let spawn = |name: &str, disk: &Path, incoming: bool| {
+            let runtime_dir = root.join(name);
+            private_dir(&runtime_dir).unwrap();
+            let ram_path = runtime_dir.join("ram");
+            File::create(&ram_path).unwrap();
+            let qmp_path = runtime_dir.join("qmp.sock");
+            let mut command = Command::new("qemu-system-x86_64");
+            command
+                .args([
+                    "-machine",
+                    "q35,memory-backend=shared,max-ram-below-4g=4G",
+                    "-accel",
+                    "tcg",
+                    "-m",
+                    "64",
+                    "-smp",
+                    "1",
+                    "-S",
+                    "-display",
+                    "none",
+                    "-monitor",
+                    "none",
+                    "-serial",
+                    "none",
+                ])
+                .arg("-object")
+                .arg(format!(
+                    "memory-backend-file,id=shared,size=64M,mem-path={},share=on",
+                    ram_path.display()
+                ))
+                .arg("-drive")
+                .arg(format!(
+                    "file={},format=qcow2,if=virtio,id=osdisk,node-name=antinomie-disk",
+                    disk.display()
+                ))
+                .arg("-qmp")
+                .arg(format!("unix:{},server=on,wait=off", qmp_path.display()))
+                .stderr(File::create(runtime_dir.join("qemu.log")).unwrap());
+            if incoming {
+                command.args(["-incoming", "defer"]);
+            }
+            let child = command.spawn().unwrap();
+            let process = VmProcess {
+                child,
+                ram_path,
+                _ram_memory: None,
+                runtime_dir,
+                bootstrap: 0,
+                ram_size: 64 * 1024 * 1024,
+                qmp_path,
+            };
+            process
+                .qmp(&serde_json::json!({"execute":"query-status"}))
+                .unwrap();
+            process
+        };
+        let overlay = |name: &str, parent: &Path| {
+            let path = root.join(name);
+            let output = Command::new("qemu-img")
+                .args(["create", "-f", "qcow2", "-F", "qcow2", "-b"])
+                .arg(parent)
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            path
+        };
+        let mut source = spawn("source", &disk, false);
+        let marker = |ram: &Path, bytes: &[u8]| {
+            let mut file = OpenOptions::new().write(true).open(ram).unwrap();
+            file.seek(SeekFrom::Start(3 * 1024 * 1024)).unwrap();
+            file.write_all(bytes).unwrap();
+            file.sync_all().unwrap();
+        };
+        marker(&source.ram_path, b"RESTORED");
+        let first = overlay("first.qcow2", &disk);
+        source.pivot_disk(&first).unwrap();
+        let second = overlay("second.qcow2", &first);
+        source.pivot_disk(&second).unwrap();
+        let state = root.join("state.bin");
+        source.save_state(&state).unwrap();
+        source.resume().unwrap();
+        let rejected = root.join("running-state.bin");
+        assert!(source.save_state(&rejected).is_err());
+        assert!(!rejected.exists());
+        assert!(source.pause().unwrap());
+        marker(&source.ram_path, b"FUTURE!!");
+        source.force_stop().unwrap();
+        let restore = overlay("restore.qcow2", &first);
+        let mut destination = spawn("destination", &restore, true);
+        destination.load_state(&state).unwrap();
+        assert!(!destination.pause().unwrap());
+        let mut file = File::open(&destination.ram_path).unwrap();
+        file.seek(SeekFrom::Start(3 * 1024 * 1024)).unwrap();
+        let mut bytes = [0; 8];
+        file.read_exact(&mut bytes).unwrap();
+        assert_eq!(&bytes, b"RESTORED");
+        destination.resume().unwrap();
+        destination.force_stop().unwrap();
+        let corrupt = root.join("corrupt-state.bin");
+        std::fs::write(&corrupt, b"invalid migration stream").unwrap();
+        let disk = overlay("bad-restore.qcow2", &first);
+        let mut failed = spawn("failed", &disk, true);
+        assert!(failed.load_state(&corrupt).is_err());
+        failed.force_stop().unwrap();
+    }
     use crate::api::{DisplayResolution, GuestProfile};
 
     #[test]

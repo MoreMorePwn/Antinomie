@@ -831,6 +831,31 @@ impl Default for ExecRequest {
 
 #[derive(Clone, Debug)]
 pub enum Command {
+    RefreshVmSnapshots {
+        vm_id: String,
+    },
+    CreateVmSnapshot {
+        vm_id: String,
+        request: SnapshotRequest,
+    },
+    RestoreVmSnapshot {
+        vm_id: String,
+        snapshot_id: String,
+        boot_from_disk: bool,
+        save_current: Option<SnapshotRequest>,
+        confirmed: bool,
+    },
+    RenameVmSnapshot {
+        vm_id: String,
+        snapshot_id: String,
+        name: String,
+    },
+    DeleteVmSnapshot {
+        vm_id: String,
+        snapshot_id: String,
+        confirmed: bool,
+    },
+    ReconnectTransport,
     Create(VmConfig),
     /// Hashing has a 15-second tool deadline; offline provisioning has 180 seconds.
     /// Failure cleans unpublished state and never reports credential tool output.
@@ -1003,8 +1028,69 @@ pub enum VmState {
     Failed,
 }
 
+/// VM checkpoint content; full restores require a resume-capable guest.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VmSnapshotMode {
+    Disk,
+    Full,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VmSnapshotConsistency {
+    Stopped,
+    CrashConsistent,
+    Paused,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SnapshotRequest {
+    pub name: String,
+    pub description: String,
+    pub mode: VmSnapshotMode,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VmCheckpoint {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub name: String,
+    pub description: String,
+    pub created_unix_ms: u64,
+    pub mode: VmSnapshotMode,
+    pub consistency: VmSnapshotConsistency,
+    pub config: VmConfig,
+    /// Allocated bytes in this checkpoint's frozen disk layer.
+    pub disk_size: u64,
+    /// Bytes in the serialized CPU/RAM/device artifact.
+    pub memory_size: u64,
+    pub compatible: bool,
+    pub compatibility_note: Option<String>,
+    /// Hidden checkpoint whose files are retained for dependencies.
+    pub deleted: bool,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct VmSnapshotCapabilities {
+    pub can_create_disk: bool,
+    pub can_create_full: bool,
+    pub can_restore: bool,
+    pub reason: Option<String>,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct VmSnapshotTree {
+    pub vm_id: String,
+    pub nodes: Vec<VmCheckpoint>,
+    pub active_parent_id: Option<String>,
+    pub recovery_note: Option<String>,
+    #[serde(default)]
+    pub capabilities: VmSnapshotCapabilities,
+}
+#[derive(Clone, Debug)]
+pub struct VmSnapshotProgress {
+    pub vm_id: String,
+    pub stage: String,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
+    pub vm_snapshot_trees: std::collections::BTreeMap<String, VmSnapshotTree>,
+    pub vm_snapshot_progress: Option<VmSnapshotProgress>,
     /// The running VM's network capture, while one runs.
     pub network_capture: Option<crate::network::NetworkCapture>,
     /// The memory dump QEMU is writing, while it writes.
