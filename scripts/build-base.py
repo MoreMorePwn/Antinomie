@@ -122,14 +122,17 @@ def prepare_source(inputs, work):
     if checksum(debtar) != conf["INPUT_SHA_DEBTAR"]:
         raise RuntimeError(f"{debtar.name} does not match the pinned SHA-256")
     series = series_hash()
-    root = work / f"source-{series[:16]}"
+    # One path for every series: compiler arguments and line markers carry the
+    # source path, so a path naming the series would miss the whole ccache.
+    root = work / "source"
     tree = root / conf["SOURCE_DIRNAME"]
     marker = root / "prepared.json"
     if marker.is_file() and json.loads(marker.read_text()).get("series") == series:
         print(f"kernel source for series {series[:16]} already prepared", flush=True)
         return tree
-    for stale in work.glob("source-*"):
-        shutil.rmtree(stale)
+    for stale in [root, *work.glob("source-*")]:
+        if stale.exists():
+            shutil.rmtree(stale)
     package = root / "package"
     package.mkdir(parents=True)
     for source in (KIT / conf["INPUT_DSC"], debtar, orig):
