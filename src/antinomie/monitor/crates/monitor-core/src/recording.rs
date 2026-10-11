@@ -160,28 +160,27 @@ fn key_blob(key: InvocationKey) -> Vec<u8> {
     ]
     .concat()
 }
-fn raw_identity(path: &Path) -> Result<String, RecordingError> {
+/// The raw archive as a file: its device and inode, and its length. The
+/// archive only grows while it is recorded, so the same file with more bytes
+/// is the same archive.
+fn raw_identity(path: &Path) -> Result<(String, u64), RecordingError> {
     let m = archive_io::open_regular(
         path.parent()
             .ok_or(RecordingError::Limit("raw archive has no directory"))?,
         path,
     )?
     .metadata()?;
-    Ok(format!(
-        "index-v6:{}:{}:{}:{}:{}",
-        m.dev(),
-        m.ino(),
-        m.len(),
-        m.mtime(),
-        m.mtime_nsec()
-    ))
+    Ok((format!("index-v7:{}:{}", m.dev(), m.ino()), m.len()))
 }
+/// The packet index of a recording, kept in the user's cache. A recording
+/// still being written (a run whose programs live on, a running capture) is
+/// indexed as far as it goes; later reads add what was appended since.
 fn archive_index(
     directory: &Path,
     cancel: &AtomicBool,
 ) -> Result<(rusqlite::Connection, String), RecordingError> {
     let raw = directory.join("telemetry.raw");
-    let identity = raw_identity(&raw)?;
+    let (identity, length) = raw_identity(&raw)?;
     let cache_root = std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -198,30 +197,37 @@ fn archive_index(
     let mut connection = rusqlite::Connection::open(&index_path)?;
     fs::set_permissions(&index_path, fs::Permissions::from_mode(0o600))?;
     connection.busy_timeout(std::time::Duration::from_secs(1))?;
-    connection.execute_batch("PRAGMA trusted_schema=OFF; PRAGMA page_size=4096; PRAGMA cache_size=-2048; PRAGMA temp_store=FILE; CREATE TABLE IF NOT EXISTS metadata(identity TEXT);")?;
-    let budget = fs::metadata(&raw)?
-        .len()
+    connection.execute_batch("PRAGMA trusted_schema=OFF; PRAGMA page_size=4096; PRAGMA cache_size=-2048; PRAGMA temp_store=FILE; CREATE TABLE IF NOT EXISTS indexed(identity TEXT NOT NULL, length INTEGER NOT NULL);")?;
+    let budget = length
         .checked_mul(2)
         .and_then(|size| size.checked_add(1024 * 1024))
         .ok_or(RecordingError::Limit("archive index budget overflow"))?
         .min(16 * 1024 * 1024 * 1024);
     connection.pragma_update(None, "max_page_count", (budget / 4096) as i64)?;
-    let cached: Option<String> = connection
-        .query_row("SELECT identity FROM metadata LIMIT 1", [], |row| {
-            row.get(0)
+    let cached: Option<(String, i64)> = connection
+        .query_row("SELECT identity,length FROM indexed LIMIT 1", [], |row| {
+            Ok((row.get(0)?, row.get(1)?))
         })
         .ok();
-    if cached.as_deref() != Some(&identity) {
+    // Go on from where the index stopped, unless the archive is another file
+    // (or, impossibly for an append-only archive, shorter).
+    let resume = cached
+        .filter(|(cached, indexed)| *cached == identity && *indexed as u64 <= length)
+        .map(|(_, indexed)| indexed as u64);
+    if resume != Some(length) {
         let transaction = connection.transaction()?;
-        // Rebuilt from scratch: an index from an older version has another schema.
-        transaction.execute_batch(
-            "DELETE FROM metadata; DROP TABLE IF EXISTS invocations; DROP TABLE IF EXISTS packets; \
-             CREATE TABLE invocations(key BLOB PRIMARY KEY, first_offset INTEGER NOT NULL, pid INTEGER NOT NULL); \
-             CREATE INDEX invocation_order ON invocations(first_offset); \
-             CREATE INDEX invocation_process ON invocations(pid, first_offset); \
-             CREATE TABLE packets(key BLOB NOT NULL, offset INTEGER NOT NULL); \
-             CREATE INDEX packet_keys ON packets(key,offset);",
-        )?;
+        if resume.is_none() {
+            // Rebuilt from scratch: an index from an older version has another schema.
+            transaction.execute_batch(
+                "DROP TABLE IF EXISTS metadata; DROP TABLE IF EXISTS invocations; DROP TABLE IF EXISTS packets; \
+                 CREATE TABLE invocations(key BLOB PRIMARY KEY, first_offset INTEGER NOT NULL, pid INTEGER NOT NULL); \
+                 CREATE INDEX invocation_order ON invocations(first_offset); \
+                 CREATE INDEX invocation_process ON invocations(pid, first_offset); \
+                 CREATE TABLE packets(key BLOB NOT NULL, offset INTEGER NOT NULL); \
+                 CREATE INDEX packet_keys ON packets(key,offset);",
+            )?;
+        }
+        let mut indexed = resume.unwrap_or(0);
         {
             let mut invocation = transaction.prepare(
                 "INSERT OR IGNORE INTO invocations(key,first_offset,pid) VALUES(?1,?2,?3)",
@@ -229,10 +235,23 @@ fn archive_index(
             let mut packets =
                 transaction.prepare("INSERT INTO packets(key,offset) VALUES(?1,?2)")?;
             let mut reader = BufReader::new(archive_io::open_regular(directory, &raw)?);
-            while let Some((offset, packet)) = next_packet(&mut reader)? {
+            reader.seek(SeekFrom::Start(indexed))?;
+            loop {
                 if cancel.load(Ordering::Relaxed) {
                     return Err(RecordingError::Limit("archive read cancelled"));
                 }
+                let (offset, packet) = match next_packet(&mut reader) {
+                    Ok(Some(next)) => next,
+                    Ok(None) => break,
+                    // The packet being written: the index stops before it.
+                    Err(RecordingError::Io(error))
+                        if error.kind() == std::io::ErrorKind::UnexpectedEof =>
+                    {
+                        break;
+                    }
+                    Err(error) => return Err(error),
+                };
+                indexed = reader.stream_position()?;
                 if let Some(key) = invocation_key(&packet) {
                     let key = key_blob(key);
                     let offset = i64::try_from(offset).map_err(|_| {
@@ -250,12 +269,18 @@ fn archive_index(
                 }
             }
         }
-        if raw_identity(&raw)? != identity {
+        if raw_identity(&raw)?.0 != identity {
             return Err(RecordingError::Limit(
-                "raw archive changed while building index; retry after capture settles",
+                "raw archive was replaced while being indexed; open it again",
             ));
         }
-        transaction.execute("INSERT INTO metadata(identity) VALUES(?1)", [&identity])?;
+        let indexed = i64::try_from(indexed)
+            .map_err(|_| RecordingError::Limit("raw archive offset exceeds index range"))?;
+        transaction.execute("DELETE FROM indexed", [])?;
+        transaction.execute(
+            "INSERT INTO indexed(identity,length) VALUES(?1,?2)",
+            rusqlite::params![identity, indexed],
+        )?;
         transaction.commit()?;
     }
     Ok((connection, identity))
@@ -375,9 +400,10 @@ impl Recording {
                 }
             }
         }
-        if raw_identity(&path)? != identity {
+        // Growing is fine (indexed packets do not move); another file is not.
+        if raw_identity(&path)?.0 != identity {
             return Err(RecordingError::Limit(
-                "raw archive changed during paging; retry after capture settles",
+                "raw archive was replaced while being read; open it again",
             ));
         }
         let events: Vec<_> = latest.into_values().collect();
@@ -901,6 +927,54 @@ mod tests {
         assert!(!page.invocations[2].async_events[0].complete);
         fs::remove_dir_all(directory).unwrap();
     }
+    #[test]
+    fn a_recording_still_being_written_opens_and_grows() {
+        let directory = std::env::temp_dir().join(format!("ant-live-{}", storage::unique_id()));
+        storage::private_dir(&directory).unwrap();
+        let path = directory.join("telemetry.raw");
+        let mut raw = File::create(&path).unwrap();
+        let write = |file: &mut File, packet: Vec<u8>| {
+            file.write_all(&(packet.len() as u32).to_le_bytes())
+                .unwrap();
+            file.write_all(&packet).unwrap();
+        };
+        for call in 0..10 {
+            write(&mut raw, event_packet(call, 1, 1, 1));
+            write(&mut raw, event_packet(call, 2, 5, 2));
+        }
+        // A packet being written: its length, half its bytes.
+        let pending = event_packet(10, 1, 1, 1);
+        raw.write_all(&(pending.len() as u32).to_le_bytes())
+            .unwrap();
+        raw.write_all(&pending[..pending.len() / 2]).unwrap();
+        raw.sync_all().unwrap();
+        storage::atomic_json(
+            &directory.join("manifest.json"),
+            &serde_json::json!({"test":true}),
+        )
+        .unwrap();
+        let recording = open_recording(&directory).unwrap();
+        let calls = |recording: &Recording| {
+            recording
+                .invocation_page(0, 256)
+                .unwrap()
+                .invocations
+                .iter()
+                .map(|row| row.call_id)
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        assert_eq!(calls(&recording).len(), 10);
+        // The rest of that packet and more calls arrive.
+        raw.write_all(&pending[pending.len() / 2..]).unwrap();
+        write(&mut raw, event_packet(10, 2, 5, 2));
+        for call in 11..15 {
+            write(&mut raw, event_packet(call, 1, 1, 1));
+        }
+        raw.sync_all().unwrap();
+        assert_eq!(calls(&recording).len(), 15);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn pages_all_three_thousand_calls_with_missing_phases_and_lifecycle() {
         let directory = std::env::temp_dir().join(format!("ant-archive-{}", storage::unique_id()));

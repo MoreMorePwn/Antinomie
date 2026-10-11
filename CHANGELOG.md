@@ -55,6 +55,14 @@ transport reconnect require a new guest base with contract revision 14 / ABI9.
   text size from 12 to 24. The Snapshots window also keeps its size while it
   loads and opens centred, even when a position saved by an earlier version
   is off the screen.
+- **Recordings still being written open.** A run whose programs live on
+  (a daemon, most malware) or a running capture failed to open with "raw
+  archive changed while building index; retry after capture settles", which
+  never settles while the malware runs. The index now covers what is written
+  so far and grows on the next read.
+- **Sending a sample again while the last copy runs works.** Each send gets
+  its own file in the guest (`/tmp/<hash>-2-<name>`…): a running copy cannot
+  be replaced ("Text file busy").
 - **A detached program's terminal no longer reports errors.** Resizing the
   terminal of a program that closed it (a daemon, as its window opened) was
   logged as "terminal is closed".

@@ -317,9 +317,23 @@ fn acquire_data_owner(directory: &std::path::Path) -> Result<File, String> {
     {
         return Err("data owner lock must be a regular file".into());
     }
-    rustix::fs::flock(&owner, rustix::fs::FlockOperation::NonBlockingLockExclusive)
-        .map_err(|error| format!("data folder is already in use or cannot be locked: {error}"))?;
-    Ok(owner)
+    // A lock just released can still look held for a moment: a process
+    // being started elsewhere holds a copy of the file until its exec. Wait
+    // up to half a second before calling the folder in use.
+    let deadline = Instant::now() + Duration::from_millis(500);
+    loop {
+        match rustix::fs::flock(&owner, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+            Ok(()) => return Ok(owner),
+            Err(rustix::io::Errno::WOULDBLOCK) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "data folder is already in use or cannot be locked: {error}"
+                ));
+            }
+        }
+    }
 }
 
 /// Guest host-liveness timeout in never-drop mode (the default is 250 ms).
