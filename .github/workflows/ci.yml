@@ -29,7 +29,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config libsqlite3-dev libxkbcommon-dev libwayland-dev \
-            qemu-utils shellcheck file
+            qemu-system-x86 qemu-utils shellcheck file
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable branch
         with:
           toolchain: 1.98.1
