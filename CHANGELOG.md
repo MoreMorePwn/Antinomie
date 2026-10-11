@@ -41,6 +41,15 @@ transport reconnect require a new guest base with contract revision 14 / ABI9.
   to the VM's disk size ("Guest filesystem resize failed" at first boot): a
   16 GiB Debian VM kept the base's smaller filesystem. It now grows online at
   every boot; bases must be rebuilt.
+- **Malware samples: shell scripts, and Send and run… opens Run program.**
+  The newest list holds ELF programs and shell scripts (droppers, miner
+  installers), which run in the guests (scripts through /bin/sh); "Newest
+  Linux" replaces "Newest ELF". Send and run… sends the sample, then opens
+  Run program with it as the program, to set arguments, user, where it runs
+  and analysis. Sending a sample again replaces the copy in the guest
+  instead of failing with "File exists".
+- **The Snapshots window keeps its size while it loads**, so its close
+  button stays where it was.
 - **A detached program's terminal no longer reports errors.** Resizing the
   terminal of a program that closed it (a daemon, as its window opened) was
   logged as "terminal is closed".

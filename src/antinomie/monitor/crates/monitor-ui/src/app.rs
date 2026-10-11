@@ -498,7 +498,8 @@ impl MonitorApp {
             }
         }
         let mut activity = Vec::new();
-        let mut follow_ups = Vec::new();
+        // A sample sent into the guest that is to run next.
+        let mut launch_sample = None;
         let mut analysis_changed = false;
         let was_offline = self.trace_archive_directory().is_some();
         if let Some(backend) = &self.backend {
@@ -564,7 +565,7 @@ impl MonitorApp {
                     }) => {
                         self.vm_snapshots.complete(id, success, &message);
                         if let Some(run) = self.samples.complete(id, success, &message) {
-                            follow_ups.push(Command::Execute(run));
+                            launch_sample = Some(run);
                         }
                         if self.pending_observer == Some(id) {
                             self.pending_observer = None;
@@ -683,9 +684,8 @@ impl MonitorApp {
         for (level, message) in activity {
             self.log(level, message);
         }
-        // A sample sent into the guest that is to run next.
-        for command in follow_ups {
-            self.send(command);
+        if let Some(run) = launch_sample {
+            self.launch_sample(run);
         }
         if !was_offline && self.trace_archive_directory().is_some() {
             self.request_page(0);
@@ -1807,6 +1807,19 @@ impl MonitorApp {
             .vms
             .iter()
             .find(|vm| Some(&vm.id) == self.selected.as_ref())
+    }
+
+    /// Malware samples > Send and run…: the sample is in the guest; the Run
+    /// program window opens with it as the program, to be run as any other
+    /// (arguments, user, where it runs, analysis) once the user presses Run.
+    fn launch_sample(&mut self, run: ExecRequest) {
+        self.exec.path = run.path;
+        self.exec.uid = run.uid;
+        self.exec.gid = run.gid;
+        self.exec.cwd = run.cwd;
+        self.args = run.args.join("\n");
+        self.launch_open = true;
+        self.status = "Sample sent: set how it runs, then press Run".into();
     }
 
     fn open_snapshots(&mut self) {

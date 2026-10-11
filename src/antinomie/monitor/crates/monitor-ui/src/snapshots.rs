@@ -225,6 +225,10 @@ impl SnapshotManager {
                 let Some(tree) = tree else {
                     ui.label("Loading snapshots…");
                     ui.weak("Use Refresh if the snapshot list is unavailable.");
+                    // The graph's room: the window keeps its size (and its
+                    // close button its place) when the list arrives.
+                    let cap = (ui.ctx().screen_rect().height() * 0.6).max(140.0);
+                    ui.allocate_space(egui::vec2(ui.available_width(), cap));
                     return;
                 };
                 if let Some(note) = &tree.recovery_note {

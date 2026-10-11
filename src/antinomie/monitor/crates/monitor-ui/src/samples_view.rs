@@ -108,8 +108,14 @@ fn next_sort(sort: Option<Sort>, column: Col) -> Option<Sort> {
 
 /// A sample's architecture as people write it.
 fn arch(sample: &SampleInfo) -> Option<String> {
+    if sample.is_script() {
+        return Some(SCRIPT.into());
+    }
     sample.file_arch.as_deref().map(samples::arch_label)
 }
+
+/// The Architecture of a shell script, which has none: it runs in the guests.
+const SCRIPT: &str = "script";
 
 /// The Architecture dropdown's entry for samples listed without one
 /// (MalwareBazaar's newest uploads leave it out).
@@ -711,8 +717,8 @@ impl SamplesView {
                     all = true;
                 }
                 if ui
-                    .add_enabled(ready, egui::Button::new("Newest ELF"))
-                    .on_hover_text("The newest Linux programs: what the VMs can run")
+                    .add_enabled(ready, egui::Button::new("Newest Linux"))
+                    .on_hover_text("The newest ELF programs and shell scripts: what the VMs run")
                     .clicked()
                 {
                     self.text.clear();
@@ -997,7 +1003,9 @@ impl SamplesView {
                             } else {
                                 theme::text()
                             }))
-                            .on_hover_text(if runs {
+                            .on_hover_text(if sample.is_script() {
+                                "A shell script: runs in the guests through /bin/sh"
+                            } else if runs {
                                 "Runs in Antinomie's x86-64 guests"
                             } else {
                                 "Will not run in the x86-64 guests"
@@ -1106,8 +1114,8 @@ impl SamplesView {
                 body.rows(row_height, stored.len(), |mut row| {
                     let sample = &stored[row.index()];
                     let info = &sample.info;
-                    let arch = info.file_arch.as_deref().map(samples::arch_label);
-                    let runs_here = arch.as_deref() == Some("x86-64");
+                    let arch = arch(info);
+                    let runs_here = info.is_script() || arch.as_deref() == Some("x86-64");
                     row.col(|ui| {
                         ui.add(egui::Label::new(RichText::new(&info.file_name).font(mono.clone())).truncate())
                             .on_hover_text(format!(
@@ -1129,7 +1137,9 @@ impl SamplesView {
                                 theme::warn()
                             }),
                         )
-                        .on_hover_text(if runs_here {
+                        .on_hover_text(if info.is_script() {
+                            "A shell script: runs in the guests through /bin/sh"
+                        } else if runs_here {
                             "Runs in Antinomie's x86-64 guests"
                         } else {
                             "Built for another processor or not a Linux program: it will not run in the x86-64 guests"
@@ -1174,14 +1184,14 @@ impl SamplesView {
                             let can = cx.running && !pending;
                             let destination = guest_path(info);
                             if ui
-                                .add_enabled(can && runs_here, egui::Button::new("Send and run"))
+                                .add_enabled(can && runs_here, egui::Button::new("Send and run…"))
                                 .on_hover_text(format!(
-                                    "Send to {destination} and run it, recorded like any program"
+                                    "Send to {destination}, then open Run program with it to choose how it runs"
                                 ))
                                 .on_disabled_hover_text(if runs_here {
                                     "Start the VM first"
                                 } else {
-                                    "Only x86-64 Linux programs run in the guests"
+                                    "Only x86-64 Linux programs and shell scripts run in the guests"
                                 })
                                 .clicked()
                             {
@@ -1189,8 +1199,18 @@ impl SamplesView {
                                 action = Some(SamplesAction::Push {
                                     sha256: info.sha256_hash.clone(),
                                     destination: destination.clone(),
+                                    // Scripts through /bin/sh: many have no #! line.
                                     run: Some(ExecRequest {
-                                        path: destination.clone(),
+                                        path: if info.is_script() {
+                                            "/bin/sh".into()
+                                        } else {
+                                            destination.clone()
+                                        },
+                                        args: if info.is_script() {
+                                            vec![destination.clone()]
+                                        } else {
+                                            Vec::new()
+                                        },
                                         uid,
                                         gid: uid,
                                         cwd: "/tmp".into(),

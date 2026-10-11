@@ -3749,7 +3749,9 @@ impl Worker {
                     timeout,
                     &mut bytes.as_slice(),
                     bytes.len() as u64,
-                    (&destination, false, executable),
+                    // The path names the sample's hash: what is there is the
+                    // same sample (sent before), so it is replaced.
+                    (&destination, true, executable),
                 )?;
                 drop(bytes);
                 crate::samples::record_push(

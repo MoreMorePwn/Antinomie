@@ -167,16 +167,23 @@ impl SampleInfo {
     pub fn is_elf(&self) -> bool {
         self.file_type.eq_ignore_ascii_case("elf")
     }
-    /// Runs in Antinomie's x86-64 guests: an x86-64 ELF, or an ELF whose
-    /// architecture MalwareBazaar does not list (checked after download).
+    /// A shell script (MalwareBazaar's `sh`): droppers and installers that
+    /// fetch the real payload. It runs in the guests through /bin/sh.
+    pub fn is_script(&self) -> bool {
+        matches!(self.file_type.to_ascii_lowercase().as_str(), "sh" | "bash")
+    }
+    /// Runs in Antinomie's x86-64 guests: a shell script, an x86-64 ELF, or
+    /// an ELF whose architecture the source does not list (checked after
+    /// download).
     pub fn may_run(&self) -> bool {
-        self.is_elf()
-            && self.file_arch.as_deref().is_none_or(|arch| {
-                matches!(
-                    arch.to_ascii_lowercase().as_str(),
-                    "x86_64" | "amd64" | "x86-64"
-                )
-            })
+        self.is_script()
+            || self.is_elf()
+                && self.file_arch.as_deref().is_none_or(|arch| {
+                    matches!(
+                        arch.to_ascii_lowercase().as_str(),
+                        "x86_64" | "amd64" | "x86-64"
+                    )
+                })
     }
 }
 
@@ -323,11 +330,17 @@ pub fn find(
 ) -> Result<(String, Vec<SampleInfo>), String> {
     let text = text.trim();
     if text.is_empty() {
+        // What the guests run: ELF programs and shell scripts, newest first.
+        // MalwareBazaar lists at most 100 per file type, whatever the limit;
+        // families and tags go to 1000.
+        let mut found = search(curl, key, &Query::FileType("elf".into()), limit)?;
+        found.extend(search(curl, key, &Query::FileType("sh".into()), limit)?);
+        found.sort_by(|a, b| b.first_seen.cmp(&a.first_seen));
         return Ok((
-            // MalwareBazaar lists at most 100 per file type, whatever the
-            // limit; families and tags go to 1000.
-            "Newest ELF samples (MalwareBazaar lists 100; search a family for up to 1000)".into(),
-            search(curl, key, &Query::FileType("elf".into()), limit)?,
+            "Newest Linux samples: ELF and shell scripts (MalwareBazaar lists 100 of each; \
+             search a family for up to 1000)"
+                .into(),
+            found,
         ));
     }
     if is_hash(text) {
@@ -888,6 +901,18 @@ mod tests {
         assert!(!on_disk.windows(plain.len()).any(|window| window == plain));
         assert_eq!(open_sample(&archive, &info.sha256_hash).unwrap(), plain);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn shell_scripts_and_x86_64_programs_run_in_the_guests() {
+        let sample = |kind: &str, arch: Option<&str>| SampleInfo {
+            file_type: kind.into(),
+            file_arch: arch.map(str::to_owned),
+            ..SampleInfo::default()
+        };
+        assert!(sample("sh", None).may_run() && sample("sh", None).is_script());
+        assert!(sample("elf", Some("X86_64")).may_run() && sample("elf", None).may_run());
+        assert!(!sample("elf", Some("ARM")).may_run() && !sample("exe", None).may_run());
     }
 
     #[test]
