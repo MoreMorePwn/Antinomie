@@ -1,9 +1,9 @@
-//! Tools → Malware samples: search MalwareBazaar, download samples (kept in
+//! Tools → Malware samples: search MalwareBazaar or MalShare, download samples (kept in
 //! their encrypted archives) and send them into the running VM, optionally
 //! running them there. Nothing is run or unpacked on the host.
 use crate::theme::{self, ValueKind};
 use antinomie_monitor_core::{
-    samples::{self, SampleInfo, StoredSample},
+    samples::{self, SampleInfo, Source, StoredSample},
     ExecRequest,
 };
 use eframe::egui::{self, RichText};
@@ -17,7 +17,7 @@ use std::{
 
 pub(crate) const WINDOW_ID: &str = "malware_samples";
 
-/// Samples asked of MalwareBazaar per search: a fair share of its free API.
+/// Samples asked of a source per search: a fair share of its free API.
 const SEARCH_LIMIT: u32 = 200;
 
 pub(crate) struct SamplesContext<'a> {
@@ -211,6 +211,10 @@ pub(crate) struct SamplesView {
     text: String,
     /// What the results are, in words ("Newest uploads", "Family Mirai").
     listing: String,
+    /// The source searched and downloaded from.
+    source: Source,
+    /// The source the results came from.
+    results_source: Source,
     /// The newest uploads were asked for when the window opened.
     listed: bool,
     results: Vec<SampleInfo>,
@@ -328,6 +332,7 @@ impl SamplesView {
             match found {
                 Ok((listing, found)) => {
                     self.listing = listing;
+                    self.results_source = self.source;
                     self.results = found;
                     self.filters = Filters::default();
                     self.sort = None;
@@ -369,12 +374,12 @@ impl SamplesView {
         }
     }
 
-    /// Search MalwareBazaar for `text` (empty: the newest uploads).
+    /// Search the source for `text` (empty: the newest samples).
     fn search(&mut self, cx: &SamplesContext<'_>, text: String) {
         let (sender, receiver) = mpsc::channel();
-        let (curl, key) = (cx.curl.to_path_buf(), self.key.clone());
+        let (curl, key, source) = (cx.curl.to_path_buf(), self.key.clone(), self.source);
         std::thread::spawn(move || {
-            let _ = sender.send(samples::find(&curl, &key, &text, SEARCH_LIMIT));
+            let _ = sender.send(source.find(&curl, &key, &text, SEARCH_LIMIT));
         });
         self.searching = Some(receiver);
         self.status = None;
@@ -389,7 +394,7 @@ impl SamplesView {
             return None;
         }
         if !self.key_loaded {
-            self.key = samples::api_key(cx.data_dir);
+            self.key = samples::source_key(cx.data_dir, self.source);
             self.key_saved = !self.key.is_empty();
             self.acknowledged = samples::acknowledged(cx.data_dir);
             self.key_loaded = true;
@@ -429,6 +434,8 @@ impl SamplesView {
             .show(ctx, |ui| {
                 self.warning(ui, cx);
                 ui.add_space(12.0);
+                self.source_row(ui, cx);
+                ui.add_space(10.0);
                 if !self.key_saved || self.editing_key {
                     self.key_row(ui, cx);
                     ui.add_space(12.0);
@@ -487,7 +494,7 @@ impl SamplesView {
                 ui.add_space(8.0);
                 ui.label(
                     "This window downloads real, live malware from MalwareBazaar (abuse.ch) \
-                     so you can study it inside a VM.",
+                     or MalShare so you can study it inside a VM.",
                 );
                 ui.add_space(6.0);
                 for point in FIRST_USE_POINTS {
@@ -544,9 +551,8 @@ impl SamplesView {
                     ui.label(RichText::new(egui_phosphor::regular::BIOHAZARD).color(theme::warn()));
                     ui.add(
                         egui::Label::new(
-                            "Live malware. Samples stay in MalwareBazaar's encrypted archives in \
-                             the data folder and are decrypted only in memory, to be sent into \
-                             the VM. Nothing is run on this computer. Use a VM you can throw \
+                            "Live malware. Samples stay in encrypted archives in the data \
+                             folder and are decrypted only in memory, to be sent into the VM. Nothing is run on this computer. Use a VM you can throw \
                              away, or take a snapshot first.",
                         )
                         .wrap(),
@@ -574,13 +580,53 @@ impl SamplesView {
             });
     }
 
+    /// The source to search: each has its own key and its own results.
+    fn source_row(&mut self, ui: &mut egui::Ui, cx: &SamplesContext<'_>) {
+        let mut switch = None;
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Source").color(theme::muted()));
+            for source in Source::ALL {
+                if ui
+                    .selectable_label(self.source == source, source.label())
+                    .on_hover_text(match source {
+                        Source::MalwareBazaar => {
+                            "abuse.ch's MalwareBazaar: families, tags, architectures"
+                        }
+                        Source::MalShare => "MalShare: hashes, file types, file names and sources",
+                    })
+                    .clicked()
+                    && self.source != source
+                {
+                    switch = Some(source);
+                }
+            }
+        });
+        if let Some(source) = switch {
+            self.source = source;
+            self.key = samples::source_key(cx.data_dir, source);
+            self.key_saved = !self.key.is_empty();
+            self.editing_key = false;
+            self.results.clear();
+            self.listing.clear();
+            self.filters = Filters::default();
+            self.sort = None;
+            self.status = None;
+            self.text.clear();
+            // The newest samples of the new source, once there is a key.
+            self.listed = false;
+        }
+    }
+
     fn key_row(&mut self, ui: &mut egui::Ui, cx: &SamplesContext<'_>) {
         ui.horizontal(|ui| {
-            ui.label("MalwareBazaar API key");
+            ui.label(format!("{} API key", self.source.label()));
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.key)
                     .password(true)
-                    .hint_text("free key from abuse.ch")
+                    .hint_text(match self.source {
+                        Source::MalwareBazaar => "free key from abuse.ch",
+                        Source::MalShare => "free key from malshare.com",
+                    })
                     .margin(theme::TEXT_EDIT_MARGIN)
                     .desired_width(340.0),
             );
@@ -595,7 +641,7 @@ impl SamplesView {
                 .on_hover_text("Kept in the data folder, readable only by you")
                 .clicked()
             {
-                match samples::save_api_key(cx.data_dir, &self.key) {
+                match samples::save_source_key(cx.data_dir, self.source, &self.key) {
                     Ok(()) => {
                         self.key_saved = true;
                         self.editing_key = false;
@@ -606,13 +652,13 @@ impl SamplesView {
                 }
             }
             if self.editing_key && ui.button("Cancel").clicked() {
-                self.key = samples::api_key(cx.data_dir);
+                self.key = samples::source_key(cx.data_dir, self.source);
                 self.key_saved = !self.key.is_empty();
                 self.editing_key = false;
             }
             ui.hyperlink_to(
                 format!("Get a key {}", egui_phosphor::regular::ARROW_SQUARE_OUT),
-                samples::BAZAAR_KEYS,
+                self.source.keys_url(),
             );
         });
     }
@@ -626,14 +672,17 @@ impl SamplesView {
                     && !self.editing_key
                     && ui
                         .button(format!("{} Key", egui_phosphor::regular::KEY))
-                        .on_hover_text("Change the MalwareBazaar API key")
+                        .on_hover_text(format!("Change the {} API key", self.source.label()))
                         .clicked()
                 {
                     self.editing_key = true;
                 }
                 if ui
                     .add_enabled(ready, egui::Button::new("Newest"))
-                    .on_hover_text("The latest uploads to MalwareBazaar")
+                    .on_hover_text(match self.source {
+                        Source::MalwareBazaar => "The latest uploads to MalwareBazaar",
+                        Source::MalShare => "The ELF samples MalShare received in the last 24 hours",
+                    })
                     .clicked()
                 {
                     self.text.clear();
@@ -662,8 +711,14 @@ impl SamplesView {
                     egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
                     egui::TextEdit::singleline(&mut self.text)
                         .hint_text(format!(
-                            "{}  Family, tag, file type or hash (Mirai, x86-64, elf, a SHA-256…)",
-                            egui_phosphor::regular::MAGNIFYING_GLASS
+                            "{}  {}",
+                            egui_phosphor::regular::MAGNIFYING_GLASS,
+                            match self.source {
+                                Source::MalwareBazaar =>
+                                    "Family, tag, file type or hash (Mirai, x86-64, elf, a SHA-256…)",
+                                Source::MalShare =>
+                                    "Hash, file type (elf, pe32) or a word in file names and sources",
+                            }
                         ))
                         .margin(theme::TEXT_EDIT_MARGIN),
                 );
@@ -676,6 +731,18 @@ impl SamplesView {
             });
         });
         ui.add_space(6.0);
+        if self.source == Source::MalShare {
+            // MalShare's terms ask that it is credited as the source.
+            ui.colored_label(
+                theme::muted(),
+                "Samples from MalShare (malshare.com), searched by hash, file type, file name \
+                 or source; MalShare names no families. Free keys allow 2000 requests a day.",
+            );
+            if let Some(text) = search {
+                self.search(cx, text);
+            }
+            return;
+        }
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Linux families:").color(theme::muted()));
             for (name, about) in samples::STARTERS {
@@ -774,11 +841,16 @@ impl SamplesView {
     ) {
         if self.results.is_empty() {
             let text = if !self.key_saved {
-                "Save a MalwareBazaar API key to list the newest samples."
+                format!(
+                    "Save a {} API key to list the newest samples.",
+                    self.source.label()
+                )
             } else if self.searching.is_some() {
-                "Asking MalwareBazaar…"
+                format!("Asking {}…", self.source.label())
+            } else if self.listing.is_empty() {
+                "Search by family, tag, file type or hash.".to_string()
             } else {
-                "Nothing found. Search by family, tag, file type or hash."
+                format!("{}: nothing found.", self.listing)
             };
             ui.add_space(8.0);
             ui.colored_label(theme::muted(), text);
@@ -830,7 +902,7 @@ impl SamplesView {
                                 )
                                 .sense(egui::Sense::click()),
                             )
-                            .on_hover_text("Sort; a third click restores MalwareBazaar's order")
+                            .on_hover_text("Sort; a third click restores the source's order")
                             .clicked()
                         {
                             clicked = Some(column);
@@ -881,16 +953,20 @@ impl SamplesView {
                         }
                         None => {
                             ui.colored_label(theme::muted(), "?").on_hover_text(
-                                "MalwareBazaar's newest uploads do not list architectures: \
-                                     search a family, tag or file type to see them, or download \
-                                     the sample",
+                                "Not listed by the source (MalwareBazaar's newest uploads, \
+                                     MalShare): search a family, tag or file type on \
+                                     MalwareBazaar, or download the sample to read it",
                             );
                         }
                     });
                     row.col(|ui| {
                         ui.label(
-                            RichText::new(format_size(sample.file_size))
-                                .color(theme::value(ValueKind::Number)),
+                            RichText::new(if sample.file_size == 0 {
+                                "-".to_string()
+                            } else {
+                                format_size(sample.file_size)
+                            })
+                            .color(theme::value(ValueKind::Number)),
                         );
                     });
                     row.col(|ui| {
@@ -922,9 +998,10 @@ impl SamplesView {
             let (sender, receiver) = mpsc::channel();
             let (curl, key, data): (PathBuf, String, PathBuf) =
                 (cx.curl.into(), self.key.clone(), cx.data_dir.into());
+            let source = self.results_source;
             let hash = sample.sha256_hash.clone();
             std::thread::spawn(move || {
-                let _ = sender.send(samples::download(&curl, &key, &data, &sample));
+                let _ = sender.send(source.download(&curl, &key, &data, &sample));
             });
             self.downloads.insert(hash, receiver);
         }

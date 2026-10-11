@@ -6,10 +6,13 @@
 //! BUNDLE (a BusyBox base), the sample sent into a VM and hashed there. The
 //! sample is never run, on the host or in the guest.
 //!
+//! With `ANTINOMIE_QA_SOURCE=malshare` the same is done with MalShare (its
+//! newest ELF samples instead of Mirai).
+//!
 //! usage: samples-live NEW_DATA_DIR [BUNDLE] < key
 use antinomie_monitor_core::{
     Backend, BackendOptions, Command, ExecRequest, Notification, Snapshot, VmConfig,
-    samples::{self, Query},
+    samples::{self, Query, Source},
 };
 use std::{
     collections::BTreeMap,
@@ -115,33 +118,44 @@ fn run() -> Result<(), String> {
         .read_line(&mut key)
         .map_err(|e| e.to_string())?;
     fs::create_dir_all(&data).map_err(|e| e.to_string())?;
-    samples::save_api_key(&data, key.trim())?;
-    let key = samples::api_key(&data);
+    let source = match std::env::var("ANTINOMIE_QA_SOURCE").as_deref() {
+        Ok("malshare") => Source::MalShare,
+        _ => Source::MalwareBazaar,
+    };
+    samples::save_source_key(&data, source, key.trim())?;
+    let key = samples::source_key(&data, source);
     let curl = Path::new(CURL);
+    println!("source {}", source.label());
 
-    for query in [
-        Query::Recent,
-        Query::Signature("Mirai".into()),
-        Query::Tag("elf".into()),
-        Query::FileType("elf".into()),
-    ] {
+    // The searches the window makes, then candidates to download.
+    let texts: &[&str] = match source {
+        Source::MalwareBazaar => &["", "Mirai", "elf"],
+        Source::MalShare => &["", "elf", "x86_64"],
+    };
+    for text in texts {
         // A large tag can be more than MalwareBazaar answers in time.
-        match samples::search(curl, &key, &query, 50) {
-            Ok(found) => println!(
-                "{query:?}: {} samples, {} ELF",
+        match source.find(curl, &key, text, 50) {
+            Ok((listing, found)) => println!(
+                "{listing}: {} samples, {} ELF",
                 found.len(),
                 found.iter().filter(|s| s.is_elf()).count()
             ),
-            Err(error) => println!("{query:?}: {error}"),
+            Err(error) => println!("{text:?}: {error}"),
         }
     }
-    let mut mirai = samples::search(curl, &key, &Query::Signature("Mirai".into()), 100)?;
-    mirai.retain(|s| s.is_elf() && s.file_size < 2 * 1024 * 1024);
-    mirai.sort_by_key(|s| s.file_size);
-    // MalwareBazaar names no architecture: the smallest x86-64 one, by download.
+    let mut candidates = match source {
+        Source::MalwareBazaar => {
+            samples::search(curl, &key, &Query::Signature("Mirai".into()), 100)?
+        }
+        Source::MalShare => source.find(curl, &key, "", 100)?.1,
+    };
+    candidates.retain(|s| s.is_elf() && s.file_size < 2 * 1024 * 1024);
+    // MalShare lists no sizes (0): those keep its order.
+    candidates.sort_by_key(|s| s.file_size);
+    // The first x86-64 one, as found by download.
     let mut chosen = None;
-    for info in mirai.iter().take(15) {
-        let stored = samples::download(curl, &key, &data, info)?;
+    for info in candidates.iter().take(15) {
+        let stored = source.download(curl, &key, &data, info)?;
         let archive = samples::archive_path(&data, &info.sha256_hash)?;
         let bytes = samples::open_sample(&archive, &info.sha256_hash)?;
         let arch = samples::elf_arch(&bytes);
@@ -154,21 +168,22 @@ fn run() -> Result<(), String> {
         if fs::read(&archive).is_ok_and(|zip| !zip.starts_with(b"PK")) {
             return Err("the stored archive is not a zip".into());
         }
-        if arch == Some("x86_64") {
+        if bytes.len() < 2 * 1024 * 1024 && arch == Some("x86_64") {
             chosen = Some((stored, bytes));
             break;
         }
         samples::delete(&data, &info.sha256_hash)?;
     }
-    let (stored, bytes) = chosen.ok_or("no small x86-64 Mirai sample among the first 15")?;
+    let (stored, bytes) = chosen.ok_or("no small x86-64 ELF sample among the first 15")?;
     let hash = stored.info.sha256_hash.clone();
     println!(
-        "kept {hash}: {} ({}), first seen {}",
+        "kept {hash}: {} ({}), first seen {}, from {}",
         stored.info.file_name,
         stored.info.signature.as_deref().unwrap_or("no family"),
-        stored.info.first_seen
+        stored.info.first_seen,
+        stored.source
     );
-    let by_hash = samples::search(curl, &key, &Query::Hash(hash.clone()), 1)?;
+    let (_, by_hash) = source.find(curl, &key, &hash, 1)?;
     if by_hash.first().map(|s| s.sha256_hash.as_str()) != Some(hash.as_str()) {
         return Err("hash lookup did not return the sample".into());
     }

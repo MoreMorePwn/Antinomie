@@ -105,14 +105,17 @@ permission notices for `vt100` and its updated parser dependency `vte 0.15.0`
 [vt100-MIT.txt](LICENSES/third-party/vt100-MIT.txt) and
 [vte-MIT.txt](LICENSES/third-party/vte-MIT.txt).
 
-Malware samples are read from MalwareBazaar's AES archives with the `zip`
+Malware samples are read from (and MalShare's samples written into) AES
+archives with the `zip`
 crate's `aes-crypto` feature, which brings the RustCrypto crates `aes`,
 `cipher`, `pbkdf2`, `hmac`, `sha1`, `digest` and their helpers (`block-buffer`,
 `crypto-common`, `inout`, `hybrid-array`, `cpufeatures`, `cpubits`, `cmov`,
 `ctutils`, `const-oid`, `zeroize`, `typenum`), each under MIT or Apache-2.0,
 and `constant_time_eq` (CC0-1.0, MIT-0 or Apache-2.0). Samples themselves are
-downloaded by the user from MalwareBazaar under abuse.ch's terms with their own
-API key; Antinomie hosts and redistributes none.
+downloaded by the user with their own API keys, from MalwareBazaar under
+abuse.ch's terms and from MalShare (malshare.com) under MalShare's terms, which
+ask that MalShare is credited as the source; each sample keeps its source.
+Antinomie hosts and redistributes none.
 
 The launch module directly uses already-locked `x11rb 0.13.2` and `rustix 1.1.5`
 for bounded X11/XWayland window sizing and deadline-aware polling. MIT options

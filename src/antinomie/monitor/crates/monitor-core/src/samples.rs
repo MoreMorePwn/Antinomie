@@ -1,11 +1,13 @@
-//! Malware samples from MalwareBazaar (abuse.ch), for running in a VM.
+//! Malware samples from MalwareBazaar (abuse.ch) and MalShare, for running in
+//! a VM.
 //!
-//! Antinomie hosts no samples: it searches MalwareBazaar with the user's own
-//! API key and downloads a sample on request, as the encrypted archive
-//! MalwareBazaar serves (AES, password `infected`). The archive is kept as is
-//! in `<data>/samples`; the sample is only ever decrypted in memory, to check
-//! its SHA-256 and to stream it into a guest. It is never written to, unpacked
-//! on or run on the host.
+//! Antinomie hosts no samples: it searches a source with the user's own API
+//! key and downloads a sample on request. MalwareBazaar serves an encrypted
+//! archive (AES, password `infected`), kept as is in `<data>/samples`;
+//! MalShare serves the file itself, which is held in memory only and written
+//! straight into the same kind of archive. A sample is only ever decrypted in
+//! memory, to check its SHA-256 and to stream it into a guest. It is never
+//! written to, unpacked on or run on the host.
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -23,6 +25,58 @@ pub const ARCHIVE_PASSWORD: &str = "infected";
 /// Samples larger than this are refused (decrypted in memory).
 pub const MAX_SAMPLE: u64 = 256 * 1024 * 1024;
 const KEYS_FILE: &str = "api-keys.json";
+
+/// Where samples come from. Each takes the user's own API key.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Source {
+    #[default]
+    MalwareBazaar,
+    MalShare,
+}
+
+impl Source {
+    pub const ALL: [Source; 2] = [Source::MalwareBazaar, Source::MalShare];
+    pub fn label(self) -> &'static str {
+        match self {
+            Source::MalwareBazaar => "MalwareBazaar",
+            Source::MalShare => "MalShare",
+        }
+    }
+    /// Where a free API key is made.
+    pub fn keys_url(self) -> &'static str {
+        match self {
+            Source::MalwareBazaar => BAZAAR_KEYS,
+            Source::MalShare => crate::malshare::KEYS,
+        }
+    }
+    /// One search box: empty lists the newest samples; see [`find`] and
+    /// [`crate::malshare::find`].
+    pub fn find(
+        self,
+        curl: &Path,
+        key: &str,
+        text: &str,
+        limit: u32,
+    ) -> Result<(String, Vec<SampleInfo>), String> {
+        match self {
+            Source::MalwareBazaar => find(curl, key, text, limit),
+            Source::MalShare => crate::malshare::find(curl, key, text, limit),
+        }
+    }
+    /// Download one sample found in this source into the data folder.
+    pub fn download(
+        self,
+        curl: &Path,
+        key: &str,
+        data_dir: &Path,
+        info: &SampleInfo,
+    ) -> Result<StoredSample, String> {
+        match self {
+            Source::MalwareBazaar => download(curl, key, data_dir, info),
+            Source::MalShare => crate::malshare::download(curl, key, data_dir, info),
+        }
+    }
+}
 
 /// Folder of downloaded sample archives and their records.
 pub fn samples_dir(data_dir: &Path) -> PathBuf {
@@ -458,6 +512,69 @@ pub fn download(
     result
 }
 
+/// Keep a sample held in memory (`bytes`, already checked against its
+/// SHA-256) as MalwareBazaar would: an AES archive with the password
+/// `infected`, owner-only, with its record. Nothing unencrypted is written.
+pub(crate) fn store_bytes(
+    data_dir: &Path,
+    info: &SampleInfo,
+    bytes: &[u8],
+    source: &str,
+) -> Result<StoredSample, String> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let archive = archive_path(data_dir, &info.sha256_hash)?;
+    let dir = samples_dir(data_dir);
+    crate::storage::private_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let partial = archive.with_extension("zip.part");
+    let result = (|| {
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&partial)
+            .map_err(|e| format!("{}: {e}", partial.display()))?;
+        let mut writer = zip::ZipWriter::new(file);
+        writer
+            .start_file(
+                format!("{}.bin", info.sha256_hash.to_ascii_lowercase()),
+                zip::write::SimpleFileOptions::default()
+                    .with_aes_encryption(zip::AesMode::Aes256, ARCHIVE_PASSWORD),
+            )
+            .map_err(|e| format!("sample archive: {e}"))?;
+        writer
+            .write_all(bytes)
+            .map_err(|e| format!("sample archive: {e}"))?;
+        writer
+            .finish()
+            .map_err(|e| format!("sample archive: {e}"))?;
+        // Read back as every sample is: the archive must open and match.
+        open_sample(&partial, &info.sha256_hash)?;
+        fs::set_permissions(&partial, fs::Permissions::from_mode(0o600))
+            .map_err(|e| e.to_string())?;
+        fs::rename(&partial, &archive).map_err(|e| e.to_string())?;
+        let mut info = info.clone();
+        if let Some(arch) = elf_arch(bytes) {
+            info.file_arch = Some(arch.into());
+        }
+        if info.file_size == 0 {
+            info.file_size = bytes.len() as u64;
+        }
+        let stored = StoredSample {
+            info,
+            source: source.into(),
+            downloaded_ms: unix_ms(),
+            pushes: Vec::new(),
+        };
+        save(data_dir, &stored)?;
+        Ok(stored)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&partial);
+    }
+    result
+}
+
 fn save(data_dir: &Path, stored: &StoredSample) -> Result<(), String> {
     crate::storage::atomic_json(&record_path(data_dir, &stored.info.sha256_hash)?, stored)
 }
@@ -540,25 +657,45 @@ pub fn acknowledge(data_dir: &Path) -> Result<(), String> {
 #[serde(default)]
 struct Keys {
     malwarebazaar: String,
+    malshare: String,
 }
 
-/// The MalwareBazaar API key saved in the data folder (readable by the user
-/// only), or an empty string.
-pub fn api_key(data_dir: &Path) -> String {
+fn keys(data_dir: &Path) -> Keys {
     fs::read(samples_dir(data_dir).join(KEYS_FILE))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Keys>(&bytes).ok())
-        .map(|keys| keys.malwarebazaar)
         .unwrap_or_default()
 }
 
+/// A source's API key saved in the data folder (readable by the user only),
+/// or an empty string.
+pub fn source_key(data_dir: &Path, source: Source) -> String {
+    let keys = keys(data_dir);
+    match source {
+        Source::MalwareBazaar => keys.malwarebazaar,
+        Source::MalShare => keys.malshare,
+    }
+}
+
+/// The MalwareBazaar API key (see [`source_key`]).
+pub fn api_key(data_dir: &Path) -> String {
+    source_key(data_dir, Source::MalwareBazaar)
+}
+
 pub fn save_api_key(data_dir: &Path, key: &str) -> Result<(), String> {
+    save_source_key(data_dir, Source::MalwareBazaar, key)
+}
+
+pub fn save_source_key(data_dir: &Path, source: Source, key: &str) -> Result<(), String> {
     let dir = samples_dir(data_dir);
     crate::storage::private_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let path = dir.join(KEYS_FILE);
-    let keys = Keys {
-        malwarebazaar: key.trim().to_owned(),
-    };
+    let mut keys = keys(data_dir);
+    let key = key.trim().to_owned();
+    match source {
+        Source::MalwareBazaar => keys.malwarebazaar = key,
+        Source::MalShare => keys.malshare = key,
+    }
     crate::storage::atomic_json(&path, &keys)?;
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())
@@ -713,7 +850,24 @@ mod tests {
         delete(&root, &hash).unwrap();
         assert!(stored(&root).is_empty());
         save_api_key(&root, " key ").unwrap();
+        save_source_key(&root, Source::MalShare, "share").unwrap();
         assert_eq!(api_key(&root), "key");
+        assert_eq!(source_key(&root, Source::MalShare), "share");
+        // A sample held in memory is kept encrypted, never as itself.
+        let plain = b"\x7fELF\x02\x01\x01 not really a program".to_vec();
+        let info = SampleInfo {
+            sha256_hash: sha256(&plain),
+            ..SampleInfo::default()
+        };
+        let kept = store_bytes(&root, &info, &plain, "MalShare").unwrap();
+        assert_eq!(
+            (kept.source.as_str(), kept.info.file_size),
+            ("MalShare", plain.len() as u64)
+        );
+        let archive = archive_path(&root, &info.sha256_hash).unwrap();
+        let on_disk = fs::read(&archive).unwrap();
+        assert!(!on_disk.windows(plain.len()).any(|window| window == plain));
+        assert_eq!(open_sample(&archive, &info.sha256_hash).unwrap(), plain);
         fs::remove_dir_all(root).unwrap();
     }
 
