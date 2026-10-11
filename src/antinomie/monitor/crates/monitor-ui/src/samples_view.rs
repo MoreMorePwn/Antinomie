@@ -3,19 +3,22 @@
 //! running them there. Nothing is run or unpacked on the host.
 use crate::theme::{self, ValueKind};
 use antinomie_monitor_core::{
-    samples::{self, Query, SampleInfo, StoredSample},
+    samples::{self, SampleInfo, StoredSample},
     ExecRequest,
 };
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     sync::mpsc::{self, Receiver},
     time::Duration,
 };
 
 pub(crate) const WINDOW_ID: &str = "malware_samples";
+
+/// Samples asked of MalwareBazaar per search: a fair share of its free API.
+const SEARCH_LIMIT: u32 = 200;
 
 pub(crate) struct SamplesContext<'a> {
     pub data_dir: &'a Path,
@@ -37,57 +40,183 @@ pub(crate) enum SamplesAction {
     },
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Kind {
+/// Columns of the search results, in order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Col {
+    Seen,
+    File,
     Family,
-    Tag,
-    FileType,
-    Hash,
-    Recent,
+    Type,
+    Arch,
+    Size,
+    Tags,
 }
 
-impl Kind {
-    const ALL: [Kind; 5] = [
-        Kind::Family,
-        Kind::Tag,
-        Kind::FileType,
-        Kind::Hash,
-        Kind::Recent,
+impl Col {
+    const ALL: [Col; 7] = [
+        Col::Seen,
+        Col::File,
+        Col::Family,
+        Col::Type,
+        Col::Arch,
+        Col::Size,
+        Col::Tags,
     ];
     fn label(self) -> &'static str {
         match self {
-            Kind::Family => "Family",
-            Kind::Tag => "Tag",
-            Kind::FileType => "File type",
-            Kind::Hash => "Hash",
-            Kind::Recent => "Newest",
-        }
-    }
-    fn hint(self) -> &'static str {
-        match self {
-            Kind::Family => "XorDDoS, Mirai, Kinsing…",
-            Kind::Tag => "x86-64, botnet, Gafgyt…",
-            Kind::FileType => "elf",
-            Kind::Hash => "SHA-256, SHA-1 or MD5",
-            Kind::Recent => "the latest 100 samples",
+            Col::Seen => "First seen",
+            Col::File => "File",
+            Col::Family => "Family",
+            Col::Type => "Type",
+            Col::Arch => "Architecture",
+            Col::Size => "Size",
+            Col::Tags => "Tags",
         }
     }
 }
 
+/// Results ordered by one column (header clicks: ascending, descending, as
+/// MalwareBazaar listed them).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Sort {
+    column: Col,
+    descending: bool,
+}
+
+fn next_sort(sort: Option<Sort>, column: Col) -> Option<Sort> {
+    match sort {
+        Some(Sort {
+            column: current,
+            descending: false,
+        }) if current == column => Some(Sort {
+            column,
+            descending: true,
+        }),
+        Some(Sort {
+            column: current,
+            descending: true,
+        }) if current == column => None,
+        _ => Some(Sort {
+            column,
+            descending: false,
+        }),
+    }
+}
+
+/// A sample's architecture as people write it.
+fn arch(sample: &SampleInfo) -> Option<String> {
+    sample.file_arch.as_deref().map(samples::arch_label)
+}
+
+/// The Architecture dropdown's entry for samples listed without one
+/// (MalwareBazaar's newest uploads leave it out).
+const UNKNOWN_ARCH: &str = "unknown";
+
+/// What the dropdowns keep of the results.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Filters {
+    file_type: Option<String>,
+    arch: Option<String>,
+    family: Option<String>,
+    /// Samples with any of these tags.
+    tags: BTreeSet<String>,
+}
+
+impl Filters {
+    fn keeps(&self, sample: &SampleInfo) -> bool {
+        self.file_type
+            .as_ref()
+            .is_none_or(|kind| sample.file_type.eq_ignore_ascii_case(kind))
+            && self
+                .arch
+                .as_ref()
+                .is_none_or(|wanted| arch(sample).unwrap_or_else(|| UNKNOWN_ARCH.into()) == *wanted)
+            && self
+                .family
+                .as_ref()
+                .is_none_or(|family| sample.signature.as_ref() == Some(family))
+            && (self.tags.is_empty() || sample.tags.iter().any(|tag| self.tags.contains(tag)))
+    }
+    fn active(&self) -> bool {
+        *self != Filters::default()
+    }
+}
+
+/// The values of one field in `results`, most frequent first.
+fn choices(
+    results: &[SampleInfo],
+    field: impl Fn(&SampleInfo) -> Vec<String>,
+) -> Vec<(String, usize)> {
+    let mut counts = BTreeMap::<String, usize>::new();
+    for sample in results {
+        for value in field(sample) {
+            if !value.is_empty() {
+                *counts.entry(value).or_default() += 1;
+            }
+        }
+    }
+    let mut counts: Vec<_> = counts.into_iter().collect();
+    counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    counts
+}
+
+/// Indices of the results the filters keep, in the order of `sort`.
+fn shown(results: &[SampleInfo], filters: &Filters, sort: Option<Sort>) -> Vec<usize> {
+    let mut shown: Vec<usize> = (0..results.len())
+        .filter(|&index| filters.keeps(&results[index]))
+        .collect();
+    if let Some(sort) = sort {
+        let text = |sample: &SampleInfo| -> String {
+            match sort.column {
+                Col::Seen => sample.first_seen.clone(),
+                Col::File => sample.file_name.to_lowercase(),
+                Col::Family => sample.signature.clone().unwrap_or_default().to_lowercase(),
+                Col::Type => sample.file_type.to_lowercase(),
+                Col::Arch => arch(sample).unwrap_or_default().to_lowercase(),
+                Col::Size => String::new(),
+                Col::Tags => sample.tags.join(",").to_lowercase(),
+            }
+        };
+        shown.sort_by(|&a, &b| {
+            let (a, b) = (&results[a], &results[b]);
+            let order = if sort.column == Col::Size {
+                a.file_size.cmp(&b.file_size)
+            } else {
+                text(a).cmp(&text(b))
+            };
+            if sort.descending {
+                order.reverse()
+            } else {
+                order
+            }
+        });
+    }
+    shown
+}
+
+type Found = Result<(String, Vec<SampleInfo>), String>;
+
+#[derive(Default)]
 pub(crate) struct SamplesView {
     pub(crate) open: bool,
     key: String,
     key_saved: bool,
     key_loaded: bool,
+    /// The saved key is being replaced.
+    editing_key: bool,
     /// The warning before first use was accepted in this data folder.
     acknowledged: bool,
     /// The acceptance checkbox of that warning.
     understood: bool,
-    kind: Kind,
     text: String,
-    elf_only: bool,
+    /// What the results are, in words ("Newest uploads", "Family Mirai").
+    listing: String,
+    /// The newest uploads were asked for when the window opened.
+    listed: bool,
     results: Vec<SampleInfo>,
-    searching: Option<Receiver<Result<Vec<SampleInfo>, String>>>,
+    filters: Filters,
+    sort: Option<Sort>,
+    searching: Option<Receiver<Found>>,
     downloads: BTreeMap<String, Receiver<Result<StoredSample, String>>>,
     stored: Option<Vec<StoredSample>>,
     /// Run pushed samples as root instead of the guest user.
@@ -98,34 +227,18 @@ pub(crate) struct SamplesView {
     awaiting: Option<Option<ExecRequest>>,
 }
 
-impl Default for SamplesView {
-    fn default() -> Self {
-        Self {
-            open: false,
-            key: String::new(),
-            key_saved: false,
-            key_loaded: false,
-            acknowledged: false,
-            understood: false,
-            kind: Kind::Family,
-            text: String::new(),
-            elf_only: true,
-            results: Vec::new(),
-            searching: None,
-            downloads: BTreeMap::new(),
-            stored: None,
-            as_root: false,
-            status: None,
-            pending: None,
-            awaiting: None,
-        }
+fn format_size(bytes: u64) -> String {
+    match bytes {
+        0..1024 => format!("{bytes} B"),
+        1024..1_048_576 => format!("{:.1} KiB", bytes as f64 / 1024.0),
+        _ => format!("{:.1} MiB", bytes as f64 / 1_048_576.0),
     }
 }
 
 /// What the warning before first use says, one point per line.
 const FIRST_USE_POINTS: &[&str] = &[
-    "Never run a sample on this computer. Antinomie keeps samples in their encrypted \
-     archives and decrypts them only in memory to send them into a VM.",
+    "Never run a sample on this computer. Antinomie keeps samples in their \
+     encrypted archives and decrypts them only in memory to send them into a VM.",
     "A sample run in a VM with NAT on can reach your network and the Internet: it may \
      spread, attack other machines or contact its operators. Keep NAT off unless you need it.",
     "Use a VM you can throw away, or take a snapshot first. Escaping a VM is rare but \
@@ -134,14 +247,6 @@ const FIRST_USE_POINTS: &[&str] = &[
     "Downloading or keeping malware may be restricted by law or by your organisation. \
      Samples are for research and defence only.",
 ];
-
-fn format_size(bytes: u64) -> String {
-    match bytes {
-        0..1024 => format!("{bytes} B"),
-        1024..1_048_576 => format!("{:.1} KiB", bytes as f64 / 1024.0),
-        _ => format!("{:.1} MiB", bytes as f64 / 1_048_576.0),
-    }
-}
 
 /// A guest path for a sample: its hash prefix and a safe form of its name.
 fn guest_path(sample: &SampleInfo) -> String {
@@ -166,6 +271,29 @@ fn guest_path(sample: &SampleInfo) -> String {
             name
         }
     )
+}
+
+/// A dropdown of one field's values (with their counts) or all of them.
+fn choice(
+    ui: &mut egui::Ui,
+    id: &str,
+    label: &str,
+    value: &mut Option<String>,
+    options: &[(String, usize)],
+) {
+    let selected = match value {
+        Some(value) => format!("{label}: {value}"),
+        None => format!("{label}: all"),
+    };
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(selected)
+        .height(360.0)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(value, None, "All");
+            for (option, count) in options {
+                ui.selectable_value(value, Some(option.clone()), format!("{option}  ({count})"));
+            }
+        });
 }
 
 impl SamplesView {
@@ -198,9 +326,12 @@ impl SamplesView {
         if let Some(found) = self.searching.as_ref().and_then(|r| r.try_recv().ok()) {
             self.searching = None;
             match found {
-                Ok(found) => {
-                    self.status = Some((format!("{} samples found", found.len()), false));
+                Ok((listing, found)) => {
+                    self.listing = listing;
                     self.results = found;
+                    self.filters = Filters::default();
+                    self.sort = None;
+                    self.status = None;
                 }
                 Err(error) => self.status = Some((error, true)),
             }
@@ -222,7 +353,11 @@ impl SamplesView {
                     format!(
                         "Downloaded {} ({}), kept encrypted",
                         sample.info.file_name,
-                        sample.info.file_arch.as_deref().unwrap_or("not an ELF")
+                        sample
+                            .info
+                            .file_arch
+                            .as_deref()
+                            .map_or("not an ELF".into(), samples::arch_label)
                     ),
                     false,
                 ),
@@ -232,6 +367,17 @@ impl SamplesView {
         if self.searching.is_some() || !self.downloads.is_empty() {
             ctx.request_repaint_after(Duration::from_millis(200));
         }
+    }
+
+    /// Search MalwareBazaar for `text` (empty: the newest uploads).
+    fn search(&mut self, cx: &SamplesContext<'_>, text: String) {
+        let (sender, receiver) = mpsc::channel();
+        let (curl, key) = (cx.curl.to_path_buf(), self.key.clone());
+        std::thread::spawn(move || {
+            let _ = sender.send(samples::find(&curl, &key, &text, SEARCH_LIMIT));
+        });
+        self.searching = Some(receiver);
+        self.status = None;
     }
 
     pub(crate) fn show(
@@ -252,6 +398,11 @@ impl SamplesView {
             self.first_use(ctx, cx);
             return None;
         }
+        // The newest uploads, as soon as there is a key to ask with.
+        if !self.listed && self.key_saved && self.searching.is_none() {
+            self.listed = true;
+            self.search(cx, String::new());
+        }
         self.poll(ctx);
         let stored = self
             .stored
@@ -259,32 +410,46 @@ impl SamplesView {
             .clone();
         let mut action = None;
         let mut open = true;
+        let screen = ctx.screen_rect();
+        let largest = egui::vec2(1240.0, 820.0).min(screen.size() - egui::vec2(96.0, 300.0));
         egui::Window::new("Malware samples")
             .id(egui::Id::new(WINDOW_ID))
             .collapsible(false)
             .resizable(true)
-            // Centred on its default size: a pivot would centre the first,
-            // smaller frame instead.
+            // The content fills the window, so the window takes its largest
+            // size: centre that. Sizes are the content's: the title bar and
+            // margins (about 90 points) come on top, below the rect's top.
             .default_rect(egui::Rect::from_center_size(
-                ctx.screen_rect().center(),
-                egui::vec2(900.0, 640.0).min(ctx.screen_rect().size() - egui::vec2(48.0, 96.0)),
+                screen.center() - egui::vec2(0.0, 42.0),
+                largest,
             ))
+            .min_size(egui::vec2(720.0, 480.0).min(largest))
+            .max_size(largest)
             .open(&mut open)
             .show(ctx, |ui| {
                 self.warning(ui, cx);
-                ui.add_space(6.0);
-                self.key_row(ui, cx);
-                ui.add_space(6.0);
-                theme::section(ui, "Search MalwareBazaar");
-                self.search_row(ui, cx);
-                ui.add_space(4.0);
-                let half = (ui.available_height() / 2.0).max(140.0);
-                ui.allocate_ui(egui::vec2(ui.available_width(), half), |ui| {
+                ui.add_space(12.0);
+                if !self.key_saved || self.editing_key {
+                    self.key_row(ui, cx);
+                    ui.add_space(12.0);
+                }
+                self.search_bar(ui, cx);
+                ui.add_space(10.0);
+                self.filter_bar(ui);
+                ui.add_space(10.0);
+                // The downloaded list keeps room for a few samples; the
+                // results take the rest.
+                let row = theme::row_height(cx.font_size).max(ui.spacing().interact_size.y + 4.0);
+                // Exactly what is drawn below the results: anything taking
+                // "the rest" would make the window grow every frame.
+                let list = row * stored.len().clamp(1, 4) as f32;
+                let below = 14.0 + ui.spacing().interact_size.y + 6.0 + list + 4.0;
+                let results = (ui.available_height() - below).max(120.0);
+                ui.allocate_ui(egui::vec2(ui.available_width(), results), |ui| {
                     self.results_table(ui, cx, &stored);
                 });
-                ui.add_space(6.0);
-                theme::section(ui, "Downloaded");
-                if let Some(next) = self.stored_list(ui, cx, &stored) {
+                ui.add_space(14.0);
+                if let Some(next) = self.stored_list(ui, cx, &stored, list) {
                     action = Some(next);
                 }
             });
@@ -369,24 +534,26 @@ impl SamplesView {
 
     fn warning(&mut self, ui: &mut egui::Ui, cx: &SamplesContext<'_>) {
         egui::Frame::new()
-            .fill(theme::raised())
+            .fill(theme::panel())
+            .stroke(egui::Stroke::new(1.0_f32, theme::line()))
             .corner_radius(6.0)
-            .inner_margin(egui::Margin::symmetric(12, 8))
+            .inner_margin(egui::Margin::symmetric(14, 10))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.horizontal_wrapped(|ui| {
+                ui.horizontal_top(|ui| {
                     ui.label(RichText::new(egui_phosphor::regular::BIOHAZARD).color(theme::warn()));
-                    ui.label(
-                        RichText::new(
-                            "Live malware. Samples stay in MalwareBazaar's encrypted archives \
-                             in the data folder and are decrypted only in memory, to be sent \
-                             into the VM. Nothing is run on this computer. Use a VM you can \
-                             throw away, or take a snapshot first.",
+                    ui.add(
+                        egui::Label::new(
+                            "Live malware. Samples stay in MalwareBazaar's encrypted archives in \
+                             the data folder and are decrypted only in memory, to be sent into \
+                             the VM. Nothing is run on this computer. Use a VM you can throw \
+                             away, or take a snapshot first.",
                         )
-                        .color(theme::text()),
+                        .wrap(),
                     );
                 });
                 if cx.nat {
+                    ui.add_space(4.0);
                     ui.colored_label(
                         theme::warn(),
                         "NAT is on for this VM: a sample run there can reach your network and \
@@ -394,6 +561,7 @@ impl SamplesView {
                     );
                 }
                 if let Some((message, error)) = &self.status {
+                    ui.add_space(4.0);
                     ui.colored_label(
                         if *error {
                             theme::error()
@@ -414,23 +582,33 @@ impl SamplesView {
                     .password(true)
                     .hint_text("free key from abuse.ch")
                     .margin(theme::TEXT_EDIT_MARGIN)
-                    .desired_width(320.0),
+                    .desired_width(340.0),
             );
             if edit.changed() {
                 self.key_saved = false;
             }
             if ui
-                .add_enabled(!self.key_saved, egui::Button::new("Save key"))
+                .add_enabled(
+                    !self.key_saved && !self.key.trim().is_empty(),
+                    egui::Button::new("Save key"),
+                )
                 .on_hover_text("Kept in the data folder, readable only by you")
                 .clicked()
             {
                 match samples::save_api_key(cx.data_dir, &self.key) {
                     Ok(()) => {
                         self.key_saved = true;
+                        self.editing_key = false;
+                        self.listed = false;
                         self.status = Some(("API key saved".into(), false));
                     }
                     Err(error) => self.status = Some((error, true)),
                 }
+            }
+            if self.editing_key && ui.button("Cancel").clicked() {
+                self.key = samples::api_key(cx.data_dir);
+                self.key_saved = !self.key.is_empty();
+                self.editing_key = false;
             }
             ui.hyperlink_to(
                 format!("Get a key {}", egui_phosphor::regular::ARROW_SQUARE_OUT),
@@ -439,79 +617,153 @@ impl SamplesView {
         });
     }
 
-    fn search_row(&mut self, ui: &mut egui::Ui, cx: &SamplesContext<'_>) {
+    fn search_bar(&mut self, ui: &mut egui::Ui, cx: &SamplesContext<'_>) {
         let mut search = None;
+        let ready = self.key_saved && self.searching.is_none();
         ui.horizontal(|ui| {
-            egui::ComboBox::from_id_salt("samples_kind")
-                .selected_text(self.kind.label())
-                .show_ui(ui, |ui| {
-                    for kind in Kind::ALL {
-                        ui.selectable_value(&mut self.kind, kind, kind.label());
-                    }
-                });
-            let edit = ui.add_enabled(
-                self.kind != Kind::Recent,
-                egui::TextEdit::singleline(&mut self.text)
-                    .hint_text(self.kind.hint())
-                    .margin(theme::TEXT_EDIT_MARGIN)
-                    .desired_width(260.0),
-            );
-            let enter = edit.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-            ui.checkbox(&mut self.elf_only, "ELF only")
-                .on_hover_text("Linux programs: what the VMs can run");
-            let ready = self.searching.is_none()
-                && (self.kind == Kind::Recent || !self.text.trim().is_empty());
-            if (ui
-                .add_enabled(
-                    ready,
-                    egui::Button::new(
-                        RichText::new(format!(
-                            "{} Search",
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if self.key_saved
+                    && !self.editing_key
+                    && ui
+                        .button(format!("{} Key", egui_phosphor::regular::KEY))
+                        .on_hover_text("Change the MalwareBazaar API key")
+                        .clicked()
+                {
+                    self.editing_key = true;
+                }
+                if ui
+                    .add_enabled(ready, egui::Button::new("Newest"))
+                    .on_hover_text("The latest uploads to MalwareBazaar")
+                    .clicked()
+                {
+                    self.text.clear();
+                    search = Some(String::new());
+                }
+                if ui
+                    .add_enabled(
+                        ready,
+                        egui::Button::new(
+                            RichText::new(format!(
+                                "{} Search",
+                                egui_phosphor::regular::MAGNIFYING_GLASS
+                            ))
+                            .color(theme::palette().primary_text),
+                        )
+                        .fill(theme::primary()),
+                    )
+                    .clicked()
+                {
+                    search = Some(self.text.clone());
+                }
+                if self.searching.is_some() {
+                    ui.spinner();
+                }
+                let edit = ui.add_sized(
+                    egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+                    egui::TextEdit::singleline(&mut self.text)
+                        .hint_text(format!(
+                            "{}  Family, tag, file type or hash (Mirai, x86-64, elf, a SHA-256…)",
                             egui_phosphor::regular::MAGNIFYING_GLASS
                         ))
-                        .color(theme::palette().primary_text),
-                    )
-                    .fill(theme::primary()),
-                )
-                .clicked()
-                || (enter && ready))
-                && ready
-            {
-                search = Some(match self.kind {
-                    Kind::Family => Query::Signature(self.text.clone()),
-                    Kind::Tag => Query::Tag(self.text.clone()),
-                    Kind::FileType => Query::FileType(self.text.clone()),
-                    Kind::Hash => Query::Hash(self.text.clone()),
-                    Kind::Recent => Query::Recent,
-                });
-            }
-            if self.searching.is_some() {
-                ui.spinner();
-            }
+                        .margin(theme::TEXT_EDIT_MARGIN),
+                );
+                if ready
+                    && edit.lost_focus()
+                    && ui.input(|input| input.key_pressed(egui::Key::Enter))
+                {
+                    search = Some(self.text.clone());
+                }
+            });
         });
+        ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Families that run on x86-64 Linux:").color(theme::muted()));
+            ui.label(RichText::new("Linux families:").color(theme::muted()));
             for (name, about) in samples::STARTERS {
                 if ui
-                    .add_enabled(self.searching.is_none(), egui::Button::new(*name).small())
+                    .add_enabled(ready, egui::Button::new(*name).small())
                     .on_hover_text(*about)
                     .clicked()
                 {
-                    self.kind = Kind::Family;
                     self.text = (*name).into();
-                    search = Some(Query::Signature((*name).into()));
+                    search = Some((*name).into());
                 }
             }
         });
-        if let Some(query) = search {
-            let (sender, receiver) = mpsc::channel();
-            let (curl, key) = (cx.curl.to_path_buf(), self.key.clone());
-            std::thread::spawn(move || {
-                let _ = sender.send(samples::search(&curl, &key, &query, 200));
-            });
-            self.searching = Some(receiver);
-            self.status = None;
+        if let Some(text) = search {
+            self.search(cx, text);
         }
+    }
+
+    fn filter_bar(&mut self, ui: &mut egui::Ui) {
+        let types = choices(&self.results, |s| vec![s.file_type.to_lowercase()]);
+        let arches = choices(&self.results, |s| {
+            vec![arch(s).unwrap_or_else(|| UNKNOWN_ARCH.into())]
+        });
+        let families = choices(&self.results, |s| s.signature.clone().into_iter().collect());
+        let tags = choices(&self.results, |s| s.tags.clone());
+        let count = shown(&self.results, &self.filters, None).len();
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            choice(
+                ui,
+                "samples_type",
+                "File type",
+                &mut self.filters.file_type,
+                &types,
+            );
+            choice(
+                ui,
+                "samples_arch",
+                "Architecture",
+                &mut self.filters.arch,
+                &arches,
+            );
+            choice(
+                ui,
+                "samples_family",
+                "Family",
+                &mut self.filters.family,
+                &families,
+            );
+            let ticked = &mut self.filters.tags;
+            egui::ComboBox::from_id_salt("samples_tags")
+                .selected_text(match ticked.len() {
+                    0 => "Tags: all".to_string(),
+                    1 => format!("Tags: {}", ticked.iter().next().map_or("", String::as_str)),
+                    n => format!("Tags: {n} ticked"),
+                })
+                .height(360.0)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .show_ui(ui, |ui| {
+                    if ui
+                        .add_enabled(!ticked.is_empty(), egui::Button::new("Clear"))
+                        .clicked()
+                    {
+                        ticked.clear();
+                    }
+                    for (tag, count) in &tags {
+                        let mut on = ticked.contains(tag);
+                        if ui.checkbox(&mut on, format!("{tag}  ({count})")).changed() {
+                            if on {
+                                ticked.insert(tag.clone());
+                            } else {
+                                ticked.remove(tag);
+                            }
+                        }
+                    }
+                })
+                .response
+                .on_hover_text("Samples with any of the ticked tags");
+            if self.filters.active() && ui.button("Clear filters").clicked() {
+                self.filters = Filters::default();
+            }
+            if !self.results.is_empty() {
+                ui.colored_label(
+                    theme::muted(),
+                    format!("{count} of {} · {}", self.results.len(), self.listing),
+                );
+            }
+        });
     }
 
     fn results_table(
@@ -520,48 +772,83 @@ impl SamplesView {
         cx: &SamplesContext<'_>,
         stored: &[StoredSample],
     ) {
-        let shown: Vec<&SampleInfo> = self
-            .results
-            .iter()
-            .filter(|sample| !self.elf_only || sample.is_elf())
-            .collect();
-        if shown.is_empty() {
-            ui.colored_label(
-                theme::muted(),
-                if self.results.is_empty() {
-                    "Search by family, tag, file type or hash."
-                } else {
-                    "No ELF samples in this search: untick ELF only to see the others."
-                },
-            );
+        if self.results.is_empty() {
+            let text = if !self.key_saved {
+                "Save a MalwareBazaar API key to list the newest samples."
+            } else if self.searching.is_some() {
+                "Asking MalwareBazaar…"
+            } else {
+                "Nothing found. Search by family, tag, file type or hash."
+            };
+            ui.add_space(8.0);
+            ui.colored_label(theme::muted(), text);
+            return;
+        }
+        let order = shown(&self.results, &self.filters, self.sort);
+        if order.is_empty() {
+            ui.add_space(8.0);
+            ui.colored_label(theme::muted(), "No sample matches the filters.");
             return;
         }
         let mono = theme::mono(cx.font_size - 1.0);
-        let row_height = theme::row_height(cx.font_size);
+        let row_height = theme::row_height(cx.font_size).max(ui.spacing().interact_size.y + 4.0);
         let mut download = None;
+        let mut clicked = None;
         TableBuilder::new(ui)
             .id_salt("samples_results")
             .striped(true)
             .resizable(true)
             .auto_shrink([false, false])
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::initial(220.0).clip(true))
-            .column(Column::initial(110.0).clip(true))
-            .column(Column::initial(60.0))
-            .column(Column::initial(80.0))
-            .column(Column::initial(150.0).clip(true))
-            .column(Column::initial(150.0).clip(true))
-            .column(Column::remainder().at_least(110.0))
+            .column(Column::initial(190.0))
+            .column(Column::initial(230.0).clip(true))
+            .column(Column::initial(120.0).clip(true))
+            .column(Column::initial(70.0))
+            .column(Column::initial(110.0))
+            .column(Column::initial(90.0))
+            .column(Column::initial(200.0).clip(true))
+            .column(Column::remainder().at_least(130.0))
             .header(row_height, |mut header| {
-                for name in ["File", "Family", "Type", "Size", "Tags", "First seen", ""] {
+                for column in Col::ALL {
                     header.col(|ui| {
-                        ui.label(RichText::new(name).strong().color(theme::heading()));
+                        let mark = match self.sort {
+                            Some(sort) if sort.column == column => {
+                                if sort.descending {
+                                    " ⏷"
+                                } else {
+                                    " ⏶"
+                                }
+                            }
+                            _ => "",
+                        };
+                        if ui
+                            .add(
+                                egui::Label::new(
+                                    RichText::new(format!("{}{mark}", column.label()))
+                                        .strong()
+                                        .color(theme::heading()),
+                                )
+                                .sense(egui::Sense::click()),
+                            )
+                            .on_hover_text("Sort; a third click restores MalwareBazaar's order")
+                            .clicked()
+                        {
+                            clicked = Some(column);
+                        }
                     });
                 }
+                header.col(|_| {});
             })
             .body(|body| {
-                body.rows(row_height, shown.len(), |mut row| {
-                    let sample = shown[row.index()];
+                body.rows(row_height, order.len(), |mut row| {
+                    let sample = &self.results[order[row.index()]];
+                    row.col(|ui| {
+                        ui.label(
+                            RichText::new(&sample.first_seen)
+                                .font(mono.clone())
+                                .color(theme::muted()),
+                        );
+                    });
                     row.col(|ui| {
                         ui.add(
                             egui::Label::new(RichText::new(&sample.file_name).font(mono.clone()))
@@ -578,6 +865,28 @@ impl SamplesView {
                     row.col(|ui| {
                         ui.label(&sample.file_type);
                     });
+                    row.col(|ui| match arch(sample) {
+                        Some(label) => {
+                            let runs = sample.may_run();
+                            ui.label(RichText::new(label).color(if runs {
+                                theme::good()
+                            } else {
+                                theme::text()
+                            }))
+                            .on_hover_text(if runs {
+                                "Runs in Antinomie's x86-64 guests"
+                            } else {
+                                "Will not run in the x86-64 guests"
+                            });
+                        }
+                        None => {
+                            ui.colored_label(theme::muted(), "?").on_hover_text(
+                                "MalwareBazaar's newest uploads do not list architectures: \
+                                     search a family, tag or file type to see them, or download \
+                                     the sample",
+                            );
+                        }
+                    });
                     row.col(|ui| {
                         ui.label(
                             RichText::new(format_size(sample.file_size))
@@ -587,9 +896,6 @@ impl SamplesView {
                     row.col(|ui| {
                         ui.add(egui::Label::new(sample.tags.join(", ")).truncate())
                             .on_hover_text(sample.tags.join(", "));
-                    });
-                    row.col(|ui| {
-                        ui.colored_label(theme::muted(), &sample.first_seen);
                     });
                     row.col(|ui| {
                         let hash = &sample.sha256_hash;
@@ -609,6 +915,9 @@ impl SamplesView {
                     });
                 });
             });
+        if let Some(column) = clicked {
+            self.sort = next_sort(self.sort, column);
+        }
         if let Some(sample) = download {
             let (sender, receiver) = mpsc::channel();
             let (curl, key, data): (PathBuf, String, PathBuf) =
@@ -626,48 +935,66 @@ impl SamplesView {
         ui: &mut egui::Ui,
         cx: &SamplesContext<'_>,
         stored: &[StoredSample],
+        height: f32,
     ) -> Option<SamplesAction> {
         let mut action = None;
         let mut delete = None;
         ui.horizontal(|ui| {
+            theme::section(ui, &format!("Downloaded ({})", stored.len()));
+            ui.add_space(12.0);
             ui.label(RichText::new("Run as").color(theme::muted()));
             ui.selectable_value(&mut self.as_root, false, "guest user");
             ui.selectable_value(&mut self.as_root, true, "root");
             if let Some(name) = cx.vm_name {
-                ui.colored_label(theme::muted(), format!("· VM: {name}"));
+                ui.add_space(8.0);
+                ui.colored_label(theme::muted(), format!("VM: {name}"));
             }
             if !cx.running {
                 ui.colored_label(theme::warn(), "· start the VM to send samples into it");
             }
         });
+        ui.add_space(6.0);
         if stored.is_empty() {
             ui.colored_label(theme::muted(), "No samples downloaded yet.");
             return None;
         }
         let pending = self.pending.is_some() || self.awaiting.is_some();
-        egui::ScrollArea::vertical()
+        let mono = theme::mono(cx.font_size - 1.0);
+        let row_height = theme::row_height(cx.font_size).max(ui.spacing().interact_size.y + 4.0);
+        TableBuilder::new(ui)
             .id_salt("samples_stored")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                for sample in stored {
+            .striped(true)
+            .auto_shrink([false, true])
+            .max_scroll_height(height)
+            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+            .column(Column::initial(260.0).clip(true))
+            .column(Column::initial(130.0).clip(true))
+            .column(Column::initial(110.0))
+            .column(Column::initial(90.0))
+            .column(Column::initial(90.0))
+            .column(Column::remainder().at_least(380.0))
+            .body(|body| {
+                body.rows(row_height, stored.len(), |mut row| {
+                    let sample = &stored[row.index()];
                     let info = &sample.info;
-                    let arch = info.file_arch.as_deref();
-                    let runs_here = arch.is_some_and(|a| a == "x86_64");
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(&info.file_name).font(theme::mono(cx.font_size - 1.0)))
+                    let arch = info.file_arch.as_deref().map(samples::arch_label);
+                    let runs_here = arch.as_deref() == Some("x86-64");
+                    row.col(|ui| {
+                        ui.add(egui::Label::new(RichText::new(&info.file_name).font(mono.clone())).truncate())
                             .on_hover_text(format!(
-                                "SHA-256 {}\nFrom {} · first seen {}\nSent into VMs {} times",
-                                info.sha256_hash,
-                                sample.source,
-                                info.first_seen,
-                                sample.pushes.len()
+                                "SHA-256 {}\nFrom {} · first seen {}",
+                                info.sha256_hash, sample.source, info.first_seen
                             ));
+                    });
+                    row.col(|ui| {
                         ui.label(
                             RichText::new(info.signature.as_deref().unwrap_or("-"))
                                 .color(theme::value(ValueKind::Name)),
                         );
+                    });
+                    row.col(|ui| {
                         ui.label(
-                            RichText::new(arch.unwrap_or("not an ELF")).color(if runs_here {
+                            RichText::new(arch.as_deref().unwrap_or("not an ELF")).color(if runs_here {
                                 theme::good()
                             } else {
                                 theme::warn()
@@ -678,7 +1005,29 @@ impl SamplesView {
                         } else {
                             "Built for another processor or not a Linux program: it will not run in the x86-64 guests"
                         });
+                    });
+                    row.col(|ui| {
                         ui.colored_label(theme::muted(), format_size(info.file_size));
+                    });
+                    row.col(|ui| {
+                        ui.colored_label(
+                            theme::muted(),
+                            match sample.pushes.len() {
+                                0 => "not sent".to_string(),
+                                1 => "sent once".to_string(),
+                                n => format!("sent {n}×"),
+                            },
+                        )
+                        .on_hover_text(
+                            sample
+                                .pushes
+                                .iter()
+                                .map(|push| format!("{} · {}", push.vm_name, push.path))
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                        );
+                    });
+                    row.col(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui
                                 .button(RichText::new("Delete").color(theme::error()))
@@ -736,8 +1085,7 @@ impl SamplesView {
                             }
                         });
                     });
-                    ui.separator();
-                }
+                });
             });
         if let Some(hash) = delete {
             self.status = Some(match samples::delete(cx.data_dir, &hash) {
@@ -756,6 +1104,69 @@ impl SamplesView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample(
+        name: &str,
+        kind: &str,
+        arch: &str,
+        family: &str,
+        tags: &[&str],
+        size: u64,
+    ) -> SampleInfo {
+        SampleInfo {
+            sha256_hash: format!("{name:0>64}"),
+            file_name: name.into(),
+            file_type: kind.into(),
+            file_arch: Some(arch.into()),
+            signature: Some(family.into()),
+            tags: tags.iter().map(|tag| tag.to_string()).collect(),
+            file_size: size,
+            ..SampleInfo::default()
+        }
+    }
+
+    #[test]
+    fn dropdowns_filter_and_headers_sort_the_results() {
+        let results = vec![
+            sample("a", "elf", "ARM", "Mirai", &["elf", "Mirai"], 300),
+            sample("b", "elf", "X86_64", "Mirai", &["elf", "upx"], 100),
+            sample("c", "exe", "I386", "AgentTesla", &["exe"], 200),
+        ];
+        let all = Filters::default();
+        assert_eq!(shown(&results, &all, None), [0, 1, 2]);
+        let x86_64 = Filters {
+            arch: Some("x86-64".into()),
+            ..Filters::default()
+        };
+        assert_eq!(shown(&results, &x86_64, None), [1]);
+        let elf_mirai = Filters {
+            file_type: Some("elf".into()),
+            family: Some("Mirai".into()),
+            ..Filters::default()
+        };
+        assert_eq!(shown(&results, &elf_mirai, None), [0, 1]);
+        let tags = Filters {
+            tags: ["upx".to_string(), "exe".to_string()].into(),
+            ..Filters::default()
+        };
+        assert_eq!(shown(&results, &tags, None), [1, 2]);
+        let by_size = next_sort(None, Col::Size);
+        assert_eq!(shown(&results, &all, by_size), [1, 2, 0]);
+        let by_size = next_sort(by_size, Col::Size);
+        assert_eq!(shown(&results, &all, by_size), [0, 2, 1]);
+        assert_eq!(next_sort(by_size, Col::Size), None);
+        assert_eq!(
+            choices(&results, |s| vec![s.file_type.clone()]),
+            [("elf".to_string(), 2), ("exe".to_string(), 1)]
+        );
+        assert_eq!(
+            choices(&results, |s| arch(s).into_iter().collect())
+                .into_iter()
+                .map(|(arch, _)| arch)
+                .collect::<Vec<_>>(),
+            ["ARM", "x86", "x86-64"]
+        );
+    }
 
     #[test]
     fn the_catalog_waits_for_the_warning_to_be_accepted() {
@@ -794,6 +1205,8 @@ mod tests {
             view.show(ctx, &cx);
         });
         assert!(view.acknowledged);
+        // No key: nothing is asked of MalwareBazaar.
+        assert!(view.searching.is_none() && !view.listed);
         std::fs::remove_dir_all(data).unwrap();
     }
 

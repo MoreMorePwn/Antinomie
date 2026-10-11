@@ -236,6 +236,69 @@ pub fn search(
     parse_reply(&post(curl, key, &query.form(limit), None)?)
 }
 
+/// A SHA-256, SHA-1 or MD5 in hex.
+fn is_hash(text: &str) -> bool {
+    matches!(text.len(), 32 | 40 | 64) && text.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// One search box: empty lists the newest uploads, a hash looks that sample
+/// up, and a word is tried as a family, then a tag, then a file type. Returns
+/// what was searched, in words, and the samples.
+pub fn find(
+    curl: &Path,
+    key: &str,
+    text: &str,
+    limit: u32,
+) -> Result<(String, Vec<SampleInfo>), String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok((
+            "Newest uploads".into(),
+            search(curl, key, &Query::Recent, limit)?,
+        ));
+    }
+    if is_hash(text) {
+        return Ok((
+            format!("Hash {text}"),
+            search(curl, key, &Query::Hash(text.into()), limit)?,
+        ));
+    }
+    let family = search(curl, key, &Query::Signature(text.into()), limit)?;
+    if !family.is_empty() {
+        return Ok((format!("Family {text}"), family));
+    }
+    // A tag as large as `elf` can be more than MalwareBazaar answers in time;
+    // the file type may still answer.
+    let tag = search(curl, key, &Query::Tag(text.into()), limit);
+    if let Ok(found) = &tag
+        && !found.is_empty()
+    {
+        return Ok((format!("Tag {text}"), found.clone()));
+    }
+    match search(curl, key, &Query::FileType(text.into()), limit) {
+        Ok(found) if !found.is_empty() => Ok((format!("File type {text}"), found)),
+        _ => tag.map(|found| (format!("{text}: no family, tag or file type"), found)),
+    }
+}
+
+/// An architecture as people write it, from MalwareBazaar's names (`X86_64`,
+/// `I386`, `PPC`) or [`elf_arch`]'s.
+pub fn arch_label(arch: &str) -> String {
+    match arch.to_ascii_lowercase().as_str() {
+        "x86_64" | "x86-64" | "amd64" => "x86-64".into(),
+        "i386" | "x86" | "i686" | "80386" => "x86".into(),
+        "arm" => "ARM".into(),
+        "aarch64" | "arm64" => "AArch64".into(),
+        "mips" => "MIPS".into(),
+        "ppc" | "powerpc" | "ppc64" => "PowerPC".into(),
+        "sh" | "superh" => "SuperH".into(),
+        "m68k" => "m68k".into(),
+        "sparc" => "SPARC".into(),
+        "risc-v" | "riscv" => "RISC-V".into(),
+        _ => arch.into(),
+    }
+}
+
 /// A downloaded sample: its MalwareBazaar record, where it came from and
 /// where it went.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -652,6 +715,23 @@ mod tests {
         save_api_key(&root, " key ").unwrap();
         assert_eq!(api_key(&root), "key");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn hashes_and_architectures_are_recognised() {
+        assert!(is_hash(&"a".repeat(64)) && is_hash(&"0".repeat(32)));
+        assert!(!is_hash("Mirai") && !is_hash(&"g".repeat(64)));
+        for (raw, label) in [
+            ("X86_64", "x86-64"),
+            ("x86_64", "x86-64"),
+            ("I386", "x86"),
+            ("PPC", "PowerPC"),
+            ("SH", "SuperH"),
+            ("AARCH64", "AArch64"),
+            ("VAX", "VAX"),
+        ] {
+            assert_eq!(arch_label(raw), label);
+        }
     }
 
     #[test]

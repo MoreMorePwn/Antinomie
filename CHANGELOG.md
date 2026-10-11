@@ -23,9 +23,11 @@ transport reconnect require a new guest base with contract revision 14 / ABI9.
 - **Snapshots** on the toolbar; the snapshot window keeps a margin to the app's
   edges and room inside its graph nodes. Memory dumps and snapshot or reconnect
   operations never overlap.
-- **Malware samples** (Tools): search MalwareBazaar by family, tag, file type
-  or hash with your own free API key (ELF only by default; one-click families
-  that run on x86-64 Linux), download samples, and send them into the running
+- **Malware samples** (Tools): the newest MalwareBazaar uploads as soon as
+  the window opens; one search box for a family, tag, file type or hash, with
+  your own free API key; File type, Architecture, Family and Tags dropdowns
+  (tags as checkboxes) and sortable columns over the results; one-click
+  families that run on x86-64 Linux. Download samples, and send them into the running
   VM, or send and run them as the guest user or root, recorded like any
   program. Samples stay in MalwareBazaar's encrypted archives in the data
   folder and are decrypted only in memory to be sent into the guest: nothing is
