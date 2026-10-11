@@ -73,7 +73,7 @@ impl Source {
     ) -> Result<(String, Vec<SampleInfo>), String> {
         match self {
             Source::MalwareBazaar => Ok((
-                "Newest uploads, all types".into(),
+                "Newest uploads, all types (MalwareBazaar lists 100)".into(),
                 search(curl, key, &Query::Recent, limit)?,
             )),
             Source::MalShare => crate::malshare::newest_all(curl, key, limit),
@@ -324,7 +324,9 @@ pub fn find(
     let text = text.trim();
     if text.is_empty() {
         return Ok((
-            "Newest ELF samples".into(),
+            // MalwareBazaar lists at most 100 per file type, whatever the
+            // limit; families and tags go to 1000.
+            "Newest ELF samples (MalwareBazaar lists 100; search a family for up to 1000)".into(),
             search(curl, key, &Query::FileType("elf".into()), limit)?,
         ));
     }
