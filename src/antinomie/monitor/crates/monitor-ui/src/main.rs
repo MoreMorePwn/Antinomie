@@ -13,6 +13,7 @@ mod network_view;
 mod runs;
 mod samples_view;
 mod snapshots;
+mod summary;
 mod terminal;
 mod theme;
 mod tools_window;

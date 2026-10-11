@@ -257,6 +257,8 @@ struct JsonQueue {
     pending: std::collections::BTreeMap<PathBuf, Vec<u8>>,
     writing: Option<PathBuf>,
     errors: std::collections::BTreeMap<PathBuf, String>,
+    observed:
+        std::collections::BTreeMap<PathBuf, std::sync::Weak<std::sync::Mutex<JsonWriteStatus>>>,
 }
 static JSON_QUEUE: std::sync::OnceLock<(std::sync::Mutex<JsonQueue>, std::sync::Condvar)> =
     std::sync::OnceLock::new();
@@ -282,10 +284,20 @@ fn json_writer() {
             continue;
         };
         queue.writing = Some(path.clone());
+        let observed = queue.observed.get(&path).and_then(std::sync::Weak::upgrade);
         drop(queue);
         let result = write_atomic(&path, &bytes);
         queue = lock.lock().unwrap_or_else(|e| e.into_inner());
         queue.writing = None;
+        if let Some(observed) = observed {
+            let mut status = observed.lock().unwrap_or_else(|error| error.into_inner());
+            if matches!(*status, JsonWriteStatus::Pending) {
+                *status = match &result {
+                    Ok(()) => JsonWriteStatus::Complete,
+                    Err(error) => JsonWriteStatus::Failed(error.message.clone()),
+                };
+            }
+        }
         match result {
             Ok(()) => queue.errors.remove(&path),
             Err(error) => queue.errors.insert(path, error.message),
@@ -302,11 +314,79 @@ pub(crate) fn queue_json(path: &Path, value: &impl Serialize) -> Result<(), Stri
     queue_bytes(path, bytes)
 }
 
+/// Publication state for an observed queued value. Failure remains observable
+/// until the caller retries or a later same-path write supersedes that value.
+#[derive(Clone, Debug)]
+pub(crate) enum JsonWriteStatus {
+    Pending,
+    Complete,
+    Failed(String),
+    Superseded,
+}
+/// An observed value is acknowledged only after its own durable publication.
+/// Any later same-path queue or synchronous write supersedes it, including
+/// coalesced writes. The caller may then publish its current final value again.
+/// Weak queue registrations are removed when the capture drops its receipt.
+pub(crate) struct JsonReceipt {
+    path: PathBuf,
+    status: std::sync::Arc<std::sync::Mutex<JsonWriteStatus>>,
+}
+impl JsonReceipt {
+    pub(crate) fn status(&self) -> JsonWriteStatus {
+        self.status
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+}
+impl Drop for JsonReceipt {
+    fn drop(&mut self) {
+        if let Some((lock, _)) = JSON_QUEUE.get() {
+            let mut queue = lock.lock().unwrap_or_else(|error| error.into_inner());
+            if queue
+                .observed
+                .get(&self.path)
+                .is_some_and(|entry| entry.ptr_eq(&std::sync::Arc::downgrade(&self.status)))
+            {
+                queue.observed.remove(&self.path);
+            }
+        }
+    }
+}
+fn supersede_observed(queue: &JsonQueue, path: &Path) {
+    if let Some(observed) = queue.observed.get(path).and_then(std::sync::Weak::upgrade) {
+        *observed.lock().unwrap_or_else(|error| error.into_inner()) = JsonWriteStatus::Superseded;
+    }
+}
+pub(crate) fn queue_json_observed(
+    path: &Path,
+    value: &impl Serialize,
+) -> Result<JsonReceipt, String> {
+    let mut bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
+    bytes.push(b'\n');
+    let status = std::sync::Arc::new(std::sync::Mutex::new(JsonWriteStatus::Pending));
+    let (lock, ready) = json_queue();
+    let mut queue = lock.lock().unwrap_or_else(|error| error.into_inner());
+    supersede_observed(&queue, path);
+    // A new receipt describes the retry rather than a previous path failure.
+    // Callers observe the original receipt before explicitly queuing a retry.
+    queue.errors.remove(path);
+    queue
+        .observed
+        .insert(path.to_path_buf(), std::sync::Arc::downgrade(&status));
+    queue.pending.insert(path.to_path_buf(), bytes);
+    ready.notify_all();
+    Ok(JsonReceipt {
+        path: path.to_path_buf(),
+        status,
+    })
+}
 /// Queues an atomic write of `bytes` to `path`, like `queue_json`.
 pub(crate) fn queue_bytes(path: &Path, bytes: Vec<u8>) -> Result<(), String> {
     let (lock, ready) = json_queue();
     let mut queue = lock.lock().unwrap_or_else(|e| e.into_inner());
     let earlier = queue.errors.remove(path);
+    supersede_observed(&queue, path);
     queue.pending.insert(path.to_path_buf(), bytes);
     ready.notify_all();
     earlier.map_or(Ok(()), Err)
@@ -318,6 +398,7 @@ fn settle_json(path: &Path) {
         return;
     };
     let mut queue = lock.lock().unwrap_or_else(|e| e.into_inner());
+    supersede_observed(&queue, path);
     queue.pending.remove(path);
     while queue.writing.as_deref() == Some(path) {
         queue = ready.wait(queue).unwrap_or_else(|e| e.into_inner());
@@ -1784,6 +1865,37 @@ mod tests {
             1,
             "temporary files left behind"
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn observed_json_reports_durability_failure_and_same_path_supersession() {
+        let root = std::env::temp_dir().join(format!("ant-json-receipt-{}", unique_id()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("artifacts.json");
+        let first = queue_json_observed(&path, &1).unwrap();
+        flush_json();
+        assert!(matches!(first.status(), JsonWriteStatus::Complete));
+        queue_json(&path, &2).unwrap();
+        assert!(matches!(first.status(), JsonWriteStatus::Superseded));
+        flush_json();
+        let final_value = queue_json_observed(&path, &3).unwrap();
+        flush_json();
+        assert!(matches!(final_value.status(), JsonWriteStatus::Complete));
+        assert_eq!(read_json::<u32>(&path).unwrap(), 3);
+        atomic_json(&path, &4).unwrap();
+        assert!(matches!(final_value.status(), JsonWriteStatus::Superseded));
+        let blocked = root.join("blocked");
+        fs::write(&blocked, b"file").unwrap();
+        let failure = queue_json_observed(&blocked.join("artifacts.json"), &5).unwrap();
+        flush_json();
+        assert!(matches!(failure.status(), JsonWriteStatus::Failed(_)));
+        assert!(
+            matches!(failure.status(), JsonWriteStatus::Failed(_)),
+            "observing a failure must not consume it"
+        );
+        drop(first);
+        drop(final_value);
+        drop(failure);
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

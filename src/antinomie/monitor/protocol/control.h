@@ -11,8 +11,8 @@
  */
 #define ANTC_VERSION 1
 /* Contract revision of the guest's observable behaviour (native-schema-slices). */
-/* Revision 14: transport ABI 9 (reattachment and snapshot resume mailbox). */
-#define ANTC_REVISION 14
+/* Revision 15: opt-in root-process ELF core acquisition at exit; ABI 9. */
+#define ANTC_REVISION 15
 #define ANTC_HEADER_SIZE 8
 #define ANTC_UPLOAD_BEGIN 0x1001
 #define ANTC_UPLOAD_CHUNK 0x1002
@@ -53,6 +53,21 @@
 #define ANTC_SPECIMEN_READ 0x1041
 #define ANTC_SPECIMEN_RELEASE 0x1042
 #define ANTC_EXEC_SPECIMEN 1
+#define ANTC_EXEC_CORE 2
+#define ANTC_CORE_STATUS 0x1060
+#define ANTC_CORE_READ 0x1061
+#define ANTC_CORE_RELEASE 0x1062
+#define ANTC_CORE_STATUS_SIZE 80
+#define ANTC_CORE_ARMED 1
+#define ANTC_CORE_COPYING 2
+#define ANTC_CORE_READY 3
+#define ANTC_CORE_PARTIAL 4
+#define ANTC_CORE_UNAVAILABLE 5
+#define ANTC_CORE_CANCELED 6
+#define ANTC_CORE_ROOT_ONLY 1
+#define ANTC_CORE_NATIVE_ELF64 2
+#define ANTC_CORE_FILTERED_MEMORY 4
+#define ANTC_CORE_COVERAGE_GAP 8
 #define ANTC_UPLOAD_OVERWRITE 1
 #define ANTC_UPLOAD_EXECUTABLE 2
 
@@ -66,7 +81,8 @@
  * COMMIT verifies total, fsyncs and closes; ABORT closes (partial destination
  * remains, visibly incomplete). No implicit execution.
  *
- * EXEC: header flags=0 or EXEC_SPECIMEN, u32 uid at 8, u32 gid at 12, u32 argc at 16,
+ * EXEC: header flags=EXEC_SPECIMEN|EXEC_CORE (both optional), uid at8,
+ * gid at12, argc at16,
  * u32 envc at 20, u32 path_len at 24, u32 cwd_len at 28; path then cwd
  * at 32, followed by argc then envc entries, each u32 byte_len + bytes.
  * argc >= 1, explicit argv[0], absolute executable and cwd, no interior NUL.
@@ -76,6 +92,29 @@
  * EXEC_SPECIMEN appends u32 max_size, u32 timeout_ms after argv/env.
  * Its reply appends the 24-byte acquisition reply to the normal 24 bytes.
  * Acquisition failure never changes the execution result.
+ * EXEC_CORE appends u32 max_size (1..64MiB), u32 timeout_ms (1..5000),
+ * after the optional specimen trailer. Reply appends u64 core_id, u64
+ * max_size, i32 status, u32 reserved=0 after optional specimen reply.
+ * Arm failure has id/size=0 and negative errno; execution still succeeds.
+ * Only the launched root thread group is eligible, native Linux ELF64.
+ * CORE_STATUS: header flags=0, u64 id at 8, 16 bytes total. Reply80:
+ * u64 id/root_cookie/start_ns/finish_ns/size/expected_size at 0/8/16/24/32/40,
+ * u32 state at48, i32 status at52, i32 original wait_status at56,
+ * u32 signal/flags/tgid/thread_count/reserved=0 at60/64/68/72/76.
+ * Expected size is zero if complete ELF program headers are unavailable.
+ * States: ARMED/COPYING/READY/PARTIAL/UNAVAILABLE/CANCELED. READY has
+ * status0; PARTIAL retains a prefix with negative errno. Flags identify
+ * root-only, native ELF64, Linux coredump_filter and coverage limitations.
+ * CORE_READ has the same request/reply layout and bound as SPECIMEN_READ.
+ * Only READY/PARTIAL data is readable; it is immutable.
+ * CORE_RELEASE: header flags=0, u64 id at8; removes/cancels the handle.
+ * Four handles, 128MiB global reservation; terminal handles expire after
+ * 180s idle. Armed handles require release; no automatic cancellation of
+ * a long running process. Release while copying retains its reservation
+ * until capture unwinds. Unknown ids return -ESRCH; ids/root cookies must
+ * be revalidated across snapshot epochs. No side-effect retry guarantee.
+ * Timeout bounds serialization, not Linux thread rendezvous/page faults.
+ * Linux memory filtering applies, so not every mapped byte is included.
  *
  * ACQUIRE: header flags=0, uid at 8, gid at 12, u32 path_len at 16,
  * reserved=0 at 20, absolute path at 24, then u32 max_size, timeout_ms.

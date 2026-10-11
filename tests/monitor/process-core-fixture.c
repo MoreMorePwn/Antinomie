@@ -1,0 +1,63 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 MikiMiku (MoreMorePwn)
+/* Build statically for the disposable BusyBox process-core qualifier. */
+#include <pthread.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+volatile char core_evidence[] = "Antinomie process core evidence before exit";
+static int finish_workers;
+
+static void *worker(void *unused)
+{
+    (void)unused;
+    if (finish_workers) {
+        sleep(2);
+        const char marker[] = "worker survived leader exit\n";
+        write(STDOUT_FILENO, marker, sizeof(marker) - 1);
+        return NULL;
+    }
+    for (;;) sleep(1);
+    return NULL;
+}
+
+int main(int argc, char **argv)
+{
+    pthread_t first, second;
+    const char *mode = argc > 1 ? argv[1] : "normal";
+    /* Force a private dirty page: evidence must come from the captured memory. */
+    core_evidence[0] = 'A';
+    finish_workers = !strcmp(mode, "leader-exit");
+    if (!strcmp(mode, "thread-exit")) {
+        syscall(SYS_exit, 7);
+        return 99;
+    }
+    if (pthread_create(&first, NULL, worker, NULL) ||
+        pthread_create(&second, NULL, worker, NULL)) return 99;
+    /* Workers reach a stable sleep before the exit rendezvous. */
+    usleep(200000);
+    if (finish_workers) pthread_exit(NULL);
+    if (!strcmp(mode, "crash")) raise(SIGSEGV);
+    if (!strcmp(mode, "terminate")) raise(SIGTERM);
+    if (!strcmp(mode, "kill")) raise(SIGKILL);
+    if (!strcmp(mode, "descendant")) {
+        pid_t child = fork();
+        if (child < 0) return 99;
+        if (!child) { setsid(); _exit(23); }
+        int status;
+        if (waitpid(child, &status, 0) != child ||
+            !WIFEXITED(status) || WEXITSTATUS(status) != 23) return 99;
+    }
+    if (!strcmp(mode, "wait")) sleep(60);
+    if (!strcmp(mode, "snapshot")) sleep(40);
+    if (!strcmp(mode, "large")) {
+        volatile unsigned char *memory = malloc(80 * 1024 * 1024);
+        if (!memory) return 99;
+        for (size_t i = 0; i < 80 * 1024 * 1024; i += 4096) memory[i] = 0x41;
+    }
+    return core_evidence[0] == 'A' ? 7 : 99;
+}

@@ -4,6 +4,34 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
+## 0.6.0 — Unreleased
+
+- **VM Summary.** A Summary tab immediately before Run History shows selected VM
+  status, base, network and configured CPU/RAM/disk. Active VM health reports
+  transport, parser, preview and storage losses, recording failures and load
+  shedding. Host measurements show QEMU CPU, resident memory, uptime and free
+  space on the data volume. Missing values stay unavailable; capacities are
+  distinguished from actual usage. Saved layouts preserve custom windows.
+- **Core Dump on Exit.** Opt-in capture retains a Linux x86-64 ELF core of the
+  launched root process before its normal exit or fatal-signal teardown, with
+  thread registers and memory mappings. This requires a revision-15 guest base
+  and an app-terminal launch; ordinary launches on older bases remain supported.
+  Runs link their retained core and metadata to the core viewer and result folder.
+  The viewer discovers acquired and unfinished captures without parsing each ELF
+  eagerly; reopening a capture preserves its labels and tags.
+- **Bounded core acquisition.** Linux's memory filter remains effective. The
+  default 64 MiB/5-second serialization limits retain explicit partial results;
+  four handles and 128 MiB bound guest reservations. Thread rendezvous and faulting
+  memory reads cannot guarantee a strict wall-clock deadline. SIGKILL preserves
+  immediate termination and can leave context unavailable. Cancellation stops
+  acquisition while allowing the program to continue.
+  Bounded disk workers handle writes, hashing and durability without blocking
+  ordinary transport passes. Final acquisition state requires durable metadata.
+- **Core recovery.** Full snapshots retain core-handle ownership. Restore and
+  reconnect validate guest identity before reading into a fresh evidence timeline;
+  earlier files remain retained. Launch/arm side effects are never replayed.
+  Transfers preserve available prefixes, hashes and quota/failure information.
+
 ## 0.5.0 — 2026-10-12
 
 Existing bases still cold boot and support disk checkpoints. Full snapshots and

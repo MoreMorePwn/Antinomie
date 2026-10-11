@@ -33,6 +33,23 @@ V7-only restriction; older requirements remain recorded for their releases.
 - V7 no snapshot/reconnect. No next transport version. Existing transport API
   is opaque; frontend/backend never manage CPU rings.
 
+## Accepted ANT-T0056 process core and VM Summary update (0.6.0)
+
+User authorized the planned 0.6.0 guest process-core-on-exit backlog and a native
+Summary tab immediately before Run History, showing VM status, health and
+resources. Unscheduled candidates and a live debugger remain outside this task.
+Opt-in core acquisition targets the launched root thread group on native x86-64,
+before normal/fatal exit releases its address space. Reuse Linux ELF core notes
+and its memory filtering; bound retained guest buffers and host transfers, expose
+partial/unavailable results, preserve original exit status and old-base launches.
+Acquisition requires guest revision 15; revision-14 snapshot ABI9 is unchanged.
+Host timelines never replay acquisition effects across snapshot recovery.
+
+Summary uses owned backend snapshots and per-VM identity guards. Configured guest
+vCPU/RAM/disk capacities are separate from QEMU host CPU/resident memory and
+available data-volume space. Missing measurements remain unavailable. Existing
+layouts gain Summary before Run History without losing custom windows.
+
 ## Accepted ANT-T0055 host evidence update (0.5.0)
 
 User authorized inspection, completion and release of current 0.5.0, with guest

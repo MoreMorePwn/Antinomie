@@ -1,3 +1,7 @@
+#[path = "core_sink.rs"]
+mod core_sink;
+#[path = "process_core.rs"]
+mod process_core;
 #[path = "snapshot_recovery.rs"]
 mod snapshot_recovery;
 
@@ -266,6 +270,7 @@ fn guest_scoped_command(command: &Command) -> bool {
         Command::Upload { .. }
             | Command::UploadSample { .. }
             | Command::Execute(_)
+            | Command::CancelProcessCore { .. }
             | Command::AnalyzeOnly { .. }
             | Command::TerminalInput { .. }
             | Command::TerminalRead { .. }
@@ -344,6 +349,8 @@ const PUMP_BUDGET: Duration = Duration::from_millis(20);
 /// Packets per drain pass above which the next pass follows without a wait.
 const BUSY_PACKETS: usize = 32;
 struct Session {
+    resources: crate::resources::ResourceSampler,
+    last_resource_check: Option<Instant>,
     analysis: crate::analysis::jobs::Jobs,
     transport: Transport,
     process: VmProcess,
@@ -355,6 +362,9 @@ struct Session {
     runs: BTreeMap<u64, ProgramRun>,
     /// Host-owned side effects keyed by root cookie, independent of terminal EOF.
     run_artifacts: BTreeMap<u64, RunArtifactOwner>,
+    /// Retained process-core prefixes, including owners temporarily removed for I/O.
+    core_stored_len: u64,
+    core_reserved_len: u64,
     captures: BTreeMap<String, CaptureSession>,
     pending_capture_id: Option<String>,
     boot_id: String,
@@ -392,6 +402,8 @@ struct RunArtifactOwner {
     network: Option<crate::network::NetworkCapture>,
     tree_complete: bool,
     last_network_stop: Option<Instant>,
+    core: Option<process_core::Transfer>,
+    core_stored_len: u64,
 }
 
 impl RunArtifactOwner {
@@ -407,11 +419,18 @@ impl RunArtifactOwner {
                 } else {
                     RunArtifactState::Disabled
                 },
+                core_state: if run.request.core_dump_on_exit {
+                    RunArtifactState::WaitingForRootExit
+                } else {
+                    RunArtifactState::Disabled
+                },
                 ..RunArtifacts::default()
             },
             network: None,
             tree_complete: false,
             last_network_stop: None,
+            core: None,
+            core_stored_len: 0,
         }
     }
     fn save(&self) -> Result<(), String> {
@@ -508,6 +527,9 @@ impl Session {
         }
         if owner.summary.memory_state != RunArtifactState::Disabled {
             owner.summary.memory_state = RunArtifactState::Failed;
+        }
+        if owner.summary.core_state != RunArtifactState::Disabled {
+            owner.summary.core_state = RunArtifactState::Failed;
         }
         for error in &issues {
             owner.issue(error.clone());
@@ -634,6 +656,8 @@ impl Session {
                     .sum::<u64>(),
             )
             .saturating_add(self.network_bytes)
+            .saturating_add(self.core_stored_len)
+            .saturating_add(self.core_reserved_len)
     }
     fn available(&self) -> u64 {
         self.capture.quota().saturating_sub(self.stored_len())
@@ -656,6 +680,7 @@ impl Session {
                     .sum::<u64>(),
             )
             .saturating_add(self.network_bytes);
+        health.persisted_len = health.persisted_len.saturating_add(self.core_stored_len);
         health.persistence_error = health.persistence_error.clone().or_else(|| {
             self.captures
                 .values()
@@ -1559,6 +1584,7 @@ impl Session {
         }
     }
     fn finalize(&mut self, state: &str, snapshot: &mut Snapshot) -> Result<(), String> {
+        self.seal_process_cores(state, snapshot);
         // QEMU has ended (or host ownership is being sealed at a restore boundary).
         // A queued post-exit dump cannot be claimed to have succeeded here.
         for owner in self.run_artifacts.values_mut() {
@@ -2416,6 +2442,7 @@ impl Worker {
                 abandon_memory_dump(&mut self.snapshot);
                 self.snapshot.active_vm = None;
                 self.snapshot.state = VmState::Stopped;
+                self.snapshot.vm_resources = None;
                 self.publish();
             }
             let paused = self.snapshot.memory_dump.is_some();
@@ -2453,6 +2480,8 @@ impl Worker {
             self.poll_build();
             self.poll_tool();
             self.check_network_capture();
+            self.check_resources();
+            self.check_process_cores();
             self.check_memory_dump();
             self.check_run_artifacts();
             if self.last_publish.elapsed() >= Duration::from_millis(250) {
@@ -2488,6 +2517,7 @@ impl Worker {
             && matches!(
                 command,
                 Command::Execute(_)
+                    | Command::CancelProcessCore { .. }
                     | Command::Upload { .. }
                     | Command::UploadSample { .. }
                     | Command::AnalyzeOnly { .. }
@@ -3220,6 +3250,8 @@ impl Worker {
             }
             capture.manifest(&vm, &bundle, &disk_bundle, "running")?;
             Ok(Session {
+                resources: crate::resources::ResourceSampler::default(),
+                last_resource_check: None,
                 analysis: crate::analysis::jobs::Jobs::with_tools(
                     crate::analysis_tools::tools_dir(&self.options.data_dir),
                 ),
@@ -3232,6 +3264,8 @@ impl Worker {
                 disk_bundle,
                 runs: BTreeMap::new(),
                 run_artifacts: BTreeMap::new(),
+                core_stored_len: 0,
+                core_reserved_len: 0,
                 captures: BTreeMap::new(),
                 pending_capture_id: None,
                 boot_id,
@@ -3655,6 +3689,25 @@ impl Worker {
         });
         self.publish();
     }
+    fn check_resources(&mut self) {
+        let Some(session) = self.session.as_mut() else {
+            self.snapshot.vm_resources = None;
+            return;
+        };
+        if session
+            .last_resource_check
+            .is_some_and(|last| last.elapsed() < Duration::from_secs(1))
+        {
+            return;
+        }
+        session.last_resource_check = Some(Instant::now());
+        self.snapshot.vm_resources = Some(session.resources.sample(
+            session.process.child.id(),
+            &session.vm.id,
+            &self.options.data_dir,
+        ));
+        self.publish();
+    }
     fn stop(&mut self) -> Result<(), String> {
         let Some(mut session) = self.session.take() else {
             self.snapshot.active_vm = None;
@@ -3923,6 +3976,22 @@ impl Worker {
                 Ok("capture admission stopped; programs continue running and late observation tails remain recordable".into())
             }
             Command::Execute(request) => {
+                if request.core_dump_on_exit
+                    && !self
+                        .snapshot
+                        .guest_kernel
+                        .as_ref()
+                        .and_then(|kernel| kernel.revision)
+                        .is_some_and(|revision| revision >= 15)
+                {
+                    return Err(
+                        "process Core Dump on Exit requires a revision-15 base for Antinomie 0.6.0"
+                            .into(),
+                    );
+                }
+                if request.core_dump_on_exit && request.run_in.guest_desktop() {
+                    return Err("process Core Dump on Exit currently requires App Terminal; desktop wrappers do not identify the selected executable as the root group".into());
+                }
                 if session.run_artifacts.contains_key(&0) {
                     return Err("a failed launch still owns an unresolved network capture; wait for cleanup or restart the VM".into());
                 }
@@ -4009,7 +4078,10 @@ impl Worker {
                         &self.sender,
                         timeout,
                     )?;
-                    if reply.len() != if inline_acquisition { 48 } else { 24 }
+                    if reply.len()
+                        != 24
+                            + usize::from(inline_acquisition) * 24
+                            + usize::from(request.core_dump_on_exit) * 24
                         || u32_at(&reply, 20).map_err(|e| e.to_string())? != 0
                     {
                         return Err("invalid execution reply".into());
@@ -4030,14 +4102,35 @@ impl Worker {
                     Err(error) => return Err(session.failed_run_launch(&mut run, artifacts,
                         format!("execution acknowledgement failed: {error}; launch outcome may be unknown"))),
                 };
-                session.run_artifacts.insert(cookie, artifacts);
                 run.summary.session_id = id;
                 run.summary.root_task_cookie = cookie;
                 run.summary.pid = pid;
                 run.summary.state = RunState::Running;
+                if request.core_dump_on_exit {
+                    let core_offset = 24 + usize::from(inline_acquisition) * 24;
+                    match process_core::Transfer::armed(&reply[core_offset..], &run.summary) {
+                        Ok(core) => artifacts.core = Some(core),
+                        Err(error) => {
+                            artifacts.summary.core_state = RunArtifactState::Failed;
+                            artifacts.issue(error.clone());
+                            artifacts.core = Some(process_core::Transfer::failed(
+                                &reply[core_offset..],
+                                &run.summary,
+                                error,
+                            ));
+                        }
+                    }
+                    if let Err(error) = storage::queue_json(
+                        &artifacts.directory.join("artifacts.json"),
+                        &artifacts.summary,
+                    ) {
+                        artifacts.issue(error);
+                    }
+                }
+                session.run_artifacts.insert(cookie, artifacts);
                 if let Some(report) = run.summary.analysis.take() {
                     let acquisition = if inline_acquisition {
-                        control::acquisition(&reply[24..])
+                        control::acquisition(&reply[24..48])
                     } else if supported {
                         control::acquire(&request.path, request.uid, request.gid)
                             .and_then(|args| {
@@ -4118,6 +4211,9 @@ impl Worker {
                 session.update_runs(&mut self.snapshot);
                 self.emit(Notification::RunStarted(summary));
                 Ok(format!("launched pid {pid}, terminal session {id}"))
+            }
+            Command::CancelProcessCore { run_id } => {
+                session.cancel_core(&run_id, &mut self.snapshot, &self.sender)
             }
             Command::AnalyzeOnly {
                 path,

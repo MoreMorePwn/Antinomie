@@ -21,3 +21,8 @@
 0017-antinomie-recycle-retained-capture-records-without-a-per-boot-limit.patch
 0018-antinomie-size-telemetry-rings-at-boot-and-let-the-host-ask-senders-to-wait.patch
 0019-antinomie-add-fenced-guest-reattachment-for-snapshot-recovery.patch
+0020-antinomie-launch-programs-without-leading-their-session.patch
+0021-antinomie-retain-bounded-root-process-elf-cores-at-exit.patch
+0022-antinomie-serialize-retained-core-cleanup-and-report-interrupted-dumps.patch
+0023-antinomie-bound-memory-pressure-while-arming-exit-cores.patch
+0024-antinomie-preserve-immediate-sigkill-teardown-for-armed-cores.patch

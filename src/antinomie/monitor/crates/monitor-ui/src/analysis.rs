@@ -10,8 +10,14 @@ mod records;
 mod workspace;
 pub(crate) use workspace::{workspace, workspace_section, WorkspaceState};
 
+#[derive(Clone, Copy)]
+pub(crate) struct LaunchCapabilities {
+    pub graphical: bool,
+    pub core_on_exit: bool,
+}
+
 /// Program fields and the analysis selection; true when the user asked to
-/// install a missing analysis tool. `graphical` offers the Run in choice,
+/// install a missing analysis tool. `capabilities.graphical` offers the Run in choice,
 /// which only a graphical base's session can use.
 pub(crate) fn launch_fields(
     ui: &mut egui::Ui,
@@ -19,50 +25,61 @@ pub(crate) fn launch_fields(
     args: &mut String,
     env: &mut String,
     tools: &[ToolStatus],
-    graphical: bool,
+    capabilities: LaunchCapabilities,
 ) -> bool {
     let mut install = false;
     let spacing = ui.spacing().item_spacing.x;
     let min_pane = ui.text_style_height(&egui::TextStyle::Body) * 22.0;
     if ui.available_width() >= min_pane * 2.0 + spacing {
         ui.columns(2, |columns| {
-            fields(&mut columns[0], request, args, env, graphical);
+            fields(&mut columns[0], request, args, env, capabilities.graphical);
             crate::theme::section(&mut columns[1], "Analysis");
             selection(&mut columns[1], &mut request.analysis, tools, &mut install);
-            capture_selection(&mut columns[1], request);
+            capture_selection(&mut columns[1], request, capabilities.core_on_exit);
         });
     } else {
-        fields(ui, request, args, env, graphical);
+        fields(ui, request, args, env, capabilities.graphical);
         ui.add_space(6.0);
         crate::theme::section(ui, "Analysis");
         selection(ui, &mut request.analysis, tools, &mut install);
-        capture_selection(ui, request);
+        capture_selection(ui, request, capabilities.core_on_exit);
     }
     install
 }
 
-fn capture_selection(ui: &mut egui::Ui, request: &mut ExecRequest) {
+fn capture_selection(ui: &mut egui::Ui, request: &mut ExecRequest, core_supported: bool) {
     ui.add_space(12.0);
     crate::theme::section(ui, "Memory");
     ui.checkbox(&mut request.memory_dump_on_exit, "Memory Dump on Exit")
         .on_hover_text("Dump VM RAM after the process tree exits. This is post-exit VM memory, not a process core.");
-    let mut unsupported = false;
+    let core_enabled = core_supported && request.run_in == RunIn::AppTerminal;
+    if !core_enabled {
+        request.core_dump_on_exit = false;
+    }
     ui.add_enabled(
-        false,
-        egui::Checkbox::new(&mut unsupported, "Core Dump on Exit"),
+        core_enabled,
+        egui::Checkbox::new(&mut request.core_dump_on_exit, "Core Dump on Exit"),
     )
-    .on_disabled_hover_text("Requires guest support planned for 0.6.0");
-    ui.add(
-        egui::Label::new(
-            egui::RichText::new("Core dumps on exit require guest support planned for 0.6.0.")
-                .weak(),
-        )
-        .wrap(),
-    );
+    .on_hover_text("Capture the launched root process before exit, including thread registers and selected memory. Linux x86-64; memory is filtered and bounded to 64 MiB, so captures may be partial. Some fatal exits, including SIGKILL, may leave register context unavailable. Thread synchronization and page faults may delay exit.")
+    .on_disabled_hover_text(core_unavailable_reason(core_supported));
+    if !core_enabled {
+        ui.add(
+            egui::Label::new(egui::RichText::new(core_unavailable_reason(core_supported)).weak())
+                .wrap(),
+        );
+    }
     ui.add_space(12.0);
     crate::theme::section(ui, "Network");
     ui.checkbox(&mut request.capture_network, "Capture network from start until tree exits")
         .on_hover_text("Record VM network packets during this run. Packets are VM-wide, not attributed to this process.");
+}
+
+fn core_unavailable_reason(core_supported: bool) -> &'static str {
+    if core_supported {
+        "Core capture requires Run in: App terminal; desktop launchers run a shell wrapper."
+    } else {
+        "Core capture requires a guest built with revision 15 or newer."
+    }
 }
 
 fn fields(
@@ -460,6 +477,35 @@ pub(crate) fn other_progress<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn core_capture_clears_when_guest_or_launch_session_cannot_capture_target() {
+        for (supported, run_in) in [
+            (false, RunIn::AppTerminal),
+            (true, RunIn::GuestDesktopTerminal),
+        ] {
+            let ctx = egui::Context::default();
+            let mut request = ExecRequest {
+                run_in,
+                core_dump_on_exit: true,
+                ..ExecRequest::default()
+            };
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default()
+                    .show(ctx, |ui| capture_selection(ui, &mut request, supported));
+            });
+            assert!(!request.core_dump_on_exit);
+        }
+        let ctx = egui::Context::default();
+        let mut request = ExecRequest {
+            core_dump_on_exit: true,
+            ..ExecRequest::default()
+        };
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| capture_selection(ui, &mut request, true));
+        });
+        assert!(request.core_dump_on_exit);
+    }
 
     fn report(
         state: AnalysisState,

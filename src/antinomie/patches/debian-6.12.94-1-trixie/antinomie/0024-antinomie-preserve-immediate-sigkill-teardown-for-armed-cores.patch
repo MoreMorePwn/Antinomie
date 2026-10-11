@@ -1,0 +1,93 @@
+Description: antinomie: preserve immediate SIGKILL teardown for armed cores
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-12
+
+
+---
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+index dcd0bfa9b..d7292c562 100644
+--- a/include/linux/antinomie_monitor.h
++++ b/include/linux/antinomie_monitor.h
+@@ -27,6 +27,7 @@ void ant_monitor_exec(void);
+ void ant_monitor_specimen_exec(struct file *file);
+ bool ant_monitor_core_armed(struct task_struct *task);
+ bool ant_monitor_core_exit(int wait_status, const struct kernel_siginfo *siginfo);
++void ant_monitor_core_unavailable(int wait_status);
+ void ant_monitor_task_exit(bool group_dead);
+ void ant_monitor_release(struct task_struct *task);
+ int ant_monitor_launch(const char *path, char **argv, char **envp);
+@@ -86,6 +87,7 @@ static inline bool ant_monitor_core_exit(int wait_status,
+ {
+ 	return false;
+ }
++static inline void ant_monitor_core_unavailable(int wait_status) {}
+ static inline void ant_monitor_task_exit(bool group_dead) {}
+ static inline void ant_monitor_release(struct task_struct *task) {}
+ static inline struct ant_async *ant_monitor_async_begin(u8 system, u32 opcode,
+diff --git a/kernel/antinomie/process_core.c b/kernel/antinomie/process_core.c
+index d3151d687..5f83f8336 100644
+--- a/kernel/antinomie/process_core.c
++++ b/kernel/antinomie/process_core.c
+@@ -316,6 +316,10 @@ bool ant_monitor_core_exit(int wait_status, const kernel_siginfo_t *siginfo)
+ 	u32 thread_count;
+ 	int error;
+ 
++	/* SIGKILL must retain immediate Linux teardown: no file or rendezvous. */
++	if ((siginfo && siginfo->si_signo == SIGKILL) ||
++	    (!siginfo && (wait_status & 0x7f) == SIGKILL))
++		return false;
+ 	if (!current->ant_root_process || !current->mm)
+ 		return false;
+ 	mutex_lock(&core_lock);
+@@ -374,6 +378,34 @@ bool ant_monitor_core_exit(int wait_status, const kernel_siginfo_t *siginfo)
+ 	return true;
+ }
+ 
++/* Called from sleepable do_exit, never from the nonblocking telemetry hook.
++ * Last-root exit can bypass acquisition (notably SIGKILL or a missing mm).
++ * Publish a terminal reason without allocating a file or walking memory.
++ */
++void ant_monitor_core_unavailable(int wait_status)
++{
++	struct ant_core *core;
++	u64 root_cookie = current->ant_root_cookie;
++
++	if (!ant_monitor_core_armed(current))
++		return;
++	mutex_lock(&core_lock);
++	list_for_each_entry(core, &cores, node)
++		if (core->root_cookie == root_cookie &&
++		    core->state == ANTC_CORE_ARMED && !core->canceled) {
++			core->wait_status = wait_status;
++			core->signal = wait_status & 0x7f;
++			core->status = core->signal == SIGKILL ? -EINTR : -ENODATA;
++			core->finish_ns = ktime_get_ns();
++			core->touched = jiffies;
++			core->flags |= ANTC_CORE_COVERAGE_GAP;
++			core->state = ANTC_CORE_UNAVAILABLE;
++			break;
++		}
++	mutex_unlock(&core_lock);
++	ant_run_core_arm(root_cookie, false);
++}
++
+ int ant_core_command(u32 opcode, const u8 *args, size_t args_len,
+ 		     void *reply, size_t capacity, size_t *reply_len)
+ {
+diff --git a/kernel/exit.c b/kernel/exit.c
+index 0e54cbe20..d75d953c3 100644
+--- a/kernel/exit.c
++++ b/kernel/exit.c
+@@ -925,6 +925,10 @@ void __noreturn do_exit(long code)
+ 	audit_free(tsk);
+ 
+ 	tsk->exit_code = code;
++	if (group_dead && ant_monitor_core_armed(tsk))
++		ant_monitor_core_unavailable(tsk->signal->flags & SIGNAL_GROUP_EXIT ?
++					     tsk->signal->group_exit_code :
++					     tsk->group_leader->exit_code);
+ 	taskstats_exit(tsk, group_dead);
+ 
+ 	/*

@@ -13,19 +13,166 @@ use std::{
         mpsc::{self, Receiver},
         Arc,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const PAGE_SIZE: usize = 16 * 1024;
 const WINDOW_SIZE: u64 = 16 * 1024 * 1024;
 enum Reply {
-    Records(Vec<CoreRecord>),
+    Records(CoreCatalog),
     Open(Box<CoreRecord>, String),
     Chosen(Option<PathBuf>),
     Page(u64, Vec<Option<u8>>),
     Code(String),
     Functions(Vec<CoreFunction>),
     Done(String),
+}
+
+#[derive(Default)]
+struct CoreCatalog {
+    imported: Vec<CoreRecord>,
+    acquired: Vec<AcquiredCore>,
+    issues: Vec<String>,
+}
+
+struct AcquiredCore {
+    run_id: String,
+    file: Option<PathBuf>,
+    state: antinomie_monitor_core::RunArtifactState,
+}
+
+/// Read bounded sidecars on the inspection worker; ELF data is read only on open.
+fn catalog(roots: &[PathBuf], vm_id: Option<&str>) -> Result<CoreCatalog, String> {
+    let mut result = CoreCatalog::default();
+    match core_dump::list_records(roots) {
+        Ok(records) => result.imported = records,
+        Err(error) => result.issues.push(error.to_string()),
+    }
+    let Some(vm_id) = vm_id else {
+        return Ok(result);
+    };
+    let mut entries_count = 0usize;
+    let mut metadata_size = 0u64;
+    for root in roots {
+        let entries = match fs::read_dir(root.join("runs")) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(format!("Core run catalog: {error}")),
+        };
+        for entry in entries {
+            entries_count += 1;
+            if entries_count > 4096 {
+                return Err(
+                    "Core run catalog exceeds 4096 entries; select fewer recording folders".into(),
+                );
+            }
+            let entry = entry.map_err(|error| error.to_string())?;
+            if !entry
+                .file_type()
+                .map_err(|error| error.to_string())?
+                .is_dir()
+            {
+                continue;
+            }
+            let path = entry.path();
+            let sidecar = path.join("artifacts.json");
+            let size = match fs::symlink_metadata(&sidecar) {
+                Ok(metadata) if metadata.is_file() => metadata.len(),
+                Ok(_) => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.to_string()),
+            };
+            metadata_size = metadata_size.saturating_add(size);
+            if metadata_size > 32 * 1024 * 1024 {
+                return Err("Core run metadata exceeds 32 MiB".into());
+            }
+            let artifacts = match antinomie_monitor_core::RunArtifacts::load(&path) {
+                Ok(Some(artifacts)) => artifacts,
+                Ok(None) => continue,
+                Err(error) => {
+                    if result.issues.len() < 16 {
+                        result.issues.push(format!("{}: {error}", path.display()));
+                    }
+                    continue;
+                }
+            };
+            if artifacts.vm_id != vm_id
+                || artifacts.core_state == antinomie_monitor_core::RunArtifactState::Disabled
+            {
+                continue;
+            }
+            for issue in &artifacts.issues {
+                if result.issues.len() >= 16 {
+                    break;
+                }
+                let mut issue_text: String = issue.chars().take(2048).collect();
+                if issue.chars().count() > 2048 {
+                    issue_text.push('…');
+                }
+                result
+                    .issues
+                    .push(format!("Run {}: {issue_text}", artifacts.run_id));
+            }
+            if result
+                .acquired
+                .iter()
+                .any(|core| core.run_id == artifacts.run_id)
+            {
+                continue;
+            }
+            result.acquired.push(AcquiredCore {
+                run_id: artifacts.run_id,
+                file: artifacts.core_dump,
+                state: artifacts.core_state,
+            });
+            if result.acquired.len() > 1024 {
+                return Err("Core catalog exceeds 1024 runs".into());
+            }
+        }
+    }
+    result
+        .acquired
+        .sort_by(|left, right| right.run_id.cmp(&left.run_id));
+    Ok(result)
+}
+
+fn acquired_record(source: &Path) -> Result<CoreRecord, String> {
+    let core = CoreDump::open(source).map_err(|error| error.to_string())?;
+    let directory = core
+        .source
+        .parent()
+        .ok_or("Core file has no result directory")?
+        .to_owned();
+    const METADATA_LIMIT: u64 = 16 * 1024 * 1024;
+    let record = match fs::File::open(directory.join("metadata.json")) {
+        Ok(file) => {
+            let metadata = file.metadata().map_err(|error| error.to_string())?;
+            if !metadata.is_file() || metadata.len() > METADATA_LIMIT {
+                return Err("Core metadata must be a regular file of at most 16 MiB".into());
+            }
+            let mut saved: CoreRecord = serde_json::from_reader(file.take(METADATA_LIMIT + 1))
+                .map_err(|error| format!("Core metadata: {error}"))?;
+            if saved.core.source != core.source {
+                return Err("Core metadata source identity does not match this run core".into());
+            }
+            saved.dir = directory;
+            saved.core = core;
+            saved
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => CoreRecord {
+            label: source
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+            tags: String::new(),
+            dir: directory,
+            core,
+        },
+        Err(error) => return Err(format!("Core metadata: {error}")),
+    };
+    record.save().map_err(|error| error.to_string())?;
+    Ok(record)
 }
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 enum Tab {
@@ -39,7 +186,11 @@ enum Tab {
 #[derive(Default)]
 pub(crate) struct CoreView {
     roots: Vec<PathBuf>,
+    vm_id: Option<String>,
+    catalog_checked: Option<Instant>,
     records: Vec<CoreRecord>,
+    acquired: Vec<AcquiredCore>,
+    catalog_issues: Vec<String>,
     selected: Option<CoreRecord>,
     job: Option<Receiver<Result<Reply, String>>>,
     status: String,
@@ -59,6 +210,33 @@ pub(crate) struct CoreView {
     cancelled: Arc<AtomicBool>,
 }
 impl CoreView {
+    /// Open retained guest evidence through the bounded metadata worker.
+    pub(crate) fn open(&mut self, source: &Path) {
+        self.poll();
+        if self.job.is_some() {
+            self.status =
+                "Finish the current core-view operation, then open this core again.".into();
+            return;
+        }
+        self.source_path = source.display().to_string();
+        let previous = self
+            .records
+            .iter()
+            .find(|record| record.core.source == source)
+            .cloned();
+        let source = source.to_owned();
+        self.start(move || {
+            let record = match previous {
+                Some(mut record) => {
+                    record.core = CoreDump::open(&source).map_err(|error| error.to_string())?;
+                    record
+                }
+                None => acquired_record(&source)?,
+            };
+            Ok(Reply::Open(Box::new(record), String::new()))
+        });
+    }
+
     fn start(&mut self, work: impl FnOnce() -> Result<Reply, String> + Send + 'static) {
         if self.job.is_some() {
             return;
@@ -89,9 +267,11 @@ impl CoreView {
         self.job = None;
         match result {
             Err(error) => self.status = error,
-            Ok(Reply::Records(records)) => {
-                self.records = records;
-                self.status.clear();
+            Ok(Reply::Records(catalog)) => {
+                self.records = catalog.imported;
+                self.acquired = catalog.acquired;
+                self.catalog_issues = catalog.issues;
+                self.catalog_checked = Some(Instant::now());
             }
             Ok(Reply::Chosen(path)) => {
                 if let Some(path) = path {
@@ -100,7 +280,9 @@ impl CoreView {
             }
             Ok(Reply::Open(record, code)) => {
                 let record = *record;
-                if !self.records.iter().any(|old| old.dir == record.dir) {
+                if record.core.source.parent() != Some(record.dir.as_path())
+                    && !self.records.iter().any(|old| old.dir == record.dir)
+                {
                     self.records.insert(0, record.clone());
                 }
                 self.code_address = record
@@ -117,8 +299,7 @@ impl CoreView {
                 self.code = code;
                 self.functions.clear();
                 self.symbol_status.clear();
-                self.status =
-                    "Imported core is referenced in place; retain its original file.".into();
+                self.status = "Core is referenced in place; retain its original file.".into();
             }
             Ok(Reply::Page(address, data)) => self.page = Some((address, data)),
             Ok(Reply::Code(code)) => {
@@ -139,20 +320,37 @@ impl CoreView {
     /// |---|---|
     /// | `ui` | Core panel surface |
     /// | `recording_roots` | User-configured durable recording directories |
-    pub(crate) fn show(&mut self, ui: &mut egui::Ui, recording_roots: &[PathBuf]) {
+    pub(crate) fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        recording_roots: &[PathBuf],
+        vm_id: Option<&str>,
+        active: bool,
+    ) {
         self.poll();
+        if active {
+            ui.ctx().request_repaint_after(Duration::from_secs(5));
+        }
         if self.job.is_some() {
             ui.ctx().request_repaint_after(Duration::from_millis(75));
         }
-        if self.roots != recording_roots && self.job.is_none() {
+        let changed = self.roots != recording_roots || self.vm_id.as_deref() != vm_id;
+        let refresh = active
+            && self
+                .catalog_checked
+                .is_none_or(|last| last.elapsed() >= Duration::from_secs(5));
+        if (changed || refresh) && self.job.is_none() {
+            if changed {
+                self.acquired.clear();
+                self.catalog_issues.clear();
+            }
             self.roots = recording_roots.to_vec();
             self.destination = 0;
+            self.vm_id = vm_id.map(str::to_owned);
+            self.catalog_checked = Some(Instant::now());
             let roots = self.roots.clone();
-            self.start(move || {
-                core_dump::list_records(&roots)
-                    .map(Reply::Records)
-                    .map_err(|error| error.to_string())
-            });
+            let vm_id = self.vm_id.clone();
+            self.start(move || catalog(&roots, vm_id.as_deref()).map(Reply::Records));
         }
         ui.horizontal(|ui| {
             ui.heading("Core dumps");
@@ -161,18 +359,15 @@ impl CoreView {
                 .clicked()
             {
                 let roots = self.roots.clone();
-                self.start(move || {
-                    core_dump::list_records(&roots)
-                        .map(Reply::Records)
-                        .map_err(|error| error.to_string())
-                });
+                let vm_id = self.vm_id.clone();
+                self.start(move || catalog(&roots, vm_id.as_deref()).map(Reply::Records));
             }
             if self.job.is_some() {
                 ui.spinner();
                 ui.label("Working…");
             }
         });
-        ui.label("Linux x86-64 process cores: threads and virtual memory. Guest core-on-exit acquisition is planned for 0.6.0.");
+        ui.add(egui::Label::new("Linux x86-64 process cores: thread registers and virtual memory. Enable Core Dump on Exit when launching with a revision 15 guest. Omitted or unavailable memory stays explicit.").wrap());
         ui.horizontal(|ui| {
             ui.label("Core file");
             ui.text_edit_singleline(&mut self.source_path);
@@ -223,6 +418,35 @@ impl CoreView {
         if !self.status.is_empty() {
             ui.label(&self.status);
         }
+        for issue in &self.catalog_issues {
+            ui.add(egui::Label::new(RichText::new(issue).color(crate::theme::warn())).wrap());
+        }
+        let mut acquired_open = None;
+        egui::ScrollArea::vertical()
+            .id_salt("acquired-core-list")
+            .max_height(ui.text_style_height(&egui::TextStyle::Body) * 6.0)
+            .show(ui, |ui| {
+                for core in &self.acquired {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(format!(
+                            "Run {}: {}",
+                            core.run_id,
+                            crate::app::core_capture_status(core.state)
+                        ));
+                        if let Some(file) = &core.file {
+                            if ui
+                                .add_enabled(self.job.is_none(), egui::Button::new("Open core"))
+                                .clicked()
+                            {
+                                acquired_open = Some(file.clone());
+                            }
+                        }
+                    });
+                }
+            });
+        if let Some(file) = acquired_open {
+            self.open(&file);
+        }
         ui.separator();
         let mut open = None;
         egui::ScrollArea::horizontal()
@@ -262,7 +486,7 @@ impl CoreView {
             });
         }
         let Some(record) = self.selected.clone() else {
-            ui.label("Import an existing process core, then select Context, Memory mappings, or Disassembly.");
+            ui.label("Open a captured process core or import an external core, then select Context, Memory mappings, or Disassembly.");
             return;
         };
         ui.horizontal(|ui| {
@@ -594,6 +818,115 @@ mod tests {
         view: CoreView,
         directory: PathBuf,
     }
+
+    #[test]
+    fn acquired_catalog_finds_unopened_partial_cores_and_scopes_the_vm() {
+        let fixture = Fixture::new();
+        for (id, vm_id, state, with_file) in [
+            (
+                "partial",
+                "chosen",
+                antinomie_monitor_core::RunArtifactState::Partial,
+                true,
+            ),
+            (
+                "waiting",
+                "chosen",
+                antinomie_monitor_core::RunArtifactState::WaitingForRootExit,
+                false,
+            ),
+            (
+                "other",
+                "other-vm",
+                antinomie_monitor_core::RunArtifactState::Complete,
+                true,
+            ),
+        ] {
+            let directory = fixture.directory.join("runs").join(id);
+            fs::create_dir_all(directory.join("core")).unwrap();
+            let file = directory.join("core/process.elf");
+            if with_file {
+                fs::write(&file, b"unfinished ELF prefix").unwrap();
+            }
+            let artifacts = antinomie_monitor_core::RunArtifacts {
+                run_id: id.into(),
+                vm_id: vm_id.into(),
+                boot_id: "boot".into(),
+                core_state: state,
+                core_dump: with_file.then_some(file),
+                ..Default::default()
+            };
+            fs::write(
+                directory.join("artifacts.json"),
+                serde_json::to_vec(&artifacts).unwrap(),
+            )
+            .unwrap();
+        }
+        let first = catalog(std::slice::from_ref(&fixture.directory), Some("chosen")).unwrap();
+        assert!(first.imported.is_empty());
+        assert_eq!(first.acquired.len(), 2);
+        assert!(first
+            .acquired
+            .iter()
+            .any(|core| core.run_id == "partial" && core.file.is_some()));
+        assert!(first
+            .acquired
+            .iter()
+            .any(|core| core.run_id == "waiting" && core.file.is_none()));
+        assert!(
+            !fixture.directory.join("core-dumps").exists(),
+            "discovery must not import or parse incomplete ELF files"
+        );
+    }
+
+    #[test]
+    fn reopening_acquired_core_reuses_its_directory_and_available_prefix() {
+        let fixture = Fixture::new();
+        let directory = fixture.directory.join("runs/root/core");
+        fs::create_dir_all(&directory).unwrap();
+        let file = directory.join("process.elf");
+        let mut data = vec![0u8; 64 + 56 + 12 + 8 + 336];
+        data[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+        data[16..18].copy_from_slice(&4u16.to_le_bytes());
+        data[18..20].copy_from_slice(&62u16.to_le_bytes());
+        data[32..40].copy_from_slice(&64u64.to_le_bytes());
+        data[54..56].copy_from_slice(&56u16.to_le_bytes());
+        data[56..58].copy_from_slice(&1u16.to_le_bytes());
+        data[64..68].copy_from_slice(&4u32.to_le_bytes());
+        data[72..80].copy_from_slice(&120u64.to_le_bytes());
+        data[96..104].copy_from_slice(&356u64.to_le_bytes());
+        data[120..124].copy_from_slice(&5u32.to_le_bytes());
+        data[124..128].copy_from_slice(&336u32.to_le_bytes());
+        data[128..132].copy_from_slice(&1u32.to_le_bytes());
+        data[132..137].copy_from_slice(b"CORE\0");
+        data[172..176].copy_from_slice(&77u32.to_le_bytes());
+        fs::write(&file, data).unwrap();
+        let mut first = acquired_record(&file).unwrap();
+        first.label = "Renamed acquisition".into();
+        first.tags = "interesting, partial".into();
+        first.save().unwrap();
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&file)
+            .unwrap()
+            .write_all(&[0])
+            .unwrap();
+        let second = acquired_record(&file).unwrap();
+        assert_eq!(first.dir, directory);
+        assert_eq!(second.dir, first.dir);
+        assert_eq!(second.core.threads[0].tid, 77);
+        assert_eq!(second.label, "Renamed acquisition");
+        assert_eq!(second.tags, "interesting, partial");
+        assert_eq!(second.core.source_size, first.core.source_size + 1);
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
+        assert!(!fixture.directory.join("core-dumps").exists());
+        let mut wrong = second;
+        wrong.core.source = fixture.directory.join("another-core.elf");
+        wrong.save().unwrap();
+        assert!(acquired_record(&file)
+            .unwrap_err()
+            .contains("identity does not match"));
+    }
     impl Fixture {
         fn new() -> Self {
             let directory = std::env::temp_dir().join(format!(
@@ -700,7 +1033,7 @@ mod tests {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| view.show(ui, &[]));
+                egui::CentralPanel::default().show(ctx, |ui| view.show(ui, &[], None, false));
             },
         )
     }
@@ -876,7 +1209,8 @@ mod tests {
         }
         impl eframe::App for FixtureApp {
             fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-                egui::CentralPanel::default().show(ctx, |ui| self.fixture.view.show(ui, &[]));
+                egui::CentralPanel::default()
+                    .show(ctx, |ui| self.fixture.view.show(ui, &[], None, false));
                 if std::time::Instant::now() >= self.deadline {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }

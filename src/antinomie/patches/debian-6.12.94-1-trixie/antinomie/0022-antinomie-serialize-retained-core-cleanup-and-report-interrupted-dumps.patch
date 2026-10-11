@@ -1,0 +1,82 @@
+Description: antinomie: serialize retained core cleanup and report interrupted dumps
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-12
+
+
+---
+diff --git a/fs/coredump.c b/fs/coredump.c
+index efa8fcbdd..aecc24956 100644
+--- a/fs/coredump.c
++++ b/fs/coredump.c
+@@ -629,6 +629,8 @@ int ant_coredump_to_file(struct file *file, unsigned long limit, int wait_status
+ 			error = -EIO;
+ 	}
+ 	free_vma_snapshot(&cprm);
++	if (dump_interrupted())
++		error = -EINTR;
+ finish:
+ 	coredump_finish(false);
+ 	return error;
+diff --git a/kernel/antinomie/process_core.c b/kernel/antinomie/process_core.c
+index 3636505a7..957cfc4b7 100644
+--- a/kernel/antinomie/process_core.c
++++ b/kernel/antinomie/process_core.c
+@@ -76,21 +76,21 @@ static DECLARE_DELAYED_WORK(core_expiry_work, expire_cores);
+ 
+ static void expire_cores(struct work_struct *work)
+ {
+-	struct ant_core *core, *next;
+-	LIST_HEAD(expired);
++	struct ant_core *core, *next, *expired[ANT_CORE_HANDLES];
++	unsigned int expired_count = 0, i;
+ 	bool remaining;
+ 
+ 	mutex_lock(&core_lock);
+ 	list_for_each_entry_safe(core, next, &cores, node)
+ 		if (core->state >= ANTC_CORE_READY &&
+-		    time_after_eq(jiffies, core->touched + ANT_CORE_IDLE))
+-			list_move_tail(&core->node, &expired);
++		    time_after_eq(jiffies, core->touched + ANT_CORE_IDLE)) {
++			list_del_init(&core->node);
++			expired[expired_count++] = core;
++		}
+ 	remaining = !list_empty(&cores);
+ 	mutex_unlock(&core_lock);
+-	list_for_each_entry_safe(core, next, &expired, node) {
+-		list_del_init(&core->node);
+-		core_put(core);
+-	}
++	for (i = 0; i < expired_count; i++)
++		core_put(expired[i]);
+ 	if (remaining)
+ 		schedule_delayed_work(&core_expiry_work, 30 * HZ);
+ }
+@@ -465,17 +465,18 @@ int ant_core_command(u32 opcode, const u8 *args, size_t args_len,
+ 
+ void ant_core_shutdown(void)
+ {
+-	struct ant_core *core, *next;
+-	LIST_HEAD(canceled);
++	struct ant_core *core, *next, *canceled[ANT_CORE_HANDLES];
++	unsigned int canceled_count = 0, i;
+ 
+ 	mutex_lock(&core_lock);
+-	list_for_each_entry(core, &cores, node)
++	list_for_each_entry_safe(core, next, &cores, node) {
+ 		WRITE_ONCE(core->canceled, true);
+-	list_splice_init(&cores, &canceled);
+-	mutex_unlock(&core_lock);
+-	list_for_each_entry_safe(core, next, &canceled, node) {
+-		ant_run_core_arm(core->root_cookie, false);
+ 		list_del_init(&core->node);
+-		core_put(core);
++		canceled[canceled_count++] = core;
++	}
++	mutex_unlock(&core_lock);
++	for (i = 0; i < canceled_count; i++) {
++		ant_run_core_arm(canceled[i]->root_cookie, false);
++		core_put(canceled[i]);
+ 	}
+ }

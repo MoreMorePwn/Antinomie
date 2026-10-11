@@ -123,7 +123,9 @@ mod guest_tests {
             r#"{"path":"/bin/sh","args":[],"cwd":"/tmp","env":[],"uid":1000,"gid":1000}"#,
         )
         .unwrap();
-        assert!(!request.capture_network && !request.memory_dump_on_exit);
+        assert!(
+            !request.capture_network && !request.memory_dump_on_exit && !request.core_dump_on_exit
+        );
         assert!(!serde_json::to_string(&vm).unwrap().contains("password"));
     }
 }
@@ -415,6 +417,9 @@ pub struct ExecRequest {
     /// Take VM RAM after authoritative tree completion (not a process core).
     #[serde(default)]
     pub memory_dump_on_exit: bool,
+    /// Capture the native x86-64 root process group before its address space exits.
+    #[serde(default)]
+    pub core_dump_on_exit: bool,
 }
 
 /// Persisted `artifacts.json` in a run directory links independently retained evidence.
@@ -430,6 +435,9 @@ pub struct RunArtifacts {
     /// Directory containing `dump.json` and the post-exit VM `memory.elf`.
     pub memory_dump: Option<PathBuf>,
     pub memory_state: RunArtifactState,
+    /// ELF core file; partial captures retain their available prefix.
+    pub core_dump: Option<PathBuf>,
+    pub core_state: RunArtifactState,
     pub issues: Vec<String>,
 }
 
@@ -474,10 +482,12 @@ pub enum RunArtifactState {
     #[default]
     Disabled,
     WaitingForTreeExit,
+    WaitingForRootExit,
     Recording,
     Queued,
     InProgress,
     Complete,
+    Partial,
     Interrupted,
     Failed,
 }
@@ -949,6 +959,7 @@ impl Default for ExecRequest {
             run_in: RunIn::default(),
             capture_network: false,
             memory_dump_on_exit: false,
+            core_dump_on_exit: false,
         }
     }
 }
@@ -1059,6 +1070,10 @@ pub enum Command {
         executable: bool,
     },
     Execute(ExecRequest),
+    /// Cancel acquisition for a run without stopping the specimen.
+    CancelProcessCore {
+        run_id: String,
+    },
     AnalyzeOnly {
         path: String,
         uid: u32,
@@ -1224,6 +1239,8 @@ pub struct VmSnapshotProgress {
 
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
+    /// Host measurements for the active QEMU process, refreshed once a second.
+    pub vm_resources: Option<VmResources>,
     pub vm_snapshot_trees: std::collections::BTreeMap<String, VmSnapshotTree>,
     pub vm_snapshot_progress: Option<VmSnapshotProgress>,
     /// The running VM's network capture, while one runs.
@@ -1269,6 +1286,21 @@ pub struct Snapshot {
     /// The running guest kernel, once it has answered the INFO probe.
     pub guest_kernel: Option<GuestKernel>,
     pub last_error: Option<String>,
+}
+
+/// Configured guest capacities remain in VmConfig; these are host measurements.
+#[derive(Clone, Debug, Default)]
+pub struct VmResources {
+    pub vm_id: String,
+    /// Elapsed host time since this QEMU process started, including pauses.
+    pub uptime_ms: Option<u64>,
+    /// CPU usage across QEMU threads; 100 percent represents one host CPU.
+    pub qemu_cpu_percent: Option<f64>,
+    /// Resident host memory; does not represent guest RAM utilization.
+    pub qemu_resident_size: Option<u64>,
+    /// Space available to this user on the data-directory filesystem.
+    pub data_disk_available_size: Option<u64>,
+    pub sample_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

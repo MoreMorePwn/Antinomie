@@ -14,7 +14,7 @@ pub(crate) const INFO: u32 = 0x1021;
 pub(crate) const INFO_SIZE: usize = 160;
 pub(crate) const SHUTDOWN: u32 = 0x1030;
 /// Guest contract revision this host implements (`ANTC_REVISION`).
-pub const REVISION: u32 = 14;
+pub const REVISION: u32 = 15;
 pub(crate) const PROCESS_LIST: u32 = 0x1050;
 pub(crate) const CAPTURE_ATTACH: u32 = 0x1051;
 pub(crate) const CAPTURE_ALL: u32 = 0x1052;
@@ -242,6 +242,12 @@ pub(crate) fn execute_analysis(r: &ExecRequest, supported: bool) -> Result<Vec<u
         encoded.extend(SPECIMEN_MAX_SIZE.to_le_bytes());
         encoded.extend(5000u32.to_le_bytes());
     }
+    if r.core_dump_on_exit {
+        let flags = u32::from(supported && r.analysis.enabled) | 2;
+        encoded[4..8].copy_from_slice(&flags.to_le_bytes());
+        encoded.extend(SPECIMEN_MAX_SIZE.to_le_bytes());
+        encoded.extend(5000u32.to_le_bytes());
+    }
     Ok(encoded)
 }
 pub(crate) fn acquire(path: &str, uid: u32, gid: u32) -> Result<Vec<u8>, String> {
@@ -361,6 +367,27 @@ pub(crate) fn info(reply: &[u8]) -> Result<crate::api::GuestKernel, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn core_exec_trailer_follows_optional_specimen_without_changing_legacy_wire() {
+        let mut request = ExecRequest::default();
+        let legacy = execute(&request).unwrap();
+        request.core_dump_on_exit = true;
+        let core = execute_analysis(&request, true).unwrap();
+        assert_eq!(core.len(), legacy.len() + 8);
+        assert_eq!(&core[4..8], &2u32.to_le_bytes());
+        assert_eq!(
+            &core[legacy.len()..legacy.len() + 4],
+            &SPECIMEN_MAX_SIZE.to_le_bytes()
+        );
+        request.analysis.enabled = true;
+        let combined = execute_analysis(&request, true).unwrap();
+        assert_eq!(combined.len(), legacy.len() + 16);
+        assert_eq!(&combined[4..8], &3u32.to_le_bytes());
+        assert_eq!(
+            &combined[legacy.len()..legacy.len() + 8],
+            &combined[legacy.len() + 8..]
+        );
+    }
     #[test]
     fn analysis_wire_preserves_off_and_legacy_execution_and_rejects_bad_replies() {
         let mut request = ExecRequest::default();

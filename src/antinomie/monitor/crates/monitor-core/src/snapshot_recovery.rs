@@ -14,6 +14,8 @@ struct HostCheckpoint {
     boot_bundle_identity: Option<String>,
     disk_bundle_identity: Option<String>,
     runs: Vec<RunSummary>,
+    #[serde(default)]
+    core_handles: Vec<process_core::SavedHandle>,
     captures: Vec<CaptureCheckpoint>,
 }
 #[derive(Serialize, Deserialize)]
@@ -28,6 +30,7 @@ impl HostCheckpoint {
             || self.source_boot_id.is_empty()
             || self.source_boot_id.len() > 128
             || self.runs.len() > 4096
+            || self.core_handles.len() > 4
             || self.captures.len() > OBSERVATION_RETAINED
             || self.boot_bundle_identity != bundle.base_identity
             || self.disk_bundle_identity != disk_bundle.base_identity
@@ -47,6 +50,22 @@ impl HostCheckpoint {
             }
         }
         let mut cookies = std::collections::BTreeSet::new();
+        let mut core_ids = std::collections::BTreeSet::new();
+        let mut core_roots = std::collections::BTreeSet::new();
+        for handle in &self.core_handles {
+            let run = self
+                .runs
+                .iter()
+                .find(|run| run.id == handle.source_run_id)
+                .ok_or("snapshot core handle names an absent run")?;
+            handle.validate(run)?;
+            if run.boot_id != self.source_boot_id {
+                return Err("snapshot core handle belongs to another recording timeline".into());
+            }
+            if !core_ids.insert(handle.core_id) || !core_roots.insert(handle.root_cookie) {
+                return Err("snapshot core handles contain duplicate ownership".into());
+            }
+        }
         for capture in &self.captures {
             if capture.summary.vm_id != vm.id
                 || capture.summary.capture_cookie == 0
@@ -72,6 +91,16 @@ impl Session {
             boot_bundle_identity: self.bundle.base_identity.clone(),
             disk_bundle_identity: self.disk_bundle.base_identity.clone(),
             runs: self.runs.values().map(|run| run.summary.clone()).collect(),
+            core_handles: self
+                .run_artifacts
+                .values()
+                .filter_map(|owner| {
+                    owner
+                        .core
+                        .as_ref()
+                        .and_then(process_core::Transfer::checkpoint_handle)
+                })
+                .collect(),
             captures: self
                 .captures
                 .values()
@@ -117,6 +146,10 @@ impl Session {
         let mut runs = BTreeMap::new();
         let mut run_artifacts = BTreeMap::new();
         for mut summary in checkpoint.runs {
+            let saved_core = checkpoint
+                .core_handles
+                .iter()
+                .find(|handle| handle.source_run_id == summary.id);
             let cookie = summary.root_task_cookie;
             if cookie == 0 || summary.session_id == 0 || runs.contains_key(&cookie) {
                 return Err("host checkpoint contains duplicate or zero run identities".into());
@@ -152,6 +185,15 @@ impl Session {
                 &serde_json::json!({"issue":RESUME_BOUNDARY}),
             )?;
             let mut owner = RunArtifactOwner::new(&run.summary);
+            if run.summary.request.core_dump_on_exit {
+                if let Some(saved) = saved_core {
+                    owner.core = Some(process_core::Transfer::restored(saved, &run.summary)?);
+                    owner.issue("snapshot checkpoint transfers a validated core handle into a fresh recording; guest STATUS must match before any read".into());
+                } else {
+                    owner.summary.core_state = RunArtifactState::Interrupted;
+                    owner.issue("snapshot checkpoint has no process-core ownership metadata; launch and arm are not replayed".into());
+                }
+            }
             owner.tree_complete = tree_complete;
             if tree_complete && run.summary.request.memory_dump_on_exit {
                 owner.summary.memory_state = RunArtifactState::Interrupted;
@@ -195,6 +237,8 @@ impl Session {
             captures.insert(capture.summary.id.clone(), capture);
         }
         Ok(Self {
+            resources: crate::resources::ResourceSampler::default(),
+            last_resource_check: None,
             analysis: crate::analysis::jobs::Jobs::with_tools(crate::analysis_tools::tools_dir(
                 &options.data_dir,
             )),
@@ -207,6 +251,8 @@ impl Session {
             disk_bundle,
             runs,
             run_artifacts,
+            core_stored_len: 0,
+            core_reserved_len: 0,
             captures,
             pending_capture_id: None,
             boot_id,

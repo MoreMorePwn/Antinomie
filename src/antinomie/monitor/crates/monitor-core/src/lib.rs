@@ -25,6 +25,7 @@ pub mod network;
 pub mod observation;
 pub mod parser;
 pub mod recording;
+mod resources;
 mod run;
 pub mod samples;
 pub mod snapshots;

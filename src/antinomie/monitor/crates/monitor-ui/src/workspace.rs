@@ -20,6 +20,7 @@ pub(crate) enum Panel {
         report_id: String,
         kind: AnalysisKind,
     },
+    Summary,
     RunHistory,
     Details,
     Activity,
@@ -35,6 +36,7 @@ impl Panel {
             Self::CoreDump => "Core dumps",
             Self::StaticAnalysis => "Static Analysis",
             Self::AnalysisSection { kind, .. } => kind.label(),
+            Self::Summary => "Summary",
             Self::RunHistory => "Run History",
             Self::Details => "Details",
             Self::Activity => "Activity",
@@ -119,10 +121,9 @@ impl DetailsFollow {
     }
 }
 
-/// Bumped when the default arrangement changes, so a layout saved before the
-/// change is replaced by the new default once. Version 2 also replaces layouts
-/// that closing a detached window had flattened into one tab bar.
-const LAYOUT_VERSION: u32 = 3;
+/// Arrangement compatibility. Versions before 3 reset obsolete flattened
+/// layouts; version 4 adds Summary while preserving the version-3 dock tree.
+const LAYOUT_VERSION: u32 = 4;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct WorkspaceLayout {
@@ -152,9 +153,9 @@ pub(crate) struct WorkspaceLayout {
 
 impl Default for WorkspaceLayout {
     fn default() -> Self {
-        // Run History is the first (leftmost) tab, next to the trace; the trace
-        // stays the open tab so the startup view is unchanged.
+        // Summary opens first, immediately to the left of Run History.
         let mut dock = DockState::new(vec![
+            Panel::Summary,
             Panel::RunHistory,
             Panel::Trace,
             Panel::Network,
@@ -162,7 +163,7 @@ impl Default for WorkspaceLayout {
             Panel::CoreDump,
             Panel::StaticAnalysis,
         ]);
-        dock.set_active_tab((SurfaceIndex::main(), NodeIndex::root(), TabIndex(1)));
+        dock.set_active_tab((SurfaceIndex::main(), NodeIndex::root(), TabIndex(0)));
         // The work area gets most of the height; details sit below.
         dock.main_surface_mut().split_below(
             NodeIndex::root(),
@@ -188,9 +189,23 @@ impl Default for WorkspaceLayout {
 impl WorkspaceLayout {
     /// The saved layout, unless it predates the current default arrangement.
     pub(crate) fn restore(saved: Option<Self>) -> Self {
-        saved
-            .filter(|layout| layout.version >= LAYOUT_VERSION)
-            .unwrap_or_default()
+        let Some(mut layout) = saved.filter(|layout| layout.version >= 3) else {
+            return Self::default();
+        };
+        if layout.version < LAYOUT_VERSION {
+            // Keep the user's splits and native windows from 0.5.0. Place the
+            // new tab beside Run History in whichever surface owns it.
+            if layout.dock.find_tab(&Panel::Summary).is_none() {
+                if let Some((surface, node, tab)) = layout.dock.find_tab(&Panel::RunHistory) {
+                    layout.dock[surface][node].insert_tab(tab, Panel::Summary);
+                } else {
+                    layout.return_home(Panel::Summary);
+                }
+            }
+            layout.focus(Panel::Summary);
+            layout.version = LAYOUT_VERSION;
+        }
+        layout
     }
 
     pub(crate) fn validate(&mut self) {
@@ -206,6 +221,7 @@ impl WorkspaceLayout {
             }
         });
         for panel in [
+            Panel::Summary,
             Panel::RunHistory,
             Panel::Trace,
             Panel::Network,
@@ -572,6 +588,7 @@ impl WorkspaceLayout {
             (
                 vec![Panel::Details, Panel::Activity],
                 vec![
+                    Panel::Summary,
                     Panel::RunHistory,
                     Panel::Trace,
                     Panel::Network,
@@ -583,6 +600,7 @@ impl WorkspaceLayout {
         } else {
             (
                 vec![
+                    Panel::Summary,
                     Panel::RunHistory,
                     Panel::Trace,
                     Panel::Network,
@@ -596,6 +614,17 @@ impl WorkspaceLayout {
         // The first panel of each group goes before its sibling.
         let first = panel == own[0];
         let tree = self.dock.main_surface_mut();
+        let beside = match panel {
+            Panel::Summary => Some((Panel::RunHistory, false)),
+            Panel::RunHistory => Some((Panel::Summary, true)),
+            _ => None,
+        };
+        if let Some((sibling, after)) = beside {
+            if let Some((node, tab)) = tree.find_tab(&sibling) {
+                tree[node].insert_tab(TabIndex(tab.0 + usize::from(after)), panel);
+                return;
+            }
+        }
         if let Some((node, _)) = own.iter().find_map(|sibling| tree.find_tab(sibling)) {
             if first {
                 tree[node].insert_tab(TabIndex(0), panel);
@@ -1090,12 +1119,13 @@ mod tests {
     }
 
     #[test]
-    fn default_layout_puts_run_history_first_with_the_trace_open() {
+    fn default_layout_opens_summary_immediately_before_run_history() {
         let layout = WorkspaceLayout::default();
         let top = NodeIndex::root().left();
         assert_eq!(
             leaf_tabs(&layout, top),
             [
+                Panel::Summary,
                 Panel::RunHistory,
                 Panel::Trace,
                 Panel::Network,
@@ -1107,7 +1137,7 @@ mod tests {
         let egui_dock::Node::Leaf { tabs, active, .. } = &layout.dock.main_surface()[top] else {
             panic!("top node must hold tabs");
         };
-        assert_eq!(tabs[active.0], Panel::Trace);
+        assert_eq!(tabs[active.0], Panel::Summary);
         assert_eq!(
             leaf_tabs(&layout, NodeIndex::root().right()),
             [Panel::Details, Panel::Activity]
@@ -1126,6 +1156,7 @@ mod tests {
         assert_eq!(
             leaf_tabs(&restored, NodeIndex::root().left()),
             [
+                Panel::Summary,
                 Panel::RunHistory,
                 Panel::Trace,
                 Panel::Network,
@@ -1145,6 +1176,60 @@ mod tests {
             [Panel::Trace, Panel::RunHistory]
         );
         assert!(WorkspaceLayout::restore(None).version >= 1);
+    }
+
+    #[test]
+    fn version_three_migration_preserves_detached_history_and_custom_geometry() {
+        let mut layout = WorkspaceLayout {
+            version: 3,
+            ..WorkspaceLayout::default()
+        };
+        layout
+            .dock
+            .remove_tab(layout.dock.find_tab(&Panel::Summary).unwrap());
+        layout
+            .dock
+            .remove_tab(layout.dock.find_tab(&Panel::RunHistory).unwrap());
+        let surface = layout
+            .dock
+            .add_window(vec![Panel::Activity, Panel::RunHistory]);
+        let rect = Rect::from_min_size(egui::pos2(160.0, 140.0), egui::vec2(800.0, 550.0));
+        layout.geometry.insert(surface.0, rect);
+        let restored = WorkspaceLayout::restore(Some(layout));
+        let (summary_surface, node, tab) = restored.dock.find_tab(&Panel::Summary).unwrap();
+        assert_eq!(summary_surface, surface);
+        assert_eq!(restored.geometry[&surface.0], rect);
+        let egui_dock::Node::Leaf { tabs, active, .. } = &restored.dock[surface][node] else {
+            panic!("history window must remain a leaf");
+        };
+        assert_eq!(tabs, &[Panel::Activity, Panel::Summary, Panel::RunHistory]);
+        assert_eq!(*active, tab);
+        assert_eq!(restored.version, LAYOUT_VERSION);
+        let restored = WorkspaceLayout::restore(Some(restored));
+        assert_eq!(
+            restored
+                .dock
+                .iter_all_tabs()
+                .filter(|(_, panel)| **panel == Panel::Summary)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn missing_summary_and_history_return_beside_each_other() {
+        for missing in [Panel::Summary, Panel::RunHistory] {
+            let mut layout = WorkspaceLayout::default();
+            layout
+                .dock
+                .remove_tab(layout.dock.find_tab(&missing).unwrap());
+            layout.validate();
+            let (surface, node, summary) = layout.dock.find_tab(&Panel::Summary).unwrap();
+            let (history_surface, history_node, history) =
+                layout.dock.find_tab(&Panel::RunHistory).unwrap();
+            assert_eq!((surface, node), (history_surface, history_node));
+            assert_eq!(summary.0 + 1, history.0);
+        }
     }
 
     #[test]
@@ -1170,6 +1255,7 @@ mod tests {
         assert_eq!(
             leaf_tabs(&layout, top),
             [
+                Panel::Summary,
                 Panel::RunHistory,
                 Panel::Trace,
                 Panel::Network,
@@ -1198,6 +1284,7 @@ mod tests {
         assert_eq!(
             leaf_tabs(&empty, top),
             [
+                Panel::Summary,
                 Panel::RunHistory,
                 Panel::Trace,
                 Panel::Network,
@@ -1225,6 +1312,7 @@ mod tests {
         assert_eq!(
             leaf_tabs(&restored, NodeIndex::root().left()),
             [
+                Panel::Summary,
                 Panel::RunHistory,
                 Panel::Trace,
                 Panel::Network,
@@ -1311,7 +1399,7 @@ mod tests {
             .dock
             .add_window(vec![Panel::Trace, Panel::Terminal("past".into())]);
         layout.validate();
-        assert_eq!(layout.dock.iter_all_tabs().count(), 8);
+        assert_eq!(layout.dock.iter_all_tabs().count(), 9);
         assert_eq!(
             layout
                 .dock

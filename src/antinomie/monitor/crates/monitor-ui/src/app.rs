@@ -1459,8 +1459,10 @@ impl MonitorApp {
             {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(format!(
-                        "Network: {:?} · Post-exit RAM: {:?}",
-                        artifacts.network_state, artifacts.memory_state
+                        "Network: {:?} · Post-exit RAM: {:?} · Process core: {}",
+                        artifacts.network_state,
+                        artifacts.memory_state,
+                        core_capture_status(artifacts.core_state)
                     ));
                     for (index, file) in artifacts.network_captures.iter().enumerate() {
                         if ui.link(format!("Network segment {}", index + 1)).clicked() {
@@ -1473,6 +1475,29 @@ impl MonitorApp {
                             self.memory_view.open_dump(directory);
                             self.focus_panel = Some(Panel::Memory);
                         }
+                    }
+                    if let Some(file) = &artifacts.core_dump {
+                        if ui.link("Open process core").clicked() {
+                            self.core_view.open(file);
+                            self.focus_panel = Some(Panel::CoreDump);
+                        }
+                        if ui.link("Open core directory").clicked() {
+                            if let Some(directory) = file.parent() {
+                                open_directory(directory, &mut self.status);
+                            }
+                        }
+                    }
+                    if matches!(
+                        artifacts.core_state,
+                        antinomie_monitor_core::RunArtifactState::WaitingForRootExit
+                            | antinomie_monitor_core::RunArtifactState::InProgress
+                    ) && self.snapshot.active_vm.as_deref() == Some(run.vm_id.as_str())
+                        && self.snapshot.boot_id.as_deref() == Some(run.boot_id.as_str())
+                        && ui.button("Cancel process core").clicked()
+                    {
+                        self.send(Command::CancelProcessCore {
+                            run_id: run.id.clone(),
+                        });
                     }
                 });
                 for issue in &artifacts.issues {
@@ -2257,6 +2282,7 @@ impl MonitorApp {
                         // Room between an item and its shortcut.
                         ui.set_min_width(ui.spacing().menu_width);
                         for view in [
+                            Panel::Summary,
                             Panel::Trace,
                             Panel::Network,
                             Panel::Memory,
@@ -3206,6 +3232,11 @@ impl MonitorApp {
         ui.add_enabled_ui(self.running() && self.pending_launch.is_none(), |ui| {
             let selection_error = self.exec.analysis.validate().err();
             let graphical = self.selected_vm_graphical();
+            let core_on_exit = self
+                .snapshot
+                .guest_kernel
+                .as_ref()
+                .is_some_and(|kernel| kernel.revision.is_some_and(|revision| revision >= 15));
             let footer = ui.spacing().interact_size.y
                 + 24.0
                 + if selection_error.is_some() {
@@ -3224,7 +3255,10 @@ impl MonitorApp {
                         &mut self.args,
                         &mut self.env,
                         &self.snapshot.analysis_tools,
-                        graphical,
+                        crate::analysis::LaunchCapabilities {
+                            graphical,
+                            core_on_exit,
+                        },
                     ) {
                         self.tools_open = true;
                     }
@@ -5536,6 +5570,7 @@ impl MonitorApp {
         ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
         self.details_follow.drawn(ui, panel);
         match panel {
+            Panel::Summary => crate::summary::show(ui, &self.snapshot, self.selected.as_deref()),
             Panel::Trace => self.events(ui),
             Panel::Network => {
                 let vm = self.selected.clone();
@@ -5586,7 +5621,12 @@ impl MonitorApp {
                     .find(|location| Some(&location.vm_id) == self.selected.as_ref())
                     .map(|location| location.recording_directories.clone())
                     .unwrap_or_default();
-                self.core_view.show(ui, &roots);
+                self.core_view.show(
+                    ui,
+                    &roots,
+                    self.selected.as_deref(),
+                    self.selected.is_some() && self.selected == self.snapshot.active_vm,
+                );
             }
             Panel::Memory => {
                 let vm_id = self.selected.clone();
@@ -6147,7 +6187,11 @@ fn describe_base(base: &BaseSummary) -> String {
     }
 }
 
-fn selected_base<'a>(snapshot: &'a Snapshot, identity: Option<&str>) -> Option<&'a BaseSummary> {
+/// Resolve the explicit base or the same legacy default used by VM configuration.
+pub(crate) fn selected_base<'a>(
+    snapshot: &'a Snapshot,
+    identity: Option<&str>,
+) -> Option<&'a BaseSummary> {
     if let Some(identity) = identity {
         return snapshot.bases.iter().find(|base| base.id == identity);
     }
@@ -6822,6 +6866,22 @@ fn program_name(path: &str) -> &str {
         .unwrap_or(path)
 }
 
+pub(crate) fn core_capture_status(state: antinomie_monitor_core::RunArtifactState) -> &'static str {
+    use antinomie_monitor_core::RunArtifactState;
+    match state {
+        RunArtifactState::Disabled => "Disabled",
+        RunArtifactState::WaitingForRootExit => "Waiting for root process exit",
+        RunArtifactState::WaitingForTreeExit => "Waiting for process tree exit",
+        RunArtifactState::Recording => "Recording",
+        RunArtifactState::Queued => "Queued",
+        RunArtifactState::InProgress => "Acquiring",
+        RunArtifactState::Complete => "Complete",
+        RunArtifactState::Partial => "Partial capture",
+        RunArtifactState::Interrupted => "Interrupted",
+        RunArtifactState::Failed => "Failed",
+    }
+}
+
 fn open_directory(directory: &std::path::Path, status: &mut String) {
     match std::process::Command::new("xdg-open")
         .arg(directory)
@@ -7243,6 +7303,9 @@ mod tests {
 
     fn app() -> MonitorApp {
         let exec = ExecRequest::default();
+        // Trace behavior fixtures explicitly open Trace; production opens Summary.
+        let mut layout = WorkspaceLayout::default();
+        layout.focus(Panel::Trace);
         MonitorApp {
             backend: None,
             snapshot: Snapshot::default(),
@@ -7316,7 +7379,7 @@ mod tests {
             archive_error: None,
             inspector: Inspector::default(),
             data_windows: crate::data_view::DataWindows::default(),
-            layout: WorkspaceLayout::default(),
+            layout,
             focus_panel: None,
             activity: VecDeque::new(),
             env: exec.env.join("\n"),
