@@ -4,7 +4,7 @@ use crate::{
     theme::{self, ValueKind},
     values,
 };
-use antinomie_monitor_core::{syscalls, FieldSummary, InvocationSummary};
+use antinomie_monitor_core::{syscalls, FieldSummary, InvocationSummary, WaitStatus};
 use eframe::egui::{self, Color32, RichText};
 
 pub(crate) type InvocationKey = (u64, u64, u64);
@@ -342,7 +342,15 @@ impl Inspector {
                             .collect();
                         let note = argument_data(&owned)
                             .map(|(_, field)| (preview(field), theme::value(ValueKind::Text)))
-                            .or_else(|| shown.raw.clone().map(|raw| (raw, theme::muted())));
+                            .or_else(|| shown.raw.clone().map(|raw| (raw, theme::muted())))
+                            .or_else(|| {
+                                nothing_returned(invocation, nr, index).then(|| {
+                                    (
+                                        "nothing to capture: the call returned 0 bytes".to_owned(),
+                                        theme::muted(),
+                                    )
+                                })
+                            });
                         let selected = self.selection
                             == Some(Selection::Argument {
                                 phase: arg_phase,
@@ -421,6 +429,36 @@ impl Inspector {
                     self.selection = Some(Selection::Return(result));
                 }
             }
+            None if invocation.exit.is_none() && invocation.task_exit.is_some() => {
+                let (ended, color) = match invocation.task_exit_status() {
+                    Some(status @ WaitStatus::Exited { code: 0 }) => {
+                        (values::task_end(&status), theme::good())
+                    }
+                    Some(status @ WaitStatus::Exited { .. }) => {
+                        (values::task_end(&status), theme::value(ValueKind::Number))
+                    }
+                    Some(status) => (values::task_end(&status), theme::error()),
+                    None => ("ended".to_owned(), theme::warn()),
+                };
+                let note = if matches!(event.syscall_name.as_str(), "exit" | "exit_group") {
+                    "never returns: the task ended here"
+                } else {
+                    "never returned: the task ended while in this call"
+                };
+                tree_row(
+                    ui,
+                    Row {
+                        id: ui.id().with((salt, "return")),
+                        depth: 0,
+                        expand: None,
+                        name: "Task ended",
+                        name_color: theme::heading(),
+                        value: Some((&ended, color)),
+                        note: Some((note, theme::muted())),
+                        selected: false,
+                    },
+                );
+            }
             None => {
                 let missing = if invocation.exit.is_some() {
                     "no value"
@@ -462,6 +500,8 @@ impl Inspector {
         if section_row(ui, ui.id().with((salt, "phases")), "Phases", false) {
             for (label, event) in [("Entry", &invocation.entry), ("Exit", &invocation.exit)] {
                 let Some(event) = event else {
+                    // A call the task ended in has no Exit to lose.
+                    let ended = label == "Exit" && invocation.task_exit.is_some();
                     tree_row(
                         ui,
                         Row {
@@ -470,26 +510,37 @@ impl Inspector {
                             expand: None,
                             name: label,
                             name_color: theme::text(),
-                            value: Some(("missing", theme::warn())),
-                            note: None,
+                            value: Some(if ended {
+                                ("none", theme::muted())
+                            } else {
+                                ("missing", theme::warn())
+                            }),
+                            note: ended.then_some(("the call never returned", theme::muted())),
                             selected: false,
                         },
                     );
                     continue;
                 };
                 let record = format!("record {}", event.event_seq);
+                let captured = match event.fields.len() {
+                    0 => String::new(),
+                    1 => " · 1 captured object".to_owned(),
+                    n => format!(" · {n} captured objects"),
+                };
                 let note = format!(
-                    "{} s · CPU {}{}",
+                    "{} s · CPU {}{captured}{}",
                     seconds(event.timestamp_ns),
                     event.cpu,
                     if event.complete { "" } else { " · incomplete" }
                 );
-                let (response, _) = tree_row(
+                let (response, open) = tree_row(
                     ui,
                     Row {
                         id: ui.id().with((salt, label)),
                         depth: 1,
-                        expand: None,
+                        // What the call read or wrote is listed under the
+                        // phase that captured it, as well as by argument.
+                        expand: (!event.fields.is_empty()).then_some(false),
                         name: label,
                         name_color: theme::text(),
                         value: Some((&record, theme::value(ValueKind::Number))),
@@ -507,6 +558,36 @@ impl Inspector {
                         ],
                     );
                 });
+                if open {
+                    let phase = if label == "Entry" { 1 } else { 2 };
+                    let fields: Vec<_> = event.fields.iter().collect();
+                    field_tree(ui, (invocation, nr, phase), &fields, false, self, 2);
+                }
+            }
+            if let Some(event) = &invocation.task_exit {
+                let record = format!("record {}", event.event_seq);
+                let note = format!(
+                    "{} s · CPU {} · {}",
+                    seconds(event.timestamp_ns),
+                    event.cpu,
+                    invocation.task_exit_status().map_or_else(
+                        || "status unreadable".to_owned(),
+                        |status| { values::task_end(&status) }
+                    )
+                );
+                tree_row(
+                    ui,
+                    Row {
+                        id: ui.id().with((salt, "task exit")),
+                        depth: 1,
+                        expand: None,
+                        name: "Task exit",
+                        name_color: theme::text(),
+                        value: Some((&record, theme::value(ValueKind::Number))),
+                        note: Some((&note, theme::muted())),
+                        selected: false,
+                    },
+                );
             }
         }
 
@@ -1045,16 +1126,23 @@ fn field_tree(
         if strip_arg && field.key.starts_with("arg") {
             components.next();
         }
+        // Outside the argument rows an argument's data goes by its name.
+        let argument = (!strip_arg)
+            .then(|| field_argument(owner.1, &field.key))
+            .flatten()
+            .filter(|_| field.key.starts_with("arg"));
         let mut node = &mut root;
-        for component in components {
+        for (position, component) in components.enumerate() {
             for (index, part) in component.split('[').enumerate() {
                 if part.is_empty() {
                     continue;
                 }
-                let label = if index == 0 {
-                    part.to_owned()
-                } else {
-                    format!("[{part}")
+                let label = match argument {
+                    Some(argument) if position == 0 && index == 0 => {
+                        argument_name(owner.1, argument).to_owned()
+                    }
+                    _ if index == 0 => part.to_owned(),
+                    _ => format!("[{part}"),
                 };
                 node = node.child(label);
             }
@@ -1293,6 +1381,27 @@ pub(crate) fn arg_count(nr: u64) -> usize {
 
 /// The captured data an argument points to, when one field holds it whole
 /// (a path, a buffer): exit data first, as it is what the call returned.
+/// Whether argument `index` is a buffer the call fills and returns the
+/// length of, and the call returned 0: a read at end of file, an empty
+/// `/proc/<pid>/cmdline`, a closed socket. Nothing was written to capture.
+fn nothing_returned(invocation: &InvocationSummary, nr: u64, index: usize) -> bool {
+    let Some(info) = syscalls::syscall(nr) else {
+        return false;
+    };
+    let fills = match info.name.as_str() {
+        "read" | "pread64" | "recvfrom" | "getrandom" | "readlink" => index == 1,
+        "readlinkat" => index == 2,
+        "getdents" | "getdents64" => index == 1,
+        _ => false,
+    };
+    fills
+        && invocation.exit.as_ref().and_then(|exit| exit.result) == Some(0)
+        && info
+            .arguments
+            .get(index)
+            .is_some_and(|argument| argument.pointer)
+}
+
 fn argument_data<'a>(fields: &[(u8, &'a FieldSummary)]) -> Option<(u8, &'a FieldSummary)> {
     let top_level = |field: &FieldSummary| {
         let key = match field.key.strip_prefix("arg") {
@@ -1707,7 +1816,7 @@ pub(crate) fn info_parts(invocation: &InvocationSummary) -> Vec<(String, Tone)> 
     if invocation.entry.is_none() {
         notes.push("missing Entry".to_owned());
     }
-    if invocation.exit.is_none() {
+    if invocation.exit.is_none() && invocation.task_exit.is_none() {
         notes.push("missing Exit".to_owned());
     }
     if !invocation.async_events.is_empty() {
@@ -1759,6 +1868,13 @@ pub(crate) fn cells(invocation: &InvocationSummary) -> Vec<(Vec<(String, Tone)>,
                 entry.event_seq, exit.event_seq
             ),
         ),
+        (Some(entry), None) if invocation.task_exit.is_some() => {
+            let ended = invocation.task_exit.as_ref().map_or(0, |end| end.event_seq);
+            (
+                format!("{}\u{2192}{ended}", entry.event_seq),
+                format!("Entry record {}, task exit record {ended}", entry.event_seq),
+            )
+        }
         _ => (
             event.event_seq.to_string(),
             format!("Record {}", event.event_seq),
@@ -1790,10 +1906,19 @@ pub(crate) fn cells(invocation: &InvocationSummary) -> Vec<(Vec<(String, Tone)>,
                 values::result_hover(event.syscall_nr, result),
             )
         }
-        None => (
-            vec![("missing Exit".to_owned(), Tone::Note)],
-            "No Exit event: the call has not returned, or its Exit was lost".to_owned(),
-        ),
+        None => match invocation.task_exit_status() {
+            Some(status) => (
+                vec![(values::task_end(&status), Tone::Value(ValueKind::Plain))],
+                format!(
+                    "The task ended in this call ({}), so it never returned",
+                    values::task_end(&status)
+                ),
+            ),
+            None => (
+                vec![("missing Exit".to_owned(), Tone::Note)],
+                "No Exit event: the call has not returned, or its Exit was lost".to_owned(),
+            ),
+        },
     };
     let info = info_parts(invocation);
     let info_hover: String = info.iter().map(|(text, _)| text.as_str()).collect();
@@ -1997,6 +2122,7 @@ mod tests {
             entry: Some(entry),
             exit: Some(event(2)),
             async_events: Vec::new(),
+            task_exit: None,
         }
     }
 

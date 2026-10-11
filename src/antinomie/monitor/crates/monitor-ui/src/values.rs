@@ -3,7 +3,7 @@
 //! (the number stays available on hover); captured strings without their
 //! terminating NUL.
 use crate::theme::ValueKind;
-use antinomie_monitor_core::syscalls;
+use antinomie_monitor_core::{syscalls, WaitStatus};
 
 /// A value as the trace shows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -275,6 +275,24 @@ pub(crate) fn result_hover(nr: u64, value: i64) -> String {
         return text;
     }
     shown.hover()
+}
+
+/// How a task ended: "exit 1", or "killed by SIGKILL" with "(core dumped)".
+pub(crate) fn task_end(status: &WaitStatus) -> String {
+    match *status {
+        WaitStatus::Exited { code } => format!("exit {code}"),
+        WaitStatus::Signaled {
+            signal,
+            core_dumped,
+        } => format!(
+            "killed by {}{}",
+            SIGNALS
+                .get(usize::from(signal))
+                .filter(|_| signal != 0)
+                .map_or_else(|| format!("signal {signal}"), |name| (*name).to_owned()),
+            if core_dumped { " (core dumped)" } else { "" }
+        ),
+    }
 }
 
 const SIGNALS: [&str; 32] = [

@@ -50,22 +50,10 @@ pub(crate) fn decode(
 }
 
 fn wait_status(raw: i32) -> Result<WaitStatus, String> {
-    if !(0..=65535).contains(&raw) {
-        return Err("invalid root wait status".into());
-    }
-    let low = raw & 127;
-    if low == 0 && raw & 128 == 0 {
-        return Ok(WaitStatus::Exited {
-            code: ((raw >> 8) & 255) as u8,
-        });
-    }
-    if (1..=64).contains(&low) && raw & !255 == 0 {
-        return Ok(WaitStatus::Signaled {
-            signal: low as u8,
-            core_dumped: raw & 128 != 0,
-        });
-    }
-    Err("root wait status is not an exit or terminating signal".into())
+    u64::try_from(raw)
+        .ok()
+        .and_then(WaitStatus::from_raw)
+        .ok_or_else(|| "root wait status is not an exit or terminating signal".into())
 }
 
 pub(crate) fn state(execution: &RunExecution) -> RunState {

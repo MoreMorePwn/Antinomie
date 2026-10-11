@@ -64,10 +64,14 @@ fn main() {
                     .and_then(|entry| entry.args)
                     .unwrap_or_default(),
                 field,
-                call.exit
-                    .as_ref()
-                    .and_then(|exit| exit.result)
-                    .map_or("?".into(), |result| result.to_string()),
+                match (
+                    call.exit.as_ref().and_then(|exit| exit.result),
+                    call.task_exit_status()
+                ) {
+                    (Some(result), _) => result.to_string(),
+                    (None, Some(ended)) => format!("(task ended: {ended:?})"),
+                    (None, None) => "?".into(),
+                },
                 if call.async_events.is_empty() {
                     String::new()
                 } else {

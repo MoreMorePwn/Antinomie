@@ -9696,6 +9696,7 @@ mod tests {
             entry: None,
             exit: None,
             async_events: vec![observed.clone()],
+            task_exit: None,
         };
         assert_eq!(trace::representative(&row).unwrap().tid, 42);
         assert!(trace::info(&row)
@@ -9722,6 +9723,90 @@ mod tests {
     }
 
     #[test]
+    fn a_call_the_task_ended_in_shows_how_it_ended_and_empty_reads_say_why() {
+        let render = |row: &InvocationSummary| {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let mut inspector = trace::Inspector::default();
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1400.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        inspector.show(ui, Some(row), false);
+                    });
+                },
+            );
+            texts(&output)
+                .into_iter()
+                .map(|(text, _)| text)
+                .collect::<Vec<_>>()
+        };
+        let mut entry = event(1, 0);
+        entry.syscall_nr = 231;
+        entry.syscall_name = "exit_group".into();
+        entry.args = Some([1, 0, 0, 0, 0, 0]);
+        let mut ended = entry.clone();
+        ended.phase = 3;
+        ended.event_seq = 9;
+        ended.fields = vec![antinomie_monitor_core::FieldSummary {
+            object_id: 1,
+            key: "lifecycle.task_exit".into(),
+            layout: String::new(),
+            logical_len: Some(8),
+            captured_len: 8,
+            status: Some(0),
+            capture_error: 0,
+            complete: true,
+            // exit_group(1): the kernel keeps the wait status 1 << 8.
+            preview: 0x100u64.to_le_bytes().to_vec(),
+            raw_path: None,
+            ranges: vec![(0, 8)],
+        }];
+        let mut row = InvocationSummary {
+            stream_id: 1,
+            task_cookie: 3,
+            call_id: 2,
+            entry: Some(entry),
+            exit: None,
+            async_events: Vec::new(),
+            task_exit: Some(ended),
+        };
+        let cells = trace::cells(&row);
+        assert_eq!(cells[1].0[0].0, "1\u{2192}9");
+        assert_eq!(cells[5].0[0].0, "exit 1");
+        assert!(!trace::info(&row).contains("missing Exit"));
+        let shown = render(&row);
+        assert!(shown.iter().any(|text| text == "Task ended"), "{shown:?}");
+        assert!(shown.iter().any(|text| text == "exit 1"));
+        assert!(!shown.iter().any(|text| text == "missing Exit"));
+        // Without the kernel's record the Exit is reported missing as before.
+        row.task_exit = None;
+        assert_eq!(trace::cells(&row)[5].0[0].0, "missing Exit");
+
+        // read() at end of file returns 0 and captures no buffer.
+        let mut exit = event(2, 0);
+        exit.result = Some(0);
+        let read = InvocationSummary {
+            stream_id: 1,
+            task_cookie: 3,
+            call_id: 2,
+            entry: Some(event(1, 0)),
+            exit: Some(exit),
+            async_events: Vec::new(),
+            task_exit: None,
+        };
+        assert!(render(&read)
+            .iter()
+            .any(|text| text == "nothing to capture: the call returned 0 bytes"));
+    }
+
+    #[test]
     fn details_values_copy_in_many_forms_and_captured_fields_open_data_windows() {
         let mut exit = event(2, 0);
         exit.result = Some(-2);
@@ -9745,6 +9830,7 @@ mod tests {
             entry: Some(event(1, 0)),
             exit: Some(exit),
             async_events: Vec::new(),
+            task_exit: None,
         };
         let ctx = egui::Context::default();
         theme::install(&ctx);

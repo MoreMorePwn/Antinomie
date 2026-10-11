@@ -484,6 +484,27 @@ pub enum WaitStatus {
     Signaled { signal: u8, core_dumped: bool },
 }
 
+impl WaitStatus {
+    /// Decode a wait status as the kernel keeps it (`task->exit_code`):
+    /// the exit code in bits 8..16, or the fatal signal in the low 7 bits
+    /// with bit 7 set when it dumped core.
+    pub fn from_raw(raw: u64) -> Option<Self> {
+        if raw > 0xffff {
+            return None;
+        }
+        let low = (raw & 127) as u8;
+        if low == 0 && raw & 128 == 0 {
+            return Some(Self::Exited {
+                code: (raw >> 8) as u8,
+            });
+        }
+        ((1..=64).contains(&low) && raw & !255 == 0).then_some(Self::Signaled {
+            signal: low,
+            core_dumped: raw & 128 != 0,
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct BaseSummary {
     pub id: String,
@@ -790,6 +811,25 @@ pub struct InvocationSummary {
     pub exit: Option<EventSummary>,
     /// Correlated async observations; capped at 256 records per invocation.
     pub async_events: Vec<EventSummary>,
+    /// The kernel's record that the calling task ended inside this call:
+    /// `exit` and `exit_group`, which never return, or a fatal signal that
+    /// arrived while the call was blocked. Its `lifecycle.task_exit` field
+    /// holds the wait status.
+    #[serde(default)]
+    pub task_exit: Option<EventSummary>,
+}
+
+impl InvocationSummary {
+    /// How the calling task ended inside this call, when it did.
+    pub fn task_exit_status(&self) -> Option<WaitStatus> {
+        let field = self
+            .task_exit
+            .as_ref()?
+            .fields
+            .iter()
+            .find(|field| field.key == "lifecycle.task_exit")?;
+        WaitStatus::from_raw(u64::from_le_bytes(field.preview.get(..8)?.try_into().ok()?))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1231,6 +1271,7 @@ pub fn pair_events(events: &[EventSummary]) -> Vec<InvocationSummary> {
                 entry: None,
                 exit: None,
                 async_events: Vec::new(),
+                task_exit: None,
             });
             rows.len() - 1
         });
@@ -1264,6 +1305,7 @@ pub fn pair_events(events: &[EventSummary]) -> Vec<InvocationSummary> {
                 entry: None,
                 exit: None,
                 async_events: Vec::new(),
+                task_exit: None,
             });
             rows.len() - 1
         });
@@ -1275,6 +1317,20 @@ pub fn pair_events(events: &[EventSummary]) -> Vec<InvocationSummary> {
             if !last.issues.iter().any(|existing| existing == issue) {
                 last.issues.push(issue.into());
             }
+        }
+    }
+    // A task's end belongs to the call it ended in; one without a captured
+    // call (its records were lost) has no row to show it on.
+    for event in events.iter().filter(|event| {
+        event.phase == 3
+            && event.call_id != 0
+            && event
+                .fields
+                .iter()
+                .any(|field| field.key == "lifecycle.task_exit")
+    }) {
+        if let Some(&index) = indexes.get(&(event.stream_id, event.task_cookie, event.call_id)) {
+            rows[index].task_exit = Some(event.clone());
         }
     }
     rows
@@ -1418,6 +1474,89 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert!(rows[0].entry.is_none());
         assert!(rows[0].exit.is_some());
+    }
+    #[test]
+    fn a_task_exit_belongs_to_the_call_it_ended_in() {
+        let entry = EventSummary {
+            root_task_cookie: 1,
+            stream_id: 1,
+            task_cookie: 2,
+            call_id: 3,
+            event_seq: 4,
+            phase: 1,
+            syscall_nr: 231,
+            syscall_name: "exit_group".into(),
+            pid: 5,
+            tid: 5,
+            cpu: 0,
+            timestamp_ns: 6,
+            args: Some([1, 0, 0, 0, 0, 0]),
+            result: None,
+            complete: true,
+            issues: vec![],
+            fields: vec![],
+        };
+        let ended = |call_id, raw: u64| {
+            let mut event = entry.clone();
+            event.phase = 3;
+            event.call_id = call_id;
+            event.event_seq = 5;
+            event.fields = vec![FieldSummary {
+                object_id: 1,
+                key: "lifecycle.task_exit".into(),
+                layout: String::new(),
+                logical_len: Some(8),
+                captured_len: 8,
+                status: Some(0),
+                capture_error: 0,
+                complete: true,
+                preview: raw.to_le_bytes().to_vec(),
+                raw_path: None,
+                ranges: vec![(0, 8)],
+            }];
+            event
+        };
+        // exit_group(1): the kernel keeps the wait status 1 << 8.
+        let rows = pair_events(&[entry.clone(), ended(3, 0x100)]);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].exit.is_none() && rows[0].async_events.is_empty());
+        assert_eq!(rows[0].task_exit.as_ref().unwrap().event_seq, 5);
+        assert_eq!(
+            rows[0].task_exit_status(),
+            Some(WaitStatus::Exited { code: 1 })
+        );
+        // Killed while blocked; a task end with no captured call has no row.
+        let rows = pair_events(&[entry.clone(), ended(3, 9), ended(8, 0)]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].task_exit_status(),
+            Some(WaitStatus::Signaled {
+                signal: 9,
+                core_dumped: false
+            })
+        );
+    }
+    #[test]
+    fn wait_statuses_decode_exits_and_fatal_signals() {
+        assert_eq!(
+            WaitStatus::from_raw(0),
+            Some(WaitStatus::Exited { code: 0 })
+        );
+        assert_eq!(
+            WaitStatus::from_raw(0xff00),
+            Some(WaitStatus::Exited { code: 255 })
+        );
+        assert_eq!(
+            WaitStatus::from_raw(0x8b),
+            Some(WaitStatus::Signaled {
+                signal: 11,
+                core_dumped: true
+            })
+        );
+        // Stopped (0x7f), exit code with a signal, out of range.
+        for raw in [0x7f, 0x17f, 0x109, 0x10000] {
+            assert_eq!(WaitStatus::from_raw(raw), None, "{raw:#x}");
+        }
     }
     #[test]
     fn older_recording_health_defaults_new_loss_counters() {

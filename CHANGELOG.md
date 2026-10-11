@@ -66,9 +66,20 @@ transport reconnect require a new guest base with contract revision 14 / ABI9.
 - **A detached program's terminal no longer reports errors.** Resizing the
   terminal of a program that closed it (a daemon, as its window opened) was
   logged as "terminal is closed".
+- **How a task ended is shown on the call it ended in.** `exit_group` and
+  `exit` never return, so the trace showed them as "missing Exit" (a warning)
+  although the kernel records every task's end. The call now shows "exit 1"
+  or "killed by SIGKILL" (Task ended), its Exit as none, and the kernel's task
+  exit record under Phases; a program killed while blocked in a call shows
+  it there. Captures listed exit statuses raw ("exit 256" for `exit(1)`).
+- **Phases list what each one captured.** Entry and Exit expand to the
+  objects recorded at that point (a read's buffer under Exit, by argument
+  name), and a read that returned 0 bytes says there was nothing to capture.
 - **stall-check** (example): freeze a guest's QEMU and check that the app
   reconnects.
-- **run-dump** (example): print a recorded run's system calls.
+- **run-dump** (example): print a recorded run's system calls, and how each
+  task ended. **event-dump** (example): print every assembled record of a
+  run, lifecycle records included, with each captured field.
 - **More room everywhere**: taller tab bars with space around tab names,
   menus wide enough that shortcuts stand apart from their items, space above
   section headings, and roomier syscall category chips (Comfortable density).

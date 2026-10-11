@@ -1,8 +1,8 @@
 //! Native process selection and observer history, without program terminals.
-use super::{icon, theme};
+use super::{icon, theme, values};
 use antinomie_monitor_core::{
     capture_processes::CaptureProcess, CaptureScope, CaptureState, CaptureSummary,
-    GuestProcessIdentity, GuestProcessPage,
+    GuestProcessIdentity, GuestProcessPage, WaitStatus,
 };
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
@@ -491,11 +491,17 @@ pub(super) fn process_tree(
     action
 }
 
-/// Exit status text and color: 0 is good, another code an error.
+/// Exit status text and color: 0 is good, another code or a signal an
+/// error. The kernel reports a wait status: `exit(1)` is 256, SIGKILL 9.
 fn exit_status(process: &CaptureProcess) -> (String, egui::Color32) {
-    match (process.exited, process.exit_code) {
-        (true, Some(0)) => ("exit 0".into(), theme::good()),
-        (true, Some(code)) => (format!("exit {code}"), theme::error()),
+    let status = process
+        .exit_code
+        .and_then(|raw| WaitStatus::from_raw(u64::try_from(raw).ok()?));
+    match (process.exited, status) {
+        (true, Some(status @ WaitStatus::Exited { code: 0 })) => {
+            (values::task_end(&status), theme::good())
+        }
+        (true, Some(status)) => (values::task_end(&status), theme::error()),
         (true, None) => ("exited".into(), theme::warn()),
         (false, _) => (String::new(), theme::muted()),
     }
@@ -664,8 +670,10 @@ mod tests {
         );
         let mut failed = process(9, 1);
         failed.exited = true;
-        failed.exit_code = Some(2);
+        failed.exit_code = Some(2 << 8);
         assert_eq!(exit_status(&failed), ("exit 2".into(), theme::error()));
+        failed.exit_code = Some(9);
+        assert_eq!(exit_status(&failed).0, "killed by SIGKILL");
         failed.exit_code = Some(0);
         assert_eq!(exit_status(&failed).1, theme::good());
     }

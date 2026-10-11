@@ -318,9 +318,10 @@ fn acquire_data_owner(directory: &std::path::Path) -> Result<File, String> {
         return Err("data owner lock must be a regular file".into());
     }
     // A lock just released can still look held for a moment: a process
-    // being started elsewhere holds a copy of the file until its exec. Wait
-    // up to half a second before calling the folder in use.
-    let deadline = Instant::now() + Duration::from_millis(500);
+    // being started elsewhere holds a copy of the file until its exec, which
+    // under load can take hundreds of milliseconds. Wait up to two seconds
+    // before calling the folder in use.
+    let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         match rustix::fs::flock(&owner, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
             Ok(()) => return Ok(owner),
@@ -4993,6 +4994,9 @@ mod tests {
         assert!(manifest["persistence_error"].is_null());
         runs.clear();
         drop(capture);
+        // Queued writes of the runs land before their folders go.
+        crate::writer::barrier();
+        storage::settle_json_under(&root);
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
