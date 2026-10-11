@@ -263,7 +263,10 @@ const FIRST_USE_POINTS: &[&str] = &[
 ];
 
 /// A guest path for a sample: its hash prefix and a safe form of its name.
-fn guest_path(sample: &SampleInfo) -> String {
+/// `sent` is how many times the sample was sent before: each send gets its
+/// own file, as a copy still running in the guest cannot be replaced ("Text
+/// file busy").
+fn guest_path(sample: &SampleInfo, sent: usize) -> String {
     let name: String = sample
         .file_name
         .chars()
@@ -276,8 +279,13 @@ fn guest_path(sample: &SampleInfo) -> String {
         })
         .take(48)
         .collect();
+    let copy = if sent == 0 {
+        String::new()
+    } else {
+        format!("{}-", sent + 1)
+    };
     format!(
-        "/tmp/{}-{}",
+        "/tmp/{}-{copy}{}",
         &sample.sha256_hash[..12.min(sample.sha256_hash.len())],
         if name.is_empty() {
             "sample".into()
@@ -1182,7 +1190,7 @@ impl SamplesView {
                                 ui.ctx().copy_text(info.sha256_hash.clone());
                             }
                             let can = cx.running && !pending;
-                            let destination = guest_path(info);
+                            let destination = guest_path(info, sample.pushes.len());
                             if ui
                                 .add_enabled(can && runs_here, egui::Button::new("Send and run…"))
                                 .on_hover_text(format!(
@@ -1366,7 +1374,14 @@ mod tests {
             file_name: "../evil name;rm.elf".into(),
             ..SampleInfo::default()
         };
-        assert_eq!(guest_path(&sample), "/tmp/abababababab-.._evil_name_rm.elf");
+        assert_eq!(
+            guest_path(&sample, 0),
+            "/tmp/abababababab-.._evil_name_rm.elf"
+        );
+        assert_eq!(
+            guest_path(&sample, 2),
+            "/tmp/abababababab-3-.._evil_name_rm.elf"
+        );
     }
 
     #[test]
