@@ -1,5 +1,6 @@
 //! Real four-vCPU snapshot/reconnect qualification in a disposable data folder.
-//! Usage: snapshot-check BUNDLE WORK_DIR
+//! Usage: snapshot-check BUNDLE WORK_DIR [debian]
+//! With `debian` the VM is sized for a Debian desktop base and boots longer.
 use antinomie_monitor_core::*;
 use std::{
     collections::BTreeMap,
@@ -11,6 +12,9 @@ struct Driver {
     backend: Backend,
     snapshot: Snapshot,
     terminal: BTreeMap<String, Vec<u8>>,
+    /// Serial log text that says guest userspace is up.
+    ready: &'static str,
+    boot_secs: u64,
 }
 impl Driver {
     fn pump(&mut self) -> Vec<(u64, bool, String)> {
@@ -81,11 +85,14 @@ impl Driver {
         self.marker(id, marker)
     }
     fn guest_ready(&mut self) -> Result<(), String> {
-        let deadline = Instant::now() + Duration::from_secs(40);
+        let deadline = Instant::now() + Duration::from_secs(self.boot_secs);
         loop {
             self.pump();
             if self.snapshot.serial_log.as_ref().is_some_and(|path| {
-                std::fs::read_to_string(path).is_ok_and(|text| text.contains("BusyBox guest ready"))
+                std::fs::read(path).is_ok_and(|text| {
+                    text.windows(self.ready.len())
+                        .any(|part| part == self.ready.as_bytes())
+                })
             }) {
                 return Ok(());
             }
@@ -123,9 +130,11 @@ impl Driver {
 }
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.len() != 2 {
-        return Err("usage: snapshot-check BUNDLE WORK_DIR".into());
-    }
+    let debian = match args.get(2).and_then(|arg| arg.to_str()) {
+        None if args.len() == 2 => false,
+        Some("debian") if args.len() == 3 => true,
+        _ => return Err("usage: snapshot-check BUNDLE WORK_DIR [debian]".into()),
+    };
     let work = PathBuf::from(&args[1]);
     if work.exists() {
         return Err("qualification requires a fresh disposable work directory".into());
@@ -141,17 +150,23 @@ fn run() -> Result<(), String> {
         backend: Backend::new(options)?,
         snapshot: Snapshot::default(),
         terminal: BTreeMap::new(),
+        ready: if debian {
+            "systemd["
+        } else {
+            "BusyBox guest ready"
+        },
+        boot_secs: if debian { 180 } else { 40 },
     };
     driver.command(Command::Create(VmConfig {
         name: "Snapshot qualification".into(),
         cpus: 4,
-        ram_mib: 1024,
-        disk_gib: 2,
+        ram_mib: if debian { 4096 } else { 1024 },
+        disk_gib: if debian { 16 } else { 2 },
         ..VmConfig::default()
     }))?;
     let vm = driver.snapshot.vms.first().ok_or("VM missing")?.id.clone();
     driver.command(Command::Start { vm_id: vm.clone() })?;
-    let deadline = Instant::now() + Duration::from_secs(40);
+    let deadline = Instant::now() + Duration::from_secs(driver.boot_secs);
     loop {
         driver.pump();
         if driver
@@ -273,7 +288,7 @@ fn run() -> Result<(), String> {
     {
         return Err("snapshot branches/dependencies lost".into());
     }
-    std::fs::write(work.join("qualification.json"),serde_json::to_vec_pretty(&serde_json::json!({"passed":true,"cpus":4,"full_restores":2,"disk_reboot":true,"reconnect":true,"graph":tree,"health":driver.snapshot.health})).map_err(|error|error.to_string())?).map_err(|error|error.to_string())?;
+    std::fs::write(work.join("qualification.json"),serde_json::to_vec_pretty(&serde_json::json!({"passed":true,"base":if debian {"debian"} else {"busybox"},"cpus":4,"full_restores":2,"disk_reboot":true,"reconnect":true,"graph":tree,"health":driver.snapshot.health})).map_err(|error|error.to_string())?).map_err(|error|error.to_string())?;
     driver.backend.shutdown()?;
     println!("four-vCPU snapshot, branch and reconnect qualification passed");
     Ok(())
