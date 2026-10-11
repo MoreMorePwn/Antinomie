@@ -21,6 +21,8 @@ contract changes instead of independently redesigning a neighboring module.
 
 ## Ownership and maintainability
 
+- Use neutral feature/version branch names and project-focused commit messages.
+  Never include agent or model names in branch names, commit messages or trailers.
 - Rust: snake_case functions/fields/modules, PascalCase types, SCREAMING_SNAKE
   constants. Kernel: existing Linux conventions and checkpatch where applicable.
 - Suffix sizes with `_size` (capacity/extent), `_len` (used length/count of data),
