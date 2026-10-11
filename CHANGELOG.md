@@ -48,8 +48,13 @@ transport reconnect require a new guest base with contract revision 14 / ABI9.
   Run program with it as the program, to set arguments, user, where it runs
   and analysis. Sending a sample again replaces the copy in the guest
   instead of failing with "File exists".
-- **The Snapshots window keeps its size while it loads**, so its close
-  button stays where it was.
+- **Window close buttons work again in Comfortable density.** With the
+  wider margins of the spacing pass, egui's title bars ignored clicks on
+  their close button (every window, text size 16 and up); Escape still
+  worked. A test now clicks a window's close button at every density and
+  text size from 12 to 24. The Snapshots window also keeps its size while it
+  loads and opens centred, even when a position saved by an earlier version
+  is off the screen.
 - **A detached program's terminal no longer reports errors.** Resizing the
   terminal of a program that closed it (a daemon, as its window opened) was
   logged as "terminal is closed".

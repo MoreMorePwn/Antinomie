@@ -188,8 +188,11 @@ fn density(style: &mut egui::Style) {
         style.spacing.button_padding = egui::vec2(12.0, 7.0);
         style.spacing.menu_margin = egui::Margin::same(10);
         // Also the margin of every tab's content (egui_dock follows it).
-        style.spacing.window_margin = egui::Margin::same(22);
-        style.spacing.interact_size.y = body + 18.0;
+        // With taller widgets or a wider margin, egui's window title bar
+        // stops taking clicks on its close button at some text sizes (see
+        // window_close_buttons_work_at_every_density_and_text_size).
+        style.spacing.window_margin = egui::Margin::same(18);
+        style.spacing.interact_size.y = body + 16.0;
         // Room between a menu item and its shortcut.
         style.spacing.menu_width = 260.0;
     } else {
@@ -534,6 +537,82 @@ mod tests {
             (TextStyle::Heading, 20.0),
         ] {
             assert_eq!(style.text_styles[&text_style].size, size);
+        }
+    }
+}
+
+#[cfg(test)]
+mod close_button_tests {
+    use eframe::egui;
+
+    /// Whether a click near a window's top-right corner (where its close
+    /// button is) closes it.
+    fn close_button_works(compact: bool, font: f32) -> bool {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0));
+        let input = |events: Vec<egui::Event>| egui::RawInput {
+            screen_rect: Some(screen),
+            events,
+            ..Default::default()
+        };
+        let draw = |ctx: &egui::Context, open: &mut bool| {
+            egui::Window::new("Probe")
+                .id(egui::Id::new("probe"))
+                .default_pos(egui::pos2(200.0, 200.0))
+                .open(open)
+                .show(ctx, |ui| {
+                    ui.label("content");
+                });
+        };
+        let setup = || {
+            let ctx = egui::Context::default();
+            super::install(&ctx);
+            super::text_size(&ctx, font);
+            super::set_compact(&ctx, compact);
+            let mut open = true;
+            for _ in 0..3 {
+                let _ = ctx.run(input(vec![]), |ctx| draw(ctx, &mut open));
+            }
+            ctx
+        };
+        let Some(rect) = setup().memory(|m| m.area_rect(egui::Id::new("probe"))) else {
+            return false;
+        };
+        for dy in (0..90).step_by(3) {
+            for dx in (0..70).step_by(3) {
+                let pos = egui::pos2(rect.right() - dx as f32, rect.top() + dy as f32);
+                let ctx = setup();
+                let mut open = true;
+                let press = |pressed| egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                };
+                for events in [
+                    vec![egui::Event::PointerMoved(pos)],
+                    vec![press(true)],
+                    vec![press(false)],
+                    vec![],
+                ] {
+                    let _ = ctx.run(input(events), |ctx| draw(ctx, &mut open));
+                }
+                if !open {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn window_close_buttons_work_at_every_density_and_text_size() {
+        for compact in [true, false] {
+            for font in [12.0, 14.0, 16.0, 17.0, 18.0, 20.0, 22.0, 24.0] {
+                assert!(
+                    close_button_works(compact, font),
+                    "close button dead (compact {compact}, text {font})"
+                );
+            }
         }
     }
 }

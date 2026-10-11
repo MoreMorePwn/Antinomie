@@ -72,6 +72,9 @@ pub(crate) struct SnapshotManager {
     decision: Option<Decision>,
     pub(crate) pending: Option<u64>,
     pub(crate) result: Option<(bool, String)>,
+    /// Centre the window the next time it is drawn: as it opens, wherever
+    /// it was last (a saved position can be off the screen).
+    place: bool,
 }
 
 impl Default for SnapshotManager {
@@ -88,6 +91,7 @@ impl Default for SnapshotManager {
             decision: None,
             pending: None,
             result: None,
+            place: true,
         }
     }
 }
@@ -99,6 +103,9 @@ impl SnapshotManager {
             self.vm_id = Some(vm_id.to_owned());
         }
         self.vm_name = vm_name.to_owned();
+        if !self.open {
+            self.place = true;
+        }
         self.open = true;
     }
 
@@ -141,7 +148,7 @@ impl SnapshotManager {
         let mut command = None;
         let busy = self.pending.is_some() || progress.is_some();
         let enabled = enabled && !busy;
-        egui::Window::new(format!("Snapshots — {}", self.vm_name))
+        let window = egui::Window::new(format!("Snapshots — {}", self.vm_name))
             .id(egui::Id::new(WINDOW_ID))
             .open(&mut open)
             .collapsible(false)
@@ -152,147 +159,152 @@ impl SnapshotManager {
                 (ctx.screen_rect().size() - egui::vec2(96.0, 140.0)).max(egui::vec2(320.0, 260.0)),
             )
             .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.screen_rect().center())
-            .show(ctx, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    if ui
-                        .add_enabled(
-                            enabled
-                                && tree.is_some_and(|t| {
-                                    t.capabilities.can_create_disk || t.capabilities.can_create_full
-                                }),
-                            egui::Button::new("New snapshot…"),
-                        )
-                        .clicked()
-                    {
-                        let mode = if tree.is_some_and(|t| t.capabilities.can_create_disk) {
-                            VmSnapshotMode::Disk
-                        } else {
-                            VmSnapshotMode::Full
-                        };
-                        self.decision = Some(Decision::Create(Draft {
-                            mode,
-                            ..Draft::default()
-                        }));
-                    }
-                    if ui
-                        .add_enabled(enabled, egui::Button::new("Refresh"))
-                        .clicked()
-                    {
-                        command = self
-                            .vm_id
-                            .as_ref()
-                            .map(|id| Command::RefreshVmSnapshots { vm_id: id.clone() });
-                    }
-                    ui.separator();
-                    ui.selectable_value(&mut self.tree_view, false, "Graph");
-                    ui.selectable_value(&mut self.tree_view, true, "Tree");
-                    if !self.tree_view {
-                        if ui.button("Fit").clicked() {
-                            self.fit = true;
-                        }
-                        if ui.button("−").on_hover_text("Zoom out").clicked() {
-                            self.zoom = (self.zoom / 1.2).max(0.001);
-                        }
-                        if ui.button("+").on_hover_text("Zoom in").clicked() {
-                            self.zoom = (self.zoom * 1.2).min(2.0);
-                        }
-                        ui.weak(format!("{:.1}%", self.zoom * 100.0));
-                    }
-                });
-                ui.separator();
-                if let Some(progress) = progress {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spinner();
-                        ui.label(&progress.stage);
-                    });
-                } else if self.pending.is_some() {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label("Waiting for snapshot operation…");
-                    });
-                }
-                if let Some((success, message)) = &self.result {
-                    ui.colored_label(
-                        if *success {
-                            theme::good()
-                        } else {
-                            theme::error()
-                        },
-                        message,
-                    );
-                }
-                let Some(tree) = tree else {
-                    ui.label("Loading snapshots…");
-                    ui.weak("Use Refresh if the snapshot list is unavailable.");
-                    // The graph's room: the window keeps its size (and its
-                    // close button its place) when the list arrives.
-                    let cap = (ui.ctx().screen_rect().height() * 0.6).max(140.0);
-                    ui.allocate_space(egui::vec2(ui.available_width(), cap));
-                    return;
-                };
-                if let Some(note) = &tree.recovery_note {
-                    ui.colored_label(theme::warn(), note);
-                }
-                if let Some(reason) = &tree.capabilities.reason {
-                    ui.weak(reason);
-                }
-                if self
-                    .selected
-                    .as_ref()
-                    .is_some_and(|id| !tree.nodes.iter().any(|node| &node.id == id))
+            .default_pos(ctx.screen_rect().center());
+        let window = if std::mem::take(&mut self.place) {
+            window.current_pos(ctx.screen_rect().center())
+        } else {
+            window
+        };
+        window.show(ctx, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(
+                        enabled
+                            && tree.is_some_and(|t| {
+                                t.capabilities.can_create_disk || t.capabilities.can_create_full
+                            }),
+                        egui::Button::new("New snapshot…"),
+                    )
+                    .clicked()
                 {
-                    self.selected = None;
+                    let mode = if tree.is_some_and(|t| t.capabilities.can_create_disk) {
+                        VmSnapshotMode::Disk
+                    } else {
+                        VmSnapshotMode::Full
+                    };
+                    self.decision = Some(Decision::Create(Draft {
+                        mode,
+                        ..Draft::default()
+                    }));
                 }
-                let width = ui.available_width();
-                // Leave the hint line below the view its full height, or the
-                // window grows a little every frame.
-                let footer = ui.text_style_height(&egui::TextStyle::Body)
-                    + 2.0 * ui.spacing().item_spacing.y
-                    + 8.0;
-                // Capped, so the window settles with a margin to the app's edges.
-                let cap = (ui.ctx().screen_rect().height() * 0.6).max(140.0);
-                let height = (ui.available_height() - footer).clamp(140.0, cap);
-                if width >= 740.0 {
-                    // The three parts and the gaps between them add up to
-                    // the width exactly, or the window widens every frame.
-                    let gap = ui.spacing().item_spacing.x;
-                    let (details, line) = (280.0, gap * 2.0 + 1.0);
-                    let graph = (width - details - line - 2.0 * gap).max(200.0);
-                    ui.horizontal_top(|ui| {
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(graph, height),
-                            egui::Layout::top_down(egui::Align::Min),
-                            |ui| self.view(ui, tree, height),
-                        );
-                        // As tall as the view: a separator would take all the
-                        // height left and stretch the window.
-                        let (line, _) =
-                            ui.allocate_exact_size(egui::vec2(line, height), egui::Sense::hover());
-                        ui.painter().vline(
-                            line.center().x,
-                            line.y_range(),
-                            ui.visuals().widgets.noninteractive.bg_stroke,
-                        );
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(details, height),
-                            egui::Layout::top_down(egui::Align::Min),
-                            |ui| {
-                                egui::ScrollArea::vertical()
-                                    .max_height(height)
-                                    .show(ui, |ui| self.details(ui, tree, enabled));
-                            },
-                        );
-                    });
-                } else {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        self.view(ui, tree, (height * 0.6).clamp(160.0, 340.0));
-                        ui.separator();
-                        self.details(ui, tree, enabled);
-                    });
+                if ui
+                    .add_enabled(enabled, egui::Button::new("Refresh"))
+                    .clicked()
+                {
+                    command = self
+                        .vm_id
+                        .as_ref()
+                        .map(|id| Command::RefreshVmSnapshots { vm_id: id.clone() });
                 }
-                ui.weak("Restore a checkpoint, then save another to create a branch.");
+                ui.separator();
+                ui.selectable_value(&mut self.tree_view, false, "Graph");
+                ui.selectable_value(&mut self.tree_view, true, "Tree");
+                if !self.tree_view {
+                    if ui.button("Fit").clicked() {
+                        self.fit = true;
+                    }
+                    if ui.button("−").on_hover_text("Zoom out").clicked() {
+                        self.zoom = (self.zoom / 1.2).max(0.001);
+                    }
+                    if ui.button("+").on_hover_text("Zoom in").clicked() {
+                        self.zoom = (self.zoom * 1.2).min(2.0);
+                    }
+                    ui.weak(format!("{:.1}%", self.zoom * 100.0));
+                }
             });
+            ui.separator();
+            if let Some(progress) = progress {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spinner();
+                    ui.label(&progress.stage);
+                });
+            } else if self.pending.is_some() {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Waiting for snapshot operation…");
+                });
+            }
+            if let Some((success, message)) = &self.result {
+                ui.colored_label(
+                    if *success {
+                        theme::good()
+                    } else {
+                        theme::error()
+                    },
+                    message,
+                );
+            }
+            let Some(tree) = tree else {
+                ui.label("Loading snapshots…");
+                ui.weak("Use Refresh if the snapshot list is unavailable.");
+                // The graph's room: the window keeps its size (and its
+                // close button its place) when the list arrives.
+                let cap = (ui.ctx().screen_rect().height() * 0.6).max(140.0);
+                ui.allocate_space(egui::vec2(ui.available_width(), cap));
+                return;
+            };
+            if let Some(note) = &tree.recovery_note {
+                ui.colored_label(theme::warn(), note);
+            }
+            if let Some(reason) = &tree.capabilities.reason {
+                ui.weak(reason);
+            }
+            if self
+                .selected
+                .as_ref()
+                .is_some_and(|id| !tree.nodes.iter().any(|node| &node.id == id))
+            {
+                self.selected = None;
+            }
+            let width = ui.available_width();
+            // Leave the hint line below the view its full height, or the
+            // window grows a little every frame.
+            let footer = ui.text_style_height(&egui::TextStyle::Body)
+                + 2.0 * ui.spacing().item_spacing.y
+                + 8.0;
+            // Capped, so the window settles with a margin to the app's edges.
+            let cap = (ui.ctx().screen_rect().height() * 0.6).max(140.0);
+            let height = (ui.available_height() - footer).clamp(140.0, cap);
+            if width >= 740.0 {
+                // The three parts and the gaps between them add up to
+                // the width exactly, or the window widens every frame.
+                let gap = ui.spacing().item_spacing.x;
+                let (details, line) = (280.0, gap * 2.0 + 1.0);
+                let graph = (width - details - line - 2.0 * gap).max(200.0);
+                ui.horizontal_top(|ui| {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(graph, height),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| self.view(ui, tree, height),
+                    );
+                    // As tall as the view: a separator would take all the
+                    // height left and stretch the window.
+                    let (line, _) =
+                        ui.allocate_exact_size(egui::vec2(line, height), egui::Sense::hover());
+                    ui.painter().vline(
+                        line.center().x,
+                        line.y_range(),
+                        ui.visuals().widgets.noninteractive.bg_stroke,
+                    );
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(details, height),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            egui::ScrollArea::vertical()
+                                .max_height(height)
+                                .show(ui, |ui| self.details(ui, tree, enabled));
+                        },
+                    );
+                });
+            } else {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    self.view(ui, tree, (height * 0.6).clamp(160.0, 340.0));
+                    ui.separator();
+                    self.details(ui, tree, enabled);
+                });
+            }
+            ui.weak("Restore a checkpoint, then save another to create a branch.");
+        });
         self.open = open;
         if !open {
             self.decision = None;
