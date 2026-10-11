@@ -14,9 +14,13 @@
 //! OpenSSH plugins (installed in DATA_DIR) must find them. The SSH session
 //! (`ANTINOMIE_QA_SSH=USER:AUTHORIZED_KEYS`) needs a throwaway sshd on the
 //! host's 127.0.0.1:22222 reading that keys file.
+//!
+//! With `ANTINOMIE_QA_SNAPSHOT=1` the VM is saved and restored from a full
+//! snapshot before the dump, so the dump is of a restored VM; a snapshot asked
+//! for while the dump runs must be refused, and one after it must work.
 use antinomie_monitor_core::{
     Backend, BackendOptions, Command, ExecRequest, GuestCredentials, Notification, Snapshot,
-    VmConfig,
+    SnapshotRequest, VmConfig, VmSnapshotMode,
     memory::{self, MemoryDump, RunState, Volatility},
 };
 use std::{
@@ -222,6 +226,7 @@ fn run() -> Result<(), String> {
     let data = PathBuf::from(data);
     let volatility = Volatility::locate(&data)?;
     let community = std::env::var_os("ANTINOMIE_QA_COMMUNITY").is_some();
+    let snapshots = std::env::var_os("ANTINOMIE_QA_SNAPSHOT").is_some();
     let mut random = [0; 16];
     File::open("/dev/urandom")
         .and_then(|mut source| source.read_exact(&mut random))
@@ -263,7 +268,9 @@ fn run() -> Result<(), String> {
         .id
         .clone();
     let booted = Instant::now();
-    test.command(Command::Start { vm_id })?;
+    test.command(Command::Start {
+        vm_id: vm_id.clone(),
+    })?;
     test.wait("Debian PID1 start", 180, |s| {
         s.serial_log
             .as_ref()
@@ -361,8 +368,49 @@ fn run() -> Result<(), String> {
     thread::sleep(Duration::from_secs(20));
     println!("guest up in {:.0} s", booted.elapsed().as_secs_f32());
 
+    let full = |name: &str| Command::CreateVmSnapshot {
+        vm_id: vm_id.clone(),
+        request: SnapshotRequest {
+            name: name.into(),
+            description: String::new(),
+            mode: VmSnapshotMode::Full,
+        },
+    };
+    if snapshots {
+        let saved = Instant::now();
+        test.command(full("Before dump"))?;
+        test.command(Command::RefreshVmSnapshots {
+            vm_id: vm_id.clone(),
+        })?;
+        let snapshot_id = test
+            .snapshot
+            .vm_snapshot_trees
+            .get(&vm_id)
+            .and_then(|tree| tree.nodes.iter().find(|node| node.name == "Before dump"))
+            .ok_or("snapshot missing")?
+            .id
+            .clone();
+        test.command(Command::RestoreVmSnapshot {
+            vm_id: vm_id.clone(),
+            snapshot_id,
+            boot_from_disk: false,
+            save_current: None,
+            confirmed: true,
+        })?;
+        println!(
+            "full snapshot saved and restored in {:.1} s",
+            saved.elapsed().as_secs_f32()
+        );
+    }
+
     let dumped = Instant::now();
     test.command(Command::DumpMemory)?;
+    if snapshots {
+        match test.command(full("During dump")) {
+            Ok(_) => return Err("snapshot accepted while the dump ran".into()),
+            Err(error) => println!("snapshot during the dump refused: {error}"),
+        }
+    }
     test.wait("memory dump", 300, |s| s.memory_dump.is_none())?;
     println!("dump written in {:.1} s", dumped.elapsed().as_secs_f32());
     let mut roots = Vec::new();
@@ -391,6 +439,10 @@ fn run() -> Result<(), String> {
     }));
     println!("guest still answers after the dump: {}", status.is_ok());
     status?;
+    if snapshots {
+        test.command(full("After dump"))?;
+        println!("full snapshot after the dump saved");
+    }
 
     let catalog = volatility.plugins()?;
     println!(
