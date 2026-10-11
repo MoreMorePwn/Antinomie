@@ -360,11 +360,49 @@ struct Session {
     /// The last drain pass found enough telemetry that the next one should
     /// follow without waiting.
     telemetry_busy: bool,
+    /// Capture All load shedding (see [`Session::shed_load`]).
+    shed: Shed,
     status_cursor: usize,
     last_status_query: Instant,
     persisted_packets: u64,
     kernel_probe: KernelProbe,
 }
+/// Capture All of a busy guest (a desktop) can produce telemetry faster than
+/// the host decodes and saves it. Never-drop sends then make every traced
+/// syscall wait for room, up to seconds each, and the guest stops responding.
+/// While Capture All runs and the host falls behind, senders drop instead of
+/// waiting (each drop is counted as lost telemetry); never-drop returns once
+/// the host has caught up.
+#[derive(Clone, Copy, Debug)]
+struct Shed {
+    active: bool,
+    since: Instant,
+    /// The guest's total send wait at `sampled`, and the share of wall time
+    /// it spent waiting since the sample before.
+    sampled: Instant,
+    sampled_wait_ns: u64,
+    wait_share: f64,
+}
+
+impl Default for Shed {
+    fn default() -> Self {
+        Self {
+            active: false,
+            since: Instant::now(),
+            sampled: Instant::now(),
+            sampled_wait_ns: 0,
+            wait_share: 0.0,
+        }
+    }
+}
+
+/// Shed when this much recording waits for the disk, or the guest's senders
+/// together waited this share of the time; resume below the lower backlog.
+const SHED_BACKLOG: usize = 64 * 1024 * 1024;
+const RESUME_BACKLOG: usize = 16 * 1024 * 1024;
+const SHED_WAIT_SHARE: f64 = 0.5;
+const SHED_MIN: Duration = Duration::from_secs(2);
+
 /// Progress of the INFO probe that identifies the running guest kernel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum KernelProbe {
@@ -1029,6 +1067,7 @@ impl Session {
         snapshot.health.ring_size = stats.ring_size;
         snapshot.health.send_wait_us = stats.send_wait_us;
         snapshot.health.write_backlog = crate::writer::backlog() as u64;
+        self.shed_load(stats.wait_ns, &mut snapshot.health)?;
         snapshot.health.persisted_packets = self.persisted_packets;
         self.refresh_storage_health(&mut snapshot.health);
         snapshot.health.parser_evicted_count = self.assembler.evicted_count
@@ -1045,6 +1084,46 @@ impl Session {
         );
         self.update_captures(snapshot);
         let _ = sender;
+        Ok(())
+    }
+    /// Capture All load shedding: drop instead of waiting while the host is
+    /// behind (see [`Shed`]). `wait_ns` is the guest's total send wait.
+    fn shed_load(&mut self, wait_ns: u64, health: &mut Health) -> Result<(), String> {
+        let configured = self.vm.transport.send_wait_us();
+        let now = Instant::now();
+        let elapsed = now.saturating_duration_since(self.shed.sampled);
+        if elapsed >= Duration::from_millis(500) {
+            let waited = wait_ns.saturating_sub(self.shed.sampled_wait_ns);
+            self.shed.wait_share = waited as f64 / elapsed.as_nanos().max(1) as f64;
+            self.shed.sampled = now;
+            self.shed.sampled_wait_ns = wait_ns;
+        }
+        let capture_all = self.captures.values().any(|capture| {
+            capture.summary.scope == CaptureScope::AllUserspace
+                && capture.summary.state == CaptureState::Active
+        });
+        let backlog = crate::writer::backlog();
+        if !self.shed.active
+            && configured > 0
+            && capture_all
+            && (backlog > SHED_BACKLOG || self.shed.wait_share > SHED_WAIT_SHARE)
+        {
+            self.transport.set_send_wait(0)?;
+            self.shed = Shed {
+                active: true,
+                since: now,
+                ..self.shed
+            };
+        } else if self.shed.active
+            && (!capture_all
+                || (backlog < RESUME_BACKLOG
+                    && now.saturating_duration_since(self.shed.since) >= SHED_MIN))
+        {
+            self.transport.set_send_wait(configured)?;
+            self.shed.active = false;
+            self.shed.wait_share = 0.0;
+        }
+        health.shedding = self.shed.active;
         Ok(())
     }
     /// Write the packets the raw captures buffered during a drain pass.
@@ -2865,6 +2944,7 @@ impl Worker {
                 terminal_cursor: 0,
                 late_reads: BTreeMap::new(),
                 telemetry_busy: false,
+                shed: Shed::default(),
                 last_process_save: Instant::now(),
                 network_bytes_done: 0,
                 network_bytes: 0,

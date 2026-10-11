@@ -250,25 +250,28 @@ impl SnapshotManager {
                 let cap = (ui.ctx().screen_rect().height() * 0.6).max(140.0);
                 let height = (ui.available_height() - footer).clamp(140.0, cap);
                 if width >= 740.0 {
+                    // The three parts and the gaps between them add up to
+                    // the width exactly, or the window widens every frame.
+                    let gap = ui.spacing().item_spacing.x;
+                    let (details, line) = (280.0, gap * 2.0 + 1.0);
+                    let graph = (width - details - line - 2.0 * gap).max(200.0);
                     ui.horizontal_top(|ui| {
                         ui.allocate_ui_with_layout(
-                            egui::vec2((width - 300.0).max(200.0), height),
+                            egui::vec2(graph, height),
                             egui::Layout::top_down(egui::Align::Min),
                             |ui| self.view(ui, tree, height),
                         );
                         // As tall as the view: a separator would take all the
                         // height left and stretch the window.
-                        let (line, _) = ui.allocate_exact_size(
-                            egui::vec2(ui.spacing().item_spacing.x * 2.0 + 1.0, height),
-                            egui::Sense::hover(),
-                        );
+                        let (line, _) =
+                            ui.allocate_exact_size(egui::vec2(line, height), egui::Sense::hover());
                         ui.painter().vline(
                             line.center().x,
                             line.y_range(),
                             ui.visuals().widgets.noninteractive.bg_stroke,
                         );
                         ui.allocate_ui_with_layout(
-                            egui::vec2(280.0, height),
+                            egui::vec2(details, height),
                             egui::Layout::top_down(egui::Align::Min),
                             |ui| {
                                 egui::ScrollArea::vertical()

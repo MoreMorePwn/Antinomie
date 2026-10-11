@@ -63,6 +63,22 @@ impl Source {
             Source::MalShare => crate::malshare::find(curl, key, text, limit),
         }
     }
+    /// The newest samples of every type. MalwareBazaar lists its latest 100
+    /// (without architectures); MalShare its last day's hashes.
+    pub fn newest_all(
+        self,
+        curl: &Path,
+        key: &str,
+        limit: u32,
+    ) -> Result<(String, Vec<SampleInfo>), String> {
+        match self {
+            Source::MalwareBazaar => Ok((
+                "Newest uploads, all types".into(),
+                search(curl, key, &Query::Recent, limit)?,
+            )),
+            Source::MalShare => crate::malshare::newest_all(curl, key, limit),
+        }
+    }
     /// Download one sample found in this source into the data folder.
     pub fn download(
         self,
@@ -295,9 +311,10 @@ fn is_hash(text: &str) -> bool {
     matches!(text.len(), 32 | 40 | 64) && text.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// One search box: empty lists the newest uploads, a hash looks that sample
-/// up, and a word is tried as a family, then a tag, then a file type. Returns
-/// what was searched, in words, and the samples.
+/// One search box: empty lists the newest ELF samples (what the guests run,
+/// with their architectures), a hash looks that sample up, and a word is
+/// tried as a family, then a tag, then a file type. Returns what was
+/// searched, in words, and the samples.
 pub fn find(
     curl: &Path,
     key: &str,
@@ -307,8 +324,8 @@ pub fn find(
     let text = text.trim();
     if text.is_empty() {
         return Ok((
-            "Newest uploads".into(),
-            search(curl, key, &Query::Recent, limit)?,
+            "Newest ELF samples".into(),
+            search(curl, key, &Query::FileType("elf".into()), limit)?,
         ));
     }
     if is_hash(text) {

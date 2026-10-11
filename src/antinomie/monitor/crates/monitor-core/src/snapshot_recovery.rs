@@ -198,6 +198,7 @@ impl Session {
             last_network_check: Instant::now(),
             last_memory_check: Instant::now(),
             telemetry_busy: false,
+            shed: Shed::default(),
             status_cursor: 0,
             last_status_query: Instant::now() - Duration::from_secs(1),
             persisted_packets: 0,

@@ -2841,6 +2841,15 @@ impl MonitorApp {
                             if health.ring_size == 0 { "unknown".to_owned() } else { ring_label(health.ring_size / 1024) },
                             if health.send_wait_us == 0 { "drop".to_owned() } else { format!("wait up to {} ms", health.send_wait_us / 1000) },
                         ));
+                    if health.shedding {
+                        ui.colored_label(theme::warn(), "Capture All is dropping events")
+                            .on_hover_text(
+                                "The host cannot decode and save this guest's telemetry as fast \
+                                 as it comes, so the guest drops records instead of waiting on \
+                                 every system call (which would freeze it). Never-drop resumes \
+                                 once the host has caught up; drops count as transport loss.",
+                            );
+                    }
                     if health.transport_waits > 0 {
                         // Never-drop mode: how much the guest was slowed down.
                         status_value(
@@ -5689,15 +5698,33 @@ fn base_selector(
             .map(base_choice_label)
             .unwrap_or_else(|| "Linux 6.12.94 (unavailable)".into())
     };
-    egui::ComboBox::from_id_salt(salt)
-        .selected_text(label)
-        .width(260.0)
-        .show_ui(ui, |ui| {
-            for base in &snapshot.bases {
-                ui.selectable_value(identity, Some(base.id.clone()), base_choice_label(base))
-                    .on_hover_text(base.directory.display().to_string());
-            }
-        });
+    // A fixed width, the name cut to fit (whole on hover): a long base name
+    // would otherwise push into the column beside the form. egui cuts the
+    // text at the width available, so the box gets exactly the Name field's.
+    let width = 296.0;
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, ui.spacing().interact_size.y),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.set_max_width(width);
+            egui::ComboBox::from_id_salt(salt)
+                .selected_text(label.clone())
+                .width(width)
+                .truncate()
+                .show_ui(ui, |ui| {
+                    for base in &snapshot.bases {
+                        ui.selectable_value(
+                            identity,
+                            Some(base.id.clone()),
+                            base_choice_label(base),
+                        )
+                        .on_hover_text(base.directory.display().to_string());
+                    }
+                })
+                .response
+                .on_hover_text(label);
+        },
+    );
 }
 
 /// One catalog base: name and facts on the left; installed, Download, or
@@ -6800,7 +6827,7 @@ fn text_field(text: &mut String) -> egui::TextEdit<'_> {
 
 /// A titled group of fields in a dialog.
 fn dialog_section(ui: &mut egui::Ui, title: &str) {
-    ui.add_space(6.0);
+    // theme::section leaves the room above a heading that follows something.
     theme::section(ui, title);
     ui.add_space(2.0);
 }

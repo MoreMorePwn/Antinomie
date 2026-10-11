@@ -188,7 +188,7 @@ fn density(style: &mut egui::Style) {
         style.spacing.button_padding = egui::vec2(12.0, 7.0);
         style.spacing.menu_margin = egui::Margin::same(10);
         // Also the margin of every tab's content (egui_dock follows it).
-        style.spacing.window_margin = egui::Margin::same(18);
+        style.spacing.window_margin = egui::Margin::same(22);
         style.spacing.interact_size.y = body + 18.0;
         // Room between a menu item and its shortcut.
         style.spacing.menu_width = 260.0;
@@ -196,7 +196,7 @@ fn density(style: &mut egui::Style) {
         style.spacing.item_spacing = egui::vec2(8.0, 6.0);
         style.spacing.button_padding = egui::vec2(10.0, 5.0);
         style.spacing.menu_margin = egui::Margin::same(8);
-        style.spacing.window_margin = egui::Margin::same(12);
+        style.spacing.window_margin = egui::Margin::same(16);
         style.spacing.interact_size.y = body + 12.0;
         style.spacing.menu_width = 220.0;
     }
@@ -330,6 +330,10 @@ pub fn apply(ctx: &egui::Context, light: bool) {
     style.visuals.widgets.active.weak_bg_fill = palette.primary;
     style.visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, palette.primary_text);
     style.visuals.widgets.open.bg_fill = palette.hover;
+    // egui grows a hovered or pressed widget by a point; next to a panel or
+    // window edge that point is cut off, so widgets keep their size.
+    style.visuals.widgets.hovered.expansion = 0.0;
+    style.visuals.widgets.active.expansion = 0.0;
     density(&mut style);
     let size = style
         .text_styles

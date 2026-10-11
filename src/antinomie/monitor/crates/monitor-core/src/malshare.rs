@@ -265,10 +265,11 @@ fn of_type(
     Ok(Some((name.clone(), infos(&body, Some(&name), limit)?)))
 }
 
-/// One search box, as for MalwareBazaar: empty lists the ELF samples of the
-/// last 24 hours (what the guests can run); a hash looks that sample up; a
-/// file type (`elf`, `pe32`) lists that type's last 24 hours; anything else
-/// is searched in MalShare's hashes, sources and file names.
+/// One search box, as for MalwareBazaar: empty lists the newest ELF samples
+/// (what the guests can run; MalShare's lists cover its last day); a hash
+/// looks that sample up; a file type (`elf`, `pe32`) lists that type's
+/// newest; anything else is searched in MalShare's hashes, sources and file
+/// names.
 pub fn find(
     curl: &Path,
     key: &str,
@@ -278,8 +279,8 @@ pub fn find(
     let text = text.trim();
     if text.is_empty() {
         return Ok(match of_type(curl, key, "elf", limit)? {
-            Some((_, found)) => ("Newest ELF samples (24 hours)".into(), found),
-            None => ("No ELF samples in the last 24 hours".into(), Vec::new()),
+            Some((_, found)) => ("Newest ELF samples".into(), found),
+            None => ("No new ELF samples".into(), Vec::new()),
         });
     }
     if matches!(text.len(), 32 | 40 | 64) && text.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -295,7 +296,7 @@ pub fn find(
         && text.len() <= 16
         && let Some((name, found)) = of_type(curl, key, text, limit)?
     {
-        return Ok((format!("File type {name} (24 hours)"), found));
+        return Ok((format!("File type {name}"), found));
     }
     let body = get(
         curl,
@@ -304,6 +305,16 @@ pub fn find(
         MAX_REPLY,
     )?;
     Ok((format!("Search {text}"), infos(&body, None, limit)?))
+}
+
+/// The newest samples of every type: MalShare lists hashes only, so their
+/// type and name are unknown until a search or a download.
+pub fn newest_all(curl: &Path, key: &str, limit: u32) -> Result<(String, Vec<SampleInfo>), String> {
+    let body = get(curl, key, &[("action", "getlist")], MAX_REPLY)?;
+    Ok((
+        "Newest uploads, all types".into(),
+        infos(&body, None, limit)?,
+    ))
 }
 
 /// Download one sample, check it and keep it encrypted with its record.

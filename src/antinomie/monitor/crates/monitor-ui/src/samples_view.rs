@@ -17,8 +17,8 @@ use std::{
 
 pub(crate) const WINDOW_ID: &str = "malware_samples";
 
-/// Samples asked of a source per search: a fair share of its free API.
-const SEARCH_LIMIT: u32 = 200;
+/// Samples asked of a source per search, the most MalwareBazaar answers.
+const SEARCH_LIMIT: u32 = 1000;
 
 pub(crate) struct SamplesContext<'a> {
     pub data_dir: &'a Path,
@@ -45,6 +45,7 @@ pub(crate) enum SamplesAction {
 enum Col {
     Seen,
     File,
+    Hash,
     Family,
     Type,
     Arch,
@@ -53,9 +54,10 @@ enum Col {
 }
 
 impl Col {
-    const ALL: [Col; 7] = [
+    const ALL: [Col; 8] = [
         Col::Seen,
         Col::File,
+        Col::Hash,
         Col::Family,
         Col::Type,
         Col::Arch,
@@ -66,6 +68,7 @@ impl Col {
         match self {
             Col::Seen => "First seen",
             Col::File => "File",
+            Col::Hash => "SHA-256",
             Col::Family => "Family",
             Col::Type => "Type",
             Col::Arch => "Architecture",
@@ -170,6 +173,7 @@ fn shown(results: &[SampleInfo], filters: &Filters, sort: Option<Sort>) -> Vec<u
             match sort.column {
                 Col::Seen => sample.first_seen.clone(),
                 Col::File => sample.file_name.to_lowercase(),
+                Col::Hash => sample.sha256_hash.clone(),
                 Col::Family => sample.signature.clone().unwrap_or_default().to_lowercase(),
                 Col::Type => sample.file_type.to_lowercase(),
                 Col::Arch => arch(sample).unwrap_or_default().to_lowercase(),
@@ -372,6 +376,17 @@ impl SamplesView {
         if self.searching.is_some() || !self.downloads.is_empty() {
             ctx.request_repaint_after(Duration::from_millis(200));
         }
+    }
+
+    /// The source's newest samples of every type.
+    fn search_all(&mut self, cx: &SamplesContext<'_>) {
+        let (sender, receiver) = mpsc::channel();
+        let (curl, key, source) = (cx.curl.to_path_buf(), self.key.clone(), self.source);
+        std::thread::spawn(move || {
+            let _ = sender.send(source.newest_all(&curl, &key, SEARCH_LIMIT));
+        });
+        self.searching = Some(receiver);
+        self.status = None;
     }
 
     /// Search the source for `text` (empty: the newest samples).
@@ -665,6 +680,7 @@ impl SamplesView {
 
     fn search_bar(&mut self, ui: &mut egui::Ui, cx: &SamplesContext<'_>) {
         let mut search = None;
+        let mut all = false;
         let ready = self.key_saved && self.searching.is_none();
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -678,11 +694,25 @@ impl SamplesView {
                     self.editing_key = true;
                 }
                 if ui
-                    .add_enabled(ready, egui::Button::new("Newest"))
+                    .add_enabled(ready, egui::Button::new("Newest (all)"))
                     .on_hover_text(match self.source {
-                        Source::MalwareBazaar => "The latest uploads to MalwareBazaar",
-                        Source::MalShare => "The ELF samples MalShare received in the last 24 hours",
+                        Source::MalwareBazaar => {
+                            "MalwareBazaar's latest 100 uploads of every type (it lists no \
+                             architectures for these)"
+                        }
+                        Source::MalShare => {
+                            "MalShare's newest uploads of every type (hashes only until \
+                             searched or downloaded)"
+                        }
                     })
+                    .clicked()
+                {
+                    self.text.clear();
+                    all = true;
+                }
+                if ui
+                    .add_enabled(ready, egui::Button::new("Newest ELF"))
+                    .on_hover_text("The newest Linux programs: what the VMs can run")
                     .clicked()
                 {
                     self.text.clear();
@@ -738,7 +768,9 @@ impl SamplesView {
                 "Samples from MalShare (malshare.com), searched by hash, file type, file name \
                  or source; MalShare names no families. Free keys allow 2000 requests a day.",
             );
-            if let Some(text) = search {
+            if all {
+                self.search_all(cx);
+            } else if let Some(text) = search {
                 self.search(cx, text);
             }
             return;
@@ -756,7 +788,9 @@ impl SamplesView {
                 }
             }
         });
-        if let Some(text) = search {
+        if all {
+            self.search_all(cx);
+        } else if let Some(text) = search {
             self.search(cx, text);
         }
     }
@@ -873,7 +907,8 @@ impl SamplesView {
             .auto_shrink([false, false])
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .column(Column::initial(190.0))
-            .column(Column::initial(230.0).clip(true))
+            .column(Column::initial(200.0).clip(true))
+            .column(Column::initial(150.0).clip(true))
             .column(Column::initial(120.0).clip(true))
             .column(Column::initial(70.0))
             .column(Column::initial(110.0))
@@ -927,6 +962,23 @@ impl SamplesView {
                                 .truncate(),
                         )
                         .on_hover_text(&sample.sha256_hash);
+                    });
+                    row.col(|ui| {
+                        let hash = &sample.sha256_hash;
+                        if ui
+                            .add(
+                                egui::Label::new(
+                                    RichText::new(format!("{}…", &hash[..16.min(hash.len())]))
+                                        .font(mono.clone())
+                                        .color(theme::value(ValueKind::Number)),
+                                )
+                                .sense(egui::Sense::click()),
+                            )
+                            .on_hover_text(format!("{hash}\nClick to copy"))
+                            .clicked()
+                        {
+                            ui.ctx().copy_text(hash.clone());
+                        }
                     });
                     row.col(|ui| {
                         ui.label(

@@ -23,11 +23,22 @@ transport reconnect require a new guest base with contract revision 14 / ABI9.
 - **Snapshots** on the toolbar; the snapshot window keeps a margin to the app's
   edges and room inside its graph nodes. Memory dumps and snapshot or reconnect
   operations never overlap.
+- **Daemonizing programs keep running.** A launched program led its terminal
+  session, so its exit hung up the children it had just forked: Mirai and
+  most Linux malware died at their first fork. The guest kernel (patch 0020)
+  now launches programs as a terminal's shell would; bases must be rebuilt.
+- **Capture All no longer freezes a desktop guest.** When the host cannot
+  decode and save telemetry as fast as a busy guest (GNOME) makes it, the
+  guest drops records instead of waiting on every system call; never-drop
+  resumes once the host catches up, and the status bar says so. Twenty
+  `ls -la /usr/bin` under Capture All on GNOME: 106 s before, 0.7 s now.
+- **run-dump** (example): print a recorded run's system calls.
 - **More room everywhere**: taller tab bars with space around tab names,
   menus wide enough that shortcuts stand apart from their items, space above
   section headings, and roomier syscall category chips (Comfortable density).
-- **Malware samples** (Tools): the newest MalwareBazaar uploads as soon as
-  the window opens; one search box for a family, tag, file type or hash, with
+- **Malware samples** (Tools): the newest ELF samples as soon as the window
+  opens (up to 1000, with architectures; "Newest (all)" for every type), a
+  SHA-256 column; one search box for a family, tag, file type or hash, with
   your own free API key; File type, Architecture, Family and Tags dropdowns
   (tags as checkboxes) and sortable columns over the results; one-click
   families that run on x86-64 Linux. A second source, MalShare (free key,

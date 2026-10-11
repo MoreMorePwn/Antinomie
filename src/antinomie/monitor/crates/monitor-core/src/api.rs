@@ -1024,6 +1024,10 @@ pub struct Health {
     /// Recording bytes queued for the disk writer thread.
     #[serde(default)]
     pub write_backlog: u64,
+    /// Capture All is dropping telemetry because the host is behind; the
+    /// guest would otherwise wait on every traced syscall.
+    #[serde(default)]
+    pub shedding: bool,
 }
 #[derive(Clone, Debug, PartialEq, Default)]
 pub enum VmState {
