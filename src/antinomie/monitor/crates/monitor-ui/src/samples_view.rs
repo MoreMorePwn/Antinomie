@@ -66,7 +66,7 @@ impl Kind {
     fn hint(self) -> &'static str {
         match self {
             Kind::Family => "XorDDoS, Mirai, Kinsing…",
-            Kind::Tag => "elf, x86-64, botnet…",
+            Kind::Tag => "x86-64, botnet, Gafgyt…",
             Kind::FileType => "elf",
             Kind::Hash => "SHA-256, SHA-1 or MD5",
             Kind::Recent => "the latest 100 samples",
@@ -79,6 +79,10 @@ pub(crate) struct SamplesView {
     key: String,
     key_saved: bool,
     key_loaded: bool,
+    /// The warning before first use was accepted in this data folder.
+    acknowledged: bool,
+    /// The acceptance checkbox of that warning.
+    understood: bool,
     kind: Kind,
     text: String,
     elf_only: bool,
@@ -101,6 +105,8 @@ impl Default for SamplesView {
             key: String::new(),
             key_saved: false,
             key_loaded: false,
+            acknowledged: false,
+            understood: false,
             kind: Kind::Family,
             text: String::new(),
             elf_only: true,
@@ -115,6 +121,19 @@ impl Default for SamplesView {
         }
     }
 }
+
+/// What the warning before first use says, one point per line.
+const FIRST_USE_POINTS: &[&str] = &[
+    "Never run a sample on this computer. Antinomie keeps samples in their encrypted \
+     archives and decrypts them only in memory to send them into a VM.",
+    "A sample run in a VM with NAT on can reach your network and the Internet: it may \
+     spread, attack other machines or contact its operators. Keep NAT off unless you need it.",
+    "Use a VM you can throw away, or take a snapshot first. Escaping a VM is rare but \
+     possible.",
+    "Antivirus software on this computer may flag or quarantine the data folder.",
+    "Downloading or keeping malware may be restricted by law or by your organisation. \
+     Samples are for research and defence only.",
+];
 
 fn format_size(bytes: u64) -> String {
     match bytes {
@@ -226,7 +245,12 @@ impl SamplesView {
         if !self.key_loaded {
             self.key = samples::api_key(cx.data_dir);
             self.key_saved = !self.key.is_empty();
+            self.acknowledged = samples::acknowledged(cx.data_dir);
             self.key_loaded = true;
+        }
+        if !self.acknowledged {
+            self.first_use(ctx, cx);
+            return None;
         }
         self.poll(ctx);
         let stored = self
@@ -239,10 +263,12 @@ impl SamplesView {
             .id(egui::Id::new(WINDOW_ID))
             .collapsible(false)
             .resizable(true)
-            .default_width(900.0)
-            .default_height(640.0)
-            .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.screen_rect().center())
+            // Centred on its default size: a pivot would centre the first,
+            // smaller frame instead.
+            .default_rect(egui::Rect::from_center_size(
+                ctx.screen_rect().center(),
+                egui::vec2(900.0, 640.0).min(ctx.screen_rect().size() - egui::vec2(48.0, 96.0)),
+            ))
             .open(&mut open)
             .show(ctx, |ui| {
                 self.warning(ui, cx);
@@ -266,6 +292,79 @@ impl SamplesView {
             self.open = false;
         }
         action
+    }
+
+    /// Shown instead of the window until the user accepts it once.
+    fn first_use(&mut self, ctx: &egui::Context, cx: &SamplesContext<'_>) {
+        let mut open = true;
+        let mut cancel = false;
+        egui::Window::new("Malware samples")
+            .id(egui::Id::new(WINDOW_ID).with("first_use"))
+            .collapsible(false)
+            .resizable(false)
+            .default_width(620.0)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(egui_phosphor::regular::BIOHAZARD)
+                            .size(cx.font_size * 2.0)
+                            .color(theme::warn()),
+                    );
+                    ui.label(
+                        RichText::new("Before you use the malware catalog")
+                            .size(cx.font_size * 1.3)
+                            .strong()
+                            .color(theme::text()),
+                    );
+                });
+                ui.add_space(8.0);
+                ui.label(
+                    "This window downloads real, live malware from MalwareBazaar (abuse.ch) \
+                     so you can study it inside a VM.",
+                );
+                ui.add_space(6.0);
+                for point in FIRST_USE_POINTS {
+                    // Wrapped lines hang under the text, not the bullet.
+                    ui.horizontal_top(|ui| {
+                        ui.label(RichText::new("•").color(theme::warn()));
+                        ui.add(egui::Label::new(*point).wrap());
+                    });
+                    ui.add_space(2.0);
+                }
+                if let Some((message, _)) = &self.status {
+                    ui.colored_label(theme::error(), message);
+                }
+                ui.add_space(8.0);
+                ui.checkbox(
+                    &mut self.understood,
+                    "I understand these are live malware samples and I am responsible for \
+                     handling them safely and lawfully.",
+                );
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(self.understood, egui::Button::new("Continue"))
+                        .clicked()
+                    {
+                        match samples::acknowledge(cx.data_dir) {
+                            Ok(()) => {
+                                self.acknowledged = true;
+                                self.status = None;
+                            }
+                            Err(error) => self.status = Some((error, true)),
+                        }
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if !open || cancel || ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.open = false;
+            self.understood = false;
+        }
     }
 
     fn warning(&mut self, ui: &mut egui::Ui, cx: &SamplesContext<'_>) {
@@ -657,6 +756,46 @@ impl SamplesView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_catalog_waits_for_the_warning_to_be_accepted() {
+        let data = std::env::temp_dir().join(format!(
+            "ant-samples-view-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&data).unwrap();
+        let cx = SamplesContext {
+            data_dir: &data,
+            curl: Path::new("/usr/bin/curl"),
+            running: false,
+            vm_name: None,
+            nat: false,
+            font_size: 14.0,
+        };
+        let mut view = SamplesView {
+            open: true,
+            ..SamplesView::default()
+        };
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            assert!(view.show(ctx, &cx).is_none());
+        });
+        assert!(view.open && !view.acknowledged);
+        samples::acknowledge(&data).unwrap();
+        let mut view = SamplesView {
+            open: true,
+            ..SamplesView::default()
+        };
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            view.show(ctx, &cx);
+        });
+        assert!(view.acknowledged);
+        std::fs::remove_dir_all(data).unwrap();
+    }
 
     #[test]
     fn guest_paths_are_safe_and_unique_per_sample() {

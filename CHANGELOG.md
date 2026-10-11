@@ -31,7 +31,10 @@ transport reconnect require a new guest base with contract revision 14 / ABI9.
   folder and are decrypted only in memory to be sent into the guest: nothing is
   unpacked or run on the host. Each sample shows its processor (only x86-64
   runs in the guests), warns when the VM has NAT on, and keeps every VM it was
-  sent into.
+  sent into. The first time, a warning about handling live malware (NAT, VM
+  escape, antivirus, the law) must be accepted before the window opens; a
+  MalwareBazaar refusal such as a search that takes too long is shown as
+  MalwareBazaar words it.
 
 ## 0.4.1 — 2026-10-11
 

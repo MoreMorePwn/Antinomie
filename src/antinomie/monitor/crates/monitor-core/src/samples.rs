@@ -113,8 +113,9 @@ impl SampleInfo {
 #[derive(Deserialize)]
 struct Reply {
     query_status: String,
+    /// The samples, or on an error MalwareBazaar's message.
     #[serde(default)]
-    data: Option<Vec<SampleInfo>>,
+    data: Option<serde_json::Value>,
 }
 
 /// What MalwareBazaar answered, in words.
@@ -138,12 +139,37 @@ fn status_text(status: &str) -> String {
 
 /// Parse a search reply; "nothing found" is an empty list.
 pub fn parse_reply(body: &[u8]) -> Result<Vec<SampleInfo>, String> {
-    let reply: Reply =
-        serde_json::from_slice(body).map_err(|e| format!("MalwareBazaar reply: {e}"))?;
+    let reply: Reply = serde_json::from_slice(body).map_err(|e| {
+        // Not JSON: an error page or a busy server. Show how it starts.
+        let start: String = String::from_utf8_lossy(body)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(160)
+            .collect();
+        if start.is_empty() {
+            "MalwareBazaar sent an empty reply; try again".to_string()
+        } else {
+            format!("MalwareBazaar reply is not JSON ({e}): {start}")
+        }
+    })?;
     match reply.query_status.as_str() {
-        "ok" => Ok(reply.data.unwrap_or_default()),
+        "ok" => match reply.data {
+            Some(data) => {
+                serde_json::from_value(data).map_err(|e| format!("MalwareBazaar reply: {e}"))
+            }
+            None => Ok(Vec::new()),
+        },
         "no_results" | "tag_not_found" | "signature_not_found" | "hash_not_found" => Ok(Vec::new()),
-        status => Err(status_text(status)),
+        status => Err(match reply.data {
+            // "Query execution time exceeded threshold. Try a different query."
+            Some(serde_json::Value::String(message)) if !message.trim().is_empty() => {
+                format!("MalwareBazaar: {}", message.trim())
+            }
+            _ => status_text(status),
+        }),
     }
 }
 
@@ -415,6 +441,38 @@ pub fn delete(data_dir: &Path, sha256: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Bumped when the warning shown before first use says something new, so it
+/// is shown again.
+pub const WARNING_VERSION: u32 = 1;
+const ACKNOWLEDGED_FILE: &str = "acknowledged.json";
+
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
+struct Acknowledged {
+    version: u32,
+    at_ms: u64,
+}
+
+/// The user accepted the current warning about live malware in this data folder.
+pub fn acknowledged(data_dir: &Path) -> bool {
+    fs::read(samples_dir(data_dir).join(ACKNOWLEDGED_FILE))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Acknowledged>(&bytes).ok())
+        .is_some_and(|seen| seen.version >= WARNING_VERSION)
+}
+
+pub fn acknowledge(data_dir: &Path) -> Result<(), String> {
+    let dir = samples_dir(data_dir);
+    crate::storage::private_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    crate::storage::atomic_json(
+        &dir.join(ACKNOWLEDGED_FILE),
+        &Acknowledged {
+            version: WARNING_VERSION,
+            at_ms: unix_ms(),
+        },
+    )
+}
+
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 struct Keys {
@@ -509,6 +567,15 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+        assert_eq!(
+            parse_reply(
+                br#"{"query_status":"error","data":"Query execution time exceeded threshold. Try a different query."}"#
+            ),
+            Err(
+                "MalwareBazaar: Query execution time exceeded threshold. Try a different query."
+                    .into()
+            )
+        );
         assert!(
             parse_reply(br#"{"query_status":"unknown_auth_key"}"#)
                 .unwrap_err()
@@ -584,6 +651,22 @@ mod tests {
         assert!(stored(&root).is_empty());
         save_api_key(&root, " key ").unwrap();
         assert_eq!(api_key(&root), "key");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_warning_is_accepted_once_per_version() {
+        let root = temp("warning");
+        assert!(!acknowledged(&root));
+        acknowledge(&root).unwrap();
+        assert!(acknowledged(&root));
+        // An older acceptance does not cover a newer warning.
+        fs::write(
+            samples_dir(&root).join(ACKNOWLEDGED_FILE),
+            format!(r#"{{"version":{}}}"#, WARNING_VERSION - 1),
+        )
+        .unwrap();
+        assert!(!acknowledged(&root));
         fs::remove_dir_all(root).unwrap();
     }
 }
