@@ -256,8 +256,10 @@ for n in 1 2 3 4 5 6 7 8 9 10; do
     [ -b /dev/vda ] && break
     sleep 1
 done
-resize2fs /dev/vda || echo 'Guest filesystem resize failed'
 mount -t ext4 -o rw /dev/vda /newroot || exec sh
+# Grow the filesystem to the VM's disk while mounted: offline, resize2fs
+# refuses a filesystem mounted since its last full check (every base disk).
+resize2fs /dev/vda || echo 'Guest filesystem resize failed'
 mount --move /dev /newroot/dev
 mount --move /proc /newroot/proc
 mount --move /sys /newroot/sys

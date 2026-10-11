@@ -37,6 +37,10 @@ transport reconnect require a new guest base with contract revision 14 / ABI9.
   ("Connection timed out") until the VM was restarted. The app now waits
   30 s instead of 10 before giving up, then reconnects by itself (VM >
   Reconnect telemetry, retried 2, 4, 8, 16 s apart) and says so.
+- **New VMs get their whole disk.** The guest's filesystem was never grown
+  to the VM's disk size ("Guest filesystem resize failed" at first boot): a
+  16 GiB Debian VM kept the base's smaller filesystem. It now grows online at
+  every boot; bases must be rebuilt.
 - **stall-check** (example): freeze a guest's QEMU and check that the app
   reconnects.
 - **run-dump** (example): print a recorded run's system calls.
