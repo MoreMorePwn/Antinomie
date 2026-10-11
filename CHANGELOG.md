@@ -4,7 +4,7 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
-## 0.4.1 — unreleased
+## 0.4.1 — 2026-10-11
 
 - **Symbol tables online.** Linux and macOS dumps without a symbol table of
   their own (imported dumps of other machines) have their kernel's table
