@@ -330,6 +330,80 @@ fn remember_functions(
             address: *address,
         });
     }
+    for entry in section
+        .entries
+        .iter()
+        .chain(page.rows.iter().map(|(_, entry)| entry))
+    {
+        for text in [&entry.label, &entry.value] {
+            for function in index_ghidra_markers(text) {
+                let identity = function_identity(function.address, &function.name);
+                if functions
+                    .iter()
+                    .any(|existing| function_identity(existing.address, &existing.name) == identity)
+                {
+                    continue;
+                }
+                functions.push(ListedFunction {
+                    name: function.name,
+                    address: function.address,
+                });
+            }
+        }
+    }
+}
+
+/// Every `@@ANTINOMIE-FUNCTION` marker in a saved Ghidra export.
+/// Identity is the address plus the name Ghidra wrote. A second read of the
+/// same text returns the same identities.
+pub(crate) fn index_ghidra_markers(text: &str) -> Vec<GhidraFunction> {
+    let mut functions = Vec::new();
+    for line in text.lines() {
+        let Some(rest) = line.strip_prefix("@@ANTINOMIE-FUNCTION\t") else {
+            continue;
+        };
+        let mut parts = rest.split('\t');
+        let address = parts
+            .next()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0);
+        let size = parts
+            .next()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0);
+        let name = parts
+            .next()
+            .filter(|name| !name.is_empty())
+            .unwrap_or("FUN");
+        let identity = format!("{address:x}:{name}");
+        if functions.iter().any(|existing: &GhidraFunction| {
+            format!("{:x}:{}", existing.address, existing.name) == identity
+        }) {
+            continue;
+        }
+        functions.push(GhidraFunction {
+            address,
+            size,
+            name: name.to_string(),
+        });
+    }
+    functions
+}
+
+/// The saved export text, unchanged, so a later open sees the same markers.
+pub(crate) fn export_ghidra_text(text: &str) -> String {
+    if text.ends_with('\n') || text.is_empty() {
+        text.to_string()
+    } else {
+        format!("{text}\n")
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct GhidraFunction {
+    pub address: u64,
+    pub size: u64,
+    pub name: String,
 }
 
 #[derive(Clone)]
@@ -628,4 +702,24 @@ fn highlight(line: &str, font: &FontId) -> LayoutJob {
         rest = &rest[token.len()..];
     }
     job
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ghidra_markers_reopen_with_the_same_identities() {
+        let text = "@@ANTINOMIE-BASE\t0\n@@ANTINOMIE-FUNCTION\t4294795840\t17\tFUN_fffd6240\nvoid FUN_fffd6240(void) {}\n@@ANTINOMIE-FUNCTION\t4096\t8\tFUN_00001000\nint other(void) { return 1; }\n";
+        let first = index_ghidra_markers(text);
+        let exported = export_ghidra_text(text);
+        let second = index_ghidra_markers(&exported);
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0].name, "FUN_fffd6240");
+        assert_eq!(first[0].address, 4294795840);
+        assert_eq!(first[1].address, 4096);
+        assert!(exported.contains("FUN_fffd6240"));
+        assert!(exported.contains("FUN_00001000"));
+    }
 }

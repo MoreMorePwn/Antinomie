@@ -922,4 +922,61 @@ mod sparse_tests {
         );
         let _ = std::fs::write("/tmp/antinomie-ghidra-export.txt", &text);
     }
+
+    #[test]
+    fn ghidra_cancel_on_real_core_stops_without_a_success_export() {
+        if std::env::var_os("ANTINOMIE_GHIDRA").is_none() {
+            return;
+        }
+        let path = std::env::var("ANTINOMIE_CORE").expect("ANTINOMIE_CORE");
+        let kept = std::env::temp_dir().join("antinomie-ghidra-accept/decompiled.txt");
+        let kept_before = std::fs::read(&kept).ok();
+        let work = std::env::temp_dir().join("antinomie-ghidra-cancel");
+        let _ = std::fs::remove_dir_all(&work);
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel_thread = std::sync::Arc::clone(&cancel);
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            cancel_thread.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
+        let error = super::decompile_captured_core(
+            std::path::Path::new(&path),
+            &work,
+            std::path::Path::new("/tmp/no-antinomie-tools"),
+            &cancel,
+        )
+        .expect_err("cancellation must not return an export");
+        assert!(error.contains("cancelled"), "{error}");
+        assert!(!work.join("decompiled.txt").is_file());
+        if let Some(before) = kept_before {
+            assert_eq!(std::fs::read(&kept).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn ghidra_script_failure_is_not_a_successful_load() {
+        if std::env::var_os("ANTINOMIE_GHIDRA").is_none() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("antinomie-core-fail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let core = dir.join("partial.core");
+        std::fs::write(&core, elf_core()).unwrap();
+        let work = dir.join("work");
+        std::fs::create_dir_all(work.join("decompiled.txt")).unwrap();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let error = super::decompile_captured_core(
+            &core,
+            &work,
+            std::path::Path::new("/tmp/no-antinomie-tools"),
+            &cancel,
+        )
+        .expect_err("a failed Ghidra script must not count as a load");
+        assert!(
+            error.contains("not a result") || error.contains("not a load result"),
+            "{error}"
+        );
+        assert!(work.join("sparse-plan.txt").is_file());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

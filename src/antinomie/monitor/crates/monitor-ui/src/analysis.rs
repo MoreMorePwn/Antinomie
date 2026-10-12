@@ -8,6 +8,7 @@ mod entropy;
 mod listing_view;
 mod records;
 mod workspace;
+pub(crate) use listing_view::{export_ghidra_text, index_ghidra_markers};
 pub(crate) use workspace::{workspace, workspace_section, WorkspaceState};
 
 #[derive(Clone, Copy)]
