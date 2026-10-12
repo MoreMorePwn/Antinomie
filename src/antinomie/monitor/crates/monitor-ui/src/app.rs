@@ -234,6 +234,9 @@ pub struct MonitorApp {
     history_generation: u64,
     run_filter: RunFilter,
     run_query: String,
+    /// Last run-history filter that compiled. An invalid expression keeps this.
+    applied_run_query: String,
+    run_query_error: Option<String>,
     terminals: BTreeMap<String, RunTerminal>,
     archive: Option<ArchiveWorker>,
     pending_archive: Option<Request>,
@@ -360,6 +363,8 @@ impl MonitorApp {
             history_generation: 0,
             run_filter: RunFilter::All,
             run_query: String::new(),
+            applied_run_query: String::new(),
+            run_query_error: None,
             terminals: BTreeMap::new(),
             archive: None,
             pending_archive: None,
@@ -1305,9 +1310,12 @@ impl MonitorApp {
         });
         ui.add(
             egui::TextEdit::singleline(&mut self.run_query)
-                .hint_text("Filter runs")
+                .hint_text("Filter runs, or tag == \"name\"")
                 .desired_width(ui.available_width()),
         );
+        if let Some(error) = &self.run_query_error {
+            ui.colored_label(theme::error(), error);
+        }
         let mut runs: Vec<_> = self
             .snapshot
             .runs
@@ -1327,12 +1335,31 @@ impl MonitorApp {
             RunFilter::Live => self.live_history_run(run),
             RunFilter::Past => !self.live_history_run(run),
         });
-        let query = self.run_query.trim().to_lowercase();
-        if !query.is_empty() {
+        let draft = crate::query::compile_record(&self.run_query);
+        if draft.error.is_some() && crate::query::structured(&self.run_query) {
+            self.run_query_error.clone_from(&draft.error);
+        } else {
+            self.applied_run_query.clone_from(&self.run_query);
+            self.run_query_error = None;
+        }
+        let compiled = crate::query::compile_record(&self.applied_run_query);
+        if !self.applied_run_query.trim().is_empty() {
+            let query = self.applied_run_query.trim().to_lowercase();
+            let structured = crate::query::structured(&self.applied_run_query);
             runs.retain(|run| {
-                run.id.to_lowercase().contains(&query)
-                    || run.request.path.to_lowercase().contains(&query)
-                    || run_status(run).to_lowercase().contains(&query)
+                let annotation = antinomie_monitor_core::annotations::load(&run.directory)
+                    .unwrap_or_else(|_| antinomie_monitor_core::annotations::Annotation {
+                        name: String::new(),
+                        tags: Vec::new(),
+                    });
+                let labels = crate::query::RecordLabels {
+                    id: &run.id,
+                    name: &annotation.name,
+                    path: &run.request.path,
+                    tags: &annotation.tags,
+                };
+                compiled.keep_record(&labels)
+                    || (!structured && run_status(run).to_lowercase().contains(&query))
             });
         }
         let height = (ui.available_height() - 36.0).max(50.0);
@@ -5335,6 +5362,25 @@ impl MonitorApp {
         }
     }
 
+    fn analysis_labels(
+        &self,
+        report: &antinomie_monitor_core::AnalysisReport,
+    ) -> (String, String, String, Vec<String>) {
+        let annotation = self
+            .analysis_directory(&report.id)
+            .and_then(|directory| antinomie_monitor_core::annotations::load(&directory).ok())
+            .unwrap_or_else(|| antinomie_monitor_core::annotations::Annotation {
+                name: String::new(),
+                tags: Vec::new(),
+            });
+        (
+            report.id.clone(),
+            annotation.name,
+            report.source_path.clone(),
+            annotation.tags,
+        )
+    }
+
     fn analysis_directory(&self, report_id: &str) -> Option<PathBuf> {
         if let Some(run) = self.snapshot.runs.iter().chain(&self.history).find(|run| {
             run.analysis
@@ -5724,11 +5770,47 @@ impl MonitorApp {
         if self.selected_capture.is_some() {
             return !self.selected_capture_owns_loaded_pcap();
         }
+        if let Some(id) = self.selected_run.clone() {
+            let owned = self
+                .run(&id)
+                .cloned()
+                .is_some_and(|run| self.loaded_pcap_belongs_to_run(&run));
+            if owned {
+                return false;
+            }
+        }
         self.trace_archive_directory().is_some()
             || self
                 .selected_run
                 .as_ref()
                 .is_some_and(|id| !self.run(id).is_some_and(|run| self.live_history_run(run)))
+    }
+
+    /// The loaded pcap is one this run recorded: the live boot capture, or a
+    /// path listed in that run's artifacts. A path that is merely open is not
+    /// treated as this run's capture.
+    fn loaded_pcap_belongs_to_run(&self, run: &RunSummary) -> bool {
+        let Some(loaded) = self.network_view.loaded_path() else {
+            return false;
+        };
+        if self
+            .snapshot
+            .network_capture
+            .as_ref()
+            .is_some_and(|capture| capture.file == loaded && capture.boot_id == run.boot_id)
+        {
+            return true;
+        }
+        antinomie_monitor_core::RunArtifacts::load(&run.directory)
+            .ok()
+            .flatten()
+            .is_some_and(|artifacts| {
+                artifacts.run_id == run.id
+                    && artifacts
+                        .network_captures
+                        .iter()
+                        .any(|file| file.as_path() == loaded)
+            })
     }
 
     fn selected_capture_owns_loaded_pcap(&self) -> bool {
@@ -5898,12 +5980,16 @@ impl MonitorApp {
             }
             Panel::AnalysisSection { report_id, kind } => {
                 let key = format!("section:{report_id}:{kind:?}");
-                let report = self.analysis_windows.get(report_id);
+                let report = self.analysis_windows.get(report_id).cloned();
+                let labels = report.as_ref().map(|report| self.analysis_labels(report));
                 let view = self.analysis_views.entry(key.clone()).or_default();
-                view.bind(report.map(|report| report.id.as_str()));
+                view.bind(report.as_ref().map(|report| report.id.as_str()));
+                if let Some((id, name, path, tags)) = labels {
+                    view.state.set_record(&id, &name, &path, tags);
+                }
                 let action = crate::analysis::workspace_section(
                     ui,
-                    report,
+                    report.as_ref(),
                     *kind,
                     &mut view.state,
                     view.preview.as_ref(),
@@ -5940,16 +6026,41 @@ impl MonitorApp {
                         "Packet rows are hidden because the open capture is not this run.",
                     );
                 }
+                let (frame_owned, frame_note) = if hide_packets {
+                    (None, None)
+                } else {
+                    self.network_view.captured_payloads()
+                };
                 let packets = if hide_packets {
                     &[]
                 } else {
                     self.network_view.loaded_packets()
+                };
+                if let Some(note) = &frame_note {
+                    ui.colored_label(theme::muted(), note);
+                }
+                let frames = frame_owned.as_deref();
+                let vm_id = self.selected.clone();
+                let run_id = self.selected_run.clone();
+                let boot_id = run_id
+                    .as_ref()
+                    .and_then(|id| self.run(id))
+                    .map(|run| run.boot_id.clone());
+                let coverage = if self.trace_archive_directory().is_some() {
+                    "this archive page only; the rest of the recording was not analyzed"
+                } else {
+                    "syscalls loaded in this session; not a finished whole-run index"
                 };
                 if let Some(call_id) = self.triage.show(
                     ui,
                     crate::triage::TriageInput {
                         invocations: &invocations,
                         packets,
+                        frames,
+                        vm_id: vm_id.as_deref(),
+                        boot_id: boot_id.as_deref(),
+                        run_id: run_id.as_deref(),
+                        coverage,
                     },
                 ) {
                     self.filter = format!("call.id == {call_id}");
@@ -6051,8 +6162,12 @@ impl MonitorApp {
                         }
                     }
                 }
+                let labels = report.as_ref().map(|report| self.analysis_labels(report));
                 let view = self.analysis_views.entry("workspace".into()).or_default();
                 view.bind(report.as_ref().map(|report| report.id.as_str()));
+                if let Some((id, name, path, tags)) = labels {
+                    view.state.set_record(&id, &name, &path, tags);
+                }
                 let action = crate::analysis::workspace(
                     ui,
                     report.as_ref(),
@@ -6740,12 +6855,28 @@ fn terminal_capacity_message() -> String {
     format!("Terminal view limit reached ({TERMINAL_VIEW_LIMIT}); close a history window")
 }
 
-/// Pcap path stored on a process-observation capture, when one exists.
-/// `CaptureSummary` has an observation directory and no pcap file, so this
-/// is always `None`. Do not invent a path from that directory.
-fn capture_pcap_file(capture: &CaptureSummary) -> Option<&std::path::Path> {
-    let _ = capture.directory.as_os_str();
+/// A file in the observation directory whose first four bytes are a classic
+/// pcap magic. A directory with no such file is not a packet capture.
+fn capture_pcap_file(capture: &CaptureSummary) -> Option<std::path::PathBuf> {
+    let entries = std::fs::read_dir(&capture.directory).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() && pcap_magic(&path) {
+            return Some(path);
+        }
+    }
     None
+}
+
+fn pcap_magic(path: &std::path::Path) -> bool {
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut magic = [0u8; 4];
+    if std::io::Read::read_exact(&mut file, &mut magic).is_err() {
+        return false;
+    }
+    matches!(magic, [0xd4, 0xc3, 0xb2, 0xa1] | [0xa1, 0xb2, 0xc3, 0xd4])
 }
 
 fn run_in_live_session(snapshot: &Snapshot, run: &RunSummary) -> bool {
@@ -7613,6 +7744,8 @@ mod tests {
             history_generation: 0,
             run_filter: RunFilter::All,
             run_query: String::new(),
+            applied_run_query: String::new(),
+            run_query_error: None,
             terminals: BTreeMap::new(),
             archive: None,
             pending_archive: None,

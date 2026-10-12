@@ -84,6 +84,16 @@ pub(crate) struct NetworkView {
     /// The running capture (id, file) last seen, to notice a start or stop.
     seen_active: Option<(String, PathBuf)>,
     hide_list: bool,
+    /// Payload bytes for the packets currently loaded. `None` when a record
+    /// could not be read; an empty capture is not treated as reconstructed HTTP.
+    payloads: Option<PayloadCache>,
+}
+
+struct PayloadCache {
+    path: PathBuf,
+    offsets: Vec<u64>,
+    frames: Vec<Vec<u8>>,
+    note: Option<String>,
 }
 
 /// Capture identity is stable when a recording folder is copied or moved.
@@ -790,6 +800,96 @@ impl NetworkView {
         self.list.path.as_deref()
     }
 
+    /// Frames aligned with the loaded packet list, up to 128 records.
+    /// `None` when there is no capture or a record could not be read.
+    pub(crate) fn captured_payloads(&mut self) -> (Option<Vec<Vec<u8>>>, Option<String>) {
+        self.refresh_payloads();
+        match &self.payloads {
+            Some(cache) if !cache.frames.is_empty() => {
+                (Some(cache.frames.clone()), cache.note.clone())
+            }
+            Some(cache) => (None, cache.note.clone()),
+            None => (None, None),
+        }
+    }
+
+    fn reconstruction(&self) -> Option<antinomie_monitor_core::network::Reconstruction> {
+        let frames = self
+            .payloads
+            .as_ref()
+            .filter(|cache| !cache.frames.is_empty())
+            .map(|cache| cache.frames.clone())?;
+        let captured: Vec<_> = self
+            .list
+            .packets
+            .iter()
+            .zip(frames.iter())
+            .map(
+                |(packet, bytes)| antinomie_monitor_core::network::CapturedFrame {
+                    number: packet.number,
+                    time_us: packet.time_us,
+                    bytes,
+                },
+            )
+            .collect();
+        Some(antinomie_monitor_core::network::reconstruct(&captured))
+    }
+
+    fn refresh_payloads(&mut self) {
+        const LIMIT: usize = 128;
+        let Some(path) = self.list.path.clone() else {
+            self.payloads = None;
+            return;
+        };
+        let offsets: Vec<u64> = self
+            .list
+            .packets
+            .iter()
+            .take(LIMIT)
+            .map(|packet| packet.offset)
+            .collect();
+        if self
+            .payloads
+            .as_ref()
+            .is_some_and(|cache| cache.path == path && cache.offsets == offsets)
+        {
+            return;
+        }
+        let mut frames = Vec::with_capacity(offsets.len());
+        for offset in &offsets {
+            match antinomie_monitor_core::network::frame(&path, *offset) {
+                Ok(bytes) => frames.push(bytes),
+                Err(error) => {
+                    self.payloads = Some(PayloadCache {
+                        path,
+                        offsets,
+                        frames: Vec::new(),
+                        note: Some(format!("Request reconstruction is unavailable: {error}")),
+                    });
+                    return;
+                }
+            }
+        }
+        let note = if self.list.packets.len() > LIMIT {
+            Some(format!(
+                "Reconstruction uses the first {LIMIT} loaded packets, not the whole capture."
+            ))
+        } else if frames.is_empty() {
+            Some(
+                "Request reconstruction is unavailable for this view: the loaded packet list has no payload."
+                    .into(),
+            )
+        } else {
+            None
+        };
+        self.payloads = Some(PayloadCache {
+            path,
+            offsets,
+            frames,
+            note,
+        });
+    }
+
     /// Keep the last valid filter. A display expression that does not parse,
     /// including an unknown dotted field, does not become a text search.
     fn apply_filter(&mut self) {
@@ -1218,6 +1318,25 @@ impl NetworkView {
                     }
                 }
             });
+        }
+        self.refresh_payloads();
+        if let Some(rebuilt) = self.reconstruction() {
+            for note in &rebuilt.notes {
+                ui.colored_label(theme::muted(), note);
+            }
+            ui.colored_label(
+                theme::muted(),
+                format!(
+                    "{} HTTP/1 requests, {} DNS queries, {} retransmissions dropped. HTTPS segments seen: {}. HTTP/2 prefaces seen: {}.",
+                    rebuilt.http.len(),
+                    rebuilt.dns.len(),
+                    rebuilt.retransmissions_dropped,
+                    rebuilt.https_segments,
+                    rebuilt.http2_prefaces,
+                ),
+            );
+        } else if let Some(note) = self.payloads.as_ref().and_then(|cache| cache.note.clone()) {
+            ui.colored_label(theme::muted(), note);
         }
         if self.list.path.is_none() {
             empty_state(

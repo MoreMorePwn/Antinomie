@@ -5,6 +5,7 @@ use std::{
     io::Read,
     path::Path,
     process::{Command, Stdio},
+    sync::atomic::{AtomicBool, Ordering},
     thread,
     time::{Duration, Instant},
 };
@@ -60,6 +61,27 @@ pub(super) fn run_with(
     max_output: usize,
     log_stderr: bool,
 ) -> Result<Run, String> {
+    run_cancellable(
+        path,
+        args,
+        env,
+        timeout,
+        max_output,
+        log_stderr,
+        &AtomicBool::new(false),
+    )
+}
+
+/// [`run_with`], stopping the tool when `cancel` is set.
+pub(super) fn run_cancellable(
+    path: &str,
+    args: &[&str],
+    env: &[(&str, &str)],
+    timeout: Duration,
+    max_output: usize,
+    log_stderr: bool,
+    cancel: &AtomicBool,
+) -> Result<Run, String> {
     let mut command = Command::new(path);
     command
         .args(args)
@@ -98,6 +120,11 @@ pub(super) fn run_with(
     let status = loop {
         match child.try_wait().map_err(|e| format!("{path}: {e}"))? {
             Some(status) => break status,
+            None if cancel.load(Ordering::Relaxed) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("cancelled".into());
+            }
             None if Instant::now() >= deadline => {
                 timed_out = true;
                 let _ = child.kill();

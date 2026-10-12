@@ -118,22 +118,59 @@ pub(super) fn show(
             }))
             .show_inside(ui, |ui| {
                 ui.label(RichText::new("Functions").strong());
-                if names.is_empty() {
-                    ui.add(egui::Label::new("No function symbols loaded.").wrap());
-                }
+                let index_complete = state.query.is_empty()
+                    && page.start == 0
+                    && page.rows.len() as u64 == page.total;
                 ui.add(
                     egui::Label::new(
-                        RichText::new("Function names from the pages loaded in this view.")
-                            .color(theme::muted()),
+                        RichText::new(if index_complete {
+                            "Function index is complete for this listing."
+                        } else {
+                            "Function index is only the pages loaded."
+                        })
+                        .color(theme::muted()),
                     )
                     .wrap(),
                 );
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!(
+                            "Module: {}. Symbol and address stay separate. These are not original source symbols.",
+                            if report.source_path.is_empty() {
+                                "not recorded"
+                            } else {
+                                report.source_path.as_str()
+                            }
+                        ))
+                        .color(theme::muted()),
+                    )
+                    .wrap(),
+                );
+                if ui.button("Export text").clicked() {
+                    action = Some(ReportAction::Export {
+                        report_id: report.id.clone(),
+                        kind: Some(kind),
+                        format: antinomie_monitor_core::AnalysisExportFormat::Text,
+                    });
+                }
+                if names.is_empty() {
+                    ui.add(egui::Label::new("No function symbols loaded.").wrap());
+                }
                 egui::ScrollArea::vertical()
                     .id_salt(("listing-functions", kind_salt(kind)))
                     .show(ui, |ui| {
                         for item in &names {
                             let identity = function_identity(item.address, &item.name);
-                            let label = format!("{}  {:x}", item.name, item.address);
+                            let label = format!(
+                                "symbol {}\naddress {:x}\nmodule {}",
+                                item.name,
+                                item.address,
+                                if report.source_path.is_empty() {
+                                    "not recorded"
+                                } else {
+                                    report.source_path.as_str()
+                                }
+                            );
                             if ui
                                 .selectable_label(
                                     state.function.as_deref() == Some(identity.as_str()),
@@ -142,7 +179,6 @@ pub(super) fn show(
                                 .clicked()
                             {
                                 state.function = Some(identity);
-                                state.query = item.name.clone();
                             }
                         }
                     });

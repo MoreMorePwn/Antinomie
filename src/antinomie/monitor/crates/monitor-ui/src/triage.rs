@@ -58,6 +58,28 @@ impl Default for TriageView {
 pub(crate) struct TriageInput<'a> {
     pub invocations: &'a [InvocationSummary],
     pub packets: &'a [NetworkPacket],
+    /// Ethernet frames parallel to `packets`. Absent when the list has no payload.
+    pub frames: Option<&'a [Vec<u8>]>,
+    pub vm_id: Option<&'a str>,
+    pub boot_id: Option<&'a str>,
+    pub run_id: Option<&'a str>,
+    /// What this view actually covered. Never claim a whole run from one page.
+    pub coverage: &'a str,
+}
+
+impl<'a> TriageInput<'a> {
+    #[cfg(test)]
+    fn page(invocations: &'a [InvocationSummary], packets: &'a [NetworkPacket]) -> Self {
+        Self {
+            invocations,
+            packets,
+            frames: None,
+            vm_id: None,
+            boot_id: None,
+            run_id: None,
+            coverage: "this loaded page",
+        }
+    }
 }
 
 impl TriageView {
@@ -74,6 +96,15 @@ impl TriageView {
             }
         });
         ui.separator();
+        ui.colored_label(theme::muted(), format!("Coverage: {}.", input.coverage));
+        let identity = [input.vm_id, input.boot_id, input.run_id]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" / ");
+        if !identity.is_empty() {
+            ui.colored_label(theme::muted(), identity);
+        }
         match self.section {
             Section::Process => self.process(ui, &input),
             Section::Files => {
@@ -85,7 +116,7 @@ impl TriageView {
                 None
             }
             Section::Bpf => {
-                bpf_view(ui, input.invocations);
+                bpf_view(ui, &input);
                 None
             }
         }
@@ -144,7 +175,7 @@ impl TriageView {
         limited_table(
             ui,
             "triage-files",
-            &["Path", "Process", "FD", "Operation", "Result"],
+            &["Path", "Process", "FD", "Operation", "Result", "Outcome"],
             &file_rows(invocations, wanted),
         );
     }
@@ -158,7 +189,11 @@ impl TriageView {
             NetTab::Http => {
                 ui.colored_label(
                     theme::muted(),
-                    "HTTP/1 request lines seen in packet info or syscall bytes. HTTPS and HTTP/2 are not decoded.",
+                    if input.frames.is_none() {
+                        "Request reconstruction is unavailable for this view: the loaded packet list has no payload. Supported when frames are present: HTTP/1.0 and HTTP/1.1 over TCP. Unavailable: HTTPS, HTTP/2, and HTTP/3."
+                    } else {
+                        "Reassembled from captured TCP payloads. Supported: HTTP/1.0 and HTTP/1.1. Unavailable: HTTPS, HTTP/2, and HTTP/3."
+                    },
                 );
                 limited_table(
                     ui,
@@ -170,7 +205,11 @@ impl TriageView {
             NetTab::Dns => {
                 ui.colored_label(
                     theme::muted(),
-                    "DNS is recognized by protocol, or by port 53 on a UDP or TCP packet. Names are shown only when the capture already decoded them.",
+                    if input.frames.is_none() {
+                        "DNS reconstruction is unavailable for this view: the loaded packet list has no payload. Supported when frames are present: DNS over UDP and DNS over TCP. Unavailable: DNS over TLS and DNS over HTTPS."
+                    } else {
+                        "Decoded from captured UDP and TCP payloads. Unavailable: DNS over TLS and DNS over HTTPS."
+                    },
                 );
                 limited_table(
                     ui,
@@ -385,6 +424,9 @@ const FORK: u64 = 57;
 const VFORK: u64 = 58;
 const CLONE3: u64 = 435;
 const CLONE_THREAD: u64 = 0x0001_0000;
+const CLONE_FILES: u64 = 0x0000_0400;
+const AT_FDCWD: u64 = (-100i64) as u64;
+const MAP_ANONYMOUS: u64 = 0x20;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct TaskKey {
@@ -873,18 +915,20 @@ fn file_rows(invocations: &[InvocationSummary], names: &[&str]) -> LimitedRows {
         stopped_early: false,
     };
     // Successful opens are remembered for this slice only. A fork, vfork, or
-    // process clone copies the parent's map onto the child at that call.
-    // Later closes change only the task that closed.
-    let mut opened: std::collections::BTreeMap<(u64, u32, u64), String> =
-        std::collections::BTreeMap::new();
+    // process clone copies the parent's map onto the child at that call,
+    // unless the recorded flags include CLONE_FILES, which shares one table.
+    // Later closes change only the task that owns the table.
+    let mut files = FdState::default();
     let cookies = task_cookies(invocations);
     for invocation in invocations {
         let Some(event) = trace::representative(invocation) else {
             continue;
         };
-        remember_open(&mut opened, invocation, event);
-        forget_closed(&mut opened, invocation, event);
-        inherit_open_fds(&mut opened, invocation, event, &cookies);
+        remember_cwd(&mut files, invocation, event);
+        remember_open(&mut files, invocation, event);
+        apply_dup(&mut files, invocation, event);
+        forget_closed(&mut files, invocation, event);
+        inherit_open_fds(&mut files, invocation, event, &cookies);
         if !names.iter().any(|name| event.syscall_name == *name) {
             continue;
         }
@@ -893,7 +937,7 @@ fn file_rows(invocations: &[InvocationSummary], names: &[&str]) -> LimitedRows {
         {
             continue;
         }
-        let path = displayed_path(invocation, event, &opened);
+        let path = displayed_path(invocation, event, &files);
         let fd = file_fd(invocation, event);
         let result = invocation
             .exit
@@ -925,6 +969,7 @@ fn file_rows(invocations: &[InvocationSummary], names: &[&str]) -> LimitedRows {
                     false,
                 ),
                 cell(result, theme::text(), true),
+                cell(file_outcome(invocation), theme::text(), false),
             ],
         ) {
             break;
@@ -960,29 +1005,113 @@ fn fd_argument(invocation: &InvocationSummary, event: &EventSummary) -> Option<u
     (index < args.len()).then_some(args[index])
 }
 
-fn remember_open(
-    opened: &mut std::collections::BTreeMap<(u64, u32, u64), String>,
-    invocation: &InvocationSummary,
-    event: &EventSummary,
-) {
-    if !matches!(event.syscall_name.as_str(), "open" | "openat" | "openat2") {
-        return;
+#[derive(Default)]
+struct FdState {
+    /// `(owner cookie, owner pid, fd)` → path text captured for that descriptor.
+    opened: std::collections::BTreeMap<(u64, u32, u64), String>,
+    /// Child task → the task whose descriptor table it shares (`CLONE_FILES`).
+    share: std::collections::BTreeMap<(u64, u32), (u64, u32)>,
+    cwd: std::collections::BTreeMap<(u64, u32), String>,
+}
+
+fn table_owner(files: &FdState, cookie: u64, pid: u32) -> (u64, u32) {
+    let mut key = (cookie, pid);
+    for _ in 0..8 {
+        match files.share.get(&key) {
+            Some(next) if *next != key => key = *next,
+            _ => break,
+        }
     }
-    let Some(result) = invocation
+    key
+}
+
+fn file_outcome(invocation: &InvocationSummary) -> String {
+    match invocation.exit.as_ref().and_then(|exit| exit.result) {
+        Some(result) if result >= 0 => "successful".into(),
+        Some(_) => "attempted".into(),
+        None => "exit not recorded".into(),
+    }
+}
+
+fn succeeded(invocation: &InvocationSummary) -> bool {
+    invocation
         .exit
         .as_ref()
         .and_then(|exit| exit.result)
-        .filter(|result| *result >= 0)
-    else {
+        .is_some_and(|result| result >= 0)
+}
+
+fn remember_open(files: &mut FdState, invocation: &InvocationSummary, event: &EventSummary) {
+    if !matches!(event.syscall_name.as_str(), "open" | "openat" | "openat2") {
+        return;
+    }
+    if !succeeded(invocation) {
+        return;
+    }
+    let Some(result) = invocation.exit.as_ref().and_then(|exit| exit.result) else {
         return;
     };
-    let key = (invocation.task_cookie, event.pid, result as u64);
+    let (cookie, pid) = table_owner(files, invocation.task_cookie, event.pid);
+    let key = (cookie, pid, result as u64);
     let paths = path_list(invocation);
     if paths.is_empty() {
-        opened.remove(&key);
+        files.opened.remove(&key);
     } else {
-        opened.insert(key, join_paths(&paths));
+        files.opened.insert(key, paths.join(", "));
     }
+}
+
+fn remember_cwd(files: &mut FdState, invocation: &InvocationSummary, event: &EventSummary) {
+    if !succeeded(invocation) {
+        return;
+    }
+    let (cookie, pid) = table_owner(files, invocation.task_cookie, event.pid);
+    let path = match event.syscall_name.as_str() {
+        "getcwd" | "chdir" => path_list(invocation).into_iter().next(),
+        "fchdir" => call_args(invocation).and_then(|args| {
+            files
+                .opened
+                .get(&(cookie, pid, args[0]))
+                .cloned()
+                .filter(|path| path.starts_with('/'))
+        }),
+        _ => None,
+    };
+    if let Some(path) = path.filter(|path| path.starts_with('/')) {
+        files.cwd.insert((cookie, pid), path);
+    }
+}
+
+/// `dup` returns the new descriptor. `dup2` and `dup3` name it in argument 1.
+fn apply_dup(files: &mut FdState, invocation: &InvocationSummary, event: &EventSummary) {
+    let kind = match (event.syscall_nr, event.syscall_name.as_str()) {
+        (32, _) | (_, "dup") => DupKind::Return,
+        (33, _) | (_, "dup2") | (292, _) | (_, "dup3") => DupKind::Argument,
+        _ => return,
+    };
+    if !succeeded(invocation) {
+        return;
+    }
+    let Some(args) = call_args(invocation) else {
+        return;
+    };
+    let Some(result) = invocation.exit.as_ref().and_then(|exit| exit.result) else {
+        return;
+    };
+    let new_fd = match kind {
+        DupKind::Return => result as u64,
+        DupKind::Argument => args[1],
+    };
+    let (cookie, pid) = table_owner(files, invocation.task_cookie, event.pid);
+    let Some(path) = files.opened.get(&(cookie, pid, args[0])).cloned() else {
+        return;
+    };
+    files.opened.insert((cookie, pid, new_fd), path);
+}
+
+enum DupKind {
+    Return,
+    Argument,
 }
 
 /// One cookie per pid when every event for that pid shares it. Two cookies
@@ -1013,32 +1142,24 @@ fn task_cookies(invocations: &[InvocationSummary]) -> std::collections::BTreeMap
 }
 
 /// A successful `close` drops that task's descriptor only.
-fn forget_closed(
-    opened: &mut std::collections::BTreeMap<(u64, u32, u64), String>,
-    invocation: &InvocationSummary,
-    event: &EventSummary,
-) {
+fn forget_closed(files: &mut FdState, invocation: &InvocationSummary, event: &EventSummary) {
     if event.syscall_name != "close" && event.syscall_nr != 3 {
         return;
     }
-    let closed = invocation
-        .exit
-        .as_ref()
-        .and_then(|exit| exit.result)
-        .is_some_and(|result| result >= 0);
-    if !closed {
+    if !succeeded(invocation) {
         return;
     }
     let Some(fd) = fd_argument(invocation, event) else {
         return;
     };
-    opened.remove(&(invocation.task_cookie, event.pid, fd));
+    let (cookie, pid) = table_owner(files, invocation.task_cookie, event.pid);
+    files.opened.remove(&(cookie, pid, fd));
 }
 
 /// Snapshot the parent's open descriptors onto the new process. The child
 /// keeps its own entries; a later close does not edit the parent.
 fn inherit_open_fds(
-    opened: &mut std::collections::BTreeMap<(u64, u32, u64), String>,
+    files: &mut FdState,
     invocation: &InvocationSummary,
     event: &EventSummary,
     cookies: &std::collections::BTreeMap<u32, u64>,
@@ -1062,26 +1183,78 @@ fn inherit_open_fds(
     if child_pid == event.pid && child_cookie == invocation.task_cookie {
         return;
     }
-    let inherited: Vec<(u64, String)> = opened
+    let parent = table_owner(files, invocation.task_cookie, event.pid);
+    if shares_files(invocation, event) {
+        files.share.insert((child_cookie, child_pid), parent);
+        if let Some(cwd) = files.cwd.get(&parent).cloned() {
+            files.cwd.entry((child_cookie, child_pid)).or_insert(cwd);
+        }
+        return;
+    }
+    let inherited: Vec<(u64, String)> = files
+        .opened
         .iter()
-        .filter(|((cookie, pid, _), _)| *cookie == invocation.task_cookie && *pid == event.pid)
+        .filter(|((cookie, pid, _), _)| (*cookie, *pid) == parent)
         .map(|((_, _, fd), path)| (*fd, path.clone()))
         .collect();
     for (fd, path) in inherited {
-        opened.entry((child_cookie, child_pid, fd)).or_insert(path);
+        files
+            .opened
+            .entry((child_cookie, child_pid, fd))
+            .or_insert(path);
+    }
+    if let Some(cwd) = files.cwd.get(&parent).cloned() {
+        files.cwd.entry((child_cookie, child_pid)).or_insert(cwd);
     }
 }
 
-fn displayed_path(
-    invocation: &InvocationSummary,
-    event: &EventSummary,
-    opened: &std::collections::BTreeMap<(u64, u32, u64), String>,
-) -> String {
+fn shares_files(invocation: &InvocationSummary, event: &EventSummary) -> bool {
+    match event.syscall_nr {
+        CLONE => call_args(invocation).is_some_and(|args| args[0] & CLONE_FILES != 0),
+        CLONE3 => clone3_flags(invocation).is_some_and(|flags| flags & CLONE_FILES != 0),
+        _ => false,
+    }
+}
+
+fn clone3_flags(invocation: &InvocationSummary) -> Option<u64> {
+    let field = invocation
+        .entry
+        .iter()
+        .chain(invocation.exit.iter())
+        .chain(invocation.async_events.iter())
+        .flat_map(|event| event.fields.iter())
+        .find(|field| field.key.contains("clone_args") && field.key.contains("flags"))?;
+    let bytes = trace::covered_preview(field);
+    match bytes.len() {
+        4 => Some(u64::from(u32::from_le_bytes(bytes.try_into().ok()?))),
+        8 => Some(u64::from_le_bytes(bytes.try_into().ok()?)),
+        _ => None,
+    }
+}
+
+fn displayed_path(invocation: &InvocationSummary, event: &EventSummary, files: &FdState) -> String {
     let own = path_list(invocation);
     if !own.is_empty() {
-        return join_paths(&own);
+        return own
+            .iter()
+            .map(|path| resolve_path(path, invocation, event, files))
+            .collect::<Vec<_>>()
+            .join(", ");
     }
     if matches!(event.syscall_name.as_str(), "mmap" | "mmap2") {
+        let anonymous = call_args(invocation)
+            .is_some_and(|args| args.get(3).is_some_and(|flags| flags & MAP_ANONYMOUS != 0));
+        if anonymous {
+            return "—".into();
+        }
+        if let Some(fd) = fd_argument(invocation, event) {
+            if fd != u64::MAX {
+                let (cookie, pid) = table_owner(files, invocation.task_cookie, event.pid);
+                if let Some(path) = files.opened.get(&(cookie, pid, fd)) {
+                    return path.clone();
+                }
+            }
+        }
         return "—".into();
     }
     if matches!(
@@ -1089,7 +1262,8 @@ fn displayed_path(
         "read" | "write" | "readv" | "writev" | "pwrite64"
     ) {
         if let Some(fd) = fd_argument(invocation, event) {
-            if let Some(path) = opened.get(&(invocation.task_cookie, event.pid, fd)) {
+            let (cookie, pid) = table_owner(files, invocation.task_cookie, event.pid);
+            if let Some(path) = files.opened.get(&(cookie, pid, fd)) {
                 return path.clone();
             }
         }
@@ -1100,6 +1274,43 @@ fn displayed_path(
     } else {
         preview
     }
+}
+
+fn resolve_path(
+    path: &str,
+    invocation: &InvocationSummary,
+    event: &EventSummary,
+    files: &FdState,
+) -> String {
+    if path.starts_with('/') {
+        return path.to_string();
+    }
+    let (cookie, pid) = table_owner(files, invocation.task_cookie, event.pid);
+    if matches!(event.syscall_name.as_str(), "openat" | "openat2") {
+        if let Some(dirfd) = dirfd_argument(invocation, event) {
+            if dirfd != AT_FDCWD {
+                return match files.opened.get(&(cookie, pid, dirfd)) {
+                    Some(base) if base.starts_with('/') => format!("{base}/{path}"),
+                    _ => format!("{path} (relative, dirfd not recorded)"),
+                };
+            }
+        }
+    }
+    match files.cwd.get(&(cookie, pid)) {
+        Some(cwd) => format!("{cwd}/{path}"),
+        None => format!("{path} (relative, cwd not recorded)"),
+    }
+}
+
+fn dirfd_argument(invocation: &InvocationSummary, event: &EventSummary) -> Option<u64> {
+    let args = call_args(invocation)?;
+    let index = (0..args.len()).find(|index| {
+        matches!(
+            trace::argument_name(event.syscall_nr, *index),
+            "dfd" | "dirfd"
+        )
+    })?;
+    (index < args.len()).then_some(args[index])
 }
 
 fn path_key(key: &str) -> bool {
@@ -1138,22 +1349,6 @@ fn path_list(invocation: &InvocationSummary) -> Vec<String> {
     paths
 }
 
-/// A path with no leading `/` is not given a directory. The working directory
-/// was not captured.
-fn join_paths(paths: &[String]) -> String {
-    paths
-        .iter()
-        .map(|path| {
-            if path.starts_with('/') {
-                path.clone()
-            } else {
-                format!("{path} (relative, cwd not recorded)")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 fn flow(frame: impl Into<String>, ends: impl Into<String>, detail: impl Into<String>) -> Vec<Cell> {
     vec![
         cell(frame, theme::value(theme::ValueKind::Number), true),
@@ -1162,97 +1357,73 @@ fn flow(frame: impl Into<String>, ends: impl Into<String>, detail: impl Into<Str
     ]
 }
 
-const REQUEST_METHODS: [&str; 7] = ["GET", "POST", "PUT", "HEAD", "PATCH", "DELETE", "OPTIONS"];
-
-/// A request line starts with a method. `HTTP/1.1 200` is a response.
-fn request_line(text: &str) -> bool {
-    let line = text.trim_start();
-    if line.len() >= 5 && line[..5].eq_ignore_ascii_case("HTTP/") {
-        return false;
-    }
-    let Some(word) = line.split_whitespace().next() else {
-        return false;
-    };
-    REQUEST_METHODS
-        .iter()
-        .any(|method| word.eq_ignore_ascii_case(method))
-}
-
-fn http_status_line(info: &str) -> bool {
-    let line = info.trim_start();
-    line.len() >= 5 && line[..5].eq_ignore_ascii_case("HTTP/")
-}
-
 fn http_rows(input: &TriageInput<'_>) -> LimitedRows {
     let mut limited = LimitedRows {
         rows: Vec::new(),
         stopped_early: false,
     };
-    let mut used_response = vec![false; input.packets.len()];
-    for (index, packet) in input.packets.iter().enumerate() {
-        if !(packet.protocol.eq_ignore_ascii_case("http") && request_line(&packet.info)) {
-            continue;
-        }
-        let response =
-            input
-                .packets
-                .iter()
-                .enumerate()
-                .skip(index + 1)
-                .find(|(later_index, later)| {
-                    !used_response[*later_index]
-                        && later.protocol.eq_ignore_ascii_case("http")
-                        && http_status_line(&later.info)
-                        && later.source == packet.destination
-                        && later.destination == packet.source
-                });
-        let response_text = if let Some((later_index, later)) = response {
-            used_response[later_index] = true;
-            later.info.clone()
-        } else {
-            "—".to_string()
-        };
+    let Some(built) = reconstruct_input(input) else {
+        return limited;
+    };
+    for request in built.http {
+        let packet = request
+            .request_frames
+            .first()
+            .and_then(|number| input.packets.iter().find(|packet| packet.number == *number));
+        let ends = packet
+            .map(|packet| format!("{} → {}", packet.source, packet.destination))
+            .unwrap_or_else(|| "—".into());
         let mut row = flow(
-            format!("#{}", packet.number),
-            format!("{} → {}", packet.source, packet.destination),
-            packet.info.clone(),
+            request
+                .request_frames
+                .first()
+                .map(|number| format!("#{number}"))
+                .unwrap_or_else(|| "—".into()),
+            ends,
+            format!("{} {} {}", request.method, request.uri, request.version),
         );
-        row.push(cell(response_text, theme::text(), false));
         row.push(cell(
-            http_process(packet, input.invocations),
+            request
+                .status
+                .map(|status| status.to_string())
+                .unwrap_or_else(|| "—".into()),
+            theme::text(),
+            false,
+        ));
+        row.push(cell(
+            packet
+                .map(|packet| http_process(packet, input.invocations))
+                .unwrap_or_else(|| "—".into()),
             theme::text(),
             true,
         ));
         if !push_limited(&mut limited, row) {
-            return limited;
-        }
-    }
-    for invocation in input.invocations {
-        let Some(event) = trace::representative(invocation) else {
-            continue;
-        };
-        let preview = invocation
-            .entry
-            .iter()
-            .chain(invocation.exit.iter())
-            .flat_map(|event| event.fields.iter())
-            .find_map(|field| {
-                let text = std::str::from_utf8(trace::covered_preview(field)).ok()?;
-                request_line(text).then(|| {
-                    let line = text.trim_start().lines().next().unwrap_or(text);
-                    line.chars().take(180).collect::<String>()
-                })
-            });
-        if let Some(line) = preview {
-            let mut row = flow("syscall", format!("tid {}", event.tid), line);
-            row.push(cell("—", theme::text(), false));
-            row.push(cell("—", theme::text(), true));
-            if !push_limited(&mut limited, row) {
-                break;
-            }
+            break;
         }
     }
     limited
+}
+
+fn reconstruct_input(
+    input: &TriageInput<'_>,
+) -> Option<antinomie_monitor_core::network::Reconstruction> {
+    let frames = input.frames?;
+    if frames.is_empty() || frames.len() > input.packets.len() {
+        return None;
+    }
+    let captured: Vec<_> = input
+        .packets
+        .iter()
+        .zip(frames.iter())
+        .map(
+            |(packet, bytes)| antinomie_monitor_core::network::CapturedFrame {
+                number: packet.number,
+                time_us: packet.time_us,
+                bytes,
+            },
+        )
+        .collect();
+    Some(antinomie_monitor_core::network::reconstruct(&captured))
 }
 
 /// Process of a connect or sendto whose path or info text contains this
@@ -1319,42 +1490,54 @@ fn contains_address_and_port(text: &str, address: &str, port: &str) -> bool {
     text.contains(address) && text.contains(port)
 }
 
-fn dns_kind(packet: &NetworkPacket) -> &'static str {
-    if packet.protocol.eq_ignore_ascii_case("dns") && packet.info.contains("response") {
-        "response"
-    } else {
-        "query"
-    }
-}
-
-fn dns_packet(packet: &NetworkPacket) -> bool {
-    if packet.protocol.eq_ignore_ascii_case("dns") {
-        return true;
-    }
-    let transport =
-        packet.protocol.eq_ignore_ascii_case("udp") || packet.protocol.eq_ignore_ascii_case("tcp");
-    transport && (packet.src_port == Some(53) || packet.dst_port == Some(53))
-}
-
 fn dns_rows(input: &TriageInput<'_>) -> LimitedRows {
     let mut limited = LimitedRows {
         rows: Vec::new(),
         stopped_early: false,
     };
-    for packet in input.packets {
-        if !dns_packet(packet) {
-            continue;
-        }
+    let Some(built) = reconstruct_input(input) else {
+        return limited;
+    };
+    for query in built.dns {
+        let packet = query
+            .query_frames
+            .first()
+            .and_then(|number| input.packets.iter().find(|packet| packet.number == *number));
+        let ends = packet
+            .map(|packet| format!("{} → {}", packet.source, packet.destination))
+            .unwrap_or_else(|| "—".into());
+        let detail = if query.answers.is_empty() {
+            format!("{} {} {}", query.name, query.qtype, query.class_name)
+        } else {
+            format!(
+                "{} {} {} → {}",
+                query.name,
+                query.qtype,
+                query.class_name,
+                query.answers.join(", ")
+            )
+        };
         let mut row = flow(
-            format!("#{}", packet.number),
-            format!("{} → {}", packet.source, packet.destination),
-            if packet.info.is_empty() {
-                "name not decoded".into()
-            } else {
-                packet.info.clone()
-            },
+            query
+                .query_frames
+                .first()
+                .map(|number| format!("#{number}"))
+                .unwrap_or_else(|| "—".into()),
+            ends,
+            detail,
         );
-        row.push(cell(dns_kind(packet), theme::text(), false));
+        let kind = if query.retry {
+            "retry"
+        } else if query.rcode.is_some() {
+            "response"
+        } else {
+            "query"
+        };
+        row.push(cell(
+            format!("{kind} {}", query.protocol),
+            theme::text(),
+            false,
+        ));
         if !push_limited(&mut limited, row) {
             break;
         }
@@ -1373,13 +1556,15 @@ struct BpfNote {
     translation: Option<String>,
     /// Classic socket-filter and seccomp bytes. Absent when no image was isolated.
     dump: Option<String>,
+    /// Raw bytes, hash, and the identity fields that were present.
+    export: Option<String>,
 }
 
-fn bpf_notes(invocations: &[InvocationSummary]) -> Vec<BpfNote> {
+fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
     let mut notes = Vec::new();
     // File descriptors returned by successful BPF_PROG_LOAD calls in this slice.
     let mut program_fds = Vec::new();
-    for invocation in invocations {
+    for invocation in input.invocations {
         let Some(event) = trace::representative(invocation) else {
             continue;
         };
@@ -1389,14 +1574,36 @@ fn bpf_notes(invocations: &[InvocationSummary]) -> Vec<BpfNote> {
             continue;
         };
         let image = instruction_image(invocation, command);
-        let (translation, dump) = if let Some(bytes) = image.as_deref() {
-            if classic_image(command) {
-                (Some(bpf::translate_classic(bytes)), Some(bpf::dump(bytes)))
+        let (translation, dump, export) = if let Some(bytes) = image.as_deref() {
+            let action = if command == "BPF_PROG_LOAD" {
+                "load"
+            } else if command == "BPF_PROG_ATTACH" || command == "SO_ATTACH_FILTER" {
+                "attach"
             } else {
-                (Some(bpf::translate(bytes)), None)
-            }
+                command
+            };
+            let exported = bpf::export_capture(
+                bytes,
+                &bpf::BpfIdentity {
+                    vm_id: input.vm_id.map(str::to_owned),
+                    boot_id: input.boot_id.map(str::to_owned),
+                    run_id: input.run_id.map(str::to_owned),
+                    cookie: Some(invocation.task_cookie),
+                    pid: Some(event.pid),
+                    tid: Some(event.tid),
+                    timestamp_ns: (event.timestamp_ns != 0).then_some(event.timestamp_ns),
+                    action: action.to_owned(),
+                },
+            );
+            let translation = if classic_image(command) {
+                bpf::translate_classic(bytes)
+            } else {
+                bpf::translate(bytes)
+            };
+            let dump = classic_image(command).then(|| bpf::dump(bytes));
+            (Some(translation), dump, Some(exported))
         } else {
-            (None, None)
+            (None, None, None)
         };
         let result = invocation.exit.as_ref().and_then(|exit| exit.result);
         notes.push(BpfNote {
@@ -1406,6 +1613,7 @@ fn bpf_notes(invocations: &[InvocationSummary]) -> Vec<BpfNote> {
                 .or_else(|| bpf_lifecycle(command, result)),
             translation,
             dump,
+            export,
         });
         if command == "BPF_PROG_LOAD" {
             if let Some(fd) = result.filter(|result| *result >= 0) {
@@ -1523,11 +1731,11 @@ fn isolated_instructions(field: &antinomie_monitor_core::FieldSummary) -> Option
     Some(bytes.to_vec())
 }
 
-fn bpf_view(ui: &mut egui::Ui, invocations: &[InvocationSummary]) {
+fn bpf_view(ui: &mut egui::Ui, input: &TriageInput<'_>) {
     ui.label(
-        "BPF programs, classic socket filters and seccomp installs in this run. The translation reads captured instruction bytes; it does not load them.",
+        "BPF programs, classic socket filters and seccomp installs in this loaded page. The translation reads captured instruction bytes; it does not load or run them. VM, boot, or run is null in the export when this view does not have that id.",
     );
-    let notes = bpf_notes(invocations);
+    let notes = bpf_notes(input);
     if notes.is_empty() {
         ui.colored_label(
             theme::muted(),
@@ -1554,6 +1762,9 @@ fn bpf_view(ui: &mut egui::Ui, invocations: &[InvocationSummary]) {
                     if let Some(text) = &note.dump {
                         ui.add(egui::Label::new(RichText::new(text).monospace()).wrap());
                     }
+                    if let Some(text) = &note.export {
+                        ui.add(egui::Label::new(RichText::new(text).monospace()).wrap());
+                    }
                 }
                 ui.separator();
             }
@@ -1566,6 +1777,10 @@ mod tests {
     use antinomie_monitor_core::{
         network::NetworkPacket, EventSummary, FieldSummary, InvocationSummary,
     };
+
+    fn page_notes(invocations: &[InvocationSummary]) -> Vec<BpfNote> {
+        bpf_notes(&TriageInput::page(invocations, &[]))
+    }
 
     fn call(pid: u32, nr: u64, name: &str, result: i64) -> InvocationSummary {
         InvocationSummary {
@@ -1834,13 +2049,8 @@ mod tests {
             packet(3, "TCP", "53 → 40000", Some(53)),
             packet(4, "UDP", "9 → 9", Some(9)),
         ];
-        let rows = dns_rows(&TriageInput {
-            invocations: &[write, send],
-            packets: &packets,
-        });
-        let frames: Vec<_> = rows.rows.iter().map(|row| row[0].text.as_str()).collect();
-        assert_eq!(frames, ["#2", "#3"]);
-        assert!(rows.rows.iter().all(|row| row[0].text != "syscall"));
+        let rows = dns_rows(&TriageInput::page(&[write, send], &packets));
+        assert!(rows.rows.is_empty());
         assert!(!rows.stopped_early);
     }
 
@@ -1863,13 +2073,11 @@ mod tests {
             "",
             b"GET /index.html HTTP/1.1\r\n",
         ));
-        let rows = http_rows(&TriageInput {
-            invocations: &[response, request],
-            packets: &packets,
-        });
-        let lines: Vec<_> = rows.rows.iter().map(|row| row[2].text.as_str()).collect();
-        assert_eq!(lines, ["GET / HTTP/1.1", "GET /index.html HTTP/1.1"]);
-        assert!(!rows.stopped_early);
+        let rows = http_rows(&TriageInput::page(&[response, request], &packets));
+        assert!(
+            rows.rows.is_empty(),
+            "packet info and syscall text are not a reconstructed request"
+        );
     }
 
     #[test]
@@ -1895,7 +2103,7 @@ mod tests {
             "linux-6.12.94/x86_64/bpf_insn[]",
             &[0xb7, 0, 0, 0, 0, 0, 0, 0],
         ));
-        let notes = bpf_notes(&[bytes]);
+        let notes = page_notes(&[bytes]);
         assert_eq!(notes.len(), 1);
         assert!(notes[0].heading.contains("BPF_PROG_LOAD"));
         assert!(notes[0].translation.is_none());
@@ -1909,13 +2117,13 @@ mod tests {
             "linux-6.12.94/x86_64/bpf_insn[]",
             &[0xb7, 0, 0, 0, 0, 0, 0, 0],
         ));
-        let notes = bpf_notes(&[image]);
+        let notes = page_notes(&[image]);
         let text = notes[0].translation.as_deref().unwrap_or("");
         assert!(text.contains("mov64 r0, 0"), "{text}");
 
         let mut filter = call(1, 317, "seccomp", 0);
         filter.entry.as_mut().unwrap().args = Some([1, 0, 0, 0, 0, 0]);
-        let notes = bpf_notes(&[filter]);
+        let notes = page_notes(&[filter]);
         assert!(notes[0].heading.contains("SECCOMP_SET_MODE_FILTER"));
         assert!(notes[0].translation.is_none());
         assert_eq!(
@@ -1925,47 +2133,47 @@ mod tests {
 
         let mut prctl = call(1, 157, "prctl", 0);
         prctl.entry.as_mut().unwrap().args = Some([22, 2, 0, 0, 0, 0]);
-        assert!(bpf_notes(&[prctl])[0]
+        assert!(page_notes(&[prctl])[0]
             .heading
             .contains("SECCOMP_MODE_FILTER"));
 
         let mut lookup = call(1, 321, "bpf", 0);
         lookup.entry.as_mut().unwrap().args = Some([1, 0, 0, 0, 0, 0]);
-        assert!(bpf_notes(&[lookup.clone()])[0]
+        assert!(page_notes(&[lookup.clone()])[0]
             .heading
             .contains("BPF_MAP_LOOKUP_ELEM"));
-        assert!(bpf_notes(&[lookup.clone()])[0].lifecycle.is_none());
+        assert!(page_notes(&[lookup.clone()])[0].lifecycle.is_none());
         assert!(suspicious_rows(&[lookup]).is_empty());
 
         let mut denied = call(1, 321, "bpf", -13);
         denied.entry.as_mut().unwrap().args = Some([5, 0, 0, 0, 0, 0]);
         assert_eq!(
-            bpf_notes(&[denied])[0].lifecycle.as_deref(),
+            page_notes(&[denied])[0].lifecycle.as_deref(),
             Some("load requested")
         );
         let mut pending = call(1, 321, "bpf", 4);
         pending.exit = None;
         pending.entry.as_mut().unwrap().args = Some([8, 0, 0, 0, 0, 0]);
         assert_eq!(
-            bpf_notes(&[pending])[0].lifecycle.as_deref(),
+            page_notes(&[pending])[0].lifecycle.as_deref(),
             Some("attach requested")
         );
         let mut attached_prog = call(1, 321, "bpf", 7);
         attached_prog.entry.as_mut().unwrap().args = Some([8, 0, 0, 0, 0, 0]);
         assert_eq!(
-            bpf_notes(&[attached_prog])[0].lifecycle.as_deref(),
+            page_notes(&[attached_prog])[0].lifecycle.as_deref(),
             Some("attach requested fd 7")
         );
         let mut detach = call(1, 321, "bpf", 0);
         detach.entry.as_mut().unwrap().args = Some([9, 0, 0, 0, 0, 0]);
         assert_eq!(
-            bpf_notes(&[detach])[0].lifecycle.as_deref(),
+            page_notes(&[detach])[0].lifecycle.as_deref(),
             Some("detach requested")
         );
         let mut socket = call(1, 54, "setsockopt", 0);
         socket.entry.as_mut().unwrap().args = Some([4, 1, 26, 0, 0, 0]);
         assert_eq!(
-            bpf_notes(&[socket])[0].lifecycle.as_deref(),
+            page_notes(&[socket])[0].lifecycle.as_deref(),
             Some("socket attach requested fd 0")
         );
     }
@@ -2032,12 +2240,13 @@ mod tests {
             .unwrap()
             .fields
             .push(captured("arg1.buf", "", b"port 80\0"));
-        let rows = http_rows(&TriageInput {
-            invocations: &[port_only],
-            packets: &packets,
-        });
-        assert_eq!(rows.rows[0][2].text, "GET / HTTP/1.1");
-        assert_eq!(rows.rows[0][4].text, "—");
+        assert_eq!(
+            http_rows(&TriageInput::page(&[port_only.clone()], &packets))
+                .rows
+                .len(),
+            0
+        );
+        assert_eq!(http_process(&packets[0], &[port_only]), "—");
 
         let mut connect = call(4, 42, "connect", 0);
         connect
@@ -2046,12 +2255,7 @@ mod tests {
             .unwrap()
             .fields
             .push(captured("arg1.addr", "", b"10.0.0.2:80\0"));
-        let rows = http_rows(&TriageInput {
-            invocations: &[connect],
-            packets: &packets,
-        });
-        assert_eq!(rows.rows[0][2].text, "GET / HTTP/1.1");
-        assert_eq!(rows.rows[0][4].text, "pid 4 tid 4");
+        assert_eq!(http_process(&packets[0], &[connect]), "pid 4 tid 4");
     }
 
     #[test]
@@ -2060,7 +2264,7 @@ mod tests {
         load.entry.as_mut().unwrap().args = Some([5, 0, 0, 0, 0, 0]);
         let mut attach = call(1, 321, "bpf", 0);
         attach.entry.as_mut().unwrap().args = Some([8, 6, 0, 0, 0, 0]);
-        let notes = bpf_notes(&[load.clone(), attach]);
+        let notes = page_notes(&[load.clone(), attach]);
         assert_eq!(notes[0].lifecycle.as_deref(), Some("load requested fd 6"));
         assert_eq!(
             notes[1].lifecycle.as_deref(),
@@ -2071,7 +2275,7 @@ mod tests {
         let mut other = call(1, 321, "bpf", 7);
         other.entry.as_mut().unwrap().args = Some([8, 4, 0, 0, 0, 0]);
         assert_eq!(
-            bpf_notes(&[other])[0].lifecycle.as_deref(),
+            page_notes(&[other])[0].lifecycle.as_deref(),
             Some("attach requested fd 7")
         );
 
@@ -2080,7 +2284,7 @@ mod tests {
         let mut attach_exit = call(1, 321, "bpf", 3);
         attach_exit.entry.as_mut().unwrap().args = Some([8, 3, 0, 0, 0, 0]);
         assert_eq!(
-            bpf_notes(&[denied, attach_exit])[1].lifecycle.as_deref(),
+            page_notes(&[denied, attach_exit])[1].lifecycle.as_deref(),
             Some("attach requested fd 3")
         );
     }

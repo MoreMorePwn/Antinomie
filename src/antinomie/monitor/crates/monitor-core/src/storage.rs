@@ -54,6 +54,11 @@ pub(crate) fn private_dir(path: &Path) -> io::Result<()> {
     fs::create_dir_all(path)?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
 }
+/// SHA-256 of an in-memory buffer, lowercase hex.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
 fn sha256_file(path: &Path) -> Result<[u8; 32], String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
     sha256_uncached(file)

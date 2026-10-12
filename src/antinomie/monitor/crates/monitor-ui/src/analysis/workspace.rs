@@ -18,11 +18,27 @@ pub(crate) struct WorkspaceState {
     structure: Structure,
     views: BTreeMap<String, ViewState>,
     active_view: Option<String>,
+    record_id: String,
+    record_name: String,
+    record_path: String,
+    record_tags: Vec<String>,
+}
+
+impl WorkspaceState {
+    pub(crate) fn set_record(&mut self, id: &str, name: &str, path: &str, tags: Vec<String>) {
+        self.record_id = id.to_owned();
+        self.record_name = name.to_owned();
+        self.record_path = path.to_owned();
+        self.record_tags = tags;
+    }
 }
 
 #[derive(Default)]
 struct ViewState {
     query: String,
+    /// Last filter that compiled. An invalid expression does not replace this.
+    applied: String,
+    query_error: Option<String>,
     sort: Option<(Column, bool)>,
     selected: Option<(bool, u64)>,
     detail_tab: u8,
@@ -33,8 +49,16 @@ struct ViewState {
 impl WorkspaceState {
     fn bind(&mut self, report_id: &str) {
         if self.report_id.as_deref() != Some(report_id) {
+            let record_id = self.record_id.clone();
+            let record_name = self.record_name.clone();
+            let record_path = self.record_path.clone();
+            let record_tags = self.record_tags.clone();
             *self = Self {
                 report_id: Some(report_id.to_owned()),
+                record_id,
+                record_name,
+                record_path,
+                record_tags,
                 ..Self::default()
             };
         }
@@ -410,6 +434,10 @@ fn results(
     } else {
         Structure::All
     };
+    let record_id = state.record_id.clone();
+    let record_name = state.record_name.clone();
+    let record_path = state.record_path.clone();
+    let record_tags = state.record_tags.clone();
     let view_key = format!("{kind:?}/{filter:?}");
     let changed_view = state.active_view.as_ref() != Some(&view_key);
     state.active_view = Some(view_key.clone());
@@ -433,7 +461,18 @@ fn results(
         )
         .labelled_by(label.id);
     });
-    let indices = visible(section, filter, view);
+    if let Some(error) = &view.query_error {
+        ui.colored_label(crate::theme::error(), error);
+    }
+    let indices = visible(
+        section,
+        filter,
+        view,
+        &record_id,
+        &record_name,
+        &record_path,
+        &record_tags,
+    );
     ui.label(format!(
         "{} matching / {} retained",
         indices.len(),
@@ -567,8 +606,38 @@ fn overview(
     action
 }
 
-fn visible(section: &AnalysisSection, filter: Structure, view: &ViewState) -> Vec<usize> {
-    let query = view.query.to_lowercase();
+fn visible(
+    section: &AnalysisSection,
+    filter: Structure,
+    view: &mut ViewState,
+    record_id: &str,
+    record_name: &str,
+    record_path: &str,
+    record_tags: &[String],
+) -> Vec<usize> {
+    let draft = crate::query::compile_record(&view.query);
+    if draft.error.is_some() && crate::query::structured(&view.query) {
+        view.query_error.clone_from(&draft.error);
+    } else {
+        view.applied.clone_from(&view.query);
+        view.query_error = None;
+    }
+    let compiled = crate::query::compile_record(&view.applied);
+    let labels = crate::query::RecordLabels {
+        id: record_id,
+        name: record_name,
+        path: record_path,
+        tags: record_tags,
+    };
+    let record_matches = compiled.keep_record(&labels);
+    let query = if crate::query::structured(&view.applied) {
+        String::new()
+    } else {
+        view.applied.to_lowercase()
+    };
+    if crate::query::structured(&view.applied) && !record_matches {
+        return Vec::new();
+    }
     let mut indices: Vec<_> = section
         .entries
         .iter()
@@ -576,7 +645,12 @@ fn visible(section: &AnalysisSection, filter: Structure, view: &ViewState) -> Ve
         .filter(|(_, entry)| {
             !is_provenance(entry)
                 && filter.accepts(entry)
-                && (query.is_empty() || records::searchable(entry).contains(&query))
+                && (query.is_empty()
+                    || records::searchable(entry).contains(&query)
+                    || record_tags
+                        .iter()
+                        .any(|tag| tag.to_lowercase().contains(&query))
+                    || record_name.to_lowercase().contains(&query))
         })
         .map(|(index, _)| index)
         .collect();
@@ -981,10 +1055,16 @@ mod tests {
             sort: Some((Column::Size, false)),
             ..Default::default()
         };
-        assert_eq!(visible(&section, Structure::All, &view), [1, 0, 2]);
+        assert_eq!(
+            visible(&section, Structure::All, &mut view, "", "", "", &[]),
+            [1, 0, 2]
+        );
         assert_eq!(selected_entry(&section, &view).unwrap().offset, Some(16));
         view.query = "value2".into();
-        assert_eq!(visible(&section, Structure::All, &view), [1]);
+        assert_eq!(
+            visible(&section, Structure::All, &mut view, "", "", "", &[]),
+            [1]
+        );
         assert_eq!(view.selected, Some((true, 16)));
     }
     #[test]
