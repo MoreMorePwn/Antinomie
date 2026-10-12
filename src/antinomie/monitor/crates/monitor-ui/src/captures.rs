@@ -9,6 +9,7 @@ use egui_extras::{Column, TableBuilder};
 
 #[derive(Default)]
 pub(super) struct ProcessPicker {
+    pub purpose: ProcessPurpose,
     pub open: bool,
     pub after_pid: u32,
     pub selected: Option<GuestProcessIdentity>,
@@ -17,9 +18,17 @@ pub(super) struct ProcessPicker {
     pub filter: String,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum ProcessPurpose {
+    #[default]
+    Attach,
+    Core,
+}
+
 pub(super) enum ProcessAction {
     Refresh(u32),
     Attach(GuestProcessIdentity),
+    DumpCore(GuestProcessIdentity),
 }
 
 impl ProcessPicker {
@@ -62,7 +71,8 @@ impl ProcessPicker {
         }
         let viewport = ctx.screen_rect();
         let width = 600.0_f32.min((viewport.width() - 64.0).max(200.0));
-        egui::Window::new("Attach to process")
+        let core = self.purpose == ProcessPurpose::Core;
+        egui::Window::new(if core { "Dump core" } else { "Attach to process" })
             .id(egui::Id::new("attach_process"))
             .open(&mut open)
             .collapsible(false)
@@ -70,6 +80,9 @@ impl ProcessPicker {
             .default_pos(egui::pos2((viewport.width() - width - 16.0) * 0.5, 48.0))
             .max_width((viewport.width() - 64.0).max(200.0))
             .show(ctx, |ui| {
+                if core {
+                    ui.add(egui::Label::new("Briefly pause this process and its threads, capture a native ELF core, then resume. Resident memory only; unavailable pages remain marked. Limit: 64 MiB, 5 seconds.").wrap());
+                }
                 ui.horizontal_wrapped(|ui| {
                     if icon(
                         ui,
@@ -172,14 +185,18 @@ impl ProcessPicker {
                     .on_hover_text(format!("Boot {}", identity.boot_id));
                 }
                 if !enabled {
-                    ui.colored_label(theme::warn(), "Process attachment unavailable");
+                    ui.colored_label(theme::warn(), if core { "Core capture unavailable" } else { "Process attachment unavailable" });
                 }
                 ui.horizontal_wrapped(|ui| {
                     if ui
                         .add_enabled(
                             enabled && self.pending.is_none() && selection_current,
                             egui::Button::new(
-                                RichText::new(format!("{} Attach", egui_phosphor::regular::PLUG))
+                                RichText::new(if core {
+                                    format!("{} Dump core", egui_phosphor::regular::FILE)
+                                } else {
+                                    format!("{} Attach", egui_phosphor::regular::PLUG)
+                                })
                                     .color(theme::palette().primary_text),
                             )
                             .fill(theme::primary()),
@@ -187,7 +204,7 @@ impl ProcessPicker {
                         .clicked()
                     {
                         if let Some(identity) = self.selected.clone() {
-                            action = Some(ProcessAction::Attach(identity));
+                            action = Some(if core { ProcessAction::DumpCore(identity) } else { ProcessAction::Attach(identity) });
                         }
                     }
                     if ui.button("Cancel").clicked() {

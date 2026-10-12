@@ -26,3 +26,5 @@
 0022-antinomie-serialize-retained-core-cleanup-and-report-interrupted-dumps.patch
 0023-antinomie-bound-memory-pressure-while-arming-exit-cores.patch
 0024-antinomie-preserve-immediate-sigkill-teardown-for-armed-cores.patch
+0025-antinomie-capture-live-process-cores-with-cooperative-pause-and-resume.patch
+0026-antinomie-distinguish-task-work-wakeups-from-pending-signals.patch

@@ -12,9 +12,10 @@ use crate::{
 use antinomie_monitor_core::{
     capture_processes::CaptureProcess, pair_events, syscall_groups::SyscallGroup, Backend,
     BackendOptions, BaseSummary, CaptureState, CaptureSummary, Command, DisplayResolution,
-    ExecRequest, GuestCredentials, InvocationSummary, Notification, RevisionStatus, RunState,
-    RunSummary, Snapshot, TerminalRecord, TransportSettings, VmAcceleration, VmConfig, VmCpuModel,
-    VmLaunchOptions, VmState, WaitStatus, APP_REVISION, APP_VERSION,
+    ExecRequest, GuestCredentials, InvocationSummary, Notification, ProcessCorePhase,
+    ProcessCoreRequest, RevisionStatus, RunState, RunSummary, Snapshot, TerminalRecord,
+    TransportSettings, VmAcceleration, VmConfig, VmCpuModel, VmLaunchOptions, VmState, WaitStatus,
+    APP_REVISION, APP_VERSION,
 };
 #[path = "captures.rs"]
 mod captures;
@@ -217,6 +218,7 @@ pub struct MonitorApp {
     capture_tab: bool,
     process_picker: captures::ProcessPicker,
     pending_observer: Option<u64>,
+    pending_core: Option<u64>,
     /// A network capture start or stop request in flight.
     pending_network: Option<u64>,
     selected_analysis: Option<String>,
@@ -340,6 +342,7 @@ impl MonitorApp {
             capture_tab: false,
             process_picker: captures::ProcessPicker::default(),
             pending_observer: None,
+            pending_core: None,
             pending_network: None,
             selected_analysis: None,
             analysis_windows: BTreeMap::new(),
@@ -427,6 +430,7 @@ impl MonitorApp {
             Command::AttachProcess { .. } | Command::CaptureAll | Command::StopCapture { .. }
         );
         let process_list = matches!(&command, Command::ListProcesses { .. });
+        let core_capture = matches!(&command, Command::DumpProcessCore { .. });
         let sample = matches!(&command, Command::UploadSample { .. });
         let network = matches!(
             &command,
@@ -456,6 +460,9 @@ impl MonitorApp {
                     }
                     if observer {
                         self.pending_observer = Some(id);
+                    }
+                    if core_capture {
+                        self.pending_core = Some(id);
                     }
                     if process_list {
                         self.process_picker.pending = Some(id);
@@ -579,6 +586,9 @@ impl MonitorApp {
                         }
                         if self.pending_observer == Some(id) {
                             self.pending_observer = None;
+                        }
+                        if self.pending_core == Some(id) {
+                            self.pending_core = None;
                         }
                         if self.pending_network == Some(id) {
                             self.pending_network = None;
@@ -911,9 +921,54 @@ impl MonitorApp {
     }
 
     fn open_process_picker(&mut self) {
+        self.process_picker.purpose = captures::ProcessPurpose::Attach;
         self.process_picker.open = true;
         self.process_picker.reset();
         self.send(Command::ListProcesses { after_pid: 0 });
+    }
+
+    fn manual_core_unavailable(&self) -> Option<&'static str> {
+        if !self.running()
+            || self.closing
+            || self.selected.is_none()
+            || self.selected != self.snapshot.active_vm
+        {
+            Some("Start the selected VM to dump a process core.")
+        } else if self.snapshot.memory_dump.is_some() {
+            Some("Wait for the VM RAM dump to finish; the guest is paused.")
+        } else if !self
+            .snapshot
+            .guest_kernel
+            .as_ref()
+            .is_some_and(|kernel| kernel.revision.is_some_and(|revision| revision >= 16))
+        {
+            Some("Live core capture needs a guest base with revision 16 or newer.")
+        } else if self.pending_core.is_some()
+            || self.snapshot.process_cores.iter().any(|capture| {
+                Some(&capture.vm_id) == self.snapshot.active_vm.as_ref()
+                    && matches!(
+                        capture.phase,
+                        ProcessCorePhase::Admission
+                            | ProcessCorePhase::UnknownAdmission
+                            | ProcessCorePhase::GuestCapture
+                    )
+            })
+        {
+            Some("Wait for the current process capture to release its pause.")
+        } else {
+            None
+        }
+    }
+
+    fn open_core_picker(&mut self) {
+        if self.manual_core_unavailable().is_some() {
+            return;
+        }
+        self.process_picker.purpose = captures::ProcessPurpose::Core;
+        self.process_picker.open = true;
+        self.process_picker.reset();
+        self.send(Command::ListProcesses { after_pid: 0 });
+        self.focus_panel = Some(Panel::CoreDump);
     }
 
     fn stop_observer(&mut self) {
@@ -1431,6 +1486,28 @@ impl MonitorApp {
     }
 
     fn run_artifacts_view(&mut self, ui: &mut egui::Ui, run: &RunSummary) {
+        let manual: Vec<_> = self
+            .snapshot
+            .process_cores
+            .iter()
+            .filter(|capture| {
+                capture.vm_id == run.vm_id
+                    && capture.boot_id == run.boot_id
+                    && capture.source_run_id.as_deref() == Some(run.id.as_str())
+            })
+            .cloned()
+            .collect();
+        if !manual.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(format!("Recent manual process cores: {}", manual.len()));
+                for (index, capture) in manual.into_iter().enumerate() {
+                    if ui.link(format!("Open manual core {}", index + 1)).clicked() {
+                        self.core_view.select_manual(capture);
+                        self.focus_panel = Some(Panel::CoreDump);
+                    }
+                }
+            });
+        }
         let cache_id = egui::Id::new(("run-artifacts", &run.directory));
         let cached = ui.ctx().data_mut(|data| {
             type Cached = (
@@ -2489,16 +2566,39 @@ impl MonitorApp {
                             ) {
                                 self.toggle_network_capture();
                             }
-                            if tool_button(ui, ToolButton {
-                                icon: egui_phosphor::regular::DATABASE, label: "Dump memory",
-                                tooltip: "Save the running VM's RAM", enabled: self.running() && !self.closing && self.snapshot.memory_dump.is_none(),
-                                tone: theme::info(), strong: false, active: self.snapshot.memory_dump.is_some(),
-                            }) { self.send(Command::DumpMemory); self.focus_panel = Some(Panel::Memory); }
-                            if tool_button(ui, ToolButton {
-                                icon: egui_phosphor::regular::FILE, label: "Core dump",
-                                tooltip: "Import and inspect a process core; automatic acquisition needs the 0.6.0 guest update",
-                                enabled: self.selected.is_some(), tone: theme::info(), strong: false, active: false,
-                            }) { self.focus_panel = Some(Panel::CoreDump); }
+                            if tool_button(
+                                ui,
+                                ToolButton {
+                                    icon: egui_phosphor::regular::DATABASE,
+                                    label: "Dump memory",
+                                    tooltip: "Save the running VM's RAM",
+                                    enabled: self.running()
+                                        && !self.closing
+                                        && self.snapshot.memory_dump.is_none(),
+                                    tone: theme::info(),
+                                    strong: false,
+                                    active: self.snapshot.memory_dump.is_some(),
+                                },
+                            ) {
+                                self.send(Command::DumpMemory);
+                                self.focus_panel = Some(Panel::Memory);
+                            }
+                            if tool_button(
+                                ui,
+                                ToolButton {
+                                    icon: egui_phosphor::regular::FILE,
+                                    label: "Dump core",
+                                    tooltip: self.manual_core_unavailable().unwrap_or(
+                                        "Pause a selected process, capture its core, then resume",
+                                    ),
+                                    enabled: self.manual_core_unavailable().is_none(),
+                                    tone: theme::info(),
+                                    strong: false,
+                                    active: false,
+                                },
+                            ) {
+                                self.open_core_picker();
+                            }
                             if ui.available_width() > 160.0 {
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
@@ -4342,14 +4442,20 @@ impl MonitorApp {
         }
         if self.launch_open {
             let mut open = true;
+            let viewport = ctx.screen_rect();
+            let width = 1000.0_f32.min((viewport.width() - 50.0).max(300.0));
             egui::Window::new("Run program")
                 .id(Dialog::Launch.window_id())
                 .open(&mut open)
                 .collapsible(false)
+                .movable(true)
                 .resizable(true)
-                .default_width(1000.0)
+                .default_width(width)
                 .default_height((ctx.screen_rect().height() - 100.0).max(240.0))
-                .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 32.0))
+                .default_pos(egui::pos2(
+                    viewport.center().x - width * 0.5,
+                    viewport.top() + 32.0,
+                ))
                 .max_width((ctx.screen_rect().width() - 50.0).max(300.0))
                 .max_height((ctx.screen_rect().height() - 90.0).max(200.0))
                 .show(ctx, |ui| {
@@ -5107,7 +5213,11 @@ impl MonitorApp {
         self.layout = layout;
         self.dialogs(ctx);
         self.data_windows.show(ctx);
-        let enabled = self.observer_start_enabled();
+        let enabled = if self.process_picker.purpose == captures::ProcessPurpose::Core {
+            self.manual_core_unavailable().is_none()
+        } else {
+            self.observer_start_enabled()
+        };
         if self
             .process_picker
             .selected
@@ -5133,6 +5243,22 @@ impl MonitorApp {
                     if self.snapshot.boot_id.as_ref() == Some(&identity.boot_id) && enabled {
                         self.process_picker.open = false;
                         self.send(Command::AttachProcess { identity });
+                    }
+                }
+                captures::ProcessAction::DumpCore(identity) => {
+                    if self.snapshot.boot_id.as_ref() == Some(&identity.boot_id)
+                        && self.manual_core_unavailable().is_none()
+                    {
+                        if let Some(vm_id) = self.snapshot.active_vm.clone() {
+                            self.process_picker.open = false;
+                            self.send(Command::DumpProcessCore {
+                                request: ProcessCoreRequest {
+                                    vm_id,
+                                    target: identity,
+                                    ..ProcessCoreRequest::default()
+                                },
+                            });
+                        }
                     }
                 }
             }
@@ -5621,12 +5747,28 @@ impl MonitorApp {
                     .find(|location| Some(&location.vm_id) == self.selected.as_ref())
                     .map(|location| location.recording_directories.clone())
                     .unwrap_or_default();
-                self.core_view.show(
+                let unavailable = self.manual_core_unavailable();
+                let action = self.core_view.show(
                     ui,
                     &roots,
                     self.selected.as_deref(),
                     self.selected.is_some() && self.selected == self.snapshot.active_vm,
+                    crate::core_view::CoreControls {
+                        unavailable,
+                        captures: &self.snapshot.process_cores,
+                        can_cancel: self.running()
+                            && !self.closing
+                            && self.snapshot.memory_dump.is_none()
+                            && self.selected == self.snapshot.active_vm,
+                    },
                 );
+                match action {
+                    Some(crate::core_view::CoreAction::Dump) => self.open_core_picker(),
+                    Some(crate::core_view::CoreAction::Cancel(capture_id)) => {
+                        self.send(Command::CancelCoreCapture { capture_id })
+                    }
+                    None => {}
+                }
             }
             Panel::Memory => {
                 let vm_id = self.selected.clone();
@@ -7356,6 +7498,7 @@ mod tests {
             capture_tab: false,
             process_picker: captures::ProcessPicker::default(),
             pending_observer: None,
+            pending_core: None,
             pending_network: None,
             selected_analysis: None,
             analysis_windows: BTreeMap::new(),
@@ -7765,6 +7908,91 @@ mod tests {
             let output = render(&mut app, &ctx, size);
             assert!(texts(&output).iter().any(|(text, _)| text == "Captures"));
         }
+    }
+
+    #[test]
+    fn core_picker_captures_the_complete_identity_and_requires_supported_selected_vm() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut app = app();
+        observer_fixture(&mut app);
+        app.snapshot.guest_kernel.as_mut().unwrap().revision = Some(15);
+        app.open_core_picker();
+        assert!(!app.process_picker.open);
+        assert!(app
+            .manual_core_unavailable()
+            .unwrap()
+            .contains("revision 16"));
+        app.snapshot.guest_kernel.as_mut().unwrap().revision = Some(16);
+        let identity = antinomie_monitor_core::GuestProcessIdentity {
+            boot_id: "boot".into(),
+            task_cookie: 55,
+            tgid: 42,
+            start_boot_ns: 100,
+        };
+        app.snapshot.process_page = Some(antinomie_monitor_core::GuestProcessPage {
+            boot_id: "boot".into(),
+            after_pid: 0,
+            next_pid: 42,
+            processes: vec![antinomie_monitor_core::GuestProcess {
+                identity: identity.clone(),
+                parent_tgid: 1,
+                uid: 1000,
+                gid: 1000,
+                thread_count: 3,
+                command: "core-target".into(),
+            }],
+        });
+        app.open_core_picker();
+        assert!(matches!(
+            app.submitted.last(),
+            Some(Command::ListProcesses { after_pid: 0 })
+        ));
+        let size = egui::vec2(1000.0, 800.0);
+        click_label(&mut app, &ctx, size, "core-target");
+        assert_eq!(app.process_picker.selected.as_ref(), Some(&identity));
+        // The foreground picker and background panel share the same action
+        // name. Click the foreground button rather than the toolbar/panel.
+        let output = render(&mut app, &ctx, size);
+        let label = format!("{} Dump core", egui_phosphor::regular::FILE);
+        let position = texts(&output)
+            .iter()
+            .rfind(|(text, _)| text == &label)
+            .unwrap()
+            .1
+            .center();
+        for pressed in [true, false] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events: vec![
+                        egui::Event::PointerMoved(position),
+                        egui::Event::PointerButton {
+                            pos: position,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ctx| app.draw(ctx),
+            );
+        }
+        assert!(
+            matches!(app.submitted.last(), Some(Command::DumpProcessCore { request })
+            if request.target == identity && request.vm_id == "vm" && request.max_size == 64 * 1024 * 1024
+                && request.timeout_ms == 5000 && request.source_run_id.is_none())
+        );
+        assert!(!app.process_picker.open);
+        assert!(!app
+            .submitted
+            .iter()
+            .any(|command| matches!(command, Command::AttachProcess { .. })));
+        app.selected = Some("other-vm".into());
+        assert!(app.manual_core_unavailable().is_some());
+        app.open_core_picker();
+        assert!(!app.process_picker.open);
     }
 
     #[test]
@@ -8644,7 +8872,7 @@ mod tests {
                 "Capture all",
                 "Capture network",
                 "Dump memory",
-                "Core dump"
+                "Dump core"
             ],
             "{shown:?}"
         );
@@ -11156,6 +11384,76 @@ mod tests {
             antinomie_monitor_core::AnalysisKind::Structures,
         ];
         app
+    }
+
+    #[test]
+    fn run_setup_title_can_move_and_reopen_without_resetting_position() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 900.0);
+        let mut app = analysis_setup_fixture();
+        for _ in 0..4 {
+            render(&mut app, &ctx, size);
+        }
+        let before = egui::AreaState::load(&ctx, Dialog::Launch.window_id())
+            .unwrap()
+            .rect();
+        let output = render(&mut app, &ctx, size);
+        let start = texts(&output)
+            .iter()
+            .find(|(text, _)| text == "Run program")
+            .unwrap()
+            .1
+            .center();
+        let end = start + egui::vec2(32.0, -12.0);
+        for events in [
+            vec![egui::Event::PointerMoved(start)],
+            vec![egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            vec![egui::Event::PointerMoved(end)],
+            vec![egui::Event::PointerButton {
+                pos: end,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| app.draw(ctx),
+            );
+        }
+        for _ in 0..3 {
+            render(&mut app, &ctx, size);
+        }
+        let moved = egui::AreaState::load(&ctx, Dialog::Launch.window_id())
+            .unwrap()
+            .rect();
+        assert!(
+            moved.min.x > before.min.x + 12.0 && moved.min.y < before.min.y - 4.0,
+            "title drag must move the dialog: {before:?} -> {moved:?}"
+        );
+        app.launch_open = false;
+        render(&mut app, &ctx, size);
+        app.launch_open = true;
+        render(&mut app, &ctx, size);
+        let reopened = egui::AreaState::load(&ctx, Dialog::Launch.window_id())
+            .unwrap()
+            .rect();
+        assert!(
+            (reopened.min - moved.min).length() < 1.0,
+            "reopen retains the moved position"
+        );
+        let (run, analyze) = app.launch_action_rects.unwrap();
+        assert!(run.bottom() < size.y && analyze.bottom() < size.y);
     }
 
     #[test]

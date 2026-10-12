@@ -1,0 +1,29 @@
+From aa16e1fb8ec2318f4f78e3a8b08727205e2605a9 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Mon, 12 Oct 2026 10:19:32 +0700
+Subject: [PATCH] antinomie: distinguish task-work wakeups from pending signals
+
+---
+ kernel/antinomie/manual_core.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/kernel/antinomie/manual_core.c b/kernel/antinomie/manual_core.c
+index 822e2e391..8335b5377 100644
+--- a/kernel/antinomie/manual_core.c
++++ b/kernel/antinomie/manual_core.c
+@@ -119,8 +119,11 @@ static int abort_reason(struct ant_manual *session)
+ 		return -ETIMEDOUT;
+ 	if (READ_ONCE(session->abort))
+ 		return READ_ONCE(session->error) ?: -EINTR;
++	/* TWA_SIGNAL sets TIF_NOTIFY_SIGNAL itself. Only actual signal state
++	 * aborts acquisition; our rendezvous notification is not a signal.
++	 */
+ 	for (i = 0; i < session->task_count; i++)
+-		if (signal_pending(session->participants[i].task))
++		if (task_sigpending(session->participants[i].task))
+ 			return -EINTR;
+ 	return 0;
+ }
+-- 
+2.53.0
+

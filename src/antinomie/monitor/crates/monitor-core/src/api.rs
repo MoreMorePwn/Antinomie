@@ -441,6 +441,72 @@ pub struct RunArtifacts {
     pub issues: Vec<String>,
 }
 
+/// A nonfatal native-process core request; PID alone never selects its owner.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProcessCoreRequest {
+    pub vm_id: String,
+    pub target: crate::observation::GuestProcessIdentity,
+    #[serde(default)]
+    pub source_run_id: Option<String>,
+    pub max_size: u32,
+    pub timeout_ms: u32,
+}
+impl Default for ProcessCoreRequest {
+    fn default() -> Self {
+        Self {
+            vm_id: String::new(),
+            target: crate::observation::GuestProcessIdentity {
+                boot_id: String::new(),
+                task_cookie: 0,
+                tgid: 0,
+                start_boot_ns: 0,
+            },
+            source_run_id: None,
+            max_size: 64 * 1024 * 1024,
+            timeout_ms: 5000,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessCorePhase {
+    #[default]
+    Admission,
+    UnknownAdmission,
+    GuestCapture,
+    Transfer,
+    Seal,
+    Finished,
+}
+
+/// Independently retained manual evidence; every request has a fresh ID/path.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProcessCoreCapture {
+    pub format: u32,
+    pub id: String,
+    pub vm_id: String,
+    pub boot_id: String,
+    pub source_run_id: Option<String>,
+    pub restored_from_capture_id: Option<String>,
+    pub target: crate::observation::GuestProcessIdentity,
+    pub directory: PathBuf,
+    pub file: Option<PathBuf>,
+    pub state: RunArtifactState,
+    pub phase: ProcessCorePhase,
+    pub stored_size: u64,
+    pub guest_size: Option<u64>,
+    pub sha256: Option<String>,
+    /// Whether capture-owned parking has ended; this does not promise the process is alive.
+    pub pause_released: Option<bool>,
+    pub max_size: u32,
+    pub timeout_ms: u32,
+    pub nonce: [u64; 2],
+    pub guest_handle: Option<u64>,
+    pub guest_status: Option<serde_json::Value>,
+    pub issue: Option<String>,
+}
+
 impl RunArtifacts {
     /// Load retained sidecar evidence. Older runs have no sidecar and return None.
     /// Reject oversized/malformed metadata instead of allocating unbounded input.
@@ -1074,6 +1140,12 @@ pub enum Command {
     CancelProcessCore {
         run_id: String,
     },
+    DumpProcessCore {
+        request: ProcessCoreRequest,
+    },
+    CancelCoreCapture {
+        capture_id: String,
+    },
     AnalyzeOnly {
         path: String,
         uid: u32,
@@ -1239,6 +1311,8 @@ pub struct VmSnapshotProgress {
 
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
+    /// Active manual captures and at most the latest 64 completed records.
+    pub process_cores: Vec<ProcessCoreCapture>,
     /// Host measurements for the active QEMU process, refreshed once a second.
     pub vm_resources: Option<VmResources>,
     pub vm_snapshot_trees: std::collections::BTreeMap<String, VmSnapshotTree>,
@@ -1292,14 +1366,20 @@ pub struct Snapshot {
 #[derive(Clone, Debug, Default)]
 pub struct VmResources {
     pub vm_id: String,
+    /// Per-sampler observation counter; restarts with a new VM session.
+    pub sample_sequence: u64,
     /// Elapsed host time since this QEMU process started, including pauses.
     pub uptime_ms: Option<u64>,
     /// CPU usage across QEMU threads; 100 percent represents one host CPU.
     pub qemu_cpu_percent: Option<f64>,
     /// Resident host memory; does not represent guest RAM utilization.
     pub qemu_resident_size: Option<u64>,
+    /// Total RAM visible to the host kernel, in octets.
+    pub host_memory_total_size: Option<u64>,
     /// Space available to this user on the data-directory filesystem.
     pub data_disk_available_size: Option<u64>,
+    /// Total capacity of the data-directory filesystem, in octets.
+    pub data_disk_total_size: Option<u64>,
     pub sample_error: Option<String>,
 }
 
@@ -1535,11 +1615,13 @@ mod tests {
         );
     }
     #[test]
-    fn revision_changes_only_with_feature_or_major_releases() {
+    fn revision_history_preserves_order_and_feature_release_versions() {
         let history = revision_history();
         assert!(!history.is_empty());
         for pair in history.windows(2) {
-            assert!(pair[1].0 > pair[0].0 && pair[1].1 > pair[0].1, "{pair:?}");
+            // Several guest candidates may be prepared for one unreleased
+            // feature version. Preserve all their minimum-version lookups.
+            assert!(pair[1].0 > pair[0].0 && pair[1].1 >= pair[0].1, "{pair:?}");
         }
         for (revision, version) in &history {
             // A revision ships with x.y.0, never with a fix release.

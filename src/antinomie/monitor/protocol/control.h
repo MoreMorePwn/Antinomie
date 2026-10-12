@@ -12,7 +12,7 @@
 #define ANTC_VERSION 1
 /* Contract revision of the guest's observable behaviour (native-schema-slices). */
 /* Revision 15: opt-in root-process ELF core acquisition at exit; ABI 9. */
-#define ANTC_REVISION 15
+#define ANTC_REVISION 16
 #define ANTC_HEADER_SIZE 8
 #define ANTC_UPLOAD_BEGIN 0x1001
 #define ANTC_UPLOAD_CHUNK 0x1002
@@ -57,6 +57,9 @@
 #define ANTC_CORE_STATUS 0x1060
 #define ANTC_CORE_READ 0x1061
 #define ANTC_CORE_RELEASE 0x1062
+#define ANTC_CORE_CAPTURE 0x1063
+#define ANTC_CORE_LOOKUP 0x1064
+#define ANTC_CORE_CANCEL 0x1065
 #define ANTC_CORE_STATUS_SIZE 80
 #define ANTC_CORE_ARMED 1
 #define ANTC_CORE_COPYING 2
@@ -68,6 +71,9 @@
 #define ANTC_CORE_NATIVE_ELF64 2
 #define ANTC_CORE_FILTERED_MEMORY 4
 #define ANTC_CORE_COVERAGE_GAP 8
+#define ANTC_CORE_MANUAL 0x10
+#define ANTC_CORE_PAUSE_RELEASED 0x20
+#define ANTC_CORE_RESIDENT_ONLY 0x40
 #define ANTC_UPLOAD_OVERWRITE 1
 #define ANTC_UPLOAD_EXECUTABLE 2
 
@@ -115,6 +121,32 @@
  * be revalidated across snapshot epochs. No side-effect retry guarantee.
  * Timeout bounds serialization, not Linux thread rendezvous/page faults.
  * Linux memory filtering applies, so not every mapped byte is included.
+ * Revision16 manual acquisition retains the same STATUS80/READ/RELEASE.
+ * CORE_CAPTURE: header0, cookie8:u64, start_boot_ns16:u64, tgid24:u32,
+ * max_size28:u32, timeout_ms32:u32, policy36:u32=1 (resident-only),
+ * nonce_lo40:u64, nonce_hi48:u64; 56 bytes. Reply is the 24-byte arm reply.
+ * CORE_LOOKUP: header0, cookie8:u64, start_boot_ns16:u64, tgid24:u32,
+ * reserved28:u32=0, nonce_lo32:u64, nonce_hi40:u64; 48 bytes. Reply STATUS80.
+ * Both require nonzero cookie/tgid and a nonce that is not all zero.
+ * Admission deduplicates retained identical nonce/identity/limits only;
+ * LOOKUP is readonly and never starts capture. Unknown admissions are never
+ * replayed. A mismatched retained nonce is -EINVAL, absent nonce -ESRCH.
+ * CORE_CANCEL: header0, id8:u64; 16 bytes, empty reply. Retains status while
+ * cancellation removes our pause ownership; RELEASE then removes evidence.
+ * Manual status root_cookie is selected leader cookie; wait_status/signal0.
+ * MANUAL/RESIDENT_ONLY flags identify mode. Terminal PAUSE_RELEASED proves
+ * our parks are removed, not that the scheduler ran or external stops ended.
+ * One manual admission, including late callbacks, owns up to 8MiB auxiliary
+ * metadata in addition to the existing 128MiB/four-handle output pool.
+ * Native leader identity, 256 threads, 4096 VMAs/extents, 65536 page probes;
+ * stopped/traced/exiting/shared-mm or changing groups are unsupported.
+ * No signal->core_state, SIGSTOP/SIGCONT, fatal teardown or helper process.
+ * Native filtered ELF notes and resident pages are observational. Missing or
+ * unscanned pages have p_filesz=0, never fabricated zero bytes; Partial is
+ * explicit. Deadlines are cooperative, not hard real-time guarantees.
+ * Reattachment cancels in-flight manual sessions before fence acknowledgment;
+ * completed immutable buffers remain readable. Snapshot operations must
+ * reject an in-flight manual capture before pausing/restoring the VM.
  *
  * ACQUIRE: header flags=0, uid at 8, gid at 12, u32 path_len at 16,
  * reserved=0 at 20, absolute path at 24, then u32 max_size, timeout_ms.

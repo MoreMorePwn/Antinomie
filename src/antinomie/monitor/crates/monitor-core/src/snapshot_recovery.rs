@@ -16,6 +16,8 @@ struct HostCheckpoint {
     runs: Vec<RunSummary>,
     #[serde(default)]
     core_handles: Vec<process_core::SavedHandle>,
+    #[serde(default)]
+    manual_core_handles: Vec<ProcessCoreCapture>,
     captures: Vec<CaptureCheckpoint>,
 }
 #[derive(Serialize, Deserialize)]
@@ -30,7 +32,7 @@ impl HostCheckpoint {
             || self.source_boot_id.is_empty()
             || self.source_boot_id.len() > 128
             || self.runs.len() > 4096
-            || self.core_handles.len() > 4
+            || self.core_handles.len() + self.manual_core_handles.len() > 4
             || self.captures.len() > OBSERVATION_RETAINED
             || self.boot_bundle_identity != bundle.base_identity
             || self.disk_bundle_identity != disk_bundle.base_identity
@@ -64,6 +66,28 @@ impl HostCheckpoint {
             }
             if !core_ids.insert(handle.core_id) || !core_roots.insert(handle.root_cookie) {
                 return Err("snapshot core handles contain duplicate ownership".into());
+            }
+        }
+        let mut manual_nonces = std::collections::BTreeSet::new();
+        for record in &self.manual_core_handles {
+            manual_core::validate_saved(record)?;
+            if record.vm_id != vm.id
+                || record.boot_id != self.source_boot_id
+                || !core_ids.insert(record.guest_handle.ok_or("missing manual handle")?)
+                || !manual_nonces.insert(record.nonce)
+            {
+                return Err("manual checkpoint has duplicate or foreign capture ownership".into());
+            }
+            if let Some(id) = &record.source_run_id
+                && !self.runs.iter().any(|run| {
+                    run.id == *id
+                        && run.root_task_cookie == record.target.task_cookie
+                        && run.pid == record.target.tgid
+                })
+            {
+                return Err(
+                    "manual checkpoint source run does not match its selected identity".into(),
+                );
             }
         }
         for capture in &self.captures {
@@ -100,6 +124,11 @@ impl Session {
                         .as_ref()
                         .and_then(process_core::Transfer::checkpoint_handle)
                 })
+                .collect(),
+            manual_core_handles: self
+                .manual_cores
+                .values()
+                .filter_map(manual_core::Owner::checkpoint)
                 .collect(),
             captures: self
                 .captures
@@ -144,6 +173,7 @@ impl Session {
             }),
         )?;
         let mut runs = BTreeMap::new();
+        let mut restored_run_ids = BTreeMap::new();
         let mut run_artifacts = BTreeMap::new();
         for mut summary in checkpoint.runs {
             let saved_core = checkpoint
@@ -154,7 +184,9 @@ impl Session {
             if cookie == 0 || summary.session_id == 0 || runs.contains_key(&cookie) {
                 return Err("host checkpoint contains duplicate or zero run identities".into());
             }
+            let source_run_id = summary.id.clone();
             summary.id = storage::unique_id();
+            restored_run_ids.insert(source_run_id, summary.id.clone());
             summary.vm_id = vm.id.clone();
             summary.boot_id = boot_id.clone();
             summary.directory = boot_dir.join("runs").join(&summary.id);
@@ -208,6 +240,17 @@ impl Session {
             runs.insert(cookie, run);
         }
         let mut captures = BTreeMap::new();
+        let mut manual_cores = BTreeMap::new();
+        for saved in &checkpoint.manual_core_handles {
+            let source = saved
+                .source_run_id
+                .as_ref()
+                .and_then(|id| restored_run_ids.get(id))
+                .cloned();
+            let owner = manual_core::Owner::restored(saved, &vm.id, &boot_id, &boot_dir, source)?;
+            manual_cores.insert(owner.summary.id.clone(), owner);
+        }
+        let manual_record_count = manual_cores.len();
         let mut cookies = std::collections::BTreeSet::new();
         for saved in checkpoint.captures {
             let mut summary = saved.summary;
@@ -253,6 +296,8 @@ impl Session {
             run_artifacts,
             core_stored_len: 0,
             core_reserved_len: 0,
+            manual_cores,
+            manual_record_count,
             captures,
             pending_capture_id: None,
             boot_id,
@@ -379,6 +424,9 @@ impl Worker {
         request: &SnapshotRequest,
     ) -> Result<VmCheckpoint, String> {
         let vm = self.snapshot_vm(id)?;
+        if let Some(session) = self.session.as_ref() {
+            session.manual_snapshot_guard()?;
+        }
         let running = self.snapshot.active_vm.as_deref() == Some(id);
         if self.session.is_some() && !running {
             return Err("stop the other VM before saving a snapshot".into());
@@ -541,6 +589,9 @@ impl Worker {
         save_current: Option<SnapshotRequest>,
     ) -> Result<String, String> {
         let vm = self.snapshot_vm(id)?;
+        if let Some(session) = self.session.as_ref() {
+            session.manual_snapshot_guard()?;
+        }
         if self.session.is_some() && self.snapshot.active_vm.as_deref() != Some(id) {
             return Err("stop the other VM before restoring".into());
         }
@@ -727,6 +778,9 @@ impl Worker {
             }
         };
         old.forget_unanswered();
+        if let Err(error) = old.prepare_manual_reconnect(&mut self.snapshot, &self.sender) {
+            return self.reconnect_failed(old, error);
+        }
         let checkpoint = match old
             .host_checkpoint()
             .and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()))

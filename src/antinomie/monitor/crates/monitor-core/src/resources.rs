@@ -7,6 +7,7 @@ use std::{fs::File, io::Read, path::Path, time::Instant};
 #[derive(Default)]
 pub(crate) struct ResourceSampler {
     previous: Option<(u64, u64, Instant)>,
+    sample_sequence: u64,
 }
 
 struct ProcessStat {
@@ -46,13 +47,38 @@ fn process_stat(text: &str) -> Result<ProcessStat, String> {
     })
 }
 
+fn memory_total(text: &str) -> Result<u64, String> {
+    let value = text
+        .lines()
+        .find_map(|line| line.strip_prefix("MemTotal:"))
+        .ok_or("host memory total is missing")?;
+    let mut fields = value.split_whitespace();
+    let size = fields
+        .next()
+        .ok_or("host memory total is missing")?
+        .parse::<u64>()
+        .map_err(|_| "invalid host memory total")?;
+    if fields.next() != Some("kB") || fields.next().is_some() {
+        return Err("unsupported host memory total unit".into());
+    }
+    size.checked_mul(1024)
+        .filter(|&size| size != 0)
+        .ok_or_else(|| "host memory total is zero or overflows".into())
+}
+
 impl ResourceSampler {
     pub(crate) fn sample(&mut self, pid: u32, vm_id: &str, data_dir: &Path) -> VmResources {
+        self.sample_sequence = self.sample_sequence.checked_add(1).unwrap_or(1);
         let mut sample = VmResources {
             vm_id: vm_id.into(),
+            sample_sequence: self.sample_sequence,
             ..VmResources::default()
         };
         let mut issues = Vec::new();
+        match read_small(Path::new("/proc/meminfo")).and_then(|text| memory_total(&text)) {
+            Ok(size) => sample.host_memory_total_size = Some(size),
+            Err(error) => issues.push(error),
+        }
         let ticks_per_second = rustix::param::clock_ticks_per_second();
         let now = Instant::now();
         match read_small(Path::new(&format!("/proc/{pid}/stat")))
@@ -100,7 +126,10 @@ impl ResourceSampler {
         match rustix::fs::statvfs(data_dir) {
             Ok(stat) => {
                 sample.data_disk_available_size = stat.f_bavail.checked_mul(stat.f_frsize);
-                if sample.data_disk_available_size.is_none() {
+                sample.data_disk_total_size = stat.f_blocks.checked_mul(stat.f_frsize);
+                if sample.data_disk_available_size.is_none()
+                    || sample.data_disk_total_size.is_none()
+                {
                     issues.push("data-volume capacity overflow".into());
                 }
             }
@@ -144,6 +173,33 @@ mod tests {
         assert!(sample.uptime_ms.is_none());
         assert!(sample.sample_error.is_some());
         assert!(sample.data_disk_available_size.is_some());
+        assert!(sample.data_disk_total_size.is_some());
+        assert!(sample.host_memory_total_size.is_some());
+        assert_eq!(sample.sample_sequence, 1);
+        assert_eq!(
+            sampler
+                .sample(u32::MAX, "vm", Path::new("/tmp"))
+                .sample_sequence,
+            2
+        );
         assert!(sampler.previous.is_none());
+    }
+
+    #[test]
+    fn memory_total_requires_supported_units_and_a_bounded_extent() {
+        assert_eq!(
+            memory_total("MemTotal: 2048 kB\nMemFree: 1 kB\n").unwrap(),
+            2 * 1024 * 1024
+        );
+        for invalid in [
+            "MemFree: 2048 kB",
+            "MemTotal: -1 kB",
+            "MemTotal: 0 kB",
+            "MemTotal: 2 MB",
+            "MemTotal: 2 kB extra",
+            "MemTotal: 18446744073709551615 kB",
+        ] {
+            assert!(memory_total(invalid).is_err(), "{invalid}");
+        }
     }
 }

@@ -642,3 +642,32 @@ here. The wire layout, record schema 1 and control version 1 are unchanged.
 | Bundles and catalog | `antinomie_revision` and `antinomie_source`, both or neither, written by the image builders from the kernel's embedded configuration; not part of the base identity (the configuration hash already is). Builders refuse a kernel without a source id unless `--allow-unversioned` |
 | Host | Refuses to import, download, install a build of or start a base whose revision is newer than its own. Labels bases current, outdated, needs a newer app, or no revision. Reports a running kernel whose revision or series differs from its base's record, or that is newer than the host. The boot capture manifest records the kernel's answer as `guest_kernel` |
 
+## 17. Revision 16: live process cores (ANT-T0057, 0.6.0)
+
+Transport ABI9 and revision-15 Core Dump on Exit remain compatible. A live core
+uses exact leader task cookie/start_boot_ns/TGID identity within the current boot.
+Admission is asynchronous; cooperative task-work callbacks briefly park the
+chosen thread group and release their own parks after native ELF serialization.
+No fatal core rendezvous, SIGSTOP/SIGCONT or guest helper is used.
+
+| Command / flag | Contract |
+|---|---|
+| CORE_CAPTURE 0x1063 | 56-octet request, 24-octet admission reply; identity, output/deadline limits, resident policy and a nonzero 128-bit host nonce |
+| CORE_LOOKUP 0x1064 | 48-octet request, existing 80-octet STATUS reply; read-only nonce/identity reconciliation; acquisition is never replayed after an unknown admission |
+| CORE_CANCEL 0x1065 | 16-octet request, empty reply; retain the record while cancellation releases owned parks |
+| MANUAL0x10 / RESIDENT_ONLY0x40 | Live group capture, resident-only page references; root-only flag is unset and manual signal/wait_status are zero |
+| PAUSE_RELEASED0x20 | Terminal status proves all capture-owned parks have ended; it does not guarantee scheduling, continued life, or undo an external stop |
+| Native ELF data | Explicit frozen-thread input supplies regsets; original VMAs supply NT_FILE. Separate PT_LOAD extents use p_filesz=0 for unavailable/filtered/unscanned memory |
+| Limits | 256 threads, 4096 original VMAs/extents, 65536 page probes, at most 64 MiB output and a 5000 ms cooperative deadline; four handles/128 MiB payload reservations plus at most 8 MiB manual auxiliary storage |
+| Snapshot boundary | Save/restore rejects queued or in-flight manual guest acquisition. Resumed immutable buffers may checkpoint/adopt into fresh recording directories |
+| Reattachment | Cancels in-flight manual work and releases owned parks before fence acknowledgement; completed immutable buffers remain available for read-only adoption |
+
+All request fields retain explicit little-endian framing and zero reserved flags;
+their exact offsets are documented in the mirrored control.h. Cancellation polls
+terminal STATUS plus PAUSE_RELEASED before RELEASE. Dead/no-mm leaders, tracing,
+external stops/freezing, unsupported ABI, shared-mm groups and identity/thread
+races are explicitly rejected. Late callbacks cannot park after cancellation;
+their references retain bounded metadata until they drain, temporarily preventing
+a new manual admission. Shared-file mappings, DMA and external kernel writers
+remain outside this process-group freeze, so it is not an atomic VM snapshot.
+

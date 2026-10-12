@@ -1,5 +1,7 @@
 #[path = "core_sink.rs"]
 mod core_sink;
+#[path = "manual_core.rs"]
+mod manual_core;
 #[path = "process_core.rs"]
 mod process_core;
 #[path = "snapshot_recovery.rs"]
@@ -271,6 +273,8 @@ fn guest_scoped_command(command: &Command) -> bool {
             | Command::UploadSample { .. }
             | Command::Execute(_)
             | Command::CancelProcessCore { .. }
+            | Command::DumpProcessCore { .. }
+            | Command::CancelCoreCapture { .. }
             | Command::AnalyzeOnly { .. }
             | Command::TerminalInput { .. }
             | Command::TerminalRead { .. }
@@ -365,6 +369,8 @@ struct Session {
     /// Retained process-core prefixes, including owners temporarily removed for I/O.
     core_stored_len: u64,
     core_reserved_len: u64,
+    manual_cores: BTreeMap<String, manual_core::Owner>,
+    manual_record_count: usize,
     captures: BTreeMap<String, CaptureSession>,
     pending_capture_id: Option<String>,
     boot_id: String,
@@ -804,7 +810,7 @@ impl Session {
             }
         };
         let result = self.wait_reply(request, opcode, snapshot, sender, Duration::from_secs(10));
-        if let Err(RequestError::Rejected(error)) = &result {
+        if let Err(RequestError::Rejected { message: error, .. }) = &result {
             self.pending_capture_id = None;
             if let Some(mut capture) = self.captures.remove(&id) {
                 capture.summary.state = CaptureState::Finalized;
@@ -1396,12 +1402,27 @@ impl Session {
         sender: &SyncSender<Notification>,
         timeout: Duration,
     ) -> Result<Vec<u8>, String> {
-        if timeout.is_zero() {
-            return Err("guest command deadline exhausted before submission".into());
-        }
-        let id = self.transport.send(opcode, args)?;
-        self.wait_reply(id, opcode, snapshot, sender, timeout)
+        self.request_typed(opcode, args, snapshot, sender, timeout)
             .map_err(RequestError::into_message)
+    }
+    fn request_typed(
+        &mut self,
+        opcode: u32,
+        args: &[u8],
+        snapshot: &mut Snapshot,
+        sender: &SyncSender<Notification>,
+        timeout: Duration,
+    ) -> Result<Vec<u8>, RequestError> {
+        if timeout.is_zero() {
+            return Err(RequestError::Failed(
+                "guest command deadline exhausted before submission".into(),
+            ));
+        }
+        let id = self
+            .transport
+            .send(opcode, args)
+            .map_err(RequestError::Failed)?;
+        self.wait_reply(id, opcode, snapshot, sender, timeout)
     }
     /// A reply for an earlier request: a late terminal READ is applied to its run;
     /// anything else has no remaining waiter.
@@ -1548,10 +1569,19 @@ impl Session {
                     continue;
                 }
                 if status < 0 {
-                    return Err(RequestError::Rejected(format!(
-                        "guest command 0x{opcode:x}: {}",
-                        std::io::Error::from_raw_os_error(-status)
-                    )));
+                    let errno = status
+                        .checked_neg()
+                        .filter(|errno| (1..=4095).contains(errno))
+                        .ok_or_else(|| {
+                            RequestError::Failed("invalid guest rejection errno".into())
+                        })?;
+                    return Err(RequestError::Rejected {
+                        status,
+                        message: format!(
+                            "guest command 0x{opcode:x}: {}",
+                            std::io::Error::from_raw_os_error(errno)
+                        ),
+                    });
                 }
                 if status != 0 {
                     return Err(RequestError::Failed(format!(
@@ -1584,6 +1614,7 @@ impl Session {
         }
     }
     fn finalize(&mut self, state: &str, snapshot: &mut Snapshot) -> Result<(), String> {
+        self.seal_manual_cores(state, snapshot);
         self.seal_process_cores(state, snapshot);
         // QEMU has ended (or host ownership is being sealed at a restore boundary).
         // A queued post-exit dump cannot be claimed to have succeeded here.
@@ -1717,7 +1748,9 @@ impl Session {
                 self.late_reads.insert(id, cookie);
                 Ok(())
             }
-            Err(RequestError::Failed(error) | RequestError::Rejected(error)) => Err(error),
+            Err(RequestError::Failed(error) | RequestError::Rejected { message: error, .. }) => {
+                Err(error)
+            }
         }
     }
     fn apply_terminal_reply(
@@ -1814,13 +1847,15 @@ fn canonical_live_history(
 enum RequestError {
     TimedOut(String),
     Failed(String),
-    Rejected(String),
+    Rejected { status: i32, message: String },
 }
 
 impl RequestError {
     fn into_message(self) -> String {
         match self {
-            Self::TimedOut(message) | Self::Failed(message) | Self::Rejected(message) => message,
+            Self::TimedOut(message) | Self::Failed(message) | Self::Rejected { message, .. } => {
+                message
+            }
         }
     }
 }
@@ -2063,6 +2098,11 @@ impl Worker {
         if let Some(session) = &self.session {
             self.snapshot.events = session.history();
             session.update_runs(&mut self.snapshot);
+            self.snapshot.process_cores = session
+                .manual_cores
+                .values()
+                .map(|owner| owner.summary.clone())
+                .collect();
             self.snapshot.capture_processes = session
                 .captures
                 .iter()
@@ -2482,6 +2522,7 @@ impl Worker {
             self.check_network_capture();
             self.check_resources();
             self.check_process_cores();
+            self.check_manual_cores();
             self.check_memory_dump();
             self.check_run_artifacts();
             if self.last_publish.elapsed() >= Duration::from_millis(250) {
@@ -2518,6 +2559,8 @@ impl Worker {
                 command,
                 Command::Execute(_)
                     | Command::CancelProcessCore { .. }
+                    | Command::DumpProcessCore { .. }
+                    | Command::CancelCoreCapture { .. }
                     | Command::Upload { .. }
                     | Command::UploadSample { .. }
                     | Command::AnalyzeOnly { .. }
@@ -3203,6 +3246,7 @@ impl Worker {
         self.snapshot.captures.clear();
         self.snapshot.capture_events.clear();
         self.snapshot.process_page = None;
+        self.snapshot.process_cores.clear();
         self.snapshot.boot_id = None;
         self.snapshot.network_capture = None;
         self.publish();
@@ -3266,6 +3310,8 @@ impl Worker {
                 run_artifacts: BTreeMap::new(),
                 core_stored_len: 0,
                 core_reserved_len: 0,
+                manual_cores: BTreeMap::new(),
+                manual_record_count: 0,
                 captures: BTreeMap::new(),
                 pending_capture_id: None,
                 boot_id,
@@ -3872,6 +3918,25 @@ impl Worker {
             return Err("process attachment and Capture All are unavailable; running guest requires a base for Antinomie 0.2.0 or newer".into());
         }
         match command {
+            Command::DumpProcessCore { request } => {
+                if !self
+                    .snapshot
+                    .guest_kernel
+                    .as_ref()
+                    .and_then(|kernel| kernel.revision)
+                    .is_some_and(|revision| revision >= 16)
+                {
+                    return Err("manual process cores require a revision-16 guest".into());
+                }
+                let message = session.start_manual_core(request)?;
+                self.publish();
+                Ok(message)
+            }
+            Command::CancelCoreCapture { capture_id } => {
+                let message = session.cancel_manual_core(&capture_id)?;
+                self.publish();
+                Ok(message)
+            }
             Command::ListProcesses { after_pid } => {
                 let page = Some(session.list_processes(
                     after_pid,

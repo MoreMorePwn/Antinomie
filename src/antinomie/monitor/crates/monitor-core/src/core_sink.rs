@@ -217,9 +217,22 @@ fn publish(state: &State, mut metadata: serde_json::Value) -> Result<(), String>
         return Err("injected core metadata publication failure".into());
     }
     metadata["stored_size"] = state.size.into();
+    if metadata.get("file").is_some() && state.has_file {
+        metadata["file"] = serde_json::to_value(state.directory.join("process.elf"))
+            .map_err(|error| error.to_string())?;
+    }
     metadata["sha256"] = format!("{:x}", state.digest.clone().finalize()).into();
     storage::private_dir(&state.directory).map_err(|error| format!("core directory: {error}"))?;
-    storage::atomic_json(&state.directory.join("core.json"), &metadata)
+    storage::atomic_json(&state.directory.join("core.json"), &metadata)?;
+    // Init is the durable admission journal. The manual layout creates both
+    // core-captures/<id> and its boot-level parent; persist those directory
+    // entries before acknowledging init or final publication. This runs only
+    // on the bounded disk pool, never on the transport owner.
+    storage::sync_directory_parent(&state.directory)?;
+    if let Some(parent) = state.directory.parent() {
+        storage::sync_directory_parent(parent)?;
+    }
+    Ok(())
 }
 fn write_chunk(state: &mut State, offset: u64, data: &[u8]) -> Result<(), String> {
     if offset != state.size {

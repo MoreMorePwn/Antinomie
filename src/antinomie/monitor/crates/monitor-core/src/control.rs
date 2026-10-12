@@ -14,12 +14,44 @@ pub(crate) const INFO: u32 = 0x1021;
 pub(crate) const INFO_SIZE: usize = 160;
 pub(crate) const SHUTDOWN: u32 = 0x1030;
 /// Guest contract revision this host implements (`ANTC_REVISION`).
-pub const REVISION: u32 = 15;
+pub const REVISION: u32 = 16;
 pub(crate) const PROCESS_LIST: u32 = 0x1050;
 pub(crate) const CAPTURE_ATTACH: u32 = 0x1051;
 pub(crate) const CAPTURE_ALL: u32 = 0x1052;
 pub(crate) const CAPTURE_STOP: u32 = 0x1053;
 pub(crate) const CAPTURE_STATUS: u32 = 0x1054;
+pub(crate) const CORE_CAPTURE: u32 = 0x1063;
+pub(crate) const CORE_LOOKUP: u32 = 0x1064;
+pub(crate) const CORE_CANCEL: u32 = 0x1065;
+pub(crate) fn core_capture(
+    request: &crate::api::ProcessCoreRequest,
+    nonce: [u64; 2],
+) -> Result<Vec<u8>, String> {
+    crate::core_capture::validate_request(request)?;
+    let mut args = header(0);
+    args.extend(request.target.task_cookie.to_le_bytes());
+    args.extend(request.target.start_boot_ns.to_le_bytes());
+    args.extend(request.target.tgid.to_le_bytes());
+    args.extend(request.max_size.to_le_bytes());
+    args.extend(request.timeout_ms.to_le_bytes());
+    args.extend(1u32.to_le_bytes());
+    args.extend(nonce[0].to_le_bytes());
+    args.extend(nonce[1].to_le_bytes());
+    Ok(args)
+}
+pub(crate) fn core_lookup(
+    identity: &crate::observation::GuestProcessIdentity,
+    nonce: [u64; 2],
+) -> Vec<u8> {
+    let mut args = header(0);
+    args.extend(identity.task_cookie.to_le_bytes());
+    args.extend(identity.start_boot_ns.to_le_bytes());
+    args.extend(identity.tgid.to_le_bytes());
+    args.extend(0u32.to_le_bytes());
+    args.extend(nonce[0].to_le_bytes());
+    args.extend(nonce[1].to_le_bytes());
+    args
+}
 pub(crate) const ACQUIRE: u32 = 0x1040;
 pub(crate) const SPECIMEN_READ: u32 = 0x1041;
 pub(crate) const SPECIMEN_RELEASE: u32 = 0x1042;

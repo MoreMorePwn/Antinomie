@@ -12,6 +12,19 @@ it runs.
   shedding. Host measurements show QEMU CPU, resident memory, uptime and free
   space on the data volume. Missing values stay unavailable; capacities are
   distinguished from actual usage. Saved layouts preserve custom windows.
+  Performance-style status indicators, a 60-sample CPU history and RAM/data-volume
+  gauges show measured values with explicit gaps. RAM gauges describe QEMU's
+  share of host-visible RAM; guest RAM utilization is unavailable.
+- **Live Dump core.** The toolbar and Core dumps offer a process picker for
+  pause/capture/resume using exact guest identities. Requires revision 16; older
+  bases display the reason capture is unavailable. Repeated cores have separate
+  IDs, status, result directories and run links. Native ELF thread notes accompany
+  resident-only memory; omitted ranges remain unavailable rather than zero data.
+  Manual auxiliary storage adds at most 8 MiB to the existing 128 MiB payload
+  pool. Snapshot operations wait for acquisition to release its process pause;
+  uncertain admission is reconciled without replaying capture.
+- **Movable Run program.** Drag the title bar to reposition the window; reopening
+  preserves its position while initial size stays within the viewport.
 - **Core Dump on Exit.** Opt-in capture retains a Linux x86-64 ELF core of the
   launched root process before its normal exit or fatal-signal teardown, with
   thread registers and memory mappings. This requires a revision-15 guest base

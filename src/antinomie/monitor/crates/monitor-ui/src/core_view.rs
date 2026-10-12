@@ -2,6 +2,7 @@
 //! Process cores stay separate from VM RAM. Metadata, page reads and decoding
 //! run in a single bounded background job; rendering never loads a whole core.
 use antinomie_monitor_core::core_dump::{self, CoreDump, CoreFunction, CoreRecord};
+use antinomie_monitor_core::{ProcessCoreCapture, ProcessCorePhase};
 use eframe::egui::{self, RichText};
 use std::{
     fs,
@@ -32,7 +33,35 @@ enum Reply {
 struct CoreCatalog {
     imported: Vec<CoreRecord>,
     acquired: Vec<AcquiredCore>,
+    manual: Vec<ProcessCoreCapture>,
     issues: Vec<String>,
+}
+
+pub(crate) enum CoreAction {
+    Dump,
+    Cancel(String),
+}
+
+pub(crate) struct CoreControls<'a> {
+    pub unavailable: Option<&'a str>,
+    pub captures: &'a [ProcessCoreCapture],
+    pub can_cancel: bool,
+}
+
+fn manual_status(core: &ProcessCoreCapture) -> String {
+    match core.phase {
+        ProcessCorePhase::Admission => "Requesting capture".into(),
+        ProcessCorePhase::UnknownAdmission => "Admission outcome unknown; checking status".into(),
+        ProcessCorePhase::GuestCapture => {
+            "Capturing process; waiting for resume confirmation".into()
+        }
+        ProcessCorePhase::Transfer => core.guest_size.map_or_else(
+            || format!("Saving {} octets", core.stored_size),
+            |size| format!("Saving {} / {size} octets", core.stored_size),
+        ),
+        ProcessCorePhase::Seal => "Finalizing retained core".into(),
+        ProcessCorePhase::Finished => crate::app::core_capture_status(core.state).into(),
+    }
 }
 
 struct AcquiredCore {
@@ -52,6 +81,13 @@ fn catalog(roots: &[PathBuf], vm_id: Option<&str>) -> Result<CoreCatalog, String
     let Some(vm_id) = vm_id else {
         return Ok(result);
     };
+    match antinomie_monitor_core::core_capture::list_with_issues(roots, Some(vm_id)) {
+        Ok(catalog) => {
+            result.manual = catalog.records;
+            result.issues.extend(catalog.issues);
+        }
+        Err(error) => result.issues.push(format!("Manual core catalog: {error}")),
+    }
     let mut entries_count = 0usize;
     let mut metadata_size = 0u64;
     for root in roots {
@@ -192,6 +228,7 @@ pub(crate) struct CoreView {
     catalog_checked: Option<Instant>,
     records: Vec<CoreRecord>,
     acquired: Vec<AcquiredCore>,
+    manual: Vec<ProcessCoreCapture>,
     catalog_issues: Vec<String>,
     selected: Option<CoreRecord>,
     selected_directory: Option<PathBuf>,
@@ -214,6 +251,24 @@ pub(crate) struct CoreView {
     cancelled: Arc<AtomicBool>,
 }
 impl CoreView {
+    pub(crate) fn select_manual(&mut self, capture: ProcessCoreCapture) {
+        let file = capture.file.clone();
+        self.selected_directory = Some(capture.directory.clone());
+        self.selected = None;
+        self.status.clear();
+        if let Some(existing) = self
+            .manual
+            .iter_mut()
+            .find(|existing| existing.id == capture.id)
+        {
+            *existing = capture;
+        } else {
+            self.manual.insert(0, capture);
+        }
+        if let Some(file) = file {
+            self.open(&file);
+        }
+    }
     /// Open retained guest evidence through the bounded metadata worker.
     pub(crate) fn open(&mut self, source: &Path) {
         self.poll();
@@ -279,6 +334,7 @@ impl CoreView {
             Ok(Reply::Records(catalog)) => {
                 self.records = catalog.imported;
                 self.acquired = catalog.acquired;
+                self.manual = catalog.manual;
                 self.catalog_issues = catalog.issues;
                 self.catalog_checked = Some(Instant::now());
             }
@@ -331,13 +387,18 @@ impl CoreView {
     /// |---|---|
     /// | `ui` | Core panel surface |
     /// | `recording_roots` | User-configured durable recording directories |
+    /// | `vm_id` | Selected VM identity; filters all retained capture records |
+    /// | `active` | Whether to periodically refresh current recording metadata |
+    /// | `controls` | Acquisition availability and owned live capture statuses |
+    /// | Return | Optional capture/cancel intent for the backend owner |
     pub(crate) fn show(
         &mut self,
         ui: &mut egui::Ui,
         recording_roots: &[PathBuf],
         vm_id: Option<&str>,
         active: bool,
-    ) {
+        controls: CoreControls<'_>,
+    ) -> Option<CoreAction> {
         self.poll();
         if active {
             ui.ctx().request_repaint_after(Duration::from_secs(5));
@@ -353,6 +414,7 @@ impl CoreView {
         if (changed || refresh) && self.job.is_none() {
             if changed {
                 self.acquired.clear();
+                self.manual.clear();
                 self.records.clear();
                 self.catalog_issues.clear();
                 self.import_open = false;
@@ -373,6 +435,23 @@ impl CoreView {
             let vm_id = self.vm_id.clone();
             self.start(move || catalog(&roots, vm_id.as_deref()).map(Reply::Records));
         }
+        for capture in controls
+            .captures
+            .iter()
+            .filter(|capture| Some(capture.vm_id.as_str()) == vm_id)
+        {
+            if let Some(existing) = self
+                .manual
+                .iter_mut()
+                .find(|existing| existing.id == capture.id)
+            {
+                *existing = capture.clone();
+            } else {
+                self.manual.insert(0, capture.clone());
+            }
+        }
+        self.manual.truncate(4096);
+        let mut action = None;
         egui::SidePanel::left("core_dump_list")
             .resizable(true)
             .default_width(240.0)
@@ -381,14 +460,23 @@ impl CoreView {
                 right: 8,
                 ..Default::default()
             }))
-            .show_inside(ui, |ui| self.dump_list(ui));
+            .show_inside(ui, |ui| {
+                action = self.dump_list(ui, controls.unavailable, controls.can_cancel);
+            });
         egui::CentralPanel::default()
             .frame(egui::Frame::new())
             .show_inside(ui, |ui| self.analysis(ui));
         self.import_dialog(ui.ctx());
+        action
     }
 
-    fn dump_list(&mut self, ui: &mut egui::Ui) {
+    fn dump_list(
+        &mut self,
+        ui: &mut egui::Ui,
+        unavailable: Option<&str>,
+        can_cancel: bool,
+    ) -> Option<CoreAction> {
+        let mut action = None;
         ui.horizontal(|ui| {
             crate::theme::section(ui, "Core dumps");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -406,6 +494,18 @@ impl CoreView {
                 }
             });
         });
+        if ui.add_enabled(unavailable.is_none(), egui::Button::new(format!("{} Dump core", egui_phosphor::regular::FILE))
+            .min_size(egui::vec2(ui.available_width(), 0.0)))
+            .on_hover_text("Pause a selected process, capture its resident memory and thread context, then resume")
+            .on_disabled_hover_text(unavailable.unwrap_or_default())
+            .clicked() {
+            action = Some(CoreAction::Dump);
+        }
+        if let Some(reason) = unavailable {
+            ui.add(
+                egui::Label::new(RichText::new(reason).small().color(crate::theme::muted())).wrap(),
+            );
+        }
         if ui
             .add_enabled(
                 !self.roots.is_empty() && self.job.is_none(),
@@ -440,9 +540,29 @@ impl CoreView {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
-                if self.acquired.is_empty() && self.records.is_empty() {
+                if self.acquired.is_empty() && self.records.is_empty() && self.manual.is_empty() {
                     ui.add_space(8.0);
-                    ui.add(egui::Label::new("No core dumps. Enable Core Dump on Exit in Run program, or import a core.").wrap());
+                    ui.add(egui::Label::new("No core dumps. Dump a live process, enable Core Dump on Exit in Run program, or import a core.").wrap());
+                }
+                for core in &self.manual {
+                    let fallback = format!("PID {} · {}", core.target.tgid, core.id);
+                    let title = crate::evidence::title(ui, &core.directory, &fallback);
+                    let selected = self.selected_directory.as_ref() == Some(&core.directory);
+                    let state = manual_status(core);
+                    let color = if core.issue.is_some() { crate::theme::warn() } else { crate::theme::text() };
+                    let row = crate::network_view::capture_row(ui, selected, (&title, color), &state, font_size)
+                        .on_hover_text(format!("{title}\n{state}\n{}", core.directory.display()));
+                    row.context_menu(|ui| {
+                        crate::evidence::menu(ui, &core.directory);
+                        if core.phase != ProcessCorePhase::Finished && can_cancel
+                            && ui.button("Cancel capture and resume").clicked() {
+                            action = Some(CoreAction::Cancel(core.id.clone()));
+                            ui.close_menu();
+                        }
+                    });
+                    if row.clicked() && self.job.is_none() {
+                        acquired_selection = Some((core.directory.clone(), core.file.clone()));
+                    }
                 }
                 for core in &self.acquired {
                     let fallback = format!("Run {}", core.run_id);
@@ -508,6 +628,7 @@ impl CoreView {
                 Ok(Reply::Open(Box::new(record), code))
             });
         }
+        action
     }
 
     fn import_dialog(&mut self, ctx: &egui::Context) {
@@ -580,6 +701,43 @@ impl CoreView {
                 });
         }
         let Some(record) = self.selected.clone() else {
+            if let Some(core) = self
+                .manual
+                .iter()
+                .find(|core| Some(&core.directory) == self.selected_directory.as_ref())
+            {
+                let title = crate::evidence::title(
+                    ui,
+                    &core.directory,
+                    &format!("PID {} · {}", core.target.tgid, core.id),
+                );
+                crate::theme::section(ui, &title);
+                ui.add(egui::Label::new(manual_status(core)).wrap());
+                ui.label(format!(
+                    "PID {} · task {} · start {} ns",
+                    core.target.tgid, core.target.task_cookie, core.target.start_boot_ns
+                ));
+                if let Some(run_id) = &core.source_run_id {
+                    ui.label(format!("Related run: {run_id}"));
+                }
+                ui.label(match core.pause_released {
+                    Some(true) => "Capture pause released",
+                    Some(false) => "Capture pause has not been released yet",
+                    None => "Capture pause status unknown",
+                });
+                if let Some(issue) = &core.issue {
+                    ui.add(
+                        egui::Label::new(RichText::new(issue).color(crate::theme::warn())).wrap(),
+                    );
+                }
+                if core.file.is_some() {
+                    ui.label("Select this capture to open its retained data.");
+                } else {
+                    ui.add(egui::Label::new("No core file is retained yet. This view shows the recorded capture status; it does not wait for process exit.").wrap());
+                }
+                crate::evidence::controls(ui, &core.directory);
+                return;
+            }
             if let Some(core) = self
                 .acquired
                 .iter()
@@ -1237,8 +1395,19 @@ mod tests {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default()
-                    .show(ctx, |ui| view.show(ui, &roots, vm_id.as_deref(), false));
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    view.show(
+                        ui,
+                        &roots,
+                        vm_id.as_deref(),
+                        false,
+                        CoreControls {
+                            unavailable: Some("Start a supported VM to dump a process core."),
+                            captures: &[],
+                            can_cancel: false,
+                        },
+                    )
+                });
             },
         )
     }
@@ -1313,6 +1482,56 @@ mod tests {
             fixture.view.records.len() == 1,
             "waiting selection keeps imported evidence"
         );
+    }
+
+    #[test]
+    fn unfinished_manual_core_shows_recorded_status_without_stale_context() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut fixture = Fixture::new();
+        let directory = fixture.directory.join("core-captures/live");
+        fs::create_dir_all(&directory).unwrap();
+        fixture.view.select_manual(ProcessCoreCapture {
+            format: 1,
+            id: "live".into(),
+            vm_id: "vm".into(),
+            boot_id: "boot".into(),
+            source_run_id: Some("run".into()),
+            restored_from_capture_id: None,
+            target: antinomie_monitor_core::GuestProcessIdentity {
+                boot_id: "boot".into(),
+                task_cookie: 42,
+                tgid: 101,
+                start_boot_ns: 100,
+            },
+            directory: directory.clone(),
+            file: None,
+            state: antinomie_monitor_core::RunArtifactState::InProgress,
+            phase: ProcessCorePhase::GuestCapture,
+            stored_size: 0,
+            guest_size: None,
+            sha256: None,
+            pause_released: Some(false),
+            max_size: 64 * 1024 * 1024,
+            timeout_ms: 5000,
+            nonce: [1, 2],
+            guest_handle: Some(7),
+            guest_status: None,
+            issue: None,
+        });
+        let output = settle(&ctx, &mut fixture.view, egui::vec2(1280.0, 900.0));
+        let content = texts(&output);
+        assert_eq!(fixture.view.selected_directory.as_ref(), Some(&directory));
+        assert!(fixture.view.selected.is_none() && fixture.view.job.is_none());
+        assert!(content
+            .iter()
+            .any(|(text, _)| text == "Capture pause has not been released yet"));
+        assert!(content
+            .iter()
+            .any(|(text, _)| text.contains("does not wait for process exit")));
+        assert!(!content.iter().any(|(text, _)| text == "rip"));
+        assert!(content.iter().any(|(text, _)| text.contains("Dump core")));
+        assert_eq!(fixture.view.records.len(), 1);
     }
 
     #[test]
@@ -1534,8 +1753,19 @@ mod tests {
         }
         impl eframe::App for FixtureApp {
             fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-                egui::CentralPanel::default()
-                    .show(ctx, |ui| self.fixture.view.show(ui, &[], None, false));
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    self.fixture.view.show(
+                        ui,
+                        &[],
+                        None,
+                        false,
+                        CoreControls {
+                            unavailable: Some("Preview"),
+                            captures: &[],
+                            can_cancel: false,
+                        },
+                    )
+                });
                 if std::time::Instant::now() >= self.deadline {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }

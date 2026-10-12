@@ -15,6 +15,7 @@
 #include <linux/slab.h>
 #include <linux/workqueue.h>
 #include "queue.h"
+#include "process_core.h"
 
 struct ant_cpu {
 	struct page *pages;
@@ -64,6 +65,11 @@ static bool service_resume(void)
 
 	if (!nonce || nonce == ANT_ACQ(&boot->resume_ack))
 		return false;
+	/* Fence acknowledgment waits until manual acquisition owns no parks.
+	 * Completed immutable evidence remains retained across reattachment.
+	 */
+	if (!ant_manual_fence())
+		return true;
 	floor = max(last_request_id, ANT_ACQ(&boot->resume_sequence_floor));
 	cursor = request_tail;
 	seen = request_head_seen;

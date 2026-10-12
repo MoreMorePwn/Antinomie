@@ -296,6 +296,12 @@ records `built_with` (the app version that built it) and `min_app_version`
 a newer version and labels older ones as outdated. A patch release therefore
 never makes existing bases outdated.
 
+Several guest contract candidates prepared for the same unreleased feature
+version may share its minimum app version. Keep their revision entries so earlier
+local candidate bases remain recognizable; revisions increase strictly and
+minimum versions never decrease. After a feature version is released, a new
+guest revision belongs to the next minor or major version.
+
 For a release: update `CHANGELOG.md`, raise the version, commit, and tag the
 commit `vX.Y.Z`. Pushing the tag runs `.github/workflows/release.yml`: it
 checks that the tag matches the version, runs the tests, builds the archive

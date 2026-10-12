@@ -10,6 +10,7 @@ mod builder_vm;
 pub mod capture;
 pub mod capture_processes;
 mod control;
+pub mod core_capture;
 pub mod core_dump;
 pub mod dependencies;
 mod display;

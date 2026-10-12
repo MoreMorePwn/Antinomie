@@ -33,6 +33,22 @@ V7-only restriction; older requirements remain recorded for their releases.
 - V7 no snapshot/reconnect. No next transport version. Existing transport API
   is opaque; frontend/backend never manage CPU rings.
 
+## Accepted ANT-T0057 manual cores and performance Summary (0.6.0)
+
+User authorized a real Dump core action beside Dump memory and inside Core dumps,
+choosing pause/capture/resume of a selected live process. Use validated guest
+boot/task/start/TGID identity, a nonfatal bounded guest rendezvous and native ELF
+notes, with truthful unavailable memory and independent repeated host captures.
+Do not use the exit-core rendezvous, kill the target, replay uncertain acquisition
+or add a guest helper. The revision-16 extension retains ABI9 and ordinary
+revision-15 exit captures; ANT-T0057 defines its accepted wire and lifecycle.
+
+Summary uses native performance charts/meters with measured QEMU/host values,
+per-VM identity, bounded sample history and explicit unknown states. Guest RAM
+utilization remains unavailable. Run program gains title dragging while preserving
+its initial viewport-limited size and final actions. Other debugger features and
+release/base publication remain separate.
+
 ## Accepted ANT-T0056 process core and VM Summary update (0.6.0)
 
 User authorized the planned 0.6.0 guest process-core-on-exit backlog and a native

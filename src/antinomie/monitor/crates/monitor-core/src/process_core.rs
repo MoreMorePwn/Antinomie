@@ -42,23 +42,40 @@ impl SavedHandle {
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
-struct CoreStatus {
-    id: u64,
-    root_cookie: u64,
-    start_ns: u64,
-    finish_ns: u64,
-    size: u64,
-    expected_size: u64,
-    state: u32,
-    status: i32,
-    wait_status: i32,
-    signal: u32,
-    flags: u32,
-    tgid: u32,
-    thread_count: u32,
+pub(super) struct CoreStatus {
+    pub(super) id: u64,
+    pub(super) root_cookie: u64,
+    pub(super) start_ns: u64,
+    pub(super) finish_ns: u64,
+    pub(super) size: u64,
+    pub(super) expected_size: u64,
+    pub(super) state: u32,
+    pub(super) status: i32,
+    pub(super) wait_status: i32,
+    pub(super) signal: u32,
+    pub(super) flags: u32,
+    pub(super) tgid: u32,
+    pub(super) thread_count: u32,
 }
 impl CoreStatus {
     fn parse(reply: &[u8], id: u64, cookie: u64, tgid: u32) -> Result<Self, String> {
+        Self::parse_mode(reply, id, cookie, tgid, false)
+    }
+    pub(super) fn parse_manual(
+        reply: &[u8],
+        id: u64,
+        cookie: u64,
+        tgid: u32,
+    ) -> Result<Self, String> {
+        Self::parse_mode(reply, id, cookie, tgid, true)
+    }
+    fn parse_mode(
+        reply: &[u8],
+        id: u64,
+        cookie: u64,
+        tgid: u32,
+        manual: bool,
+    ) -> Result<Self, String> {
         if reply.len() != 80 {
             return Err("invalid process-core status length".into());
         }
@@ -87,8 +104,15 @@ impl CoreStatus {
             || result.tgid != tgid
             || !(1..=6).contains(&result.state)
             || result.size > LIMIT
-            || result.flags & !15 != 0
-            || result.flags & 1 == 0
+            || result.flags & if manual { !0x7f } else { !15 } != 0
+            || if manual {
+                result.flags & 0x51 != 0x50
+                    || result.wait_status != 0
+                    || result.signal != 0
+                    || (result.state >= 3 && result.flags & 0x20 == 0)
+            } else {
+                result.flags & 1 == 0
+            }
             || result.signal > 64
             || result.thread_count > 256
             || !(-4095..=0).contains(&result.status)
@@ -229,7 +253,7 @@ fn acknowledged_len(previous: u64, written: u64, reserved: u64) -> Result<u64, S
         .ok_or_else(|| "core disk acknowledgement exceeds its reservation".into())
 }
 impl Session {
-    fn core_readonly(
+    pub(super) fn core_readonly(
         &mut self,
         opcode: u32,
         args: &[u8],
