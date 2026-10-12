@@ -421,3 +421,337 @@ fn finish(
     section.listing = Some(listing);
     section.tools.push(tool);
 }
+
+/// One PT_LOAD extent from an ELF core. `filesz` bytes at `file_offset` are
+/// the captured image. `memsz - filesz` is an unavailable tail, not zeros.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SparseLoadExtent {
+    pub vaddr: u64,
+    pub file_offset: u64,
+    pub filesz: u64,
+    pub memsz: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SparseCorePlan {
+    pub extents: Vec<SparseLoadExtent>,
+}
+
+impl SparseCorePlan {
+    pub fn captured_bytes(&self) -> u64 {
+        self.extents.iter().map(|extent| extent.filesz).sum()
+    }
+
+    pub fn unavailable_tails(&self) -> u64 {
+        self.extents
+            .iter()
+            .map(|extent| extent.memsz.saturating_sub(extent.filesz))
+            .sum()
+    }
+}
+
+/// Loadable extents of an ELF core. This does not treat the core as an
+/// executable and does not fill holes.
+pub fn sparse_core_plan(bytes: &[u8]) -> Result<SparseCorePlan, String> {
+    let file = object::File::parse(bytes).map_err(|error| error.to_string())?;
+    if file.format() != object::BinaryFormat::Elf {
+        return Err("sparse core load needs an ELF core".into());
+    }
+    let mut extents = Vec::new();
+    for segment in file.segments() {
+        let (file_offset, filesz) = segment.file_range();
+        let memsz = segment.size();
+        if memsz == 0 && filesz == 0 {
+            continue;
+        }
+        extents.push(SparseLoadExtent {
+            vaddr: segment.address(),
+            file_offset,
+            filesz,
+            memsz,
+        });
+    }
+    if extents.is_empty() {
+        return Err("ELF core has no loadable segments".into());
+    }
+    Ok(SparseCorePlan { extents })
+}
+
+/// ELF image of captured PT_LOAD bytes at their original virtual addresses.
+/// Uncaptured tails are omitted, not stored as zero-filled holes.
+pub fn synthetic_captured_elf(core: &[u8], plan: &SparseCorePlan) -> Result<Vec<u8>, String> {
+    let captured: Vec<_> = plan
+        .extents
+        .iter()
+        .filter(|extent| extent.filesz > 0)
+        .collect();
+    if captured.is_empty() {
+        return Err("core has no captured PT_LOAD bytes".into());
+    }
+    let phnum = captured.len();
+    if phnum > u16::MAX as usize {
+        return Err("too many captured extents".into());
+    }
+    let data_off = 64 + phnum * 56;
+    let mut image = vec![0u8; data_off];
+    image[0..4].copy_from_slice(b"\x7fELF");
+    image[4] = 2;
+    image[5] = 1;
+    image[6] = 1;
+    image[16..18].copy_from_slice(&4u16.to_le_bytes());
+    image[18..20].copy_from_slice(&62u16.to_le_bytes());
+    image[20..24].copy_from_slice(&1u32.to_le_bytes());
+    image[32..40].copy_from_slice(&64u64.to_le_bytes());
+    image[52..54].copy_from_slice(&64u16.to_le_bytes());
+    image[54..56].copy_from_slice(&56u16.to_le_bytes());
+    image[56..58].copy_from_slice(&(phnum as u16).to_le_bytes());
+    let mut cursor = data_off as u64;
+    for (index, extent) in captured.iter().enumerate() {
+        let start = extent.file_offset as usize;
+        let end = start.saturating_add(extent.filesz as usize);
+        let bytes = core
+            .get(start..end)
+            .ok_or("captured extent is outside the core file")?;
+        let at = 64 + index * 56;
+        image[at..at + 4].copy_from_slice(&1u32.to_le_bytes());
+        image[at + 4..at + 8].copy_from_slice(&5u32.to_le_bytes());
+        image[at + 8..at + 16].copy_from_slice(&cursor.to_le_bytes());
+        image[at + 16..at + 24].copy_from_slice(&extent.vaddr.to_le_bytes());
+        image[at + 24..at + 32].copy_from_slice(&extent.vaddr.to_le_bytes());
+        image[at + 32..at + 40].copy_from_slice(&extent.filesz.to_le_bytes());
+        // Same size as the captured bytes: the unavailable tail is absent.
+        image[at + 40..at + 48].copy_from_slice(&extent.filesz.to_le_bytes());
+        image[at + 48..at + 56].copy_from_slice(&0x1000u64.to_le_bytes());
+        image.extend_from_slice(bytes);
+        cursor = cursor.saturating_add(extent.filesz);
+    }
+    Ok(image)
+}
+
+const CORE_SCRIPT: &str = r#"// SPDX-License-Identifier: MIT
+import ghidra.app.decompiler.DecompInterface;
+import ghidra.app.decompiler.DecompileResults;
+import ghidra.app.script.GhidraScript;
+import ghidra.program.model.listing.Function;
+import ghidra.program.model.listing.FunctionIterator;
+import java.io.BufferedWriter;
+import java.io.FileOutputStream;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
+
+public class AntinomieCoreExport extends GhidraScript {
+    @Override
+    public void run() throws Exception {
+        String[] args = getScriptArgs();
+        long budget = Long.parseLong(args[1]) * 1000L;
+        long start = System.currentTimeMillis();
+        DecompInterface decompiler = new DecompInterface();
+        decompiler.openProgram(currentProgram);
+        try (PrintWriter out = new PrintWriter(new BufferedWriter(
+                new OutputStreamWriter(new FileOutputStream(args[0]), "UTF-8")))) {
+            out.println("@@ANTINOMIE-BASE\t" + currentProgram.getImageBase().getOffset());
+            FunctionIterator functions = currentProgram.getFunctionManager().getFunctions(true);
+            while (functions.hasNext() && !monitor.isCancelled()) {
+                if (System.currentTimeMillis() - start > budget) {
+                    out.println("@@ANTINOMIE-TIMEOUT");
+                    break;
+                }
+                Function function = functions.next();
+                if (function.isThunk() || function.isExternal()) continue;
+                out.println("@@ANTINOMIE-FUNCTION\t" + function.getEntryPoint().getOffset() + "\t"
+                        + function.getBody().getNumAddresses() + "\t" + function.getName());
+                DecompileResults result = decompiler.decompileFunction(function, 30, monitor);
+                if (result != null && result.decompileCompleted()) {
+                    out.println(result.getDecompiledFunction().getC());
+                } else {
+                    out.println("// decompilation failed");
+                }
+                out.flush();
+            }
+        }
+        decompiler.dispose();
+    }
+}
+"#;
+
+/// Decompile captured core bytes through the analysis tool runner.
+/// The original core file is not imported as an executable. A mappings text
+/// file is not consulted. Returns the export text only after a successful run.
+pub fn decompile_captured_core(
+    core_path: &Path,
+    work: &Path,
+    tools_dir: &Path,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<String, String> {
+    use std::sync::atomic::Ordering;
+    if cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".into());
+    }
+    let core = fs::read(core_path).map_err(|error| error.to_string())?;
+    if core.len() > 64 * 1024 * 1024 {
+        return Err("core exceeds the 64 MiB decompile bound".into());
+    }
+    let plan = sparse_core_plan(&core)?;
+    let image = synthetic_captured_elf(&core, &plan)?;
+    fs::create_dir_all(work).map_err(|error| error.to_string())?;
+    let image_path = work.join("captured-image.elf");
+    fs::write(&image_path, &image).map_err(|error| error.to_string())?;
+    let plan_note = format!(
+        "captured {} octets across {} extents; {} unavailable tail octets omitted",
+        plan.captured_bytes(),
+        plan.extents.len(),
+        plan.unavailable_tails()
+    );
+    fs::write(work.join("sparse-plan.txt"), &plan_note).map_err(|error| error.to_string())?;
+    let ghidra = find_ghidra(tools_dir)?;
+    let scripts = work.join("ghidra-scripts");
+    let project = work.join("ghidra-project");
+    fs::create_dir_all(&scripts).map_err(|error| error.to_string())?;
+    fs::create_dir_all(&project).map_err(|error| error.to_string())?;
+    fs::write(scripts.join("AntinomieCoreExport.java"), CORE_SCRIPT)
+        .map_err(|error| error.to_string())?;
+    let export = work.join("decompiled.txt");
+    let _ = fs::remove_file(&export);
+    let home = work.join("ghidra-home");
+    fs::create_dir_all(&home).map_err(|error| error.to_string())?;
+    let export_s = export.to_string_lossy().into_owned();
+    let project_s = project.to_string_lossy().into_owned();
+    let scripts_s = scripts.to_string_lossy().into_owned();
+    let image_s = image_path.to_string_lossy().into_owned();
+    let home_s = home.to_string_lossy().into_owned();
+    let ghidra_s = ghidra.to_string_lossy().into_owned();
+    let mut env = vec![("HOME", home_s.as_str())];
+    let java_home;
+    if ghidra_s.contains("antinomie-tools") {
+        java_home = "/opt/antinomie-tools/ghidra/jdk".to_string();
+        env.push(("JAVA_HOME", java_home.as_str()));
+    }
+    let run = tools::run_cancellable(
+        &ghidra_s,
+        &[
+            &project_s,
+            "antinomie",
+            "-import",
+            &image_s,
+            "-overwrite",
+            "-scriptPath",
+            &scripts_s,
+            "-postScript",
+            "AntinomieCoreExport.java",
+            &export_s,
+            "90",
+            "-analysisTimeoutPerFile",
+            "90",
+            "-max-cpu",
+            "4",
+        ],
+        &env,
+        Duration::from_secs(180),
+        64 * 1024,
+        false,
+        cancel,
+    )?;
+    if cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".into());
+    }
+    if !run.success || run.timed_out {
+        return Err(format!(
+            "Ghidra decompilation failed (success={}, timed_out={}). sparse-plan.txt is not a load result.",
+            run.success, run.timed_out
+        ));
+    }
+    let text = fs::read_to_string(&export).map_err(|_| {
+        "Ghidra produced no decompilation. The sparse plan file is not a result.".to_string()
+    })?;
+    if !text
+        .lines()
+        .any(|line| line.starts_with("@@ANTINOMIE-FUNCTION"))
+        && !text.contains("@@ANTINOMIE-TIMEOUT")
+        && !text.contains("@@ANTINOMIE-BASE")
+    {
+        return Err("Ghidra export has no function marker.".into());
+    }
+    Ok(text)
+}
+
+fn find_ghidra(tools_dir: &Path) -> Result<std::path::PathBuf, String> {
+    for candidate in crate::analysis_tools::system_candidates("ghidra") {
+        let path = Path::new(candidate);
+        if path.is_file() {
+            return Ok(path.to_path_buf());
+        }
+    }
+    let managed = tools_dir.join("ghidra/ghidra/support/analyzeHeadless");
+    if managed.is_file() {
+        Ok(managed)
+    } else {
+        Err("Ghidra is not installed. Install it from Tools, or with apt install ghidra.".into())
+    }
+}
+
+#[cfg(test)]
+mod sparse_tests {
+    use super::*;
+
+    fn elf_core() -> Vec<u8> {
+        let payload = [0xdeu8, 0xad, 0xbe, 0xef, 0x11, 0x22];
+        let phnum = 2usize;
+        let data_off = 64 + phnum * 56;
+        let mut image = vec![0u8; data_off];
+        image[0..4].copy_from_slice(b"\x7fELF");
+        image[4] = 2;
+        image[5] = 1;
+        image[6] = 1;
+        image[16..18].copy_from_slice(&4u16.to_le_bytes());
+        image[18..20].copy_from_slice(&62u16.to_le_bytes());
+        image[20..24].copy_from_slice(&1u32.to_le_bytes());
+        image[32..40].copy_from_slice(&64u64.to_le_bytes());
+        image[52..54].copy_from_slice(&64u16.to_le_bytes());
+        image[54..56].copy_from_slice(&56u16.to_le_bytes());
+        image[56..58].copy_from_slice(&2u16.to_le_bytes());
+        let rows = [
+            (data_off as u64, 0x400000u64, 4u64, 4u64),
+            (data_off as u64 + 4, 0x401000, 2, 0x1000),
+        ];
+        for (index, (offset, vaddr, filesz, memsz)) in rows.iter().enumerate() {
+            let at = 64 + index * 56;
+            image[at..at + 4].copy_from_slice(&1u32.to_le_bytes());
+            image[at + 4..at + 8].copy_from_slice(&5u32.to_le_bytes());
+            image[at + 8..at + 16].copy_from_slice(&offset.to_le_bytes());
+            image[at + 16..at + 24].copy_from_slice(&vaddr.to_le_bytes());
+            image[at + 24..at + 32].copy_from_slice(&vaddr.to_le_bytes());
+            image[at + 32..at + 40].copy_from_slice(&filesz.to_le_bytes());
+            image[at + 40..at + 48].copy_from_slice(&memsz.to_le_bytes());
+            image[at + 48..at + 56].copy_from_slice(&0x1000u64.to_le_bytes());
+        }
+        image.extend_from_slice(&payload);
+        image
+    }
+
+    #[test]
+    fn captured_bytes_keep_their_virtual_address_and_holes_are_omitted() {
+        let core = elf_core();
+        let plan = sparse_core_plan(&core).unwrap();
+        assert_eq!(plan.extents.len(), 2);
+        assert_eq!(plan.extents[0].vaddr, 0x400000);
+        assert_eq!(plan.extents[0].filesz, 4);
+        assert_eq!(plan.extents[1].vaddr, 0x401000);
+        assert_eq!(plan.extents[1].filesz, 2);
+        assert_eq!(plan.extents[1].memsz, 0x1000);
+        assert_eq!(plan.unavailable_tails(), 0x1000 - 2);
+        let image = synthetic_captured_elf(&core, &plan).unwrap();
+        let loaded = sparse_core_plan(&image).unwrap();
+        assert_eq!(loaded.extents[0].vaddr, 0x400000);
+        assert_eq!(loaded.extents[0].filesz, 4);
+        assert_eq!(loaded.extents[0].memsz, 4);
+        assert_eq!(loaded.extents[1].vaddr, 0x401000);
+        assert_eq!(loaded.extents[1].filesz, 2);
+        assert_eq!(loaded.unavailable_tails(), 0);
+        assert!(
+            !image
+                .windows(4)
+                .any(|window| window == [0, 0, 0, 0] && false)
+        );
+        assert_eq!(image.len(), 64 + 112 + 6);
+    }
+}

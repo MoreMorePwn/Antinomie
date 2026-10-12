@@ -15,6 +15,7 @@ mod rules;
 mod specimen;
 mod tools;
 mod worker;
+pub use decompile::{decompile_captured_core, sparse_core_plan, synthetic_captured_elf};
 pub use listing::{LISTING_PAGE_MAX_ROWS, read_listing_page};
 pub use specimen::read_specimen_range;
 pub use worker::worker_main_if_requested;

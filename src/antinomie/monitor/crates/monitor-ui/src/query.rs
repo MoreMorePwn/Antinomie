@@ -18,7 +18,49 @@ syscall.num in {9, 10}\n\
 args.prot & 7 == 7\n\
 args.raw[4] == 2\n\
 call.id == 1\n\
-A word with none of these matches the syscall name, TID, task or info text.";
+A word with none of these matches the syscall name, TID, task or info text.
+tag and tags on a syscall row are missing unless that row has an annotation.
+On a run or result they match annotation.json, not path text.";
+
+/// Fields the syscall and record filters actually implement.
+const KEYWORDS: &[(&str, &str, &str)] = &[
+    ("syscall.num", "integer", "Native syscall number"),
+    ("syscall.name", "text", "Syscall name, case-sensitive in =="),
+    ("tid", "integer", "Thread id"),
+    ("pid", "integer", "Process id"),
+    ("cpu", "integer", "CPU recorded on the event"),
+    ("task", "integer", "Task cookie"),
+    ("cookie", "integer", "Task cookie"),
+    ("ret", "integer", "Exit result; missing when the exit was not recorded"),
+    ("result", "integer", "Same as ret"),
+    ("syscall.ret", "integer", "Same as ret"),
+    ("info", "text", "Rendered trace text"),
+    (
+        "tag",
+        "text list",
+        "Annotation tag. Missing on a syscall row. On a run or result, one stored tag.",
+    ),
+    ("tags", "text list", "Same as tag"),
+    ("entry.tag", "text list", "Same as tag, for a run or result annotation"),
+    ("call.id", "integer", "Invocation id"),
+    ("args.raw[0..5]", "integer", "Captured argument word. Not decoded path text."),
+    (
+        "args.path",
+        "text",
+        "Captured path, filename, or pathname string. Not the pointer in args.raw.",
+    ),
+    ("args.old_path", "text", "Captured old path string"),
+    ("args.new_path", "text", "Captured new path string"),
+    (
+        "args.<name>",
+        "integer",
+        "Named argument word for this syscall: fd, dirfd, flags, prot, addr, len, and the schema name.",
+    ),
+    ("entry.id", "text", "Run or result id"),
+    ("entry.name", "text", "Annotation name. Missing when the annotation has no name."),
+    ("name", "text", "Syscall name on a syscall row; annotation name on a run or result"),
+    ("entry.path", "text", "Run executable or result path"),
+];
 
 /// Short recommended filters. Opened from Help → Filter guide.
 pub(crate) fn guide(ctx: &egui::Context) {
@@ -44,7 +86,36 @@ pub(crate) fn guide(ctx: &egui::Context) {
                 ui.monospace(line);
             }
             ui.add_space(4.0);
-            ui.label("Fields: syscall.num, syscall.name, tid, pid, ret, args.fd, args.path, args.prot, args.addr, info, tag.");
+            ui.label("Every field this filter implements. A name that is not in this list is an error.");
+            use egui_extras::{Column, TableBuilder};
+            TableBuilder::new(ui)
+                .id_salt("filter-keywords")
+                .striped(true)
+                .column(Column::initial(160.0))
+                .column(Column::initial(120.0))
+                .column(Column::remainder())
+                .header(22.0, |mut header| {
+                    for title in ["Field", "Type", "Meaning"] {
+                        header.col(|ui| {
+                            ui.strong(title);
+                        });
+                    }
+                })
+                .body(|mut body| {
+                    for (field, kind, meaning) in KEYWORDS {
+                        body.row(22.0, |mut row| {
+                            row.col(|ui| {
+                                ui.monospace(*field);
+                            });
+                            row.col(|ui| {
+                                ui.label(*kind);
+                            });
+                            row.col(|ui| {
+                                ui.label(*meaning);
+                            });
+                        });
+                    }
+                });
             ui.add_space(8.0);
             ui.strong("Packets");
             for line in [
@@ -101,16 +172,58 @@ impl Compiled {
             Mode::Expr(expr) => expr.eval(invocation).unwrap_or(false),
         }
     }
+
+    pub(crate) fn keep_record(&self, labels: &RecordLabels<'_>) -> bool {
+        if self.error.is_some() {
+            return false;
+        }
+        match &self.mode {
+            Mode::All => true,
+            Mode::Text(filter) => {
+                let haystack = format!(
+                    "{} {} {} {}",
+                    labels.id,
+                    labels.name,
+                    labels.path,
+                    labels.tags.join(" ")
+                );
+                haystack.to_lowercase().contains(&filter.to_lowercase())
+            }
+            Mode::Expr(expr) => expr.eval_record(labels).unwrap_or(false),
+        }
+    }
 }
 
 pub(crate) fn compile_note(filter: &str) -> Compiled {
-    match compiled(filter) {
+    compile_with(filter, false)
+}
+
+/// Run and result rows. `tag` is the annotation on that directory.
+/// An invalid expression is an error and is not a text search.
+pub(crate) fn compile_record(filter: &str) -> Compiled {
+    compile_with(filter, true)
+}
+
+pub(crate) fn structured(filter: &str) -> bool {
+    is_expression(filter.trim())
+}
+
+fn compile_with(filter: &str, record: bool) -> Compiled {
+    match compiled(filter, record) {
         Ok(mode) => Compiled { error: None, mode },
         Err(error) => Compiled {
             error: Some(error),
             mode: Mode::All,
         },
     }
+}
+
+/// Labels stored beside a run or result. Tags do not come from path text.
+pub(crate) struct RecordLabels<'a> {
+    pub id: &'a str,
+    pub name: &'a str,
+    pub path: &'a str,
+    pub tags: &'a [String],
 }
 
 #[cfg(test)]
@@ -122,7 +235,7 @@ pub(crate) fn matches(filter: &str, invocation: &InvocationSummary) -> Result<bo
     Ok(compiled.keep(invocation))
 }
 
-fn compiled(filter: &str) -> Result<Mode, String> {
+fn compiled(filter: &str, record: bool) -> Result<Mode, String> {
     let filter = filter.trim();
     if filter.is_empty() {
         return Ok(Mode::All);
@@ -136,29 +249,29 @@ fn compiled(filter: &str) -> Result<Mode, String> {
     if parser.at != parser.tokens.len() {
         return Err("Unexpected text after the filter".into());
     }
-    check_fields(&expr)?;
+    check_fields(&expr, record)?;
     Ok(Mode::Expr(expr))
 }
 
-fn check_fields(expr: &Expr) -> Result<(), String> {
+fn check_fields(expr: &Expr, record: bool) -> Result<(), String> {
     match expr {
-        Expr::Value(value) => check_value(value),
-        Expr::Not(inner) => check_fields(inner),
+        Expr::Value(value) => check_value(value, record),
+        Expr::Not(inner) => check_fields(inner, record),
         Expr::And(left, right) | Expr::Or(left, right) => {
-            check_fields(left)?;
-            check_fields(right)
+            check_fields(left, record)?;
+            check_fields(right, record)
         }
         Expr::Cmp(left, _, right) => {
             if matches!(left, Value::Masked(_, _)) {
-                require_field(left)?;
+                require_field(left, record)?;
             } else {
-                check_value(left)?;
+                check_value(left, record)?;
             }
-            check_value(right)
+            check_value(right, record)
         }
-        Expr::Exists(value) | Expr::Missing(value) => require_field(value),
+        Expr::Exists(value) | Expr::Missing(value) => require_field(value, record),
         Expr::In(left, items) => {
-            require_field(left)?;
+            require_field(left, record)?;
             if items.is_empty() {
                 return Err("Empty set".into());
             }
@@ -170,27 +283,43 @@ fn check_fields(expr: &Expr) -> Result<(), String> {
     }
 }
 
-fn check_value(value: &Value) -> Result<(), String> {
+fn check_value(value: &Value, record: bool) -> Result<(), String> {
     match value {
         Value::Field(name) => {
+            if record {
+                if !known_record_field(name) {
+                    return Err(unknown_field(name));
+                }
+                return Ok(());
+            }
             if name.contains('.') && !known_field(name) {
                 return Err(unknown_field(name));
             }
             Ok(())
         }
-        Value::Masked(inner, _) => check_value(inner),
+        Value::Masked(inner, _) => check_value(inner, record),
+        Value::Raw(_) if record => Err("args.raw is a syscall field".into()),
         Value::Raw(_) | Value::Number(_) | Value::Text(_) => Ok(()),
     }
 }
 
-fn require_field(value: &Value) -> Result<(), String> {
+fn require_field(value: &Value, record: bool) -> Result<(), String> {
     match value {
+        Value::Raw(_) if record => Err("args.raw is a syscall field".into()),
         Value::Raw(_) => Ok(()),
-        Value::Field(name) if known_field(name) => Ok(()),
+        Value::Field(name) if record && known_record_field(name) => Ok(()),
+        Value::Field(name) if !record && known_field(name) => Ok(()),
         Value::Field(name) => Err(unknown_field(name)),
-        Value::Masked(inner, _) => require_field(inner),
+        Value::Masked(inner, _) => require_field(inner, record),
         Value::Number(_) | Value::Text(_) => Err("Expected a field".into()),
     }
+}
+
+fn known_record_field(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "tag" | "tags" | "entry.tag" | "entry.name" | "entry.id" | "entry.path" | "name"
+    )
 }
 
 fn check_literal(value: &Value) -> Result<(), String> {
@@ -621,6 +750,7 @@ enum Value {
 enum Resolved {
     Number(i64),
     Text(String),
+    List(Vec<String>),
     Missing,
 }
 
@@ -633,6 +763,7 @@ impl Expr {
             Expr::Value(value) => Ok(match value.resolve(invocation)? {
                 Resolved::Number(number) => number != 0,
                 Resolved::Text(text) => !text.is_empty(),
+                Resolved::List(items) => !items.is_empty(),
                 Resolved::Missing => false,
             }),
             Expr::Exists(value) => Ok(is_present(&value.resolve(invocation)?)),
@@ -642,26 +773,58 @@ impl Expr {
                 let right = right.resolve(invocation)?;
                 Ok(compare(*op, &left, &right))
             }
-            Expr::In(left, items) => {
-                let left = left.resolve(invocation)?;
-                if matches!(left, Resolved::Missing) {
-                    return Ok(false);
-                }
-                for item in items {
-                    if compare(Cmp::Eq, &left, &item.resolve(invocation)?) {
-                        return Ok(true);
-                    }
-                }
-                Ok(false)
-            }
+            Expr::In(left, items) => in_list(left.resolve(invocation)?, items, |item| {
+                item.resolve(invocation)
+            }),
         }
     }
+
+    fn eval_record(&self, labels: &RecordLabels<'_>) -> Result<bool, String> {
+        match self {
+            Expr::Not(inner) => Ok(!inner.eval_record(labels)?),
+            Expr::And(left, right) => Ok(left.eval_record(labels)? && right.eval_record(labels)?),
+            Expr::Or(left, right) => Ok(left.eval_record(labels)? || right.eval_record(labels)?),
+            Expr::Value(value) => Ok(match value.resolve_record(labels)? {
+                Resolved::Number(number) => number != 0,
+                Resolved::Text(text) => !text.is_empty(),
+                Resolved::List(items) => !items.is_empty(),
+                Resolved::Missing => false,
+            }),
+            Expr::Exists(value) => Ok(is_present(&value.resolve_record(labels)?)),
+            Expr::Missing(value) => Ok(!is_present(&value.resolve_record(labels)?)),
+            Expr::Cmp(left, op, right) => Ok(compare(
+                *op,
+                &left.resolve_record(labels)?,
+                &right.resolve_record(labels)?,
+            )),
+            Expr::In(left, items) => in_list(left.resolve_record(labels)?, items, |item| {
+                item.resolve_record(labels)
+            }),
+        }
+    }
+}
+
+fn in_list(
+    left: Resolved,
+    items: &[Value],
+    mut resolve: impl FnMut(&Value) -> Result<Resolved, String>,
+) -> Result<bool, String> {
+    if matches!(left, Resolved::Missing) {
+        return Ok(false);
+    }
+    for item in items {
+        if compare(Cmp::Eq, &left, &resolve(item)?) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn is_present(value: &Resolved) -> bool {
     match value {
         Resolved::Number(_) => true,
         Resolved::Text(text) => !text.is_empty(),
+        Resolved::List(items) => !items.is_empty(),
         Resolved::Missing => false,
     }
 }
@@ -692,11 +855,56 @@ impl Value {
             },
         }
     }
+
+    fn resolve_record(&self, labels: &RecordLabels<'_>) -> Result<Resolved, String> {
+        match self {
+            Value::Number(number) => Ok(Resolved::Number(*number)),
+            Value::Text(text) => Ok(Resolved::Text(text.clone())),
+            Value::Raw(_) => Err("args.raw is a syscall field".into()),
+            Value::Masked(value, mask) => match value.resolve_record(labels)? {
+                Resolved::Number(number) => Ok(Resolved::Number(number & *mask as i64)),
+                _ => Ok(Resolved::Missing),
+            },
+            Value::Field(name) => record_field(labels, name),
+        }
+    }
+}
+
+fn record_field(labels: &RecordLabels<'_>, name: &str) -> Result<Resolved, String> {
+    match name.to_ascii_lowercase().as_str() {
+        "tag" | "tags" | "entry.tag" => Ok(if labels.tags.is_empty() {
+            Resolved::Missing
+        } else {
+            Resolved::List(labels.tags.to_vec())
+        }),
+        "entry.name" | "name" => {
+            if labels.name.is_empty() {
+                Ok(Resolved::Missing)
+            } else {
+                Ok(Resolved::Text(labels.name.to_string()))
+            }
+        }
+        "entry.id" => Ok(Resolved::Text(labels.id.to_string())),
+        "entry.path" => Ok(Resolved::Text(labels.path.to_string())),
+        _ => Err(unknown_field(name)),
+    }
 }
 
 fn compare(op: Cmp, left: &Resolved, right: &Resolved) -> bool {
     match (left, right) {
         (Resolved::Missing, _) | (_, Resolved::Missing) => false,
+        (Resolved::List(items), Resolved::Text(needle)) => match op {
+            Cmp::Eq => items.iter().any(|item| item == needle),
+            Cmp::Ne => !items.iter().any(|item| item == needle),
+            Cmp::Contains => items.iter().any(|item| item.contains(needle.as_str())),
+            Cmp::Lt | Cmp::Le | Cmp::Gt | Cmp::Ge => false,
+        },
+        (Resolved::List(items), Resolved::Number(number)) => match op {
+            Cmp::Eq => items.iter().any(|item| item == &number.to_string()),
+            Cmp::Ne => !items.iter().any(|item| item == &number.to_string()),
+            _ => false,
+        },
+        (Resolved::List(_), _) | (_, Resolved::List(_)) => false,
         (Resolved::Number(left), Resolved::Number(right)) => match op {
             Cmp::Eq => left == right,
             Cmp::Ne => left != right,
@@ -710,11 +918,13 @@ fn compare(op: Cmp, left: &Resolved, right: &Resolved) -> bool {
             let left = match left {
                 Resolved::Text(text) => text.clone(),
                 Resolved::Number(number) => number.to_string(),
+                Resolved::List(items) => items.join(", "),
                 Resolved::Missing => return false,
             };
             let right = match right {
                 Resolved::Text(text) => text.clone(),
                 Resolved::Number(number) => number.to_string(),
+                Resolved::List(items) => items.join(", "),
                 Resolved::Missing => return false,
             };
             match op {
@@ -727,22 +937,38 @@ fn compare(op: Cmp, left: &Resolved, right: &Resolved) -> bool {
     }
 }
 
-/// Captured path text. A pointer in `args` is not a path.
-fn captured_path(event: &EventSummary) -> Option<String> {
-    event.fields.iter().find_map(|field| {
-        let key = field.key.rsplit('.').next().unwrap_or(field.key.as_str());
-        if !matches!(
-            key,
-            "path" | "old_path" | "new_path" | "filename" | "pathname" | "oldname" | "newname"
-        ) {
-            return None;
+/// Captured path text for one argument name. A pointer in `args` is not a path.
+fn captured_path(event: &EventSummary, names: &[&str]) -> Option<String> {
+    for name in names {
+        if let Some(text) = event.fields.iter().find_map(|field| {
+            let key = field.key.rsplit('.').next().unwrap_or(field.key.as_str());
+            if key != *name {
+                return None;
+            }
+            let text = String::from_utf8_lossy(crate::trace::covered_preview(field))
+                .trim_end_matches('\0')
+                .trim()
+                .to_owned();
+            (!text.is_empty()).then_some(text)
+        }) {
+            return Some(text);
         }
-        let text = String::from_utf8_lossy(crate::trace::covered_preview(field))
-            .trim_end_matches('\0')
-            .trim()
-            .to_owned();
-        (!text.is_empty()).then_some(text)
-    })
+    }
+    None
+}
+
+fn path_names(alias: &str, argument: &str) -> Option<&'static [&'static str]> {
+    match alias {
+        "path" | "filename" | "pathname" => Some(&["path", "filename", "pathname"]),
+        "old_path" | "oldname" => Some(&["old_path", "oldname"]),
+        "new_path" | "newname" => Some(&["new_path", "newname"]),
+        _ => match argument {
+            "path" | "filename" | "pathname" => Some(&["path", "filename", "pathname"]),
+            "old_path" | "oldname" => Some(&["old_path", "oldname"]),
+            "new_path" | "newname" => Some(&["new_path", "newname"]),
+            _ => None,
+        },
+    }
 }
 
 fn field(invocation: &InvocationSummary, name: &str) -> Result<Resolved, String> {
@@ -811,13 +1037,9 @@ fn field(invocation: &InvocationSummary, name: &str) -> Result<Resolved, String>
         let Some(index) = slot else {
             return Ok(Resolved::Missing);
         };
-        if alias == "path"
-            || matches!(
-                argument_name(event.syscall_nr, index),
-                "path" | "old_path" | "new_path" | "filename" | "pathname"
-            )
-        {
-            return Ok(captured_path(event).map_or(Resolved::Missing, Resolved::Text));
+        let argument = argument_name(event.syscall_nr, index);
+        if let Some(names) = path_names(alias, argument) {
+            return Ok(captured_path(event, names).map_or(Resolved::Missing, Resolved::Text));
         }
         return Ok(event
             .args
@@ -989,5 +1211,30 @@ mod tests {
         assert!(matches("args.raw[6]", &mmap).is_err());
         assert!(matches("args.raw[6] == 0", &mmap).is_err());
         assert!(matches("args.raw[prot] == 7", &mmap).is_err());
+    }
+
+    #[test]
+    fn record_tags_come_from_annotations_not_from_the_path() {
+        let labels = RecordLabels {
+            id: "run-1",
+            name: "sample",
+            path: "/tmp/example",
+            tags: &["review".into()],
+        };
+        let tagged = compile_record(r#"tag == "review""#);
+        assert!(tagged.error.is_none());
+        assert!(tagged.keep_record(&labels));
+        assert!(!compile_record(r#"tag == "tmp""#).keep_record(&labels));
+        assert!(!compile_record(r#"tag contains "tmp""#).keep_record(&labels));
+        assert!(compile_record(r#"entry.path contains "tmp""#).keep_record(&labels));
+        let untagged = RecordLabels {
+            tags: &[],
+            ..labels
+        };
+        assert!(!compile_record("exists tag").keep_record(&untagged));
+        assert!(compile_record("missing tag").keep_record(&untagged));
+        let invalid = compile_record("syscall.typo == 9");
+        assert!(invalid.error.is_some());
+        assert!(!invalid.keep_record(&labels));
     }
 }

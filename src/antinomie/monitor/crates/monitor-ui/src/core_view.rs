@@ -7,15 +7,14 @@ use eframe::egui::{self, RichText};
 use std::{
     fs,
     io::{Read, Write},
-    os::unix::process::CommandExt,
     path::{Path, PathBuf},
-    process::{Command, ExitStatus, Stdio},
+    process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicI32, Ordering},
         mpsc::{self, Receiver},
         Arc,
     },
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, Instant},
 };
 
 const PAGE_SIZE: usize = 16 * 1024;
@@ -1231,6 +1230,8 @@ impl CoreView {
                 ..Default::default()
             }))
             .show_inside(ui, |ui| {
+                ui.add(egui::Label::new("Function index is only the functions named in the loaded result. It is not a complete list of the core.").wrap());
+                ui.add(egui::Label::new("A name here is Ghidra's when Ghidra produced the saved result. It is not an original source symbol.").wrap());
                 if self.functions.is_empty() {
                     ui.add(egui::Label::new("No function symbols loaded. Decompile with Ghidra to name functions from its default analysis.").wrap());
                 }
@@ -1240,7 +1241,11 @@ impl CoreView {
                     .show_rows(ui, row_height, self.functions.len(), |ui, range| {
                         for index in range {
                             let function = &self.functions[index];
-                            let label = format!("{:x} {} ({} octets)", function.address, function.name, function.size);
+                            let label = format!(
+                                "symbol {}\naddress {:x}\nmodule not recorded\n{} octets",
+                                function.name, function.address, function.size
+                            );
+                            let _ = record;
                             if ui.selectable_label(self.code_function == Some(index), label).clicked() {
                                 let address = function.address;
                                 self.code_function = Some(index);
@@ -1747,184 +1752,24 @@ fn ghidra_decompile(
     core: &Path,
     dir: &Path,
     tools_dir: &Path,
-    pid_slot: &AtomicI32,
+    _pid_slot: &AtomicI32,
     cancel: &AtomicBool,
 ) -> Result<String, String> {
-    const SCRIPT: &str = r#"// SPDX-License-Identifier: MIT
-import ghidra.app.decompiler.DecompInterface;
-import ghidra.app.decompiler.DecompileResults;
-import ghidra.app.script.GhidraScript;
-import ghidra.program.model.listing.Function;
-import ghidra.program.model.listing.FunctionIterator;
-import java.io.BufferedReader;
-import java.io.BufferedWriter;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
-import java.io.PrintWriter;
-
-public class AntinomieExport extends GhidraScript {
-    @Override
-    public void run() throws Exception {
-        String[] args = getScriptArgs();
-        long budget = Long.parseLong(args[1]) * 1000L;
-        long start = System.currentTimeMillis();
-        DecompInterface decompiler = new DecompInterface();
-        decompiler.openProgram(currentProgram);
-        try (PrintWriter out = new PrintWriter(new BufferedWriter(
-                new OutputStreamWriter(new FileOutputStream(args[0]), "UTF-8")))) {
-            out.println("@@ANTINOMIE-BASE\t" + currentProgram.getImageBase().getOffset());
-            if (args.length > 2 && args[2] != null && !args[2].isEmpty()) {
-                File mappings = new File(args[2]);
-                if (mappings.isFile()) {
-                    try (BufferedReader mappingsReader = new BufferedReader(
-                            new InputStreamReader(new FileInputStream(mappings), "UTF-8"))) {
-                        String mappingLine;
-                        while ((mappingLine = mappingsReader.readLine()) != null) {
-                            if (mappingLine.isEmpty()) {
-                                continue;
-                            }
-                            String[] fields = mappingLine.split(" ");
-                            if (fields.length < 4) {
-                                continue;
-                            }
-                            out.println("@@ANTINOMIE-GAP\t" + fields[0] + "\t" + fields[2] + "\t"
-                                    + fields[3]);
-                        }
-                    }
-                }
-            }
-            FunctionIterator functions = currentProgram.getFunctionManager().getFunctions(true);
-            while (functions.hasNext() && !monitor.isCancelled()) {
-                if (System.currentTimeMillis() - start > budget) {
-                    out.println("@@ANTINOMIE-TIMEOUT");
-                    break;
-                }
-                Function function = functions.next();
-                if (function.isThunk() || function.isExternal()) continue;
-                out.println("@@ANTINOMIE-FUNCTION\t" + function.getEntryPoint().getOffset() + "\t"
-                        + function.getBody().getNumAddresses() + "\t" + function.getName());
-                DecompileResults result = decompiler.decompileFunction(function, 30, monitor);
-                if (result != null && result.decompileCompleted()) {
-                    out.println(result.getDecompiledFunction().getC());
-                } else {
-                    out.println("// decompilation failed");
-                }
-                out.flush();
-            }
+    // The analysis job owns analyzeHeadless. This thread only starts that job
+    // and watches cancel. A mappings file is not passed and is not a result.
+    match antinomie_monitor_core::decompile_captured_core(core, dir, tools_dir, cancel) {
+        Err(error) if error == "cancelled" || cancel.load(Ordering::SeqCst) => {
+            Err(DECOMPILE_CANCELLED.into())
         }
-        decompiler.dispose();
-    }
-}
-"#;
-    let ghidra = resolve_ghidra(tools_dir)?;
-    if cancel.load(Ordering::SeqCst) {
-        return Err(DECOMPILE_CANCELLED.into());
-    }
-    let scripts = dir.join("ghidra-scripts");
-    let project = dir.join("ghidra-project");
-    fs::create_dir_all(&scripts).map_err(|error| error.to_string())?;
-    fs::create_dir_all(&project).map_err(|error| error.to_string())?;
-    fs::write(scripts.join("AntinomieExport.java"), SCRIPT).map_err(|error| error.to_string())?;
-    let export = dir.join("decompiled.txt");
-    let previous_modified = match fs::symlink_metadata(&export) {
-        Ok(metadata) => {
-            let modified = metadata.modified().ok();
-            match fs::remove_file(&export) {
-                Ok(()) => None,
-                Err(_) => modified,
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error.to_string()),
-    };
-    if cancel.load(Ordering::SeqCst) {
-        return Err(DECOMPILE_CANCELLED.into());
-    }
-    let mut command = Command::new(&ghidra);
-    command
-        .arg(&project)
-        .arg("antinomie")
-        .arg("-import")
-        .arg(core)
-        .arg("-overwrite")
-        .arg("-scriptPath")
-        .arg(&scripts)
-        .arg("-postScript")
-        .arg("AntinomieExport.java")
-        .arg(&export)
-        .arg("90")
-        .arg(dir.join("ghidra-mappings.txt"))
-        .arg("-analysisTimeoutPerFile")
-        .arg("90")
-        .arg("-max-cpu")
-        .arg("4")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
-    if ghidra.to_string_lossy().contains("antinomie-tools") {
-        command.env("JAVA_HOME", "/opt/antinomie-tools/ghidra/jdk");
-    }
-    let mut child = command.spawn().map_err(|error| error.to_string())?;
-    let pid =
-        i32::try_from(child.id()).map_err(|_| "Ghidra process id does not fit".to_string())?;
-    pid_slot.store(pid, Ordering::SeqCst);
-    let _clear_pid = ClearPid(pid_slot);
-    let stdout = spawn_capped_reader(child.stdout.take(), GHIDRA_OUTPUT_LIMIT)?;
-    let stderr = spawn_capped_reader(child.stderr.take(), GHIDRA_OUTPUT_LIMIT)?;
-    let status = wait_ghidra(child, pid, cancel);
-    pid_slot.store(0, Ordering::SeqCst);
-    let stderr_bytes = stderr.join().unwrap_or_default();
-    let _stdout = stdout.join();
-    let status = status?;
-    if cancel.load(Ordering::SeqCst) {
-        return Err(DECOMPILE_CANCELLED.into());
-    }
-    accept_ghidra_export(status.success(), &export, previous_modified).map_err(|error| {
-        let detail = String::from_utf8_lossy(&stderr_bytes);
-        let tail: String = detail.chars().rev().take(500).collect();
-        let tail: String = tail.chars().rev().collect();
-        if tail.trim().is_empty() {
-            error
-        } else {
-            format!("{error} {tail}")
-        }
-    })
-}
-
-fn resolve_ghidra(tools_dir: &Path) -> Result<PathBuf, String> {
-    for candidate in antinomie_monitor_core::analysis_tools::system_candidates("ghidra") {
-        let path = Path::new(candidate);
-        if path.is_file() {
-            return Ok(path.to_path_buf());
-        }
-    }
-    let tools = if tools_dir.as_os_str().is_empty() {
-        antinomie_monitor_core::analysis_tools::tools_dir(
-            &antinomie_monitor_core::api::BackendOptions::default().data_dir,
-        )
-    } else {
-        tools_dir.to_path_buf()
-    };
-    let managed = tools.join("ghidra/ghidra/support/analyzeHeadless");
-    if managed.is_file() {
-        Ok(managed)
-    } else {
-        Err(
-            "Ghidra is not installed. Install it from Tools, or with apt install ghidra."
-                .to_string(),
-        )
+        other => other,
     }
 }
 
-/// Accept `decompiled.txt` only after a successful exit that wrote it during this run.
+#[cfg(test)]
 fn accept_ghidra_export(
     success: bool,
     export: &Path,
-    previous_modified: Option<SystemTime>,
+    previous_modified: Option<std::time::SystemTime>,
 ) -> Result<String, String> {
     if !success {
         return Err("Ghidra decompilation failed; an existing export is not a result.".to_string());
@@ -1932,7 +1777,9 @@ fn accept_ghidra_export(
     let metadata =
         fs::metadata(export).map_err(|_| "Ghidra produced no decompilation.".to_string())?;
     if let Some(previous) = previous_modified {
-        let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        let modified = metadata
+            .modified()
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
         if modified <= previous {
             return Err(
                 "Ghidra produced no decompilation for this run; refusing an older export."
@@ -1944,15 +1791,6 @@ fn accept_ghidra_export(
 }
 
 const DECOMPILE_CANCELLED: &str = "The decompile was cancelled.";
-const GHIDRA_OUTPUT_LIMIT: usize = 64 * 1024;
-const GHIDRA_TIMEOUT: Duration = Duration::from_secs(180);
-
-struct ClearPid<'a>(&'a AtomicI32);
-impl Drop for ClearPid<'_> {
-    fn drop(&mut self) {
-        self.0.store(0, Ordering::SeqCst);
-    }
-}
 
 extern "C" {
     fn kill(pid: i32, sig: i32) -> i32;
@@ -1980,99 +1818,6 @@ fn reap_child(pid: i32) {
         let error = std::io::Error::last_os_error();
         if error.raw_os_error() != Some(4) {
             return;
-        }
-    }
-}
-
-fn spawn_capped_reader<R>(
-    pipe: Option<R>,
-    limit: usize,
-) -> Result<std::thread::JoinHandle<Vec<u8>>, String>
-where
-    R: Read + Send + 'static,
-{
-    std::thread::Builder::new()
-        .name("ghidra-output".into())
-        .spawn(move || match pipe {
-            Some(pipe) => read_capped(pipe, limit),
-            None => Vec::new(),
-        })
-        .map_err(|error| error.to_string())
-}
-
-fn read_capped(mut pipe: impl Read, limit: usize) -> Vec<u8> {
-    let mut kept = Vec::new();
-    let mut buf = [0u8; 8192];
-    loop {
-        match pipe.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => {
-                let room = limit.saturating_sub(kept.len());
-                if room > 0 {
-                    kept.extend_from_slice(&buf[..n.min(room)]);
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(_) => break,
-        }
-    }
-    kept
-}
-
-fn wait_ghidra(
-    mut child: std::process::Child,
-    pid: i32,
-    cancel: &AtomicBool,
-) -> Result<ExitStatus, String> {
-    let started = Instant::now();
-    loop {
-        if cancel.load(Ordering::SeqCst) {
-            return finish_cancelled(child, pid);
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => return Ok(status),
-            Ok(None) if started.elapsed() >= GHIDRA_TIMEOUT => {
-                signal_process_group(pid);
-                return match child.wait() {
-                    Ok(status) => Ok(status),
-                    Err(error) => {
-                        reap_child(pid);
-                        std::mem::forget(child);
-                        Err(error.to_string())
-                    }
-                };
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-            Err(error) => {
-                reap_child(pid);
-                std::mem::forget(child);
-                if cancel.load(Ordering::SeqCst) {
-                    return Err(DECOMPILE_CANCELLED.into());
-                }
-                return Err(error.to_string());
-            }
-        }
-    }
-}
-
-fn finish_cancelled(mut child: std::process::Child, pid: i32) -> Result<ExitStatus, String> {
-    match child.try_wait() {
-        Ok(Some(_)) => Err(DECOMPILE_CANCELLED.into()),
-        Ok(None) => {
-            signal_process_group(pid);
-            match child.wait() {
-                Ok(_) => Err(DECOMPILE_CANCELLED.into()),
-                Err(_) => {
-                    reap_child(pid);
-                    std::mem::forget(child);
-                    Err(DECOMPILE_CANCELLED.into())
-                }
-            }
-        }
-        Err(_) => {
-            reap_child(pid);
-            std::mem::forget(child);
-            Err(DECOMPILE_CANCELLED.into())
         }
     }
 }

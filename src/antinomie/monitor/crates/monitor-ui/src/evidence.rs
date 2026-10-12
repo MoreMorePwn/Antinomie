@@ -206,6 +206,35 @@ pub(crate) fn dialogs(ctx: &egui::Context) {
     }
 }
 
+/// `tag == "name"` and `tag contains "part"` match stored annotation tags.
+/// A `tag` expression that is not one of those forms matches nothing.
+/// Anything else returns `None` so the caller can use its ordinary text search.
+#[cfg(test)]
+pub(crate) fn tag_query(query: &str, tags: &[String]) -> Option<bool> {
+    let query = query.trim();
+    let rest = query
+        .strip_prefix("tag ")
+        .or_else(|| query.strip_prefix("tags "))?;
+    let rest = rest.trim();
+    if let Some(value) = rest.strip_prefix("==") {
+        let wanted = unquote(value.trim());
+        return Some(tags.iter().any(|tag| tag == wanted));
+    }
+    if let Some(value) = rest.strip_prefix("contains") {
+        let wanted = unquote(value.trim());
+        return Some(!wanted.is_empty() && tags.iter().any(|tag| tag.contains(wanted)));
+    }
+    Some(false)
+}
+
+#[cfg(test)]
+fn unquote(value: &str) -> &str {
+    value
+        .strip_prefix('"')
+        .and_then(|text| text.strip_suffix('"'))
+        .unwrap_or(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,5 +251,15 @@ mod tests {
         let retagged = merge_annotation(&stored, Field::Tags, " alpha , , beta ");
         assert_eq!(retagged.name, stored.name);
         assert_eq!(retagged.tags, vec!["alpha".to_owned(), "beta".to_owned()]);
+    }
+
+    #[test]
+    fn tag_query_reads_stored_tags_and_rejects_a_broken_expression() {
+        let tags = vec!["review".into(), "odd, tag".into()];
+        assert_eq!(tag_query(r#"tag == "review""#, &tags), Some(true));
+        assert_eq!(tag_query(r#"tag == "other""#, &tags), Some(false));
+        assert_eq!(tag_query(r#"tags contains "odd""#, &tags), Some(true));
+        assert_eq!(tag_query("tag = review", &tags), Some(false));
+        assert_eq!(tag_query("syscall.num == 1", &tags), None);
     }
 }

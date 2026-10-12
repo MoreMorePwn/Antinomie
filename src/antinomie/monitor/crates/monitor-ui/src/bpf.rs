@@ -5,13 +5,14 @@ use antinomie_monitor_core::EventSummary;
 
 /// Classic and eBPF instructions are 8 octets: opcode, registers, offset, immediate.
 pub(crate) fn translate(bytes: &[u8]) -> String {
-    if bytes.len() < 8 || !bytes.len().is_multiple_of(8) {
+    let (insns, tail) = bytes.as_chunks::<8>();
+    if insns.is_empty() {
         return format!(
-            "Captured {} octets; an eBPF program image is a multiple of 8 octets.",
-            bytes.len()
+            "captured {} octets, 0 instructions\npartial tail {} octets, not padded",
+            bytes.len(),
+            tail.len()
         );
     }
-    let insns = bytes.as_chunks::<8>().0;
     let mut lines = Vec::new();
     let mut index = 0;
     while index < insns.len() {
@@ -46,10 +47,50 @@ pub(crate) fn translate(bytes: &[u8]) -> String {
         lines.push(format!("{slot:04}  {text}"));
     }
     // An LDDW pair is one line, so the line count is the instruction count.
-    let mut rendered = Vec::with_capacity(lines.len() + 1);
+    let mut rendered = Vec::with_capacity(lines.len() + 2);
     rendered.push(captured_header(bytes.len(), lines.len()));
+    if !tail.is_empty() {
+        rendered.push(format!("partial tail {} octets, not padded", tail.len()));
+    }
     rendered.extend(lines);
     rendered.join("\n")
+}
+
+/// Identity recorded on the invocation. Absent values stay absent.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct BpfIdentity {
+    pub vm_id: Option<String>,
+    pub boot_id: Option<String>,
+    pub run_id: Option<String>,
+    pub cookie: Option<u64>,
+    pub pid: Option<u32>,
+    pub tid: Option<u32>,
+    pub timestamp_ns: Option<u64>,
+    /// `load`, `attach`, or another recorded action name.
+    pub action: String,
+}
+
+/// JSON metadata and a hex dump of the exact captured bytes.
+/// A short tail is reported and is not extended with zero bytes.
+pub(crate) fn export_capture(bytes: &[u8], identity: &BpfIdentity) -> String {
+    let hash = antinomie_monitor_core::storage::sha256_hex(bytes);
+    let meta = serde_json::json!({
+        "sha256": hash,
+        "captured_octets": bytes.len(),
+        "complete_instructions": bytes.len() / 8,
+        "partial_tail_octets": bytes.len() % 8,
+        "partial": !bytes.len().is_multiple_of(8),
+        "padded": false,
+        "vm_id": identity.vm_id,
+        "boot_id": identity.boot_id,
+        "run_id": identity.run_id,
+        "cookie": identity.cookie,
+        "pid": identity.pid,
+        "tid": identity.tid,
+        "timestamp_ns": identity.timestamp_ns,
+        "action": identity.action,
+    });
+    format!("{meta}\n{}", dump(bytes))
 }
 
 /// Classic `sock_filter`: little-endian `u16 code`, `u8 jt`, `u8 jf`, `u32 k`.
@@ -58,6 +99,10 @@ pub(crate) fn translate(bytes: &[u8]) -> String {
 pub(crate) fn translate_classic(bytes: &[u8]) -> String {
     let instructions = bytes.len() / 8;
     let mut lines = vec![captured_header(bytes.len(), instructions)];
+    let tail = bytes.len() % 8;
+    if tail != 0 {
+        lines.push(format!("partial tail {tail} octets, not padded"));
+    }
     let (words, _) = bytes.as_chunks::<8>();
     for (slot, insn) in words.iter().enumerate() {
         let code = u16::from_le_bytes([insn[0], insn[1]]);
@@ -407,10 +452,63 @@ mod tests {
             "{text}"
         );
         let partial = translate_classic(&[0x06, 0x00, 0xff]);
-        assert_eq!(partial, "captured 3 octets, 0 instructions");
+        assert_eq!(
+            partial,
+            "captured 3 octets, 0 instructions\npartial tail 3 octets, not padded"
+        );
         assert_eq!(
             dump(&[0x06, 0x00, 0xff]),
             "captured 3 octets, 0 instructions\n06 00 ff"
         );
+    }
+
+    #[test]
+    fn classic_and_ebpf_sequences_disassemble_without_running() {
+        // ld [0], jeq #1 jump 0/1, ret #0. Three classic instructions.
+        let mut classic = vec![0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        classic.extend_from_slice(&[0x15, 0x00, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00]);
+        classic.extend_from_slice(&[0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        classic.push(0xaa);
+        let text = translate_classic(&classic);
+        assert!(text.contains("ld "), "{text}");
+        assert!(text.contains("jmp "), "{text}");
+        assert!(text.contains("ret "), "{text}");
+        assert!(text.contains("partial tail 1 octets, not padded"), "{text}");
+        assert!(!text.contains("00 aa"), "{text}");
+
+        // mov64 r0, 1; jeq r0, 1, +1; exit; mov64 r0, 0; exit.
+        let mut ebpf = vec![0xb7, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00];
+        ebpf.extend_from_slice(&[0x15, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00]);
+        ebpf.extend_from_slice(&[0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        ebpf.extend_from_slice(&[0xb7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        ebpf.extend_from_slice(&[0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        let text = translate(&ebpf);
+        assert!(text.contains("mov64 r0, 1"), "{text}");
+        assert!(text.contains("jeq r0, 1"), "{text}");
+        assert!(text.contains("-> insn 3"), "{text}");
+        assert_eq!(text.matches("exit").count(), 2, "{text}");
+
+        let exported = export_capture(
+            &classic,
+            &BpfIdentity {
+                vm_id: None,
+                boot_id: Some("boot".into()),
+                run_id: None,
+                cookie: Some(4),
+                pid: Some(9),
+                tid: None,
+                timestamp_ns: Some(10),
+                action: "load".into(),
+            },
+        );
+        assert!(exported.contains("\"vm_id\":null"), "{exported}");
+        assert!(exported.contains("\"run_id\":null"), "{exported}");
+        assert!(exported.contains("\"tid\":null"), "{exported}");
+        assert!(exported.contains("\"boot_id\":\"boot\""), "{exported}");
+        assert!(exported.contains("\"action\":\"load\""), "{exported}");
+        assert!(exported.contains("\"partial\":true"), "{exported}");
+        assert!(exported.contains("\"padded\":false"), "{exported}");
+        let dump_line = exported.lines().last().unwrap_or("");
+        assert!(dump_line.ends_with(" aa"), "{exported}");
     }
 }
