@@ -398,6 +398,51 @@ fn check() -> Result<(), String> {
                 .map_or(0, |(sequence, _)| *sequence);
             driver.wait_output(&run.id, previous)?;
             println!("PASS uid {uid}: canceled capture released its pause and target continued");
+            let old_ids: Vec<_> = driver
+                .snapshot
+                .process_cores
+                .iter()
+                .map(|core| core.id.clone())
+                .collect();
+            driver.command(Command::DumpProcessCore {
+                request: ProcessCoreRequest {
+                    vm_id: vm_id.clone(),
+                    target: target.clone(),
+                    timeout_ms: 1,
+                    ..Default::default()
+                },
+            })?;
+            driver.wait("manual timeout cleanup", 20, |snapshot| {
+                snapshot.process_cores.iter().any(|core| {
+                    !old_ids.contains(&core.id) && core.phase == ProcessCorePhase::Finished
+                })
+            })?;
+            let timed = driver
+                .snapshot
+                .process_cores
+                .iter()
+                .find(|core| !old_ids.contains(&core.id))
+                .ok_or("timeout capture missing")?;
+            if timed.pause_released != Some(true)
+                || timed
+                    .guest_status
+                    .as_ref()
+                    .and_then(|status| status.get("status"))
+                    .and_then(|status| status.as_i64())
+                    != Some(-110)
+            {
+                return Err(format!(
+                    "one-millisecond deadline did not report released timeout: {timed:?}"
+                ));
+            }
+            let previous = driver
+                .output
+                .get(&run.id)
+                .map_or(0, |(sequence, _)| *sequence);
+            driver.wait_output(&run.id, previous)?;
+            println!(
+                "PASS uid {uid}: short deadline reports timeout, releases capture pause and target continues"
+            );
             driver.command(Command::TerminalInput {
                 run_id: run.id.clone(),
                 data: b"finish\n".to_vec(),
