@@ -19,6 +19,9 @@ it runs.
   Runs link their retained core and metadata to the core viewer and result folder.
   The viewer discovers acquired and unfinished captures without parsing each ELF
   eagerly; reopening a capture preserves its labels and tags.
+  Core dumps use Memory's resizable capture sidebar and right-hand analysis area.
+  Import controls open in a dialog; mappings and function lists are resizable,
+  and analysis controls stay reachable at large font sizes.
 - **Bounded core acquisition.** Linux's memory filter remains effective. The
   default 64 MiB/5-second serialization limits retain explicit partial results;
   four handles and 128 MiB bound guest reservations. Thread rendezvous and faulting

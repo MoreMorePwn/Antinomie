@@ -50,6 +50,11 @@ vCPU/RAM/disk capacities are separate from QEMU host CPU/resident memory and
 available data-volume space. Missing measurements remain unavailable. Existing
 layouts gain Summary before Run History without losing custom windows.
 
+The accepted UI follow-up aligns Core dumps with Memory: a resizable capture
+list on the left, selected evidence and analysis tabs on the right, and a separate
+import dialog. Waiting/unfinished entries, names/tags and lazy inspection remain
+available. This changes presentation only; core acquisition/recovery is unchanged.
+
 ## Accepted ANT-T0055 host evidence update (0.5.0)
 
 User authorized inspection, completion and release of current 0.5.0, with guest

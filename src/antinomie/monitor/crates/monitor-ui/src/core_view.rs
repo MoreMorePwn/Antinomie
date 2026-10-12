@@ -37,6 +37,7 @@ struct CoreCatalog {
 
 struct AcquiredCore {
     run_id: String,
+    directory: PathBuf,
     file: Option<PathBuf>,
     state: antinomie_monitor_core::RunArtifactState,
 }
@@ -122,6 +123,7 @@ fn catalog(roots: &[PathBuf], vm_id: Option<&str>) -> Result<CoreCatalog, String
             }
             result.acquired.push(AcquiredCore {
                 run_id: artifacts.run_id,
+                directory: path.join("core"),
                 file: artifacts.core_dump,
                 state: artifacts.core_state,
             });
@@ -192,6 +194,8 @@ pub(crate) struct CoreView {
     acquired: Vec<AcquiredCore>,
     catalog_issues: Vec<String>,
     selected: Option<CoreRecord>,
+    selected_directory: Option<PathBuf>,
+    import_open: bool,
     job: Option<Receiver<Result<Reply, String>>>,
     status: String,
     source_path: String,
@@ -224,6 +228,11 @@ impl CoreView {
             .iter()
             .find(|record| record.core.source == source)
             .cloned();
+        self.selected_directory = previous
+            .as_ref()
+            .map(|record| record.dir.clone())
+            .or_else(|| source.parent().map(Path::to_owned));
+        self.selected = None;
         let source = source.to_owned();
         self.start(move || {
             let record = match previous {
@@ -291,7 +300,9 @@ impl CoreView {
                     .first()
                     .and_then(|thread| thread.register("rip"))
                     .map_or_else(String::new, |address| format!("{address:x}"));
+                self.selected_directory = Some(record.dir.clone());
                 self.selected = Some(record);
+                self.import_open = false;
                 self.thread_index = 0;
                 self.mapping_index = 0;
                 self.window_offset = 0;
@@ -342,7 +353,17 @@ impl CoreView {
         if (changed || refresh) && self.job.is_none() {
             if changed {
                 self.acquired.clear();
+                self.records.clear();
                 self.catalog_issues.clear();
+                self.import_open = false;
+                if self.selected_directory.as_ref().is_some_and(|directory| {
+                    !recording_roots
+                        .iter()
+                        .any(|root| directory.starts_with(root))
+                }) {
+                    self.selected = None;
+                    self.selected_directory = None;
+                }
             }
             self.roots = recording_roots.to_vec();
             self.destination = 0;
@@ -352,122 +373,124 @@ impl CoreView {
             let vm_id = self.vm_id.clone();
             self.start(move || catalog(&roots, vm_id.as_deref()).map(Reply::Records));
         }
+        egui::SidePanel::left("core_dump_list")
+            .resizable(true)
+            .default_width(240.0)
+            .width_range(180.0..=480.0)
+            .frame(egui::Frame::new().inner_margin(egui::Margin {
+                right: 8,
+                ..Default::default()
+            }))
+            .show_inside(ui, |ui| self.dump_list(ui));
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new())
+            .show_inside(ui, |ui| self.analysis(ui));
+        self.import_dialog(ui.ctx());
+    }
+
+    fn dump_list(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.heading("Core dumps");
-            if ui
-                .add_enabled(self.job.is_none(), egui::Button::new("Refresh"))
-                .clicked()
-            {
-                let roots = self.roots.clone();
-                let vm_id = self.vm_id.clone();
-                self.start(move || catalog(&roots, vm_id.as_deref()).map(Reply::Records));
-            }
-            if self.job.is_some() {
+            crate::theme::section(ui, "Core dumps");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add_enabled(
+                        self.job.is_none(),
+                        egui::Button::new(egui_phosphor::regular::ARROW_CLOCKWISE).frame(false),
+                    )
+                    .on_hover_text("Refresh the list")
+                    .clicked()
+                {
+                    let roots = self.roots.clone();
+                    let vm_id = self.vm_id.clone();
+                    self.start(move || catalog(&roots, vm_id.as_deref()).map(Reply::Records));
+                }
+            });
+        });
+        if ui
+            .add_enabled(
+                !self.roots.is_empty() && self.job.is_none(),
+                egui::Button::new(format!(
+                    "{} Import core…",
+                    egui_phosphor::regular::FILE_ARROW_UP
+                ))
+                .min_size(egui::vec2(ui.available_width(), 0.0)),
+            )
+            .on_hover_text(
+                "Reference a Linux x86-64 process core made elsewhere. The file stays where it is.",
+            )
+            .on_disabled_hover_text(
+                "Select a VM with a recording folder; wait for any current operation to finish.",
+            )
+            .clicked()
+        {
+            self.import_open = true;
+            self.status.clear();
+        }
+        if self.job.is_some() {
+            ui.horizontal(|ui| {
                 ui.spinner();
                 ui.label("Working…");
-            }
-        });
-        ui.add(egui::Label::new("Linux x86-64 process cores: thread registers and virtual memory. Enable Core Dump on Exit when launching with a revision 15 guest. Omitted or unavailable memory stays explicit.").wrap());
-        ui.horizontal(|ui| {
-            ui.label("Core file");
-            ui.text_edit_singleline(&mut self.source_path);
-            if ui
-                .add_enabled(self.job.is_none(), egui::Button::new("Browse…"))
-                .clicked()
-            {
-                let cancelled = self.cancelled.clone();
-                self.start(move || choose_file(false, &cancelled).map(Reply::Chosen));
-            }
-            if ui
-                .add_enabled(
-                    self.job.is_none()
-                        && !recording_roots.is_empty()
-                        && !self.source_path.trim().is_empty(),
-                    egui::Button::new("Import reference"),
-                )
-                .clicked()
-            {
-                if let Some(root) = recording_roots.get(self.destination).cloned() {
-                    let path = crate::folders::user_path(&self.source_path);
-                    self.start(move || {
-                        CoreRecord::import(&path, &root)
-                            .map(|record| Reply::Open(Box::new(record), String::new()))
-                            .map_err(|error| error.to_string())
-                    });
-                }
-            }
-        });
-        if !recording_roots.is_empty() {
-            egui::ComboBox::from_id_salt("core-recording-root")
-                .selected_text(recording_roots.get(self.destination).map_or_else(
-                    || "Select recording folder".into(),
-                    |root| root.display().to_string(),
-                ))
-                .show_ui(ui, |ui| {
-                    for (index, root) in recording_roots.iter().enumerate() {
-                        ui.selectable_value(
-                            &mut self.destination,
-                            index,
-                            root.display().to_string(),
-                        );
-                    }
-                });
-        } else {
-            ui.label("Select a VM with a recording folder to retain imported core metadata.");
+            });
         }
-        if !self.status.is_empty() {
-            ui.label(&self.status);
-        }
-        for issue in &self.catalog_issues {
-            ui.add(egui::Label::new(RichText::new(issue).color(crate::theme::warn())).wrap());
-        }
-        let mut acquired_open = None;
+        let mut acquired_selection = None;
+        let mut imported_selection = None;
+        let font_size = egui::TextStyle::Body.resolve(ui.style()).size;
         egui::ScrollArea::vertical()
-            .id_salt("acquired-core-list")
-            .max_height(ui.text_style_height(&egui::TextStyle::Body) * 6.0)
+            .id_salt("core_capture_list")
+            .auto_shrink([false, false])
             .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                if self.acquired.is_empty() && self.records.is_empty() {
+                    ui.add_space(8.0);
+                    ui.add(egui::Label::new("No core dumps. Enable Core Dump on Exit in Run program, or import a core.").wrap());
+                }
                 for core in &self.acquired {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(format!(
-                            "Run {}: {}",
-                            core.run_id,
-                            crate::app::core_capture_status(core.state)
-                        ));
-                        if let Some(file) = &core.file {
-                            if ui
-                                .add_enabled(self.job.is_none(), egui::Button::new("Open core"))
-                                .clicked()
-                            {
-                                acquired_open = Some(file.clone());
-                            }
-                        }
-                    });
+                    let fallback = format!("Run {}", core.run_id);
+                    let title = crate::evidence::title(ui, &core.directory, &fallback);
+                    let selected = self.selected_directory.as_ref() == Some(&core.directory)
+                        || self.selected.as_ref().is_some_and(|record| record.dir == core.directory);
+                    let state = crate::app::core_capture_status(core.state);
+                    let color = match core.state {
+                        antinomie_monitor_core::RunArtifactState::Failed => crate::theme::error(),
+                        antinomie_monitor_core::RunArtifactState::Partial
+                        | antinomie_monitor_core::RunArtifactState::Interrupted => crate::theme::warn(),
+                        _ => crate::theme::text(),
+                    };
+                    let row = crate::network_view::capture_row(ui, selected, (&title, color), state, font_size)
+                        .on_hover_text(format!("{title}\n{state}\n{}", core.directory.display()));
+                    row.context_menu(|ui| crate::evidence::menu(ui, &core.directory));
+                    if row.clicked() && self.job.is_none() {
+                        acquired_selection = Some((core.directory.clone(), core.file.clone()));
+                    }
+                }
+                if !self.records.is_empty() && !self.acquired.is_empty() {
+                    ui.add_space(8.0);
+                    crate::theme::section(ui, "Imported cores");
+                }
+                for record in &self.records {
+                    let title = crate::evidence::title(ui, &record.dir, &record.label);
+                    let selected = self.selected_directory.as_ref() == Some(&record.dir)
+                        || self.selected.as_ref().is_some_and(|current| current.dir == record.dir);
+                    let detail = format!("{} threads · {} mappings", record.core.threads.len(), record.core.mappings.len());
+                    let row = crate::network_view::capture_row(ui, selected, (&title, crate::theme::text()), &detail, font_size)
+                        .on_hover_text(record.core.source.display().to_string());
+                    row.context_menu(|ui| crate::evidence::menu(ui, &record.dir));
+                    if row.clicked() && self.job.is_none() {
+                        imported_selection = Some(record.clone());
+                    }
                 }
             });
-        if let Some(file) = acquired_open {
-            self.open(&file);
-        }
-        ui.separator();
-        let mut open = None;
-        egui::ScrollArea::horizontal()
-            .id_salt("core-record-list")
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    for record in &self.records {
-                        let title = crate::evidence::title(ui, &record.dir, &record.label);
-                        let selected = self
-                            .selected
-                            .as_ref()
-                            .is_some_and(|current| current.dir == record.dir);
-                        let response = ui.selectable_label(selected, title);
-                        response.context_menu(|ui| crate::evidence::menu(ui, &record.dir));
-                        if response.clicked() && self.job.is_none() {
-                            open = Some(record.clone());
-                        }
-                    }
-                });
-            });
-        if let Some(mut record) = open {
+        if let Some((directory, file)) = acquired_selection {
+            self.selected_directory = Some(directory);
+            self.selected = None;
+            self.status.clear();
+            if let Some(file) = file {
+                self.open(&file);
+            }
+        } else if let Some(mut record) = imported_selection {
+            self.selected_directory = Some(record.dir.clone());
+            self.selected = None;
+            self.status.clear();
             self.start(move || {
                 record.core =
                     CoreDump::open(&record.core.source).map_err(|error| error.to_string())?;
@@ -485,11 +508,112 @@ impl CoreView {
                 Ok(Reply::Open(Box::new(record), code))
             });
         }
+    }
+
+    fn import_dialog(&mut self, ctx: &egui::Context) {
+        if !self.import_open {
+            return;
+        }
+        let mut open = true;
+        let mut cancel = false;
+        egui::Window::new("Import process core")
+            .id(egui::Id::new("core_import"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(480.0)
+            .show(ctx, |ui| {
+                ui.add(egui::Label::new("Linux x86-64 ELF process core. The original file stays in place; reference metadata is saved with the selected VM.").wrap());
+                ui.label("Core file");
+                ui.add(egui::TextEdit::singleline(&mut self.source_path).desired_width(f32::INFINITY));
+                if ui.add_enabled(self.job.is_none(), egui::Button::new("Browse…")).clicked() {
+                    let cancelled = self.cancelled.clone();
+                    self.start(move || choose_file(false, &cancelled).map(Reply::Chosen));
+                }
+                ui.label("Recording folder");
+                egui::ComboBox::from_id_salt("core_recording_root")
+                    .width(ui.available_width())
+                    .selected_text(self.roots.get(self.destination).map_or_else(
+                        || "Select recording folder".into(),
+                        |root| root.file_name().unwrap_or(root.as_os_str()).to_string_lossy().into_owned(),
+                    ))
+                    .show_ui(ui, |ui| {
+                        for (index, root) in self.roots.iter().enumerate() {
+                            ui.selectable_value(&mut self.destination, index, root.display().to_string());
+                        }
+                    });
+                if self.roots.is_empty() {
+                    ui.label("Select a VM with a recording folder first.");
+                }
+                if !self.status.is_empty() {
+                    ui.add(egui::Label::new(&self.status).wrap());
+                }
+                if self.job.is_some() {
+                    ui.spinner();
+                }
+                ui.horizontal_wrapped(|ui| {
+                    if ui.add_enabled(self.job.is_none() && self.roots.get(self.destination).is_some() && !self.source_path.trim().is_empty(), egui::Button::new("Import core")).clicked() {
+                        if let Some(root) = self.roots.get(self.destination).cloned() {
+                            let path = crate::folders::user_path(&self.source_path);
+                            self.start(move || CoreRecord::import(&path, &root).map(|record| Reply::Open(Box::new(record), String::new())).map_err(|error| error.to_string()));
+                        }
+                    }
+                    cancel = ui.button(if self.job.is_some() { "Close" } else { "Cancel" }).clicked();
+                });
+            });
+        self.import_open = open && !cancel;
+    }
+
+    fn analysis(&mut self, ui: &mut egui::Ui) {
+        if !self.status.is_empty() {
+            ui.add(egui::Label::new(&self.status).wrap());
+        }
+        if !self.catalog_issues.is_empty() {
+            egui::CollapsingHeader::new(format!("Capture issues ({})", self.catalog_issues.len()))
+                .show(ui, |ui| {
+                    for issue in &self.catalog_issues {
+                        ui.add(
+                            egui::Label::new(RichText::new(issue).color(crate::theme::warn()))
+                                .wrap(),
+                        );
+                    }
+                });
+        }
         let Some(record) = self.selected.clone() else {
-            ui.label("Open a captured process core or import an external core, then select Context, Memory mappings, or Disassembly.");
+            if let Some(core) = self
+                .acquired
+                .iter()
+                .find(|core| Some(&core.directory) == self.selected_directory.as_ref())
+            {
+                let title =
+                    crate::evidence::title(ui, &core.directory, &format!("Run {}", core.run_id));
+                crate::theme::section(ui, &title);
+                ui.label(crate::app::core_capture_status(core.state));
+                ui.add(egui::Label::new(format!("Run {}", core.run_id)).wrap());
+                crate::evidence::controls(ui, &core.directory);
+                let explanation = if core.file.is_some() {
+                    "Select this capture to open its currently recorded data."
+                } else if matches!(
+                    core.state,
+                    antinomie_monitor_core::RunArtifactState::WaitingForRootExit
+                        | antinomie_monitor_core::RunArtifactState::InProgress
+                ) {
+                    "No core file is recorded yet. The capture is waiting for process exit or acquisition; recorded context and memory can be opened when available."
+                } else {
+                    "This capture retained no core file. Check run history for acquisition details."
+                };
+                ui.add(egui::Label::new(explanation).wrap());
+            } else if self.job.is_some() {
+                ui.label("Opening core…");
+            } else {
+                crate::theme::section(ui, "Process core");
+                ui.add(egui::Label::new("Select a core from the list to inspect its threads, memory mappings, disassembly and recovered notes.").wrap());
+            }
             return;
         };
-        ui.horizontal(|ui| {
+        let title = crate::evidence::title(ui, &record.dir, &record.label);
+        crate::theme::section(ui, &title);
+        ui.horizontal_wrapped(|ui| {
             crate::evidence::controls(ui, &record.dir);
             if ui
                 .add_enabled(self.job.is_none(), egui::Button::new("Reveal core file"))
@@ -534,11 +658,27 @@ impl CoreView {
                 });
             }
         });
-        ui.label(record.core.source.display().to_string());
-        for warning in &record.core.warnings {
-            ui.colored_label(ui.visuals().warn_fg_color, warning);
+        let source_path = record.core.source.display().to_string();
+        ui.add(egui::Label::new(&source_path).truncate())
+            .on_hover_text(&source_path)
+            .context_menu(|ui| {
+                if ui.button("Copy core path").clicked() {
+                    ui.ctx().copy_text(source_path);
+                    ui.close_menu();
+                }
+            });
+        if !record.core.warnings.is_empty() {
+            egui::CollapsingHeader::new(format!("Core warnings ({})", record.core.warnings.len()))
+                .show(ui, |ui| {
+                    for warning in &record.core.warnings {
+                        ui.add(
+                            egui::Label::new(RichText::new(warning).color(crate::theme::warn()))
+                                .wrap(),
+                        );
+                    }
+                });
         }
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut self.tab, Tab::Context, "Context");
             ui.selectable_value(&mut self.tab, Tab::Mappings, "Memory mappings");
             ui.selectable_value(&mut self.tab, Tab::Code, "Disassembly");
@@ -551,7 +691,7 @@ impl CoreView {
             Tab::Code => self.disassembly(ui, &record),
             Tab::Notes => {
                 egui::ScrollArea::vertical().id_salt("core-notes").show(ui, |ui| {
-                    ui.label("Other notes are inventoried below; floating-point/XSAVE payloads are not decoded in 0.5.0.");
+                    ui.label("Other notes are inventoried below; floating-point/XSAVE payloads are not decoded here.");
                     for (key,value) in &record.core.auxv { ui.monospace(format!("AUXV {key}: 0x{value:x}")); }
                     for note in &record.core.notes { ui.label(note); }
                     for file in &record.core.files { ui.monospace(format!("{:016x}-{:016x} file+0x{:x} {}", file.start, file.end, file.file_offset, file.path)); }
@@ -585,11 +725,11 @@ impl CoreView {
             "TID {} · parent PID {} · current signal {}",
             thread.tid, thread.parent_pid, thread.signal
         ));
-        egui::ScrollArea::vertical().id_salt("core-registers").show(ui, |ui| {
+        egui::ScrollArea::both().id_salt("core-registers").show(ui, |ui| {
             egui::Grid::new("core-reg-grid").striped(true).show(ui, |ui| {
                 for (name,value) in &thread.registers { ui.monospace(name); ui.monospace(format!("0x{value:016x}"));
                     if ui.small_button("Copy").clicked() { ui.ctx().copy_text(format!("0x{value:x}")); }
-                    if (name == "rip" || name == "rsp") && ui.small_button("View memory").clicked() {
+                    if (name == "rip" || name == "rsp") && ui.small_button(egui_phosphor::regular::MEMORY).on_hover_text("View memory at this register").clicked() {
                         if let Some(index) = record.core.mappings.iter().position(|mapping| *value >= mapping.start && *value < mapping.end()) {
                             self.mapping_index=index; self.window_offset=(*value-record.core.mappings[index].start)/WINDOW_SIZE*WINDOW_SIZE; self.page=None; self.tab=Tab::Mappings;
                         } else { self.status="Register points to an unmapped address.".into(); }
@@ -602,16 +742,50 @@ impl CoreView {
     }
     fn mappings(&mut self, ui: &mut egui::Ui, record: &CoreRecord) {
         let mut requested_page = None;
-        ui.columns(2, |columns| {
-            egui::ScrollArea::vertical().id_salt("core-map-list").show(&mut columns[0], |ui| {
-                for (index,mapping) in record.core.mappings.iter().enumerate() {
-                    let label=format!("{:x}-{:x} {}\n{} / {} octets captured",mapping.start,mapping.end(),mapping.permissions(),mapping.available_size,mapping.memory_size);
-                    if ui.selectable_label(index==self.mapping_index,RichText::new(label).monospace()).clicked() {self.mapping_index=index;self.window_offset=0;self.page=None;}
-                    for file in record.core.files.iter().filter(|file| mapping.start>=file.start && mapping.start<file.end) {ui.small(&file.path);}
-                }
+        egui::SidePanel::left("core_mapping_list")
+            .resizable(true)
+            .default_width(220.0)
+            .width_range(160.0..=360.0)
+            .frame(egui::Frame::new().inner_margin(egui::Margin {
+                right: 8,
+                ..Default::default()
+            }))
+            .show_inside(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("core-map-list")
+                    .show(ui, |ui| {
+                        for (index, mapping) in record.core.mappings.iter().enumerate() {
+                            let label = format!(
+                                "{:x}-{:x} {}\n{} / {} octets captured",
+                                mapping.start,
+                                mapping.end(),
+                                mapping.permissions(),
+                                mapping.available_size,
+                                mapping.memory_size
+                            );
+                            if ui
+                                .selectable_label(
+                                    index == self.mapping_index,
+                                    RichText::new(label).monospace(),
+                                )
+                                .clicked()
+                            {
+                                self.mapping_index = index;
+                                self.window_offset = 0;
+                                self.page = None;
+                            }
+                            for file in record.core.files.iter().filter(|file| {
+                                mapping.start >= file.start && mapping.start < file.end
+                            }) {
+                                ui.small(&file.path);
+                            }
+                        }
+                    });
             });
-            let ui=&mut columns[1]; let Some(mapping)=record.core.mappings.get(self.mapping_index) else {ui.label("No PT_LOAD mappings.");return;};
-            ui.label("?? = absent, omitted, or truncated memory; 00 is a captured zero.");
+        egui::CentralPanel::default().frame(egui::Frame::new()).show_inside(ui, |ui| {
+            let Some(mapping)=record.core.mappings.get(self.mapping_index) else {ui.label("No PT_LOAD mappings.");return;};
+            ui.add(egui::Label::new("?? = unavailable; 00 = captured zero.").wrap())
+                .on_hover_text("Unavailable memory can be absent, omitted by the memory filter, or truncated in the saved core.");
             ui.horizontal_wrapped(|ui| {
                 if ui.add_enabled(self.window_offset>0,egui::Button::new("Previous span")).clicked() {self.window_offset=self.window_offset.saturating_sub(WINDOW_SIZE);self.page=None;}
                 if ui.add_enabled(self.window_offset.saturating_add(WINDOW_SIZE)<mapping.memory_size,egui::Button::new("Next span")).clicked() {self.window_offset=self.window_offset.saturating_add(WINDOW_SIZE);self.page=None;}
@@ -625,7 +799,8 @@ impl CoreView {
                 }
             });
             let span=mapping.memory_size.saturating_sub(self.window_offset).min(WINDOW_SIZE);
-            ui.label(format!("Mapping +0x{:x}..+0x{:x}; scroll this span or advance to inspect the entire mapping.",self.window_offset,self.window_offset+span));
+            ui.add(egui::Label::new(format!("Offset 0x{:x}–0x{:x} of 0x{:x}",self.window_offset,self.window_offset+span,mapping.memory_size)).wrap())
+                .on_hover_text("Scroll this span, advance to another span, or jump to an offset to inspect the entire mapping.");
             let row_count=usize::try_from(span.div_ceil(16)).unwrap_or(0);
             let row_height = ui.text_style_height(&egui::TextStyle::Monospace) + 2.0;
             egui::ScrollArea::both().id_salt(("core-hex",self.mapping_index,self.window_offset)).show_rows(ui,row_height,row_count,|ui,range| {
@@ -658,9 +833,9 @@ impl CoreView {
     }
     fn disassembly(&mut self, ui: &mut egui::Ui, record: &CoreRecord) {
         ui.label("Decode on demand from captured memory. Decompilation requires an external analysis project and is unavailable here.");
-        ui.horizontal(|ui| {
-            ui.label("Virtual address (hex)");
-            ui.text_edit_singleline(&mut self.code_address);
+        ui.label("Virtual address (hex)");
+        ui.horizontal_wrapped(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut self.code_address).desired_width(200.0));
             if ui
                 .add_enabled(self.job.is_none(), egui::Button::new("Disassemble 4 KiB"))
                 .clicked()
@@ -682,9 +857,9 @@ impl CoreView {
                 }
             }
         });
-        ui.horizontal(|ui| {
-            ui.label("Matching symbol binary");
-            ui.text_edit_singleline(&mut self.symbol_path);
+        ui.label("Matching symbol binary");
+        ui.add(egui::TextEdit::singleline(&mut self.symbol_path).desired_width(f32::INFINITY));
+        ui.horizontal_wrapped(|ui| {
             if ui.add_enabled(self.job.is_none(), egui::Button::new("Load symbols for selected mapping")).clicked() {
                 let mapping = record.core.mappings.get(self.mapping_index).and_then(|region| {
                     record.core.files.iter().find(|file| region.start >= file.start && region.start < file.end)
@@ -710,14 +885,41 @@ impl CoreView {
         if !self.symbol_status.is_empty() {
             ui.label(&self.symbol_status);
         }
-        ui.columns(2,|columns| {
-            if self.functions.is_empty(){columns[0].label("No function symbols loaded. Use an address, or supply the exact mapped binary; a core alone usually has no symbol table.");}
-            egui::ScrollArea::vertical().id_salt("core-functions").show_rows(&mut columns[0],20.0,self.functions.len(),|ui,range| {
-                for index in range {let function=&self.functions[index];if ui.selectable_label(false,format!("{:x} {} ({} octets)",function.address,function.name,function.size)).clicked(){self.code_address=format!("{:x}",function.address);}}
+        ui.add(egui::Label::new("Results are saved in the result directory: disassembly.txt, functions.txt and metadata.json.").wrap());
+        egui::SidePanel::left("core_function_list")
+            .resizable(true)
+            .default_width(220.0)
+            .width_range(160.0..=360.0)
+            .frame(egui::Frame::new().inner_margin(egui::Margin { right: 8, ..Default::default() }))
+            .show_inside(ui, |ui| {
+                if self.functions.is_empty(){ui.add(egui::Label::new("No function symbols loaded. Use an address, or supply the exact mapped binary; a core alone usually has no symbol table.").wrap());}
+                let row_height = ui.text_style_height(&egui::TextStyle::Body) + ui.spacing().item_spacing.y;
+                egui::ScrollArea::vertical().id_salt("core-functions").show_rows(ui,row_height,self.functions.len(),|ui,range| {
+                    for index in range {let function=&self.functions[index];if ui.selectable_label(false,format!("{:x} {} ({} octets)",function.address,function.name,function.size)).clicked(){self.code_address=format!("{:x}",function.address);}}
+                });
             });
-            egui::ScrollArea::both().id_salt("core-code").show(&mut columns[1],|ui| {if self.code.is_empty(){ui.label("Choose a function or address and click Disassemble.");}else{ui.add(egui::Label::new(RichText::new(&self.code).monospace()).extend().selectable(true));}});
-        });
-        ui.label("Results are retained as disassembly.txt, functions.txt and metadata.json; use the result directory control to export them.");
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new())
+            .show_inside(ui, |ui| {
+                egui::ScrollArea::both()
+                    .id_salt("core-code")
+                    .show(ui, |ui| {
+                        if self.code.is_empty() {
+                            ui.add(
+                                egui::Label::new(
+                                    "Choose a function or address and click Disassemble.",
+                                )
+                                .wrap(),
+                            );
+                        } else {
+                            ui.add(
+                                egui::Label::new(RichText::new(&self.code).monospace())
+                                    .extend()
+                                    .selectable(true),
+                            );
+                        }
+                    });
+            });
     }
 }
 fn parse_address(text: &str) -> Result<u64, String> {
@@ -1026,6 +1228,8 @@ mod tests {
         size: egui::Vec2,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
+        let roots = view.roots.clone();
+        let vm_id = view.vm_id.clone();
         ctx.run(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
@@ -1033,7 +1237,8 @@ mod tests {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| view.show(ui, &[], None, false));
+                egui::CentralPanel::default()
+                    .show(ctx, |ui| view.show(ui, &roots, vm_id.as_deref(), false));
             },
         )
     }
@@ -1065,6 +1270,106 @@ mod tests {
     }
 
     #[test]
+    fn sidebar_selection_shows_unfinished_capture_without_old_core_context() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        crate::theme::text_size(&ctx, 24.0);
+        let size = egui::vec2(800.0, 1000.0);
+        let mut fixture = Fixture::new();
+        let directory = fixture.directory.join("runs/waiting/core");
+        fixture.view.acquired.push(AcquiredCore {
+            run_id: "waiting".into(),
+            directory: directory.clone(),
+            file: None,
+            state: antinomie_monitor_core::RunArtifactState::WaitingForRootExit,
+        });
+        let output = settle(&ctx, &mut fixture.view, size);
+        let content = texts(&output);
+        let row = content
+            .iter()
+            .find(|(text, _)| text == "Run waiting")
+            .unwrap()
+            .1;
+        let context = content
+            .iter()
+            .find(|(text, _)| text == "Context")
+            .unwrap()
+            .1;
+        assert!(
+            row.max.x < context.min.x,
+            "capture list stays left of analysis"
+        );
+        assert!(!content.iter().any(|(text, _)| text == "Core file"));
+        click(&ctx, &mut fixture.view, size, row.center());
+        let output = settle(&ctx, &mut fixture.view, size);
+        assert_eq!(fixture.view.selected_directory.as_ref(), Some(&directory));
+        assert!(fixture.view.selected.is_none() && fixture.view.job.is_none());
+        let content = texts(&output);
+        assert!(content
+            .iter()
+            .any(|(text, _)| text.contains("No core file is recorded yet")));
+        assert!(!content.iter().any(|(text, _)| text == "rip"));
+        assert!(
+            fixture.view.records.len() == 1,
+            "waiting selection keeps imported evidence"
+        );
+    }
+
+    #[test]
+    fn import_fields_live_in_dialog_and_cancel_preserves_selection() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        crate::theme::text_size(&ctx, 24.0);
+        let size = egui::vec2(800.0, 1000.0);
+        let mut fixture = Fixture::new();
+        fixture.view.roots = vec![fixture.directory.clone()];
+        let original = fixture.view.selected.as_ref().unwrap().dir.clone();
+        let output = settle(&ctx, &mut fixture.view, size);
+        let content = texts(&output);
+        assert!(!content.iter().any(|(text, _)| text == "Core file"));
+        let import = content
+            .iter()
+            .find(|(text, _)| text.contains("Import core…"))
+            .unwrap()
+            .1
+            .center();
+        click(&ctx, &mut fixture.view, size, import);
+        assert!(fixture.view.import_open);
+        let output = settle(&ctx, &mut fixture.view, size);
+        let content = texts(&output);
+        for label in [
+            "Import process core",
+            "Core file",
+            "Browse…",
+            "Recording folder",
+            "Import core",
+        ] {
+            let rect = content
+                .iter()
+                .find(|(text, _)| text == label)
+                .unwrap_or_else(|| panic!("missing {label}"))
+                .1;
+            assert!(
+                rect.min.x >= 0.0 && rect.max.x <= size.x && rect.max.y <= size.y,
+                "{label} stays reachable"
+            );
+        }
+        let cancel = content
+            .iter()
+            .find(|(text, _)| text == "Cancel")
+            .unwrap()
+            .1
+            .center();
+        click(&ctx, &mut fixture.view, size, cancel);
+        assert!(!fixture.view.import_open && fixture.view.job.is_none());
+        assert_eq!(fixture.view.selected.as_ref().unwrap().dir, original);
+        assert!(
+            fixture.view.code.is_empty(),
+            "opening import dialog does not run analysis"
+        );
+    }
+
+    #[test]
     fn thread_context_and_mapping_controls_render_at_narrow_large_font() {
         for (size, font) in [
             (egui::vec2(1280.0, 900.0), 16.0),
@@ -1089,6 +1394,15 @@ mod tests {
                 assert!(
                     rect.min.x >= 0.0 && rect.max.x <= size.x && rect.max.y <= size.y,
                     "{label} must stay reachable at {size:?}, {font} pt: {rect:?}"
+                );
+            }
+            for (text, rect) in content
+                .iter()
+                .filter(|(text, _)| text == "Copy" || text == egui_phosphor::regular::MEMORY)
+            {
+                assert!(
+                    rect.max.x <= size.x && rect.max.y <= size.y,
+                    "register action {text} stays reachable: {rect:?}"
                 );
             }
             assert!(fixture.view.job.is_none());
@@ -1140,6 +1454,17 @@ mod tests {
         fixture.view.code = "0000000000400000  mov rax, qword ptr fs:[0x0000000000000028]\n0000000000400009  mov qword ptr [rsp+0x0000000000000010], rax".into();
         let output = settle(&ctx, &mut fixture.view, egui::vec2(800.0, 1000.0));
         let content = texts(&output);
+        for label in ["Disassemble 4 KiB", "Load symbols for selected mapping"] {
+            let rect = content
+                .iter()
+                .find(|(text, _)| text == label)
+                .unwrap_or_else(|| panic!("missing {label}"))
+                .1;
+            assert!(
+                rect.max.x <= 800.0 && rect.max.y <= 1000.0,
+                "{label} stays reachable: {rect:?}"
+            );
+        }
         let (_, rect) = content
             .iter()
             .find(|(text, _)| text == &fixture.view.code)
