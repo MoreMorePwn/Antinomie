@@ -6,6 +6,7 @@ use super::listing::{LISTING_MAX_SIZE, ListingWriter};
 use super::tools;
 use super::*;
 use object::{Object, ObjectSegment};
+use std::io::{Read, Seek, SeekFrom};
 use std::{collections::BTreeMap, fs, path::Path, time::Duration};
 
 const GHIDRA_MANAGED: &str = "/opt/antinomie-tools/ghidra/ghidra/support/analyzeHeadless";
@@ -528,6 +529,115 @@ pub fn synthetic_captured_elf(core: &[u8], plan: &SparseCorePlan) -> Result<Vec<
     Ok(image)
 }
 
+/// Read PT_LOAD extents until `bound` captured octets. A larger extent is left
+/// out and named in the note. It is not treated as missing memory.
+fn bounded_core_image(path: &Path, bound: u64) -> Result<(Vec<u8>, String), String> {
+    let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut header = [0u8; 64];
+    file.read_exact(&mut header)
+        .map_err(|error| error.to_string())?;
+    if &header[0..4] != b"\x7fELF" || header[4] != 2 || header[5] != 1 {
+        return Err("sparse core load needs an ELF64 core".into());
+    }
+    let phoff = u64_at(&header, 32)?;
+    let phentsize = u16_at(&header, 54)? as u64;
+    let phnum = u16_at(&header, 56)? as u64;
+    if phentsize < 56 || phnum == 0 || phnum > 4096 || phoff > 1024 * 1024 {
+        return Err("ELF program headers are outside the header bound".into());
+    }
+    file.seek(SeekFrom::Start(phoff))
+        .map_err(|error| error.to_string())?;
+    let mut table = vec![0u8; (phentsize * phnum) as usize];
+    file.read_exact(&mut table)
+        .map_err(|error| error.to_string())?;
+    let mut kept = Vec::new();
+    let mut omitted = Vec::new();
+    let mut kept_size = 0u64;
+    for index in 0..phnum {
+        let at = (index * phentsize) as usize;
+        let kind = u32_at(&table, at)?;
+        if kind != 1 {
+            continue;
+        }
+        let offset = u64_at(&table, at + 8)?;
+        let vaddr = u64_at(&table, at + 16)?;
+        let filesz = u64_at(&table, at + 32)?;
+        if filesz == 0 {
+            continue;
+        }
+        if kept_size.saturating_add(filesz) > bound {
+            omitted.push(format!("0x{vaddr:x}+0x{filesz:x}"));
+            continue;
+        }
+        kept_size += filesz;
+        kept.push((vaddr, offset, filesz));
+    }
+    if kept.is_empty() {
+        return Err("core has no captured PT_LOAD bytes within the decompile bound".into());
+    }
+    let phnum = kept.len();
+    let data_off = 64 + phnum * 56;
+    let mut image = vec![0u8; data_off];
+    image[0..4].copy_from_slice(b"\x7fELF");
+    image[4] = 2;
+    image[5] = 1;
+    image[6] = 1;
+    image[16..18].copy_from_slice(&4u16.to_le_bytes());
+    image[18..20].copy_from_slice(&62u16.to_le_bytes());
+    image[20..24].copy_from_slice(&1u32.to_le_bytes());
+    image[32..40].copy_from_slice(&64u64.to_le_bytes());
+    image[52..54].copy_from_slice(&64u16.to_le_bytes());
+    image[54..56].copy_from_slice(&56u16.to_le_bytes());
+    image[56..58].copy_from_slice(&(phnum as u16).to_le_bytes());
+    let mut cursor = data_off as u64;
+    for (index, (vaddr, offset, filesz)) in kept.iter().copied().enumerate() {
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|error| error.to_string())?;
+        let len = usize::try_from(filesz).map_err(|_| "extent does not fit in memory")?;
+        let mut bytes = vec![0u8; len];
+        file.read_exact(&mut bytes)
+            .map_err(|error| error.to_string())?;
+        let at = 64 + index * 56;
+        image[at..at + 4].copy_from_slice(&1u32.to_le_bytes());
+        image[at + 4..at + 8].copy_from_slice(&5u32.to_le_bytes());
+        image[at + 8..at + 16].copy_from_slice(&cursor.to_le_bytes());
+        image[at + 16..at + 24].copy_from_slice(&vaddr.to_le_bytes());
+        image[at + 24..at + 32].copy_from_slice(&vaddr.to_le_bytes());
+        image[at + 32..at + 40].copy_from_slice(&filesz.to_le_bytes());
+        image[at + 40..at + 48].copy_from_slice(&filesz.to_le_bytes());
+        image[at + 48..at + 56].copy_from_slice(&0x1000u64.to_le_bytes());
+        image.extend_from_slice(&bytes);
+        cursor = cursor.saturating_add(filesz);
+    }
+    let note = if omitted.is_empty() {
+        format!("{phnum} load extents, {kept_size} octets, within the decompile bound")
+    } else {
+        format!(
+            "{phnum} load extents kept ({kept_size} octets); omitted outside the decompile bound: {}",
+            omitted.join(", ")
+        )
+    };
+    Ok((image, note))
+}
+
+fn u16_at(bytes: &[u8], offset: usize) -> Result<u16, String> {
+    let end = offset + 2;
+    let slice = bytes.get(offset..end).ok_or("truncated ELF field")?;
+    Ok(u16::from_le_bytes([slice[0], slice[1]]))
+}
+
+fn u32_at(bytes: &[u8], offset: usize) -> Result<u32, String> {
+    let end = offset + 4;
+    let slice = bytes.get(offset..end).ok_or("truncated ELF field")?;
+    Ok(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+fn u64_at(bytes: &[u8], offset: usize) -> Result<u64, String> {
+    let end = offset + 8;
+    let slice = bytes.get(offset..end).ok_or("truncated ELF field")?;
+    Ok(u64::from_le_bytes(slice.try_into().unwrap()))
+}
+
 const CORE_SCRIPT: &str = r#"// SPDX-License-Identifier: MIT
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileResults;
@@ -587,10 +697,7 @@ pub fn decompile_captured_core(
     if cancel.load(Ordering::Relaxed) {
         return Err("cancelled".into());
     }
-    let core = fs::read(core_path).map_err(|error| error.to_string())?;
-    if core.len() > 64 * 1024 * 1024 {
-        return Err("core exceeds the 64 MiB decompile bound".into());
-    }
+    let (core, bound_note) = bounded_core_image(core_path, 64 * 1024 * 1024)?;
     let plan = sparse_core_plan(&core)?;
     let image = synthetic_captured_elf(&core, &plan)?;
     fs::create_dir_all(work).map_err(|error| error.to_string())?;
@@ -602,6 +709,7 @@ pub fn decompile_captured_core(
         plan.extents.len(),
         plan.unavailable_tails()
     );
+    let plan_note = format!("{plan_note}. {bound_note}");
     fs::write(work.join("sparse-plan.txt"), &plan_note).map_err(|error| error.to_string())?;
     let ghidra = find_ghidra(tools_dir)?;
     let scripts = work.join("ghidra-scripts");
@@ -753,5 +861,65 @@ mod sparse_tests {
                 .any(|window| window == [0, 0, 0, 0] && false)
         );
         assert_eq!(image.len(), 64 + 112 + 6);
+    }
+
+    #[test]
+    fn bounded_read_keeps_virtual_addresses_and_names_omitted_extents() {
+        let dir = std::env::temp_dir().join(format!("antinomie-core-bound-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("partial.core");
+        std::fs::write(&path, elf_core()).unwrap();
+        let (image, note) = super::bounded_core_image(&path, 4).unwrap();
+        assert!(note.contains("0x401000"), "{note}");
+        let loaded = super::sparse_core_plan(&image).unwrap();
+        assert_eq!(loaded.extents.len(), 1);
+        assert_eq!(loaded.extents[0].vaddr, 0x400000);
+        assert_eq!(loaded.extents[0].filesz, 4);
+        let (image, note) = super::bounded_core_image(&path, 64).unwrap();
+        assert!(!note.contains("omitted"), "{note}");
+        let loaded = super::sparse_core_plan(&image).unwrap();
+        assert_eq!(loaded.extents[1].vaddr, 0x401000);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn real_core_from_env_keeps_small_extents_and_names_the_rest() {
+        let Ok(path) = std::env::var("ANTINOMIE_CORE") else {
+            return;
+        };
+        let (image, note) =
+            super::bounded_core_image(std::path::Path::new(&path), 64 * 1024 * 1024).unwrap();
+        assert!(image.len() < 64 * 1024 * 1024, "{note}");
+        let plan = super::sparse_core_plan(&image).unwrap();
+        assert!(
+            plan.extents.iter().any(|extent| extent.vaddr == 0),
+            "{note}"
+        );
+        assert!(note.contains("omitted"), "{note}");
+        let _ = std::fs::write("/tmp/antinomie-core-bound.txt", &note);
+    }
+
+    #[test]
+    fn ghidra_decompiles_real_core_when_requested() {
+        if std::env::var_os("ANTINOMIE_GHIDRA").is_none() {
+            return;
+        }
+        let path = std::env::var("ANTINOMIE_CORE").expect("ANTINOMIE_CORE");
+        let work = std::env::temp_dir().join("antinomie-ghidra-accept");
+        let _ = std::fs::remove_dir_all(&work);
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let text = super::decompile_captured_core(
+            std::path::Path::new(&path),
+            &work,
+            std::path::Path::new("/tmp/no-antinomie-tools"),
+            &cancel,
+        )
+        .unwrap_or_else(|error| panic!("ghidra failed: {error}"));
+        assert!(
+            text.contains("@@ANTINOMIE-BASE"),
+            "export did not report a base: {}",
+            text.chars().take(400).collect::<String>()
+        );
+        let _ = std::fs::write("/tmp/antinomie-ghidra-export.txt", &text);
     }
 }

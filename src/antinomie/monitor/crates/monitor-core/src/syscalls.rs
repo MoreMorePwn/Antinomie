@@ -45,6 +45,10 @@ fn inventory() -> &'static [SyscallInfo] {
         .syscalls
 }
 
+pub fn all() -> &'static [SyscallInfo] {
+    inventory()
+}
+
 pub fn syscall(number: u64) -> Option<&'static SyscallInfo> {
     let table = inventory();
     table

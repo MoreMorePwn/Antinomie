@@ -74,6 +74,18 @@ pub(crate) fn guide(ctx: &egui::Context) {
         .resizable(true)
         .show(ctx, |ui| {
             ui.label("Use a comparison when you know the field. A bare word searches the row.");
+            ui.label(
+                "This is a native subset with the fields below. It is not a Wireshark display filter.",
+            );
+            let query_id = egui::Id::new("filter-guide-query");
+            let mut query = ui.ctx().data(|data| data.get_temp::<String>(query_id).unwrap_or_default());
+            ui.add(
+                egui::TextEdit::singleline(&mut query)
+                    .hint_text("Search fields, operators, schema argument names, syscall names")
+                    .desired_width(f32::INFINITY),
+            );
+            let needle = query.to_lowercase();
+            ui.ctx().data_mut(|data| data.insert_temp(query_id, query));
             ui.add_space(6.0);
             ui.strong("Syscall rows");
             for line in [
@@ -102,39 +114,130 @@ pub(crate) fn guide(ctx: &egui::Context) {
                     }
                 })
                 .body(|mut body| {
-                    for (field, kind, meaning) in KEYWORDS {
+                    for (field, kind, meaning) in guide_rows() {
+                        if !needle.is_empty()
+                            && !field.to_lowercase().contains(&needle)
+                            && !kind.to_lowercase().contains(&needle)
+                            && !meaning.to_lowercase().contains(&needle)
+                        {
+                            continue;
+                        }
                         body.row(22.0, |mut row| {
                             row.col(|ui| {
-                                ui.monospace(*field);
+                                ui.monospace(field);
                             });
                             row.col(|ui| {
-                                ui.label(*kind);
+                                ui.label(kind);
                             });
                             row.col(|ui| {
-                                ui.label(*meaning);
+                                ui.label(meaning);
                             });
                         });
                     }
                 });
             ui.add_space(8.0);
-            ui.strong("Packets");
+            ui.strong("Examples");
             for line in [
+                "syscall.num == 9 && args.prot == 7",
+                "syscall.name == execve",
                 "ip.src == 10.0.2.15 && tcp.dstport == 80",
-                "port 53",
-                "http",
-                "dns",
-                "frame contains \"GET\"",
+                "http.request.method == \"GET\"",
+                "dns.qry.name contains \"example\"",
             ] {
-                ui.monospace(line);
+                if needle.is_empty() || line.to_lowercase().contains(&needle) {
+                    ui.monospace(line);
+                }
             }
-            ui.add_space(4.0);
-            ui.label("Also: ip.dst, tcp.srcport, udp.port, frame.number, frame.len, proto, and a bare protocol name.");
         });
     ctx.data_mut(|data| data.insert_temp(id, open));
 }
 
 pub(crate) fn open_guide(ctx: &egui::Context) {
     ctx.data_mut(|data| data.insert_temp(egui::Id::new("filter-guide-open"), true));
+}
+
+fn guide_rows() -> &'static [(String, String, String)] {
+    use std::collections::BTreeSet;
+    use std::sync::OnceLock;
+    static ROWS: OnceLock<Vec<(String, String, String)>> = OnceLock::new();
+    ROWS.get_or_init(|| {
+        let mut rows = Vec::new();
+        for (field, kind, meaning) in KEYWORDS {
+            rows.push(((*field).into(), (*kind).into(), (*meaning).into()));
+        }
+        for (field, meaning) in [
+            ("==", "Equal. Text compare is case-sensitive on syscall rows."),
+            ("!=", "Not equal."),
+            ("<", "Less than. Numbers only."),
+            ("<=", "Less than or equal. Numbers only."),
+            (">", "Greater than. Numbers only."),
+            (">=", "Greater than or equal. Numbers only."),
+            ("&&", "And. Binds looser than a comparison."),
+            ("||", "Or. Binds looser than &&."),
+            ("!", "Not."),
+            ("contains", "Substring on a text field."),
+            ("in", "Membership. Example: syscall.num in {9, 10}."),
+            ("exists", "The field was recorded."),
+            ("missing", "The field was not recorded."),
+            ("&", "Bit test. Example: args.prot & 7 == 7."),
+        ] {
+            rows.push(((*field).into(), "operator".into(), (*meaning).into()));
+        }
+        for (field, meaning) in [
+            ("ip.src", "Source IP. Equality only."),
+            ("ip.dst", "Destination IP. Equality only."),
+            ("ip.addr", "Either IP endpoint."),
+            ("tcp.srcport", "TCP source port."),
+            ("tcp.dstport", "TCP destination port."),
+            ("udp.port", "Either UDP port."),
+            ("frame.len", "Captured frame length."),
+            ("http.request", "Bare field: decoded HTTP request line, not a status line."),
+            (
+                "http.request.method",
+                "Method token of the decoded HTTP request line.",
+            ),
+            (
+                "http.request.uri",
+                "Request-target token of the decoded HTTP request line.",
+            ),
+            (
+                "dns.qry.name",
+                "Name from a decoded query TYPE name or response TYPE name summary. A bare field means the packet is DNS.",
+            ),
+            ("frame contains", "Substring of the packet summary. Not a field comparison."),
+        ] {
+            rows.push(((*field).into(), "packet".into(), (*meaning).into()));
+        }
+        let mut arguments = BTreeSet::new();
+        let mut names = BTreeSet::new();
+        for syscall in antinomie_monitor_core::syscalls::all() {
+            names.insert(syscall.name.clone());
+            for argument in &syscall.arguments {
+                arguments.insert(argument.name.clone());
+            }
+        }
+        for name in arguments {
+            rows.push((
+                format!("args.{name}"),
+                "schema argument".into(),
+                "Argument name from protocol/native-syscalls.json.".into(),
+            ));
+        }
+        for name in names {
+            rows.push((
+                name,
+                "syscall name".into(),
+                "syscall.name value from the native schema.".into(),
+            ));
+        }
+        rows
+    })
+    .as_slice()
+}
+
+#[cfg(test)]
+fn guide_has(needle: &str) -> bool {
+    guide_rows().iter().any(|(field, _, _)| field == needle)
 }
 
 pub(crate) struct Compiled {
@@ -1054,6 +1157,14 @@ fn field(invocation: &InvocationSummary, name: &str) -> Result<Resolved, String>
 mod tests {
     use super::*;
     use antinomie_monitor_core::{EventSummary, FieldSummary, InvocationSummary};
+
+    #[test]
+    fn help_lists_schema_argument_names() {
+        assert!(guide_has("args.filename"));
+        assert!(guide_has("execve"));
+        assert!(guide_has("http.request.method"));
+        assert!(guide_has("dns.qry.name"));
+    }
 
     fn call(nr: u64, name: &str, args: [u64; 6]) -> InvocationSummary {
         InvocationSummary {
