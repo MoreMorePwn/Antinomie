@@ -112,6 +112,7 @@ pub(crate) fn show(ui: &mut egui::Ui, snapshot: &Snapshot, selected: Option<&str
             let active = snapshot.active_vm.as_deref() == Some(vm.id.as_str());
             ui.label(RichText::new(&vm.name).strong());
             indicator(ui, state_label(snapshot, active), state_color(snapshot, active));
+            status_tiles(ui, snapshot, vm, active);
             let base = crate::app::selected_base(snapshot, vm.base_identity.as_deref());
             row(ui, "Base", base.map_or("Unavailable", |base| base.label.as_str()));
             if let Some(revision) = base.and_then(|base| base.revision) {
@@ -187,6 +188,105 @@ pub(crate) fn show(ui: &mut egui::Ui, snapshot: &Snapshot, selected: Option<&str
                 ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
             }
         });
+}
+
+fn status_tiles(ui: &mut egui::Ui, snapshot: &Snapshot, vm: &VmConfig, active: bool) {
+    let mut tiles = vec![
+        (
+            "State",
+            state_label(snapshot, active).to_string(),
+            state_color(snapshot, active),
+        ),
+        ("vCPU", vm.cpus.to_string(), theme::info()),
+        (
+            "RAM",
+            format!("{} MiB", vm.ram_mib),
+            theme::value(crate::theme::ValueKind::Pointer),
+        ),
+        (
+            "Disk",
+            format!("{} GiB", vm.disk_gib),
+            theme::value(crate::theme::ValueKind::Number),
+        ),
+    ];
+    if active {
+        let cpu = snapshot
+            .vm_resources
+            .as_ref()
+            .filter(|resources| resources.vm_id == vm.id)
+            .map(|resources| {
+                cpu_value(resources.qemu_cpu_percent)
+                    .map_or_else(|| "Unavailable".into(), |value| format!("{value:.1}%"))
+            })
+            .unwrap_or_else(|| "Unavailable".into());
+        let color = cpu_tile_color(&cpu);
+        tiles.push(("QEMU CPU", cpu, color));
+    }
+    let across = if ui.available_width() < 560.0 {
+        2
+    } else {
+        tiles.len()
+    };
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let width = ((ui.available_width() - 8.0 * (across.saturating_sub(1) as f32))
+            / across as f32)
+            .clamp(96.0, 240.0);
+        for (title, value, color) in tiles {
+            tile(ui, width, title, &value, color);
+        }
+    });
+}
+
+fn cpu_tile_color(text: &str) -> egui::Color32 {
+    let Some(percent) = text
+        .strip_suffix('%')
+        .and_then(|text| text.parse::<f64>().ok())
+    else {
+        return theme::muted();
+    };
+    if percent >= 90.0 {
+        theme::error()
+    } else if percent >= 50.0 {
+        theme::warn()
+    } else {
+        theme::good()
+    }
+}
+
+fn tile(ui: &mut egui::Ui, width: f32, title: &str, value: &str, color: egui::Color32) {
+    let fill = egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 36);
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, 0.0),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            egui::Frame::new()
+                .fill(fill)
+                .stroke(egui::Stroke::new(1.0_f32, color))
+                .inner_margin(egui::Margin::same(8))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let (rect, _) = ui.allocate_exact_size(
+                            egui::vec2(4.0, ui.text_style_height(&egui::TextStyle::Heading)),
+                            egui::Sense::hover(),
+                        );
+                        ui.painter().rect_filled(rect, 2.0, color);
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new(title).small().color(theme::muted()));
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(value)
+                                        .strong()
+                                        .color(color)
+                                        .size(ui.text_style_height(&egui::TextStyle::Heading)),
+                                )
+                                .wrap(),
+                            );
+                        });
+                    });
+                });
+        },
+    );
 }
 
 fn indicator(ui: &mut egui::Ui, label: &str, color: egui::Color32) {

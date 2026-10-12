@@ -73,6 +73,10 @@ struct PacketList {
 pub(crate) struct NetworkView {
     list: PacketList,
     filter: String,
+    /// Last filter that parsed. Packet rows are built from this, not from an
+    /// invalid expression still sitting in the box.
+    applied_filter: String,
+    filter_error: Option<String>,
     /// Captures of the selected VM, newest first, and the current and retained
     /// recording folders they were listed from.
     captures: Vec<NetworkCapture>,
@@ -128,35 +132,70 @@ enum Filter {
     Protocol(String),
     /// Any other text: found in Source, Destination, Protocol or Info.
     Text(String),
+    And(Box<Filter>, Box<Filter>),
+    Or(Box<Filter>, Box<Filter>),
+    Not(Box<Filter>),
+    /// `frame contains "GET"`.
+    Contains(String),
+    /// `ip.src == 10.0.2.15`, `tcp.dstport == 80`, `frame.number > 10`.
+    Compare {
+        field: String,
+        op: Cmp,
+        value: String,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Cmp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
 }
 
 impl Filter {
-    fn parse(text: &str) -> Filter {
+    fn parse(text: &str) -> Result<Filter, String> {
         let text = text.trim();
         if text.is_empty() {
-            return Filter::All;
+            return Ok(Filter::All);
+        }
+        let display = is_display_filter(text);
+        if display {
+            if let Some(filter) = parse_display(text) {
+                if let Some(field) = unknown_display_field(&filter) {
+                    return Err(format!("Unknown field: {field}"));
+                }
+                return Ok(filter);
+            }
         }
         let lower = text.to_lowercase();
         let argument = |prefix: &str| lower.strip_prefix(prefix).map(str::trim);
         if let Some(port) = argument("port ").and_then(|port| port.parse().ok()) {
-            return Filter::Port(port);
+            return Ok(Filter::Port(port));
         }
         if let Some(address) = argument("ip ")
             .or_else(|| argument("host "))
             .and_then(|address| address.parse().ok())
         {
-            return Filter::Address(address);
+            return Ok(Filter::Address(address));
         }
         if let Some(protocol) = argument("proto ") {
-            return Filter::Protocol(protocol.to_owned());
+            return Ok(Filter::Protocol(protocol.to_owned()));
         }
         if let Ok(endpoint) = text.parse::<SocketAddr>() {
-            return Filter::Endpoint(endpoint.ip(), endpoint.port());
+            return Ok(Filter::Endpoint(endpoint.ip(), endpoint.port()));
         }
         if let Ok(address) = text.parse() {
-            return Filter::Address(address);
+            return Ok(Filter::Address(address));
         }
-        Filter::Text(lower)
+        // A display expression that did not parse must not become a text search.
+        // Shorthand port, address, and protocol filters above still apply.
+        if display {
+            return Err(format!("Invalid display filter: {text}"));
+        }
+        Ok(Filter::Text(lower))
     }
 
     fn matches(&self, packet: &NetworkPacket) -> bool {
@@ -170,7 +209,15 @@ impl Filter {
                 (packet.src_ip == Some(*address) && packet.src_port == Some(*port))
                     || (packet.dst_ip == Some(*address) && packet.dst_port == Some(*port))
             }
-            Filter::Protocol(protocol) => packet.protocol.eq_ignore_ascii_case(protocol),
+            Filter::Protocol(protocol) => packet
+                .protocol
+                .to_lowercase()
+                .contains(&protocol.to_lowercase()),
+            Filter::And(left, right) => left.matches(packet) && right.matches(packet),
+            Filter::Or(left, right) => left.matches(packet) || right.matches(packet),
+            Filter::Not(inner) => !inner.matches(packet),
+            Filter::Contains(needle) => packet_text(packet).contains(&needle.to_lowercase()),
+            Filter::Compare { field, op, value } => compare_field(packet, field, *op, value),
             Filter::Text(needle) => [
                 &packet.source,
                 &packet.destination,
@@ -180,6 +227,404 @@ impl Filter {
             .iter()
             .any(|text| text.to_lowercase().contains(needle)),
         }
+    }
+}
+
+fn is_display_filter(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("==")
+        || lower.contains("!=")
+        || lower.contains("&&")
+        || lower.contains("||")
+        || lower.contains(" contains ")
+        || lower.split_whitespace().any(|word| word.contains('.'))
+        || matches!(
+            lower.as_str(),
+            "http" | "dns" | "tls" | "tcp" | "udp" | "arp" | "icmp" | "dhcp"
+        )
+}
+
+fn parse_display(text: &str) -> Option<Filter> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Some(Filter::All);
+    }
+    if let Some((left, right)) = split_top(text, "||") {
+        return Some(Filter::Or(
+            Box::new(parse_display(left)?),
+            Box::new(parse_display(right)?),
+        ));
+    }
+    if let Some((left, right)) = split_top(text, "&&") {
+        return Some(Filter::And(
+            Box::new(parse_display(left)?),
+            Box::new(parse_display(right)?),
+        ));
+    }
+    if let Some(inner) = text.strip_prefix('!').map(str::trim) {
+        if !inner.starts_with('=') {
+            return Some(Filter::Not(Box::new(parse_display(inner)?)));
+        }
+    }
+    if let Some(inner) = strip_parens(text) {
+        return parse_display(inner);
+    }
+    let lower = text.to_lowercase();
+    if let Some(value) = lower.strip_prefix("frame contains ") {
+        let value = value.trim().trim_matches('"').trim_matches('\'');
+        return Some(Filter::Contains(value.to_owned()));
+    }
+    if matches!(
+        lower.as_str(),
+        "http" | "dns" | "tls" | "tcp" | "udp" | "arp" | "icmp" | "dhcp"
+    ) {
+        // Same column substring as `proto icmp` matching ICMPv6.
+        return Some(Filter::Protocol(lower));
+    }
+    if matches!(
+        lower.as_str(),
+        "http.request"
+            | "dns.qry.name"
+            | "http.host"
+            | "tcp.flags.syn"
+            | "tcp.flags.ack"
+            | "tcp.flags.fin"
+            | "tcp.flags.reset"
+            | "tcp.flags.push"
+    ) {
+        return Some(Filter::Compare {
+            field: lower,
+            op: Cmp::Eq,
+            value: String::new(),
+        });
+    }
+    let (field, op, value) = if let Some((field, value)) = lower.split_once("==") {
+        (field, Cmp::Eq, value)
+    } else if let Some((field, value)) = lower.split_once("!=") {
+        (field, Cmp::Ne, value)
+    } else if let Some((field, value)) = lower.split_once(">=") {
+        (field, Cmp::Ge, value)
+    } else if let Some((field, value)) = lower.split_once("<=") {
+        (field, Cmp::Le, value)
+    } else if let Some((field, value)) = lower.split_once('>') {
+        (field, Cmp::Gt, value)
+    } else if let Some((field, value)) = lower.split_once('<') {
+        (field, Cmp::Lt, value)
+    } else {
+        return None;
+    };
+    let field = field.trim();
+    let value = value.trim().trim_matches('"');
+    // `frame.len >=` is an unfinished comparison, not a text search.
+    if field.is_empty() || value.is_empty() {
+        return None;
+    }
+    Some(Filter::Compare {
+        field: field.to_owned(),
+        op,
+        value: value.to_owned(),
+    })
+}
+
+fn known_display_field(field: &str) -> bool {
+    matches!(
+        field,
+        "ip.src"
+            | "ip.dst"
+            | "ip.addr"
+            | "ip.host"
+            | "tcp.srcport"
+            | "udp.srcport"
+            | "tcp.dstport"
+            | "udp.dstport"
+            | "tcp.port"
+            | "udp.port"
+            | "frame.number"
+            | "frame.num"
+            | "frame.len"
+            | "frame.protocol"
+            | "proto"
+            | "ipv6.addr"
+            | "tcp.flags.syn"
+            | "tcp.flags.ack"
+            | "tcp.flags.fin"
+            | "tcp.flags.reset"
+            | "tcp.flags.push"
+            | "http.request"
+            | "http.host"
+            | "dns.qry.name"
+            | "frame.info"
+    )
+}
+
+fn unknown_display_field(filter: &Filter) -> Option<&str> {
+    match filter {
+        Filter::Compare { field, .. } if !known_display_field(field) => Some(field.as_str()),
+        Filter::And(left, right) | Filter::Or(left, right) => {
+            unknown_display_field(left).or_else(|| unknown_display_field(right))
+        }
+        Filter::Not(inner) => unknown_display_field(inner),
+        _ => None,
+    }
+}
+
+fn strip_parens(text: &str) -> Option<&str> {
+    if !text.starts_with('(') || !text.ends_with(')') {
+        return None;
+    }
+    let mut depth = 0i32;
+    for (index, byte) in text.bytes().enumerate() {
+        if byte == b'(' {
+            depth += 1;
+        } else if byte == b')' {
+            depth -= 1;
+            if depth == 0 && index + 1 != text.len() {
+                return None;
+            }
+        }
+    }
+    (depth == 0).then_some(text[1..text.len() - 1].trim())
+}
+
+fn split_top<'a>(text: &'a str, needle: &str) -> Option<(&'a str, &'a str)> {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    let mut quoted = false;
+    let mut depth = 0i32;
+    while index + needle.len() <= bytes.len() {
+        let byte = bytes[index];
+        if byte == b'"' {
+            quoted = !quoted;
+        }
+        if !quoted {
+            if byte == b'(' {
+                depth += 1;
+            } else if byte == b')' {
+                depth -= 1;
+            } else if depth == 0 && text[index..].starts_with(needle) {
+                return Some((text[..index].trim(), text[index + needle.len()..].trim()));
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
+// monitor-core exports TCP_FIN, TCP_SYN and TCP_RST. ACK (0x10) and PSH (0x08)
+// are the header bits `transport` reads; they are not named exports.
+fn tcp_flag_matches(is_tcp: bool, flags: Option<u8>, bit: u8, op: Cmp, value: &str) -> bool {
+    let Some(flags) = flags.filter(|_| is_tcp) else {
+        return false;
+    };
+    let set = flags & bit != 0;
+    match op {
+        Cmp::Eq if value.is_empty() || value == "1" => set,
+        Cmp::Eq if value == "0" => !set,
+        Cmp::Ne if value.is_empty() || value == "1" => !set,
+        Cmp::Ne if value == "0" => set,
+        _ => false,
+    }
+}
+
+fn ipv6_addr_matches(packet: &NetworkPacket, op: Cmp, value: &str) -> bool {
+    let Ok(want) = value.parse::<IpAddr>() else {
+        return false;
+    };
+    let ipv6 = |ip: Option<IpAddr>| matches!(ip, Some(IpAddr::V6(_)));
+    match op {
+        Cmp::Eq => {
+            matches!(want, IpAddr::V6(_))
+                && (packet.src_ip == Some(want) || packet.dst_ip == Some(want))
+        }
+        Cmp::Ne => {
+            ipv6(packet.src_ip)
+                && ipv6(packet.dst_ip)
+                && packet.src_ip != Some(want)
+                && packet.dst_ip != Some(want)
+        }
+        _ => false,
+    }
+}
+
+/// `Host:` as its own header token. A longer word such as `Ghost:` or
+/// `localhost:` does not count, and the host value is the following token.
+fn info_host_token(info: &str, host: Option<&str>) -> bool {
+    let lower = info.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let needle = "host:";
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find(needle) {
+        let at = from + rel;
+        let left_ok = at == 0
+            || !matches!(
+                bytes[at - 1],
+                b'0'..=b'9' | b'a'..=b'z' | b'_' | b'-'
+            );
+        if left_ok {
+            match host {
+                None => return true,
+                Some(host) => {
+                    let token = lower[at + needle.len()..]
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("");
+                    if token.eq_ignore_ascii_case(host) {
+                        return true;
+                    }
+                }
+            }
+        }
+        from = at + needle.len();
+    }
+    false
+}
+
+fn http_host_matches(packet: &NetworkPacket, op: Cmp, value: &str) -> bool {
+    if !packet.protocol.eq_ignore_ascii_case("http") {
+        return false;
+    }
+    match op {
+        Cmp::Eq if value.is_empty() => info_host_token(&packet.info, None),
+        Cmp::Eq => info_host_token(&packet.info, Some(value)),
+        Cmp::Ne if value.is_empty() => !info_host_token(&packet.info, None),
+        Cmp::Ne => !info_host_token(&packet.info, Some(value)),
+        _ => false,
+    }
+}
+
+fn info_starts_with_http_method(info: &str) -> bool {
+    info.split_whitespace().next().is_some_and(|word| {
+        matches!(
+            word.to_ascii_uppercase().as_str(),
+            "GET" | "POST" | "PUT" | "HEAD" | "PATCH" | "DELETE" | "OPTIONS"
+        )
+    })
+}
+
+fn packet_text(packet: &NetworkPacket) -> String {
+    format!(
+        "{} {} {} {}",
+        packet.source, packet.destination, packet.protocol, packet.info
+    )
+    .to_lowercase()
+}
+
+fn compare_field(packet: &NetworkPacket, field: &str, op: Cmp, value: &str) -> bool {
+    let number = |text: &str| text.parse::<u64>().ok();
+    let address = |text: &str| text.parse::<IpAddr>().ok();
+    let eq_text = |left: &str| match op {
+        Cmp::Eq => left.eq_ignore_ascii_case(value),
+        Cmp::Ne => !left.eq_ignore_ascii_case(value),
+        Cmp::Lt | Cmp::Le | Cmp::Gt | Cmp::Ge => false,
+    };
+    let eq_num = |left: u64| match (op, number(value)) {
+        (Cmp::Eq, Some(right)) => left == right,
+        (Cmp::Ne, Some(right)) => left != right,
+        (Cmp::Lt, Some(right)) => left < right,
+        (Cmp::Le, Some(right)) => left <= right,
+        (Cmp::Gt, Some(right)) => left > right,
+        (Cmp::Ge, Some(right)) => left >= right,
+        _ => false,
+    };
+    let same_ip = |ip: IpAddr| match (op, address(value)) {
+        (Cmp::Eq, Some(want)) => ip == want,
+        (Cmp::Ne, Some(want)) => ip != want,
+        _ => false,
+    };
+    let either_ip = |packet: &NetworkPacket| match (op, address(value)) {
+        (Cmp::Eq, Some(want)) => packet.src_ip == Some(want) || packet.dst_ip == Some(want),
+        // Neither endpoint is the address. A missing side is not that address.
+        (Cmp::Ne, Some(want)) => packet.src_ip != Some(want) && packet.dst_ip != Some(want),
+        _ => false,
+    };
+    let transport = |name: &str| {
+        packet.protocol.eq_ignore_ascii_case(name)
+            || packet
+                .protocol
+                .to_ascii_lowercase()
+                .starts_with(&format!("{name} "))
+    };
+    match field {
+        "ip.src" => packet.src_ip.is_some_and(same_ip),
+        "ip.dst" => packet.dst_ip.is_some_and(same_ip),
+        "ip.addr" | "ip.host" => either_ip(packet),
+        "tcp.srcport" => {
+            transport("tcp") && packet.src_port.is_some_and(|port| eq_num(u64::from(port)))
+        }
+        "udp.srcport" => {
+            transport("udp") && packet.src_port.is_some_and(|port| eq_num(u64::from(port)))
+        }
+        "tcp.dstport" => {
+            transport("tcp") && packet.dst_port.is_some_and(|port| eq_num(u64::from(port)))
+        }
+        "udp.dstport" => {
+            transport("udp") && packet.dst_port.is_some_and(|port| eq_num(u64::from(port)))
+        }
+        "tcp.port" => {
+            transport("tcp")
+                && (packet.src_port.is_some_and(|port| eq_num(u64::from(port)))
+                    || packet.dst_port.is_some_and(|port| eq_num(u64::from(port))))
+        }
+        "udp.port" => {
+            transport("udp")
+                && (packet.src_port.is_some_and(|port| eq_num(u64::from(port)))
+                    || packet.dst_port.is_some_and(|port| eq_num(u64::from(port))))
+        }
+        "frame.number" | "frame.num" => eq_num(packet.number),
+        "frame.len" => eq_num(u64::from(packet.length)),
+        "frame.protocol" | "proto" => eq_text(&packet.protocol),
+        "http.request" => {
+            // Bare field: an HTTP request line, not a status line and not an
+            // equality check of the whole Info column.
+            let request = packet.protocol.eq_ignore_ascii_case("http")
+                && info_starts_with_http_method(&packet.info);
+            match op {
+                Cmp::Eq if value.is_empty() => request,
+                Cmp::Ne if value.is_empty() => !request,
+                _ => false,
+            }
+        }
+        "dns.qry.name" => {
+            // Bare field: the Protocol column is DNS. A value is not compared
+            // against packet.info; this summary has no query-name field.
+            let dns = packet.protocol.eq_ignore_ascii_case("dns");
+            match op {
+                Cmp::Eq if value.is_empty() => dns,
+                Cmp::Ne if value.is_empty() => !dns,
+                _ => false,
+            }
+        }
+        "tcp.flags.syn" => tcp_flag_matches(
+            transport("tcp"),
+            packet.tcp_flags,
+            network::TCP_SYN,
+            op,
+            value,
+        ),
+        "tcp.flags.ack" => tcp_flag_matches(transport("tcp"), packet.tcp_flags, 0x10, op, value),
+        "tcp.flags.fin" => tcp_flag_matches(
+            transport("tcp"),
+            packet.tcp_flags,
+            network::TCP_FIN,
+            op,
+            value,
+        ),
+        "tcp.flags.reset" => tcp_flag_matches(
+            transport("tcp"),
+            packet.tcp_flags,
+            network::TCP_RST,
+            op,
+            value,
+        ),
+        "tcp.flags.push" => tcp_flag_matches(transport("tcp"), packet.tcp_flags, 0x08, op, value),
+        "ipv6.addr" => ipv6_addr_matches(packet, op, value),
+        "http.host" => http_host_matches(packet, op, value),
+        "frame.info" => match op {
+            Cmp::Eq => packet.info.eq_ignore_ascii_case(value),
+            Cmp::Ne => !packet.info.eq_ignore_ascii_case(value),
+            _ => packet.info.to_lowercase().contains(&value.to_lowercase()),
+        },
+        _ => false,
     }
 }
 
@@ -312,7 +757,9 @@ impl PacketList {
                 0
             }
         };
-        let parsed = Filter::parse(filter);
+        let Ok(parsed) = Filter::parse(filter) else {
+            return;
+        };
         let packets = &self.packets;
         self.rows
             .extend((done..packets.len()).filter(|&i| parsed.matches(&packets[i])));
@@ -333,6 +780,28 @@ impl NetworkView {
         if self.list.path != path {
             self.list = PacketList::new(path);
         }
+    }
+
+    pub(crate) fn loaded_packets(&self) -> &[antinomie_monitor_core::network::NetworkPacket] {
+        &self.list.packets
+    }
+
+    pub(crate) fn loaded_path(&self) -> Option<&Path> {
+        self.list.path.as_deref()
+    }
+
+    /// Keep the last valid filter. A display expression that does not parse,
+    /// including an unknown dotted field, does not become a text search.
+    fn apply_filter(&mut self) {
+        let text = self.filter.trim();
+        match Filter::parse(text) {
+            Ok(_) => {
+                self.applied_filter = text.to_owned();
+                self.filter_error = None;
+            }
+            Err(error) => self.filter_error = Some(error),
+        }
+        self.list.filter_rows(&self.applied_filter);
     }
 
     fn scan(&mut self, recordings: Option<&Path>, recording_roots: &[PathBuf]) {
@@ -378,7 +847,7 @@ impl NetworkView {
         if active.is_some() {
             ui.ctx().request_repaint_after(Duration::from_secs(1));
         }
-        self.list.filter_rows(&self.filter);
+        self.apply_filter();
 
         let mut action = None;
         self.toolbar(ui, is_live, &cx);
@@ -396,7 +865,10 @@ impl NetworkView {
                 });
         }
         egui::CentralPanel::default()
-            .frame(egui::Frame::new())
+            .frame(egui::Frame::new().inner_margin(egui::Margin {
+                left: 10,
+                ..Default::default()
+            }))
             .show_inside(ui, |ui| self.packets(ui, is_live, &cx));
         action
     }
@@ -439,24 +911,6 @@ impl NetworkView {
                 }
             }
             ui.separator();
-            ui.label(RichText::new(egui_phosphor::regular::FUNNEL).color(theme::muted()));
-            let width = (ui.available_width() * 0.4).clamp(180.0, 320.0);
-            ui.add(
-                egui::TextEdit::singleline(&mut self.filter)
-                    .hint_text("Filter packets")
-                    .margin(theme::TEXT_EDIT_MARGIN)
-                    .desired_width(width),
-            )
-            .on_hover_text(
-                "port N: either port\nip ADDRESS: either address\n\
-                 ADDRESS:PORT: that endpoint, either direction\n\
-                 proto NAME: the Protocol column\nOther text: found in any column\n\
-                 Click an address, port or protocol in the list to filter by it.",
-            );
-            if let Some(filter) = self.quick_filters(ui) {
-                self.filter = filter;
-            }
-            ui.separator();
             ui.menu_button(
                 format!("{} Colors", egui_phosphor::regular::PALETTE),
                 |ui| {
@@ -475,20 +929,50 @@ impl NetworkView {
             if let Some(path) = self.list.path.clone() {
                 self.wireshark_button(ui, &path, is_live);
             }
+            if let Some(filter) = self.quick_filters(ui) {
+                self.filter = filter;
+            }
+            ui.separator();
+            ui.label(RichText::new(egui_phosphor::regular::FUNNEL).color(theme::muted()));
+            let width = ui.available_width().max(180.0);
+            ui.add(
+                egui::TextEdit::singleline(&mut self.filter)
+                    .hint_text("Filter packets")
+                    .margin(theme::TEXT_EDIT_MARGIN)
+                    .desired_width(width),
+            )
+            .on_hover_text(
+                "port N: either port\nip ADDRESS: either address\n\
+                 ADDRESS:PORT: that endpoint, either direction\n\
+                 proto NAME: the Protocol column\n\
+                 ip.src == 10.0.2.15 && tcp.dstport == 80\n\
+                 ip.dst  tcp.srcport  tcp.dstport  udp.port  frame.number  frame.len\n\
+                 http  dns  tls  tcp  udp  arp  icmp  dhcp\n\
+                 frame contains \"GET\"\n\
+                 == != && || !\n\
+                 Other text: found in any column.",
+            );
         });
+        if let Some(error) = &self.filter_error {
+            ui.colored_label(theme::warn(), error);
+        }
+        let shown_filter = if self.filter_error.is_some() {
+            self.applied_filter.trim().to_owned()
+        } else {
+            self.filter.trim().to_owned()
+        };
         let total = self.list.packets.len();
-        if !self.filter.trim().is_empty() || cx.pending {
+        if !shown_filter.is_empty() || cx.pending {
             ui.horizontal_wrapped(|ui| {
                 if cx.pending {
                     ui.add(egui::Spinner::new());
                     ui.colored_label(theme::muted(), "Waiting for the VM...");
                 }
-                if !self.filter.trim().is_empty() {
+                if !shown_filter.is_empty() {
                     ui.colored_label(
                         theme::blue(),
                         format!(
-                            "Filter {}: {} of {total} packets",
-                            self.filter.trim(),
+                            "Filter {shown_filter}: {} of {total} packets",
                             self.list.rows.len()
                         ),
                     );
@@ -728,7 +1212,6 @@ impl NetworkView {
                     &path.with_extension("metadata"),
                     &path.file_name().unwrap_or_default().to_string_lossy(),
                 ));
-                crate::evidence::controls(ui, &path.with_extension("metadata"));
                 if ui.button("Open PCAP directory").clicked() {
                     if let Some(parent) = path.parent() {
                         crate::evidence::reveal(ui.ctx(), parent);
@@ -1512,6 +1995,10 @@ pub(crate) fn format_date(seconds: u64) -> String {
 mod tests {
     use super::*;
 
+    fn ok_filter(text: &str) -> Filter {
+        Filter::parse(text).unwrap_or_else(|error| panic!("{text}: {error}"))
+    }
+
     fn packet(protocol: &str, source: &str, destination: &str) -> NetworkPacket {
         let parse = |text: &str| -> (Option<IpAddr>, Option<u16>) {
             match text.parse::<SocketAddr>() {
@@ -1568,7 +2055,7 @@ mod tests {
         let v6 = packet("UDP", "[fe80::1]:546", "[ff02::1:2]:547");
         let all = [&dns, &http, &ping, &v6];
         let matching = |filter: &str| -> Vec<&str> {
-            let filter = Filter::parse(filter);
+            let filter = ok_filter(filter);
             all.iter()
                 .filter(|packet| filter.matches(packet))
                 .map(|packet| packet.protocol.as_str())
@@ -1587,7 +2074,7 @@ mod tests {
         assert_eq!(matching("info"), ["DNS", "HTTP", "ICMPv6", "UDP"]);
         // "port 5" is port 5, not every port starting with 5.
         assert!(matching("port 5").is_empty());
-        assert_eq!(Filter::parse("port x"), Filter::Text("port x".into()));
+        assert_eq!(ok_filter("port x"), Filter::Text("port x".into()));
     }
 
     #[test]
@@ -1712,5 +2199,269 @@ mod tests {
         assert_eq!(captures[2].file, legacy);
         assert!(captures[2].whole_boot);
         std::fs::remove_dir_all(fixture).unwrap();
+    }
+
+    #[test]
+    fn packet_filter_respects_operator_protocol_precedence_and_parens() {
+        let involved = packet("UDP", "10.0.2.15:5353", "10.0.2.3:53");
+        let other = packet("TCP", "1.1.1.1:443", "8.8.8.8:443");
+        assert!(!ok_filter("ip.addr != 10.0.2.15").matches(&involved));
+        assert!(!ok_filter("ip.host != 10.0.2.15").matches(&involved));
+        assert!(ok_filter("ip.addr == 10.0.2.15").matches(&involved));
+        assert!(ok_filter("ip.addr != 10.0.2.15").matches(&other));
+
+        let mut udp = packet("UDP", "10.0.2.15:40000", "93.184.216.34:80");
+        udp.length = 120;
+        let mut tcp = packet("TCP", "10.0.2.15:40000", "93.184.216.34:80");
+        tcp.length = 120;
+        assert!(!ok_filter("tcp.port == 80").matches(&udp));
+        assert!(!ok_filter("tcp.srcport == 40000").matches(&udp));
+        assert!(!ok_filter("tcp.dstport == 80").matches(&udp));
+        assert!(ok_filter("tcp.port == 80").matches(&tcp));
+        assert!(ok_filter("tcp.srcport == 40000").matches(&tcp));
+        assert!(ok_filter("tcp.dstport == 80").matches(&tcp));
+        assert!(!ok_filter("udp.port == 80").matches(&tcp));
+        assert!(!ok_filter("udp.dstport == 80").matches(&tcp));
+        assert!(ok_filter("udp.port == 80").matches(&udp));
+        assert!(ok_filter("udp.dstport == 80").matches(&udp));
+
+        assert_eq!(
+            ok_filter("frame.len >= 100"),
+            Filter::Compare {
+                field: "frame.len".into(),
+                op: Cmp::Ge,
+                value: "100".into(),
+            }
+        );
+        assert!(ok_filter("frame.len >= 100").matches(&udp));
+        assert!(ok_filter("(udp || tcp) && frame.len > 100").matches(&udp));
+        assert!(matches!(
+            ok_filter("(udp || tcp) && frame.len > 100"),
+            Filter::And(left, right)
+                if matches!(left.as_ref(), Filter::Or(_, _))
+                    && matches!(
+                        right.as_ref(),
+                        Filter::Compare {
+                            op: Cmp::Gt,
+                            value,
+                            ..
+                        } if value == "100"
+                    )
+        ));
+
+        assert!(ok_filter("!tcp || udp").matches(&udp));
+        assert!(!ok_filter("!tcp || udp").matches(&tcp));
+        assert!(matches!(
+            ok_filter("!tcp || udp"),
+            Filter::Or(left, right)
+                if matches!(
+                    left.as_ref(),
+                    Filter::Not(inner)
+                        if matches!(inner.as_ref(), Filter::Protocol(name) if name == "tcp")
+                ) && matches!(right.as_ref(), Filter::Protocol(name) if name == "udp")
+        ));
+
+        let mut request = packet("HTTP", "10.0.2.15:40000", "93.184.216.34:80");
+        request.info = "GET / HTTP/1.1".into();
+        let mut status = request.clone();
+        status.info = "HTTP/1.1 200 OK".into();
+        let mut mentioned = packet("UDP", "10.0.2.15:1", "1.2.3.4:2");
+        mentioned.info = "see http.request in the text".into();
+        assert!(ok_filter("http.request").matches(&request));
+        assert!(!ok_filter("http.request").matches(&status));
+        assert!(!ok_filter("http.request").matches(&mentioned));
+        assert!(!ok_filter("http.request == \"GET / HTTP/1.1\"").matches(&request));
+
+        let mut dns = packet("DNS", "10.0.2.15:5353", "10.0.2.3:53");
+        dns.info = "example.com".into();
+        assert!(ok_filter("dns.qry.name").matches(&dns));
+        assert!(!ok_filter("dns.qry.name").matches(&udp));
+        assert!(!ok_filter("dns.qry.name == example.com").matches(&dns));
+    }
+
+    #[test]
+    fn packet_filter_invalid_display_expression_is_not_a_text_search() {
+        let mut decoy = packet("UDP", "10.0.2.15:9", "1.2.3.4:9");
+        decoy.info = "frame.len >= no.such == 1".into();
+        let dns = packet("DNS", "10.0.2.15:5353", "10.0.2.3:53");
+        for text in ["frame.len >=", "no.such == 1"] {
+            let parsed = Filter::parse(text);
+            assert!(parsed.is_err(), "{text}: {parsed:?}");
+            assert!(!matches!(parsed, Ok(Filter::Text(_))));
+        }
+
+        let mut view = NetworkView::default();
+        view.list.packets.push(decoy);
+        view.list.packets.push(dns);
+        view.filter = "no.such == 1".into();
+        view.apply_filter();
+        assert!(view.filter_error.is_some());
+        assert_eq!(view.applied_filter, "");
+        // An empty applied filter matches every packet. A text search would
+        // have kept only the decoy whose info contains the expression.
+        assert_eq!(view.list.rows, [0, 1]);
+
+        view.filter = "port 53".into();
+        view.apply_filter();
+        assert!(view.filter_error.is_none());
+        assert_eq!(view.list.rows, [1]);
+
+        view.filter = "frame.len >=".into();
+        view.apply_filter();
+        assert!(view
+            .filter_error
+            .as_deref()
+            .is_some_and(|error| !error.is_empty()));
+        assert_eq!(view.applied_filter, "port 53");
+        assert_eq!(view.list.rows, [1]);
+
+        view.filter = "no.such == 1".into();
+        view.apply_filter();
+        assert!(view
+            .filter_error
+            .as_deref()
+            .is_some_and(|error| error.contains("no.such")));
+        assert_eq!(view.applied_filter, "port 53");
+        assert_eq!(view.list.rows, [1]);
+    }
+
+    #[test]
+    fn packet_filter_tcp_flags_ipv6_addr_and_http_host() {
+        let udp = packet("UDP", "10.0.2.15:40000", "93.184.216.34:80");
+        let mut udp_syn = udp.clone();
+        udp_syn.tcp_flags = Some(network::TCP_SYN);
+        let ack = packet("TCP", "10.0.2.15:40000", "93.184.216.34:80");
+        let mut syn = ack.clone();
+        syn.tcp_flags = Some(network::TCP_SYN);
+        let mut fin = ack.clone();
+        fin.tcp_flags = Some(network::TCP_FIN);
+        let mut reset = ack.clone();
+        reset.tcp_flags = Some(network::TCP_RST);
+        let mut push = ack.clone();
+        push.tcp_flags = Some(0x08);
+        let mut syn_ack = ack.clone();
+        syn_ack.tcp_flags = Some(network::TCP_SYN | 0x10);
+        let mut none = ack.clone();
+        none.tcp_flags = None;
+        let mut http_syn = packet("HTTP", "10.0.2.15:40000", "93.184.216.34:80");
+        http_syn.tcp_flags = Some(network::TCP_SYN);
+
+        assert!(ok_filter("tcp.flags.syn").matches(&syn));
+        assert!(ok_filter("tcp.flags.syn == 1").matches(&syn));
+        assert!(ok_filter("TCP.FLAGS.SYN == 1").matches(&syn));
+        assert!(!ok_filter("tcp.flags.syn == 0").matches(&syn));
+        assert!(!ok_filter("tcp.flags.syn").matches(&ack));
+        assert!(ok_filter("tcp.flags.syn == 0").matches(&ack));
+        assert!(ok_filter("tcp.flags.ack").matches(&ack));
+        assert!(ok_filter("tcp.flags.ack == 1").matches(&ack));
+        assert!(!ok_filter("tcp.flags.ack == 0").matches(&ack));
+        assert!(ok_filter("tcp.flags.ack == 0").matches(&syn));
+        assert!(ok_filter("tcp.flags.fin").matches(&fin));
+        assert!(ok_filter("tcp.flags.fin == 1").matches(&fin));
+        assert!(ok_filter("tcp.flags.fin == 0").matches(&ack));
+        assert!(ok_filter("tcp.flags.reset").matches(&reset));
+        assert!(ok_filter("tcp.flags.reset == 1").matches(&reset));
+        assert!(ok_filter("tcp.flags.reset == 0").matches(&ack));
+        assert!(ok_filter("tcp.flags.push").matches(&push));
+        assert!(ok_filter("tcp.flags.push == 1").matches(&push));
+        assert!(ok_filter("tcp.flags.push == 0").matches(&ack));
+        assert!(ok_filter("tcp.flags.syn == 1").matches(&syn_ack));
+        assert!(ok_filter("tcp.flags.ack == 1").matches(&syn_ack));
+        assert!(ok_filter("tcp.flags.fin == 0").matches(&syn_ack));
+        for filter in [
+            "tcp.flags.syn",
+            "tcp.flags.syn == 1",
+            "tcp.flags.syn == 0",
+            "tcp.flags.ack",
+            "tcp.flags.ack == 0",
+            "tcp.flags.fin == 1",
+            "tcp.flags.reset == 0",
+            "tcp.flags.push == 1",
+        ] {
+            assert!(!ok_filter(filter).matches(&udp), "{filter}");
+            assert!(!ok_filter(filter).matches(&udp_syn), "{filter}");
+            assert!(!ok_filter(filter).matches(&http_syn), "{filter}");
+        }
+        assert!(!ok_filter("tcp.flags.syn").matches(&none));
+        assert!(!ok_filter("tcp.flags.syn == 0").matches(&none));
+        assert!(Filter::parse("tcp.flags.cwr == 1").is_err());
+        assert!(!matches!(
+            Filter::parse("tcp.flags.cwr == 1"),
+            Ok(Filter::Text(_))
+        ));
+
+        let v6 = packet("UDP", "[fe80::1]:546", "[ff02::1:2]:547");
+        let other = packet("ICMPv6", "fe80::2", "ff02::1");
+        let v4 = packet("UDP", "10.0.2.15:1", "1.2.3.4:2");
+        let mixed = packet("TCP", "10.0.2.15:1", "[fe80::1]:80");
+        assert!(ok_filter("ipv6.addr == fe80::1").matches(&v6));
+        assert!(ok_filter("ipv6.addr == ff02::1:2").matches(&v6));
+        assert!(ok_filter("IPv6.ADDR == FE80::1").matches(&v6));
+        assert!(!ok_filter("ipv6.addr == fe80::2").matches(&v6));
+        assert!(!ok_filter("ipv6.addr != fe80::1").matches(&v6));
+        assert!(ok_filter("ipv6.addr != fe80::9").matches(&v6));
+        assert!(ok_filter("ipv6.addr != fe80::1").matches(&other));
+        assert!(!ok_filter("ipv6.addr == fe80::1").matches(&v4));
+        assert!(!ok_filter("ipv6.addr != fe80::1").matches(&v4));
+        assert!(!ok_filter("ipv6.addr == 10.0.2.15").matches(&v4));
+        assert!(!ok_filter("ipv6.addr != 10.0.2.15").matches(&v4));
+        assert!(ok_filter("ipv6.addr == fe80::1").matches(&mixed));
+        assert!(!ok_filter("ipv6.addr != fe80::1").matches(&mixed));
+        assert!(!ok_filter("ipv6.addr != fe80::2").matches(&mixed));
+        assert!(Filter::parse("ipv6.addr").is_err());
+        assert!(!matches!(Filter::parse("ipv6.addr"), Ok(Filter::Text(_))));
+        assert!(Filter::parse("ipv6.host == fe80::1").is_err());
+
+        let mut host = packet("HTTP", "10.0.2.15:40000", "93.184.216.34:80");
+        host.info = "GET / HTTP/1.1\r\nHost: example.com\r\nUser-Agent: curl".into();
+        assert!(ok_filter("http.host").matches(&host));
+        assert!(ok_filter("http.host == \"example.com\"").matches(&host));
+        assert!(ok_filter("http.host == \"Example.COM\"").matches(&host));
+        assert!(!ok_filter("http.host == \"example.org\"").matches(&host));
+        assert!(!ok_filter("http.host == \"example\"").matches(&host));
+
+        let mut bare = host.clone();
+        bare.info = "see Host: with no value".into();
+        assert!(ok_filter("http.host").matches(&bare));
+        assert!(!ok_filter("http.host == \"example.com\"").matches(&bare));
+
+        let mut spaced = host.clone();
+        spaced.info = "HOST:example.com".into();
+        assert!(ok_filter("http.host == example.com").matches(&spaced));
+
+        let mut ghost = host.clone();
+        ghost.info = "Ghost: example.com".into();
+        assert!(!ok_filter("http.host").matches(&ghost));
+        assert!(!ok_filter("http.host == \"example.com\"").matches(&ghost));
+
+        let mut local = host.clone();
+        local.info = "localhost: example.com".into();
+        assert!(!ok_filter("http.host").matches(&local));
+        assert!(!ok_filter("http.host == \"example.com\"").matches(&local));
+
+        let mut longer = host.clone();
+        longer.info = "Host: example.com.evil".into();
+        assert!(ok_filter("http.host").matches(&longer));
+        assert!(!ok_filter("http.host == \"example.com\"").matches(&longer));
+
+        let mut prefix = host.clone();
+        prefix.info = "Host: notexample.com".into();
+        assert!(!ok_filter("http.host == \"example.com\"").matches(&prefix));
+
+        let mut word = host.clone();
+        word.info = "GET /example.com HTTP/1.1".into();
+        assert!(!ok_filter("http.host").matches(&word));
+        assert!(!ok_filter("http.host == \"example.com\"").matches(&word));
+
+        let mut udp_host = packet("UDP", "10.0.2.15:1", "1.2.3.4:2");
+        udp_host.info = "Host: example.com".into();
+        assert!(!ok_filter("http.host").matches(&udp_host));
+        assert!(!ok_filter("http.host == \"example.com\"").matches(&udp_host));
+        assert!(!ok_filter("http.host != \"example.com\"").matches(&udp_host));
+
+        let mut other_host = host.clone();
+        other_host.info = "Host: other.example".into();
+        assert!(ok_filter("http.host != \"example.com\"").matches(&other_host));
+        assert!(!ok_filter("http.host != \"other.example\"").matches(&other_host));
     }
 }

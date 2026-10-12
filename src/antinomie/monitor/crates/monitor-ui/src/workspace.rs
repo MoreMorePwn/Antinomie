@@ -15,6 +15,7 @@ pub(crate) enum Panel {
     Network,
     Memory,
     CoreDump,
+    Triage,
     StaticAnalysis,
     AnalysisSection {
         report_id: String,
@@ -34,6 +35,7 @@ impl Panel {
             Self::Network => "Network",
             Self::Memory => "Memory",
             Self::CoreDump => "Core dumps",
+            Self::Triage => "Triage",
             Self::StaticAnalysis => "Static Analysis",
             Self::AnalysisSection { kind, .. } => kind.label(),
             Self::Summary => "Summary",
@@ -52,7 +54,7 @@ impl Panel {
 pub(crate) struct DetailsFollow {
     followed: usize,
     /// Pass of the main window in which each followed panel was last drawn.
-    drawn: [Option<u64>; 3],
+    drawn: [Option<u64>; 4],
 }
 
 /// What the Details panel shows.
@@ -61,16 +63,23 @@ pub(crate) enum DetailsOf {
     Syscall,
     Packet,
     MemoryRow,
+    History,
 }
 
 impl DetailsFollow {
-    const SIDES: [DetailsOf; 3] = [DetailsOf::Syscall, DetailsOf::Packet, DetailsOf::MemoryRow];
+    const SIDES: [DetailsOf; 4] = [
+        DetailsOf::Syscall,
+        DetailsOf::Packet,
+        DetailsOf::MemoryRow,
+        DetailsOf::History,
+    ];
 
     fn side(panel: &Panel) -> Option<usize> {
         match panel {
             Panel::Trace => Some(0),
             Panel::Network => Some(1),
             Panel::Memory => Some(2),
+            Panel::RunHistory => Some(3),
             _ => None,
         }
     }
@@ -123,7 +132,7 @@ impl DetailsFollow {
 
 /// Arrangement compatibility. Versions before 3 reset obsolete flattened
 /// layouts; version 4 adds Summary while preserving the version-3 dock tree.
-const LAYOUT_VERSION: u32 = 4;
+const LAYOUT_VERSION: u32 = 5;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct WorkspaceLayout {
@@ -161,6 +170,7 @@ impl Default for WorkspaceLayout {
             Panel::Network,
             Panel::Memory,
             Panel::CoreDump,
+            Panel::Triage,
             Panel::StaticAnalysis,
         ]);
         dock.set_active_tab((SurfaceIndex::main(), NodeIndex::root(), TabIndex(0)));
@@ -202,6 +212,13 @@ impl WorkspaceLayout {
                     layout.return_home(Panel::Summary);
                 }
             }
+            if layout.version < 5 && layout.dock.find_tab(&Panel::Triage).is_none() {
+                if let Some((surface, node, tab)) = layout.dock.find_tab(&Panel::Trace) {
+                    layout.dock[surface][node].insert_tab(tab, Panel::Triage);
+                } else {
+                    layout.return_home(Panel::Triage);
+                }
+            }
             layout.focus(Panel::Summary);
             layout.version = LAYOUT_VERSION;
         }
@@ -227,6 +244,7 @@ impl WorkspaceLayout {
             Panel::Network,
             Panel::Memory,
             Panel::CoreDump,
+            Panel::Triage,
             Panel::StaticAnalysis,
             Panel::Details,
             Panel::Activity,
@@ -594,6 +612,7 @@ impl WorkspaceLayout {
                     Panel::Network,
                     Panel::Memory,
                     Panel::CoreDump,
+                    Panel::Triage,
                     Panel::StaticAnalysis,
                 ],
             )
@@ -606,6 +625,7 @@ impl WorkspaceLayout {
                     Panel::Network,
                     Panel::Memory,
                     Panel::CoreDump,
+                    Panel::Triage,
                     Panel::StaticAnalysis,
                 ],
                 vec![Panel::Details, Panel::Activity],
@@ -1131,6 +1151,7 @@ mod tests {
                 Panel::Network,
                 Panel::Memory,
                 Panel::CoreDump,
+                Panel::Triage,
                 Panel::StaticAnalysis
             ]
         );
@@ -1162,6 +1183,7 @@ mod tests {
                 Panel::Network,
                 Panel::Memory,
                 Panel::CoreDump,
+                Panel::Triage,
                 Panel::StaticAnalysis
             ]
         );
@@ -1261,6 +1283,7 @@ mod tests {
                 Panel::Network,
                 Panel::Memory,
                 Panel::CoreDump,
+                Panel::Triage,
                 Panel::StaticAnalysis
             ]
         );
@@ -1290,6 +1313,7 @@ mod tests {
                 Panel::Network,
                 Panel::Memory,
                 Panel::CoreDump,
+                Panel::Triage,
                 Panel::StaticAnalysis
             ]
         );
@@ -1318,6 +1342,7 @@ mod tests {
                 Panel::Network,
                 Panel::Memory,
                 Panel::CoreDump,
+                Panel::Triage,
                 Panel::StaticAnalysis
             ]
         );
@@ -1399,7 +1424,7 @@ mod tests {
             .dock
             .add_window(vec![Panel::Trace, Panel::Terminal("past".into())]);
         layout.validate();
-        assert_eq!(layout.dock.iter_all_tabs().count(), 9);
+        assert_eq!(layout.dock.iter_all_tabs().count(), 10);
         assert_eq!(
             layout
                 .dock

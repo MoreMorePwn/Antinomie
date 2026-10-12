@@ -164,6 +164,7 @@ pub(crate) struct MemoryView {
     community_os: BTreeMap<String, Os>,
     /// Installed catalog plugins, read when the catalog opens or changes.
     catalog_installed: Option<Vec<community::Installed>>,
+    hide_list: bool,
 }
 
 impl Default for MemoryView {
@@ -197,6 +198,7 @@ impl Default for MemoryView {
             catalog_status: None,
             community_os: BTreeMap::new(),
             catalog_installed: None,
+            hide_list: false,
         }
     }
 }
@@ -631,19 +633,41 @@ impl MemoryView {
         self.poll_picker();
 
         let mut action = None;
-        egui::SidePanel::left("memory_dumps")
-            .resizable(true)
-            .default_width(240.0)
-            .width_range(180.0..=480.0)
+        ui.horizontal(|ui| {
+            if ui
+                .add(
+                    egui::Button::new(egui_phosphor::regular::SIDEBAR_SIMPLE)
+                        .frame(false)
+                        .selected(!self.hide_list),
+                )
+                .on_hover_text(if self.hide_list {
+                    "Show the dump list"
+                } else {
+                    "Hide the dump list"
+                })
+                .clicked()
+            {
+                self.hide_list = !self.hide_list;
+            }
+        });
+        if !self.hide_list {
+            egui::SidePanel::left("memory_dumps")
+                .resizable(true)
+                .default_width(240.0)
+                .width_range(180.0..=480.0)
+                .frame(egui::Frame::new().inner_margin(egui::Margin {
+                    right: 8,
+                    ..Default::default()
+                }))
+                .show_inside(ui, |ui| {
+                    action = self.dump_list(ui, &cx);
+                });
+        }
+        egui::CentralPanel::default()
             .frame(egui::Frame::new().inner_margin(egui::Margin {
-                right: 8,
+                left: 10,
                 ..Default::default()
             }))
-            .show_inside(ui, |ui| {
-                action = self.dump_list(ui, &cx);
-            });
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new())
             .show_inside(ui, |ui| {
                 if let Some(next) = self.analysis(ui, &cx) {
                     action = Some(next);

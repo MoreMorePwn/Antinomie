@@ -249,12 +249,8 @@ pub(super) fn history(
     font_size: f32,
 ) -> Option<(String, bool)> {
     let mut action = None;
-    // The list takes the rows it needs, up to 40% of the height, so the
-    // process tree below gets the rest.
     let row_height = theme::row_height(font_size);
-    let height = (captures.len().max(2) as f32 * row_height)
-        .min(ui.available_height() * 0.4)
-        .max(row_height * 2.0);
+    let height = (ui.available_height() - row_height).max(row_height * 2.0);
     egui::ScrollArea::horizontal()
         .id_salt("capture_columns")
         .show(ui, |ui| {
@@ -310,59 +306,58 @@ pub(super) fn history(
                     });
                 });
         });
-    ui.separator();
-    if let Some(capture) = selected.and_then(|id| captures.iter().find(|capture| capture.id == id))
-    {
-        crate::evidence::controls(ui, &capture.directory);
-        egui::CollapsingHeader::new("Capture details")
-            .id_salt("capture_metadata")
-            .default_open(false)
-            .show(ui, |ui| {
-                egui::Grid::new("capture_identity")
-                    .num_columns(2)
-                    .show(ui, |ui| {
-                        for (label, value) in [
-                            ("Scope", scope(&capture.scope)),
-                            ("State", status(capture.state).to_owned()),
-                            ("Capture", capture.id.clone()),
-                            ("Boot", capture.boot_id.clone()),
-                            ("Observer cookie", capture.capture_cookie.to_string()),
-                            (
-                                "Start",
-                                capture
-                                    .start_ns
-                                    .map_or_else(|| "Unknown".into(), |time| format!("{time} ns")),
-                            ),
-                            (
-                                "Stop",
-                                capture.stop_ns.map_or_else(
-                                    || "Not acknowledged".into(),
-                                    |time| format!("{time} ns"),
-                                ),
-                            ),
-                            ("Recording", capture.directory.display().to_string()),
-                        ] {
-                            ui.label(label);
-                            ui.add(egui::Label::new(value).selectable(true));
-                            ui.end_row();
-                        }
-                        if let CaptureScope::Process { root } = &capture.scope {
-                            ui.label("Root task / start");
-                            ui.label(format!("{} / {} ns", root.task_cookie, root.start_boot_ns));
-                            ui.end_row();
-                        }
-                    });
-                for warning in [&capture.incomplete_reason, &capture.recording_error]
-                    .into_iter()
-                    .flatten()
-                {
-                    ui.label(RichText::new(warning).color(theme::warn()));
-                }
-            });
-    } else if captures.is_empty() {
+    if captures.is_empty() {
         ui.colored_label(theme::muted(), "No retained captures for this VM");
     }
     action
+}
+
+pub(super) fn detail(ui: &mut egui::Ui, capture: &CaptureSummary) {
+    egui::CollapsingHeader::new("Capture details")
+        .id_salt("capture_metadata")
+        .default_open(false)
+        .show(ui, |ui| {
+            egui::Grid::new("capture_identity")
+                .num_columns(2)
+                .show(ui, |ui| {
+                    for (label, value) in [
+                        ("Scope", scope(&capture.scope)),
+                        ("State", status(capture.state).to_owned()),
+                        ("Capture", capture.id.clone()),
+                        ("Boot", capture.boot_id.clone()),
+                        ("Observer cookie", capture.capture_cookie.to_string()),
+                        (
+                            "Start",
+                            capture
+                                .start_ns
+                                .map_or_else(|| "Unknown".into(), |time| format!("{time} ns")),
+                        ),
+                        (
+                            "Stop",
+                            capture.stop_ns.map_or_else(
+                                || "Not acknowledged".into(),
+                                |time| format!("{time} ns"),
+                            ),
+                        ),
+                        ("Recording", capture.directory.display().to_string()),
+                    ] {
+                        ui.label(label);
+                        ui.add(egui::Label::new(value).selectable(true));
+                        ui.end_row();
+                    }
+                    if let CaptureScope::Process { root } = &capture.scope {
+                        ui.label("Root task / start");
+                        ui.label(format!("{} / {} ns", root.task_cookie, root.start_boot_ns));
+                        ui.end_row();
+                    }
+                });
+            for warning in [&capture.incomplete_reason, &capture.recording_error]
+                .into_iter()
+                .flatten()
+            {
+                ui.label(RichText::new(warning).color(theme::warn()));
+            }
+        });
 }
 
 /// What a click in the process tree selects.

@@ -14,11 +14,17 @@ struct State {
     editor: Option<Editor>,
     error: Option<String>,
 }
+#[derive(Clone, Copy)]
+enum Field {
+    Name,
+    Tags,
+}
 #[derive(Clone)]
 struct Editor {
     directory: PathBuf,
-    name: String,
-    tags: String,
+    field: Field,
+    draft: String,
+    stored: Annotation,
 }
 type Shared = Arc<Mutex<State>>;
 fn state(ctx: &egui::Context) -> Shared {
@@ -56,28 +62,53 @@ pub(crate) fn title(ui: &egui::Ui, directory: &Path, fallback: &str) -> String {
     }
 }
 
-pub(crate) fn controls(ui: &mut egui::Ui, directory: &Path) {
-    ui.menu_button("Evidence…", |ui| menu(ui, directory));
-}
 pub(crate) fn menu(ui: &mut egui::Ui, directory: &Path) {
-    if ui.button("Rename / tags…").clicked() {
-        let shared = state(ui.ctx());
-        let mut data = shared.lock().unwrap_or_else(|e| e.into_inner());
-        match annotations::load(directory) {
-            Ok(value) => {
-                data.editor = Some(Editor {
-                    directory: directory.to_owned(),
-                    name: value.name,
-                    tags: value.tags.join(", "),
-                })
-            }
-            Err(error) => data.error = Some(error),
-        }
-        ui.close_menu();
+    if ui.button("Rename…").clicked() {
+        open_editor(ui, directory, Field::Name);
+    }
+    if ui.button("Edit tags…").clicked() {
+        open_editor(ui, directory, Field::Tags);
     }
     if ui.button("Open result directory").clicked() {
         reveal(ui.ctx(), directory);
         ui.close_menu();
+    }
+}
+fn open_editor(ui: &mut egui::Ui, directory: &Path, field: Field) {
+    let shared = state(ui.ctx());
+    let mut data = shared.lock().unwrap_or_else(|e| e.into_inner());
+    match annotations::load(directory) {
+        Ok(stored) => {
+            let draft = match field {
+                Field::Name => stored.name.clone(),
+                Field::Tags => stored.tags.join(", "),
+            };
+            data.editor = Some(Editor {
+                directory: directory.to_owned(),
+                field,
+                draft,
+                stored,
+            });
+        }
+        Err(error) => data.error = Some(error),
+    }
+    ui.close_menu();
+}
+fn merge_annotation(stored: &Annotation, field: Field, draft: &str) -> Annotation {
+    match field {
+        Field::Name => Annotation {
+            name: draft.trim().to_owned(),
+            tags: stored.tags.clone(),
+        },
+        Field::Tags => Annotation {
+            name: stored.name.clone(),
+            tags: draft
+                .split(',')
+                .map(str::trim)
+                .filter(|tag| !tag.is_empty())
+                .map(str::to_owned)
+                .collect(),
+        },
     }
 }
 pub(crate) fn reveal(ctx: &egui::Context, directory: &Path) {
@@ -120,17 +151,26 @@ pub(crate) fn dialogs(ctx: &egui::Context) {
     if let Some(ref mut edit) = editor {
         let mut open = true;
         let mut save = false;
-        egui::Window::new("Evidence name and tags")
+        let title = match edit.field {
+            Field::Name => "Evidence name",
+            Field::Tags => "Evidence tags",
+        };
+        egui::Window::new(title)
             .id(egui::Id::new("annotation-editor"))
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
             .default_width(460.0)
             .show(ctx, |ui| {
-                ui.label("Name");
-                ui.add(egui::TextEdit::singleline(&mut edit.name).desired_width(f32::INFINITY));
-                ui.label("Tags (comma separated)");
-                ui.add(egui::TextEdit::singleline(&mut edit.tags).desired_width(f32::INFINITY));
+                match edit.field {
+                    Field::Name => {
+                        ui.label("Name");
+                    }
+                    Field::Tags => {
+                        ui.label("Tags (comma separated)");
+                    }
+                }
+                ui.add(egui::TextEdit::singleline(&mut edit.draft).desired_width(f32::INFINITY));
                 ui.colored_label(
                     crate::theme::muted(),
                     "The original evidence and its identity are preserved.",
@@ -139,16 +179,7 @@ pub(crate) fn dialogs(ctx: &egui::Context) {
             });
         let mut data = shared.lock().unwrap_or_else(|e| e.into_inner());
         if save {
-            let value = Annotation {
-                name: edit.name.trim().to_owned(),
-                tags: edit
-                    .tags
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_owned)
-                    .collect(),
-            };
+            let value = merge_annotation(&edit.stored, edit.field, &edit.draft);
             match annotations::save(&edit.directory, &value) {
                 Ok(()) => {
                     data.labels.insert(edit.directory.clone(), Ok(value));
@@ -172,5 +203,24 @@ pub(crate) fn dialogs(ctx: &egui::Context) {
         if open {
             shared.lock().unwrap_or_else(|e| e.into_inner()).error = Some(error);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn evidence_edit_keeps_the_field_that_was_not_opened() {
+        let stored = Annotation {
+            name: "  stored name  ".into(),
+            tags: vec!["triage".into(), "odd, tag".into()],
+        };
+        let renamed = merge_annotation(&stored, Field::Name, "  renamed  ");
+        assert_eq!(renamed.name, "renamed");
+        assert_eq!(renamed.tags, stored.tags);
+        let retagged = merge_annotation(&stored, Field::Tags, " alpha , , beta ");
+        assert_eq!(retagged.name, stored.name);
+        assert_eq!(retagged.tags, vec!["alpha".to_owned(), "beta".to_owned()]);
     }
 }
