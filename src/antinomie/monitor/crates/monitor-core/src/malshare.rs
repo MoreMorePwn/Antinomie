@@ -10,6 +10,7 @@
 use crate::samples::{self, SampleInfo, StoredSample};
 use serde_json::Value;
 use std::{
+    collections::HashSet,
     io::{Read, Write},
     path::Path,
     process::{Command, Stdio},
@@ -213,6 +214,10 @@ fn info(value: &Value, file_type: Option<&str>) -> Option<SampleInfo> {
     tags.dedup();
     Some(SampleInfo {
         md5_hash: text(value, "md5").unwrap_or_default().to_ascii_lowercase(),
+        sha1_hash: text(value, "sha1")
+            .map(|hash| hash.to_ascii_lowercase())
+            .filter(|hash| hash.len() == 40 && hash.bytes().all(|b| b.is_ascii_hexdigit()))
+            .unwrap_or_default(),
         file_name: name,
         file_type: text(value, "f_type")
             .or_else(|| text(value, "type"))
@@ -230,15 +235,112 @@ fn info(value: &Value, file_type: Option<&str>) -> Option<SampleInfo> {
     })
 }
 
+fn hash_sample(hash: &str, file_type: Option<&str>) -> Option<SampleInfo> {
+    let hash = hash.trim().to_ascii_lowercase();
+    if !matches!(hash.len(), 32 | 40 | 64) || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut sample = SampleInfo {
+        file_type: file_type.unwrap_or("").to_ascii_lowercase(),
+        file_name: hash[..8.min(hash.len())].to_owned(),
+        reporter: "MalShare".into(),
+        ..SampleInfo::default()
+    };
+    match hash.len() {
+        32 => sample.md5_hash = hash,
+        40 => sample.sha1_hash = hash,
+        64 => {
+            sample.file_name = hash[..16].to_owned();
+            sample.sha256_hash = hash;
+        }
+        _ => return None,
+    }
+    // No hash was stored: do not return an empty identity.
+    if sample.md5_hash.is_empty() && sample.sha1_hash.is_empty() && sample.sha256_hash.is_empty() {
+        return None;
+    }
+    Some(sample)
+}
+
+/// A sample with no MD5, SHA-1, or SHA-256 is not a catalog row.
+fn identified(sample: &SampleInfo) -> bool {
+    !sample.md5_hash.is_empty() || !sample.sha1_hash.is_empty() || !sample.sha256_hash.is_empty()
+}
+
+fn remember(found: &mut Vec<SampleInfo>, sample: Option<SampleInfo>) {
+    if let Some(sample) = sample.filter(identified) {
+        found.push(sample);
+    }
+}
+
+/// SHA-256, else SHA-1, else MD5. A row with none of them has no key.
+fn sample_key(sample: &SampleInfo) -> Option<String> {
+    let (kind, hash) = if !sample.sha256_hash.is_empty() {
+        ("sha256", sample.sha256_hash.as_str())
+    } else if !sample.sha1_hash.is_empty() {
+        ("sha1", sample.sha1_hash.as_str())
+    } else if !sample.md5_hash.is_empty() {
+        ("md5", sample.md5_hash.as_str())
+    } else {
+        return None;
+    };
+    Some(format!("{kind}:{}", hash.to_ascii_lowercase()))
+}
+
+/// Keep the first row for each hash. A row whose hashes are all empty stays.
+fn dedupe(samples: Vec<SampleInfo>) -> Vec<SampleInfo> {
+    let mut seen = HashSet::new();
+    let mut kept = Vec::with_capacity(samples.len());
+    for sample in samples {
+        if let Some(key) = sample_key(&sample)
+            && !seen.insert(key)
+        {
+            continue;
+        }
+        kept.push(sample);
+    }
+    kept
+}
+
+/// MalShare `details` already takes an MD5, a SHA-1, or a SHA-256.
+fn details_accepts(hash: &str) -> bool {
+    matches!(hash.len(), 32 | 40 | 64) && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn hex_len(text: &str, len: usize) -> bool {
+    text.len() == len && text.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 fn infos(body: &[u8], file_type: Option<&str>, limit: u32) -> Result<Vec<SampleInfo>, String> {
     if let Some(refused) = refusal(body) {
         return Err(refused);
     }
-    Ok(objects(body)?
-        .iter()
-        .filter_map(|value| info(value, file_type))
-        .take(limit as usize)
-        .collect())
+    let mut found = Vec::new();
+    for value in objects(body)? {
+        match &value {
+            Value::String(hash) => remember(&mut found, hash_sample(hash, file_type)),
+            Value::Object(object) => {
+                if let Some(Value::Array(items)) = object
+                    .iter()
+                    .find_map(|(key, value)| key.eq_ignore_ascii_case("hashes").then_some(value))
+                {
+                    for item in items {
+                        if let Some(hash) = item.as_str() {
+                            remember(&mut found, hash_sample(hash, file_type));
+                        }
+                    }
+                    continue;
+                }
+                remember(&mut found, info(&value, file_type));
+            }
+            _ => {}
+        }
+        if found.len() >= limit as usize {
+            break;
+        }
+    }
+    found.truncate(limit as usize);
+    Ok(dedupe(found))
 }
 
 /// The samples of one file type MalShare received in the last 24 hours. Its
@@ -255,8 +357,11 @@ fn of_type(
     }
     let name = objects(&types)?
         .iter()
-        .filter_map(Value::as_object)
-        .flat_map(|types| types.keys().cloned().collect::<Vec<_>>())
+        .flat_map(|value| match value {
+            Value::String(name) => vec![name.clone()],
+            Value::Object(types) => types.keys().cloned().collect(),
+            _ => Vec::new(),
+        })
         .find(|name| name.eq_ignore_ascii_case(wanted));
     let Some(name) = name else {
         return Ok(None);
@@ -279,11 +384,11 @@ pub fn find(
     let text = text.trim();
     if text.is_empty() {
         return Ok(match of_type(curl, key, "elf", limit)? {
-            Some((_, found)) => ("Newest ELF samples".into(), found),
+            Some((_, found)) => ("Newest ELF samples, last 24 hours".into(), found),
             None => ("No new ELF samples".into(), Vec::new()),
         });
     }
-    if matches!(text.len(), 32 | 40 | 64) && text.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if details_accepts(text) {
         let body = get(
             curl,
             key,
@@ -325,7 +430,64 @@ pub fn download(
     info: &SampleInfo,
 ) -> Result<StoredSample, String> {
     use sha2::{Digest, Sha256};
+    let mut record = info.clone();
+    if !hex_len(&record.sha256_hash, 64) {
+        // MD5 keeps the details lookup. SHA-1 uses that same lookup only
+        // because it already accepts an arbitrary hash; otherwise stop.
+        let lookup = if hex_len(&record.md5_hash, 32) {
+            record.md5_hash.clone()
+        } else if hex_len(&record.sha1_hash, 40) && details_accepts(&record.sha1_hash) {
+            record.sha1_hash.clone()
+        } else {
+            return Err("MalShare download needs a resolved SHA-256".into());
+        };
+        let sha1_only = !hex_len(&record.md5_hash, 32);
+        let body = get(
+            curl,
+            key,
+            &[("action", "details"), ("hash", &lookup)],
+            MAX_REPLY,
+        )?;
+        let hinted = (!record.file_type.is_empty()).then_some(record.file_type.as_str());
+        let Some(resolved) = infos(&body, hinted, 1)?.into_iter().next() else {
+            return Err(if sha1_only {
+                "MalShare download needs a resolved SHA-256".into()
+            } else {
+                "MalShare has no SHA-256 for this hash".into()
+            });
+        };
+        let sha1_placeholder = record.md5_hash.is_empty()
+            && record.sha1_hash.len() >= 8
+            && record.file_name == record.sha1_hash[..8];
+        if record.file_name.is_empty() || record.file_name == record.md5_hash || sha1_placeholder {
+            record.file_name = resolved.file_name;
+        }
+        if record.file_type.is_empty() {
+            record.file_type = resolved.file_type;
+        }
+        if record.md5_hash.is_empty() {
+            record.md5_hash = resolved.md5_hash;
+        }
+        if record.sha1_hash.is_empty() {
+            record.sha1_hash = resolved.sha1_hash;
+        }
+        // Only a SHA-256 the details reply actually carried. Never invent one.
+        if hex_len(&resolved.sha256_hash, 64) {
+            record.sha256_hash = resolved.sha256_hash;
+        }
+        if !hex_len(&record.sha256_hash, 64) {
+            return Err(if sha1_only {
+                "MalShare download needs a resolved SHA-256".into()
+            } else {
+                "MalShare has no SHA-256 for this hash".into()
+            });
+        }
+    }
+    let info = &record;
     let hash = info.sha256_hash.to_ascii_lowercase();
+    if hash.is_empty() || !hex_len(&hash, 64) {
+        return Err("MalShare download needs a resolved SHA-256".into());
+    }
     let mut bytes = get(
         curl,
         key,
@@ -409,6 +571,22 @@ mod tests {
             Err("MalShare: Over Request Limit.  Please wait until tomorrow".into())
         );
         assert!(infos(br#"[{"sha256":"zz"}]"#, None, 10).unwrap().is_empty());
+        let hashes = format!(r#"["{}","{}"]"#, "f".repeat(32), "ab".repeat(32));
+        let found = infos(hashes.as_bytes(), Some("ELF"), 10).unwrap();
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].md5_hash.len(), 32);
+        assert!(found[0].sha256_hash.is_empty());
+        assert_eq!(found[0].file_type, "elf");
+        assert_eq!(found[1].sha256_hash.len(), 64);
+        let wrapped = format!(r#"{{"hashes":["{}"]}}"#, "9".repeat(32));
+        assert_eq!(infos(wrapped.as_bytes(), None, 10).unwrap().len(), 1);
+        let types = br#"["ELF","PE32"]"#;
+        let names: Vec<String> = objects(types)
+            .unwrap()
+            .iter()
+            .filter_map(|value| value.as_str().map(str::to_owned))
+            .collect();
+        assert_eq!(names, ["ELF", "PE32"]);
     }
 
     #[test]
@@ -417,5 +595,46 @@ mod tests {
         assert_eq!(utc(951_782_400), "2000-02-29 00:00:00");
         assert_eq!(host("hxxp://Example.ORG:80/x"), Some("example.org".into()));
         assert_eq!(host("plain-name"), Some("plain-name".into()));
+    }
+
+    #[test]
+    fn duplicate_hashes_keep_the_first_row() {
+        let sha = "a".repeat(64);
+        let other = "b".repeat(64);
+        let md5 = "c".repeat(32);
+        let sha1 = "d".repeat(40);
+        let body = format!(
+            r#"[
+                {{"sha256":"{sha}","md5":"{md5}","filenames":["first"]}},
+                {{"sha256":"{sha}","md5":"{}","filenames":["second"]}},
+                {{"sha256":"{other}","filenames":["third"]}},
+                "{md5}",
+                "{sha1}",
+                "{sha1}"
+            ]"#,
+            "e".repeat(32)
+        );
+        let found = infos(body.as_bytes(), None, 10).unwrap();
+        assert_eq!(found.len(), 4);
+        assert_eq!(found[0].file_name, "first");
+        assert_eq!(found[0].sha256_hash, sha);
+        assert_eq!(found[1].sha256_hash, other);
+        assert_eq!(found[2].md5_hash, md5);
+        assert!(found[2].sha256_hash.is_empty());
+        assert_eq!(found[3].sha1_hash, sha1);
+        assert!(found[3].sha256_hash.is_empty());
+        let empty = SampleInfo::default();
+        assert_eq!(dedupe(vec![empty.clone(), empty]).len(), 2);
+    }
+
+    #[test]
+    fn a_sha1_hash_is_stored_on_the_sample() {
+        let hash = "a".repeat(40);
+        let sample = hash_sample(&hash, None).expect("40 hex chars");
+        assert_eq!(sample.sha1_hash, hash);
+        assert!(sample.sha256_hash.is_empty());
+        assert!(sample.md5_hash.is_empty());
+        assert_eq!(sample.file_name, hash[..8]);
+        assert!(sample.file_type.is_empty());
     }
 }

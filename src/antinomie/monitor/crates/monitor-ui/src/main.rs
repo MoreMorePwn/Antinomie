@@ -1,6 +1,7 @@
 mod analysis;
 mod app;
 mod archive;
+mod bpf;
 mod build_wizard;
 mod core_view;
 mod data_view;
@@ -10,6 +11,7 @@ mod evidence_jobs;
 mod folders;
 mod memory_view;
 mod network_view;
+mod query;
 mod runs;
 mod samples_view;
 mod snapshots;
@@ -18,6 +20,7 @@ mod terminal;
 mod theme;
 mod tools_window;
 mod trace;
+mod triage;
 mod values;
 mod workspace;
 

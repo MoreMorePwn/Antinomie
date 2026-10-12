@@ -15,6 +15,11 @@ pub(super) struct ListingState {
     pub query: String,
     /// The selected row: listing index and entry.
     pub selected: Option<(u64, AnalysisEntry)>,
+    /// Selected function, stored as "{address:x}:{name}".
+    pub function: Option<String>,
+    /// Function headers already seen, in first-seen order.
+    /// Keyed by "{address:x}:{name}". Empty until a page is shown.
+    functions: Vec<ListedFunction>,
 }
 
 /// Rows read ahead of the first one that is needed.
@@ -75,6 +80,7 @@ pub(super) fn show(
             return request(0, &state.query);
         }
     };
+    remember_functions(&mut state.functions, section, page);
     if page.total == 0 {
         ui.label(if state.query.is_empty() {
             "This listing is empty."
@@ -88,6 +94,60 @@ pub(super) fn show(
     let loaded = page.start..page.start + page.rows.len() as u64;
     let mut needed = None;
     let mut clicked = None;
+    let split = matches!(
+        kind,
+        AnalysisKind::Disassembly | AnalysisKind::Decompilation
+    );
+    let names = if split {
+        state.functions.clone()
+    } else {
+        Vec::new()
+    };
+    if split {
+        let panel_id = match kind {
+            AnalysisKind::Disassembly => "listing-functions-disassembly",
+            _ => "listing-functions-decompilation",
+        };
+        egui::SidePanel::left(panel_id)
+            .resizable(true)
+            .default_width(220.0)
+            .width_range(160.0..=420.0)
+            .frame(egui::Frame::new().inner_margin(egui::Margin {
+                right: 8,
+                ..Default::default()
+            }))
+            .show_inside(ui, |ui| {
+                ui.label(RichText::new("Functions").strong());
+                if names.is_empty() {
+                    ui.add(egui::Label::new("No function symbols loaded.").wrap());
+                }
+                ui.add(
+                    egui::Label::new(
+                        RichText::new("Function names from the pages loaded in this view.")
+                            .color(theme::muted()),
+                    )
+                    .wrap(),
+                );
+                egui::ScrollArea::vertical()
+                    .id_salt(("listing-functions", kind_salt(kind)))
+                    .show(ui, |ui| {
+                        for item in &names {
+                            let identity = function_identity(item.address, &item.name);
+                            let label = format!("{}  {:x}", item.name, item.address);
+                            if ui
+                                .selectable_label(
+                                    state.function.as_deref() == Some(identity.as_str()),
+                                    &label,
+                                )
+                                .clicked()
+                            {
+                                state.function = Some(identity);
+                                state.query = item.name.clone();
+                            }
+                        }
+                    });
+            });
+    }
     let columns: &[(&str, Column)] = match kind {
         AnalysisKind::Disassembly => &[
             ("Address", Column::exact(mono.size * 7.5)),
@@ -121,6 +181,22 @@ pub(super) fn show(
             ui.push_id(("listing-table", kind_salt(kind)), |ui| {
                 // Rows select on click; text selection would swallow it.
                 ui.style_mut().interaction.selectable_labels = false;
+                let focus: Option<Vec<usize>> = state.function.as_ref().map(|identity| {
+                    let mut current = None;
+                    page.rows
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, (_, entry))| {
+                            row_function_identity(entry, &names, &mut current, identity).as_deref()
+                                == Some(identity.as_str())
+                        })
+                        .map(|(index, _)| index)
+                        .collect()
+                });
+                let row_total = focus.as_ref().map_or(page.total as usize, Vec::len);
+                if focus.as_ref().is_some_and(Vec::is_empty) {
+                    ui.label("No rows of this function are in the loaded listing page.");
+                }
                 let height = ui.available_height().max(row_height);
                 let mut table = TableBuilder::new(ui)
                     .id_salt(("listing", kind_salt(kind)))
@@ -141,13 +217,17 @@ pub(super) fn show(
                         }
                     })
                     .body(|body| {
-                        body.rows(row_height, page.total as usize, |mut row| {
-                            let index = row.index() as u64;
-                            let Some((listing_index, entry)) = loaded
-                                .contains(&index)
-                                .then(|| &page.rows[(index - page.start) as usize])
-                            else {
-                                needed.get_or_insert(index);
+                        body.rows(row_height, row_total, |mut row| {
+                            let index = row.index();
+                            let Some((listing_index, entry)) = (if let Some(focus) = &focus {
+                                focus.get(index).map(|slot| &page.rows[*slot])
+                            } else {
+                                let index = index as u64;
+                                loaded
+                                    .contains(&index)
+                                    .then(|| &page.rows[(index - page.start) as usize])
+                            }) else {
+                                needed.get_or_insert(index as u64);
                                 row.col(|ui| {
                                     ui.weak("…");
                                 });
@@ -182,6 +262,126 @@ pub(super) fn show(
     // Keep the page size in the type system's view of the bound.
     debug_assert!(page.rows.len() <= LISTING_PAGE_MAX_ROWS);
     action
+}
+
+/// Adds function headers from this page and from `section.entries`.
+/// Later pages append; an identity already stored is left in place.
+/// Instruction and source rows are not turned into functions.
+fn remember_functions(
+    functions: &mut Vec<ListedFunction>,
+    section: &AnalysisSection,
+    page: &AnalysisListingPage,
+) {
+    for entry in section
+        .entries
+        .iter()
+        .chain(page.rows.iter().map(|(_, entry)| entry))
+    {
+        let Some(AnalysisData::Function { name, address, .. }) =
+            entry.record.as_ref().map(|record| &record.data)
+        else {
+            continue;
+        };
+        let identity = function_identity(*address, name);
+        if functions
+            .iter()
+            .any(|existing| function_identity(existing.address, &existing.name) == identity)
+        {
+            continue;
+        }
+        functions.push(ListedFunction {
+            name: name.clone(),
+            address: *address,
+        });
+    }
+}
+
+#[derive(Clone)]
+struct ListedFunction {
+    name: String,
+    address: u64,
+}
+
+fn function_identity(address: u64, name: &str) -> String {
+    format!("{address:x}:{name}")
+}
+
+/// Identity of one loaded row. Function headers carry the address. Later
+/// instructions and source lines keep that header when the name matches.
+/// A row before the first header on this page uses a function already
+/// remembered from section entries or pages loaded in this view; it is not
+/// matched when two remembered functions share the name and neither covers
+/// the row.
+fn row_function_identity(
+    entry: &AnalysisEntry,
+    functions: &[ListedFunction],
+    current: &mut Option<String>,
+    selected: &str,
+) -> Option<String> {
+    match entry.record.as_ref().map(|record| &record.data) {
+        Some(AnalysisData::Function { name, address, .. }) => {
+            let identity = function_identity(*address, name);
+            *current = Some(identity.clone());
+            Some(identity)
+        }
+        Some(AnalysisData::Instruction {
+            function, address, ..
+        }) => body_identity(
+            function.as_deref(),
+            Some(*address),
+            functions,
+            current.as_deref(),
+            selected,
+        ),
+        Some(AnalysisData::SourceLine {
+            function, address, ..
+        }) => body_identity(
+            Some(function.as_str()),
+            *address,
+            functions,
+            current.as_deref(),
+            selected,
+        ),
+        _ => None,
+    }
+}
+
+fn body_identity(
+    name: Option<&str>,
+    address: Option<u64>,
+    functions: &[ListedFunction],
+    current: Option<&str>,
+    selected: &str,
+) -> Option<String> {
+    let name = name?;
+    if let Some(address) = address {
+        if let Some(owner) = functions
+            .iter()
+            .filter(|function| function.name == name && function.address <= address)
+            .max_by_key(|function| function.address)
+        {
+            let blocked = functions
+                .iter()
+                .any(|function| function.address > owner.address && function.address <= address);
+            if !blocked {
+                return Some(function_identity(owner.address, &owner.name));
+            }
+        }
+    }
+    if let Some(current) = current {
+        if identity_name(current) == Some(name) {
+            return Some(current.to_owned());
+        }
+    }
+    let same_name = functions.iter().any(|function| function.name == name);
+    if !same_name && identity_name(selected) == Some(name) {
+        return Some(selected.to_owned());
+    }
+    None
+}
+
+fn identity_name(identity: &str) -> Option<&str> {
+    identity.split_once(':').map(|(_, name)| name)
 }
 
 fn kind_salt(kind: AnalysisKind) -> &'static str {

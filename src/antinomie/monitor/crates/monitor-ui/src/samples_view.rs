@@ -121,6 +121,17 @@ const SCRIPT: &str = "script";
 /// (MalwareBazaar's newest uploads leave it out).
 const UNKNOWN_ARCH: &str = "unknown";
 
+/// Hash column: SHA-256, otherwise MD5, otherwise SHA-1.
+fn listed_hash(sample: &SampleInfo) -> Option<&str> {
+    [
+        sample.sha256_hash.as_str(),
+        sample.md5_hash.as_str(),
+        sample.sha1_hash.as_str(),
+    ]
+    .into_iter()
+    .find(|hash| !hash.is_empty())
+}
+
 /// What the dropdowns keep of the results.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Filters {
@@ -179,7 +190,7 @@ fn shown(results: &[SampleInfo], filters: &Filters, sort: Option<Sort>) -> Vec<u
             match sort.column {
                 Col::Seen => sample.first_seen.clone(),
                 Col::File => sample.file_name.to_lowercase(),
-                Col::Hash => sample.sha256_hash.clone(),
+                Col::Hash => listed_hash(sample).unwrap_or("").to_owned(),
                 Col::Family => sample.signature.clone().unwrap_or_default().to_lowercase(),
                 Col::Type => sample.file_type.to_lowercase(),
                 Col::Arch => arch(sample).unwrap_or_default().to_lowercase(),
@@ -284,9 +295,14 @@ fn guest_path(sample: &SampleInfo, sent: usize) -> String {
     } else {
         format!("{}-", sent + 1)
     };
+    let identity = if sample.sha256_hash.is_empty() {
+        sample.md5_hash.as_str()
+    } else {
+        sample.sha256_hash.as_str()
+    };
     format!(
         "/tmp/{}-{copy}{}",
-        &sample.sha256_hash[..12.min(sample.sha256_hash.len())],
+        &identity[..12.min(identity.len())],
         if name.is_empty() {
             "sample".into()
         } else {
@@ -715,7 +731,7 @@ impl SamplesView {
                              architectures for these)"
                         }
                         Source::MalShare => {
-                            "MalShare's newest uploads of every type (hashes only until \
+                            "This list is the last 24 hours, not an archive (hashes only until \
                              searched or downloaded)"
                         }
                     })
@@ -726,7 +742,12 @@ impl SamplesView {
                 }
                 if ui
                     .add_enabled(ready, egui::Button::new("Newest Linux"))
-                    .on_hover_text("The newest ELF programs and shell scripts: what the VMs run")
+                    .on_hover_text(match self.source {
+                        Source::MalwareBazaar => {
+                            "The newest ELF programs and shell scripts: what the VMs run"
+                        }
+                        Source::MalShare => "This list is the last 24 hours, not an archive",
+                    })
                     .clicked()
                 {
                     self.text.clear();
@@ -781,6 +802,11 @@ impl SamplesView {
                 theme::muted(),
                 "Samples from MalShare (malshare.com), searched by hash, file type, file name \
                  or source; MalShare names no families. Free keys allow 2000 requests a day.",
+            );
+            ui.colored_label(
+                theme::muted(),
+                "MalShare returns the past 24 hours only. 7-day and 30-day lists are not \
+                 available from the current API.",
             );
             if all {
                 self.search_all(cx);
@@ -975,23 +1001,27 @@ impl SamplesView {
                             egui::Label::new(RichText::new(&sample.file_name).font(mono.clone()))
                                 .truncate(),
                         )
-                        .on_hover_text(&sample.sha256_hash);
+                        .on_hover_text(listed_hash(sample).unwrap_or("—"));
                     });
-                    row.col(|ui| {
-                        let hash = &sample.sha256_hash;
-                        if ui
-                            .add(
-                                egui::Label::new(
-                                    RichText::new(format!("{}…", &hash[..16.min(hash.len())]))
-                                        .font(mono.clone())
-                                        .color(theme::value(ValueKind::Number)),
+                    row.col(|ui| match listed_hash(sample) {
+                        Some(hash) => {
+                            if ui
+                                .add(
+                                    egui::Label::new(
+                                        RichText::new(format!("{}…", &hash[..16.min(hash.len())]))
+                                            .font(mono.clone())
+                                            .color(theme::value(ValueKind::Number)),
+                                    )
+                                    .sense(egui::Sense::click()),
                                 )
-                                .sense(egui::Sense::click()),
-                            )
-                            .on_hover_text(format!("{hash}\nClick to copy"))
-                            .clicked()
-                        {
-                            ui.ctx().copy_text(hash.clone());
+                                .on_hover_text(format!("{hash}\nClick to copy"))
+                                .clicked()
+                            {
+                                ui.ctx().copy_text(hash.to_owned());
+                            }
+                        }
+                        None => {
+                            ui.label("—");
                         }
                     });
                     row.col(|ui| {
@@ -1001,7 +1031,10 @@ impl SamplesView {
                         );
                     });
                     row.col(|ui| {
-                        ui.label(&sample.file_type);
+                        // A hash alone is not a file type. SHA-1 rows stay unlabeled
+                        // unless the source named a type.
+                        let kind = sample.file_type.as_str();
+                        ui.label(if kind.is_empty() { "—" } else { kind });
                     });
                     row.col(|ui| match arch(sample) {
                         Some(label) => {
@@ -1042,10 +1075,14 @@ impl SamplesView {
                             .on_hover_text(sample.tags.join(", "));
                     });
                     row.col(|ui| {
-                        let hash = &sample.sha256_hash;
-                        if stored.iter().any(|s| &s.info.sha256_hash == hash) {
+                        let identity = listed_hash(sample).unwrap_or("");
+                        let downloaded = !sample.sha256_hash.is_empty()
+                            && stored
+                                .iter()
+                                .any(|item| item.info.sha256_hash == sample.sha256_hash);
+                        if downloaded {
                             ui.colored_label(theme::good(), "Downloaded");
-                        } else if self.downloads.contains_key(hash) {
+                        } else if self.downloads.contains_key(identity) {
                             ui.spinner();
                         } else if ui
                             .button(format!(
@@ -1067,7 +1104,7 @@ impl SamplesView {
             let (curl, key, data): (PathBuf, String, PathBuf) =
                 (cx.curl.into(), self.key.clone(), cx.data_dir.into());
             let source = self.results_source;
-            let hash = sample.sha256_hash.clone();
+            let hash = listed_hash(&sample).unwrap_or("").to_owned();
             std::thread::spawn(move || {
                 let _ = sender.send(source.download(&curl, &key, &data, &sample));
             });

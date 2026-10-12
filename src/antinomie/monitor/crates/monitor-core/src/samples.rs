@@ -143,6 +143,9 @@ impl Query {
 #[serde(default)]
 pub struct SampleInfo {
     pub sha256_hash: String,
+    /// Empty when an older saved record has no SHA-1.
+    #[serde(default)]
+    pub sha1_hash: String,
     pub md5_hash: String,
     pub file_name: String,
     pub file_size: u64,

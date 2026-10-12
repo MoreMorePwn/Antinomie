@@ -194,6 +194,8 @@ pub struct MonitorApp {
     name_action: Option<(String, bool, String)>,
     status: String,
     filter: String,
+    /// Last syscall filter that compiled. An invalid expression leaves this in place.
+    applied_filter: String,
     /// Trace table order: the clicked column and whether it is descending.
     trace_sort: Option<(TraceColumn, bool)>,
     selected_event: Option<InvocationKey>,
@@ -206,6 +208,7 @@ pub struct MonitorApp {
     network_view: crate::network_view::NetworkView,
     memory_view: crate::memory_view::MemoryView,
     core_view: crate::core_view::CoreView,
+    triage: crate::triage::TriageView,
     run_tree: Option<(String, crate::archive::ProcessTreeResult)>,
     run_tree_pending: Option<String>,
     archive_total: Option<u64>,
@@ -230,6 +233,7 @@ pub struct MonitorApp {
     archive_selected: bool,
     history_generation: u64,
     run_filter: RunFilter,
+    run_query: String,
     terminals: BTreeMap<String, RunTerminal>,
     archive: Option<ArchiveWorker>,
     pending_archive: Option<Request>,
@@ -323,6 +327,7 @@ impl MonitorApp {
             name_action: None,
             status,
             filter: String::new(),
+            applied_filter: String::new(),
             trace_sort: None,
             selected_event: None,
             selected_run: None,
@@ -332,6 +337,7 @@ impl MonitorApp {
             network_view: Default::default(),
             memory_view: Default::default(),
             core_view: Default::default(),
+            triage: Default::default(),
             run_tree: None,
             run_tree_pending: None,
             archive_total: None,
@@ -353,6 +359,7 @@ impl MonitorApp {
             archive_selected: false,
             history_generation: 0,
             run_filter: RunFilter::All,
+            run_query: String::new(),
             terminals: BTreeMap::new(),
             archive: None,
             pending_archive: None,
@@ -1198,6 +1205,13 @@ impl MonitorApp {
         self.archive_pending = true;
     }
 
+    fn next_archive_page(&mut self) {
+        if let Some(offset) = self.archive_next {
+            self.archive_previous.push(self.archive_offset);
+            self.request_page(offset);
+        }
+    }
+
     fn reopen(&mut self, run: RunSummary) {
         let live = run_in_live_session(&self.snapshot, &run);
         let reserved = usize::from(self.pending_launch.is_some());
@@ -1289,6 +1303,11 @@ impl MonitorApp {
                 self.select_run(None);
             }
         });
+        ui.add(
+            egui::TextEdit::singleline(&mut self.run_query)
+                .hint_text("Filter runs")
+                .desired_width(ui.available_width()),
+        );
         let mut runs: Vec<_> = self
             .snapshot
             .runs
@@ -1308,7 +1327,15 @@ impl MonitorApp {
             RunFilter::Live => self.live_history_run(run),
             RunFilter::Past => !self.live_history_run(run),
         });
-        let height = (ui.available_height() * 0.58 - 30.0).max(50.0);
+        let query = self.run_query.trim().to_lowercase();
+        if !query.is_empty() {
+            runs.retain(|run| {
+                run.id.to_lowercase().contains(&query)
+                    || run.request.path.to_lowercase().contains(&query)
+                    || run_status(run).to_lowercase().contains(&query)
+            });
+        }
+        let height = (ui.available_height() - 36.0).max(50.0);
         let mut inspect = None;
         ui.allocate_ui_with_layout(
             egui::vec2(ui.available_width(), height + 28.0),
@@ -1426,62 +1453,128 @@ impl MonitorApp {
                 self.select_run(Some(id));
             }
         }
-        ui.separator();
-        if let Some(run) = self
-            .selected_run
-            .as_deref()
-            .and_then(|id| runs.iter().find(|run| run.id == id))
-        {
-            ui.horizontal_wrapped(|ui| {
-                crate::evidence::controls(ui, &run.directory);
-                if run.analysis.is_some() && ui.button("Open static analysis").clicked() {
-                    self.selected_analysis = None;
-                    self.focus_panel = Some(Panel::StaticAnalysis);
-                }
-            });
-            self.run_artifacts_view(ui, run);
-            self.run_tree_view(ui, run);
-            egui::CollapsingHeader::new("Launch details")
-                .default_open(false)
-                .show(ui, |ui| {
-                    egui::ScrollArea::both()
-                        .id_salt("launch_metadata")
-                        .show(ui, |ui| {
-                            egui::Grid::new("run_metadata")
-                                .num_columns(2)
-                                .show(ui, |ui| {
-                                    for (label, value) in [
-                                        ("Executable", run.request.path.clone()),
-                                        ("Arguments", format!("{:?}", run.request.args)),
-                                        ("Working directory", run.request.cwd.clone()),
-                                        ("Environment", run.request.env.join("\n")),
-                                        ("Run in", run.request.run_in.label().to_owned()),
-                                        (
-                                            "UID / GID",
-                                            format!("{} / {}", run.request.uid, run.request.gid),
-                                        ),
-                                        ("Run", run.id.clone()),
-                                        ("Boot", run.boot_id.clone()),
-                                        (
-                                            "Session / root task / PID",
-                                            format!(
-                                                "{} / {} / {}",
-                                                run.session_id, run.root_task_cookie, run.pid
-                                            ),
-                                        ),
-                                        ("Tree", execution_detail(run)),
-                                        ("Root exit", root_exit(run)),
-                                        ("Recording", run.directory.display().to_string()),
-                                    ] {
-                                        ui.label(label);
-                                        ui.add(egui::Label::new(value).selectable(true));
-                                        ui.end_row();
-                                    }
-                                });
-                        });
-                });
-        } else if runs.is_empty() {
+        if runs.is_empty() {
             ui.colored_label(theme::muted(), "No retained runs for this VM");
+        } else if self.selected_run.is_some() {
+            ui.colored_label(
+                theme::muted(),
+                "Run details are in the Details panel below.",
+            );
+        }
+    }
+
+    fn history_detail(&mut self, ui: &mut egui::Ui) {
+        if self.capture_tab {
+            self.capture_detail(ui);
+            return;
+        }
+        let Some(vm_id) = self.selected.clone() else {
+            ui.colored_label(theme::muted(), "No VM selected");
+            return;
+        };
+        let run = self
+            .snapshot
+            .runs
+            .iter()
+            .chain(&self.history)
+            .find(|run| self.selected_run.as_ref() == Some(&run.id) && run.vm_id == vm_id)
+            .cloned();
+        let Some(run) = run else {
+            ui.colored_label(theme::muted(), "Select a run in Run History.");
+            return;
+        };
+        ui.horizontal_wrapped(|ui| {
+            if run.analysis.is_some() && ui.button("Open static analysis").clicked() {
+                self.selected_analysis = None;
+                self.focus_panel = Some(Panel::StaticAnalysis);
+            }
+        });
+        self.run_artifacts_view(ui, &run);
+        self.run_tree_view(ui, &run);
+        egui::CollapsingHeader::new("Launch details")
+            .default_open(false)
+            .show(ui, |ui| {
+                egui::ScrollArea::both()
+                    .id_salt("launch_metadata")
+                    .show(ui, |ui| {
+                        egui::Grid::new("run_metadata")
+                            .num_columns(2)
+                            .show(ui, |ui| {
+                                for (label, value) in [
+                                    ("Executable", run.request.path.clone()),
+                                    ("Arguments", format!("{:?}", run.request.args)),
+                                    ("Working directory", run.request.cwd.clone()),
+                                    ("Environment", run.request.env.join("\n")),
+                                    ("Run in", run.request.run_in.label().to_owned()),
+                                    (
+                                        "UID / GID",
+                                        format!("{} / {}", run.request.uid, run.request.gid),
+                                    ),
+                                    ("Run", run.id.clone()),
+                                    ("Boot", run.boot_id.clone()),
+                                    (
+                                        "Session / root task / PID",
+                                        format!(
+                                            "{} / {} / {}",
+                                            run.session_id, run.root_task_cookie, run.pid
+                                        ),
+                                    ),
+                                    ("Tree", execution_detail(&run)),
+                                    ("Root exit", root_exit(&run)),
+                                    ("Recording", run.directory.display().to_string()),
+                                ] {
+                                    ui.label(label);
+                                    ui.add(egui::Label::new(value).selectable(true));
+                                    ui.end_row();
+                                }
+                            });
+                    });
+            });
+    }
+
+    fn capture_detail(&mut self, ui: &mut egui::Ui) {
+        let Some(id) = self.selected_capture.clone() else {
+            ui.colored_label(theme::muted(), "Select a capture in Run History.");
+            return;
+        };
+        let capture = self
+            .snapshot
+            .captures
+            .iter()
+            .chain(&self.capture_history)
+            .find(|capture| capture.id == id)
+            .cloned();
+        if let Some(capture) = capture {
+            captures::detail(ui, &capture);
+        }
+        let processes = match self.snapshot.capture_processes.get(&id) {
+            Some(live) => Ok(live.clone()),
+            None => match &self.archived_processes {
+                Some((loaded, result)) if *loaded == id => result.clone(),
+                _ => Ok(Vec::new()),
+            },
+        };
+        match processes {
+            Err(error) => {
+                ui.colored_label(theme::warn(), format!("Process tree unavailable: {error}"));
+            }
+            Ok(processes) if processes.is_empty() => {
+                ui.colored_label(
+                    theme::muted(),
+                    "No process tree (captures before Antinomie 0.3.0 keep one combined trace)",
+                );
+            }
+            Ok(processes) => {
+                if let Some(selection) = captures::process_tree(
+                    ui,
+                    &processes,
+                    self.selected_process,
+                    self.settings.font_size,
+                ) {
+                    self.select_process(selection);
+                    self.focus_trace();
+                }
+            }
         }
     }
 
@@ -1681,7 +1774,9 @@ impl MonitorApp {
         if self.trace_archive_directory().is_some() {
             self.request_page(0);
         }
-        self.focus_trace();
+        if archive {
+            self.focus_trace();
+        }
     }
 
     fn capture_history_view(&mut self, ui: &mut egui::Ui, vm_id: &str) {
@@ -1728,41 +1823,11 @@ impl MonitorApp {
         ) {
             self.select_capture(id, archive);
         }
-        let Some(id) = self.selected_capture.clone() else {
-            return;
-        };
-        let processes = match self.snapshot.capture_processes.get(&id) {
-            Some(live) => Ok(live.as_slice()),
-            None => match &self.archived_processes {
-                Some((loaded, result)) if *loaded == id => {
-                    result.as_ref().map(Vec::as_slice).map_err(String::as_str)
-                }
-                _ => Ok(&[][..]),
-            },
-        };
-        ui.separator();
-        match processes {
-            Err(error) => {
-                ui.colored_label(theme::warn(), format!("Process tree unavailable: {error}"));
-            }
-            Ok([]) => {
-                ui.colored_label(
-                    theme::muted(),
-                    "No process tree (captures before Antinomie 0.3.0 keep one combined trace)",
-                );
-            }
-            Ok(processes) => {
-                let selection = captures::process_tree(
-                    ui,
-                    processes,
-                    self.selected_process,
-                    self.settings.font_size,
-                );
-                if let Some(selection) = selection {
-                    self.select_process(selection);
-                    self.focus_trace();
-                }
-            }
+        if self.selected_capture.is_some() {
+            ui.colored_label(
+                theme::muted(),
+                "Capture details are in the Details panel below.",
+            );
         }
     }
 
@@ -2419,6 +2484,10 @@ impl MonitorApp {
                         ui.set_min_width(ui.spacing().menu_width);
                         if ui.button("About Antinomie").clicked() {
                             self.about_open = true;
+                            ui.close_menu();
+                        }
+                        if ui.button("Filter guide").clicked() {
+                            crate::query::open_guide(ui.ctx());
                             ui.close_menu();
                         }
                     });
@@ -3119,144 +3188,82 @@ impl MonitorApp {
         }
     }
 
-    /// The status bar: VM state, guest kernel, telemetry loss and storage in
-    /// groups; then errors and the latest status message.
+    /// The status line. Losses and the app version sit on the right:
+    /// `TRL x UIL y STL z CAP p/q GiB Antinomie x.y.z`.
     fn health(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::bottom("health")
             .frame(theme::frame(theme::raised()))
             .show(ctx, |ui| {
-                let health = &self.snapshot.health;
+                let dropped = self.snapshot.health.dropped;
+                let attempted = self.snapshot.health.attempted;
+                let ui_dropped = self.snapshot.health.ui_dropped;
+                let storage_dropped = self.snapshot.health.storage_dropped_packets;
+                let persisted = self.snapshot.health.persisted_len;
+                let quota = self.settings.quota_gib;
+                let shedding = self.snapshot.health.shedding;
+                let persistence = self.snapshot.health.persistence_error.clone();
+                let last_error = self.snapshot.last_error.clone();
+                let status = self.status.clone();
+                let closing = self.closing;
                 let loss = |count: u64| if count == 0 { theme::good() } else { theme::warn() };
+                let saved = persisted as f64 / 1_073_741_824.0;
                 ui.add_space(3.0);
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    let (word, color) = vm_state_word(&self.snapshot.state);
-                    ui.colored_label(color, "●");
-                    ui.label(RichText::new(word).color(color).strong());
-                    if let Some(vm) = self
-                        .snapshot
-                        .vms
-                        .iter()
-                        .find(|vm| Some(&vm.id) == self.snapshot.active_vm.as_ref())
-                    {
-                        ui.label(RichText::new(&vm.name).color(theme::muted()));
-                    }
-                    if let Some(kernel) = &self.snapshot.guest_kernel {
-                        let status = RevisionStatus::of(kernel.revision);
-                        ui.separator();
-                        ui.label(RichText::new("Kernel").color(theme::muted()));
-                        ui.label(
-                            RichText::new(RevisionStatus::describe(kernel.revision, None)).color(
-                                if status == RevisionStatus::Current {
-                                    theme::good()
-                                } else {
-                                    theme::warn()
-                                },
-                            ),
-                        )
-                        .on_hover_text(format!(
-                            "Release: {}\nKernel: {}\nThis app: Antinomie {APP_VERSION}",
-                            kernel.release.as_deref().unwrap_or("unknown"),
-                            RevisionStatus::describe(kernel.revision, None),
-                        ));
-                    }
-                    ui.separator();
-                    status_value(ui, "Transport loss", &health.dropped.to_string(), loss(health.dropped))
-                        .on_hover_text(format!(
-                            "Records the guest could not hand over: {} of {}\nGuest buffer per vCPU: {}\nWhen buffers fill: {}",
-                            health.dropped,
-                            health.attempted,
-                            if health.ring_size == 0 { "unknown".to_owned() } else { ring_label(health.ring_size / 1024) },
-                            if health.send_wait_us == 0 { "drop".to_owned() } else { format!("wait up to {} ms", health.send_wait_us / 1000) },
-                        ));
-                    if health.shedding {
-                        ui.colored_label(theme::warn(), "Capture All is dropping events")
-                            .on_hover_text(
-                                "The host cannot decode and save this guest's telemetry as fast \
-                                 as it comes, so the guest drops records instead of waiting on \
-                                 every system call (which would freeze it). Never-drop resumes \
-                                 once the host has caught up; drops count as transport loss.",
-                            );
-                    }
-                    if health.transport_waits > 0 {
-                        // Never-drop mode: how much the guest was slowed down.
-                        status_value(
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    if let Some(error) = &persistence {
+                        status_line(
                             ui,
-                            "Guest waited",
-                            &format!("{:.1} s", health.transport_wait_ns as f64 / 1e9),
-                            theme::info(),
-                        )
-                        .on_hover_text(format!(
-                            "{} system calls waited for the host to make room",
-                            health.transport_waits
-                        ));
+                            egui_phosphor::regular::WARNING,
+                            &format!("Saving stopped: {error}"),
+                            theme::error(),
+                        );
+                    } else if let Some(error) = &last_error {
+                        status_line(
+                            ui,
+                            egui_phosphor::regular::WARNING_CIRCLE,
+                            error,
+                            theme::error(),
+                        );
+                    } else if closing {
+                        ui.spinner();
+                        ui.colored_label(
+                            theme::warn(),
+                            "Waiting for guest shutdown and recording finalization…",
+                        );
+                    } else if !status.is_empty() {
+                        status_line(ui, egui_phosphor::regular::INFO, &status, theme::info());
                     }
-                    ui.add_space(8.0);
-                    status_value(ui, "UI loss", &health.ui_dropped.to_string(), loss(health.ui_dropped));
-                    ui.add_space(8.0);
-                    status_value(
-                        ui,
-                        "Storage loss",
-                        &health.storage_dropped_packets.to_string(),
-                        if health.persistence_error.is_some() {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // A name stays next to its number. Groups are separated.
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        let version = ui.monospace(format!("Antinomie {APP_VERSION}"));
+                        ui.add_space(16.0);
+                        let cap = ui.monospace(format!("CAP {saved:.1}/{quota} GiB"));
+                        ui.add_space(16.0);
+                        let storage_color = if persistence.is_some() {
                             theme::error()
                         } else {
-                            loss(health.storage_dropped_packets)
-                        },
-                    );
-                    if health.parser_errors > 0 {
-                        status_value(ui, "Parser errors", &health.parser_errors.to_string(), theme::warn());
-                    }
-                    ui.separator();
-                    let saved = health.persisted_len as f64 / 1073741824.0;
-                    let fraction = (saved / f64::from(self.settings.quota_gib.max(1))).clamp(0.0, 1.0) as f32;
-                    let fill = if health.persistence_error.is_some() {
-                        theme::error()
-                    } else if fraction > 0.9 {
-                        theme::warn()
-                    } else {
-                        theme::good()
-                    };
-                    ui.label(RichText::new("Saved").color(theme::muted()));
-                    ui.add(
-                        egui::ProgressBar::new(fraction)
-                            .desired_width(64.0)
-                            .desired_height(8.0)
-                            .fill(fill),
-                    );
-                    ui.label(
-                        RichText::new(format!("{saved:.1} / {} GiB", self.settings.quota_gib))
-                            .monospace(),
-                    )
-                    .on_hover_text(format!(
-                        "Packets saved / received: {} / {}\nParser errors: {}\nReply stalls: {}\nTransport health: {:#x}\nRecording: {}",
-                        health.persisted_packets, health.received_packets, health.parser_errors,
-                        health.reply_stalls, health.transport_health,
-                        self.snapshot.capture_dir.as_ref().map(|path| path.display().to_string()).unwrap_or_else(|| "none".into())));
-                    if health.write_backlog > 64 * 1024 * 1024 {
-                        status_value(
-                            ui,
-                            "Disk backlog",
-                            &format!("{} MB", health.write_backlog / 1_000_000),
-                            theme::warn(),
-                        )
-                        .on_hover_text("Recording data waiting for the disk; when the queue is full the transport waits");
-                    }
-                });
-                if let Some(error) = &health.persistence_error {
-                    status_line(ui, egui_phosphor::regular::WARNING, &format!("Saving stopped: {error}"), theme::error());
-                }
-                if let Some(error) = &self.snapshot.last_error {
-                    status_line(ui, egui_phosphor::regular::WARNING_CIRCLE, error, theme::error());
-                }
-                if self.closing {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.colored_label(theme::warn(), "Waiting for guest shutdown and recording finalization…");
+                            loss(storage_dropped)
+                        };
+                        let stl =
+                            status_value_rtl(ui, "STL", &storage_dropped.to_string(), storage_color);
+                        ui.add_space(16.0);
+                        let uil =
+                            status_value_rtl(ui, "UIL", &ui_dropped.to_string(), loss(ui_dropped));
+                        ui.add_space(16.0);
+                        let trl = status_value_rtl(ui, "TRL", &dropped.to_string(), loss(dropped));
+                        let meters = version | cap | stl | uil | trl;
+                        meters.on_hover_text(format!(
+                            "TRL transport loss: {dropped} of {attempted} records the guest could not hand over\n\
+                             UIL interface loss: {ui_dropped} preview records not drawn\n\
+                             STL storage loss: {storage_dropped} packets not retained\n\
+                             CAP saved / quota: {saved:.1} / {quota} GiB\n\
+                             Capture All shedding: {}\n\
+                             Antinomie {APP_VERSION}",
+                            if shedding { "dropping events" } else { "off" }
+                        ));
                     });
-                } else if !self.status.is_empty() {
-                    status_line(ui, egui_phosphor::regular::INFO, &self.status, theme::info());
-                }
+                });
                 ui.add_space(3.0);
             });
     }
@@ -3529,6 +3536,16 @@ impl MonitorApp {
             )
     }
 
+    /// A valid trace box becomes the applied filter. An invalid expression
+    /// keeps the previous one; an empty applied filter matches every row.
+    fn commit_trace_filter(&mut self) -> crate::query::Compiled {
+        let draft = crate::query::compile_note(&self.filter);
+        if draft.error.is_none() {
+            self.applied_filter.clone_from(&self.filter);
+        }
+        draft
+    }
+
     fn events(&mut self, ui: &mut egui::Ui) {
         if self.no_live_trace() {
             self.empty_trace(ui);
@@ -3548,15 +3565,6 @@ impl MonitorApp {
                     self.select_process(selection);
                 }
             }
-            ui.add(
-                egui::TextEdit::singleline(&mut self.filter)
-                    .hint_text(format!(
-                        "{} Filter",
-                        egui_phosphor::regular::MAGNIFYING_GLASS
-                    ))
-                    .desired_width(150.0),
-            )
-            .on_hover_text("Show calls whose name, TID or info contains this text (saved traces: filters the current page)");
             if self.trace_archive_directory().is_some() {
                 if icon(
                     ui,
@@ -3574,10 +3582,7 @@ impl MonitorApp {
                     "Next archive page",
                     !self.archive_pending && self.archive_next.is_some(),
                 ) {
-                    if let Some(offset) = self.archive_next {
-                        self.archive_previous.push(self.archive_offset);
-                        self.request_page(offset);
-                    }
+                    self.next_archive_page();
                 }
                 if icon(
                     ui,
@@ -3588,7 +3593,11 @@ impl MonitorApp {
                     self.request_page(self.archive_offset);
                 }
                 if let Some(total) = self.archive_total {
-                    ui.label(format!("Page {} of {} · 100 calls/page · {total} saved calls", self.archive_previous.len() + 1, total.div_ceil(100).max(1)));
+                    ui.label(format!(
+                        "Page {} of {} · 100 calls/page · {total} saved calls",
+                        self.archive_previous.len() + 1,
+                        total.div_ceil(100).max(1)
+                    ));
                 }
                 ui.label(if self.archive_pending {
                     "Reading archive..."
@@ -3596,12 +3605,30 @@ impl MonitorApp {
                     "History"
                 });
             }
+            let filter_width = ui.available_width().max(180.0);
+            ui.add(
+                egui::TextEdit::singleline(&mut self.filter)
+                    .hint_text(format!(
+                        "{} Filter",
+                        egui_phosphor::regular::MAGNIFYING_GLASS
+                    ))
+                    .desired_width(filter_width),
+            )
+            .on_hover_text(crate::query::HELP);
         });
         if let Some(error) = &self.archive_error {
             ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).truncate())
                 .on_hover_text(error);
         }
-        let filter = self.filter.to_lowercase();
+        let draft = self.commit_trace_filter();
+        if let Some(error) = &draft.error {
+            ui.colored_label(theme::warn(), error);
+        }
+        let filter = if draft.error.is_none() {
+            draft
+        } else {
+            crate::query::compile_note(&self.applied_filter)
+        };
         self.trace_categories(ui, &all);
         let total = all.len();
         let hidden = self.settings.hidden_trace_categories.clone();
@@ -3616,16 +3643,7 @@ impl MonitorApp {
                 {
                     return false;
                 }
-                filter.is_empty()
-                    || format!(
-                        "{} {} {} {}",
-                        event.syscall_name,
-                        event.tid,
-                        event.task_cookie,
-                        trace::info(invocation)
-                    )
-                    .to_lowercase()
-                    .contains(&filter)
+                filter.keep(invocation)
             })
             .collect();
         let mut invocations = invocations;
@@ -4361,6 +4379,7 @@ impl MonitorApp {
                 });
             self.about_open = open;
         }
+        crate::query::guide(ctx);
         if self.build_open {
             let mut open = true;
             let build = self.snapshot.build.clone();
@@ -5692,6 +5711,39 @@ impl MonitorApp {
         }
     }
 
+    /// Loaded packets have no run id. Show them only when they belong to this
+    /// selection; otherwise triage gets an empty slice.
+    ///
+    /// A selected observation capture contributes packets only when
+    /// `loaded_path` equals that capture's pcap file. `CaptureSummary` stores
+    /// an observation directory and has no pcap path, so the comparison fails
+    /// and the slice is empty. An archived trace, or a selected run that is
+    /// not the live running run, also has no proven pcap join. Anything else
+    /// is the live VM and keeps the packets currently loaded.
+    fn triage_hides_packets(&self) -> bool {
+        if self.selected_capture.is_some() {
+            return !self.selected_capture_owns_loaded_pcap();
+        }
+        self.trace_archive_directory().is_some()
+            || self
+                .selected_run
+                .as_ref()
+                .is_some_and(|id| !self.run(id).is_some_and(|run| self.live_history_run(run)))
+    }
+
+    fn selected_capture_owns_loaded_pcap(&self) -> bool {
+        let Some(loaded) = self
+            .network_view
+            .loaded_path()
+            .map(std::path::Path::to_path_buf)
+        else {
+            return false;
+        };
+        self.selected_capture_summary()
+            .and_then(capture_pcap_file)
+            .is_some_and(|file| file == loaded)
+    }
+
     pub(crate) fn show_panel(&mut self, ui: &mut egui::Ui, panel: &Panel) {
         ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
         self.details_follow.drawn(ui, panel);
@@ -5748,6 +5800,10 @@ impl MonitorApp {
                     .map(|location| location.recording_directories.clone())
                     .unwrap_or_default();
                 let unavailable = self.manual_core_unavailable();
+                self.core_view
+                    .set_tools_dir(antinomie_monitor_core::analysis_tools::tools_dir(
+                        &self.options.data_dir,
+                    ));
                 let action = self.core_view.show(
                     ui,
                     &roots,
@@ -5855,6 +5911,52 @@ impl MonitorApp {
                 );
                 self.analysis_action(&key, action);
             }
+            Panel::Triage => {
+                let invocations = self.invocations();
+                if self.trace_archive_directory().is_some() {
+                    let archive_offset = self.archive_offset;
+                    let archive_page_len = self.archive_page.len();
+                    let archive_total = self
+                        .archive_total
+                        .map(|total| total.to_string())
+                        .unwrap_or_else(|| "—".to_string());
+                    ui.colored_label(
+                        theme::muted(),
+                        format!(
+                            "Triage is archive page offset {archive_offset}, {archive_page_len} calls of {archive_total} saved."
+                        ),
+                    );
+                    if self.archive_next.is_some()
+                        && !self.archive_pending
+                        && ui.button("Next archive page").clicked()
+                    {
+                        self.next_archive_page();
+                    }
+                }
+                let hide_packets = self.triage_hides_packets();
+                if hide_packets {
+                    ui.colored_label(
+                        theme::muted(),
+                        "Packet rows are hidden because the open capture is not this run.",
+                    );
+                }
+                let packets = if hide_packets {
+                    &[]
+                } else {
+                    self.network_view.loaded_packets()
+                };
+                if let Some(call_id) = self.triage.show(
+                    ui,
+                    crate::triage::TriageInput {
+                        invocations: &invocations,
+                        packets,
+                    },
+                ) {
+                    self.filter = format!("call.id == {call_id}");
+                    self.applied_filter = format!("call.id == {call_id}");
+                    self.focus_trace();
+                }
+            }
             Panel::StaticAnalysis => {
                 let mut reports = BTreeMap::new();
                 for run in self.snapshot.runs.iter().chain(&self.history) {
@@ -5878,11 +5980,11 @@ impl MonitorApp {
                     .and_then(|id| reports.get(id))
                     .cloned()
                     .unwrap_or_else(|| "Selected run".into());
-                ui.horizontal_wrapped(|ui| {
+                ui.horizontal(|ui| {
                     ui.label("Report");
                     egui::ComboBox::from_id_salt("analysis-source")
                         .selected_text(current)
-                        .width(420.0)
+                        .width(ui.available_width())
                         .truncate()
                         .show_ui(ui, |ui| {
                             ui.selectable_value(&mut self.selected_analysis, None, "Selected run");
@@ -5930,9 +6032,6 @@ impl MonitorApp {
                     shown.as_deref(),
                 );
                 if let Some(id) = shown.as_deref() {
-                    if let Some(directory) = self.analysis_directory(id) {
-                        crate::evidence::controls(ui, &directory);
-                    }
                     let related: Vec<_> = self
                         .snapshot
                         .runs
@@ -5941,25 +6040,16 @@ impl MonitorApp {
                         .filter(|run| run.analysis.as_ref().is_some_and(|r| r.id == id))
                         .map(|run| (run.id.clone(), run.request.path.clone()))
                         .collect();
-                    ui.horizontal_wrapped(|ui| {
-                        if related.is_empty() {
-                            ui.colored_label(
-                                theme::muted(),
-                                "Analysis only — no program run linked",
-                            );
-                        } else {
-                            ui.label("Related runs:");
-                            let mut seen = std::collections::BTreeSet::new();
-                            for (run_id, path) in related {
-                                if seen.insert(run_id.clone())
-                                    && ui.link(format!("{path} ({run_id})")).clicked()
-                                {
-                                    self.select_run(Some(run_id));
-                                    self.focus_panel = Some(Panel::RunHistory);
-                                }
-                            }
+                    if let Some((run_id, path)) = related.first() {
+                        if ui
+                            .link(format!("{path} ({run_id})"))
+                            .on_hover_text("Open the related run")
+                            .clicked()
+                        {
+                            self.select_run(Some(run_id.clone()));
+                            self.focus_panel = Some(Panel::RunHistory);
                         }
-                    });
+                    }
                 }
                 let view = self.analysis_views.entry("workspace".into()).or_default();
                 view.bind(report.as_ref().map(|report| report.id.as_str()));
@@ -5980,6 +6070,7 @@ impl MonitorApp {
                 crate::workspace::DetailsOf::MemoryRow => {
                     self.memory_view.details(ui, self.settings.font_size)
                 }
+                crate::workspace::DetailsOf::History => self.history_detail(ui),
                 crate::workspace::DetailsOf::Syscall => self.details(ui),
             },
             Panel::Activity => self.activity(ui),
@@ -6647,6 +6738,14 @@ fn show_terminal_viewport(
 
 fn terminal_capacity_message() -> String {
     format!("Terminal view limit reached ({TERMINAL_VIEW_LIMIT}); close a history window")
+}
+
+/// Pcap path stored on a process-observation capture, when one exists.
+/// `CaptureSummary` has an observation directory and no pcap file, so this
+/// is always `None`. Do not invent a path from that directory.
+fn capture_pcap_file(capture: &CaptureSummary) -> Option<&std::path::Path> {
+    let _ = capture.directory.as_os_str();
+    None
 }
 
 fn run_in_live_session(snapshot: &Snapshot, run: &RunSummary) -> bool {
@@ -7378,15 +7477,17 @@ fn text_size_control(ui: &mut egui::Ui, size: &mut f32) {
     });
 }
 
-/// A status bar figure: a muted name and a monospace value in `color`.
-fn status_value(
+/// A status bar figure inside a right-to-left row. The value is added first so
+/// it sits to the right of its name: `TRL 0`.
+fn status_value_rtl(
     ui: &mut egui::Ui,
     name: &str,
     value: &str,
     color: egui::Color32,
 ) -> egui::Response {
+    let value = ui.label(RichText::new(value).monospace().color(color));
     let name = ui.label(RichText::new(name).color(theme::muted()));
-    ui.label(RichText::new(value).monospace().color(color)) | name
+    value | name
 }
 
 /// A status bar message line: an icon and the text in `color`, cut to fit.
@@ -7479,6 +7580,7 @@ mod tests {
             build_wizard: build_wizard::BuildWizard::default(),
             name_action: None,
             filter: String::new(),
+            applied_filter: String::new(),
             trace_sort: None,
             selected_event: None,
             selected_run: None,
@@ -7488,6 +7590,7 @@ mod tests {
             network_view: Default::default(),
             memory_view: Default::default(),
             core_view: Default::default(),
+            triage: Default::default(),
             run_tree: None,
             run_tree_pending: None,
             archive_total: None,
@@ -7509,6 +7612,7 @@ mod tests {
             archive_selected: false,
             history_generation: 0,
             run_filter: RunFilter::All,
+            run_query: String::new(),
             terminals: BTreeMap::new(),
             archive: None,
             pending_archive: None,
@@ -7561,6 +7665,70 @@ mod tests {
             issues: Vec::new(),
             fields: Vec::new(),
         }
+    }
+
+    #[test]
+    fn invalid_syscall_filter_keeps_the_previous_applied_filter() {
+        let mut app = app();
+        let invocation = InvocationSummary {
+            stream_id: 1,
+            task_cookie: 3,
+            call_id: 2,
+            entry: Some(event(1, 0)),
+            exit: None,
+            async_events: Vec::new(),
+            task_exit: None,
+        };
+        assert_eq!(app.applied_filter, "");
+        assert!(crate::query::compile_note(&app.applied_filter).keep(&invocation));
+
+        app.filter = "read".into();
+        let note = app.commit_trace_filter();
+        assert!(note.error.is_none());
+        assert_eq!(app.applied_filter, "read");
+        assert!(crate::query::compile_note(&app.applied_filter).keep(&invocation));
+
+        app.filter = "syscall.typo == 9".into();
+        let note = app.commit_trace_filter();
+        assert!(note.error.is_some());
+        assert_eq!(app.applied_filter, "read");
+        assert!(crate::query::compile_note(&app.applied_filter).keep(&invocation));
+        assert!(!crate::query::compile_note(&app.filter).keep(&invocation));
+    }
+
+    #[test]
+    fn triage_packets_stay_with_the_live_vm_only() {
+        let mut live = app();
+        live.network_view
+            .open(Some(PathBuf::from("/tmp/live.pcap")));
+        assert!(!live.triage_hides_packets());
+
+        live.snapshot.state = VmState::Running;
+        live.snapshot.active_vm = Some("vm".into());
+        live.snapshot.runs.push(run("live"));
+        live.selected_run = Some("live".into());
+        assert!(!live.triage_hides_packets());
+
+        let mut past = run("old");
+        past.state = RunState::Finished;
+        live.history.push(past);
+        live.selected_run = Some("old".into());
+        assert!(live.triage_hides_packets());
+
+        let mut captured = app();
+        captured
+            .snapshot
+            .captures
+            .push(observer("cap", CaptureState::Active));
+        captured.selected_capture = Some("cap".into());
+        captured
+            .network_view
+            .open(Some(PathBuf::from("/tmp/live.pcap")));
+        assert!(captured.triage_hides_packets());
+        assert_eq!(
+            captured.network_view.loaded_path(),
+            Some(std::path::Path::new("/tmp/live.pcap"))
+        );
     }
 
     fn run(id: &str) -> RunSummary {
@@ -11095,6 +11263,9 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
+                    egui::TopBottomPanel::bottom("history-details")
+                        .exact_height(180.0)
+                        .show(ctx, |ui| app.history_detail(ui));
                     egui::CentralPanel::default().show(ctx, |ui| app.run_history(ui));
                 },
             )
@@ -11328,9 +11499,9 @@ mod tests {
                         .1
                 };
                 assert!(rect("Syscalls").bottom() < rect("Details").top());
-                assert!(rect("Details").bottom() < rect("Transport loss").top());
+                assert!(rect("Details").bottom() < rect("TRL").top());
                 // The status bar value sits beside its name, colored as a loss.
-                let label = rect("Transport loss");
+                let label = rect("TRL");
                 let loss = texts
                     .iter()
                     .find(|(text, value)| {
@@ -11339,6 +11510,10 @@ mod tests {
                     .expect("transport loss value")
                     .1;
                 assert!(label.right() < loss.left());
+                assert!(
+                    rect("Antinomie 0.6.0").right() > size.x - 48.0,
+                    "loss meters must sit on the right edge"
+                );
                 assert!(rect("File").bottom() < rect("Syscalls").top());
                 let title = rect("Virtual machines");
                 let add = texts
