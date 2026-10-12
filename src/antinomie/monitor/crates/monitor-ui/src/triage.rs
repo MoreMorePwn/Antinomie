@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Triage for the selected run: process activity, files, HTTP/DNS and eBPF.
 //! Rows are observations from captured syscalls and packets, not a verdict.
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
@@ -46,12 +46,13 @@ pub(crate) struct TriageView {
     suspicious_filter: String,
     /// Invocation chosen from a Suspicious activity row.
     selected_call_id: Option<u64>,
-    /// Directory whose saved `telemetry.raw` the background index is reading.
-    scan_key: Option<PathBuf>,
+    /// Archive directory and owned pcap, so a different capture starts a new index.
+    scan_key: Option<String>,
     scan_cancel: Option<Arc<AtomicBool>>,
     scan_rx: Option<Receiver<Result<ArchiveScan, String>>>,
     scan: Option<ArchiveScan>,
     scan_error: Option<String>,
+    bpf_export_status: String,
 }
 
 impl Default for TriageView {
@@ -68,6 +69,7 @@ impl Default for TriageView {
             scan_rx: None,
             scan: None,
             scan_error: None,
+            bpf_export_status: String::new(),
         }
     }
 }
@@ -84,6 +86,10 @@ pub(crate) struct TriageInput<'a> {
     pub coverage: &'a str,
     /// Saved recording directory. `None` for a live session or a single loaded page.
     pub archive: Option<&'a Path>,
+    /// Pcap that belongs to this run. Absent means no packet index, not another capture.
+    pub pcap: Option<&'a Path>,
+    /// The pcap is still being written. The index reads the bytes present now.
+    pub pcap_open: bool,
 }
 
 impl<'a> TriageInput<'a> {
@@ -98,6 +104,8 @@ impl<'a> TriageInput<'a> {
             run_id: None,
             coverage: "this loaded page",
             archive: None,
+            pcap: None,
+            pcap_open: false,
         }
     }
 }
@@ -116,7 +124,7 @@ impl TriageView {
             }
         });
         ui.separator();
-        self.ensure_scan(input.archive);
+        self.ensure_scan(input.archive, input.pcap, input.pcap_open);
         self.poll_scan(ui);
         let coverage = if let Some(scan) = &self.scan {
             scan.coverage.clone()
@@ -153,7 +161,7 @@ impl TriageView {
                 None
             }
             Section::Bpf => {
-                bpf_view(ui, &input);
+                bpf_view(ui, &input, &mut self.bpf_export_status);
                 None
             }
         }
@@ -252,14 +260,41 @@ impl TriageView {
             ui.selectable_value(&mut self.network, NetTab::Http, "All HTTP requests");
             ui.selectable_value(&mut self.network, NetTab::Dns, "All DNS requests");
         });
+        if input.archive.is_some() {
+            let Some(scan) = &self.scan else {
+                ui.colored_label(
+                    theme::muted(),
+                    "HTTP and DNS wait for the saved-capture index. The loaded packet preview is not shown here.",
+                );
+                return;
+            };
+            ui.colored_label(theme::muted(), &scan.network_coverage);
+            match self.network {
+                NetTab::Http => indexed_packet_table(
+                    ui,
+                    "triage-http",
+                    &["Frame", "Endpoints", "Request", "Response", "Process"],
+                    &scan.http,
+                    scan.http_omitted,
+                ),
+                NetTab::Dns => indexed_packet_table(
+                    ui,
+                    "triage-dns",
+                    &["Frame", "Endpoints", "Query", "Kind"],
+                    &scan.dns,
+                    scan.dns_omitted,
+                ),
+            }
+            return;
+        }
         match self.network {
             NetTab::Http => {
                 ui.colored_label(
                     theme::muted(),
                     if input.frames.is_none() {
-                        "Request reconstruction is unavailable for this view: the loaded packet list has no payload. Supported when frames are present: HTTP/1.0 and HTTP/1.1 over TCP. Unavailable: HTTPS, HTTP/2, and HTTP/3."
+                        "Request reconstruction is unavailable for this view: the loaded packet list has no payload. Supported when frames are present: HTTP/1.0 and HTTP/1.1 over TCP. Unavailable: HTTPS, HTTP/2, and HTTP/3. This is the open capture, not a finished whole-run index."
                     } else {
-                        "Reassembled from captured TCP payloads. Supported: HTTP/1.0 and HTTP/1.1. Unavailable: HTTPS, HTTP/2, and HTTP/3."
+                        "Reassembled from the open capture's loaded packets, not a finished whole-run index. Supported: HTTP/1.0 and HTTP/1.1. Unavailable: HTTPS, HTTP/2, and HTTP/3."
                     },
                 );
                 limited_table(
@@ -273,9 +308,9 @@ impl TriageView {
                 ui.colored_label(
                     theme::muted(),
                     if input.frames.is_none() {
-                        "DNS reconstruction is unavailable for this view: the loaded packet list has no payload. Supported when frames are present: DNS over UDP and DNS over TCP. Unavailable: DNS over TLS and DNS over HTTPS."
+                        "DNS reconstruction is unavailable for this view: the loaded packet list has no payload. Supported when frames are present: DNS over UDP and DNS over TCP. Unavailable: DNS over TLS and DNS over HTTPS. This is the open capture, not a finished whole-run index."
                     } else {
-                        "Decoded from captured UDP and TCP payloads. Unavailable: DNS over TLS and DNS over HTTPS."
+                        "Decoded from the open capture's loaded packets, not a finished whole-run index. Unavailable: DNS over TLS and DNS over HTTPS."
                     },
                 );
                 limited_table(
@@ -337,30 +372,42 @@ impl TriageView {
         clicked
     }
 
-    fn ensure_scan(&mut self, archive: Option<&Path>) {
+    fn ensure_scan(&mut self, archive: Option<&Path>, pcap: Option<&Path>, pcap_open: bool) {
         let Some(path) = archive else {
             self.stop_scan();
             return;
         };
-        if self.scan_key.as_deref() == Some(path) {
+        let key = format!(
+            "{}\n{}\n{pcap_open}",
+            path.display(),
+            pcap.map(|file| file.display().to_string())
+                .unwrap_or_default()
+        );
+        if self.scan_key.as_deref() == Some(key.as_str()) {
             return;
         }
         self.stop_scan();
         let cancel = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::channel();
         let directory = path.to_path_buf();
+        let pcap = pcap.map(Path::to_path_buf);
         let cancel_thread = Arc::clone(&cancel);
         if std::thread::Builder::new()
             .name("triage-index".into())
             .spawn(move || {
-                let _ = tx.send(scan_archive(&directory, &cancel_thread));
+                let _ = tx.send(scan_archive(
+                    &directory,
+                    pcap.as_deref(),
+                    pcap_open,
+                    &cancel_thread,
+                ));
             })
             .is_err()
         {
             self.scan_error = Some("could not start the saved-recording index".into());
             return;
         }
-        self.scan_key = Some(path.to_path_buf());
+        self.scan_key = Some(key);
         self.scan_cancel = Some(cancel);
         self.scan_rx = Some(rx);
     }
@@ -427,6 +474,20 @@ struct LimitedRows {
 fn push_limited(limited: &mut LimitedRows, row: Vec<Cell>) -> bool {
     limited.rows.push(row);
     true
+}
+
+fn indexed_packet_table(
+    ui: &mut egui::Ui,
+    id: &str,
+    headers: &[&str],
+    rows: &[Vec<Cell>],
+    omitted: u64,
+) {
+    ui.colored_label(
+        theme::muted(),
+        format!("{count} rows from the saved capture; {omitted} additional matches were not stored in this table.", count = rows.len()),
+    );
+    table(ui, id, headers, rows);
 }
 
 fn limited_table(ui: &mut egui::Ui, id: &str, headers: &[&str], limited: &LimitedRows) {
@@ -1192,12 +1253,22 @@ struct ArchiveScan {
     opened_omitted: u64,
     changed: Vec<Vec<Cell>>,
     changed_omitted: u64,
+    network_coverage: String,
+    http: Vec<Vec<Cell>>,
+    http_omitted: u64,
+    dns: Vec<Vec<Cell>>,
+    dns_omitted: u64,
 }
 
 /// Walk every saved invocation page. Display tables keep at most [`STORED_ROWS`]
 /// matches; the coverage line counts anything left out. Cancellation stops
 /// between pages and does not claim the recording was fully indexed.
-fn scan_archive(directory: &Path, cancel: &AtomicBool) -> Result<ArchiveScan, String> {
+fn scan_archive(
+    directory: &Path,
+    pcap: Option<&Path>,
+    pcap_open: bool,
+    cancel: &AtomicBool,
+) -> Result<ArchiveScan, String> {
     if cancel.load(Ordering::Relaxed) {
         return Err("cancelled".into());
     }
@@ -1279,6 +1350,25 @@ fn scan_archive(directory: &Path, cancel: &AtomicBool) -> Result<ArchiveScan, St
     if !issues.is_empty() {
         coverage.push_str(&format!("; {} archive read issues", issues.len()));
     }
+    let network = match pcap {
+        Some(path) => scan_pcap(path, pcap_open, cancel).unwrap_or_else(|error| PacketIndex {
+            coverage: format!("pcap index failed: {error}"),
+            http: Vec::new(),
+            http_omitted: 0,
+            dns: Vec::new(),
+            dns_omitted: 0,
+        }),
+        None => PacketIndex {
+            coverage: "no pcap is recorded for this run; the loaded packet preview was not used"
+                .into(),
+            http: Vec::new(),
+            http_omitted: 0,
+            dns: Vec::new(),
+            dns_omitted: 0,
+        },
+    };
+    coverage.push_str(". ");
+    coverage.push_str(&network.coverage);
     Ok(ArchiveScan {
         coverage,
         process: finish_processes(nodes),
@@ -1288,7 +1378,187 @@ fn scan_archive(directory: &Path, cancel: &AtomicBool) -> Result<ArchiveScan, St
         opened_omitted,
         changed,
         changed_omitted,
+        network_coverage: network.coverage,
+        http: network.http,
+        http_omitted: network.http_omitted,
+        dns: network.dns,
+        dns_omitted: network.dns_omitted,
     })
+}
+
+const PACKET_BOUND: usize = 4096;
+
+struct PacketIndex {
+    coverage: String,
+    http: Vec<Vec<Cell>>,
+    http_omitted: u64,
+    dns: Vec<Vec<Cell>>,
+    dns_omitted: u64,
+}
+
+/// Read the owned pcap to the end, or to [`PACKET_BOUND`] frames. Reconstruction
+/// uses those frames. A later frame is counted and not decoded.
+fn scan_pcap(path: &Path, pcap_open: bool, cancel: &AtomicBool) -> Result<PacketIndex, String> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".into());
+    }
+    if !path.is_file() {
+        return Err("pcap path is not a file".into());
+    }
+    let mut offset = 0u64;
+    let mut number = 0u64;
+    let mut held: Vec<(antinomie_monitor_core::network::NetworkPacket, Vec<u8>)> = Vec::new();
+    let mut omitted = 0u64;
+    let mut stopped = false;
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            stopped = true;
+            break;
+        }
+        let page = antinomie_monitor_core::network::read_page(path, offset, number, 256)?;
+        if page.packets.is_empty() {
+            break;
+        }
+        for packet in page.packets {
+            if held.len() >= PACKET_BOUND {
+                omitted += 1;
+                continue;
+            }
+            let bytes = antinomie_monitor_core::network::frame(path, packet.offset)?;
+            held.push((packet, bytes));
+        }
+        if page.next_offset <= offset {
+            break;
+        }
+        offset = page.next_offset;
+        number = page.next_number;
+    }
+    let captured: Vec<_> = held
+        .iter()
+        .map(
+            |(packet, bytes)| antinomie_monitor_core::network::CapturedFrame {
+                number: packet.number,
+                time_us: packet.time_us,
+                bytes,
+            },
+        )
+        .collect();
+    let built = antinomie_monitor_core::network::reconstruct(&captured);
+    let mut http = Vec::new();
+    let mut http_omitted = 0u64;
+    for request in &built.http {
+        if http.len() >= STORED_ROWS {
+            http_omitted += 1;
+            continue;
+        }
+        http.push(http_index_row(request, &held));
+    }
+    let mut dns = Vec::new();
+    let mut dns_omitted = 0u64;
+    for query in &built.dns {
+        if dns.len() >= STORED_ROWS {
+            dns_omitted += 1;
+            continue;
+        }
+        dns.push(dns_index_row(query, &held));
+    }
+    let mut coverage = format!(
+        "pcap frames read {}, omitted {omitted}; retransmissions dropped {}; HTTPS segments {}; HTTP/2 prefaces {}; HTTP requests stored {}, omitted {http_omitted}; DNS requests stored {}, omitted {dns_omitted}. Supported: HTTP/1.0 and HTTP/1.1 over TCP, DNS over UDP and DNS over TCP. Unavailable: HTTPS, HTTP/2, HTTP/3, and encrypted DNS",
+        held.len(),
+        built.retransmissions_dropped,
+        built.https_segments,
+        built.http2_prefaces,
+        http.len(),
+        dns.len()
+    );
+    if stopped {
+        coverage.push_str("; scan stopped before the end of the pcap");
+    } else if pcap_open {
+        coverage.push_str(
+            "; the capture file was read to its current end; a live capture may still grow",
+        );
+    }
+    Ok(PacketIndex {
+        coverage,
+        http,
+        http_omitted,
+        dns,
+        dns_omitted,
+    })
+}
+
+fn packet_ends(
+    number: Option<u64>,
+    held: &[(antinomie_monitor_core::network::NetworkPacket, Vec<u8>)],
+) -> String {
+    number
+        .and_then(|number| held.iter().find(|(packet, _)| packet.number == number))
+        .map(|(packet, _)| format!("{} → {}", packet.source, packet.destination))
+        .unwrap_or_else(|| "—".into())
+}
+
+fn http_index_row(
+    request: &antinomie_monitor_core::network::ReconstructedHttp,
+    held: &[(antinomie_monitor_core::network::NetworkPacket, Vec<u8>)],
+) -> Vec<Cell> {
+    let mut row = flow(
+        request
+            .request_frames
+            .first()
+            .map(|number| format!("#{number}"))
+            .unwrap_or_else(|| "—".into()),
+        packet_ends(request.request_frames.first().copied(), held),
+        format!("{} {} {}", request.method, request.uri, request.version),
+    );
+    row.push(cell(
+        request
+            .status
+            .map(|status| status.to_string())
+            .unwrap_or_else(|| "—".into()),
+        theme::text(),
+        false,
+    ));
+    row.push(cell("—".to_string(), theme::text(), true));
+    row
+}
+
+fn dns_index_row(
+    query: &antinomie_monitor_core::network::ReconstructedDns,
+    held: &[(antinomie_monitor_core::network::NetworkPacket, Vec<u8>)],
+) -> Vec<Cell> {
+    let detail = if query.answers.is_empty() {
+        format!("{} {} {}", query.name, query.qtype, query.class_name)
+    } else {
+        format!(
+            "{} {} {} → {}",
+            query.name,
+            query.qtype,
+            query.class_name,
+            query.answers.join(", ")
+        )
+    };
+    let mut row = flow(
+        query
+            .query_frames
+            .first()
+            .map(|number| format!("#{number}"))
+            .unwrap_or_else(|| "—".into()),
+        packet_ends(query.query_frames.first().copied(), held),
+        detail,
+    );
+    let kind = if query.retry {
+        "retry"
+    } else if query.rcode.is_some() {
+        "response"
+    } else {
+        "query"
+    };
+    row.push(cell(
+        format!("{kind} {}", query.protocol),
+        theme::text(),
+        false,
+    ));
+    row
 }
 
 fn walk_pages(
@@ -1367,7 +1637,13 @@ fn file_fd(invocation: &InvocationSummary, event: &EventSummary) -> String {
             .unwrap_or_else(|| "—".into());
     }
     fd_argument(invocation, event)
-        .map(|fd| fd.to_string())
+        .map(|fd| {
+            if fd == u64::from(u32::MAX) || fd == u64::MAX {
+                "—".to_string()
+            } else {
+                fd.to_string()
+            }
+        })
         .unwrap_or_else(|| "—".into())
 }
 
@@ -1645,12 +1921,8 @@ fn displayed_path(invocation: &InvocationSummary, event: &EventSummary, files: &
             }
         }
     }
-    let preview = trace::info(invocation);
-    if preview.is_empty() {
-        "—".into()
-    } else {
-        preview
-    }
+    // Trace text is not a path. An uncaptured filename stays unknown.
+    "—".into()
 }
 
 fn resolve_path(
@@ -1703,7 +1975,11 @@ fn path_text(field: &antinomie_monitor_core::FieldSummary) -> Option<String> {
     let bytes = trace::covered_preview(field);
     let end = bytes.iter().rposition(|byte| *byte != 0)?;
     let text = std::str::from_utf8(&bytes[..=end]).ok()?.trim();
-    if text.is_empty() || text.chars().any(char::is_control) {
+    if text.is_empty()
+        || text.chars().any(char::is_control)
+        || text.contains('=')
+        || text.contains("uncaptured")
+    {
         return None;
     }
     Some(text.to_string())
@@ -1935,6 +2211,9 @@ struct BpfNote {
     dump: Option<String>,
     /// Raw bytes, hash, and the identity fields that were present.
     export: Option<String>,
+    /// Captured instruction bytes, when an image was isolated.
+    bytes: Option<Vec<u8>>,
+    identity: bpf::BpfIdentity,
 }
 
 fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
@@ -1951,7 +2230,7 @@ fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
             continue;
         };
         let image = instruction_image(invocation, command);
-        let (translation, dump, export) = if let Some(bytes) = image.as_deref() {
+        let (translation, dump, export, bytes, identity) = if let Some(bytes) = image.as_deref() {
             let action = if command == "BPF_PROG_LOAD" {
                 "load"
             } else if command == "BPF_PROG_ATTACH" || command == "SO_ATTACH_FILTER" {
@@ -1959,28 +2238,32 @@ fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
             } else {
                 command
             };
-            let exported = bpf::export_capture(
-                bytes,
-                &bpf::BpfIdentity {
-                    vm_id: input.vm_id.map(str::to_owned),
-                    boot_id: input.boot_id.map(str::to_owned),
-                    run_id: input.run_id.map(str::to_owned),
-                    cookie: Some(invocation.task_cookie),
-                    pid: Some(event.pid),
-                    tid: Some(event.tid),
-                    timestamp_ns: (event.timestamp_ns != 0).then_some(event.timestamp_ns),
-                    action: action.to_owned(),
-                },
-            );
+            let identity = bpf::BpfIdentity {
+                vm_id: input.vm_id.map(str::to_owned),
+                boot_id: input.boot_id.map(str::to_owned),
+                run_id: input.run_id.map(str::to_owned),
+                cookie: Some(invocation.task_cookie),
+                pid: Some(event.pid),
+                tid: Some(event.tid),
+                timestamp_ns: (event.timestamp_ns != 0).then_some(event.timestamp_ns),
+                action: action.to_owned(),
+            };
+            let exported = bpf::export_capture(bytes, &identity);
             let translation = if classic_image(command) {
                 bpf::translate_classic(bytes)
             } else {
                 bpf::translate(bytes)
             };
             let dump = classic_image(command).then(|| bpf::dump(bytes));
-            (Some(translation), dump, Some(exported))
+            (
+                Some(translation),
+                dump,
+                Some(exported),
+                Some(bytes.to_vec()),
+                identity,
+            )
         } else {
-            (None, None, None)
+            (None, None, None, None, bpf::BpfIdentity::default())
         };
         let result = invocation.exit.as_ref().and_then(|exit| exit.result);
         notes.push(BpfNote {
@@ -1991,6 +2274,8 @@ fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
             translation,
             dump,
             export,
+            bytes,
+            identity,
         });
         if command == "BPF_PROG_LOAD" {
             if let Some(fd) = result.filter(|result| *result >= 0) {
@@ -2108,11 +2393,14 @@ fn isolated_instructions(field: &antinomie_monitor_core::FieldSummary) -> Option
     Some(bytes.to_vec())
 }
 
-fn bpf_view(ui: &mut egui::Ui, input: &TriageInput<'_>) {
+fn bpf_view(ui: &mut egui::Ui, input: &TriageInput<'_>, status: &mut String) {
     ui.label(
         "BPF programs, classic socket filters and seccomp installs in this loaded page. The translation reads captured instruction bytes; it does not load or run them. VM, boot, or run is null in the export when this view does not have that id.",
     );
     let notes = bpf_notes(input);
+    if !status.is_empty() {
+        ui.label(status.as_str());
+    }
     if notes.is_empty() {
         ui.colored_label(
             theme::muted(),
@@ -2142,6 +2430,20 @@ fn bpf_view(ui: &mut egui::Ui, input: &TriageInput<'_>) {
                     if let Some(text) = &note.export {
                         ui.add(egui::Label::new(RichText::new(text).monospace()).wrap());
                     }
+                    if let (Some(bytes), Some(directory)) = (&note.bytes, input.archive) {
+                        if ui.button("Export binary and JSON").clicked() {
+                            match bpf::write_export(&directory.join("bpf"), bytes, &note.identity) {
+                                Ok((binary, metadata)) => {
+                                    *status = format!(
+                                        "Wrote {} and {}",
+                                        binary.display(),
+                                        metadata.display()
+                                    );
+                                }
+                                Err(error) => *status = error,
+                            }
+                        }
+                    }
                 }
                 ui.separator();
             }
@@ -2164,7 +2466,7 @@ mod tests {
         let Ok(dir) = std::env::var("ANTINOMIE_RECORDING") else {
             return;
         };
-        let scan = scan_archive(Path::new(&dir), &AtomicBool::new(false))
+        let scan = scan_archive(Path::new(&dir), None, false, &AtomicBool::new(false))
             .unwrap_or_else(|error| panic!("index failed: {error}"));
         assert!(scan.coverage.contains("indexed "), "{}", scan.coverage);
         assert!(
@@ -2173,6 +2475,148 @@ mod tests {
             scan.coverage
         );
         let _ = std::fs::write("/tmp/antinomie-index-coverage.txt", &scan.coverage);
+        let files = scan
+            .opened
+            .iter()
+            .chain(scan.changed.iter())
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let _ = std::fs::write("/tmp/antinomie-fd-rows.txt", files);
+        let findings = scan
+            .findings
+            .iter()
+            .map(|finding| {
+                finding
+                    .cells
+                    .iter()
+                    .map(|cell| cell.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let _ = std::fs::write("/tmp/antinomie-findings.txt", findings);
+        let recording = antinomie_monitor_core::recording::Recording {
+            directory: std::fs::canonicalize(&dir).unwrap(),
+            manifest: serde_json::Value::Null,
+            events: Vec::new(),
+        };
+        let mut offset = 0u64;
+        let mut bpf = String::new();
+        loop {
+            let page = recording.invocation_page(offset, 256).unwrap();
+            for invocation in &page.invocations {
+                let Some(event) = invocation.entry.as_ref().or(invocation.exit.as_ref()) else {
+                    continue;
+                };
+                if event.syscall_name.contains("bpf")
+                    || event.syscall_name.contains("seccomp")
+                    || event.syscall_name == "setsockopt"
+                {
+                    bpf.push_str(&format!(
+                        "{} result {:?} args {:?}\n",
+                        event.syscall_name,
+                        invocation.exit.as_ref().and_then(|exit| exit.result),
+                        event.args
+                    ));
+                }
+            }
+            match page.next_offset {
+                Some(next) if next > offset => offset = next,
+                _ => break,
+            }
+        }
+        if bpf.is_empty() {
+            bpf.push_str("no bpf, seccomp, or setsockopt call in this recording\n");
+        }
+        let _ = std::fs::write("/tmp/antinomie-bpf-scan.txt", bpf);
+    }
+
+    #[test]
+    fn pcap_index_reconstructs_http_and_states_coverage() {
+        let dir = std::env::temp_dir().join(format!("antinomie-pcap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sample.pcap");
+        std::fs::write(&path, http_pcap()).unwrap();
+        let index = scan_pcap(&path, false, &AtomicBool::new(false))
+            .unwrap_or_else(|error| panic!("pcap index failed: {error}"));
+        assert!(
+            index.coverage.contains("pcap frames read 1"),
+            "{}",
+            index.coverage
+        );
+        assert!(
+            index
+                .coverage
+                .contains("Unavailable: HTTPS, HTTP/2, HTTP/3"),
+            "{}",
+            index.coverage
+        );
+        assert_eq!(index.http.len(), 1);
+        assert!(index.http[0].iter().any(|cell| cell.text.contains("GET /")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn saved_pcap_from_env_is_indexed_when_present() {
+        let Ok(path) = std::env::var("ANTINOMIE_PCAP") else {
+            return;
+        };
+        let index = scan_pcap(Path::new(&path), false, &AtomicBool::new(false))
+            .unwrap_or_else(|error| panic!("pcap index failed: {error}"));
+        assert!(
+            index.coverage.contains("pcap frames read"),
+            "{}",
+            index.coverage
+        );
+        assert!(
+            index.coverage.contains("Unavailable: HTTPS"),
+            "{}",
+            index.coverage
+        );
+        let _ = std::fs::write("/tmp/antinomie-pcap-coverage.txt", &index.coverage);
+    }
+
+    fn http_pcap() -> Vec<u8> {
+        let payload = b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n";
+        let mut tcp = Vec::new();
+        tcp.extend(40000u16.to_be_bytes());
+        tcp.extend(80u16.to_be_bytes());
+        tcp.extend(1u32.to_be_bytes());
+        tcp.extend(0u32.to_be_bytes());
+        tcp.push(0x50);
+        tcp.push(0x18);
+        tcp.extend(0u16.to_be_bytes());
+        tcp.extend(0u16.to_be_bytes());
+        tcp.extend(0u16.to_be_bytes());
+        tcp.extend(payload);
+        let total = (20 + tcp.len()) as u16;
+        let mut ip = vec![
+            0x45, 0, 0, 0, 0, 0, 0, 0, 64, 6, 0, 0, 10, 0, 2, 15, 93, 184, 216, 34,
+        ];
+        ip[2..4].copy_from_slice(&total.to_be_bytes());
+        ip.extend(tcp);
+        let mut frame = vec![0; 12];
+        frame.extend(0x0800u16.to_be_bytes());
+        frame.extend(ip);
+        let mut pcap = vec![
+            0xd4, 0xc3, 0xb2, 0xa1, 2, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 1, 0, 0,
+            0,
+        ];
+        let len = frame.len() as u32;
+        pcap.extend(0u32.to_le_bytes());
+        pcap.extend(0u32.to_le_bytes());
+        pcap.extend(len.to_le_bytes());
+        pcap.extend(len.to_le_bytes());
+        pcap.extend(frame);
+        pcap
     }
 
     #[test]
@@ -2180,7 +2624,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("antinomie-triage-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let Err(error) = scan_archive(&dir, &AtomicBool::new(false)) else {
+        let Err(error) = scan_archive(&dir, None, false, &AtomicBool::new(false)) else {
             panic!("a directory without telemetry.raw must not count as a whole-run index");
         };
         assert!(error.contains("telemetry.raw"), "{error}");

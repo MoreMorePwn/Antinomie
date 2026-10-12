@@ -5813,6 +5813,33 @@ impl MonitorApp {
             })
     }
 
+    /// A pcap this selection recorded. An observation directory with no pcap
+    /// file stays empty; the loaded preview is not substituted.
+    fn owned_triage_pcap(&self) -> Option<(std::path::PathBuf, bool)> {
+        if let Some(capture) = self.selected_capture_summary() {
+            return capture_pcap_file(capture).map(|file| (file, false));
+        }
+        let id = self.selected_run.clone()?;
+        let run = self.run(&id)?.clone();
+        if let Some(capture) = &self.snapshot.network_capture {
+            if capture.boot_id == run.boot_id && capture.file.is_file() && pcap_magic(&capture.file)
+            {
+                return Some((capture.file.clone(), capture.stopped_ms.is_none()));
+            }
+        }
+        let artifacts = antinomie_monitor_core::RunArtifacts::load(&run.directory)
+            .ok()
+            .flatten()?;
+        if artifacts.run_id != run.id {
+            return None;
+        }
+        artifacts
+            .network_captures
+            .into_iter()
+            .find(|file| file.is_file() && pcap_magic(file))
+            .map(|file| (file, false))
+    }
+
     fn selected_capture_owns_loaded_pcap(&self) -> bool {
         let Some(loaded) = self
             .network_view
@@ -6047,6 +6074,7 @@ impl MonitorApp {
                     .and_then(|id| self.run(id))
                     .map(|run| run.boot_id.clone());
                 let archive_dir = self.trace_archive_directory();
+                let owned_pcap = archive_dir.as_ref().and_then(|_| self.owned_triage_pcap());
                 let coverage = if archive_dir.is_some() {
                     "visible archive page until the saved-recording index reports its own coverage"
                 } else {
@@ -6063,6 +6091,8 @@ impl MonitorApp {
                         run_id: run_id.as_deref(),
                         coverage,
                         archive: archive_dir.as_deref(),
+                        pcap: owned_pcap.as_ref().map(|owned| owned.0.as_path()),
+                        pcap_open: owned_pcap.as_ref().is_some_and(|owned| owned.1),
                     },
                 ) {
                     self.filter = format!("call.id == {call_id}");

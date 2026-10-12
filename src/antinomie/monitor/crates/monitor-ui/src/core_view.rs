@@ -1286,7 +1286,15 @@ impl CoreView {
                 ..Default::default()
             }))
             .show_inside(ui, |ui| {
-                ui.add(egui::Label::new("Function index is only the functions named in the loaded result. It is not a complete list of the core.").wrap());
+                ui.add(egui::Label::new("Function index is every @@ANTINOMIE-FUNCTION marker in this result's saved decompiled.txt. It is not every unnamed address in the core.").wrap());
+                if ui.button("Export functions").clicked() {
+                    match export_saved_functions(&record.dir) {
+                        Ok(path) => {
+                            self.status = format!("Exported functions to {}", path.display());
+                        }
+                        Err(error) => self.status = error,
+                    }
+                }
                 ui.add(egui::Label::new("A name here is Ghidra's when Ghidra produced the saved result. It is not an original source symbol.").wrap());
                 if self.functions.is_empty() {
                     ui.add(egui::Label::new("No function symbols loaded. Decompile with Ghidra to name functions from its default analysis.").wrap());
@@ -1748,6 +1756,18 @@ fn saved_decompilation(dir: &Path) -> Option<String> {
     text.lines()
         .any(|line| line.starts_with("@@ANTINOMIE-FUNCTION"))
         .then_some(text)
+}
+
+fn export_saved_functions(dir: &Path) -> Result<PathBuf, String> {
+    let source = dir.join("decompiled.txt");
+    let text = fs::read_to_string(&source).map_err(|error| error.to_string())?;
+    if crate::analysis::index_ghidra_markers(&text).is_empty() {
+        return Err("this result has no saved Ghidra function markers".into());
+    }
+    let exported = crate::analysis::export_ghidra_text(&text);
+    let destination = dir.join("function-export.txt");
+    fs::write(&destination, exported).map_err(|error| error.to_string())?;
+    Ok(destination)
 }
 
 fn parse_ghidra(text: &str) -> (Vec<CoreFunction>, Vec<String>) {

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Readable translation of captured eBPF instructions. Bytes are the guest's
 //! recorded program image; this is a disassembly, not proof the kernel loaded it.
+use std::path::{Path, PathBuf};
+
 use antinomie_monitor_core::EventSummary;
 
 /// Classic and eBPF instructions are 8 octets: opcode, registers, offset, immediate.
@@ -91,6 +93,44 @@ pub(crate) fn export_capture(bytes: &[u8], identity: &BpfIdentity) -> String {
         "action": identity.action,
     });
     format!("{meta}\n{}", dump(bytes))
+}
+
+/// Write the captured bytes and a JSON sidecar. The binary is the recorded
+/// octets only; a short tail is not padded.
+pub(crate) fn write_export(
+    directory: &Path,
+    bytes: &[u8],
+    identity: &BpfIdentity,
+) -> Result<(PathBuf, PathBuf), String> {
+    std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+    let hash = antinomie_monitor_core::storage::sha256_hex(bytes);
+    let binary_name = format!("{hash}.bin");
+    let binary = directory.join(&binary_name);
+    let metadata = directory.join(format!("{hash}.json"));
+    std::fs::write(&binary, bytes).map_err(|error| error.to_string())?;
+    let meta = serde_json::json!({
+        "sha256": hash,
+        "binary": binary_name,
+        "captured_octets": bytes.len(),
+        "complete_instructions": bytes.len() / 8,
+        "partial_tail_octets": bytes.len() % 8,
+        "partial": !bytes.len().is_multiple_of(8),
+        "padded": false,
+        "vm_id": identity.vm_id,
+        "boot_id": identity.boot_id,
+        "run_id": identity.run_id,
+        "cookie": identity.cookie,
+        "pid": identity.pid,
+        "tid": identity.tid,
+        "timestamp_ns": identity.timestamp_ns,
+        "action": identity.action,
+    });
+    std::fs::write(
+        &metadata,
+        serde_json::to_vec_pretty(&meta).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok((binary, metadata))
 }
 
 /// Classic `sock_filter`: little-endian `u16 code`, `u8 jt`, `u8 jf`, `u32 k`.
@@ -326,6 +366,25 @@ pub(crate) fn command_name(event: &EventSummary) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn binary_export_keeps_a_partial_tail() {
+        let bytes = [0x15u8, 0, 0, 1, 1, 0, 0, 0, 0xaa];
+        let dir = std::env::temp_dir().join(format!("antinomie-bpf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let identity = BpfIdentity {
+            action: "attach".into(),
+            ..BpfIdentity::default()
+        };
+        let (binary, metadata) = write_export(&dir, &bytes, &identity).unwrap();
+        assert_eq!(std::fs::read(&binary).unwrap(), bytes);
+        let text = std::fs::read_to_string(&metadata).unwrap();
+        assert!(text.contains("\"partial\": true"), "{text}");
+        assert!(text.contains("\"padded\": false"), "{text}");
+        assert!(text.contains("\"partial_tail_octets\": 1"), "{text}");
+        assert!(!std::fs::read(&binary).unwrap().ends_with(&[0, 0, 0]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn translates_mov_and_exit() {
