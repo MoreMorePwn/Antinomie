@@ -1012,6 +1012,52 @@ impl CoreView {
             Tab::Notes => notes_table(ui, &record, &mut self.notes_query),
         }
     }
+    fn register_cell(&mut self, ui: &mut egui::Ui, record: &CoreRecord, name: &str, value: u64) {
+        let name_color = match name {
+            "rip" | "eip" | "pc" => crate::theme::error(),
+            "rsp" | "esp" | "rbp" | "ebp" => crate::theme::warn(),
+            "rflags" | "eflags" | "flags" => crate::theme::value(crate::theme::ValueKind::Flags),
+            _ => crate::theme::value(crate::theme::ValueKind::Name),
+        };
+        let value_color = if matches!(name, "rflags" | "eflags" | "flags") {
+            crate::theme::value(crate::theme::ValueKind::Flags)
+        } else {
+            crate::theme::value(crate::theme::ValueKind::Pointer)
+        };
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(name).monospace().color(name_color));
+            ui.label(
+                RichText::new(format!("0x{value:016x}"))
+                    .monospace()
+                    .color(value_color),
+            );
+            if ui.small_button("Copy").clicked() {
+                ui.ctx().copy_text(format!("0x{value:x}"));
+            }
+            if (name == "rip" || name == "rsp")
+                && ui
+                    .small_button(egui_phosphor::regular::MEMORY)
+                    .on_hover_text("View memory at this register")
+                    .clicked()
+            {
+                if let Some(index) = record
+                    .core
+                    .mappings
+                    .iter()
+                    .position(|mapping| value >= mapping.start && value < mapping.end())
+                {
+                    self.mapping_index = index;
+                    self.window_offset =
+                        (value - record.core.mappings[index].start) / WINDOW_SIZE * WINDOW_SIZE;
+                    self.page = None;
+                    self.tab = Tab::Mappings;
+                } else {
+                    self.status = "Register points to an unmapped address.".into();
+                }
+            }
+        });
+    }
+
     fn context(&mut self, ui: &mut egui::Ui, record: &CoreRecord) {
         egui::ComboBox::from_id_salt("core-thread")
             .selected_text(format!(
@@ -1039,45 +1085,55 @@ impl CoreView {
             thread.tid, thread.parent_pid, thread.signal
         ));
         egui::ScrollArea::both().id_salt("core-registers").show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                for (name, value) in &thread.registers {
-                    let name_color = match name.as_str() {
-                        "rip" | "eip" | "pc" => crate::theme::error(),
-                        "rsp" | "esp" | "rbp" | "ebp" => crate::theme::warn(),
-                        _ => crate::theme::value(crate::theme::ValueKind::Name),
-                    };
-                    ui.label(RichText::new(name).monospace().color(name_color));
-                    ui.label(
-                        RichText::new(format!("0x{value:016x}"))
-                            .monospace()
-                            .color(crate::theme::value(crate::theme::ValueKind::Pointer)),
-                    );
-                    if ui.small_button("Copy").clicked() {
-                        ui.ctx().copy_text(format!("0x{value:x}"));
-                    }
-                    if (name == "rip" || name == "rsp")
-                        && ui
-                            .small_button(egui_phosphor::regular::MEMORY)
-                            .on_hover_text("View memory at this register")
-                            .clicked()
-                    {
-                        if let Some(index) = record.core.mappings.iter().position(|mapping| {
-                            *value >= mapping.start && *value < mapping.end()
-                        }) {
-                            self.mapping_index = index;
-                            self.window_offset = (*value - record.core.mappings[index].start)
-                                / WINDOW_SIZE
-                                * WINDOW_SIZE;
-                            self.page = None;
-                            self.tab = Tab::Mappings;
-                        } else {
-                            self.status = "Register points to an unmapped address.".into();
-                        }
-                    }
-                    ui.add_space(10.0);
+            let groups: &[(&str, &[&str])] = &[
+                ("Instruction pointer", &["rip", "eip", "pc"]),
+                ("Stack and frame", &["rsp", "esp", "rbp", "ebp"]),
+                ("Flags", &["rflags", "eflags", "flags"]),
+                (
+                    "General",
+                    &[
+                        "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12",
+                        "r13", "r14", "r15", "eax", "ebx", "ecx", "edx", "esi", "edi",
+                    ],
+                ),
+            ];
+            let mut shown = std::collections::BTreeSet::new();
+            for (title, names) in groups {
+                let present: Vec<_> = names
+                    .iter()
+                    .filter_map(|name| {
+                        thread
+                            .registers
+                            .iter()
+                            .find(|(register, _)| register == name)
+                    })
+                    .collect();
+                if present.is_empty() {
+                    continue;
                 }
-            });
+                ui.label(RichText::new(*title).strong().color(crate::theme::heading()));
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 16.0;
+                    for (name, value) in present {
+                        shown.insert(name.clone());
+                        self.register_cell(ui, record, name, *value);
+                    }
+                });
+            }
+            let other: Vec<_> = thread
+                .registers
+                .iter()
+                .filter(|(name, _)| !shown.contains(name))
+                .collect();
+            if !other.is_empty() {
+                ui.label(RichText::new("Other").strong().color(crate::theme::heading()));
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 16.0;
+                    for (name, value) in other {
+                        self.register_cell(ui, record, name, *value);
+                    }
+                });
+            }
             ui.label("Register values are recovered evidence. Stack unwinding, pointer chains, and debugger execution are not available.");
         });
     }
