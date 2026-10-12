@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: MIT
 //! Triage for the selected run: process activity, files, HTTP/DNS and eBPF.
 //! Rows are observations from captured syscalls and packets, not a verdict.
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
+use std::time::Duration;
+
 use crate::{bpf, theme, trace};
 use antinomie_monitor_core::{network::NetworkPacket, EventSummary, InvocationSummary};
 use eframe::egui::{self, RichText};
@@ -40,6 +46,12 @@ pub(crate) struct TriageView {
     suspicious_filter: String,
     /// Invocation chosen from a Suspicious activity row.
     selected_call_id: Option<u64>,
+    /// Directory whose saved `telemetry.raw` the background index is reading.
+    scan_key: Option<PathBuf>,
+    scan_cancel: Option<Arc<AtomicBool>>,
+    scan_rx: Option<Receiver<Result<ArchiveScan, String>>>,
+    scan: Option<ArchiveScan>,
+    scan_error: Option<String>,
 }
 
 impl Default for TriageView {
@@ -51,6 +63,11 @@ impl Default for TriageView {
             network: NetTab::Http,
             suspicious_filter: String::new(),
             selected_call_id: None,
+            scan_key: None,
+            scan_cancel: None,
+            scan_rx: None,
+            scan: None,
+            scan_error: None,
         }
     }
 }
@@ -65,6 +82,8 @@ pub(crate) struct TriageInput<'a> {
     pub run_id: Option<&'a str>,
     /// What this view actually covered. Never claim a whole run from one page.
     pub coverage: &'a str,
+    /// Saved recording directory. `None` for a live session or a single loaded page.
+    pub archive: Option<&'a Path>,
 }
 
 impl<'a> TriageInput<'a> {
@@ -78,6 +97,7 @@ impl<'a> TriageInput<'a> {
             boot_id: None,
             run_id: None,
             coverage: "this loaded page",
+            archive: None,
         }
     }
 }
@@ -96,7 +116,24 @@ impl TriageView {
             }
         });
         ui.separator();
-        ui.colored_label(theme::muted(), format!("Coverage: {}.", input.coverage));
+        self.ensure_scan(input.archive);
+        self.poll_scan(ui);
+        let coverage = if let Some(scan) = &self.scan {
+            scan.coverage.clone()
+        } else if let Some(error) = &self.scan_error {
+            format!(
+                "saved-recording index failed: {error}. {fallback}",
+                fallback = input.coverage
+            )
+        } else if input.archive.is_some() {
+            format!(
+                "indexing the saved recording; rows below are the visible page until that index finishes. {}",
+                input.coverage
+            )
+        } else {
+            input.coverage.to_string()
+        };
+        ui.colored_label(theme::muted(), format!("Coverage: {coverage}."));
         let identity = [input.vm_id, input.boot_id, input.run_id]
             .into_iter()
             .flatten()
@@ -133,10 +170,20 @@ impl TriageView {
         });
         match self.process {
             ProcessTab::Tree => {
-                process_tree(ui, input.invocations);
+                if let Some(scan) = &self.scan {
+                    process_tree_nodes(ui, &scan.process);
+                } else {
+                    process_tree(ui, input.invocations);
+                }
                 None
             }
-            ProcessTab::Suspicious => self.suspicious(ui, input.invocations),
+            ProcessTab::Suspicious => {
+                if let Some(scan) = &self.scan {
+                    self.suspicious_findings(ui, scan.findings.clone(), scan.findings_omitted)
+                } else {
+                    self.suspicious(ui, input.invocations)
+                }
+            }
         }
     }
 
@@ -172,12 +219,32 @@ impl TriageView {
                 "fchownat",
             ],
         };
-        limited_table(
-            ui,
-            "triage-files",
-            &["Path", "Process", "FD", "Operation", "Result", "Outcome"],
-            &file_rows(invocations, wanted),
-        );
+        if let Some(scan) = &self.scan {
+            let (rows, omitted) = match self.files {
+                FileTab::Opened => (&scan.opened, scan.opened_omitted),
+                FileTab::Changed => (&scan.changed, scan.changed_omitted),
+            };
+            ui.colored_label(
+                theme::muted(),
+                format!(
+                    "{} rows from the saved-recording index; {omitted} additional matches were not stored in this table.",
+                    rows.len()
+                ),
+            );
+            table(
+                ui,
+                "triage-files",
+                &["Path", "Process", "FD", "Operation", "Result", "Outcome"],
+                rows,
+            );
+        } else {
+            limited_table(
+                ui,
+                "triage-files",
+                &["Path", "Process", "FD", "Operation", "Result", "Outcome"],
+                &file_rows(invocations, wanted),
+            );
+        }
     }
 
     fn network(&mut self, ui: &mut egui::Ui, input: &TriageInput<'_>) {
@@ -222,16 +289,31 @@ impl TriageView {
     }
 
     fn suspicious(&mut self, ui: &mut egui::Ui, invocations: &[InvocationSummary]) -> Option<u64> {
+        self.suspicious_findings(ui, suspicious_rows(invocations), 0)
+    }
+
+    fn suspicious_findings(
+        &mut self,
+        ui: &mut egui::Ui,
+        findings: Vec<Finding>,
+        omitted: u64,
+    ) -> Option<u64> {
         ui.colored_label(
             theme::muted(),
             "A row is a rule match with its source. It is not a verdict that the sample is malicious.",
         );
+        if omitted > 0 {
+            ui.colored_label(
+                theme::warn(),
+                format!("{omitted} additional rule matches were not stored in this table."),
+            );
+        }
         ui.add(
             egui::TextEdit::singleline(&mut self.suspicious_filter)
                 .hint_text("Filter rule, process, summary, or evidence")
                 .desired_width(f32::INFINITY),
         );
-        let rows = filter_findings(suspicious_rows(invocations), &self.suspicious_filter);
+        let rows = filter_findings(findings, &self.suspicious_filter);
         let clicked = finding_table(
             ui,
             "triage-findings",
@@ -254,8 +336,74 @@ impl TriageView {
         }
         clicked
     }
+
+    fn ensure_scan(&mut self, archive: Option<&Path>) {
+        let Some(path) = archive else {
+            self.stop_scan();
+            return;
+        };
+        if self.scan_key.as_deref() == Some(path) {
+            return;
+        }
+        self.stop_scan();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = mpsc::channel();
+        let directory = path.to_path_buf();
+        let cancel_thread = Arc::clone(&cancel);
+        if std::thread::Builder::new()
+            .name("triage-index".into())
+            .spawn(move || {
+                let _ = tx.send(scan_archive(&directory, &cancel_thread));
+            })
+            .is_err()
+        {
+            self.scan_error = Some("could not start the saved-recording index".into());
+            return;
+        }
+        self.scan_key = Some(path.to_path_buf());
+        self.scan_cancel = Some(cancel);
+        self.scan_rx = Some(rx);
+    }
+
+    fn poll_scan(&mut self, ui: &mut egui::Ui) {
+        let Some(rx) = &self.scan_rx else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(scan)) => {
+                self.scan = Some(scan);
+                self.scan_error = None;
+                self.scan_rx = None;
+            }
+            Ok(Err(error)) => {
+                self.scan = None;
+                self.scan_error = Some(error);
+                self.scan_rx = None;
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                ui.ctx().request_repaint_after(Duration::from_millis(200));
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.scan_error =
+                    Some("saved-recording index stopped before reporting coverage".into());
+                self.scan_rx = None;
+            }
+        }
+    }
+
+    fn stop_scan(&mut self) {
+        if let Some(cancel) = &self.scan_cancel {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        self.scan_key = None;
+        self.scan_cancel = None;
+        self.scan_rx = None;
+        self.scan = None;
+        self.scan_error = None;
+    }
 }
 
+#[derive(Clone)]
 struct Cell {
     text: String,
     color: egui::Color32,
@@ -334,6 +482,7 @@ fn table(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[Vec<Cell>]) {
         });
 }
 
+#[derive(Clone)]
 struct Finding {
     cells: Vec<Cell>,
     call_id: u64,
@@ -396,20 +545,28 @@ fn finding_table(
 }
 
 fn process_tree(ui: &mut egui::Ui, invocations: &[InvocationSummary]) {
+    process_tree_nodes(ui, &process_nodes(invocations));
+}
+
+fn process_tree_nodes(ui: &mut egui::Ui, nodes: &[ProcessNode]) {
     ui.colored_label(
         theme::muted(),
         "Parent and child from fork, vfork and clone in this trace. Only pid 1 with no parent edge is a root.",
     );
-    let rows = process_nodes(invocations)
-        .into_iter()
+    let rows = nodes
+        .iter()
         .map(|node| {
             vec![
                 cell(
-                    format!("{}{}", "│ ".repeat(node.depth), process_label(&node)),
+                    format!("{}{}", "│ ".repeat(node.depth), process_label(node)),
                     theme::value(theme::ValueKind::Pointer),
                     true,
                 ),
-                cell(node.comm, theme::value(theme::ValueKind::Name), true),
+                cell(
+                    node.comm.clone(),
+                    theme::value(theme::ValueKind::Name),
+                    true,
+                ),
             ]
         })
         .collect::<Vec<_>>();
@@ -449,8 +606,15 @@ enum Spawn {
 }
 
 fn process_nodes(invocations: &[InvocationSummary]) -> Vec<ProcessNode> {
-    let mut nodes: std::collections::BTreeMap<TaskKey, TaskNode> =
-        std::collections::BTreeMap::new();
+    let mut nodes = std::collections::BTreeMap::new();
+    observe_processes(&mut nodes, invocations);
+    finish_processes(nodes)
+}
+
+fn observe_processes(
+    nodes: &mut std::collections::BTreeMap<TaskKey, TaskNode>,
+    invocations: &[InvocationSummary],
+) {
     for invocation in invocations {
         let entry = invocation.entry.as_ref();
         let exit = invocation.exit.as_ref();
@@ -460,7 +624,7 @@ fn process_nodes(invocations: &[InvocationSummary]) -> Vec<ProcessNode> {
         if event.pid == 0 {
             continue;
         }
-        let key = adopt_task(&mut nodes, event);
+        let key = adopt_task(nodes, event);
         if matches!(event.syscall_name.as_str(), "execve" | "execveat")
             && exit
                 .and_then(|exit| exit.result)
@@ -487,8 +651,11 @@ fn process_nodes(invocations: &[InvocationSummary]) -> Vec<ProcessNode> {
         else {
             continue;
         };
-        link_child(&mut nodes, key, child);
+        link_child(nodes, key, child);
     }
+}
+
+fn finish_processes(nodes: std::collections::BTreeMap<TaskKey, TaskNode>) -> Vec<ProcessNode> {
     let mut children: std::collections::BTreeMap<TaskKey, Vec<TaskKey>> =
         std::collections::BTreeMap::new();
     let mut roots = Vec::new();
@@ -929,53 +1096,262 @@ fn file_rows(invocations: &[InvocationSummary], names: &[&str]) -> LimitedRows {
         apply_dup(&mut files, invocation, event);
         forget_closed(&mut files, invocation, event);
         inherit_open_fds(&mut files, invocation, event, &cookies);
-        if !names.iter().any(|name| event.syscall_name == *name) {
-            continue;
-        }
-        if matches!(event.syscall_name.as_str(), "mmap" | "mmap2")
-            && !call_args(invocation).is_some_and(|args| args[2] & 2 != 0)
-        {
-            continue;
-        }
-        let path = displayed_path(invocation, event, &files);
-        let fd = file_fd(invocation, event);
-        let result = invocation
-            .exit
-            .as_ref()
-            .and_then(|exit| exit.result)
-            .map(|result| result.to_string())
-            .unwrap_or_else(|| "—".into());
-        if !push_limited(
-            &mut limited,
-            vec![
-                cell(
-                    if path.is_empty() {
-                        "—".to_string()
-                    } else {
-                        path
-                    },
-                    theme::text(),
-                    true,
-                ),
-                cell(
-                    format!("pid {} tid {}", event.pid, event.tid),
-                    theme::text(),
-                    true,
-                ),
-                cell(fd, theme::value(theme::ValueKind::Number), true),
-                cell(
-                    event.syscall_name.clone(),
-                    theme::value(theme::ValueKind::Name),
-                    false,
-                ),
-                cell(result, theme::text(), true),
-                cell(file_outcome(invocation), theme::text(), false),
-            ],
-        ) {
-            break;
+        if let Some(row) = file_event_row(&files, invocation, event, names) {
+            if !push_limited(&mut limited, row) {
+                break;
+            }
         }
     }
     limited
+}
+
+fn file_event_row(
+    files: &FdState,
+    invocation: &InvocationSummary,
+    event: &EventSummary,
+    names: &[&str],
+) -> Option<Vec<Cell>> {
+    if !names.iter().any(|name| event.syscall_name == *name) {
+        return None;
+    }
+    if matches!(event.syscall_name.as_str(), "mmap" | "mmap2")
+        && !call_args(invocation).is_some_and(|args| args[2] & 2 != 0)
+    {
+        return None;
+    }
+    let path = displayed_path(invocation, event, files);
+    let result = invocation
+        .exit
+        .as_ref()
+        .and_then(|exit| exit.result)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "—".into());
+    Some(vec![
+        cell(
+            if path.is_empty() {
+                "—".to_string()
+            } else {
+                path
+            },
+            theme::text(),
+            true,
+        ),
+        cell(
+            format!("pid {} tid {}", event.pid, event.tid),
+            theme::text(),
+            true,
+        ),
+        cell(
+            file_fd(invocation, event),
+            theme::value(theme::ValueKind::Number),
+            true,
+        ),
+        cell(
+            event.syscall_name.clone(),
+            theme::value(theme::ValueKind::Name),
+            false,
+        ),
+        cell(result, theme::text(), true),
+        cell(file_outcome(invocation), theme::text(), false),
+    ])
+}
+
+const OPEN_NAMES: &[&str] = &["open", "openat", "openat2"];
+const CHANGE_NAMES: &[&str] = &[
+    "write",
+    "writev",
+    "pwrite64",
+    "mmap",
+    "mmap2",
+    "unlink",
+    "unlinkat",
+    "rename",
+    "renameat",
+    "renameat2",
+    "truncate",
+    "ftruncate",
+    "mkdir",
+    "mkdirat",
+    "rmdir",
+    "chmod",
+    "fchmod",
+    "fchmodat",
+    "chown",
+    "fchown",
+    "lchown",
+    "fchownat",
+];
+const STORED_ROWS: usize = 2000;
+
+struct ArchiveScan {
+    coverage: String,
+    process: Vec<ProcessNode>,
+    findings: Vec<Finding>,
+    findings_omitted: u64,
+    opened: Vec<Vec<Cell>>,
+    opened_omitted: u64,
+    changed: Vec<Vec<Cell>>,
+    changed_omitted: u64,
+}
+
+/// Walk every saved invocation page. Display tables keep at most [`STORED_ROWS`]
+/// matches; the coverage line counts anything left out. Cancellation stops
+/// between pages and does not claim the recording was fully indexed.
+fn scan_archive(directory: &Path, cancel: &AtomicBool) -> Result<ArchiveScan, String> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".into());
+    }
+    let directory = std::fs::canonicalize(directory).map_err(|error| error.to_string())?;
+    if !directory.join("telemetry.raw").is_file() {
+        return Err(
+            "saved recording has no telemetry.raw; the visible page was not treated as the whole run"
+                .into(),
+        );
+    }
+    let recording = antinomie_monitor_core::recording::Recording {
+        directory,
+        manifest: serde_json::Value::Null,
+        events: Vec::new(),
+    };
+    let total = recording.invocation_count_cancellable(None, cancel).ok();
+    let mut cookie_sets = std::collections::BTreeMap::new();
+    let mut nodes = std::collections::BTreeMap::new();
+    let mut findings = Vec::new();
+    let mut findings_omitted = 0u64;
+    let (seen, complete, issues) = walk_pages(&recording, cancel, |page| {
+        note_cookie_sets(&mut cookie_sets, page);
+        observe_processes(&mut nodes, page);
+        for finding in suspicious_rows(page) {
+            if findings.len() < STORED_ROWS {
+                findings.push(finding);
+            } else {
+                findings_omitted += 1;
+            }
+        }
+        Ok(())
+    })?;
+    let cookies = resolve_cookies(&cookie_sets);
+    let mut files = FdState::default();
+    let mut opened = Vec::new();
+    let mut changed = Vec::new();
+    let mut opened_omitted = 0u64;
+    let mut changed_omitted = 0u64;
+    let (_, files_complete, _) = walk_pages(&recording, cancel, |page| {
+        for invocation in page {
+            let Some(event) = trace::representative(invocation) else {
+                continue;
+            };
+            remember_cwd(&mut files, invocation, event);
+            remember_open(&mut files, invocation, event);
+            apply_dup(&mut files, invocation, event);
+            forget_closed(&mut files, invocation, event);
+            inherit_open_fds(&mut files, invocation, event, &cookies);
+            if let Some(row) = file_event_row(&files, invocation, event, OPEN_NAMES) {
+                if opened.len() < STORED_ROWS {
+                    opened.push(row);
+                } else {
+                    opened_omitted += 1;
+                }
+            }
+            if let Some(row) = file_event_row(&files, invocation, event, CHANGE_NAMES) {
+                if changed.len() < STORED_ROWS {
+                    changed.push(row);
+                } else {
+                    changed_omitted += 1;
+                }
+            }
+        }
+        Ok(())
+    })?;
+    let complete = complete && files_complete;
+    let mut coverage = format!(
+        "indexed {seen} saved calls{}; findings stored {}, omitted {findings_omitted}; opened stored {}, omitted {opened_omitted}; changed stored {}, omitted {changed_omitted}",
+        total
+            .map(|count| format!(" of {count}"))
+            .unwrap_or_else(|| " (saved total unavailable)".into()),
+        findings.len(),
+        opened.len(),
+        changed.len()
+    );
+    if !complete {
+        coverage.push_str("; scan stopped before the end of telemetry.raw");
+    }
+    if !issues.is_empty() {
+        coverage.push_str(&format!("; {} archive read issues", issues.len()));
+    }
+    Ok(ArchiveScan {
+        coverage,
+        process: finish_processes(nodes),
+        findings,
+        findings_omitted,
+        opened,
+        opened_omitted,
+        changed,
+        changed_omitted,
+    })
+}
+
+fn walk_pages(
+    recording: &antinomie_monitor_core::recording::Recording,
+    cancel: &AtomicBool,
+    mut each: impl FnMut(&[InvocationSummary]) -> Result<(), String>,
+) -> Result<(u64, bool, Vec<String>), String> {
+    let mut offset = 0u64;
+    let mut seen = 0u64;
+    let mut issues = Vec::new();
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Ok((seen, false, issues));
+        }
+        let page = match recording.invocation_page_cancellable(offset, 256, cancel) {
+            Ok(page) => page,
+            Err(error) => {
+                let text = error.to_string();
+                if text.contains("cancelled") {
+                    return Ok((seen, false, issues));
+                }
+                return Err(text);
+            }
+        };
+        seen += page.invocations.len() as u64;
+        issues.extend(page.issues);
+        each(&page.invocations)?;
+        match page.next_offset {
+            Some(next) if next > offset => offset = next,
+            Some(_) => return Err("archive cursor did not advance".into()),
+            None => return Ok((seen, true, issues)),
+        }
+    }
+}
+
+fn note_cookie_sets(
+    sets: &mut std::collections::BTreeMap<u32, std::collections::BTreeSet<u64>>,
+    invocations: &[InvocationSummary],
+) {
+    for invocation in invocations {
+        for event in invocation
+            .entry
+            .iter()
+            .chain(invocation.exit.iter())
+            .chain(invocation.async_events.iter())
+        {
+            if event.pid == 0 {
+                continue;
+            }
+            sets.entry(event.pid)
+                .or_default()
+                .insert(invocation.task_cookie);
+        }
+    }
+}
+
+fn resolve_cookies(
+    sets: &std::collections::BTreeMap<u32, std::collections::BTreeSet<u64>>,
+) -> std::collections::BTreeMap<u32, u64> {
+    sets.iter()
+        .filter(|(_, cookies)| cookies.len() == 1)
+        .map(|(pid, cookies)| (*pid, cookies.iter().next().copied().unwrap_or(0)))
+        .collect()
 }
 
 /// Successful `open`, `openat` and `openat2` return the new descriptor.
@@ -1104,6 +1480,7 @@ fn apply_dup(files: &mut FdState, invocation: &InvocationSummary, event: &EventS
     };
     let (cookie, pid) = table_owner(files, invocation.task_cookie, event.pid);
     let Some(path) = files.opened.get(&(cookie, pid, args[0])).cloned() else {
+        files.opened.remove(&(cookie, pid, new_fd));
         return;
     };
     files.opened.insert((cookie, pid, new_fd), path);
@@ -1780,6 +2157,34 @@ mod tests {
 
     fn page_notes(invocations: &[InvocationSummary]) -> Vec<BpfNote> {
         bpf_notes(&TriageInput::page(invocations, &[]))
+    }
+
+    #[test]
+    fn saved_recording_from_env_is_indexed_when_present() {
+        let Ok(dir) = std::env::var("ANTINOMIE_RECORDING") else {
+            return;
+        };
+        let scan = scan_archive(Path::new(&dir), &AtomicBool::new(false))
+            .unwrap_or_else(|error| panic!("index failed: {error}"));
+        assert!(scan.coverage.contains("indexed "), "{}", scan.coverage);
+        assert!(
+            scan.coverage.contains(" of ") || scan.coverage.contains("saved total unavailable"),
+            "{}",
+            scan.coverage
+        );
+        let _ = std::fs::write("/tmp/antinomie-index-coverage.txt", &scan.coverage);
+    }
+
+    #[test]
+    fn missing_raw_archive_is_not_treated_as_a_whole_run() {
+        let dir = std::env::temp_dir().join(format!("antinomie-triage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let Err(error) = scan_archive(&dir, &AtomicBool::new(false)) else {
+            panic!("a directory without telemetry.raw must not count as a whole-run index");
+        };
+        assert!(error.contains("telemetry.raw"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn call(pid: u32, nr: u64, name: &str, result: i64) -> InvocationSummary {

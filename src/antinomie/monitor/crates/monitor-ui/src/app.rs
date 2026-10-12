@@ -6046,8 +6046,9 @@ impl MonitorApp {
                     .as_ref()
                     .and_then(|id| self.run(id))
                     .map(|run| run.boot_id.clone());
-                let coverage = if self.trace_archive_directory().is_some() {
-                    "this archive page only; the rest of the recording was not analyzed"
+                let archive_dir = self.trace_archive_directory();
+                let coverage = if archive_dir.is_some() {
+                    "visible archive page until the saved-recording index reports its own coverage"
                 } else {
                     "syscalls loaded in this session; not a finished whole-run index"
                 };
@@ -6061,6 +6062,7 @@ impl MonitorApp {
                         boot_id: boot_id.as_deref(),
                         run_id: run_id.as_deref(),
                         coverage,
+                        archive: archive_dir.as_deref(),
                     },
                 ) {
                     self.filter = format!("call.id == {call_id}");

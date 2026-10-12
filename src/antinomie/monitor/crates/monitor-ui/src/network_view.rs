@@ -163,6 +163,7 @@ enum Cmp {
     Le,
     Gt,
     Ge,
+    Contains,
 }
 
 impl Filter {
@@ -280,9 +281,20 @@ fn parse_display(text: &str) -> Option<Filter> {
         return parse_display(inner);
     }
     let lower = text.to_lowercase();
-    if let Some(value) = lower.strip_prefix("frame contains ") {
+    if let Some((field, value)) = lower.split_once(" contains ") {
+        let field = field.trim();
         let value = value.trim().trim_matches('"').trim_matches('\'');
-        return Some(Filter::Contains(value.to_owned()));
+        if field.is_empty() || value.is_empty() {
+            return None;
+        }
+        if field == "frame" {
+            return Some(Filter::Contains(value.to_owned()));
+        }
+        return Some(Filter::Compare {
+            field: field.to_owned(),
+            op: Cmp::Contains,
+            value: value.to_owned(),
+        });
     }
     if matches!(
         lower.as_str(),
@@ -361,6 +373,8 @@ fn known_display_field(field: &str) -> bool {
             | "tcp.flags.reset"
             | "tcp.flags.push"
             | "http.request"
+            | "http.request.method"
+            | "http.request.uri"
             | "http.host"
             | "dns.qry.name"
             | "frame.info"
@@ -519,12 +533,52 @@ fn packet_text(packet: &NetworkPacket) -> String {
     .to_lowercase()
 }
 
+fn text_op(left: &str, op: Cmp, value: &str) -> bool {
+    match op {
+        Cmp::Eq => left.eq_ignore_ascii_case(value),
+        Cmp::Ne => !left.eq_ignore_ascii_case(value),
+        Cmp::Contains => left.to_lowercase().contains(&value.to_lowercase()),
+        Cmp::Lt | Cmp::Le | Cmp::Gt | Cmp::Ge => false,
+    }
+}
+
+/// Method and request-target from a decoded HTTP request line. A status line
+/// has no method.
+fn http_request_line(packet: &NetworkPacket) -> Option<(&str, &str)> {
+    if !packet.protocol.eq_ignore_ascii_case("http") {
+        return None;
+    }
+    let mut parts = packet.info.split_whitespace();
+    let method = parts.next()?;
+    let uri = parts.next()?;
+    if method.starts_with("HTTP/") {
+        return None;
+    }
+    Some((method, uri))
+}
+
+/// Query name from `query TYPE name` or `response TYPE name`.
+fn dns_query_name(packet: &NetworkPacket) -> Option<String> {
+    if !packet.protocol.eq_ignore_ascii_case("dns") {
+        return None;
+    }
+    let mut parts = packet.info.split_whitespace();
+    let kind = parts.next()?;
+    if kind != "query" && kind != "response" {
+        return None;
+    }
+    let _qtype = parts.next()?;
+    let name = parts.next()?.trim_end_matches(':');
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
 fn compare_field(packet: &NetworkPacket, field: &str, op: Cmp, value: &str) -> bool {
     let number = |text: &str| text.parse::<u64>().ok();
     let address = |text: &str| text.parse::<IpAddr>().ok();
     let eq_text = |left: &str| match op {
         Cmp::Eq => left.eq_ignore_ascii_case(value),
         Cmp::Ne => !left.eq_ignore_ascii_case(value),
+        Cmp::Contains => left.to_lowercase().contains(&value.to_lowercase()),
         Cmp::Lt | Cmp::Le | Cmp::Gt | Cmp::Ge => false,
     };
     let eq_num = |left: u64| match (op, number(value)) {
@@ -595,14 +649,24 @@ fn compare_field(packet: &NetworkPacket, field: &str, op: Cmp, value: &str) -> b
             }
         }
         "dns.qry.name" => {
-            // Bare field: the Protocol column is DNS. A value is not compared
-            // against packet.info; this summary has no query-name field.
-            let dns = packet.protocol.eq_ignore_ascii_case("dns");
-            match op {
-                Cmp::Eq if value.is_empty() => dns,
-                Cmp::Ne if value.is_empty() => !dns,
-                _ => false,
+            // A value is the name in the decoded summary ("query A example.com"
+            // or "response A example.com"). An empty value still means the
+            // packet is DNS, including summaries that did not carry a name.
+            if value.is_empty() {
+                let dns = packet.protocol.eq_ignore_ascii_case("dns");
+                return match op {
+                    Cmp::Eq => dns,
+                    Cmp::Ne => !dns,
+                    _ => false,
+                };
             }
+            dns_query_name(packet).is_some_and(|name| text_op(&name, op, value))
+        }
+        "http.request.method" => {
+            http_request_line(packet).is_some_and(|(method, _)| text_op(method, op, value))
+        }
+        "http.request.uri" => {
+            http_request_line(packet).is_some_and(|(_, uri)| text_op(uri, op, value))
         }
         "tcp.flags.syn" => tcp_flag_matches(
             transport("tcp"),
@@ -2396,6 +2460,17 @@ mod tests {
         assert!(ok_filter("dns.qry.name").matches(&dns));
         assert!(!ok_filter("dns.qry.name").matches(&udp));
         assert!(!ok_filter("dns.qry.name == example.com").matches(&dns));
+        let mut api = request.clone();
+        api.info = "GET /api HTTP/1.1".into();
+        assert!(ok_filter("http.request.method == \"GET\"").matches(&api));
+        assert!(ok_filter("http.request.uri contains \"/api\"").matches(&api));
+        assert!(!ok_filter("http.request.method == \"POST\"").matches(&api));
+        assert!(!ok_filter("http.request.uri contains \"/api\"").matches(&status));
+        let mut named = packet("DNS", "10.0.2.15:5353", "10.0.2.3:53");
+        named.info = "query A example.com".into();
+        assert!(ok_filter("dns.qry.name contains \"example\"").matches(&named));
+        assert!(ok_filter("dns.qry.name == example.com").matches(&named));
+        assert!(!ok_filter("dns.qry.name == other.test").matches(&named));
     }
 
     #[test]
