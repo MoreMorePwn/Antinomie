@@ -99,9 +99,13 @@ All edits happen in the **author repo**, never in a `.patch` file.
 
 ```bash
 cd work/debian-6.12.94-1-trixie/core
-git checkout 6.12
-git checkout -b antinomie/<short-topic>
+git switch -c release-X.Y.Z
 ```
+
+Create the version branch once from the current patched author tree for the
+authorized release. If it already exists, switch to it to continue that version's
+work. Do not reset to the bare baseline or create a different topic branch for
+each component. Use the same release version as the product checkout.
 
 Edit the source. Put bulk code in **new files** under `kernel/antinomie/`;
 keep hooks into existing files small and in regions no distro patch touches.
