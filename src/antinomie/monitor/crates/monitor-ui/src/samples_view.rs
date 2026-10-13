@@ -247,6 +247,8 @@ pub(crate) struct SamplesView {
     /// Run pushed samples as root instead of the guest user.
     as_root: bool,
     status: Option<(String, bool)>,
+    range_start: String,
+    range_end: String,
     /// The upload request and the run that follows it.
     pending: Option<(u64, Option<ExecRequest>)>,
     awaiting: Option<Option<ExecRequest>>,
@@ -409,6 +411,25 @@ impl SamplesView {
     }
 
     /// The source's newest samples of every type.
+    fn search_dated(&mut self, cx: &SamplesContext<'_>) {
+        let (sender, receiver) = mpsc::channel();
+        let curl = cx.curl.to_path_buf();
+        let cache = cx.data_dir.join("malshare-daily");
+        let start = self.range_start.clone();
+        let end = self.range_end.clone();
+        std::thread::spawn(move || {
+            let _ = sender.send(antinomie_monitor_core::malshare::dated_hashes(
+                &curl,
+                &cache,
+                &start,
+                &end,
+                SEARCH_LIMIT as usize,
+            ));
+        });
+        self.searching = Some(receiver);
+        self.status = None;
+    }
+
     fn search_all(&mut self, cx: &SamplesContext<'_>) {
         let (sender, receiver) = mpsc::channel();
         let (curl, key, source) = (cx.curl.to_path_buf(), self.key.clone(), self.source);
@@ -740,6 +761,19 @@ impl SamplesView {
                     self.text.clear();
                     all = true;
                 }
+                if self.source == Source::MalShare
+                    && ui
+                        .add_enabled(
+                            self.searching.is_none(),
+                            egui::Button::new("Newest in range"),
+                        )
+                        .on_hover_text(
+                            "Official dated SHA-256 lists. This is separate from the last-24-hours list. Type is unknown until a sample is downloaded.",
+                        )
+                        .clicked()
+                {
+                    self.search_dated(cx);
+                }
                 if ui
                     .add_enabled(ready, egui::Button::new("Newest Linux"))
                     .on_hover_text(match self.source {
@@ -797,16 +831,23 @@ impl SamplesView {
         });
         ui.add_space(6.0);
         if self.source == Source::MalShare {
-            // MalShare's terms ask that it is credited as the source.
+            ui.horizontal(|ui| {
+                ui.label("From");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.range_start)
+                        .desired_width(120.0)
+                        .hint_text("YYYY-MM-DD"),
+                );
+                ui.label("through");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.range_end)
+                        .desired_width(120.0)
+                        .hint_text("YYYY-MM-DD"),
+                );
+            });
             ui.colored_label(
                 theme::muted(),
-                "Samples from MalShare (malshare.com), searched by hash, file type, file name \
-                 or source; MalShare names no families. Free keys allow 2000 requests a day.",
-            );
-            ui.colored_label(
-                theme::muted(),
-                "MalShare returns the past 24 hours only. 7-day and 30-day lists are not \
-                 available from the current API.",
+                "Samples from MalShare (malshare.com). Newest and Newest Linux are the last 24 hours. Newest in range reads the official dated SHA-256 lists and is not a sample download.",
             );
             if all {
                 self.search_all(cx);

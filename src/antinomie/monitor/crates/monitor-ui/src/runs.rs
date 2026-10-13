@@ -16,6 +16,9 @@ pub(crate) struct RunTerminal {
     pub(crate) snapshot_request: Option<u64>,
     pub(crate) snapshot_error: Option<String>,
     pub(crate) snapshot_started: Option<Instant>,
+    /// When this view last painted. Replay keeps going while the tab is on
+    /// screen even if `open` was cleared, and while it is hidden if still open.
+    pub(crate) last_paint: Option<Instant>,
 }
 
 impl RunTerminal {
@@ -33,6 +36,7 @@ impl RunTerminal {
             snapshot_request: None,
             snapshot_error: None,
             snapshot_started: None,
+            last_paint: None,
         }
     }
 

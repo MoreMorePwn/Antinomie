@@ -422,6 +422,167 @@ pub fn newest_all(curl: &Path, key: &str, limit: u32) -> Result<(String, Vec<Sam
     ))
 }
 
+/// Official dated SHA-256 lists, one small file per day. These are public
+/// metadata, not sample downloads. Days are `YYYY-MM-DD`. The newest 1000
+/// unique hashes in the range are returned, newest day first.
+pub fn dated_hashes(
+    curl: &Path,
+    cache: &Path,
+    start: &str,
+    end: &str,
+    limit: usize,
+) -> Result<(String, Vec<SampleInfo>), String> {
+    let start = parse_day(start)?;
+    let end = parse_day(end)?;
+    if end < start {
+        return Err("the end date is before the start date".into());
+    }
+    if end - start > 31 {
+        return Err("a MalShare date range is at most 31 days".into());
+    }
+    fs_create(cache)?;
+    let mut merged = Vec::new();
+    let mut seen = HashSet::new();
+    let mut day = end;
+    loop {
+        let label = format_day(day);
+        let cached = cache.join(format!("{label}.sha256.txt"));
+        let text = if cached.is_file() {
+            std::fs::read_to_string(&cached).map_err(|error| error.to_string())?
+        } else {
+            let url = format!(
+                "https://malshare.com/daily/{label}/malshare_fileList.{label}.sha256.txt"
+            );
+            let body = fetch_public(curl, &url, 1024 * 1024)?;
+            let text = String::from_utf8_lossy(&body).into_owned();
+            std::fs::write(&cached, &text).map_err(|error| error.to_string())?;
+            text
+        };
+        for info in hashes_from_daily(&label, &text) {
+            if seen.insert(info.sha256_hash.clone()) {
+                merged.push(info);
+            }
+            if merged.len() == limit {
+                break;
+            }
+        }
+        if merged.len() == limit || day == start {
+            break;
+        }
+        day -= 1;
+    }
+    Ok((
+        format!(
+            "Newest {} dated SHA-256 hashes, {} through {} (not the last-24-hours list)",
+            merged.len(),
+            format_day(start),
+            format_day(end)
+        ),
+        merged,
+    ))
+}
+
+fn fs_create(path: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(path).map_err(|error| error.to_string())
+}
+
+fn fetch_public(curl: &Path, url: &str, max: u64) -> Result<Vec<u8>, String> {
+    crate::dependencies::require_tool(curl, "curl")?;
+    let mut child = Command::new(curl)
+        .args(["-fsS", "--proto", "=https", "--max-time", "30", url])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("curl: {error}"))?;
+    let mut body = Vec::new();
+    if let Some(stdout) = child.stdout.take() {
+        stdout
+            .take(max + 1)
+            .read_to_end(&mut body)
+            .map_err(|error| format!("curl: {error}"))?;
+    }
+    let done = child.wait_with_output().map_err(|error| format!("curl: {error}"))?;
+    if body.len() as u64 > max {
+        return Err("MalShare dated list is larger than 1 MiB".into());
+    }
+    if !done.status.success() {
+        let error = String::from_utf8_lossy(&done.stderr);
+        return Err(format!(
+            "MalShare dated list HTTP failed: {}",
+            error.trim()
+        ));
+    }
+    Ok(body)
+}
+
+pub(crate) fn hashes_from_daily(day: &str, text: &str) -> Vec<SampleInfo> {
+    let mut found = Vec::new();
+    let mut seen = HashSet::new();
+    for line in text.lines() {
+        let hash = line.trim().to_ascii_lowercase();
+        if hash.len() == 64
+            && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+            && seen.insert(hash.clone())
+        {
+            found.push(SampleInfo {
+                sha256_hash: hash,
+                file_type: "unknown".into(),
+                first_seen: day.to_owned(),
+                ..SampleInfo::default()
+            });
+        }
+    }
+    found
+}
+
+fn parse_day(text: &str) -> Result<i64, String> {
+    let parts: Vec<_> = text.trim().split('-').collect();
+    if parts.len() != 3 {
+        return Err("dates are YYYY-MM-DD".into());
+    }
+    let year: i32 = parts[0].parse().map_err(|_| "dates are YYYY-MM-DD".to_string())?;
+    let month: u32 = parts[1].parse().map_err(|_| "dates are YYYY-MM-DD".to_string())?;
+    let day: u32 = parts[2].parse().map_err(|_| "dates are YYYY-MM-DD".to_string())?;
+    days_from_civil(year, month, day).ok_or_else(|| "dates are YYYY-MM-DD".into())
+}
+
+fn format_day(days: i64) -> String {
+    let (year, month, day) = civil_from_days(days);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+fn days_from_civil(year: i32, month: u32, day: u32) -> Option<i64> {
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let year = year as i64 - i64::from(month <= 2);
+    let era = year.div_euclid(400);
+    let yoe = year.rem_euclid(400) as u64;
+    let mp = if month > 2 { month - 3 } else { month + 9 };
+    let doy = (153 * mp as u64 + 2) / 5 + day as u64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146097 + doe as i64 - 719468)
+}
+
+fn civil_from_days(z: i64) -> (i32, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let year = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let month_part = (5 * doy + 2) / 153;
+    let day = doy - (153 * month_part + 2) / 5 + 1;
+    let month = if month_part < 10 {
+        month_part + 3
+    } else {
+        month_part - 9
+    };
+    let year = if month <= 2 { year + 1 } else { year };
+    (year as i32, month as u32, day as u32)
+}
+
 /// Download one sample, check it and keep it encrypted with its record.
 pub fn download(
     curl: &Path,
@@ -515,6 +676,18 @@ pub fn download(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dated_hash_lines_keep_unknown_type_and_drop_duplicates() {
+        let day = "2026-10-12";
+        let hash = "ab".repeat(32);
+        let text = format!("{hash}\n{hash}\nnot-a-hash\n{}\n", "cd".repeat(32));
+        let found = hashes_from_daily(day, &text);
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].file_type, "unknown");
+        assert_eq!(found[0].first_seen, day);
+        assert_eq!(parse_day("2026-10-12").unwrap() - parse_day("2026-10-01").unwrap(), 11);
+    }
 
     #[test]
     fn replies_are_read_in_any_shape() {

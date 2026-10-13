@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::{bpf, theme, trace};
 use antinomie_monitor_core::{network::NetworkPacket, EventSummary, InvocationSummary};
@@ -49,9 +49,17 @@ pub(crate) struct TriageView {
     /// Archive directory and owned pcap, so a different capture starts a new index.
     scan_key: Option<String>,
     scan_cancel: Option<Arc<AtomicBool>>,
-    scan_rx: Option<Receiver<Result<ArchiveScan, String>>>,
+    scan_rx: Option<Receiver<(u64, Result<ArchiveScan, String>)>>,
+    /// Result generation. A late index from a previous capture is discarded.
+    scan_generation: u64,
+    pending_generation: Option<u64>,
     scan: Option<ArchiveScan>,
     scan_error: Option<String>,
+    last_refresh: Option<Instant>,
+    next_refresh: Option<Instant>,
+    refresh_requested: bool,
+    /// A refresh arrived while an index was already running.
+    refresh_queued: bool,
     bpf_export_status: String,
 }
 
@@ -67,8 +75,14 @@ impl Default for TriageView {
             scan_key: None,
             scan_cancel: None,
             scan_rx: None,
+            scan_generation: 0,
+            pending_generation: None,
             scan: None,
             scan_error: None,
+            last_refresh: None,
+            next_refresh: None,
+            refresh_requested: false,
+            refresh_queued: false,
             bpf_export_status: String::new(),
         }
     }
@@ -124,32 +138,51 @@ impl TriageView {
             }
         });
         ui.separator();
-        self.ensure_scan(input.archive, input.pcap, input.pcap_open);
-        self.poll_scan(ui);
-        let coverage = if let Some(scan) = &self.scan {
-            scan.coverage.clone()
-        } else if let Some(error) = &self.scan_error {
-            format!(
-                "saved-recording index failed: {error}. {fallback}",
-                fallback = input.coverage
-            )
-        } else if input.archive.is_some() {
-            format!(
-                "indexing the saved recording; rows below are the visible page until that index finishes. {}",
-                input.coverage
-            )
-        } else {
-            input.coverage.to_string()
-        };
-        ui.colored_label(theme::muted(), format!("Coverage: {coverage}."));
-        let identity = [input.vm_id, input.boot_id, input.run_id]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join(" / ");
-        if !identity.is_empty() {
-            ui.colored_label(theme::muted(), identity);
+        if input.archive.is_some() {
+            ui.ctx().request_repaint_after(Duration::from_secs(5));
+            if self
+                .next_refresh
+                .is_some_and(|due| Instant::now() >= due)
+            {
+                self.refresh_requested = true;
+            }
         }
+        self.ensure_scan(
+            input.archive,
+            input.pcap,
+            input.pcap_open,
+            input.vm_id,
+            input.boot_id,
+            input.run_id,
+        );
+        self.poll_scan(ui);
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(input.archive.is_some(), egui::Button::new("Refresh"))
+                .on_disabled_hover_text("A whole-run index starts after the recording is saved")
+                .clicked()
+            {
+                self.refresh_requested = true;
+                self.ensure_scan(
+                    input.archive,
+                    input.pcap,
+                    input.pcap_open,
+                    input.vm_id,
+                    input.boot_id,
+                    input.run_id,
+                );
+            }
+            ui.colored_label(theme::muted(), self.refresh_status(&input));
+        });
+        let coverage = self.coverage_text(&input);
+        egui::CollapsingHeader::new("Index details")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.add(egui::Label::new(coverage).wrap());
+                ui.label(
+                    "HTTP/1 and DNS over UDP or TCP can be indexed. HTTPS, HTTP/2, HTTP/3, and encrypted DNS are not.",
+                );
+            });
         match self.section {
             Section::Process => self.process(ui, &input),
             Section::Files => {
@@ -268,7 +301,6 @@ impl TriageView {
                 );
                 return;
             };
-            ui.colored_label(theme::muted(), &scan.network_coverage);
             match self.network {
                 NetTab::Http => indexed_packet_table(
                     ui,
@@ -289,14 +321,6 @@ impl TriageView {
         }
         match self.network {
             NetTab::Http => {
-                ui.colored_label(
-                    theme::muted(),
-                    if input.frames.is_none() {
-                        "Request reconstruction is unavailable for this view: the loaded packet list has no payload. Supported when frames are present: HTTP/1.0 and HTTP/1.1 over TCP. Unavailable: HTTPS, HTTP/2, and HTTP/3. This is the open capture, not a finished whole-run index."
-                    } else {
-                        "Reassembled from the open capture's loaded packets, not a finished whole-run index. Supported: HTTP/1.0 and HTTP/1.1. Unavailable: HTTPS, HTTP/2, and HTTP/3."
-                    },
-                );
                 limited_table(
                     ui,
                     "triage-http",
@@ -305,14 +329,6 @@ impl TriageView {
                 );
             }
             NetTab::Dns => {
-                ui.colored_label(
-                    theme::muted(),
-                    if input.frames.is_none() {
-                        "DNS reconstruction is unavailable for this view: the loaded packet list has no payload. Supported when frames are present: DNS over UDP and DNS over TCP. Unavailable: DNS over TLS and DNS over HTTPS. This is the open capture, not a finished whole-run index."
-                    } else {
-                        "Decoded from the open capture's loaded packets, not a finished whole-run index. Unavailable: DNS over TLS and DNS over HTTPS."
-                    },
-                );
                 limited_table(
                     ui,
                     "triage-dns",
@@ -343,10 +359,12 @@ impl TriageView {
                 format!("{omitted} additional rule matches were not stored in this table."),
             );
         }
-        ui.add(
-            egui::TextEdit::singleline(&mut self.suspicious_filter)
-                .hint_text("Filter rule, process, summary, or evidence")
-                .desired_width(f32::INFINITY),
+        crate::query::filter_edit(
+            ui,
+            &mut self.suspicious_filter,
+            "Filter rule, process, summary, or evidence",
+            ui.available_width(),
+            crate::query::FilterScope::Record,
         );
         let rows = filter_findings(findings, &self.suspicious_filter);
         let clicked = finding_table(
@@ -372,34 +390,95 @@ impl TriageView {
         clicked
     }
 
-    fn ensure_scan(&mut self, archive: Option<&Path>, pcap: Option<&Path>, pcap_open: bool) {
+    fn refresh_status(&self, input: &TriageInput<'_>) -> String {
+        if self.scan_rx.is_some() {
+            return "Refreshing the saved recording".into();
+        }
+        if let Some(error) = &self.scan_error {
+            return format!("Refresh failed: {error}");
+        }
+        if let Some(when) = self.last_refresh {
+            return format!("Refreshed {} s ago", when.elapsed().as_secs());
+        }
+        if input.archive.is_some() {
+            "Waiting to index the saved recording".into()
+        } else {
+            "Live page. The whole recording is indexed after it is saved.".into()
+        }
+    }
+
+    fn coverage_text(&self, input: &TriageInput<'_>) -> String {
+        if let Some(scan) = &self.scan {
+            return scan.coverage.clone();
+        }
+        if let Some(error) = &self.scan_error {
+            return format!(
+                "saved-recording index failed: {error}. {}",
+                input.coverage
+            );
+        }
+        if input.archive.is_some() {
+            format!(
+                "Indexing the saved recording. Rows below stay on the last finished index. {}",
+                input.coverage
+            )
+        } else {
+            input.coverage.to_string()
+        }
+    }
+
+    fn ensure_scan(
+        &mut self,
+        archive: Option<&Path>,
+        pcap: Option<&Path>,
+        pcap_open: bool,
+        vm_id: Option<&str>,
+        boot_id: Option<&str>,
+        run_id: Option<&str>,
+    ) {
         let Some(path) = archive else {
             self.stop_scan();
             return;
         };
         let key = format!(
-            "{}\n{}\n{pcap_open}",
+            "{}\n{}\n{}\n{}\n{}",
             path.display(),
             pcap.map(|file| file.display().to_string())
-                .unwrap_or_default()
+                .unwrap_or_default(),
+            vm_id.unwrap_or(""),
+            boot_id.unwrap_or(""),
+            run_id.unwrap_or("")
         );
-        if self.scan_key.as_deref() == Some(key.as_str()) {
+        if self.scan_key.as_deref() != Some(key.as_str()) {
+            self.stop_scan();
+            self.scan_key = Some(key);
+            self.refresh_requested = true;
+        }
+        if self.scan_rx.is_some() {
+            if self.refresh_requested {
+                self.refresh_queued = true;
+                self.refresh_requested = false;
+            }
             return;
         }
-        self.stop_scan();
+        if !self.refresh_requested {
+            return;
+        }
+        self.refresh_requested = false;
+        self.refresh_queued = false;
         let cancel = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::channel();
         let directory = path.to_path_buf();
         let pcap = pcap.map(Path::to_path_buf);
         let cancel_thread = Arc::clone(&cancel);
+        self.scan_generation = self.scan_generation.saturating_add(1);
+        let generation = self.scan_generation;
         if std::thread::Builder::new()
             .name("triage-index".into())
             .spawn(move || {
-                let _ = tx.send(scan_archive(
-                    &directory,
-                    pcap.as_deref(),
-                    pcap_open,
-                    &cancel_thread,
+                let _ = tx.send((
+                    generation,
+                    scan_archive(&directory, pcap.as_deref(), pcap_open, &cancel_thread),
                 ));
             })
             .is_err()
@@ -407,9 +486,10 @@ impl TriageView {
             self.scan_error = Some("could not start the saved-recording index".into());
             return;
         }
-        self.scan_key = Some(key);
+        self.pending_generation = Some(generation);
         self.scan_cancel = Some(cancel);
         self.scan_rx = Some(rx);
+        self.next_refresh = Some(Instant::now() + Duration::from_secs(5));
     }
 
     fn poll_scan(&mut self, ui: &mut egui::Ui) {
@@ -417,23 +497,36 @@ impl TriageView {
             return;
         };
         match rx.try_recv() {
-            Ok(Ok(scan)) => {
-                self.scan = Some(scan);
-                self.scan_error = None;
+            Ok((generation, result)) => {
                 self.scan_rx = None;
-            }
-            Ok(Err(error)) => {
-                self.scan = None;
-                self.scan_error = Some(error);
-                self.scan_rx = None;
+                self.scan_cancel = None;
+                if self.pending_generation == Some(generation) {
+                    match result {
+                        Ok(scan) => {
+                            self.scan = Some(scan);
+                            self.scan_error = None;
+                            self.last_refresh = Some(Instant::now());
+                        }
+                        Err(error) if error == "cancelled" => {}
+                        Err(error) => self.scan_error = Some(error),
+                    }
+                }
+                if self.refresh_queued {
+                    self.refresh_queued = false;
+                    self.refresh_requested = true;
+                }
             }
             Err(mpsc::TryRecvError::Empty) => {
                 ui.ctx().request_repaint_after(Duration::from_millis(200));
             }
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.scan_error =
-                    Some("saved-recording index stopped before reporting coverage".into());
+                    Some("saved-recording index stopped before reporting a result".into());
                 self.scan_rx = None;
+                if self.refresh_queued {
+                    self.refresh_queued = false;
+                    self.refresh_requested = true;
+                }
             }
         }
     }
@@ -442,11 +535,17 @@ impl TriageView {
         if let Some(cancel) = &self.scan_cancel {
             cancel.store(true, Ordering::Relaxed);
         }
+        self.scan_generation = self.scan_generation.saturating_add(1);
+        self.pending_generation = None;
         self.scan_key = None;
         self.scan_cancel = None;
         self.scan_rx = None;
         self.scan = None;
         self.scan_error = None;
+        self.last_refresh = None;
+        self.next_refresh = None;
+        self.refresh_requested = false;
+        self.refresh_queued = false;
     }
 }
 
@@ -642,8 +741,10 @@ const FORK: u64 = 57;
 const VFORK: u64 = 58;
 const CLONE3: u64 = 435;
 const CLONE_THREAD: u64 = 0x0001_0000;
+const CLONE_FS: u64 = 0x0000_0200;
 const CLONE_FILES: u64 = 0x0000_0400;
 const AT_FDCWD: u64 = (-100i64) as u64;
+const MAP_PRIVATE: u64 = 0x02;
 const MAP_ANONYMOUS: u64 = 0x20;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -1143,9 +1244,9 @@ fn file_rows(invocations: &[InvocationSummary], names: &[&str]) -> LimitedRows {
         stopped_early: false,
     };
     // Successful opens are remembered for this slice only. A fork, vfork, or
-    // process clone copies the parent's map onto the child at that call,
-    // unless the recorded flags include CLONE_FILES, which shares one table.
-    // Later closes change only the task that owns the table.
+    // process clone copies the parent's descriptors unless CLONE_FILES shares
+    // one table. CLONE_FS shares the working directory; CLONE_FILES does not.
+    // Later closes change only the task that owns the descriptor table.
     let mut files = FdState::default();
     let cookies = task_cookies(invocations);
     for invocation in invocations {
@@ -1175,10 +1276,14 @@ fn file_event_row(
     if !names.iter().any(|name| event.syscall_name == *name) {
         return None;
     }
-    if matches!(event.syscall_name.as_str(), "mmap" | "mmap2")
-        && !call_args(invocation).is_some_and(|args| args[2] & 2 != 0)
-    {
-        return None;
+    if matches!(event.syscall_name.as_str(), "mmap" | "mmap2") {
+        let writable = call_args(invocation).is_some_and(|args| args[2] & 2 != 0);
+        let private = call_args(invocation)
+            .and_then(|args| args.get(3).copied())
+            .is_some_and(|flags| flags & MAP_PRIVATE != 0);
+        if !writable || private {
+            return None;
+        }
     }
     let path = displayed_path(invocation, event, files);
     let result = invocation
@@ -1253,7 +1358,6 @@ struct ArchiveScan {
     opened_omitted: u64,
     changed: Vec<Vec<Cell>>,
     changed_omitted: u64,
-    network_coverage: String,
     http: Vec<Vec<Cell>>,
     http_omitted: u64,
     dns: Vec<Vec<Cell>>,
@@ -1378,7 +1482,6 @@ fn scan_archive(
         opened_omitted,
         changed,
         changed_omitted,
-        network_coverage: network.coverage,
         http: network.http,
         http_omitted: network.http_omitted,
         dns: network.dns,
@@ -1463,7 +1566,7 @@ fn scan_pcap(path: &Path, pcap_open: bool, cancel: &AtomicBool) -> Result<Packet
         dns.push(dns_index_row(query, &held));
     }
     let mut coverage = format!(
-        "pcap frames read {}, omitted {omitted}; retransmissions dropped {}; HTTPS segments {}; HTTP/2 prefaces {}; HTTP requests stored {}, omitted {http_omitted}; DNS requests stored {}, omitted {dns_omitted}. Supported: HTTP/1.0 and HTTP/1.1 over TCP, DNS over UDP and DNS over TCP. Unavailable: HTTPS, HTTP/2, HTTP/3, and encrypted DNS",
+        "pcap frames read {}, omitted {omitted}; retransmissions dropped {}; HTTPS segments {}; HTTP/2 prefaces {}; HTTP requests stored {}, omitted {http_omitted}; DNS requests stored {}, omitted {dns_omitted}",
         held.len(),
         built.retransmissions_dropped,
         built.https_segments,
@@ -1663,13 +1766,27 @@ struct FdState {
     opened: std::collections::BTreeMap<(u64, u32, u64), String>,
     /// Child task → the task whose descriptor table it shares (`CLONE_FILES`).
     share: std::collections::BTreeMap<(u64, u32), (u64, u32)>,
+    /// Child task → the task whose working directory it shares (`CLONE_FS`).
+    fs_share: std::collections::BTreeMap<(u64, u32), (u64, u32)>,
     cwd: std::collections::BTreeMap<(u64, u32), String>,
 }
 
 fn table_owner(files: &FdState, cookie: u64, pid: u32) -> (u64, u32) {
+    follow_share(&files.share, cookie, pid)
+}
+
+fn fs_owner(files: &FdState, cookie: u64, pid: u32) -> (u64, u32) {
+    follow_share(&files.fs_share, cookie, pid)
+}
+
+fn follow_share(
+    share: &std::collections::BTreeMap<(u64, u32), (u64, u32)>,
+    cookie: u64,
+    pid: u32,
+) -> (u64, u32) {
     let mut key = (cookie, pid);
     for _ in 0..8 {
-        match files.share.get(&key) {
+        match share.get(&key) {
             Some(next) if *next != key => key = *next,
             _ => break,
         }
@@ -1717,10 +1834,18 @@ fn remember_cwd(files: &mut FdState, invocation: &InvocationSummary, event: &Eve
     if !succeeded(invocation) {
         return;
     }
-    let (cookie, pid) = table_owner(files, invocation.task_cookie, event.pid);
+    let owner = fs_owner(files, invocation.task_cookie, event.pid);
     let path = match event.syscall_name.as_str() {
-        "getcwd" | "chdir" => path_list(invocation).into_iter().next(),
+        "getcwd" => path_list(invocation)
+            .into_iter()
+            .next()
+            .filter(|path| path.starts_with('/')),
+        "chdir" => path_list(invocation)
+            .into_iter()
+            .next()
+            .and_then(|path| resolve_chdir(files, owner, path)),
         "fchdir" => call_args(invocation).and_then(|args| {
+            let (cookie, pid) = table_owner(files, invocation.task_cookie, event.pid);
             files
                 .opened
                 .get(&(cookie, pid, args[0]))
@@ -1729,8 +1854,37 @@ fn remember_cwd(files: &mut FdState, invocation: &InvocationSummary, event: &Eve
         }),
         _ => None,
     };
-    if let Some(path) = path.filter(|path| path.starts_with('/')) {
-        files.cwd.insert((cookie, pid), path);
+    if let Some(path) = path {
+        files.cwd.insert(owner, path);
+    }
+}
+
+/// An absolute chdir is stored as given. A relative chdir is applied to the
+/// task's current directory. Without a recorded directory the relative change
+/// is left unknown instead of being treated as an absolute path.
+fn resolve_chdir(files: &FdState, owner: (u64, u32), path: String) -> Option<String> {
+    if path.starts_with('/') {
+        return Some(path);
+    }
+    let base = files.cwd.get(&owner)?;
+    Some(join_cwd(base, &path))
+}
+
+fn join_cwd(base: &str, relative: &str) -> String {
+    let mut parts: Vec<&str> = base.split('/').filter(|part| !part.is_empty()).collect();
+    for part in relative.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    if parts.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{}", parts.join("/"))
     }
 }
 
@@ -1839,32 +1993,43 @@ fn inherit_open_fds(
     let parent = table_owner(files, invocation.task_cookie, event.pid);
     if shares_files(invocation, event) {
         files.share.insert((child_cookie, child_pid), parent);
-        if let Some(cwd) = files.cwd.get(&parent).cloned() {
-            files.cwd.entry((child_cookie, child_pid)).or_insert(cwd);
-        }
-        return;
-    }
-    let inherited: Vec<(u64, String)> = files
-        .opened
-        .iter()
-        .filter(|((cookie, pid, _), _)| (*cookie, *pid) == parent)
-        .map(|((_, _, fd), path)| (*fd, path.clone()))
-        .collect();
-    for (fd, path) in inherited {
-        files
+    } else {
+        let inherited: Vec<(u64, String)> = files
             .opened
-            .entry((child_cookie, child_pid, fd))
-            .or_insert(path);
+            .iter()
+            .filter(|((cookie, pid, _), _)| (*cookie, *pid) == parent)
+            .map(|((_, _, fd), path)| (*fd, path.clone()))
+            .collect();
+        for (fd, path) in inherited {
+            files
+                .opened
+                .entry((child_cookie, child_pid, fd))
+                .or_insert(path);
+        }
     }
-    if let Some(cwd) = files.cwd.get(&parent).cloned() {
-        files.cwd.entry((child_cookie, child_pid)).or_insert(cwd);
+    let directory = fs_owner(files, invocation.task_cookie, event.pid);
+    if shares_fs(invocation, event) {
+        files.fs_share.insert((child_cookie, child_pid), directory);
+    } else if let Some(cwd) = files.cwd.get(&directory).cloned() {
+        files
+            .cwd
+            .entry((child_cookie, child_pid))
+            .or_insert(cwd);
     }
 }
 
 fn shares_files(invocation: &InvocationSummary, event: &EventSummary) -> bool {
+    clone_flag(invocation, event, CLONE_FILES)
+}
+
+fn shares_fs(invocation: &InvocationSummary, event: &EventSummary) -> bool {
+    clone_flag(invocation, event, CLONE_FS)
+}
+
+fn clone_flag(invocation: &InvocationSummary, event: &EventSummary, flag: u64) -> bool {
     match event.syscall_nr {
-        CLONE => call_args(invocation).is_some_and(|args| args[0] & CLONE_FILES != 0),
-        CLONE3 => clone3_flags(invocation).is_some_and(|flags| flags & CLONE_FILES != 0),
+        CLONE => call_args(invocation).is_some_and(|args| args[0] & flag != 0),
+        CLONE3 => clone3_flags(invocation).is_some_and(|flags| flags & flag != 0),
         _ => false,
     }
 }
@@ -1945,7 +2110,8 @@ fn resolve_path(
             }
         }
     }
-    match files.cwd.get(&(cookie, pid)) {
+    let directory = fs_owner(files, invocation.task_cookie, event.pid);
+    match files.cwd.get(&directory) {
         Some(cwd) => format!("{cwd}/{path}"),
         None => format!("{path} (relative, cwd not recorded)"),
     }
@@ -2553,9 +2719,8 @@ mod tests {
             index.coverage
         );
         assert!(
-            index
-                .coverage
-                .contains("Unavailable: HTTPS, HTTP/2, HTTP/3"),
+            index.coverage.contains("HTTPS segments 0")
+                && index.coverage.contains("HTTP/2 prefaces 0"),
             "{}",
             index.coverage
         );
@@ -3077,6 +3242,76 @@ mod tests {
         missing_write.entry.as_mut().unwrap().args = Some([7, 0, 3, 0, 0, 0]);
         let rows = file_rows(&[opened, missing, missing_write], &["write"]);
         assert!(!rows.rows[0][0].text.contains("/etc/passwd"));
+    }
+
+    fn path_call(pid: u32, nr: u64, name: &str, result: i64, path: &str) -> InvocationSummary {
+        let mut row = call(pid, nr, name, result);
+        let mut bytes = path.as_bytes().to_vec();
+        bytes.push(0);
+        row.entry
+            .as_mut()
+            .unwrap()
+            .fields
+            .push(captured("arg0.pathname", "", &bytes));
+        row
+    }
+
+    #[test]
+    fn clone_files_does_not_share_cwd_and_relative_chdir_is_applied() {
+        let start = path_call(1, 80, "chdir", 0, "/tmp");
+        let mut files_only = call(1, CLONE, "clone", 42);
+        files_only.entry.as_mut().unwrap().args = Some([CLONE_FILES, 0, 0, 0, 0, 0]);
+        let parent_move = path_call(1, 80, "chdir", 0, "later");
+        let mut child_open = call(42, 257, "openat", 3);
+        child_open.entry.as_mut().unwrap().args = Some([AT_FDCWD, 0, 0, 0, 0, 0]);
+        child_open
+            .entry
+            .as_mut()
+            .unwrap()
+            .fields
+            .push(captured("arg1.path", "", b"note\0"));
+        let rows = file_rows(&[start, files_only, parent_move, child_open], &["openat"]);
+        assert_eq!(rows.rows.len(), 1, "{}", rows.rows.len());
+        assert_eq!(rows.rows[0][0].text, "/tmp/note");
+
+        let start = path_call(1, 80, "chdir", 0, "/tmp");
+        let relative = path_call(1, 80, "chdir", 0, "sub");
+        let mut opened = call(1, 257, "openat", 4);
+        opened.entry.as_mut().unwrap().args = Some([AT_FDCWD, 0, 0, 0, 0, 0]);
+        opened
+            .entry
+            .as_mut()
+            .unwrap()
+            .fields
+            .push(captured("arg1.path", "", b"note\0"));
+        let rows = file_rows(&[start, relative, opened], &["openat"]);
+        assert_eq!(rows.rows[0][0].text, "/tmp/sub/note");
+
+        let start = path_call(1, 80, "chdir", 0, "/tmp");
+        let mut shared = call(1, CLONE, "clone", 42);
+        shared.entry.as_mut().unwrap().args = Some([CLONE_FILES | CLONE_FS, 0, 0, 0, 0, 0]);
+        let parent_move = path_call(1, 80, "chdir", 0, "/var");
+        let mut child_open = call(42, 257, "openat", 3);
+        child_open.entry.as_mut().unwrap().args = Some([AT_FDCWD, 0, 0, 0, 0, 0]);
+        child_open
+            .entry
+            .as_mut()
+            .unwrap()
+            .fields
+            .push(captured("arg1.path", "", b"note\0"));
+        let rows = file_rows(&[start, shared, parent_move, child_open], &["openat"]);
+        assert_eq!(rows.rows[0][0].text, "/var/note");
+    }
+
+    #[test]
+    fn private_writable_mmap_is_not_a_changed_file() {
+        let mut private = call(1, 9, "mmap", 0x1000);
+        private.entry.as_mut().unwrap().args = Some([0, 4096, 2, MAP_PRIVATE, 3, 0]);
+        let mut shared = call(1, 9, "mmap", 0x2000);
+        shared.entry.as_mut().unwrap().args = Some([0, 4096, 2, 1, 3, 0]);
+        let rows = file_rows(&[private, shared], &["mmap"]);
+        assert_eq!(rows.rows.len(), 1, "{}", rows.rows.len());
+        assert_eq!(rows.rows[0][3].text, "mmap");
     }
 
     #[test]

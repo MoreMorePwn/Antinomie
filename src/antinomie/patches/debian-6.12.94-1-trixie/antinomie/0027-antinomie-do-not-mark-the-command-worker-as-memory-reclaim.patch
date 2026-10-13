@@ -1,0 +1,29 @@
+Description: antinomie: do not mark the command worker as memory reclaim
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-13
+
+
+---
+diff --git a/kernel/antinomie/guest.c b/kernel/antinomie/guest.c
+index 85f9cfcee..de445d3fd 100644
+--- a/kernel/antinomie/guest.c
++++ b/kernel/antinomie/guest.c
+@@ -437,7 +437,15 @@ static int __init ant_guest_init(void)
+ 		directory[index].cpu_id = cpu;
+ 		per_cpu(producers, cpu).index = index++;
+ 	}
+-	worker = alloc_ordered_workqueue("antinomie-control", WQ_MEM_RECLAIM);
++	/*
++	 * This worker only polls host commands. It is not a reclaim path,
++	 * and a terminal READ reaches n_tty_read, which flushes the ordinary
++	 * TTY queue events_unbound. WQ_MEM_RECLAIM makes that flush trip
++	 * check_flush_dependency. Flags stay 0 so the worker may complete
++	 * the read. The queue stays ordered, so commands, EOF and shutdown
++	 * keep one sequence.
++	 */
++	worker = alloc_ordered_workqueue("antinomie-control", 0);
+ 	if (!worker) goto free_rings;
+ 	control->geometry.version = ANT_ABI;
+ 	control->geometry.session = get_random_u64() ?: 1;

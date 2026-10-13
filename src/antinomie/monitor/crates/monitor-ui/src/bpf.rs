@@ -387,6 +387,16 @@ mod tests {
     }
 
     #[test]
+    fn translates_a_240_byte_classic_socket_filter() {
+        let bytes = [0x06u8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00].repeat(30);
+        assert_eq!(bytes.len(), 240);
+        let text = translate_classic(&bytes);
+        assert!(text.starts_with("captured 240 octets, 30 instructions"), "{text}");
+        assert!(text.contains("0029"), "{text}");
+        assert!(!text.contains("partial tail"), "{text}");
+    }
+
+    #[test]
     fn translates_mov_and_exit() {
         // mov64 r0, 0; exit
         let mut bytes = vec![0xb7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];

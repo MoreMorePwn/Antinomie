@@ -1,5 +1,6 @@
 use crate::theme;
 use eframe::egui::{self, Color32, Key, Sense, TextStyle};
+use std::time::{Duration, Instant};
 
 /// Output lines kept above the screen for scrolling back.
 const SCROLLBACK: usize = 10_000;
@@ -21,6 +22,8 @@ pub struct Terminal {
     wheel: egui::Vec2,
     /// First column shown when a recorded screen is wider than its pane.
     column: u16,
+    /// Last time the grid was drawn. A gap means the tab was hidden.
+    last_show: Option<Instant>,
 }
 
 impl Default for Terminal {
@@ -31,6 +34,7 @@ impl Default for Terminal {
             offset: 0,
             wheel: egui::Vec2::ZERO,
             column: 0,
+            last_show: None,
         }
     }
 }
@@ -120,7 +124,15 @@ impl Terminal {
         let Some(fit) = fit_grid(available, cell) else {
             return (Vec::new(), None);
         };
-        let resize = if resize_parser && self.size != fit {
+        // Coming back to a hidden terminal paints the bytes already drained
+        // into the parser. A PTY resize on that same frame would reflow or
+        // clear the screen before those bytes are visible, so the size change
+        // waits until the following shown frame.
+        let returning = self
+            .last_show
+            .is_some_and(|shown| shown.elapsed() > Duration::from_millis(100));
+        self.last_show = Some(Instant::now());
+        let resize = if resize_parser && self.size != fit && !returning {
             self.size = fit;
             self.parser.screen_mut().set_size(fit.0, fit.1);
             Some(fit)
@@ -597,6 +609,55 @@ mod tests {
         }
         terminal.process(b"Y");
         assert!(terminal.contents().contains("XY"));
+    }
+
+    #[test]
+    fn return_frame_paints_output_accumulated_while_hidden() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut terminal = Terminal::default();
+        let pane = egui::vec2(800.0, 600.0);
+        let (_, _, resize) = frame(&ctx, &mut terminal, pane, Vec::new(), true);
+        assert!(resize.is_some());
+        let size = terminal.parser.screen().size();
+        terminal.process(b"while-hidden");
+        terminal.last_show = Some(Instant::now() - Duration::from_secs(2));
+        let mut result = (Vec::new(), None);
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                events: vec![egui::Event::Text("typed-unfocused".into())],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show(ctx, |ui| {
+                        result = terminal.show_grid(ui, false, true);
+                    });
+            },
+        );
+        let (input, resize) = result;
+        assert!(resize.is_none(), "return must not resize before painting");
+        assert_eq!(terminal.parser.screen().size(), size);
+        assert!(input.is_empty(), "hidden return does not take input");
+        assert!(
+            rendered(&output).iter().any(|row| row.contains("while-hidden")),
+            "{:?}",
+            rendered(&output)
+        );
+        let (_, input, resize) = frame(
+            &ctx,
+            &mut terminal,
+            egui::vec2(900.0, 700.0),
+            vec![egui::Event::Text("k".into())],
+            true,
+        );
+        assert!(resize.is_some(), "the following frame applies the new pane");
+        assert_eq!(input, b"k");
     }
 
     #[test]

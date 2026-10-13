@@ -799,6 +799,132 @@ fn spawn_worker_binary(
     cmd.spawn()
         .map_err(|e| format!("mandatory bubblewrap isolation unavailable: {e}"))
 }
+
+/// Run an external analysis tool inside the same bubblewrap isolation as the
+/// static-analysis worker. The host process is `bwrap`, not the tool itself.
+pub(crate) fn run_sandboxed(
+    program: &Path,
+    args: &[String],
+    writable: &Path,
+    extra_read_only: &[PathBuf],
+    env: &[(&str, &str)],
+    timeout: Duration,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    crate::dependencies::require_tool(Path::new("/usr/bin/bwrap"), "bubblewrap")?;
+    let mut cmd = Command::new("/usr/bin/bwrap");
+    cmd.args([
+        "--unshare-all",
+        "--hostname",
+        "analysis",
+        "--unshare-user",
+        "--disable-userns",
+        "--die-with-parent",
+        "--new-session",
+        "--clearenv",
+        "--cap-drop",
+        "ALL",
+        "--ro-bind",
+        "/usr",
+        "/usr",
+    ]);
+    for path in ["/bin", "/sbin", "/lib", "/lib64"] {
+        if let Ok(target) = fs::read_link(path) {
+            cmd.arg("--symlink").arg(target).arg(path);
+        }
+    }
+    for path in [
+        "/lib",
+        "/lib64",
+        "/etc/alternatives",
+        "/etc/java-17-openjdk",
+        "/etc/java-21-openjdk",
+        "/etc/ld.so.cache",
+    ] {
+        if Path::new(path).exists() && fs::read_link(path).is_err() {
+            cmd.arg("--ro-bind").arg(path).arg(path);
+        }
+    }
+    cmd.args([
+        "--proc",
+        "/proc",
+        "--dir",
+        "/dev",
+        "--dev-bind",
+        "/dev/null",
+        "/dev/null",
+        "--dev-bind",
+        "/dev/urandom",
+        "/dev/urandom",
+        "--dev-bind",
+        "/dev/random",
+        "/dev/random",
+        "--symlink",
+        "/proc/self/fd",
+        "/dev/fd",
+        "--symlink",
+        "/proc/self/fd/0",
+        "/dev/stdin",
+        "--symlink",
+        "/proc/self/fd/1",
+        "/dev/stdout",
+        "--symlink",
+        "/proc/self/fd/2",
+        "/dev/stderr",
+        "--size",
+        "2147483648",
+        "--tmpfs",
+        "/tmp",
+        "--bind",
+    ])
+    .arg(writable)
+    .arg(writable);
+    for path in extra_read_only {
+        if path.exists() {
+            cmd.arg("--ro-bind").arg(path).arg(path);
+        }
+    }
+    cmd.args(["--remount-ro", "/", "--setenv", "LC_ALL", "C"]);
+    for (key, value) in env {
+        cmd.arg("--setenv").arg(key).arg(value);
+    }
+    cmd.arg("--chdir").arg(writable).arg("--").arg(program);
+    for arg in args {
+        cmd.arg(arg);
+    }
+    cmd.env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = cmd
+        .spawn()
+        .map_err(|error| format!("mandatory bubblewrap isolation unavailable: {error}"))?;
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait().map_err(|error| error.to_string())? {
+            Some(status) => break status,
+            None if cancel.load(Ordering::Relaxed) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("cancelled".into());
+            }
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Ghidra decompilation timed out inside the sandbox.".into());
+            }
+            None => std::thread::sleep(Duration::from_millis(50)),
+        }
+    };
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "sandboxed Ghidra exited with {status}. sparse-plan.txt is not a load result."
+        ))
+    }
+}
+
 fn read_report(path: &Path, expected: &AnalysisReport) -> Result<AnalysisReport, String> {
     let mut encoded = Vec::new();
     crate::archive_io::open_regular(path.parent().ok_or("worker report has no directory")?, path)
