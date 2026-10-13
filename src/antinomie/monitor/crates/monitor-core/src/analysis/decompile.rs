@@ -734,39 +734,38 @@ pub fn decompile_captured_core(
         java_home = "/opt/antinomie-tools/ghidra/jdk".to_string();
         env.push(("JAVA_HOME", java_home.as_str()));
     }
-    let run = tools::run_cancellable(
-        &ghidra_s,
-        &[
-            &project_s,
-            "antinomie",
-            "-import",
-            &image_s,
-            "-overwrite",
-            "-scriptPath",
-            &scripts_s,
-            "-postScript",
-            "AntinomieCoreExport.java",
-            &export_s,
-            "90",
-            "-analysisTimeoutPerFile",
-            "90",
-            "-max-cpu",
-            "4",
-        ],
+    let args = vec![
+        project_s,
+        "antinomie".into(),
+        "-import".into(),
+        image_s,
+        "-overwrite".into(),
+        "-scriptPath".into(),
+        scripts_s,
+        "-postScript".into(),
+        "AntinomieCoreExport.java".into(),
+        export_s.clone(),
+        "90".into(),
+        "-analysisTimeoutPerFile".into(),
+        "90".into(),
+        "-max-cpu".into(),
+        "4".into(),
+    ];
+    let mut extra = Vec::new();
+    if !ghidra.starts_with("/usr") {
+        extra.push(tools_dir.to_path_buf());
+    }
+    super::jobs::run_sandboxed(
+        &ghidra,
+        &args,
+        work,
+        &extra,
         &env,
         Duration::from_secs(180),
-        64 * 1024,
-        false,
         cancel,
     )?;
     if cancel.load(Ordering::Relaxed) {
         return Err("cancelled".into());
-    }
-    if !run.success || run.timed_out {
-        return Err(format!(
-            "Ghidra decompilation failed (success={}, timed_out={}). sparse-plan.txt is not a load result.",
-            run.success, run.timed_out
-        ));
     }
     let text = fs::read_to_string(&export).map_err(|_| {
         "Ghidra produced no decompilation. The sparse plan file is not a result.".to_string()

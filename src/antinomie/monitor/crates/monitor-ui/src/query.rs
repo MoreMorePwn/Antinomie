@@ -1153,6 +1153,693 @@ fn field(invocation: &InvocationSummary, name: &str) -> Result<Resolved, String>
     Err(unknown_field(name))
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FilterScope {
+    Syscall,
+    Record,
+    Packet,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Completion {
+    pub start: usize,
+    pub end: usize,
+    pub insert: String,
+    pub detail: String,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn completions(text: &str, cursor: usize, scope: FilterScope) -> Vec<Completion> {
+    completions_with(text, cursor, scope, &[])
+}
+
+pub(crate) fn completions_with(
+    text: &str,
+    cursor: usize,
+    scope: FilterScope,
+    known_values: &[String],
+) -> Vec<Completion> {
+    let cursor = floor_boundary(text, cursor.min(text.len()));
+    if unclosed_quote(&text[..cursor]) {
+        return Vec::new();
+    }
+    let start = token_start(text, cursor);
+    let end = token_end(text, cursor);
+    let prefix = &text[start..cursor];
+    let fields = fields_for(scope);
+    let previous = previous_word(text, start);
+    let mut items = Vec::new();
+    let clause_start = previous.as_deref().is_none_or(|word| {
+        matches!(word, "&&" | "||" | "&" | "|" | "(" | "!")
+            || word.eq_ignore_ascii_case("and")
+            || word.eq_ignore_ascii_case("or")
+    });
+    if clause_start {
+        let needle = prefix.to_ascii_lowercase();
+        for (insert, detail) in [
+            ("exists", "Recorded field, written before the field name"),
+            ("missing", "Absent field, written before the field name"),
+        ] {
+            if needle.is_empty() || insert.starts_with(&needle) {
+                items.push(Completion {
+                    start,
+                    end,
+                    insert: format!("{insert} "),
+                    detail: detail.into(),
+                });
+            }
+        }
+    }
+    if let Some(field) = previous.as_deref().and_then(|word| {
+        fields
+            .iter()
+            .find(|field| field.name.eq_ignore_ascii_case(word))
+    }) {
+        if prefix.is_empty() || operator_prefix(prefix) {
+            for (insert, detail) in operators(field.kind) {
+                if insert
+                    .trim()
+                    .to_ascii_lowercase()
+                    .starts_with(&prefix.to_ascii_lowercase())
+                    || prefix.is_empty()
+                {
+                    items.push(Completion {
+                        start,
+                        end,
+                        insert: format!(" {insert} "),
+                        detail: (*detail).into(),
+                    });
+                }
+            }
+        }
+    }
+    if let Some(field_name) = field_before_operator(text, start) {
+        for (insert, detail) in values_for(&field_name, prefix, known_values) {
+            items.push(Completion {
+                start,
+                end,
+                insert,
+                detail,
+            });
+        }
+    }
+    let offering_operator = previous.as_deref().is_some_and(|word| {
+        fields
+            .iter()
+            .any(|field| field.name.eq_ignore_ascii_case(word))
+            && (prefix.is_empty() || operator_prefix(prefix))
+    });
+    if !offering_operator && !prefix.is_empty() {
+        let needle = prefix.to_ascii_lowercase();
+        for field in fields {
+            if field.name.to_ascii_lowercase().starts_with(&needle) {
+                items.push(Completion {
+                    start,
+                    end,
+                    insert: field.name.into(),
+                    detail: format!("{} · {}", field.kind, field.detail),
+                });
+            }
+        }
+    } else if !offering_operator && prefix.is_empty() {
+        for field in fields.iter().take(8) {
+            items.push(Completion {
+                start,
+                end,
+                insert: field.name.into(),
+                detail: format!("{} · {}", field.kind, field.detail),
+            });
+        }
+    }
+    items.truncate(12);
+    items
+}
+
+pub(crate) fn filter_edit(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    hint: &str,
+    width: f32,
+    scope: FilterScope,
+) -> egui::Response {
+    filter_edit_with(ui, text, hint, width, scope, &[])
+}
+
+pub(crate) fn filter_edit_with(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    hint: &str,
+    width: f32,
+    scope: FilterScope,
+    known_values: &[String],
+) -> egui::Response {
+    let id = ui.id().with(("filter-edit", hint));
+    let mut dismiss = ui
+        .data(|data| data.get_temp::<bool>(id.with("dismiss")))
+        .unwrap_or(false);
+    let mut selected = ui
+        .data(|data| data.get_temp::<usize>(id.with("selected")))
+        .unwrap_or(0);
+    let was_focused = ui
+        .data(|data| data.get_temp::<bool>(id.with("focus")))
+        .unwrap_or(false);
+    let pending = ui
+        .data(|data| data.get_temp::<Vec<Completion>>(id.with("items")))
+        .unwrap_or_default();
+    let mut caret = None;
+    if was_focused {
+        let reopen = ui.input_mut(|input| {
+            input.consume_key(egui::Modifiers::CTRL, egui::Key::Space)
+                || input.consume_key(egui::Modifiers::COMMAND, egui::Key::Space)
+        });
+        if reopen {
+            dismiss = false;
+        }
+        if !pending.is_empty() && !dismiss {
+            let accept = ui.input_mut(|input| {
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+                    selected = selected.saturating_add(1) % pending.len();
+                }
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+                    selected = if selected == 0 {
+                        pending.len() - 1
+                    } else {
+                        selected - 1
+                    };
+                }
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
+                    dismiss = true;
+                }
+                input.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                    || input.consume_key(egui::Modifiers::NONE, egui::Key::Tab)
+            });
+            if accept && !dismiss {
+                if let Some(item) = pending.get(selected.min(pending.len() - 1)).cloned() {
+                    let byte = apply_completion(text, &item);
+                    caret = Some(char_index(text, byte));
+                    dismiss = true;
+                }
+            }
+        }
+    }
+    let output = egui::TextEdit::singleline(text)
+        .hint_text(hint)
+        .desired_width(width)
+        .margin(crate::theme::TEXT_EDIT_MARGIN)
+        .show(ui);
+    if let Some(caret) = caret {
+        let mut state = output.state.clone();
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::one(
+                egui::text::CCursor::new(caret),
+            )));
+        state.store(ui.ctx(), output.response.id);
+    }
+    let cursor_chars = output
+        .cursor_range
+        .map(|range| range.primary.ccursor.index)
+        .unwrap_or(text.chars().count());
+    let cursor = byte_index(text, cursor_chars);
+    let changed = output.response.changed();
+    if changed {
+        dismiss = false;
+        selected = 0;
+    }
+    let items = if output.response.has_focus() && !dismiss {
+        completions_with(text, cursor, scope, known_values)
+    } else {
+        Vec::new()
+    };
+    let popup_id = id.with("popup");
+    if items.is_empty() {
+        ui.memory_mut(|memory| {
+            if memory.is_popup_open(popup_id) {
+                memory.close_popup();
+            }
+        });
+    } else {
+        ui.memory_mut(|memory| memory.open_popup(popup_id));
+        let shown = items.clone();
+        let mut picked = None;
+        egui::popup::popup_below_widget(
+            ui,
+            popup_id,
+            &output.response,
+            egui::PopupCloseBehavior::IgnoreClicks,
+            |ui| {
+                ui.set_min_width(width.clamp(180.0, 420.0));
+                egui::ScrollArea::vertical()
+                    .max_height(240.0)
+                    .show(ui, |ui| {
+                        for (index, item) in shown.iter().enumerate() {
+                            let label = format!("{}  {}", item.insert.trim(), item.detail);
+                            if ui.selectable_label(index == selected, label).clicked() {
+                                picked = Some(item.clone());
+                            }
+                        }
+                    });
+            },
+        );
+        if let Some(item) = picked {
+            let byte = apply_completion(text, &item);
+            let caret = char_index(text, byte);
+            let mut state = output.state.clone();
+            state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::one(
+                    egui::text::CCursor::new(caret),
+                )));
+            state.store(ui.ctx(), output.response.id);
+            output.response.request_focus();
+            dismiss = true;
+        }
+    }
+    let focused = output.response.has_focus();
+    ui.data_mut(|data| {
+        data.insert_temp(id.with("dismiss"), dismiss);
+        data.insert_temp(id.with("selected"), selected);
+        data.insert_temp(id.with("focus"), focused);
+        data.insert_temp(id.with("items"), items);
+    });
+    output.response
+}
+
+fn apply_completion(text: &mut String, item: &Completion) -> usize {
+    let start = item.start.min(text.len());
+    let end = item.end.min(text.len()).max(start);
+    text.replace_range(start..end, &item.insert);
+    start + item.insert.len()
+}
+
+struct FieldSpec {
+    name: &'static str,
+    kind: &'static str,
+    detail: &'static str,
+}
+
+fn fields_for(scope: FilterScope) -> Vec<FieldSpec> {
+    match scope {
+        FilterScope::Syscall => syscall_fields(),
+        FilterScope::Record => vec![
+            FieldSpec {
+                name: "entry.id",
+                kind: "text",
+                detail: "Run or result id",
+            },
+            FieldSpec {
+                name: "entry.name",
+                kind: "text",
+                detail: "Annotation name",
+            },
+            FieldSpec {
+                name: "entry.path",
+                kind: "text",
+                detail: "Run executable or result path",
+            },
+            FieldSpec {
+                name: "entry.tag",
+                kind: "text",
+                detail: "Annotation tag",
+            },
+            FieldSpec {
+                name: "tag",
+                kind: "text",
+                detail: "Annotation tag",
+            },
+            FieldSpec {
+                name: "tags",
+                kind: "text",
+                detail: "Annotation tag",
+            },
+            FieldSpec {
+                name: "name",
+                kind: "text",
+                detail: "Annotation name",
+            },
+        ],
+        FilterScope::Packet => vec![
+            FieldSpec {
+                name: "ip.src",
+                kind: "ip",
+                detail: "Source IP",
+            },
+            FieldSpec {
+                name: "ip.dst",
+                kind: "ip",
+                detail: "Destination IP",
+            },
+            FieldSpec {
+                name: "ip.addr",
+                kind: "ip",
+                detail: "Either IP endpoint",
+            },
+            FieldSpec {
+                name: "ipv6.addr",
+                kind: "ip",
+                detail: "IPv6 endpoint",
+            },
+            FieldSpec {
+                name: "tcp.srcport",
+                kind: "integer",
+                detail: "TCP source port",
+            },
+            FieldSpec {
+                name: "tcp.dstport",
+                kind: "integer",
+                detail: "TCP destination port",
+            },
+            FieldSpec {
+                name: "tcp.port",
+                kind: "integer",
+                detail: "Either TCP port",
+            },
+            FieldSpec {
+                name: "udp.srcport",
+                kind: "integer",
+                detail: "UDP source port",
+            },
+            FieldSpec {
+                name: "udp.dstport",
+                kind: "integer",
+                detail: "UDP destination port",
+            },
+            FieldSpec {
+                name: "udp.port",
+                kind: "integer",
+                detail: "Either UDP port",
+            },
+            FieldSpec {
+                name: "frame.number",
+                kind: "integer",
+                detail: "Frame number",
+            },
+            FieldSpec {
+                name: "frame.len",
+                kind: "integer",
+                detail: "Captured frame length",
+            },
+            FieldSpec {
+                name: "frame.protocol",
+                kind: "text",
+                detail: "Protocol column",
+            },
+            FieldSpec {
+                name: "frame.info",
+                kind: "text",
+                detail: "Info column",
+            },
+            FieldSpec {
+                name: "frame.contains",
+                kind: "text",
+                detail: "Substring of the packet summary",
+            },
+            FieldSpec {
+                name: "http.request",
+                kind: "text",
+                detail: "Decoded HTTP request line",
+            },
+            FieldSpec {
+                name: "http.request.method",
+                kind: "text",
+                detail: "HTTP method",
+            },
+            FieldSpec {
+                name: "http.request.uri",
+                kind: "text",
+                detail: "HTTP request target",
+            },
+            FieldSpec {
+                name: "http.host",
+                kind: "text",
+                detail: "HTTP Host header",
+            },
+            FieldSpec {
+                name: "dns.qry.name",
+                kind: "text",
+                detail: "DNS query name",
+            },
+            FieldSpec {
+                name: "tcp.flags.syn",
+                kind: "integer",
+                detail: "TCP SYN",
+            },
+            FieldSpec {
+                name: "tcp.flags.ack",
+                kind: "integer",
+                detail: "TCP ACK",
+            },
+            FieldSpec {
+                name: "tcp.flags.fin",
+                kind: "integer",
+                detail: "TCP FIN",
+            },
+            FieldSpec {
+                name: "tcp.flags.reset",
+                kind: "integer",
+                detail: "TCP RST",
+            },
+            FieldSpec {
+                name: "tcp.flags.push",
+                kind: "integer",
+                detail: "TCP PSH",
+            },
+        ],
+    }
+}
+
+fn syscall_fields() -> Vec<FieldSpec> {
+    let mut fields: Vec<FieldSpec> = KEYWORDS
+        .iter()
+        .filter(|(name, _, _)| *name != "args.<name>" && *name != "args.raw[0..5]")
+        .map(|(name, kind, detail)| FieldSpec { name, kind, detail })
+        .collect();
+    for index in 0..6 {
+        fields.push(FieldSpec {
+            name: match index {
+                0 => "args.raw[0]",
+                1 => "args.raw[1]",
+                2 => "args.raw[2]",
+                3 => "args.raw[3]",
+                4 => "args.raw[4]",
+                _ => "args.raw[5]",
+            },
+            kind: "integer",
+            detail: "Captured argument word",
+        });
+    }
+    let known: std::collections::BTreeSet<&str> = fields.iter().map(|field| field.name).collect();
+    fields.extend(
+        schema_argument_fields()
+            .into_iter()
+            .filter(|field| !known.contains(field.name)),
+    );
+    fields
+}
+
+fn schema_argument_fields() -> Vec<FieldSpec> {
+    use std::sync::OnceLock;
+    static FIELDS: OnceLock<Vec<(String, String)>> = OnceLock::new();
+    let stored = FIELDS.get_or_init(|| {
+        let mut names = std::collections::BTreeSet::new();
+        for syscall in antinomie_monitor_core::syscalls::all() {
+            for argument in &syscall.arguments {
+                names.insert(argument.name.clone());
+            }
+        }
+        names
+            .into_iter()
+            .map(|name| (format!("args.{name}"), "Schema argument".into()))
+            .collect()
+    });
+    stored
+        .iter()
+        .map(|(name, detail)| FieldSpec {
+            name: name.as_str(),
+            kind: "integer",
+            detail: detail.as_str(),
+        })
+        .collect()
+}
+
+fn operators(kind: &str) -> &'static [(&'static str, &'static str)] {
+    match kind {
+        "text" | "text list" => &[
+            ("==", "Equal"),
+            ("!=", "Not equal"),
+            ("contains", "Substring"),
+        ],
+        "ip" => &[("==", "Equal"), ("!=", "Not equal")],
+        _ => &[
+            ("==", "Equal"),
+            ("!=", "Not equal"),
+            ("<", "Less than"),
+            ("<=", "Less than or equal"),
+            (">", "Greater than"),
+            (">=", "Greater than or equal"),
+        ],
+    }
+}
+
+fn values_for(field: &str, prefix: &str, known_values: &[String]) -> Vec<(String, String)> {
+    let needle = prefix.to_ascii_lowercase();
+    let mut values = Vec::new();
+    if matches!(
+        field.to_ascii_lowercase().as_str(),
+        "tag" | "tags" | "entry.tag"
+    ) {
+        for value in known_values {
+            if value.to_ascii_lowercase().starts_with(&needle) {
+                values.push((value.clone(), "recorded tag".into()));
+            }
+            if values.len() == 12 {
+                break;
+            }
+        }
+    }
+    if field.eq_ignore_ascii_case("syscall.name") {
+        for syscall in antinomie_monitor_core::syscalls::all() {
+            if syscall.name.to_ascii_lowercase().starts_with(&needle) {
+                values.push((syscall.name.clone(), "syscall name".into()));
+            }
+            if values.len() == 12 {
+                break;
+            }
+        }
+    } else if field.eq_ignore_ascii_case("http.request.method") {
+        for method in ["GET", "POST", "HEAD", "PUT", "DELETE", "PATCH", "OPTIONS"] {
+            if method.to_ascii_lowercase().starts_with(&needle) {
+                values.push((method.into(), "HTTP method".into()));
+            }
+        }
+    } else if field.eq_ignore_ascii_case("args.prot") {
+        for (value, detail) in [
+            ("0", "PROT_NONE"),
+            ("1", "PROT_READ"),
+            ("2", "PROT_WRITE"),
+            ("4", "PROT_EXEC"),
+            ("7", "read, write and execute"),
+        ] {
+            if value.starts_with(prefix) {
+                values.push((value.into(), detail.into()));
+            }
+        }
+    }
+    values
+}
+
+fn operator_prefix(prefix: &str) -> bool {
+    prefix.starts_with(['=', '!', '<', '>', '&', '|', 'c', 'i', 'e', 'm'])
+}
+
+fn field_before_operator(text: &str, start: usize) -> Option<String> {
+    let before = text[..start].trim_end();
+    let operator = before
+        .rsplit_once(|ch: char| ch.is_whitespace())
+        .map(|(_, word)| word)
+        .unwrap_or(before);
+    if !matches!(
+        operator,
+        "==" | "!=" | "<" | "<=" | ">" | ">=" | "contains" | "&"
+    ) {
+        return None;
+    }
+    let head = before[..before.len() - operator.len()].trim_end();
+    let field = head
+        .rsplit_once(|ch: char| ch.is_whitespace())
+        .map(|(_, word)| word)
+        .unwrap_or(head);
+    if field.is_empty() {
+        None
+    } else {
+        Some(field.to_owned())
+    }
+}
+
+fn previous_word(text: &str, start: usize) -> Option<String> {
+    let before = text[..start].trim_end();
+    if before.is_empty() {
+        return None;
+    }
+    let word = before
+        .rsplit_once(|ch: char| ch.is_whitespace())
+        .map(|(_, word)| word)
+        .unwrap_or(before);
+    if word.is_empty() {
+        None
+    } else {
+        Some(word.to_owned())
+    }
+}
+
+fn byte_index(text: &str, chars: usize) -> usize {
+    text.char_indices()
+        .nth(chars)
+        .map(|(index, _)| index)
+        .unwrap_or(text.len())
+}
+
+fn char_index(text: &str, byte: usize) -> usize {
+    text[..byte.min(text.len())].chars().count()
+}
+
+fn token_end(text: &str, cursor: usize) -> usize {
+    let bytes = text.as_bytes();
+    let mut end = cursor.min(bytes.len());
+    while end < bytes.len() {
+        let ch = bytes[end];
+        if ch.is_ascii_alphanumeric() || matches!(ch, b'.' | b'_' | b'[' | b']' | b'=' | b'<' | b'>')
+        {
+            end += 1;
+        } else {
+            break;
+        }
+    }
+    end
+}
+
+fn token_start(text: &str, cursor: usize) -> usize {
+    let bytes = text.as_bytes();
+    let mut start = cursor;
+    while start > 0 {
+        let ch = bytes[start - 1];
+        if ch.is_ascii_alphanumeric()
+            || matches!(ch, b'.' | b'_' | b'[' | b']' | b'=' | b'<' | b'>')
+        {
+            start -= 1;
+        } else {
+            break;
+        }
+    }
+    start
+}
+
+fn floor_boundary(text: &str, mut index: usize) -> usize {
+    while index > 0 && !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+fn unclosed_quote(text: &str) -> bool {
+    let mut quoted = false;
+    let mut escape = false;
+    for ch in text.chars() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if ch == '\\' {
+            escape = true;
+            continue;
+        }
+        if ch == '"' {
+            quoted = !quoted;
+        }
+    }
+    quoted
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1347,5 +2034,163 @@ mod tests {
         let invalid = compile_record("syscall.typo == 9");
         assert!(invalid.error.is_some());
         assert!(!invalid.keep_record(&labels));
+    }
+
+    #[test]
+    fn completions_keep_the_surrounding_clause_and_follow_the_registry() {
+        let text = "syscall.num == 9 && args.pr";
+        let items = completions(text, text.len(), FilterScope::Syscall);
+        let prot = items
+            .iter()
+            .find(|item| item.insert == "args.prot")
+            .expect("args.prot");
+        let mut edited = text.to_owned();
+        edited.replace_range(prot.start..prot.end, &prot.insert);
+        assert_eq!(edited, "syscall.num == 9 && args.prot");
+        let sysc = completions("sysc", 4, FilterScope::Syscall);
+        let names: Vec<_> = sysc.iter().map(|item| item.insert.as_str()).collect();
+        assert!(names.contains(&"syscall.name"), "{names:?}");
+        assert!(names.contains(&"syscall.num"), "{names:?}");
+        let method = completions("http.req", 8, FilterScope::Packet);
+        assert!(method
+            .iter()
+            .any(|item| item.insert == "http.request.method"));
+        assert!(method.iter().any(|item| item.insert == "http.request.uri"));
+        let operators = completions("syscall.num ", 12, FilterScope::Syscall);
+        assert!(operators.iter().any(|item| item.insert.contains("==")));
+        assert!(operators.iter().any(|item| item.insert.contains("<=")));
+        let inside = "info contains \"exa";
+        assert!(completions(inside, inside.len(), FilterScope::Syscall).is_empty());
+        let text = "syscall.num == 9 && args.prot";
+        let caret = text.find("args.pr").unwrap() + "args.pr".len();
+        let prot = completions(text, caret, FilterScope::Syscall)
+            .into_iter()
+            .find(|item| item.insert == "args.prot")
+            .expect("whole token");
+        let mut edited = text.to_owned();
+        let next = apply_completion(&mut edited, &prot);
+        assert_eq!(edited, "syscall.num == 9 && args.prot");
+        assert_eq!(next, edited.len());
+        let unicode = "info contains \"é\" && args.pr";
+        let byte_caret = unicode.find("args.pr").unwrap() + "args.pr".len();
+        let char_caret = char_index(unicode, byte_caret);
+        assert_ne!(char_caret, byte_caret);
+        assert_eq!(byte_index(unicode, char_caret), byte_caret);
+        let prot = completions(unicode, byte_index(unicode, char_caret), FilterScope::Syscall)
+            .into_iter()
+            .find(|item| item.insert == "args.prot")
+            .expect("unicode caret");
+        let mut edited = unicode.to_owned();
+        apply_completion(&mut edited, &prot);
+        assert_eq!(edited, "info contains \"é\" && args.prot");
+        let presence = completions("ex", 2, FilterScope::Syscall);
+        assert!(presence.iter().any(|item| item.insert == "exists "));
+        assert!(completions("syscall.num ex", 14, FilterScope::Syscall)
+            .iter()
+            .all(|item| !item.insert.contains("exists")));
+        let tags = completions_with("tag == mal", 10, FilterScope::Record, &["malware".into()]);
+        assert!(tags.iter().any(|item| item.insert == "malware"));
+    }
+
+    #[test]
+    #[ignore = "native X11 filter popup; stays open long enough to cover a 30s refresh"]
+    fn native_filter_autocomplete() {
+        use std::time::{Duration, Instant};
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        struct App {
+            syscall: String,
+            history: String,
+            packet: String,
+            frames: u64,
+            started: Instant,
+            deadline: Instant,
+            focused: bool,
+        }
+        impl eframe::App for App {
+            fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+                self.frames += 1;
+                let elapsed = self.started.elapsed().as_secs();
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.label(format!("refresh {elapsed}s · frame {}", self.frames));
+                    ui.label("Syscall filter");
+                    let syscall = crate::query::filter_edit(
+                        ui,
+                        &mut self.syscall,
+                        "Filter syscalls",
+                        ui.available_width(),
+                        FilterScope::Syscall,
+                    );
+                    ui.label("Run history filter");
+                    let _ = crate::query::filter_edit(
+                        ui,
+                        &mut self.history,
+                        "Filter runs",
+                        ui.available_width(),
+                        FilterScope::Record,
+                    );
+                    ui.label("Packet filter");
+                    let _ = crate::query::filter_edit(
+                        ui,
+                        &mut self.packet,
+                        "Filter packets",
+                        ui.available_width(),
+                        FilterScope::Packet,
+                    );
+                    if !self.focused {
+                        syscall.request_focus();
+                        self.focused = true;
+                    }
+                });
+                let _ = std::fs::write(
+                    "/tmp/antinomie-filter-refresh",
+                    format!("{elapsed} {}\n", self.frames),
+                );
+                if Instant::now() >= self.deadline {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+        }
+        let wide = std::env::var_os("ANTINOMIE_FILTER_QA_WIDE").is_some();
+        let font = std::env::var("ANTINOMIE_FILTER_QA_FONT")
+            .ok()
+            .and_then(|value| value.parse::<f32>().ok())
+            .unwrap_or(if wide { 16.0 } else { 24.0 });
+        let seconds = std::env::var("ANTINOMIE_FILTER_QA_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(35)
+            .clamp(1, 90);
+        eframe::run_native(
+            "Antinomie Filter QA",
+            eframe::NativeOptions {
+                viewport: egui::ViewportBuilder::default()
+                    .with_inner_size(if wide {
+                        [1100.0, 720.0]
+                    } else {
+                        [420.0, 760.0]
+                    })
+                    .with_position([80.0, 60.0]),
+                persist_window: false,
+                event_loop_builder: Some(Box::new(|builder| {
+                    builder.with_x11().with_any_thread(true);
+                })),
+                ..Default::default()
+            },
+            Box::new(move |cc| {
+                crate::theme::install(&cc.egui_ctx);
+                crate::theme::text_size(&cc.egui_ctx, font);
+                Ok(Box::new(App {
+                    syscall: "syscall.num == 9 && args.pr".into(),
+                    history: "entry.na".into(),
+                    packet: "tcp.f".into(),
+                    frames: 0,
+                    started: Instant::now(),
+                    deadline: Instant::now() + Duration::from_secs(seconds),
+                    focused: false,
+                }))
+            }),
+        )
+        .unwrap();
     }
 }

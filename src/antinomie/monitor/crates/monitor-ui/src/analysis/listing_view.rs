@@ -45,14 +45,16 @@ pub(super) fn show(
     let listing = section.listing.as_ref();
     ui.horizontal(|ui| {
         let label = ui.label(egui_phosphor::regular::MAGNIFYING_GLASS);
-        ui.add(
-            egui::TextEdit::singleline(&mut state.query)
-                .desired_width((ui.available_width() - 160.0).max(120.0))
-                .hint_text(match kind {
-                    AnalysisKind::Disassembly => "Search instructions, functions or addresses",
-                    AnalysisKind::Decompilation => "Search decompiled code",
-                    _ => "Search all rows",
-                }),
+        crate::query::filter_edit(
+            ui,
+            &mut state.query,
+            match kind {
+                AnalysisKind::Disassembly => "Search instructions, functions or addresses",
+                AnalysisKind::Decompilation => "Search decompiled code",
+                _ => "Search all rows",
+            },
+            ui.available_width().max(120.0),
+            crate::query::FilterScope::Record,
         )
         .labelled_by(label.id);
         let current = page
@@ -118,20 +120,6 @@ pub(super) fn show(
             }))
             .show_inside(ui, |ui| {
                 ui.label(RichText::new("Functions").strong());
-                let index_complete = state.query.is_empty()
-                    && page.start == 0
-                    && page.rows.len() as u64 == page.total;
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(if index_complete {
-                            "Function index is complete for this listing."
-                        } else {
-                            "Function index is only the pages loaded."
-                        })
-                        .color(theme::muted()),
-                    )
-                    .wrap(),
-                );
                 ui.add(
                     egui::Label::new(
                         RichText::new(format!(
@@ -211,8 +199,13 @@ pub(super) fn show(
             ("Value", Column::remainder().at_least(200.0).clip(true)),
         ],
     };
+    if split {
+        let surface = ui.available_rect_before_wrap();
+        ui.painter().rect_filled(surface, 0.0, theme::terminal());
+    }
     egui::ScrollArea::horizontal()
         .id_salt(("listing-horizontal", kind_salt(kind)))
+        .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.push_id(("listing-table", kind_salt(kind)), |ui| {
                 // Rows select on click; text selection would swallow it.

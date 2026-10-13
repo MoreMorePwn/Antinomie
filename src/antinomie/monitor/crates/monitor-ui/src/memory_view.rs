@@ -633,23 +633,7 @@ impl MemoryView {
         self.poll_picker();
 
         let mut action = None;
-        ui.horizontal(|ui| {
-            if ui
-                .add(
-                    egui::Button::new(egui_phosphor::regular::SIDEBAR_SIMPLE)
-                        .frame(false)
-                        .selected(!self.hide_list),
-                )
-                .on_hover_text(if self.hide_list {
-                    "Show the dump list"
-                } else {
-                    "Hide the dump list"
-                })
-                .clicked()
-            {
-                self.hide_list = !self.hide_list;
-            }
-        });
+        self.list_toolbar(ui);
         if !self.hide_list {
             egui::SidePanel::left("memory_dumps")
                 .resizable(true)
@@ -676,6 +660,38 @@ impl MemoryView {
         self.import_window(ui.ctx(), &cx);
         self.catalog_window(ui.ctx(), &cx);
         action
+    }
+
+    fn list_toolbar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add(
+                    egui::Button::new(egui_phosphor::regular::SIDEBAR_SIMPLE)
+                        .frame(false)
+                        .selected(!self.hide_list),
+                )
+                .on_hover_text(if self.hide_list {
+                    "Show the dump list"
+                } else {
+                    "Hide the dump list"
+                })
+                .clicked()
+            {
+                self.hide_list = !self.hide_list;
+            }
+            match self.dump() {
+                Some(dump) => {
+                    ui.label(
+                        RichText::new(dump_title(dump))
+                            .strong()
+                            .color(theme::heading()),
+                    );
+                }
+                None => {
+                    ui.colored_label(theme::muted(), "No dump open");
+                }
+            }
+        });
     }
 
     fn dump_list(&mut self, ui: &mut egui::Ui, cx: &MemoryContext<'_>) -> Option<MemoryAction> {
@@ -1202,14 +1218,6 @@ impl MemoryView {
             };
             ui.menu_button(label, |ui| {
                 ui.set_max_width(420.0);
-                ui.label(
-                    RichText::new(
-                        "Volatility 3 plugins (.py files) put in the community folder are \
-                         listed with the others. They are ordinary Python and run as you, \
-                         outside any sandbox: add only plugins you have read or trust.",
-                    )
-                    .color(theme::muted()),
-                );
                 if !failures.is_empty() {
                     ui.colored_label(theme::error(), "Failed to load:");
                     for failure in failures {
@@ -1563,11 +1571,12 @@ impl MemoryView {
                         });
                     }
                 }
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.filter)
-                        .hint_text(format!("{} Filter rows", egui_phosphor::regular::FUNNEL))
-                        .margin(theme::TEXT_EDIT_MARGIN)
-                        .desired_width(180.0),
+                crate::query::filter_edit(
+                    ui,
+                    &mut self.filter,
+                    "Filter rows",
+                    ui.available_width().max(180.0),
+                    crate::query::FilterScope::Record,
                 );
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     let mut title = egui::text::LayoutJob::default();

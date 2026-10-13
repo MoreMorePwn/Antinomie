@@ -1099,11 +1099,12 @@ impl NetworkView {
             ui.separator();
             ui.label(RichText::new(egui_phosphor::regular::FUNNEL).color(theme::muted()));
             let width = ui.available_width().max(180.0);
-            ui.add(
-                egui::TextEdit::singleline(&mut self.filter)
-                    .hint_text("Filter packets")
-                    .margin(theme::TEXT_EDIT_MARGIN)
-                    .desired_width(width),
+            crate::query::filter_edit(
+                ui,
+                &mut self.filter,
+                "Filter packets",
+                width,
+                crate::query::FilterScope::Packet,
             )
             .on_hover_text(
                 "port N: either port\nip ADDRESS: either address\n\

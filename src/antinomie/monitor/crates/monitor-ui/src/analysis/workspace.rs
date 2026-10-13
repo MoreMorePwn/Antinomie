@@ -104,33 +104,15 @@ fn render(
     };
     state.bind(&report.id);
     let mut action = None;
-    ui.horizontal_wrapped(|ui| {
-        ui.strong(format!("{:?}", report.state));
-        if matches!(
-            report.state,
-            AnalysisState::Acquiring | AnalysisState::Queued | AnalysisState::Running
-        ) && ui
-            .button(egui_phosphor::regular::X)
-            .on_hover_text("Cancel analysis")
-            .clicked()
-        {
-            action = Some(ReportAction::Cancel(report.id.clone()));
-        }
-        ui.add(egui::Label::new(&report.source_path).truncate())
-            .on_hover_text(format!(
-                "{}\nReport: {}\nSHA-256: {}\nSpecimen: {}",
-                report.source_path,
-                report.id,
-                report.specimen_sha256.as_deref().unwrap_or("Unavailable"),
-                report
-                    .specimen_len
-                    .map(|n| format!("{n} octets"))
-                    .unwrap_or_else(|| "Unavailable".into())
-            ));
-    });
-    if let Some(reason) = &report.reason {
-        ui.add(egui::Label::new(egui::RichText::new(reason).color(crate::theme::warn())).wrap())
-            .on_hover_text(reason);
+    if matches!(
+        report.state,
+        AnalysisState::Acquiring | AnalysisState::Queued | AnalysisState::Running
+    ) && ui
+        .button(egui_phosphor::regular::X)
+        .on_hover_text("Cancel analysis")
+        .clicked()
+    {
+        action = Some(ReportAction::Cancel(report.id.clone()));
     }
     super::progress_banner(ui, report);
     if forced.is_none() && state.kind.is_none() {
@@ -454,10 +436,13 @@ fn results(
     }
     ui.horizontal(|ui| {
         let label = ui.label("Search");
-        ui.add(
-            egui::TextEdit::singleline(&mut view.query)
-                .desired_width(ui.available_width())
-                .hint_text("Filter retained rows"),
+        crate::query::filter_edit_with(
+            ui,
+            &mut view.query,
+            "Filter retained rows",
+            ui.available_width(),
+            crate::query::FilterScope::Record,
+            &record_tags,
         )
         .labelled_by(label.id);
     });
@@ -541,6 +526,20 @@ fn overview(
     egui::ScrollArea::vertical()
         .id_salt("analysis-overview")
         .show(ui, |ui| {
+            identity_value(ui, "State", &format!("{:?}", report.state));
+            if matches!(
+                report.state,
+                AnalysisState::Partial | AnalysisState::Unavailable | AnalysisState::Cancelled
+            ) {
+                if let Some(reason) = &report.reason {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(reason).color(crate::theme::warn()),
+                        )
+                        .wrap(),
+                    );
+                }
+            }
             identity_value(ui, "Report", &report.id);
             if let Some(len) = report.specimen_len {
                 ui.label(format!("Specimen: {len} octets"));

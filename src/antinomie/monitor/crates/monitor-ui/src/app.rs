@@ -209,6 +209,7 @@ pub struct MonitorApp {
     memory_view: crate::memory_view::MemoryView,
     core_view: crate::core_view::CoreView,
     triage: crate::triage::TriageView,
+    cpu_history: crate::summary::CpuHistory,
     run_tree: Option<(String, crate::archive::ProcessTreeResult)>,
     run_tree_pending: Option<String>,
     archive_total: Option<u64>,
@@ -341,6 +342,7 @@ impl MonitorApp {
             memory_view: Default::default(),
             core_view: Default::default(),
             triage: Default::default(),
+            cpu_history: Default::default(),
             run_tree: None,
             run_tree_pending: None,
             archive_total: None,
@@ -1308,10 +1310,12 @@ impl MonitorApp {
                 self.select_run(None);
             }
         });
-        ui.add(
-            egui::TextEdit::singleline(&mut self.run_query)
-                .hint_text("Filter runs, or tag == \"name\"")
-                .desired_width(ui.available_width()),
+        crate::query::filter_edit(
+            ui,
+            &mut self.run_query,
+            "Filter runs, or tag == \"name\"",
+            ui.available_width(),
+            crate::query::FilterScope::Record,
         );
         if let Some(error) = &self.run_query_error {
             ui.colored_label(theme::error(), error);
@@ -2084,7 +2088,10 @@ impl MonitorApp {
             return;
         }
         for terminal in self.terminals.values_mut() {
-            if !terminal.open || terminal.replay_pending {
+            let on_screen = terminal
+                .last_paint
+                .is_some_and(|painted| painted.elapsed() < Duration::from_secs(1));
+            if (!terminal.open && !on_screen) || terminal.replay_pending {
                 continue;
             }
             if let Some(offset) = terminal.replay_offset {
@@ -3633,13 +3640,12 @@ impl MonitorApp {
                 });
             }
             let filter_width = ui.available_width().max(180.0);
-            ui.add(
-                egui::TextEdit::singleline(&mut self.filter)
-                    .hint_text(format!(
-                        "{} Filter",
-                        egui_phosphor::regular::MAGNIFYING_GLASS
-                    ))
-                    .desired_width(filter_width),
+            crate::query::filter_edit(
+                ui,
+                &mut self.filter,
+                "Filter syscall rows",
+                filter_width,
+                crate::query::FilterScope::Syscall,
             )
             .on_hover_text(crate::query::HELP);
         });
@@ -5857,7 +5863,13 @@ impl MonitorApp {
         ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
         self.details_follow.drawn(ui, panel);
         match panel {
-            Panel::Summary => crate::summary::show(ui, &self.snapshot, self.selected.as_deref()),
+            Panel::Summary => crate::summary::show(
+                ui,
+                &self.snapshot,
+                self.selected.as_deref(),
+                self.settings.quota_gib,
+                &self.cpu_history,
+            ),
             Panel::Trace => self.events(ui),
             Panel::Network => {
                 let vm = self.selected.clone();
@@ -6239,6 +6251,7 @@ impl MonitorApp {
                             ui.colored_label(theme::warn(), error);
                         }
                     });
+                    terminal.last_paint = Some(Instant::now());
                     let interactive = live && terminal.interactive() && !self.closing;
                     let (data, resize) = if live {
                         terminal.terminal.show(ui, interactive)
@@ -6287,6 +6300,8 @@ impl eframe::App for MonitorApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.dependencies.poll();
         self.drain();
+        self.cpu_history
+            .observe(&self.snapshot, self.selected.as_deref());
         self.flush_archive();
         self.drain_archive();
         self.resync_terminals();
@@ -7754,6 +7769,7 @@ mod tests {
             memory_view: Default::default(),
             core_view: Default::default(),
             triage: Default::default(),
+            cpu_history: Default::default(),
             run_tree: None,
             run_tree_pending: None,
             archive_total: None,

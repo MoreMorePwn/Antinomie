@@ -582,23 +582,7 @@ impl CoreView {
         }
         self.manual.truncate(4096);
         let mut action = None;
-        ui.horizontal(|ui| {
-            if ui
-                .add(
-                    egui::Button::new(egui_phosphor::regular::SIDEBAR_SIMPLE)
-                        .frame(false)
-                        .selected(!self.hide_list),
-                )
-                .on_hover_text(if self.hide_list {
-                    "Show the core list"
-                } else {
-                    "Hide the core list"
-                })
-                .clicked()
-            {
-                self.hide_list = !self.hide_list;
-            }
-        });
+        self.list_toolbar(ui);
         if !self.hide_list {
             egui::SidePanel::left("core_dump_list")
                 .resizable(true)
@@ -620,6 +604,44 @@ impl CoreView {
             .show_inside(ui, |ui| self.analysis(ui));
         self.import_dialog(ui.ctx());
         action
+    }
+
+    fn list_toolbar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add(
+                    egui::Button::new(egui_phosphor::regular::SIDEBAR_SIMPLE)
+                        .frame(false)
+                        .selected(!self.hide_list),
+                )
+                .on_hover_text(if self.hide_list {
+                    "Show the core list"
+                } else {
+                    "Hide the core list"
+                })
+                .clicked()
+            {
+                self.hide_list = !self.hide_list;
+            }
+            let title = self
+                .selected
+                .as_ref()
+                .map(|record| record.label.clone())
+                .or_else(|| {
+                    self.manual
+                        .iter()
+                        .find(|core| Some(&core.directory) == self.selected_directory.as_ref())
+                        .map(|core| format!("PID {} · {}", core.target.tgid, core.id))
+                });
+            match title {
+                Some(title) => {
+                    ui.label(RichText::new(title).strong().color(crate::theme::heading()));
+                }
+                None => {
+                    ui.colored_label(crate::theme::muted(), "No core open");
+                }
+            }
+        });
     }
 
     fn dump_list(
@@ -1143,72 +1165,51 @@ impl CoreView {
             ui.label("No PT_LOAD mappings.");
             return;
         };
-        let current = format!(
-            "{:x}-{:x} {} · {} / {} octets captured",
-            mapping.start,
-            mapping.end(),
-            mapping.permissions(),
-            mapping.available_size,
-            mapping.memory_size
-        );
+        let choices = mapping_choices(&record.core);
+        let (selected_label, selected_tip) = choices
+            .get(self.mapping_index)
+            .map(|(label, tip)| (label.clone(), tip.clone()))
+            .unwrap_or_else(|| {
+                (
+                    "unknown".into(),
+                    "No NT_FILE name overlaps this mapping.".into(),
+                )
+            });
         egui::ComboBox::from_id_salt("core-mapping")
             .width(ui.available_width())
-            .selected_text(&current)
+            .selected_text(selected_label)
             .show_ui(ui, |ui| {
-                for (index, region) in record.core.mappings.iter().enumerate() {
-                    let label = format!(
-                        "{:x}-{:x} {} · {} / {} octets captured",
-                        region.start,
-                        region.end(),
-                        region.permissions(),
-                        region.available_size,
-                        region.memory_size
-                    );
-                    if ui
+                for (index, (label, tip)) in choices.iter().enumerate() {
+                    let row = ui
                         .selectable_value(&mut self.mapping_index, index, label)
-                        .changed()
-                    {
+                        .on_hover_text(tip);
+                    if row.changed() {
                         self.window_offset = 0;
                         self.page = None;
                     }
                 }
-            });
-        ui.label(&current);
-        ui.add(egui::Label::new("?? = unavailable; 00 = captured zero.").wrap())
-                .on_hover_text("Unavailable memory can be absent, omitted by the memory filter, or truncated in the saved core.");
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(self.window_offset > 0, egui::Button::new("Previous span"))
-                .clicked()
-            {
-                self.window_offset = self.window_offset.saturating_sub(WINDOW_SIZE);
-                self.page = None;
-            }
-            if ui
-                .add_enabled(
-                    self.window_offset.saturating_add(WINDOW_SIZE) < mapping.memory_size,
-                    egui::Button::new("Next span"),
-                )
-                .clicked()
-            {
-                self.window_offset = self.window_offset.saturating_add(WINDOW_SIZE);
-                self.page = None;
-            }
-        });
-        ui.label("Mapping offset (hex)");
-        ui.horizontal_wrapped(|ui| {
-            let input_width = ui.available_width().min(200.0);
-            ui.add(egui::TextEdit::singleline(&mut self.jump).desired_width(input_width));
-            if ui.button("Jump").clicked() {
-                match parse_address(&self.jump) {
-                    Ok(offset) if offset < mapping.memory_size => {
-                        self.window_offset = offset / 16 * 16;
-                        self.page = None;
-                    }
-                    _ => self.status = "Offset must lie inside the selected mapping.".into(),
-                }
-            }
-        });
+            })
+            .response
+            .on_hover_text(selected_tip);
+        let wide = ui.available_width() >= 760.0;
+        if wide {
+            egui::SidePanel::right("core-mapping-info")
+                .resizable(true)
+                .default_width(280.0)
+                .width_range(220.0..=460.0)
+                .show_separator_line(true)
+                .frame(egui::Frame::new().inner_margin(egui::Margin {
+                    left: 12,
+                    right: 8,
+                    top: 4,
+                    bottom: 4,
+                }))
+                .show_inside(ui, |ui| self.mapping_panel(ui, mapping));
+        } else {
+            egui::CollapsingHeader::new("Mapping details")
+                .default_open(true)
+                .show(ui, |ui| self.mapping_panel(ui, mapping));
+        }
         let span = mapping
             .memory_size
             .saturating_sub(self.window_offset)
@@ -1276,6 +1277,55 @@ impl CoreView {
             }
         }
     }
+    fn mapping_panel(&mut self, ui: &mut egui::Ui, mapping: &CoreMapping) {
+        ui.label(
+            RichText::new("Mapping")
+                .strong()
+                .color(crate::theme::heading()),
+        );
+        ui.label(format!(
+            "{} / {} octets captured",
+            mapping.available_size, mapping.memory_size
+        ));
+        ui.add(egui::Label::new("?? = unavailable; 00 = captured zero.").wrap())
+            .on_hover_text(
+                "Unavailable memory can be absent, omitted by the memory filter, or truncated in the saved core.",
+            );
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(self.window_offset > 0, egui::Button::new("Previous span"))
+                .clicked()
+            {
+                self.window_offset = self.window_offset.saturating_sub(WINDOW_SIZE);
+                self.page = None;
+            }
+            if ui
+                .add_enabled(
+                    self.window_offset.saturating_add(WINDOW_SIZE) < mapping.memory_size,
+                    egui::Button::new("Next span"),
+                )
+                .clicked()
+            {
+                self.window_offset = self.window_offset.saturating_add(WINDOW_SIZE);
+                self.page = None;
+            }
+        });
+        ui.label("Mapping offset (hex)");
+        ui.horizontal_wrapped(|ui| {
+            let input_width = ui.available_width().min(160.0);
+            ui.add(egui::TextEdit::singleline(&mut self.jump).desired_width(input_width));
+            if ui.button("Jump").clicked() {
+                match parse_address(&self.jump) {
+                    Ok(offset) if offset < mapping.memory_size => {
+                        self.window_offset = offset / 16 * 16;
+                        self.page = None;
+                    }
+                    _ => self.status = "Offset must lie inside the selected mapping.".into(),
+                }
+            }
+        });
+    }
+
     fn disassembly(&mut self, ui: &mut egui::Ui, record: &CoreRecord) {
         egui::SidePanel::left("core_function_list")
             .resizable(true)
@@ -1286,7 +1336,6 @@ impl CoreView {
                 ..Default::default()
             }))
             .show_inside(ui, |ui| {
-                ui.add(egui::Label::new("Function index is every @@ANTINOMIE-FUNCTION marker in this result's saved decompiled.txt. It is not every unnamed address in the core.").wrap());
                 if ui.button("Export functions").clicked() {
                     match export_saved_functions(&record.dir) {
                         Ok(path) => {
@@ -1295,7 +1344,6 @@ impl CoreView {
                         Err(error) => self.status = error,
                     }
                 }
-                ui.add(egui::Label::new("A name here is Ghidra's when Ghidra produced the saved result. It is not an original source symbol.").wrap());
                 if self.functions.is_empty() {
                     ui.add(egui::Label::new("No function symbols loaded. Decompile with Ghidra to name functions from its default analysis.").wrap());
                 }
@@ -1322,10 +1370,14 @@ impl CoreView {
                     });
             });
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().inner_margin(egui::Margin {
-                left: 10,
-                ..Default::default()
-            }))
+            .frame(
+                egui::Frame::new()
+                    .fill(crate::theme::terminal())
+                    .inner_margin(egui::Margin {
+                        left: 10,
+                        ..Default::default()
+                    }),
+            )
             .show_inside(ui, |ui| {
                 self.follow_function_decode(record);
                 let idle = self.code.is_empty() && !self.show_decompiled;
@@ -1333,6 +1385,23 @@ impl CoreView {
                     ui.vertical_centered(|ui| {
                         ui.add_space((ui.available_height() * 0.28).max(12.0));
                         ui.label("Disassemble or decompile this core on demand.");
+                        if self.job.is_some() {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(if self.status.is_empty() {
+                                    "Disassembling…"
+                                } else {
+                                    self.status.as_str()
+                                });
+                            });
+                        } else if !self.status.is_empty() {
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(&self.status).color(crate::theme::warn()),
+                                )
+                                .wrap(),
+                            );
+                        }
                         if ui
                             .add_enabled(
                                 self.job.is_none(),
@@ -1376,7 +1445,10 @@ impl CoreView {
                         );
                     } else {
                         let row_height = ui.text_style_height(&egui::TextStyle::Monospace) + 2.0;
-                        egui::ScrollArea::both().id_salt("core-code").show_rows(
+                        egui::ScrollArea::both()
+                            .id_salt("core-code")
+                            .auto_shrink([false, false])
+                            .show_rows(
                             ui,
                             row_height,
                             lines.len(),
@@ -1477,26 +1549,27 @@ impl CoreView {
     /// for `min(function.size, 65536)` octets, even when `code_address` is stale.
     /// Otherwise the request is 65536 octets at `code_address`. `disassemble`
     /// stops at the first missing byte and caps the decode at 64 KiB.
-    fn disassembly_request(&mut self) -> Result<(u64, usize), String> {
+    fn disassembly_request(&mut self, core: &CoreDump) -> Result<(u64, usize), String> {
         if let Some(function) = self
             .code_function
             .and_then(|index| self.functions.get(index))
             .filter(|function| function.size > 0)
         {
+            if !captured_byte(core, function.address) {
+                return Err(format!(
+                    "Function {:x} has no captured bytes at its start.",
+                    function.address
+                ));
+            }
             let octets = function.size.min(FUNCTION_DISASSEMBLY_LIMIT);
             let size = usize::try_from(octets)
                 .map_err(|_| "function disassembly window does not fit".to_owned())?;
+            self.code_address = format!("{:x}", function.address);
             return Ok((function.address, size));
         }
-        if self.code_address.trim().is_empty() {
-            if let Some(function) = self
-                .code_function
-                .and_then(|index| self.functions.get(index))
-            {
-                self.code_address = format!("{:x}", function.address);
-            }
-        }
-        parse_address(&self.code_address).map(|address| (address, DISASSEMBLY_BYTES))
+        let address = captured_code_origin(core, &self.code_address)?;
+        self.code_address = format!("{address:x}");
+        Ok((address, DISASSEMBLY_BYTES))
     }
 
     fn disassemble_label(&self) -> String {
@@ -1511,8 +1584,9 @@ impl CoreView {
     }
 
     fn decode_window(&mut self, record: &CoreRecord) {
-        match self.disassembly_request() {
+        match self.disassembly_request(&record.core) {
             Ok((address, size)) => {
+                self.status = format!("Disassembling 0x{address:x} ({size} octets)…");
                 let core = record.core.clone();
                 let dir = record.dir.clone();
                 self.start(move || {
@@ -1552,6 +1626,108 @@ impl CoreView {
     }
 }
 
+fn mapping_name(core: &CoreDump, mapping: &CoreMapping) -> String {
+    let mut paths = Vec::new();
+    for file in &core.files {
+        let path = file.path.trim();
+        if path.is_empty() {
+            continue;
+        }
+        if file.start < mapping.end()
+            && mapping.start < file.end
+            && !paths.iter().any(|existing| existing == path)
+        {
+            paths.push(path.to_owned());
+        }
+    }
+    match paths.as_slice() {
+        [] => "unknown".into(),
+        [one] => one.clone(),
+        [first, rest @ ..] => format!("{first} (+{} file extents)", rest.len()),
+    }
+}
+
+fn mapping_choices(core: &CoreDump) -> Vec<(String, String)> {
+    let names: Vec<String> = core
+        .mappings
+        .iter()
+        .map(|mapping| mapping_name(core, mapping))
+        .collect();
+    core.mappings
+        .iter()
+        .zip(names)
+        .map(|(mapping, name)| {
+            let permissions = mapping.permissions();
+            let shown = if name == "unknown" || name.starts_with("unknown ") {
+                "unknown".to_owned()
+            } else {
+                name.clone()
+            };
+            let label = format!(
+                "mmap {:x}-{:x} {permissions} [{shown}]",
+                mapping.start,
+                mapping.end()
+            );
+            let label = ellipsize(&label, 96);
+            let tip = if shown == "unknown" {
+                format!("{name}\nNo NT_FILE name overlaps this mapping.")
+            } else {
+                name
+            };
+            (label, tip)
+        })
+        .collect()
+}
+
+fn ellipsize(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_owned();
+    }
+    let keep = limit.saturating_sub(1);
+    let end = text
+        .char_indices()
+        .nth(keep)
+        .map(|(index, _)| index)
+        .unwrap_or(text.len());
+    format!("{}…", &text[..end])
+}
+
+/// A typed address is used only when a captured byte exists there.
+/// Otherwise the instruction pointer is used when it is captured, then the
+/// first executable mapping that actually contains captured bytes.
+fn captured_code_origin(core: &CoreDump, typed: &str) -> Result<u64, String> {
+    if let Ok(address) = parse_address(typed) {
+        if captured_byte(core, address) {
+            return Ok(address);
+        }
+    }
+    if let Some(thread) = core.threads.first() {
+        for name in ["rip", "eip", "pc"] {
+            if let Some(address) = thread.register(name) {
+                if captured_byte(core, address) {
+                    return Ok(address);
+                }
+            }
+        }
+    }
+    core.mappings
+        .iter()
+        .find(|mapping| mapping.flags & 1 != 0 && mapping.available_size > 0)
+        .map(|mapping| mapping.start)
+        .ok_or_else(|| {
+            "No captured executable bytes. This core has no executable mapping with captured data."
+                .to_owned()
+        })
+}
+
+fn captured_byte(core: &CoreDump, address: u64) -> bool {
+    core.mappings.iter().any(|mapping| {
+        let available = mapping.available_size.min(mapping.memory_size);
+        let end = mapping.start.saturating_add(available);
+        address >= mapping.start && address < end
+    })
+}
+
 fn core_file_menu(ui: &mut egui::Ui, file: Option<&Path>, action: &mut Option<(bool, PathBuf)>) {
     let Some(file) = file else { return };
     if ui.button("Open core file directory").clicked() {
@@ -1572,10 +1748,12 @@ fn notes_table(ui: &mut egui::Ui, record: &CoreRecord, query: &mut String) {
     );
     ui.horizontal(|ui| {
         ui.label("Search");
-        ui.add(
-            egui::TextEdit::singleline(query)
-                .desired_width(280.0)
-                .hint_text("Filter by substring"),
+        crate::query::filter_edit(
+            ui,
+            query,
+            "Filter by substring",
+            ui.available_width().max(280.0),
+            crate::query::FilterScope::Record,
         );
     });
     struct NoteRow {
@@ -1702,6 +1880,7 @@ fn paint_asm(ui: &mut egui::Ui, line: &str) {
 fn paint_source(ui: &mut egui::Ui, body: &str) {
     egui::ScrollArea::both()
         .id_salt("core-decomp")
+        .auto_shrink([false, false])
         .show(ui, |ui| {
             for line in body.lines() {
                 let mut job = egui::text::LayoutJob::default();
@@ -2571,6 +2750,86 @@ mod tests {
         assert!(fixture.directory.join("disassembly.txt").is_file());
         assert!(fixture.view.functions.is_empty());
         assert!(!fixture.directory.join("functions.txt").exists());
+        let shown = texts(&settle(&ctx, &mut fixture.view, size));
+        assert!(shown.iter().any(|(text, _)| text.contains("nop")));
+        assert!(shown
+            .iter()
+            .all(|(text, _)| !text.contains("Function index is")
+                && !text.contains("It is not an original source symbol")
+                && !text.contains("It is not a complete list of the core")));
+    }
+
+    #[test]
+    fn disassemble_uses_captured_executable_bytes_when_rip_is_absent() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let size = egui::vec2(1280.0, 900.0);
+        let mut fixture = Fixture::new();
+        fixture.view.tab = Tab::Code;
+        fixture.view.code_address.clear();
+        fixture.view.selected.as_mut().unwrap().core.threads[0].registers[0].1 = 0x1;
+        let output = settle(&ctx, &mut fixture.view, size);
+        let position = texts(&output)
+            .iter()
+            .find(|(text, _)| text == "Disassemble captured code")
+            .unwrap()
+            .1
+            .center();
+        click(&ctx, &mut fixture.view, size, position);
+        assert!(fixture.view.job.is_some());
+        assert!(fixture.view.status.contains("Disassembling 0x400000"));
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while fixture.view.job.is_some() && std::time::Instant::now() < deadline {
+            fixture.view.poll();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(fixture.view.code.contains("nop"), "{}", fixture.view.status);
+        assert_eq!(fixture.view.code_address, "400000");
+    }
+
+    #[test]
+    fn mapping_choices_use_recovered_names_and_mark_unknown_duplicates() {
+        let fixture = Fixture::new();
+        let core = &fixture.view.selected.as_ref().unwrap().core;
+        let choices = mapping_choices(core);
+        assert!(
+            choices[0].0.starts_with("mmap 400000-") && choices[0].0.contains("r-x [/synthetic/sample]"),
+            "{}",
+            choices[0].0
+        );
+        assert!(choices[0].1.contains("/synthetic/sample"));
+        let mut unnamed = core.clone();
+        unnamed.files.clear();
+        assert!(
+            mapping_choices(&unnamed)[0].0.contains("r-x [unknown]"),
+            "{}",
+            mapping_choices(&unnamed)[0].0
+        );
+        assert!(mapping_choices(&unnamed)[0].1.contains("No NT_FILE name"));
+        let mut duplicated = core.clone();
+        duplicated.mappings.push(CoreMapping {
+            start: 0x500000,
+            memory_size: 0x1000,
+            file_offset: 0,
+            captured_size: 16,
+            available_size: 16,
+            flags: 5,
+        });
+        duplicated
+            .files
+            .push(antinomie_monitor_core::core_dump::MappedFile {
+                start: 0x500000,
+                end: 0x501000,
+                file_offset: 0,
+                path: "/synthetic/sample".into(),
+            });
+        let choices = mapping_choices(&duplicated);
+        assert!(choices[0].0.contains("400000-"), "{}", choices[0].0);
+        assert!(choices[1].0.contains("500000-"), "{}", choices[1].0);
+        assert_eq!(captured_code_origin(&unnamed, ""), Ok(0x400000));
+        unnamed.mappings[0].flags = 4;
+        unnamed.threads[0].registers.clear();
+        assert!(captured_code_origin(&unnamed, "").is_err());
     }
 
     #[test]
@@ -2700,6 +2959,114 @@ mod tests {
                 Ok(Box::new(FixtureApp {
                     fixture,
                     deadline: std::time::Instant::now() + Duration::from_secs(seconds),
+                }))
+            }),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[ignore = "native X11; opens a genuine process core and waits for a Disassemble click"]
+    fn native_genuine_core_disassemble() {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        let source = PathBuf::from(std::env::var("ANTINOMIE_GENUINE_CORE").unwrap_or_else(|_| {
+            "/home/kali/antinomie/memory_test_17bc3c772460b5aef551e1bc56fd315d/memory/fc0b9d2bfdd7a015094efbf1c30718dc/memory.elf".into()
+        }));
+        assert!(
+            source.is_file(),
+            "genuine core missing: {}",
+            source.display()
+        );
+        let root = PathBuf::from("/tmp/antinomie-t0066-recording");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let record = CoreRecord::import(&source, &root).expect("import genuine core by reference");
+        let status_path = PathBuf::from("/tmp/antinomie-genuine-core-status");
+        struct App {
+            view: CoreView,
+            root: PathBuf,
+            deadline: Instant,
+            status_path: PathBuf,
+        }
+        impl eframe::App for App {
+            fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let _ = self.view.show(
+                        ui,
+                        std::slice::from_ref(&self.root),
+                        Some("qa"),
+                        false,
+                        CoreControls {
+                            unavailable: Some("Preview does not capture a live process"),
+                            captures: &[],
+                            can_cancel: false,
+                        },
+                    );
+                });
+                let code_lines = self
+                    .view
+                    .code
+                    .lines()
+                    .filter(|line| !line.is_empty())
+                    .count();
+                let _ = fs::write(
+                    &self.status_path,
+                    format!(
+                        "status={}\ncode_lines={code_lines}\njob={}\n",
+                        self.view.status.replace('\n', " "),
+                        self.view.job.is_some()
+                    ),
+                );
+                if Instant::now() >= self.deadline {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+        }
+        let small = std::env::var_os("ANTINOMIE_CORE_QA_SMALL").is_some();
+        let font = std::env::var("ANTINOMIE_CORE_QA_FONT")
+            .ok()
+            .and_then(|value| value.parse::<f32>().ok())
+            .unwrap_or(if small { 24.0 } else { 16.0 });
+        let seconds = std::env::var("ANTINOMIE_CORE_QA_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(90)
+            .clamp(1, 180);
+        let tab = std::env::var("ANTINOMIE_CORE_QA_TAB").unwrap_or_else(|_| "code".into());
+        eframe::run_native(
+            "Antinomie Genuine Core",
+            eframe::NativeOptions {
+                viewport: egui::ViewportBuilder::default()
+                    .with_inner_size(if small {
+                        [800.0, 900.0]
+                    } else {
+                        [1280.0, 900.0]
+                    })
+                    .with_position([40.0, 40.0]),
+                persist_window: false,
+                event_loop_builder: Some(Box::new(|builder| {
+                    builder.with_x11().with_any_thread(true);
+                })),
+                ..Default::default()
+            },
+            Box::new(move |cc| {
+                crate::theme::install(&cc.egui_ctx);
+                crate::theme::text_size(&cc.egui_ctx, font);
+                let mut view = CoreView::default();
+                view.selected_directory = Some(record.dir.clone());
+                view.tab = match tab.as_str() {
+                    "mappings" => Tab::Mappings,
+                    "notes" => Tab::Notes,
+                    "context" => Tab::Context,
+                    _ => Tab::Code,
+                };
+                view.selected = Some(record);
+                Ok(Box::new(App {
+                    view,
+                    root,
+                    deadline: Instant::now() + Duration::from_secs(seconds),
+                    status_path,
                 }))
             }),
         )

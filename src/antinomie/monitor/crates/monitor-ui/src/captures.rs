@@ -100,13 +100,12 @@ impl ProcessPicker {
                             format!("{} guest processes", page.processes.len())
                         })
                     });
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.filter)
-                            .margin(theme::TEXT_EDIT_MARGIN)
-                            .desired_width(180.0)
-                            .hint_text(
-                                RichText::new("Filter by name or PID").color(theme::muted()),
-                            ),
+                    crate::query::filter_edit(
+                        ui,
+                        &mut self.filter,
+                        "Filter by name or PID",
+                        ui.available_width().max(180.0),
+                        crate::query::FilterScope::Record,
                     );
                 });
                 let height = (viewport.height() - 300.0).clamp(64.0, 360.0);

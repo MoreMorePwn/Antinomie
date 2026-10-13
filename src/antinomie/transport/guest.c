@@ -437,7 +437,15 @@ retry:
 		directory[index].cpu_id = cpu;
 		per_cpu(producers, cpu).index = index++;
 	}
-	worker = alloc_ordered_workqueue("antinomie-control", WQ_MEM_RECLAIM);
+	/*
+	 * This worker only polls host commands. It is not a reclaim path,
+	 * and a terminal READ reaches n_tty_read, which flushes the ordinary
+	 * TTY queue events_unbound. WQ_MEM_RECLAIM makes that flush trip
+	 * check_flush_dependency. Flags stay 0 so the worker may complete
+	 * the read. The queue stays ordered, so commands, EOF and shutdown
+	 * keep one sequence.
+	 */
+	worker = alloc_ordered_workqueue("antinomie-control", 0);
 	if (!worker) goto free_rings;
 	control->geometry.version = ANT_ABI;
 	control->geometry.session = get_random_u64() ?: 1;
