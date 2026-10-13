@@ -65,6 +65,46 @@ pub struct Recording {
     pub events: Vec<EventSummary>,
 }
 
+/// A bounded matching page of the retained invocation stream.
+///
+/// | Field | Meaning |
+/// | --- | --- |
+/// | `page` | At most the requested number of matching calls and a stable next raw cursor |
+/// | `total` | Matching calls over the entire fixed retained prefix, including before the cursor |
+/// | `source_total` | Reconstructed saved calls for the selected process before the predicate |
+pub struct FilteredInvocationPage {
+    pub page: InvocationPage,
+    pub total: u64,
+    pub source_total: u64,
+}
+
+fn event_preview_size(event: &EventSummary) -> usize {
+    let mut size = std::mem::size_of::<EventSummary>().saturating_add(event.syscall_name.len());
+    for issue in &event.issues {
+        size = size.saturating_add(issue.len());
+    }
+    for field in &event.fields {
+        size = size
+            .saturating_add(std::mem::size_of::<FieldSummary>())
+            .saturating_add(field.key.len())
+            .saturating_add(field.layout.len())
+            .saturating_add(field.preview.len())
+            .saturating_add(
+                field
+                    .ranges
+                    .len()
+                    .saturating_mul(std::mem::size_of::<(u64, u64)>()),
+            )
+            .saturating_add(
+                field
+                    .raw_path
+                    .as_ref()
+                    .map_or(0, |path| path.as_os_str().as_encoded_bytes().len()),
+            );
+    }
+    size
+}
+
 /// Small saved-run metadata; missing values retain legacy/unfinished meaning.
 #[derive(Clone, Debug, Default)]
 pub struct RunFilterFacts {
@@ -396,6 +436,190 @@ fn archive_index(
 }
 
 impl Recording {
+    /// Match the full retained recording off the UI thread, retaining only one page.
+    ///
+    /// | Argument | Meaning |
+    /// | --- | --- |
+    /// | `offset` | Inclusive stable raw-file cursor returned by a previous matching page |
+    /// | `limit` | Maximum returned calls, in `1..=256` |
+    /// | `pid` | Optional guest process/thread-group predicate |
+    /// | `cancel` | Cooperative per-request cancellation, checked while indexing and reading packets |
+    /// | `keep` | Predicate on the same bounded reconstructed summaries used by ordinary archive pages |
+    ///
+    /// The disk index and packet previews remain bounded. Only complete saved
+    /// packets in the indexed prefix are read; a growing tail is included on the
+    /// next request. Replaced/shrunk archives and cancelled reads return errors.
+    pub fn filtered_page_cancellable(
+        &self,
+        offset: u64,
+        limit: usize,
+        pid: Option<u32>,
+        cancel: &AtomicBool,
+        mut keep: impl FnMut(&InvocationSummary) -> bool,
+    ) -> Result<FilteredInvocationPage, RecordingError> {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(RecordingError::Limit("archive read cancelled"));
+        }
+        if !(1..=256).contains(&limit) {
+            return Err(RecordingError::Limit("page size must be 1..256"));
+        }
+        let path = self.directory.join("telemetry.raw");
+        let (connection, identity) = archive_index(&self.directory, cancel)?;
+        let boundary: i64 =
+            connection.query_row("SELECT length FROM indexed LIMIT 1", [], |row| row.get(0))?;
+        let boundary = u64::try_from(boundary)
+            .map_err(|_| RecordingError::Limit("negative indexed boundary"))?;
+        if offset > raw_identity(&path)?.1 {
+            return Err(RecordingError::Limit("cursor beyond raw archive"));
+        }
+        let mut reader = BufReader::new(archive_io::open_regular(&self.directory, &path)?);
+        let mut query = connection.prepare(
+            "SELECT key,first_offset FROM invocations WHERE first_offset<?1 \
+             AND (?2 IS NULL OR pid=?2) ORDER BY first_offset",
+        )?;
+        let mut rows = query.query(rusqlite::params![boundary as i64, pid])?;
+        let mut packet_query = connection
+            .prepare("SELECT offset FROM packets WHERE key=?1 AND offset<?2 ORDER BY offset")?;
+        let mut invocations = Vec::with_capacity(limit);
+        let mut total = 0_u64;
+        let mut source_total = 0_u64;
+        let mut next_offset = None;
+        let mut issues = Vec::new();
+        let mut page_preview_size = 0_usize;
+        while let Some(row) = rows.next()? {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(RecordingError::Limit("archive read cancelled"));
+            }
+            let key: Vec<u8> = row.get(0)?;
+            let first_offset = u64::try_from(row.get::<_, i64>(1)?)
+                .map_err(|_| RecordingError::Limit("negative cached invocation offset"))?;
+            let mut assembler = Assembler::open_archive(self.directory.join("objects"))
+                .map_err(|_| RecordingError::Limit("cannot open archived objects"))?;
+            let mut latest = std::collections::BTreeMap::new();
+            let mut invocation_preview_size = 0_usize;
+            let packets = packet_query
+                .query_map(rusqlite::params![key, boundary as i64], |row| {
+                    row.get::<_, i64>(0)
+                })?;
+            for packet_offset in packets {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(RecordingError::Limit("archive read cancelled"));
+                }
+                let packet_offset = u64::try_from(packet_offset?)
+                    .map_err(|_| RecordingError::Limit("negative cached packet offset"))?;
+                reader.seek(SeekFrom::Start(packet_offset))?;
+                let (_, packet) = next_packet(&mut reader)?
+                    .ok_or(RecordingError::Limit("indexed packet is missing"))?;
+                if reader.stream_position()? > boundary {
+                    return Err(RecordingError::Limit(
+                        "indexed packet exceeds retained boundary",
+                    ));
+                }
+                if invocation_key(&packet).map(key_blob).as_ref() != Some(&key) {
+                    return Err(RecordingError::Limit("indexed packet identity changed"));
+                }
+                match assembler.ingest(&packet) {
+                    Ok(Some(event)) => {
+                        let event_key = (
+                            event.phase,
+                            if event.phase == 3 { event.event_seq } else { 0 },
+                        );
+                        let event_size = event_preview_size(&event);
+                        let previous = latest.insert(event_key, event);
+                        invocation_preview_size = invocation_preview_size
+                            .saturating_sub(previous.as_ref().map_or(0, event_preview_size))
+                            .saturating_add(event_size);
+                        if latest.len() > 2048 {
+                            // Preserve entry/exit and task-exit evidence; ordinary
+                            // async summaries retain their existing bounded preview.
+                            let remove = latest
+                                .iter()
+                                .rev()
+                                .find(|(key, event)| {
+                                    key.0 == 3
+                                        && !event
+                                            .fields
+                                            .iter()
+                                            .any(|field| field.key == "lifecycle.task_exit")
+                                })
+                                .map(|(key, _)| *key)
+                                .or_else(|| latest.keys().next().copied());
+                            if let Some(remove) = remove
+                                && let Some(removed) = latest.remove(&remove)
+                            {
+                                invocation_preview_size = invocation_preview_size
+                                    .saturating_sub(event_preview_size(&removed));
+                            }
+                            if issues.len() < 32 && !issues.iter().any(|issue| issue == "additional archive event previews omitted; raw records retained") {
+                                issues.push("additional archive event previews omitted; raw records retained".into());
+                            }
+                        }
+                        if invocation_preview_size > 32 * 1024 * 1024 {
+                            return Err(RecordingError::Limit(
+                                "archive invocation previews exceed 32 MiB; raw records retained",
+                            ));
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) if issues.len() < 32 => issues.push(error.to_string()),
+                    Err(_) => {}
+                }
+            }
+            let events: Vec<_> = latest.into_values().collect();
+            let Some(invocation) = pair_events(&events).into_iter().next() else {
+                continue;
+            };
+            source_total = source_total
+                .checked_add(1)
+                .ok_or(RecordingError::Limit("invocation count overflow"))?;
+            if keep(&invocation) {
+                total = total
+                    .checked_add(1)
+                    .ok_or(RecordingError::Limit("matching invocation count overflow"))?;
+                if first_offset >= offset {
+                    if invocations.len() < limit {
+                        let size = invocation
+                            .entry
+                            .iter()
+                            .chain(invocation.exit.iter())
+                            .chain(&invocation.async_events)
+                            .chain(invocation.task_exit.iter())
+                            .fold(0_usize, |size, event| {
+                                size.saturating_add(event_preview_size(event))
+                            });
+                        page_preview_size = page_preview_size.saturating_add(size);
+                        if page_preview_size > 64 * 1024 * 1024 {
+                            return Err(RecordingError::Limit(
+                                "archive page previews exceed 64 MiB; raw records retained",
+                            ));
+                        }
+                        invocations.push(invocation);
+                    } else if next_offset.is_none() {
+                        next_offset = Some(first_offset);
+                    }
+                }
+            }
+        }
+        if cancel.load(Ordering::Relaxed) {
+            return Err(RecordingError::Limit("archive read cancelled"));
+        }
+        let (after_identity, after_size) = raw_identity(&path)?;
+        if after_identity != identity || after_size < boundary {
+            return Err(RecordingError::Limit(
+                "raw archive was replaced or shrunk while being read; open it again",
+            ));
+        }
+        Ok(FilteredInvocationPage {
+            page: InvocationPage {
+                invocations,
+                next_offset,
+                issues,
+            },
+            total,
+            source_total,
+        })
+    }
+
     /// Count indexed calls for page navigation without loading all call previews.
     pub fn invocation_count_cancellable(
         &self,
@@ -1056,6 +1280,112 @@ mod tests {
         packet[128..136].copy_from_slice(&99u64.to_le_bytes());
         packet.extend(body);
         packet
+    }
+    #[test]
+    fn filtered_archive_finds_late_matches_and_counts_all_matching_pages() {
+        let directory =
+            std::env::temp_dir().join(format!("ant-filtered-archive-{}", storage::unique_id()));
+        storage::private_dir(&directory).unwrap();
+        let mut raw = File::create(directory.join("telemetry.raw")).unwrap();
+        for call in 0..350_u64 {
+            for (fragment, sequence) in [(1, 1), (5, 2)] {
+                let mut packet = event_packet(call, 1, fragment, sequence);
+                packet[72..76]
+                    .copy_from_slice(&(if call % 2 == 0 { 41_u32 } else { 42 }).to_le_bytes());
+                raw.write_all(&(packet.len() as u32).to_le_bytes()).unwrap();
+                raw.write_all(&packet).unwrap();
+            }
+        }
+        // An incomplete tail cannot become an invented invocation.
+        let tail = event_packet(350, 1, 1, 1);
+        raw.write_all(&(tail.len() as u32).to_le_bytes()).unwrap();
+        raw.write_all(&tail[..80]).unwrap();
+        raw.sync_all().unwrap();
+        storage::atomic_json(&directory.join("manifest.json"), &serde_json::json!({})).unwrap();
+        let recording = open_recording(&directory).unwrap();
+        let cancel = AtomicBool::new(false);
+        let first = recording
+            .filtered_page_cancellable(0, 100, None, &cancel, |call| call.call_id >= 150)
+            .unwrap();
+        assert_eq!((first.total, first.source_total), (200, 350));
+        assert_eq!(first.page.invocations.len(), 100);
+        assert_eq!(first.page.invocations.first().unwrap().call_id, 150);
+        assert_eq!(first.page.invocations.last().unwrap().call_id, 249);
+        let second = recording
+            .filtered_page_cancellable(
+                first.page.next_offset.unwrap(),
+                100,
+                None,
+                &cancel,
+                |call| call.call_id >= 150,
+            )
+            .unwrap();
+        assert_eq!((second.total, second.source_total), (200, 350));
+        assert_eq!(second.page.invocations.first().unwrap().call_id, 250);
+        assert_eq!(second.page.invocations.last().unwrap().call_id, 349);
+        assert!(second.page.next_offset.is_none());
+        let process = recording
+            .filtered_page_cancellable(0, 100, Some(42), &cancel, |call| call.call_id >= 150)
+            .unwrap();
+        assert_eq!((process.total, process.source_total), (100, 175));
+        assert!(
+            process
+                .page
+                .invocations
+                .iter()
+                .all(|call| call.entry.as_ref().unwrap().pid == 42)
+        );
+        assert!(process.page.next_offset.is_none());
+        // A next read sees the completed tail, with the same original IDs/cursors.
+        raw.write_all(&tail[80..]).unwrap();
+        raw.sync_all().unwrap();
+        let grown = recording
+            .filtered_page_cancellable(0, 100, None, &cancel, |call| call.call_id == 350)
+            .unwrap();
+        assert_eq!((grown.total, grown.source_total), (1, 351));
+        assert_eq!(grown.page.invocations[0].call_id, 350);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn filtered_archive_cancellation_stops_during_global_scan() {
+        let directory =
+            std::env::temp_dir().join(format!("ant-filter-cancel-{}", storage::unique_id()));
+        storage::private_dir(&directory).unwrap();
+        let mut raw = File::create(directory.join("telemetry.raw")).unwrap();
+        for call in 0..350_u64 {
+            let packet = event_packet(call, 1, 1, 1);
+            raw.write_all(&(packet.len() as u32).to_le_bytes()).unwrap();
+            raw.write_all(&packet).unwrap();
+        }
+        raw.sync_all().unwrap();
+        storage::atomic_json(&directory.join("manifest.json"), &serde_json::json!({})).unwrap();
+        let recording = open_recording(&directory).unwrap();
+        let cancel = AtomicBool::new(false);
+        let mut examined = 0;
+        let result = recording.filtered_page_cancellable(0, 100, None, &cancel, |_| {
+            examined += 1;
+            if examined == 125 {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            false
+        });
+        assert!(matches!(
+            result,
+            Err(RecordingError::Limit("archive read cancelled"))
+        ));
+        assert_eq!(examined, 125);
+        assert!(
+            recording
+                .filtered_page_cancellable(0, 100, None, &cancel, |_| true)
+                .is_err()
+        );
+        assert!(
+            recording
+                .filtered_page_cancellable(0, 257, None, &AtomicBool::new(false), |_| true)
+                .is_err()
+        );
+        fs::remove_dir_all(directory).unwrap();
     }
     #[test]
     fn archive_page_attaches_distinct_async_events_to_parent_only() {

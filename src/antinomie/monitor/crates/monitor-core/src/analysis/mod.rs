@@ -2,8 +2,8 @@
 mod export;
 mod types;
 pub use export::{
-    AnalysisExportFormat, export_analysis, ghidra_open_command, ghidra_open_exported_project,
-    retained_ghidra_project,
+    AnalysisExportFormat, copy_project, export_analysis, ghidra_open_command,
+    ghidra_open_exported_project, retained_ghidra_project,
 };
 pub use types::*;
 mod capa;

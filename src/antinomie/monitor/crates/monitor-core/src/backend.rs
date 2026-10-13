@@ -168,6 +168,34 @@ impl Backend {
                 .map(Notification::Snapshot)
         })
     }
+    /// Wait for a notification without treating a quiet, still-running owner as failed.
+    ///
+    /// | Item | Purpose |
+    /// |---|---|
+    /// | `timeout` | Maximum channel wait; already queued notifications/snapshots return immediately. |
+    /// | `Ok(Some(...))` | Next queued notification, or the latest coalesced snapshot. |
+    /// | `Ok(None)` | Wait elapsed without a notification. |
+    /// | `Err(...)` | Backend owner disconnected and no final snapshot remains to deliver. |
+    pub fn recv_timeout(&self, timeout: Duration) -> Result<Option<Notification>, String> {
+        if let Some(notification) = self.try_recv() {
+            return Ok(Some(notification));
+        }
+        match self.notifications.recv_timeout(timeout) {
+            Ok(notification) => Ok(Some(notification)),
+            Err(mpsc::RecvTimeoutError::Timeout) => Ok(self.try_recv()),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                // The final coalesced snapshot can be published during this wait.
+                // Deliver it once; the following receive reports disconnection.
+                self.latest_snapshot
+                    .lock()
+                    .ok()
+                    .and_then(|mut latest| latest.take())
+                    .map(|snapshot| Some(Notification::Snapshot(snapshot)))
+                    .ok_or_else(|| "backend owner disconnected".into())
+            }
+        }
+    }
+
     pub fn shutdown(&mut self) -> Result<(), String> {
         self.closing.store(true, Ordering::Relaxed);
         self.stopping.store(true, Ordering::Relaxed);
@@ -382,6 +410,8 @@ struct Session {
     /// keyed by request id. The guest answers commands in submission order and
     /// has already consumed the PTY bytes, so a late reply still belongs to its run.
     late_reads: BTreeMap<u64, u64>,
+    /// At most one timed-out read-only status poll; no uncertain effects are replayed.
+    run_status_poll: RunStatusPoll,
     /// When capture process trees were last queued for saving.
     last_process_save: Instant,
     /// Bytes of this boot's network captures (pcaps written by QEMU): the
@@ -400,6 +430,82 @@ struct Session {
     last_status_query: Instant,
     persisted_packets: u64,
     kernel_probe: KernelProbe,
+}
+
+/// Correlation survives a poll deadline, but never a new session or run generation.
+#[derive(Clone)]
+struct RunStatusOwner {
+    cookie: u64,
+    run_id: String,
+    generation: u64,
+}
+
+impl RunStatusOwner {
+    fn matches(&self, run: &ProgramRun) -> bool {
+        self.cookie == run.summary.root_task_cookie
+            && self.run_id == run.summary.id
+            && self.generation == run.execution_generation
+    }
+}
+
+#[derive(Default)]
+struct RunStatusPoll {
+    pending: Option<(u64, RunStatusOwner)>,
+    diagnostic: Option<(u64, String, String)>,
+}
+
+impl RunStatusPoll {
+    fn timed_out(&mut self, id: u64, owner: RunStatusOwner, error: String) {
+        self.diagnostic = Some((owner.cookie, owner.run_id.clone(), error));
+        self.pending = Some((id, owner));
+    }
+
+    /// Return None for unrelated replies, leaving their normal mismatch handling intact.
+    fn late_reply(
+        &mut self,
+        id: u64,
+        status: i32,
+        payload: &[u8],
+        owner_matches: impl FnOnce(&RunStatusOwner) -> bool,
+    ) -> Option<Result<(RunStatusOwner, RunExecution), String>> {
+        if !self
+            .pending
+            .as_ref()
+            .is_some_and(|(pending_id, _)| *pending_id == id)
+        {
+            return None;
+        }
+        let (_, owner) = self.pending.take()?;
+        Some((|| {
+            if !owner_matches(&owner) {
+                return Err("late run status owner or execution generation changed".into());
+            }
+            if status != 0 {
+                return Err(format!(
+                    "late run status command {id} returned status {status}"
+                ));
+            }
+            let execution = crate::execution::decode(payload, owner.cookie, owner.generation)?;
+            Ok((owner, execution))
+        })())
+    }
+
+    /// An attachment boundary discards old reply correlation, not diagnostic ownership.
+    fn forget_unanswered(&mut self) {
+        self.pending = None;
+    }
+
+    fn recovered(&mut self, cookie: u64, run_id: &str, last_error: &mut Option<String>) {
+        let Some((owned_cookie, owned_run_id, error)) = self.diagnostic.as_ref() else {
+            return;
+        };
+        if *owned_cookie == cookie && owned_run_id == run_id {
+            if last_error.as_ref() == Some(error) {
+                *last_error = None;
+            }
+            self.diagnostic = None;
+        }
+    }
 }
 
 struct RunArtifactOwner {
@@ -1051,6 +1157,11 @@ impl Session {
         snapshot: &mut Snapshot,
         sender: &SyncSender<Notification>,
     ) -> Result<(), String> {
+        if self.run_status_poll.pending.is_some() {
+            // Do not grow an unbounded collection of abandoned request IDs. A lost
+            // reply leaves status unknown until it arrives or the session recovers.
+            return self.drain_replies(snapshot, sender);
+        }
         if self.runs.is_empty() || self.last_status_query.elapsed() < Duration::from_millis(100) {
             return Ok(());
         }
@@ -1061,31 +1172,47 @@ impl Session {
             .nth(self.status_cursor % self.runs.len())
             .ok_or("missing run status owner")?;
         self.status_cursor = self.status_cursor.wrapping_add(1);
-        let result = self.request(
-            control::RUN_STATUS,
-            &control::with_session(cookie),
-            snapshot,
-            sender,
-            Duration::from_millis(100),
-        );
-        let run = self
-            .runs
-            .get_mut(&cookie)
-            .ok_or("missing run status owner")?;
-        let result = result
-            .and_then(|reply| crate::execution::decode(&reply, cookie, run.execution_generation));
-        match result {
-            Ok(execution) => {
-                if run.summary.execution.as_ref() != Some(&execution) {
-                    run.execution_generation = execution.generation;
-                    run.summary.state = crate::execution::state(&execution);
-                    run.summary.execution = Some(execution);
-                    run.record_tree_completion();
-                    run.persist_summary()?;
+        let run = self.runs.get(&cookie).ok_or("missing run status owner")?;
+        let owner = RunStatusOwner {
+            cookie,
+            run_id: run.summary.id.clone(),
+            generation: run.execution_generation,
+        };
+        let result = match self
+            .transport
+            .send(control::RUN_STATUS, &control::with_session(cookie))
+        {
+            Ok(id) => match self.wait_reply(
+                id,
+                control::RUN_STATUS,
+                snapshot,
+                sender,
+                Duration::from_millis(100),
+            ) {
+                Err(RequestError::TimedOut(error)) => {
+                    let error = format!(
+                        "{error}; run status polling paused until its reply arrives or transport reconnects"
+                    );
+                    self.run_status_poll
+                        .timed_out(id, owner.clone(), error.clone());
+                    Err(error)
                 }
-                Ok(())
-            }
+                result => result.map_err(RequestError::into_message),
+            },
+            Err(error) => Err(error),
+        };
+        let result =
+            result.and_then(|reply| crate::execution::decode(&reply, cookie, owner.generation));
+        match result {
+            Ok(execution) => self.apply_run_status(&owner, execution, snapshot),
             Err(error) => {
+                let run = self
+                    .runs
+                    .get_mut(&cookie)
+                    .ok_or("missing run status owner")?;
+                if !owner.matches(run) {
+                    return Err("run status owner or execution generation changed".into());
+                }
                 let changed = run.summary.execution.take().is_some()
                     || run.summary.state != RunState::Unknown;
                 run.summary.state = RunState::Unknown;
@@ -1095,6 +1222,31 @@ impl Session {
                 Err(error)
             }
         }
+    }
+
+    fn apply_run_status(
+        &mut self,
+        owner: &RunStatusOwner,
+        execution: RunExecution,
+        snapshot: &mut Snapshot,
+    ) -> Result<(), String> {
+        let run = self
+            .runs
+            .get_mut(&owner.cookie)
+            .ok_or("missing run status owner")?;
+        if !owner.matches(run) {
+            return Err("run status owner or execution generation changed".into());
+        }
+        if run.summary.execution.as_ref() != Some(&execution) {
+            run.execution_generation = execution.generation;
+            run.summary.state = crate::execution::state(&execution);
+            run.summary.execution = Some(execution);
+            run.record_tree_completion();
+            run.persist_summary()?;
+        }
+        self.run_status_poll
+            .recovered(owner.cookie, &owner.run_id, &mut snapshot.last_error);
+        Ok(())
     }
     fn history(&self) -> Vec<EventSummary> {
         canonical_live_history(
@@ -1425,8 +1577,8 @@ impl Session {
             .map_err(RequestError::Failed)?;
         self.wait_reply(id, opcode, snapshot, sender, timeout)
     }
-    /// A reply for an earlier request: a late terminal READ is applied to its run;
-    /// anything else has no remaining waiter.
+    /// Route only explicitly retained status/terminal requests and the kernel probe.
+    /// Other replies still have no remaining waiter.
     fn other_reply(
         &mut self,
         reply_id: u64,
@@ -1437,6 +1589,21 @@ impl Session {
         sender: &SyncSender<Notification>,
     ) {
         if self.kernel_probe_reply(reply_id, status, payload, snapshot) {
+            return;
+        }
+        let runs = &self.runs;
+        if let Some(result) = self
+            .run_status_poll
+            .late_reply(reply_id, status, payload, |owner| {
+                runs.get(&owner.cookie)
+                    .is_some_and(|run| owner.matches(run))
+            })
+        {
+            if let Err(error) = result
+                .and_then(|(owner, execution)| self.apply_run_status(&owner, execution, snapshot))
+            {
+                snapshot.last_error = Some(format!("late run status: {error}"));
+            }
             return;
         }
         if let Some(cookie) = self.late_reads.remove(&reply_id) {
@@ -3321,6 +3488,7 @@ impl Worker {
                 pending_overflow: false,
                 terminal_cursor: 0,
                 late_reads: BTreeMap::new(),
+                run_status_poll: RunStatusPoll::default(),
                 telemetry_busy: false,
                 shed: Shed::default(),
                 last_process_save: Instant::now(),
@@ -4817,6 +4985,229 @@ fn remaining_request_budget(deadline: Instant, maximum: Duration) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn notification_backend() -> (Backend, SyncSender<Notification>) {
+        let (commands, _) = mpsc::sync_channel(1);
+        let (sender, notifications) = mpsc::sync_channel(4);
+        (
+            Backend {
+                commands,
+                notifications,
+                thread: None,
+                data_owner: None,
+                closing: Arc::new(AtomicBool::new(false)),
+                stopping: Arc::new(AtomicBool::new(false)),
+                sequence: AtomicU64::new(0),
+                guest_epoch: Arc::new(AtomicU64::new(0)),
+                latest_snapshot: Arc::new(Mutex::new(None)),
+            },
+            sender,
+        )
+    }
+
+    #[test]
+    fn backend_recv_timeout_distinguishes_quiet_owner_from_disconnection() {
+        let (backend, sender) = notification_backend();
+        assert!(
+            backend
+                .recv_timeout(Duration::from_millis(1))
+                .unwrap()
+                .is_none()
+        );
+        sender
+            .send(Notification::CommandResult {
+                id: 42,
+                success: true,
+                message: "base installed".into(),
+            })
+            .unwrap();
+        drop(sender);
+        assert!(matches!(
+            backend.recv_timeout(Duration::ZERO).unwrap(),
+            Some(Notification::CommandResult {
+                id: 42,
+                success: true,
+                ..
+            })
+        ));
+        assert_eq!(
+            backend.recv_timeout(Duration::ZERO).err().as_deref(),
+            Some("backend owner disconnected")
+        );
+    }
+
+    #[test]
+    fn backend_recv_timeout_preserves_queue_priority_and_final_coalesced_snapshot() {
+        let (backend, sender) = notification_backend();
+        *backend.latest_snapshot.lock().unwrap() = Some(Snapshot::default());
+        sender
+            .send(Notification::CommandResult {
+                id: 42,
+                success: true,
+                message: "base installed".into(),
+            })
+            .unwrap();
+        drop(sender);
+        assert!(matches!(
+            backend.recv_timeout(Duration::ZERO).unwrap(),
+            Some(Notification::CommandResult { id: 42, .. })
+        ));
+        assert!(matches!(
+            backend.recv_timeout(Duration::ZERO).unwrap(),
+            Some(Notification::Snapshot(_))
+        ));
+        assert!(backend.recv_timeout(Duration::ZERO).is_err());
+    }
+
+    fn late_status_owner() -> RunStatusOwner {
+        RunStatusOwner {
+            cookie: 2,
+            run_id: "artifact-run".into(),
+            generation: 1,
+        }
+    }
+
+    fn late_status_payload(cookie: u64, generation: u64) -> Vec<u8> {
+        let mut reply = vec![0; 64];
+        for (offset, value) in [(0, cookie), (8, generation), (16, 1), (48, 1)] {
+            reply[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+        }
+        reply[32..36].copy_from_slice(&8u32.to_le_bytes());
+        reply
+    }
+
+    #[test]
+    fn late_status_routes_exact_timeout_while_another_command_is_waiting() {
+        let mut poll = RunStatusPoll::default();
+        let error = "guest command 364 timed out; outcome unknown".to_string();
+        poll.timed_out(364, late_status_owner(), error.clone());
+        // A terminal waiter 365 remains unrelated. Repeated unmatched replies
+        // neither consume the owner nor grow status correlation state.
+        for id in [365, 366, 367] {
+            assert!(
+                poll.late_reply(id, 0, &[], |_| panic!("unrelated owner checked"))
+                    .is_none()
+            );
+            assert_eq!(poll.pending.as_ref().unwrap().0, 364);
+        }
+        let (owner, execution) = poll
+            .late_reply(364, 0, &late_status_payload(2, 2), |owner| {
+                owner.cookie == 2 && owner.run_id == "artifact-run" && owner.generation == 1
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(crate::execution::state(&execution), RunState::Running);
+        assert_eq!(execution.generation, 2);
+        assert!(poll.pending.is_none());
+        let mut last_error = Some(error);
+        poll.recovered(owner.cookie, &owner.run_id, &mut last_error);
+        assert!(last_error.is_none());
+        // A duplicate reply does not become a new exception to mismatch handling.
+        assert!(
+            poll.late_reply(364, 0, &late_status_payload(2, 2), |_| true)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn late_status_validates_cookie_generation_status_and_exact_wire_extent() {
+        for (status, payload) in [
+            (0, late_status_payload(3, 2)),
+            (0, late_status_payload(2, 0)),
+            (-2, late_status_payload(2, 2)),
+            (1, late_status_payload(2, 2)),
+            (0, vec![0; 63]),
+        ] {
+            let mut poll = RunStatusPoll::default();
+            poll.timed_out(364, late_status_owner(), "timeout".into());
+            assert!(
+                poll.late_reply(364, status, &payload, |_| true)
+                    .unwrap()
+                    .is_err()
+            );
+            assert!(poll.pending.is_none());
+        }
+    }
+
+    #[test]
+    fn late_status_owner_drift_cannot_overwrite_a_newer_or_different_run() {
+        let root = std::env::temp_dir().join(format!("ant-status-owner-{}", storage::unique_id()));
+        let mut run = ProgramRun::new(artifact_run(root.clone()), 1024).unwrap();
+        run.execution_generation = 1;
+        let owner = late_status_owner();
+        assert!(owner.matches(&run));
+        for mutation in 0..3 {
+            run.summary.id = "artifact-run".into();
+            run.summary.root_task_cookie = 2;
+            run.execution_generation = 1;
+            match mutation {
+                0 => run.summary.id = "replacement-run".into(),
+                1 => run.summary.root_task_cookie = 3,
+                _ => run.execution_generation = 2,
+            }
+            let mut poll = RunStatusPoll::default();
+            poll.timed_out(364, owner.clone(), "timeout".into());
+            let error = poll
+                .late_reply(364, 0, &late_status_payload(2, 3), |owner| {
+                    owner.matches(&run)
+                })
+                .unwrap()
+                .err()
+                .unwrap();
+            assert!(error.contains("owner or execution generation changed"));
+            assert_eq!(run.summary.state, RunState::Running);
+        }
+        drop(run);
+        storage::flush_json();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn late_status_reconnect_discards_old_id_but_retains_timeout_recovery_ownership() {
+        let mut poll = RunStatusPoll::default();
+        poll.timed_out(364, late_status_owner(), "status timeout".into());
+        poll.forget_unanswered();
+        // A checkpoint-stage failure may keep this Session after the attachment
+        // changed. Old IDs must not route into it; fresh polling can resume.
+        assert!(poll.pending.is_none());
+        assert!(
+            poll.late_reply(364, 0, &late_status_payload(2, 2), |_| true)
+                .is_none()
+        );
+        let mut last_error = Some("status timeout".into());
+        poll.recovered(2, "artifact-run", &mut last_error);
+        assert!(last_error.is_none());
+
+        poll.timed_out(400, late_status_owner(), "status timeout".into());
+        poll.forget_unanswered();
+        last_error = Some("reconnect checkpoint persistence failed".into());
+        poll.recovered(2, "artifact-run", &mut last_error);
+        assert_eq!(
+            last_error.as_deref(),
+            Some("reconnect checkpoint persistence failed")
+        );
+    }
+
+    #[test]
+    fn late_status_recovery_clears_only_the_owned_diagnostic_for_the_same_run() {
+        let mut poll = RunStatusPoll::default();
+        poll.timed_out(364, late_status_owner(), "status timeout".into());
+        let mut last_error = Some("status timeout".into());
+        poll.recovered(3, "artifact-run", &mut last_error);
+        poll.recovered(2, "different-run", &mut last_error);
+        assert_eq!(last_error.as_deref(), Some("status timeout"));
+        assert!(poll.diagnostic.is_some());
+        last_error = Some("unmatched command reply 999; awaiting 365".into());
+        poll.recovered(2, "artifact-run", &mut last_error);
+        assert_eq!(
+            last_error.as_deref(),
+            Some("unmatched command reply 999; awaiting 365")
+        );
+        assert!(poll.diagnostic.is_none());
+        // Session recreation starts with no correlation or diagnostic ownership.
+        let fresh = RunStatusPoll::default();
+        assert!(fresh.pending.is_none() && fresh.diagnostic.is_none());
+    }
 
     #[test]
     fn lifecycle_qmp_reconciliation_uses_payload_and_preserves_unknown_dump_outcomes() {

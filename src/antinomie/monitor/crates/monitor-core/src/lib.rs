@@ -31,6 +31,7 @@ pub mod recording;
 mod resources;
 mod run;
 pub mod samples;
+mod sandbox_process;
 pub mod snapshots;
 pub mod storage;
 pub mod syscall_groups;

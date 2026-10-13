@@ -4705,12 +4705,8 @@ mod tests {
         assert_eq!(epoch_us("1.bad"), None);
     }
 
-    #[test]
-    fn complete_retained_archive_query_pages_every_rwx_finding_and_persists_facts() {
-        use std::io::Write;
-        let temp = PacketSpool::new().unwrap();
-        let mut raw = std::fs::File::create(temp.directory.join("telemetry.raw")).unwrap();
-        for call in 0u64..2051 {
+    fn write_rwx_calls(raw: &mut dyn std::io::Write, calls: std::ops::Range<u64>) {
+        for call in calls {
             for phase in [1u8, 2] {
                 for fragment in [1u8, 5] {
                     let mut body = vec![0u8; if fragment == 1 { 120 } else { 32 }];
@@ -4752,6 +4748,114 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn hidden_tick_refreshes_growing_archive_preserves_selection_and_rejects_prior_run() {
+        fn input<'a>(archive: &'a Path, run: &'a str) -> TriageInput<'a> {
+            TriageInput {
+                invocations: &[],
+                packets: &[],
+                frames: None,
+                vm_id: Some("vm"),
+                boot_id: Some("boot"),
+                run_id: Some(run),
+                coverage: "test retained archive",
+                archive: Some(archive),
+                pcap: None,
+                pcap_open: false,
+            }
+        }
+        fn wait(
+            view: &mut TriageView,
+            ctx: &egui::Context,
+            archive: &Path,
+            run: &str,
+            count: usize,
+        ) {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                // Intentionally never call show: another panel owns the workspace.
+                view.tick(ctx, input(archive, run));
+                if view
+                    .scan
+                    .as_ref()
+                    .is_some_and(|scan| scan.findings.len() == count)
+                    && view.scan_rx.is_none()
+                {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "hidden index stalled: {:?}",
+                    view.scan_error
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        let first = PacketSpool::new().unwrap();
+        let second = PacketSpool::new().unwrap();
+        let mut raw = std::fs::File::create(first.directory.join("telemetry.raw")).unwrap();
+        write_rwx_calls(&mut raw, 0..1);
+        raw.sync_all().unwrap();
+        let ctx = egui::Context::default();
+        let mut view = TriageView::default();
+        view.refresh_seconds = 1;
+        view.scan_request.filters[0] = "finding.rule == \"memory.rwx\"".into();
+        wait(&mut view, &ctx, &first.directory, "first", 1);
+        view.selected_call_id = Some(0);
+        let first_refresh = view.last_refresh.unwrap();
+        write_rwx_calls(&mut raw, 1..2);
+        raw.sync_all().unwrap();
+        wait(&mut view, &ctx, &first.directory, "first", 2);
+        assert!(view.last_refresh.unwrap() > first_refresh);
+        assert_eq!(view.selected_call_id, Some(0));
+        assert_eq!(
+            view.scan_request.filters[0],
+            "finding.rule == \"memory.rwx\""
+        );
+        // Hold a completed worker reply to exercise refresh pressure deterministically.
+        view.refresh_requested = true;
+        view.ensure_scan(
+            Some(&first.directory),
+            None,
+            false,
+            Some("vm"),
+            Some("boot"),
+            Some("first"),
+        );
+        let actual = view.scan_rx.take().unwrap();
+        let (held_tx, held_rx) = mpsc::channel();
+        view.scan_rx = Some(held_rx);
+        let generation = view.scan_generation;
+        for _ in 0..100 {
+            view.refresh_requested = true;
+            view.tick(&ctx, input(&first.directory, "first"));
+            assert_eq!(view.scan_generation, generation);
+        }
+        assert!(view.refresh_queued);
+        held_tx
+            .send(actual.recv_timeout(Duration::from_secs(5)).unwrap())
+            .unwrap();
+        view.tick(&ctx, input(&first.directory, "first"));
+        assert_eq!(view.scan_generation, generation + 1);
+        let stale_cancel = Arc::clone(view.scan_cancel.as_ref().unwrap());
+        let mut other = std::fs::File::create(second.directory.join("telemetry.raw")).unwrap();
+        write_rwx_calls(&mut other, 7..8);
+        other.sync_all().unwrap();
+        view.tick(&ctx, input(&second.directory, "second"));
+        assert!(stale_cancel.load(Ordering::Relaxed));
+        assert!(view.scan.is_none());
+        assert!(view.selected_call_id.is_none());
+        wait(&mut view, &ctx, &second.directory, "second", 1);
+        assert_eq!(view.scan.as_ref().unwrap().findings[0].call_id, 7);
+    }
+
+    #[test]
+    fn complete_retained_archive_query_pages_every_rwx_finding_and_persists_facts() {
+        let temp = PacketSpool::new().unwrap();
+        let mut raw = std::fs::File::create(temp.directory.join("telemetry.raw")).unwrap();
+        write_rwx_calls(&mut raw, 0..2051);
         raw.sync_all().unwrap();
         let cancel = Arc::new(AtomicBool::new(false));
         let first = scan_archive_query(

@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
 use super::worker::REPORT_MAX_SIZE;
 use super::*;
-use crate::{control, storage};
+use crate::{
+    control,
+    sandbox_process::{self, SandboxProcess},
+    storage,
+};
 use sha2::{Digest, Sha256};
 use std::sync::{
     Mutex,
@@ -11,13 +15,22 @@ use std::{
     collections::VecDeque,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
+    os::fd::OwnedFd,
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    os::unix::net::UnixStream,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     time::{Duration, Instant},
 };
 static CLEANUP_PENDING: AtomicBool = AtomicBool::new(false);
-static CLEANUP_CHILD: Mutex<Option<(Child, PathBuf, AnalysisReport)>> = Mutex::new(None);
+static CLEANUP_CHILD: Mutex<Option<CleanupOwner>> = Mutex::new(None);
+
+struct CleanupOwner {
+    process: SandboxProcess,
+    directory: PathBuf,
+    report: AnalysisReport,
+    reason: String,
+}
 
 pub(crate) struct Job {
     pub run_id: Option<String>,
@@ -28,7 +41,8 @@ pub(crate) struct Job {
     received_len: u64,
     file: Option<File>,
     deadline: Instant,
-    child: Option<Child>,
+    child: Option<SandboxProcess>,
+    cleanup_reason: Option<String>,
     reserved_len: u64,
     digest: Sha256,
     disk_len: u64,
@@ -172,6 +186,7 @@ impl Jobs {
                 file: Some(file),
                 deadline: Instant::now() + Duration::from_secs(120),
                 child: None,
+                cleanup_reason: None,
                 reserved_len,
                 digest: Sha256::new(),
                 disk_len: 0,
@@ -229,17 +244,27 @@ impl Jobs {
             self.release.push_back(id);
         }
         if let Some(mut child) = job.child.take() {
-            let kill = child.kill();
-            match child.try_wait() {
-                Ok(Some(_)) => {
-                    job.report.reason=Some(if job.report.state==AnalysisState::Cancelled {"analysis cancelled; worker cleanup completed; program execution continues"}else{"analysis incomplete; worker cleanup completed"}.into());
-                }
-                Ok(None) => {
-                    job.report.reason=Some("analysis stopped; worker cleanup pending, no new worker will start until reap".into());
-                    job.child = Some(child);
+            let reason = job
+                .cleanup_reason
+                .get_or_insert_with(|| job.report.reason.clone().unwrap_or_default())
+                .clone();
+            let cleanup = child.cleanup_poll();
+            if matches!(cleanup, Ok(true)) {
+                job.report.reason = Some(cleanup_message(&reason, "worker cleanup completed"));
+            } else {
+                let detail = match cleanup {
+                    Err(error) => format!("worker {} cleanup pending: {error}; no new worker will start", child.id()),
+                    _ => "worker cleanup pending; no new worker will start until namespace exit and reap".into(),
+                };
+                let message = cleanup_message(&reason, &detail);
+                let changed = job.report.reason.as_deref() != Some(message.as_str());
+                job.report.reason = Some(message);
+                job.child = Some(child);
+                if changed {
                     if let Err(error) = persist_report(&job.directory, &job.report) {
-                        job.report.reason = Some(format!(
-                            "worker cleanup pending; report persistence failed: {error}"
+                        job.report.reason = Some(cleanup_message(
+                            &reason,
+                            &format!("worker cleanup pending; report persistence failed: {error}"),
                         ));
                     }
                     let report_len = fs::metadata(job.directory.join("report.json"))
@@ -250,18 +275,9 @@ impl Jobs {
                         .saturating_add(report_len);
                     job.report_len = report_len;
                     self.updates.push((job.run_id.clone(), job.report.clone()));
-                    self.active = Some(job);
-                    return;
                 }
-                Err(error) => {
-                    job.report.reason = Some(format!(
-                        "worker reap pending after wait error: {error}; kill error {:?}",
-                        kill.err()
-                    ));
-                    job.child = Some(child);
-                    self.active = Some(job);
-                    return;
-                }
+                self.active = Some(job);
+                return;
             }
         }
         if let Err(error) = persist_report(&job.directory, &job.report) {
@@ -307,7 +323,7 @@ impl Jobs {
             return None;
         }
         if let Some(child) = job.child.as_mut() {
-            match child.try_wait() {
+            match child.poll_status() {
                 Ok(Some(status)) => {
                     job.child = None;
                     if status.success() {
@@ -336,7 +352,7 @@ impl Jobs {
                     fail(
                         &mut job.report,
                         AnalysisState::Unavailable,
-                        format!("worker wait: {error}"),
+                        format!("worker {} wait: {error}", child.id()),
                     );
                     self.finish(job);
                     return None;
@@ -490,8 +506,12 @@ impl Jobs {
                     "VM ended; worker cleanup pending in bounded reaper, not yet reaped".into(),
                 );
                 CLEANUP_PENDING.store(true, Ordering::Release);
-                *CLEANUP_CHILD.lock().unwrap_or_else(|p| p.into_inner()) =
-                    Some((child, job.directory.clone(), job.report.clone()));
+                *CLEANUP_CHILD.lock().unwrap_or_else(|p| p.into_inner()) = Some(CleanupOwner {
+                    process: child,
+                    directory: job.directory.clone(),
+                    report: job.report.clone(),
+                    reason: job.cleanup_reason.clone().unwrap_or_default(),
+                });
                 let directory = job.directory.clone();
                 let run_id = job.run_id.clone();
                 let mut pending_report = job.report.clone();
@@ -503,24 +523,27 @@ impl Jobs {
                             .lock()
                             .unwrap_or_else(|p| p.into_inner())
                             .take();
-                        if let Some((mut child, directory, mut report)) = item {
-                            let reaped = match child.wait() {
-                                Ok(_) => {
-                                    report.reason =
-                                        Some("VM ended; stopped worker cleanup completed".into());
-                                    true
+                        if let Some(mut owner) = item {
+                            loop {
+                                let cleaned = owner.process.cleanup_poll();
+                                let done = matches!(cleaned, Ok(true));
+                                let detail = match cleaned {
+                                    Ok(true) => "VM ended; worker cleanup completed".into(),
+                                    Ok(false) => "VM ended; worker cleanup pending until namespace exit and reap".into(),
+                                    Err(error) => format!("VM ended; worker cleanup pending: {error}"),
+                                };
+                                let message = cleanup_message(&owner.reason, &detail);
+                                if owner.report.reason.as_deref() != Some(message.as_str()) {
+                                    owner.report.reason = Some(message);
+                                    if let Err(error) = persist_report(&owner.directory, &owner.report) {
+                                        eprintln!("analysis cleanup report persistence failed: {error}");
+                                    }
                                 }
-                                Err(error) => {
-                                    report.reason =
-                                        Some(format!("VM ended; worker reap failed: {error}"));
-                                    false
+                                if done {
+                                    CLEANUP_PENDING.store(false, Ordering::Release);
+                                    break;
                                 }
-                            };
-                            if let Err(error) = persist_report(&directory, &report) {
-                                eprintln!("analysis cleanup report persistence failed: {error}");
-                            }
-                            if reaped {
-                                CLEANUP_PENDING.store(false, Ordering::Release);
+                                std::thread::sleep(Duration::from_millis(50));
                             }
                         }
                     });
@@ -541,6 +564,15 @@ impl Jobs {
         }
     }
 }
+
+fn cleanup_message(reason: &str, detail: &str) -> String {
+    if reason.is_empty() {
+        detail.into()
+    } else {
+        format!("{reason}; {detail}")
+    }
+}
+
 impl Drop for Jobs {
     fn drop(&mut self) {
         self.shutdown();
@@ -615,7 +647,7 @@ fn directory_len(path: &Path) -> Result<u64, String> {
     }
     Ok(total)
 }
-fn spawn_worker(job: &Job, tools: Option<&Path>) -> Result<Child, String> {
+fn spawn_worker(job: &Job, tools: Option<&Path>) -> Result<SandboxProcess, String> {
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
     spawn_worker_binary(job, &executable, tools)
 }
@@ -623,11 +655,12 @@ fn spawn_worker_binary(
     job: &Job,
     executable: &Path,
     tools: Option<&Path>,
-) -> Result<Child, String> {
+) -> Result<SandboxProcess, String> {
     crate::dependencies::require_tool(Path::new("/usr/bin/bwrap"), "bubblewrap")?;
     if CLEANUP_PENDING.load(Ordering::Acquire) {
         return Err("a previous worker still awaits reap; isolation worker unavailable".into());
     }
+    let account = sandbox_passwd(&job.directory)?;
     let output = job.directory.join("output");
     fs::create_dir(&output).map_err(|e| e.to_string())?;
     let listings = output.join("listings");
@@ -698,6 +731,7 @@ fn spawn_worker_binary(
             cmd.arg("--ro-bind").arg(path).arg(path);
         }
     }
+    cmd.arg("--ro-bind").arg(&account).arg("/etc/passwd");
     for path in [
         "/usr/lib/bfd-plugins",
         "/usr/lib/x86_64-linux-gnu/bfd-plugins",
@@ -774,6 +808,7 @@ fn spawn_worker_binary(
     if std::env::var("ANTINOMIE_ANALYSIS_TOOLS").as_deref() == Ok("managed") {
         cmd.args(["--setenv", "ANTINOMIE_ANALYSIS_TOOLS", "managed"]);
     }
+    let launch = sandbox_process::prepare(&mut cmd)?;
     cmd.args([
         "--remount-ro",
         "/",
@@ -793,15 +828,19 @@ fn spawn_worker_binary(
         "--antinomie-analysis-worker",
     ])
     .env_clear()
-    .stdin(Stdio::null())
     .stdout(Stdio::null())
     .stderr(Stdio::from(log));
-    cmd.spawn()
+    let spawned = cmd.spawn();
+    drop(cmd);
+    spawned
+        .map(|child| SandboxProcess::adopt(child, launch))
         .map_err(|e| format!("mandatory bubblewrap isolation unavailable: {e}"))
 }
 
 /// Run an external analysis tool inside the same bubblewrap isolation as the
 /// static-analysis worker. The host process is `bwrap`, not the tool itself.
+/// A private, unique log retains at most 2 MiB, including the final output tail.
+/// Limits apply to each descendant process, not aggregate process-tree RSS.
 pub(crate) fn run_sandboxed(
     program: &Path,
     args: &[String],
@@ -812,6 +851,12 @@ pub(crate) fn run_sandboxed(
     cancel: &AtomicBool,
 ) -> Result<(), String> {
     crate::dependencies::require_tool(Path::new("/usr/bin/bwrap"), "bubblewrap")?;
+    crate::dependencies::require_tool(Path::new("/usr/bin/prlimit"), "prlimit")?;
+    let account = sandbox_passwd(writable)?;
+    let mut log = SandboxLog::new(writable)?;
+    let (mut reader, writer) = UnixStream::pair().map_err(|e| e.to_string())?;
+    reader.set_nonblocking(true).map_err(|e| e.to_string())?;
+    let stderr = writer.try_clone().map_err(|e| e.to_string())?;
     let mut cmd = Command::new("/usr/bin/bwrap");
     cmd.args([
         "--unshare-all",
@@ -845,6 +890,7 @@ pub(crate) fn run_sandboxed(
             cmd.arg("--ro-bind").arg(path).arg(path);
         }
     }
+    cmd.arg("--ro-bind").arg(&account).arg("/etc/passwd");
     cmd.args([
         "--proc",
         "/proc",
@@ -888,40 +934,292 @@ pub(crate) fn run_sandboxed(
     for (key, value) in env {
         cmd.arg("--setenv").arg(key).arg(value);
     }
-    cmd.arg("--chdir").arg(writable).arg("--").arg(program);
+    let launch = sandbox_process::prepare(&mut cmd)?;
+    cmd.arg("--chdir")
+        .arg(writable)
+        .args([
+            "--",
+            "/usr/bin/prlimit",
+            "--as=8589934592",
+            "--nofile=1024",
+            "--core=0",
+            "--",
+        ])
+        .arg(program);
     for arg in args {
         cmd.arg(arg);
     }
     cmd.env_clear()
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    let mut child = cmd
-        .spawn()
-        .map_err(|error| format!("mandatory bubblewrap isolation unavailable: {error}"))?;
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait().map_err(|error| error.to_string())? {
-            Some(status) => break status,
-            None if cancel.load(Ordering::Relaxed) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("cancelled".into());
-            }
-            None if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("Ghidra decompilation timed out inside the sandbox.".into());
-            }
-            None => std::thread::sleep(Duration::from_millis(50)),
+        .stdout(Stdio::from(OwnedFd::from(writer)))
+        .stderr(Stdio::from(OwnedFd::from(stderr)));
+    let spawned = cmd.spawn();
+    // Command owns its configured descriptors even after spawn; release them so
+    // EOF reflects only the sandbox and its descendants.
+    drop(cmd);
+    let mut child = match spawned {
+        Ok(child) => SandboxProcess::adopt(child, launch),
+        Err(error) => {
+            let reason = format!("mandatory bubblewrap isolation unavailable: {error}");
+            let reason = match log.finish() {
+                Ok(()) => reason,
+                Err(persist) => format!("{reason}; diagnostics persistence failed: {persist}"),
+            };
+            return Err(log.error(&reason));
         }
     };
-    if status.success() {
+    let deadline = Instant::now().checked_add(timeout);
+    let mut result = (|| {
+        let deadline = deadline.ok_or("sandbox deadline overflow")?;
+        loop {
+            log.drain(&mut reader)?;
+            if cancel.load(Ordering::Relaxed) {
+                return Err("cancelled".into());
+            }
+            if Instant::now() >= deadline {
+                return Err("Ghidra decompilation timed out inside the sandbox.".into());
+            }
+            match child
+                .poll_status()
+                .map_err(|e| format!("sandbox wait: {e}"))?
+            {
+                Some(status) if status.success() => return Ok(()),
+                Some(status) => {
+                    return Err(format!(
+                        "sandboxed Ghidra exited with {status}. sparse-plan.txt is not a load result."
+                    ));
+                }
+                None => std::thread::sleep(Duration::from_millis(20)),
+            }
+        }
+    })();
+    if result.is_err() {
+        // Retain both launcher and namespace ownership on this background
+        // caller until exact cleanup is confirmed, including early setup.
+        if let Err(error) = cleanup_sandbox(&mut child, &mut log) {
+            result = Err(format!("sandbox cleanup failed: {error}; {result:?}"));
+        }
+    }
+    let final_drain = log.drain_final(&mut reader);
+    let persistence = log.finish();
+    let diagnostics = match (final_drain, persistence) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(drain), Err(persist)) => Err(format!("{drain}; persistence failed: {persist}")),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+    };
+    if let Err(error) = diagnostics {
+        result = Err(format!(
+            "sandbox diagnostics persistence failed: {error}; {result:?}"
+        ));
+    }
+    result.map_err(|error| log.error(&error))
+}
+
+fn cleanup_sandbox(process: &mut SandboxProcess, log: &mut SandboxLog) -> Result<(), String> {
+    let started = Instant::now();
+    let mut failure = None;
+    let mut noted = false;
+    loop {
+        match process.cleanup_poll() {
+            Ok(true) => return failure.map_or(Ok(()), Err),
+            Ok(false) => {}
+            Err(error) => failure = Some(error),
+        }
+        if !noted && (failure.is_some() || started.elapsed() >= Duration::from_secs(1)) {
+            let detail = failure
+                .as_deref()
+                .unwrap_or("namespace termination and reap are pending");
+            let message =
+                format!("\n[sandbox cleanup pending: {detail}; owned process retained]\n");
+            if let Err(error) = log
+                .record(message.as_bytes())
+                .and_then(|()| log.file.flush().map_err(|e| e.to_string()))
+            {
+                failure = Some(format!("cleanup pending diagnostics: {error}; {detail}"));
+            }
+            noted = true;
+        }
+        std::thread::sleep(Duration::from_millis(if noted { 50 } else { 10 }));
+    }
+}
+
+/// Resolve only the actual host UID's local account, never an inherited USER.
+/// This bounded lookup is for background analysis/export work, not rendering.
+pub(crate) fn host_user_name() -> Result<String, String> {
+    const ACCOUNT_DATABASE_MAX_SIZE: u64 = 1024 * 1024;
+    let mut encoded = Vec::new();
+    File::open("/etc/passwd")
+        .and_then(|file| {
+            file.take(ACCOUNT_DATABASE_MAX_SIZE + 1)
+                .read_to_end(&mut encoded)
+        })
+        .map_err(|error| format!("analysis account lookup unavailable: {error}"))?;
+    if encoded.len() as u64 > ACCOUNT_DATABASE_MAX_SIZE {
+        return Err("analysis account lookup exceeded 1 MiB bound".into());
+    }
+    let uid = rustix::process::getuid().as_raw();
+    let mut matched = None;
+    for line in encoded.split(|byte| *byte == b'\n') {
+        let mut fields = line.split(|byte| *byte == b':');
+        let name = fields.next().unwrap_or_default();
+        let _password = fields.next();
+        let candidate = fields
+            .next()
+            .and_then(|value| std::str::from_utf8(value).ok())
+            .and_then(|value| value.parse::<u32>().ok());
+        if candidate != Some(uid) {
+            continue;
+        }
+        if matched.is_some() {
+            return Err("analysis account lookup is ambiguous for current UID".into());
+        }
+        if name.is_empty()
+            || name.len() > 64
+            || !name
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(byte))
+        {
+            return Err("analysis account has an unsupported user name; Ghidra ownership cannot be established".into());
+        }
+        matched = Some(String::from_utf8(name.to_vec()).map_err(|error| error.to_string())?);
+    }
+    matched.ok_or_else(|| {
+        "current UID has no local account; Ghidra ownership cannot be established".into()
+    })
+}
+
+fn sandbox_passwd(directory: &Path) -> Result<PathBuf, String> {
+    let name = host_user_name()?;
+    let uid = rustix::process::getuid().as_raw();
+    let gid = rustix::process::getgid().as_raw();
+    let path = directory.join(format!("sandbox-account-{}.passwd", storage::unique_id()));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .map_err(|error| format!("sandbox account mapping: {error}"))?;
+    // Only one name/UID/GID crosses the boundary. No host home, shell, password,
+    // GECOS, or other account is exposed. JVM settings stay in bounded tmpfs.
+    writeln!(file, "{name}:x:{uid}:{gid}::/tmp:/bin/false")
+        .and_then(|()| file.sync_all())
+        .map_err(|error| format!("sandbox account mapping: {error}"))?;
+    Ok(path)
+}
+
+const SANDBOX_LOG_MAX_SIZE: usize = 2 * 1024 * 1024;
+const SANDBOX_TAIL_MAX_SIZE: usize = 8192;
+const SANDBOX_LOG_HEAD_SIZE: usize = SANDBOX_LOG_MAX_SIZE - SANDBOX_TAIL_MAX_SIZE - 256;
+
+struct SandboxLog {
+    file: File,
+    path: PathBuf,
+    head_len: usize,
+    total_len: u64,
+    tail: VecDeque<u8>,
+}
+impl SandboxLog {
+    fn new(directory: &Path) -> Result<Self, String> {
+        let path = directory.join(format!("ghidra-{}.log", storage::unique_id()));
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|e| format!("sandbox diagnostics {}: {e}", path.display()))?;
+        Ok(Self {
+            file,
+            path,
+            head_len: 0,
+            total_len: 0,
+            tail: VecDeque::with_capacity(SANDBOX_TAIL_MAX_SIZE),
+        })
+    }
+    /// True means the stream reached EOF or has no queued output at this instant.
+    fn drain(&mut self, reader: &mut UnixStream) -> Result<bool, String> {
+        let mut chunk = [0u8; 8192];
+        // Finite drain work keeps cancellation/deadline polling responsive even
+        // when a malfunctioning tool produces output continuously.
+        for _ in 0..32 {
+            let len = match reader.read(&mut chunk) {
+                Ok(0) => return Ok(true),
+                Ok(len) => len,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(true),
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(format!("sandbox output: {e}")),
+            };
+            self.record(&chunk[..len])?;
+        }
+        Ok(false)
+    }
+    fn record(&mut self, chunk: &[u8]) -> Result<(), String> {
+        self.total_len = self.total_len.saturating_add(chunk.len() as u64);
+        let keep = chunk.len().min(SANDBOX_LOG_HEAD_SIZE - self.head_len);
+        self.file
+            .write_all(&chunk[..keep])
+            .map_err(|e| e.to_string())?;
+        self.head_len += keep;
+        let discard = self
+            .tail
+            .len()
+            .saturating_add(chunk.len())
+            .saturating_sub(SANDBOX_TAIL_MAX_SIZE);
+        self.tail.drain(..discard);
+        self.tail.extend(chunk);
         Ok(())
-    } else {
-        Err(format!(
-            "sandboxed Ghidra exited with {status}. sparse-plan.txt is not a load result."
-        ))
+    }
+    fn drain_final(&mut self, reader: &mut UnixStream) -> Result<(), String> {
+        // Socket send buffers can exceed the ordinary per-poll drain budget.
+        // Once the sandbox has exited/been reaped, consume queued data until
+        // idle, while bounding work even if a hidden writer retained a handle.
+        let deadline = Instant::now() + Duration::from_secs(1);
+        for _ in 0..256 {
+            if Instant::now() >= deadline {
+                return Err(
+                    "incomplete sandbox diagnostics: final drain exceeded one second".into(),
+                );
+            }
+            if self.drain(reader)? {
+                return Ok(());
+            }
+        }
+        Err("incomplete sandbox diagnostics: final drain exceeded 64 MiB work bound".into())
+    }
+    fn finish(&mut self) -> Result<(), String> {
+        if self.total_len > self.head_len as u64 {
+            writeln!(
+                self.file,
+                "\n[output truncated; {} octets observed; final observed output tail follows]",
+                self.total_len
+            )
+            .map_err(|e| e.to_string())?;
+            let (a, b) = self.tail.as_slices();
+            self.file
+                .write_all(a)
+                .and_then(|()| self.file.write_all(b))
+                .map_err(|e| e.to_string())?;
+        }
+        self.file.sync_all().map_err(|e| e.to_string())
+    }
+    fn error(&self, reason: &str) -> String {
+        let tail: Vec<u8> = self
+            .tail
+            .iter()
+            .skip(self.tail.len().saturating_sub(2048))
+            .copied()
+            .collect();
+        let mut text = format!(
+            "{reason}\nDiagnostics: {}\n{}",
+            self.path.display(),
+            String::from_utf8_lossy(&tail)
+        );
+        if text.len() > 4096 {
+            let mut end = 4096;
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            text.truncate(end);
+        }
+        text
     }
 }
 
@@ -1245,6 +1543,335 @@ pub(super) fn validate_record(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn sandbox_test_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ant-sandbox-{}", storage::unique_id()));
+        storage::private_dir(&dir).unwrap();
+        dir
+    }
+    fn sandbox_test_log(dir: &Path) -> (PathBuf, Vec<u8>) {
+        let paths: Vec<_> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|s| s == "log"))
+            .collect();
+        assert_eq!(paths.len(), 1);
+        let path = paths[0].clone();
+        let bytes = fs::read(&path).unwrap();
+        assert!(bytes.len() <= SANDBOX_LOG_MAX_SIZE);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        (path, bytes)
+    }
+
+    #[test]
+    fn sandbox_job_cleanup_keeps_preexec_owner_and_original_failure() {
+        for cancel in [true, false] {
+            let directory = sandbox_test_dir();
+            let (_errors, writer) = UnixStream::pair().unwrap();
+            let mut command = Command::new("/usr/bin/bwrap");
+            command.args([
+                "--unshare-pid",
+                "--unshare-user",
+                "--die-with-parent",
+                "--new-session",
+                "--block-fd",
+                "2",
+                "--ro-bind",
+                "/",
+                "/",
+                "--proc",
+                "/proc",
+            ]);
+            let launch = sandbox_process::prepare(&mut command).unwrap();
+            command
+                .args(["--", "/bin/sleep", "30"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::from(OwnedFd::from(writer)));
+            let child = command.spawn().unwrap();
+            drop(command);
+            let mut report = new_report("/bin/sleep", &AnalysisSelection::default());
+            report.state = AnalysisState::Queued;
+            let id = report.id.clone();
+            let mut jobs = Jobs {
+                active: Some(Job {
+                    run_id: None,
+                    report,
+                    directory: directory.clone(),
+                    handle: None,
+                    total_len: 0,
+                    received_len: 0,
+                    file: None,
+                    deadline: Instant::now() + Duration::from_secs(30),
+                    child: Some(SandboxProcess::adopt(child, launch)),
+                    cleanup_reason: None,
+                    reserved_len: 0,
+                    digest: Sha256::new(),
+                    disk_len: 0,
+                    worker_len: 0,
+                    report_len: 0,
+                }),
+                queue: VecDeque::new(),
+                release: VecDeque::new(),
+                retained_len: 0,
+                updates: Vec::new(),
+                tools_dir: None,
+            };
+            let launcher = jobs.active.as_ref().unwrap().child.as_ref().unwrap().id();
+            let children = PathBuf::from(format!("/proc/{launcher}/task/{launcher}/children"));
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let pid = loop {
+                if let Some(pid) = fs::read_to_string(&children)
+                    .unwrap()
+                    .split_whitespace()
+                    .next()
+                    .and_then(|pid| pid.parse::<i32>().ok())
+                {
+                    break rustix::process::Pid::from_raw(pid).unwrap();
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "real sandbox init was not created"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            };
+            let witness =
+                rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()).unwrap();
+            let started = Instant::now();
+            if cancel {
+                jobs.cancel(&id).unwrap();
+            } else {
+                let mut job = jobs.active.take().unwrap();
+                fail(
+                    &mut job.report,
+                    AnalysisState::Partial,
+                    "analysis deadline exceeded",
+                );
+                jobs.finish(job);
+            }
+            assert!(
+                started.elapsed() < Duration::from_millis(250),
+                "cleanup tick blocked"
+            );
+            assert!(
+                jobs.active.is_some(),
+                "one STOP request is not cleanup completion"
+            );
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while jobs.active.is_some() && Instant::now() < deadline {
+                jobs.next();
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(jobs.active.is_none(), "namespace cleanup did not finish");
+            let mut polls = [rustix::event::PollFd::new(
+                &witness,
+                rustix::event::PollFlags::IN,
+            )];
+            rustix::event::poll(
+                &mut polls,
+                Some(&rustix::event::Timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                }),
+            )
+            .unwrap();
+            assert!(
+                polls[0].revents().contains(rustix::event::PollFlags::IN),
+                "owned init survived completion"
+            );
+            let report = jobs.updates().pop().unwrap().1;
+            let reason = report.reason.unwrap();
+            assert!(
+                reason.starts_with(if cancel {
+                    "analysis cancelled"
+                } else {
+                    "analysis deadline exceeded"
+                }),
+                "original failure lost: {reason}"
+            );
+            assert!(reason.contains("worker cleanup completed"));
+            assert!(!reason.contains("cleanup pending"));
+            fs::remove_dir_all(directory).unwrap();
+        }
+    }
+    #[test]
+    #[ignore = "requires installed bubblewrap/prlimit/python3 and usable user namespaces"]
+    fn sandbox_failure_retains_diagnostics_and_enforces_process_limits() {
+        let dir = sandbox_test_dir();
+        let script = r#"import errno, mmap, os, resource, sys
+assert resource.getrlimit(resource.RLIMIT_AS) == (8589934592,8589934592)
+assert resource.getrlimit(resource.RLIMIT_NOFILE) == (1024,1024)
+assert resource.getrlimit(resource.RLIMIT_CORE) == (0,0)
+fds=[]
+try:
+    for i in range(1030): fds.append(os.open('/dev/null',os.O_RDONLY))
+    raise AssertionError('FD limit did not reject opens')
+except OSError as e:
+    assert e.errno == errno.EMFILE
+finally:
+    for fd in fds: os.close(fd)
+try:
+    mmap.mmap(-1,9*1024*1024*1024)
+    raise AssertionError('AS limit did not reject mapping')
+except OSError as e:
+    assert e.errno == errno.ENOMEM
+print('stdout diagnostic: limits enforced',flush=True)
+print('stderr diagnostic: deliberate failure',file=sys.stderr,flush=True)
+sys.exit(23)
+"#;
+        let error = run_sandboxed(
+            Path::new("/usr/bin/python3"),
+            &["-c".into(), script.into()],
+            &dir,
+            &[],
+            &[],
+            Duration::from_secs(10),
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+        let (path, bytes) = sandbox_test_log(&dir);
+        let log = String::from_utf8(bytes).unwrap();
+        assert!(log.contains("stdout diagnostic: limits enforced"), "{log}");
+        assert!(
+            log.contains("stderr diagnostic: deliberate failure"),
+            "{log}"
+        );
+        assert!(
+            error.contains("23")
+                && error.contains("deliberate failure")
+                && error.contains(&path.display().to_string()),
+            "{error}"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    #[ignore = "requires installed bubblewrap/prlimit/python3 and usable user namespaces"]
+    fn sandbox_large_output_cancel_reaps_descendants_and_caps_log() {
+        let dir = sandbox_test_dir();
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let trigger = std::sync::Arc::clone(&cancel);
+        let ready = dir.join("ready");
+        let cancellation = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !ready.is_file() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            trigger.store(true, Ordering::Relaxed);
+        });
+        let script = r#"import os, sys, time
+if os.fork()==0:
+    time.sleep(2)
+    open('descendant-survived','w').write('unexpected survivor')
+    os._exit(0)
+for i in range(384): os.write(1,b'x'*8192)
+print('\nSPAM-FINAL-DIAGNOSTIC',file=sys.stderr,flush=True)
+open('ready','w').write('ready')
+time.sleep(30)
+"#;
+        let started = Instant::now();
+        let error = run_sandboxed(
+            Path::new("/usr/bin/python3"),
+            &["-c".into(), script.into()],
+            &dir,
+            &[],
+            &[],
+            Duration::from_secs(10),
+            &cancel,
+        )
+        .unwrap_err();
+        cancellation.join().unwrap();
+        assert!(started.elapsed() < Duration::from_secs(6), "{error}");
+        let (path, bytes) = sandbox_test_log(&dir);
+        let log = String::from_utf8(bytes).unwrap();
+        assert!(
+            log.contains("output truncated") && log.contains("SPAM-FINAL-DIAGNOSTIC"),
+            "{}",
+            log.chars().rev().take(500).collect::<String>()
+        );
+        assert!(
+            error.contains("cancelled")
+                && error.contains("SPAM-FINAL-DIAGNOSTIC")
+                && error.contains(&path.display().to_string()),
+            "{error}"
+        );
+        std::thread::sleep(Duration::from_millis(2200));
+        assert!(
+            !dir.join("descendant-survived").exists(),
+            "sandbox descendant survived cancellation"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    #[ignore = "requires installed bubblewrap/prlimit/python3 and usable user namespaces"]
+    fn sandbox_terminal_burst_retains_final_diagnostic_beyond_one_drain() {
+        let dir = sandbox_test_dir();
+        let script = r#"import os, socket, sys
+stream=socket.socket(fileno=1)
+stream.setsockopt(socket.SOL_SOCKET,socket.SO_SNDBUF,16*1024*1024)
+print('TERMINAL-SOCKET-BUFFER='+str(stream.getsockopt(socket.SOL_SOCKET,socket.SO_SNDBUF)),file=sys.stderr,flush=True)
+os.write(1,b'x'*(2*1024*1024))
+os.write(2,b'\nFINAL-TERMINAL-DIAGNOSTIC\n')
+os._exit(31)
+"#;
+        let error = run_sandboxed(
+            Path::new("/usr/bin/python3"),
+            &["-c".into(), script.into()],
+            &dir,
+            &[],
+            &[],
+            Duration::from_secs(10),
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+        let (path, bytes) = sandbox_test_log(&dir);
+        let log = String::from_utf8(bytes).unwrap();
+        assert!(log.contains("TERMINAL-SOCKET-BUFFER="));
+        assert!(log.contains("output truncated") && log.contains("FINAL-TERMINAL-DIAGNOSTIC"));
+        assert!(
+            error.contains("31")
+                && error.contains("FINAL-TERMINAL-DIAGNOSTIC")
+                && error.contains(&path.display().to_string()),
+            "{error}"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    #[ignore = "requires installed bubblewrap/prlimit/python3 and usable user namespaces"]
+    fn sandbox_timeout_reaps_descendants_and_retains_diagnostics() {
+        let dir = sandbox_test_dir();
+        let script = r#"import os, sys, time
+if os.fork()==0:
+    time.sleep(1)
+    open('descendant-survived','w').write('unexpected survivor')
+    os._exit(0)
+print('timeout diagnostic',file=sys.stderr,flush=True)
+time.sleep(30)
+"#;
+        let error = run_sandboxed(
+            Path::new("/usr/bin/python3"),
+            &["-c".into(), script.into()],
+            &dir,
+            &[],
+            &[],
+            Duration::from_millis(250),
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+        let (_, bytes) = sandbox_test_log(&dir);
+        assert!(
+            String::from_utf8(bytes)
+                .unwrap()
+                .contains("timeout diagnostic")
+        );
+        assert!(
+            error.contains("timed out") && error.contains("timeout diagnostic"),
+            "{error}"
+        );
+        std::thread::sleep(Duration::from_millis(1200));
+        assert!(!dir.join("descendant-survived").exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
     /// Every category in the real sandbox, listings adopted and paged.
     /// ANTINOMIE_TEST_SPECIMEN picks the program (default /usr/bin/true).
     #[test]
@@ -1283,6 +1910,7 @@ mod tests {
             file: None,
             deadline,
             child: None,
+            cleanup_reason: None,
             reserved_len: 0,
             digest: Sha256::new(),
             disk_len: 0,
@@ -1299,12 +1927,12 @@ mod tests {
         )
         .unwrap();
         let status = loop {
-            if let Some(status) = child.try_wait().unwrap() {
+            if let Some(status) = child.poll_status().unwrap() {
                 break status;
             }
             if Instant::now() >= job.deadline {
-                let _ = child.kill();
-                let _ = child.wait();
+                let mut log = SandboxLog::new(&directory).unwrap();
+                cleanup_sandbox(&mut child, &mut log).unwrap();
                 panic!("worker exceeded its deadline; see {}", directory.display());
             }
             std::thread::sleep(Duration::from_millis(50));
@@ -1419,6 +2047,7 @@ mod tests {
             file: None,
             deadline: Instant::now() + Duration::from_secs(15),
             child: None,
+            cleanup_reason: None,
             reserved_len: 0,
             digest: Sha256::new(),
             disk_len: 0,
@@ -1434,13 +2063,13 @@ mod tests {
         )
         .unwrap();
         let status = loop {
-            if let Some(status) = child.try_wait().unwrap() {
+            if let Some(status) = child.poll_status().unwrap() {
                 break status;
             }
             if Instant::now() >= job.deadline {
-                let kill = child.kill();
-                let reap = child.wait();
-                panic!("worker smoke exceeded 15 seconds: kill {kill:?}; reap {reap:?}");
+                let mut log = SandboxLog::new(&directory).unwrap();
+                let cleanup = cleanup_sandbox(&mut child, &mut log);
+                panic!("worker smoke exceeded 15 seconds: cleanup {cleanup:?}");
             }
             std::thread::sleep(Duration::from_millis(10));
         };

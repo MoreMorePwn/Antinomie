@@ -3,7 +3,7 @@
 use super::{AnalysisData, AnalysisEntry, AnalysisKind, AnalysisReport, AnalysisSection};
 use std::{
     fs::{self, OpenOptions},
-    io::{BufRead, BufReader, BufWriter, Write},
+    io::{BufRead, BufReader, BufWriter, Read, Write},
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     process::Command,
@@ -318,7 +318,17 @@ fn project_inventory(source: &Path) -> Result<Vec<(PathBuf, Option<u64>)>, Strin
 
 /// Copy only a bounded complete native project, preserving empty directories.
 /// Destination must be new; cleanup on failure never touches existing data.
-pub(crate) fn copy_project(source: &Path, destination: &Path) -> Result<(), String> {
+/// Export a validated native Ghidra project without changing its retained source.
+///
+/// | Item | Purpose |
+/// |---|---|
+/// | `source` | Directory containing `antinomie.gpr` and its `.rep` database. |
+/// | `destination` | New destination directory; existing paths are rejected. |
+/// | Return | Success after a bounded copy, or a validation/copy/cleanup error. |
+///
+/// The copied project's owner is set to this host account so Ghidra can open
+/// it, including older projects produced without a sandbox account mapping.
+pub fn copy_project(source: &Path, destination: &Path) -> Result<(), String> {
     let files = project_inventory(source)?;
     let source_root = fs::canonicalize(source).map_err(|e| e.to_string())?;
     let destination_parent = fs::canonicalize(
@@ -366,6 +376,8 @@ pub(crate) fn copy_project(source: &Path, destination: &Path) -> Result<(), Stri
             }
             output.sync_all().map_err(|e| e.to_string())?;
         }
+        normalize_copied_project_owner(destination)?;
+        project_inventory(destination)?;
         Ok(())
     })();
     if let Err(error) = result {
@@ -379,10 +391,96 @@ pub(crate) fn copy_project(source: &Path, destination: &Path) -> Result<(), Stri
     Ok(())
 }
 
+fn normalize_copied_project_owner(destination: &Path) -> Result<(), String> {
+    let property = Path::new("antinomie.rep/project.prp");
+    let path = destination.join(property);
+    if !path.try_exists().map_err(|e| e.to_string())? {
+        return Ok(());
+    }
+    let mut bytes = Vec::new();
+    crate::archive_io::open_regular(destination, property)
+        .and_then(|file| file.take(65537).read_to_end(&mut bytes))
+        .map_err(|e| format!("Ghidra project ownership: {e}"))?;
+    if bytes.len() > 65536 {
+        return Err("Ghidra project ownership metadata exceeds its bound".into());
+    }
+    let text = String::from_utf8(bytes)
+        .map_err(|_| "Ghidra project ownership metadata is not UTF-8".to_string())?;
+    // Ghidra's FILE_INFO properties serialize OWNER with this fixed STATE
+    // shape. Change only its value in the newly owned copy; preserve the
+    // retained source and all other project properties/database contents.
+    let prefix = "<STATE NAME=\"OWNER\" TYPE=\"string\" VALUE=\"";
+    let Some(start) = text.find(prefix).map(|at| at + prefix.len()) else {
+        return Err("Ghidra project ownership metadata has an unsupported format".into());
+    };
+    if text[start..].contains(prefix) {
+        return Err("Ghidra project ownership metadata has duplicate owners".into());
+    }
+    let Some(end) = text[start..].find("\" />").map(|at| start + at) else {
+        return Err("Ghidra project ownership metadata is incomplete".into());
+    };
+    let owner = super::jobs::host_user_name()?;
+    let mut updated = text;
+    updated.replace_range(start..end, &owner);
+    let mut output = OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    output
+        .write_all(updated.as_bytes())
+        .and_then(|()| output.sync_all())
+        .map_err(|e| format!("Ghidra project ownership: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::analysis::{AnalysisSectionState, AnalysisState, listing::ListingWriter};
+
+    #[test]
+    fn project_export_repairs_copy_owner_and_preserves_source_and_other_properties() {
+        let root = std::env::temp_dir().join(format!("ant-owner-{}", crate::storage::unique_id()));
+        let source = root.join("source");
+        fs::create_dir_all(source.join("antinomie.rep")).unwrap();
+        fs::write(source.join("antinomie.gpr"), b"project").unwrap();
+        fs::write(source.join("antinomie.rep/database"), b"retained database").unwrap();
+        let original = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<FILE_INFO><BASIC_INFO>\n<STATE NAME=\"OWNER\" TYPE=\"string\" VALUE=\"?\" />\n<STATE NAME=\"OTHER\" TYPE=\"string\" VALUE=\"keep\" />\n</BASIC_INFO></FILE_INFO>\n";
+        fs::write(source.join("antinomie.rep/project.prp"), original).unwrap();
+        let output = root.join("output");
+        copy_project(&source, &output).unwrap();
+        assert_eq!(
+            fs::read_to_string(source.join("antinomie.rep/project.prp")).unwrap(),
+            original
+        );
+        let expected = original.replace(
+            "VALUE=\"?\"",
+            &format!(
+                "VALUE=\"{}\"",
+                super::super::jobs::host_user_name().unwrap()
+            ),
+        );
+        assert_eq!(
+            fs::read_to_string(output.join("antinomie.rep/project.prp")).unwrap(),
+            expected
+        );
+        assert_eq!(
+            fs::read(output.join("antinomie.rep/database")).unwrap(),
+            b"retained database"
+        );
+        assert!(copy_project(&source, &output).is_err());
+        fs::write(
+            source.join("antinomie.rep/project.prp"),
+            original.replace(
+                "VALUE=\"?\" />",
+                "VALUE=\"?\" />\n<STATE NAME=\"OWNER\" TYPE=\"string\" VALUE=\"duplicate\" />",
+            ),
+        )
+        .unwrap();
+        assert!(copy_project(&source, &root.join("invalid")).is_err());
+        assert!(!root.join("invalid").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     fn fixture() -> PathBuf {
         let root = std::env::temp_dir().join(format!("ant-export-{}", crate::storage::unique_id()));
