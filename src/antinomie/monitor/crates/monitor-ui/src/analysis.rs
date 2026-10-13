@@ -9,6 +9,7 @@ mod listing_view;
 mod records;
 mod workspace;
 pub(crate) use listing_view::{export_ghidra_text, index_ghidra_markers};
+pub(crate) use listing_view::{listing_fields, listing_row_with};
 pub(crate) use workspace::{workspace, workspace_section, WorkspaceState};
 
 #[derive(Clone, Copy)]

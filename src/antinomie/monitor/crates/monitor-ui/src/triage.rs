@@ -7,7 +7,11 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::{bpf, theme, trace};
+use crate::{
+    bpf,
+    query::{self, FieldSpec, RowValue},
+    theme, trace,
+};
 use antinomie_monitor_core::{network::NetworkPacket, EventSummary, InvocationSummary};
 use eframe::egui::{self, RichText};
 
@@ -43,7 +47,6 @@ pub(crate) struct TriageView {
     files: FileTab,
     network: NetTab,
     /// Case-insensitive substring for rule, process, summary, or evidence.
-    suspicious_filter: String,
     /// Invocation chosen from a Suspicious activity row.
     selected_call_id: Option<u64>,
     /// Archive directory and owned pcap, so a different capture starts a new index.
@@ -60,7 +63,12 @@ pub(crate) struct TriageView {
     refresh_requested: bool,
     /// A refresh arrived while an index was already running.
     refresh_queued: bool,
+    refresh_seconds: u64,
     bpf_export_status: String,
+    scan_request: ScanRequest,
+    filter_drafts: [String; 5],
+    packet_jump: Option<u64>,
+    context_key: Option<String>,
 }
 
 impl Default for TriageView {
@@ -70,7 +78,6 @@ impl Default for TriageView {
             process: ProcessTab::Tree,
             files: FileTab::Opened,
             network: NetTab::Http,
-            suspicious_filter: String::new(),
             selected_call_id: None,
             scan_key: None,
             scan_cancel: None,
@@ -83,11 +90,17 @@ impl Default for TriageView {
             next_refresh: None,
             refresh_requested: false,
             refresh_queued: false,
+            refresh_seconds: 5,
             bpf_export_status: String::new(),
+            scan_request: ScanRequest::default(),
+            filter_drafts: Default::default(),
+            packet_jump: None,
+            context_key: None,
         }
     }
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct TriageInput<'a> {
     pub invocations: &'a [InvocationSummary],
     pub packets: &'a [NetworkPacket],
@@ -125,6 +138,51 @@ impl<'a> TriageInput<'a> {
 }
 
 impl TriageView {
+    /// Maintain the selected run's index even when the Triage pane is hidden.
+    /// Identity changes cancel old jobs; refreshes coalesce into one next scan.
+    pub(crate) fn tick(&mut self, ctx: &egui::Context, input: TriageInput<'_>) {
+        let key = format!(
+            "{}\n{}\n{}\n{}",
+            input.vm_id.unwrap_or(""),
+            input.boot_id.unwrap_or(""),
+            input.run_id.unwrap_or(""),
+            input
+                .archive
+                .map(|path| path.display().to_string())
+                .unwrap_or_default()
+        );
+        if self.context_key.as_deref() != Some(&key) {
+            self.stop_scan();
+            self.context_key = Some(key);
+        }
+        if input.archive.is_some() {
+            if self.next_refresh.is_some_and(|due| Instant::now() >= due) {
+                self.refresh_requested = true;
+                self.next_refresh = None;
+            }
+            ctx.request_repaint_after(Duration::from_secs(self.refresh_seconds));
+        }
+        self.ensure_scan(
+            input.archive,
+            input.pcap,
+            input.pcap_open,
+            input.vm_id,
+            input.boot_id,
+            input.run_id,
+        );
+        self.poll_scan(ctx);
+        // A coalesced refresh starts in the same frame the previous scan ends.
+        if self.refresh_requested {
+            self.ensure_scan(
+                input.archive,
+                input.pcap,
+                input.pcap_open,
+                input.vm_id,
+                input.boot_id,
+                input.run_id,
+            );
+        }
+    }
     /// `Some(call_id)` on the frame a Suspicious activity row is clicked.
     pub(crate) fn show(&mut self, ui: &mut egui::Ui, input: TriageInput<'_>) -> Option<u64> {
         ui.horizontal_wrapped(|ui| {
@@ -138,25 +196,8 @@ impl TriageView {
             }
         });
         ui.separator();
-        if input.archive.is_some() {
-            ui.ctx().request_repaint_after(Duration::from_secs(5));
-            if self
-                .next_refresh
-                .is_some_and(|due| Instant::now() >= due)
-            {
-                self.refresh_requested = true;
-            }
-        }
-        self.ensure_scan(
-            input.archive,
-            input.pcap,
-            input.pcap_open,
-            input.vm_id,
-            input.boot_id,
-            input.run_id,
-        );
-        self.poll_scan(ui);
-        ui.horizontal(|ui| {
+        self.tick(ui.ctx(), input);
+        ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(input.archive.is_some(), egui::Button::new("Refresh"))
                 .on_disabled_hover_text("A whole-run index starts after the recording is saved")
@@ -172,6 +213,19 @@ impl TriageView {
                     input.run_id,
                 );
             }
+            ui.label("Every");
+            if ui
+                .add(
+                    egui::DragValue::new(&mut self.refresh_seconds)
+                        .range(1..=300)
+                        .suffix(" s"),
+                )
+                .changed()
+            {
+                self.refresh_seconds = self.refresh_seconds.clamp(1, 300);
+                self.next_refresh =
+                    Some(Instant::now() + Duration::from_secs(self.refresh_seconds));
+            }
             ui.colored_label(theme::muted(), self.refresh_status(&input));
         });
         let coverage = self.coverage_text(&input);
@@ -183,7 +237,7 @@ impl TriageView {
                     "HTTP/1 and DNS over UDP or TCP can be indexed. HTTPS, HTTP/2, HTTP/3, and encrypted DNS are not.",
                 );
             });
-        match self.section {
+        let jump = match self.section {
             Section::Process => self.process(ui, &input),
             Section::Files => {
                 self.files(ui, input.invocations);
@@ -197,7 +251,19 @@ impl TriageView {
                 bpf_view(ui, &input, &mut self.bpf_export_status);
                 None
             }
-        }
+        };
+        self.packet_jump = ui
+            .ctx()
+            .data_mut(|data| data.remove_temp::<u64>(egui::Id::new("triage-packet-jump")));
+        jump.or_else(|| {
+            ui.ctx()
+                .data_mut(|data| data.remove_temp::<u64>(egui::Id::new("triage-call-jump")))
+        })
+    }
+
+    /// Original PCAP frame requested from a selected HTTP/DNS evidence row.
+    pub(crate) fn take_packet_jump(&mut self) -> Option<u64> {
+        self.packet_jump.take()
     }
 
     fn process(&mut self, ui: &mut egui::Ui, input: &TriageInput<'_>) -> Option<u64> {
@@ -233,32 +299,23 @@ impl TriageView {
             ui.selectable_value(&mut self.files, FileTab::Opened, "Opened files");
             ui.selectable_value(&mut self.files, FileTab::Changed, "Changed files");
         });
-        let wanted: &[&str] = match self.files {
-            FileTab::Opened => &["open", "openat", "openat2"],
-            FileTab::Changed => &[
-                "write",
-                "writev",
-                "pwrite64",
-                "mmap",
-                "mmap2",
-                "unlink",
-                "unlinkat",
-                "rename",
-                "renameat",
-                "renameat2",
-                "truncate",
-                "ftruncate",
-                "mkdir",
-                "mkdirat",
-                "rmdir",
-                "chmod",
-                "fchmod",
-                "fchmodat",
-                "chown",
-                "fchown",
-                "lchown",
-                "fchownat",
-            ],
+        let index = if self.files == FileTab::Opened { 1 } else { 2 };
+        let (retained, total) = self.scan.as_ref().map_or((0, 0), |scan| {
+            let (rows, omitted) = if index == 1 {
+                (&scan.opened, scan.opened_omitted)
+            } else {
+                (&scan.changed, scan.changed_omitted)
+            };
+            (rows.len(), rows.len() as u64 + omitted)
+        });
+        self.query_controls(ui, index, FILE_FIELDS, retained, total);
+        ui.colored_label(
+            theme::muted(),
+            "Each row is one observed operation; repeated paths retain separate evidence.",
+        );
+        let wanted = match self.files {
+            FileTab::Opened => OPEN_NAMES,
+            FileTab::Changed => CHANGE_NAMES,
         };
         if let Some(scan) = &self.scan {
             let (rows, omitted) = match self.files {
@@ -268,22 +325,55 @@ impl TriageView {
             ui.colored_label(
                 theme::muted(),
                 format!(
-                    "{} rows from the saved-recording index; {omitted} additional matches were not stored in this table.",
+                    "{} rows on this saved-recording query page; {omitted} matches on other pages.",
                     rows.len()
                 ),
             );
             table(
                 ui,
                 "triage-files",
-                &["Path", "Process", "FD", "Operation", "Result", "Outcome"],
+                &[
+                    "Path / provenance",
+                    "Process",
+                    "FD",
+                    "Operation",
+                    "Result",
+                    "Outcome",
+                    "Access",
+                    "First (ns)",
+                    "Written",
+                    "Requested",
+                    "Observed old → new",
+                    "Evidence",
+                    "Last (ns)",
+                    "Count",
+                ],
                 rows,
             );
         } else {
+            let mut rows = file_rows(invocations, wanted);
+            let compiled = query::compile_table(&self.scan_request.filters[index], FILE_FIELDS);
+            rows.rows.retain(|row| compiled.keep_table(&row[0].values));
             limited_table(
                 ui,
                 "triage-files",
-                &["Path", "Process", "FD", "Operation", "Result", "Outcome"],
-                &file_rows(invocations, wanted),
+                &[
+                    "Path / provenance",
+                    "Process",
+                    "FD",
+                    "Operation",
+                    "Result",
+                    "Outcome",
+                    "Access",
+                    "First (ns)",
+                    "Written",
+                    "Requested",
+                    "Observed old → new",
+                    "Evidence",
+                    "Last (ns)",
+                    "Count",
+                ],
+                &rows,
             );
         }
     }
@@ -293,6 +383,22 @@ impl TriageView {
             ui.selectable_value(&mut self.network, NetTab::Http, "All HTTP requests");
             ui.selectable_value(&mut self.network, NetTab::Dns, "All DNS requests");
         });
+        let index = if self.network == NetTab::Http { 3 } else { 4 };
+        let (retained, total) = self.scan.as_ref().map_or((0, 0), |scan| {
+            let (rows, omitted) = if index == 3 {
+                (&scan.http, scan.http_omitted)
+            } else {
+                (&scan.dns, scan.dns_omitted)
+            };
+            (rows.len(), rows.len() as u64 + omitted)
+        });
+        self.query_controls(
+            ui,
+            index,
+            if index == 3 { HTTP_FIELDS } else { DNS_FIELDS },
+            retained,
+            total,
+        );
         if input.archive.is_some() {
             let Some(scan) = &self.scan else {
                 ui.colored_label(
@@ -305,17 +411,13 @@ impl TriageView {
                 NetTab::Http => indexed_packet_table(
                     ui,
                     "triage-http",
-                    &["Frame", "Endpoints", "Request", "Response", "Process"],
+                    HTTP_HEADERS,
                     &scan.http,
                     scan.http_omitted,
                 ),
-                NetTab::Dns => indexed_packet_table(
-                    ui,
-                    "triage-dns",
-                    &["Frame", "Endpoints", "Query", "Kind"],
-                    &scan.dns,
-                    scan.dns_omitted,
-                ),
+                NetTab::Dns => {
+                    indexed_packet_table(ui, "triage-dns", DNS_HEADERS, &scan.dns, scan.dns_omitted)
+                }
             }
             return;
         }
@@ -356,17 +458,21 @@ impl TriageView {
         if omitted > 0 {
             ui.colored_label(
                 theme::warn(),
-                format!("{omitted} additional rule matches were not stored in this table."),
+                format!("{omitted} rule matches are available on other query pages."),
             );
         }
-        crate::query::filter_edit(
+        self.query_controls(
             ui,
-            &mut self.suspicious_filter,
-            "Filter rule, process, summary, or evidence",
-            ui.available_width(),
-            crate::query::FilterScope::Record,
+            0,
+            FINDING_FIELDS,
+            findings.len(),
+            findings.len() as u64 + omitted,
         );
-        let rows = filter_findings(findings, &self.suspicious_filter);
+        let rows = if self.scan.is_some() {
+            findings
+        } else {
+            filter_findings(findings, &self.scan_request.filters[0])
+        };
         let clicked = finding_table(
             ui,
             "triage-findings",
@@ -380,6 +486,7 @@ impl TriageView {
                 "Confidence",
                 "Evidence",
                 "Version",
+                "Outcome",
             ],
             &rows,
             self.selected_call_id,
@@ -387,18 +494,140 @@ impl TriageView {
         if let Some(call_id) = clicked {
             self.selected_call_id = Some(call_id);
         }
-        clicked
+        if let Some(selected) = rows
+            .iter()
+            .find(|row| Some(row.call_id) == self.selected_call_id)
+        {
+            ui.separator();
+            for (name, value) in &selected.values {
+                ui.label(format!("{name}: {value:?}"));
+            }
+            if ui
+                .button(format!("Open original syscall {}", selected.call_id))
+                .clicked()
+            {
+                return Some(selected.call_id);
+            }
+        }
+        None
+    }
+
+    fn query_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        index: usize,
+        fields: &[FieldSpec<'_>],
+        retained: usize,
+        total: u64,
+    ) {
+        let draft_id = egui::Id::new(("triage-filter-draft", index));
+        if let Some(draft) = ui
+            .ctx()
+            .data_mut(|data| data.remove_temp::<String>(draft_id))
+        {
+            self.filter_drafts[index] = draft;
+        }
+        let table_id = [
+            "triage-findings",
+            "triage-files",
+            "triage-files",
+            "triage-http",
+            "triage-dns",
+        ][index];
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(egui::Id::new(("triage-filter-target", table_id)), draft_id);
+        });
+        ui.push_id(("triage-filter", index), |ui| {
+            query::filter_edit_fields(
+                ui,
+                &mut self.filter_drafts[index],
+                "Filter observed fields",
+                ui.available_width(),
+                fields,
+                &[],
+            )
+        });
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(draft_id, self.filter_drafts[index].clone()));
+        let compiled = query::compile_table(&self.filter_drafts[index], fields);
+        if let Some(error) = compiled.error {
+            ui.colored_label(
+                theme::warn(),
+                format!("{error}; showing the last valid filter"),
+            );
+        } else if self.scan_request.filters[index] != self.filter_drafts[index] {
+            self.scan_request.filters[index] = self.filter_drafts[index].clone();
+            self.scan_request.offsets[index] = 0;
+            self.request_query_refresh();
+        }
+        if self.scan_key.is_some() {
+            let offset = self.scan_request.offsets[index];
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(
+                    theme::muted(),
+                    format!(
+                        "{}–{} of {total} matched; page size {STORED_ROWS}",
+                        if retained == 0 { 0 } else { offset + 1 },
+                        offset + retained
+                    ),
+                );
+                if ui
+                    .add_enabled(
+                        offset > 0 && self.scan_rx.is_none(),
+                        egui::Button::new("Previous"),
+                    )
+                    .clicked()
+                {
+                    self.scan_request.offsets[index] = offset.saturating_sub(STORED_ROWS);
+                    self.request_query_refresh();
+                }
+                if ui
+                    .add_enabled(
+                        (offset + retained) < total as usize && self.scan_rx.is_none(),
+                        egui::Button::new("Next"),
+                    )
+                    .clicked()
+                {
+                    self.scan_request.offsets[index] = offset + STORED_ROWS;
+                    self.request_query_refresh();
+                }
+            });
+        }
+    }
+
+    fn request_query_refresh(&mut self) {
+        if let Some(cancel) = &self.scan_cancel {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        self.pending_generation = None;
+        self.refresh_requested = true;
     }
 
     fn refresh_status(&self, input: &TriageInput<'_>) -> String {
         if self.scan_rx.is_some() {
-            return "Refreshing the saved recording".into();
+            return self.last_refresh.map_or_else(
+                || "Indexing the saved recording".into(),
+                |when| {
+                    format!(
+                        "Refreshing; showing index from {} s ago",
+                        when.elapsed().as_secs()
+                    )
+                },
+            );
         }
         if let Some(error) = &self.scan_error {
             return format!("Refresh failed: {error}");
         }
         if let Some(when) = self.last_refresh {
-            return format!("Refreshed {} s ago", when.elapsed().as_secs());
+            return format!(
+                "Refreshed {} s ago{}",
+                when.elapsed().as_secs(),
+                if self.scan.as_ref().is_some_and(|scan| scan.partial) {
+                    "; partial evidence — see Index details"
+                } else {
+                    ""
+                }
+            );
         }
         if input.archive.is_some() {
             "Waiting to index the saved recording".into()
@@ -412,10 +641,7 @@ impl TriageView {
             return scan.coverage.clone();
         }
         if let Some(error) = &self.scan_error {
-            return format!(
-                "saved-recording index failed: {error}. {}",
-                input.coverage
-            );
+            return format!("saved-recording index failed: {error}. {}", input.coverage);
         }
         if input.archive.is_some() {
             format!(
@@ -437,7 +663,9 @@ impl TriageView {
         run_id: Option<&str>,
     ) {
         let Some(path) = archive else {
-            self.stop_scan();
+            if self.scan_key.is_some() || self.scan_rx.is_some() {
+                self.stop_scan();
+            }
             return;
         };
         let key = format!(
@@ -471,6 +699,7 @@ impl TriageView {
         let directory = path.to_path_buf();
         let pcap = pcap.map(Path::to_path_buf);
         let cancel_thread = Arc::clone(&cancel);
+        let request = self.scan_request.clone();
         self.scan_generation = self.scan_generation.saturating_add(1);
         let generation = self.scan_generation;
         if std::thread::Builder::new()
@@ -478,7 +707,13 @@ impl TriageView {
             .spawn(move || {
                 let _ = tx.send((
                     generation,
-                    scan_archive(&directory, pcap.as_deref(), pcap_open, &cancel_thread),
+                    scan_archive_query(
+                        &directory,
+                        pcap.as_deref(),
+                        pcap_open,
+                        &cancel_thread,
+                        &request,
+                    ),
                 ));
             })
             .is_err()
@@ -489,10 +724,10 @@ impl TriageView {
         self.pending_generation = Some(generation);
         self.scan_cancel = Some(cancel);
         self.scan_rx = Some(rx);
-        self.next_refresh = Some(Instant::now() + Duration::from_secs(5));
+        self.next_refresh = Some(Instant::now() + Duration::from_secs(self.refresh_seconds));
     }
 
-    fn poll_scan(&mut self, ui: &mut egui::Ui) {
+    fn poll_scan(&mut self, ctx: &egui::Context) {
         let Some(rx) = &self.scan_rx else {
             return;
         };
@@ -503,6 +738,14 @@ impl TriageView {
                 if self.pending_generation == Some(generation) {
                     match result {
                         Ok(scan) => {
+                            if self.selected_call_id.is_some_and(|call_id| {
+                                !scan
+                                    .findings
+                                    .iter()
+                                    .any(|finding| finding.call_id == call_id)
+                            }) {
+                                self.selected_call_id = None;
+                            }
                             self.scan = Some(scan);
                             self.scan_error = None;
                             self.last_refresh = Some(Instant::now());
@@ -517,7 +760,7 @@ impl TriageView {
                 }
             }
             Err(mpsc::TryRecvError::Empty) => {
-                ui.ctx().request_repaint_after(Duration::from_millis(200));
+                ctx.request_repaint_after(Duration::from_millis(200));
             }
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.scan_error =
@@ -546,6 +789,18 @@ impl TriageView {
         self.next_refresh = None;
         self.refresh_requested = false;
         self.refresh_queued = false;
+        self.selected_call_id = None;
+        self.bpf_export_status.clear();
+        self.packet_jump = None;
+        self.scan_request.offsets = [0; 5];
+    }
+}
+
+impl Drop for TriageView {
+    fn drop(&mut self) {
+        if let Some(cancel) = &self.scan_cancel {
+            cancel.store(true, Ordering::Relaxed);
+        }
     }
 }
 
@@ -554,6 +809,7 @@ struct Cell {
     text: String,
     color: egui::Color32,
     mono: bool,
+    values: Vec<(&'static str, RowValue)>,
 }
 
 fn cell(text: impl Into<String>, color: egui::Color32, mono: bool) -> Cell {
@@ -561,6 +817,7 @@ fn cell(text: impl Into<String>, color: egui::Color32, mono: bool) -> Cell {
         text: text.into(),
         color,
         mono,
+        values: Vec::new(),
     }
 }
 
@@ -584,7 +841,10 @@ fn indexed_packet_table(
 ) {
     ui.colored_label(
         theme::muted(),
-        format!("{count} rows from the saved capture; {omitted} additional matches were not stored in this table.", count = rows.len()),
+        format!(
+            "{count} rows on this saved-capture query page; {omitted} matches on other pages.",
+            count = rows.len()
+        ),
     );
     table(ui, id, headers, rows);
 }
@@ -601,16 +861,93 @@ fn limited_table(ui: &mut egui::Ui, id: &str, headers: &[&str], limited: &Limite
 }
 
 fn table(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[Vec<Cell>]) {
+    egui::ScrollArea::horizontal()
+        .id_salt((id, "columns"))
+        .show(ui, |ui| {
+            ui.set_min_width((headers.len() as f32 * 90.0).min(1600.0));
+            table_rows(ui, id, headers, rows);
+        });
+    let selected_id = egui::Id::new(("triage-selected-row", id));
+    let selected = ui.ctx().data(|data| data.get_temp::<String>(selected_id));
+    if let Some(row) = rows.iter().find(|row| Some(evidence_key(row)) == selected) {
+        ui.separator();
+        ui.strong("Selected evidence");
+        for (title, value) in headers.iter().zip(row) {
+            ui.add(egui::Label::new(format!("{title}: {}", value.text)).wrap());
+        }
+        for (name, value) in row
+            .first()
+            .map(|cell| cell.values.as_slice())
+            .unwrap_or_default()
+        {
+            if let RowValue::Number(id) = value {
+                if *name == "event.id" && ui.button(format!("Open original syscall {id}")).clicked()
+                {
+                    if let Ok(id) = u64::try_from(*id) {
+                        ui.ctx().data_mut(|data| {
+                            data.insert_temp(egui::Id::new("triage-call-jump"), id)
+                        });
+                    }
+                }
+                if *name == "frame.number"
+                    && ui.button(format!("Open original packet {id}")).clicked()
+                {
+                    if let Ok(id) = u64::try_from(*id) {
+                        ui.ctx().data_mut(|data| {
+                            data.insert_temp(egui::Id::new("triage-packet-jump"), id)
+                        });
+                    }
+                }
+            }
+        }
+    } else {
+        ui.ctx().data_mut(|data| data.remove::<String>(selected_id));
+    }
+}
+
+fn evidence_key(row: &[Cell]) -> String {
+    let identity = row
+        .first()
+        .map(|cell| cell.values.as_slice())
+        .unwrap_or_default()
+        .iter()
+        .filter(|(name, _)| {
+            matches!(
+                *name,
+                "event.id" | "frame.number" | "dns.name" | "http.uri" | "process.cookie"
+            )
+        })
+        .map(|(name, value)| format!("{name}:{value:?}"))
+        .collect::<Vec<_>>()
+        .join("/");
+    if identity.is_empty() {
+        row.iter()
+            .map(|cell| cell.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        identity
+    }
+}
+
+fn table_rows(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[Vec<Cell>]) {
     use egui_extras::{Column, TableBuilder};
     if rows.is_empty() {
         ui.colored_label(theme::muted(), "Nothing recorded for this view.");
         return;
     }
+    let row_height = ui.text_style_height(&egui::TextStyle::Body).max(14.0) + 8.0;
+    let selected_id = egui::Id::new(("triage-selected-row", id));
+    let selected = ui.ctx().data(|data| data.get_temp::<String>(selected_id));
+    let filter_id = ui
+        .ctx()
+        .data(|data| data.get_temp::<egui::Id>(egui::Id::new(("triage-filter-target", id))));
     let mut builder = TableBuilder::new(ui)
         .id_salt(id)
         .striped(true)
         .resizable(true)
-        .vscroll(true);
+        .vscroll(true)
+        .sense(egui::Sense::click());
     for index in 0..headers.len() {
         builder = if index + 1 == headers.len() {
             builder.column(Column::remainder().at_least(140.0))
@@ -619,7 +956,7 @@ fn table(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[Vec<Cell>]) {
         };
     }
     builder
-        .header(22.0, |mut header| {
+        .header(row_height, |mut header| {
             for title in headers {
                 header.col(|ui| {
                     ui.strong(*title);
@@ -627,8 +964,10 @@ fn table(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[Vec<Cell>]) {
             }
         })
         .body(|body| {
-            body.rows(22.0, rows.len(), |mut row| {
+            body.rows(row_height, rows.len(), |mut row| {
                 let cells = &rows[row.index()];
+                let key = evidence_key(cells);
+                row.set_selected(selected.as_ref() == Some(&key));
                 for cell in cells {
                     row.col(|ui| {
                         let mut text = RichText::new(&cell.text).color(cell.color);
@@ -636,6 +975,23 @@ fn table(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[Vec<Cell>]) {
                             text = text.monospace();
                         }
                         ui.add(egui::Label::new(text).truncate());
+                    });
+                }
+                if row.response().clicked() {
+                    row.response()
+                        .ctx
+                        .data_mut(|data| data.insert_temp(selected_id, key));
+                }
+                if let Some(filter_id) = filter_id {
+                    row.response().context_menu(|ui| {
+                        query::table_row_menu(
+                            ui,
+                            filter_id,
+                            cells
+                                .first()
+                                .map(|cell| cell.values.as_slice())
+                                .unwrap_or_default(),
+                        );
                     });
                 }
             });
@@ -646,6 +1002,7 @@ fn table(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[Vec<Cell>]) {
 struct Finding {
     cells: Vec<Cell>,
     call_id: u64,
+    values: Vec<(&'static str, RowValue)>,
 }
 
 /// Suspicious-activity rows. A click returns that invocation's `call_id`.
@@ -662,6 +1019,10 @@ fn finding_table(
         return None;
     }
     let mut clicked = None;
+    let filter_id = ui
+        .ctx()
+        .data(|data| data.get_temp::<egui::Id>(egui::Id::new(("triage-filter-target", id))));
+    let row_height = ui.text_style_height(&egui::TextStyle::Body).max(14.0) + 8.0;
     let mut builder = TableBuilder::new(ui)
         .id_salt(id)
         .striped(true)
@@ -676,7 +1037,7 @@ fn finding_table(
         };
     }
     builder
-        .header(22.0, |mut header| {
+        .header(row_height, |mut header| {
             for title in headers {
                 header.col(|ui| {
                     ui.strong(*title);
@@ -684,7 +1045,7 @@ fn finding_table(
             }
         })
         .body(|body| {
-            body.rows(22.0, rows.len(), |mut row| {
+            body.rows(row_height, rows.len(), |mut row| {
                 let finding = &rows[row.index()];
                 row.set_selected(selected == Some(finding.call_id));
                 for cell in &finding.cells {
@@ -699,6 +1060,10 @@ fn finding_table(
                 if row.response().clicked() {
                     clicked = Some(finding.call_id);
                 }
+                if let Some(filter_id) = filter_id {
+                    row.response()
+                        .context_menu(|ui| query::table_row_menu(ui, filter_id, &finding.values));
+                }
             });
         });
     clicked
@@ -709,16 +1074,23 @@ fn process_tree(ui: &mut egui::Ui, invocations: &[InvocationSummary]) {
 }
 
 fn process_tree_nodes(ui: &mut egui::Ui, nodes: &[ProcessNode]) {
+    let ended = nodes
+        .iter()
+        .filter(|node| node.state.starts_with("task exit"))
+        .count();
+    ui.colored_label(theme::muted(), format!(
+        "{} observed tasks; {ended} recorded task exits; {} without a recorded exit. A root exit does not imply tree completion.",
+        nodes.len(), nodes.len().saturating_sub(ended)));
     ui.colored_label(
         theme::muted(),
-        "Parent and child from fork, vfork and clone in this trace. Only pid 1 with no parent edge is a root.",
+        "Recorded task identity and fork edges. Launch-root cookies identify roots; other missing parents stay unknown. Parent exit keeps observed children.",
     );
     let rows = nodes
         .iter()
         .map(|node| {
-            vec![
+            let mut row = vec![
                 cell(
-                    format!("{}{}", "│ ".repeat(node.depth), process_label(node)),
+                    format!("{}{}", "│ ".repeat(node.depth.min(16)), process_label(node)),
                     theme::value(theme::ValueKind::Pointer),
                     true,
                 ),
@@ -727,11 +1099,107 @@ fn process_tree_nodes(ui: &mut egui::Ui, nodes: &[ProcessNode]) {
                     theme::value(theme::ValueKind::Name),
                     true,
                 ),
-            ]
+                cell(node.tid.to_string(), theme::text(), true),
+                cell(node.argv.join(" "), theme::text(), false),
+                cell(
+                    node.first_ns.map_or("—".into(), |time| time.to_string()),
+                    theme::text(),
+                    true,
+                ),
+                cell(
+                    node.last_ns.map_or("—".into(), |time| time.to_string()),
+                    theme::text(),
+                    true,
+                ),
+                cell(&node.state, theme::text(), false),
+                cell(node.exec_history.join(" → "), theme::text(), false),
+            ];
+            row[0].values = vec![
+                ("process.pid", RowValue::Number(i128::from(node.pid))),
+                ("process.tid", RowValue::Number(i128::from(node.tid))),
+                ("process.cookie", RowValue::Number(i128::from(node.cookie))),
+                (
+                    "process.exe",
+                    if node.comm == "?" {
+                        RowValue::Missing
+                    } else {
+                        text_value(&node.comm)
+                    },
+                ),
+                (
+                    "process.argv",
+                    if node.argv.is_empty() {
+                        RowValue::Missing
+                    } else {
+                        RowValue::List(node.argv.clone())
+                    },
+                ),
+                ("process.state", RowValue::Text(node.state.clone())),
+                (
+                    "process.first_ns",
+                    node.first_ns
+                        .map_or(RowValue::Missing, |time| RowValue::Number(i128::from(time))),
+                ),
+                (
+                    "process.last_ns",
+                    node.last_ns
+                        .map_or(RowValue::Missing, |time| RowValue::Number(i128::from(time))),
+                ),
+            ];
+            row
         })
         .collect::<Vec<_>>();
-    table(ui, "triage-process", &["Process", "Program"], &rows);
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(
+            egui::Id::new(("triage-filter-target", "triage-process")),
+            ui.id().with(("table-filter", "triage-process")),
+        )
+    });
+    let compiled = query::table_filter(
+        ui,
+        "triage-process",
+        "Filter process identity, executable or state",
+        PROCESS_FIELDS,
+        &[],
+    );
+    let filtered = rows
+        .into_iter()
+        .filter(|row| compiled.keep_table(&row[0].values))
+        .collect::<Vec<_>>();
+    ui.colored_label(
+        theme::muted(),
+        format!("{} / {} observed tasks", filtered.len(), nodes.len()),
+    );
+    table(
+        ui,
+        "triage-process",
+        &[
+            "Process",
+            "Executable",
+            "TID",
+            "Argv",
+            "First ns",
+            "Last ns",
+            "Task outcome",
+            "Exec history",
+        ],
+        &filtered,
+    );
 }
+
+const PROCESS_FIELDS: &[FieldSpec<'static>] = &[
+    FieldSpec::number("process.pid", "Observed TGID"),
+    FieldSpec::number("process.tid", "Observed thread ID"),
+    FieldSpec::number("process.cookie", "Stable task cookie"),
+    FieldSpec::text("process.exe", "Latest successful captured executable"),
+    FieldSpec::tags("process.argv", "Captured exec argument strings"),
+    FieldSpec::text(
+        "process.state",
+        "Recorded task exit, separately from tree completion",
+    ),
+    FieldSpec::number("process.first_ns", "First observed monotonic ns"),
+    FieldSpec::number("process.last_ns", "Last observed monotonic ns"),
+];
 
 /// x86-64: clone, fork, vfork, clone3. `CLONE_THREAD` stays inside the parent.
 /// `clone` reads that bit from `args[0]`. `clone3`'s `args[0]` is a pointer, so
@@ -753,11 +1221,19 @@ struct TaskKey {
     cookie: u64,
 }
 
+#[derive(Default)]
 struct TaskNode {
     parent: Option<TaskKey>,
     comm: String,
     /// Fork return created this pid before any event identified its cookie.
     provisional: bool,
+    tid: u32,
+    root: bool,
+    first_ns: Option<u64>,
+    last_ns: Option<u64>,
+    argv: Vec<String>,
+    state: String,
+    exec_history: Vec<String>,
 }
 
 enum Spawn {
@@ -787,13 +1263,55 @@ fn observe_processes(
             continue;
         }
         let key = adopt_task(nodes, event);
+        if let Some(node) = nodes.get_mut(&key) {
+            node.tid = event.tid;
+            node.root |= event.root_task_cookie != 0 && event.task_cookie == event.root_task_cookie;
+            for observed in invocation
+                .entry
+                .iter()
+                .chain(invocation.exit.iter())
+                .chain(invocation.task_exit.iter())
+            {
+                node.first_ns = Some(node.first_ns.map_or(observed.timestamp_ns, |time| {
+                    time.min(observed.timestamp_ns)
+                }));
+                node.last_ns = Some(node.last_ns.map_or(observed.timestamp_ns, |time| {
+                    time.max(observed.timestamp_ns)
+                }));
+            }
+            if invocation.task_exit.is_some() {
+                node.state = format!("task exit {:?}", invocation.task_exit_status());
+            } else if node.state.is_empty() {
+                node.state = "exit not recorded".into();
+            }
+        }
         if matches!(event.syscall_name.as_str(), "execve" | "execveat")
             && exit
                 .and_then(|exit| exit.result)
                 .is_some_and(|result| result >= 0)
         {
             if let Some(comm) = program_name(entry, exit) {
-                nodes.get_mut(&key).unwrap().comm = comm;
+                let node = nodes.get_mut(&key).unwrap();
+                node.comm = comm.clone();
+                if node.exec_history.last() != Some(&comm) {
+                    if node.exec_history.len() < 128 {
+                        node.exec_history.push(comm);
+                    } else if node
+                        .exec_history
+                        .last()
+                        .is_some_and(|text| text != "further exec history omitted")
+                    {
+                        node.exec_history
+                            .push("further exec history omitted".into());
+                    }
+                }
+                node.argv = entry
+                    .into_iter()
+                    .chain(exit)
+                    .flat_map(|event| &event.fields)
+                    .filter(|field| field.key.contains("argv"))
+                    .filter_map(path_text)
+                    .collect();
             }
         }
         let args = entry
@@ -839,28 +1357,42 @@ fn finish_processes(nodes: std::collections::BTreeMap<TaskKey, TaskNode>) -> Vec
         found: &mut Vec<ProcessNode>,
         seen: &mut std::collections::BTreeSet<TaskKey>,
     ) {
-        if !seen.insert(key) {
-            return;
-        }
-        let Some(node) = nodes.get(&key) else {
-            return;
-        };
-        found.push(ProcessNode {
-            depth,
-            pid: key.pid,
-            cookie: key.cookie,
-            comm: node.comm.clone(),
-            parent_missing: depth == 0 && !(node.parent.is_none() && key.pid == 1),
-        });
-        if let Some(kids) = children.get(&key) {
-            for child in kids {
-                walk(*child, depth + 1, nodes, children, found, seen);
+        let mut pending = vec![(key, depth)];
+        while let Some((key, depth)) = pending.pop() {
+            if !seen.insert(key) {
+                continue;
+            }
+            let Some(node) = nodes.get(&key) else {
+                continue;
+            };
+            found.push(ProcessNode {
+                depth,
+                pid: key.pid,
+                cookie: key.cookie,
+                comm: node.comm.clone(),
+                parent_missing: depth == 0 && !node.root,
+                tid: node.tid,
+                argv: node.argv.clone(),
+                first_ns: node.first_ns,
+                last_ns: node.last_ns,
+                state: node.state.clone(),
+                exec_history: node.exec_history.clone(),
+            });
+            if let Some(kids) = children.get(&key) {
+                for child in kids.iter().rev() {
+                    pending.push((*child, depth.saturating_add(1)));
+                }
             }
         }
     }
     let mut seen = std::collections::BTreeSet::new();
     for key in roots {
         walk(key, 0, &nodes, &children, &mut found, &mut seen);
+    }
+    for key in nodes.keys() {
+        if !seen.contains(key) {
+            walk(*key, 0, &nodes, &children, &mut found, &mut seen);
+        }
     }
     found
 }
@@ -897,6 +1429,7 @@ fn adopt_task(
         parent: None,
         comm: "?".into(),
         provisional: false,
+        ..TaskNode::default()
     });
     if key.cookie == 0 {
         node.provisional = false;
@@ -939,6 +1472,7 @@ fn link_child(
                             parent: Some(parent),
                             comm: "?".into(),
                             provisional: true,
+                            ..TaskNode::default()
                         },
                     );
                 }
@@ -987,8 +1521,11 @@ fn clone3_is_thread(invocation: &InvocationSummary) -> Option<bool> {
 
 fn program_name(entry: Option<&EventSummary>, exit: Option<&EventSummary>) -> Option<String> {
     entry.into_iter().chain(exit).find_map(|event| {
-        let comm = preview_line(event);
-        (comm != event.syscall_name).then_some(comm)
+        event
+            .fields
+            .iter()
+            .filter(|field| path_key(&field.key))
+            .find_map(path_text)
     })
 }
 
@@ -998,6 +1535,12 @@ struct ProcessNode {
     cookie: u64,
     comm: String,
     parent_missing: bool,
+    tid: u32,
+    argv: Vec<String>,
+    first_ns: Option<u64>,
+    last_ns: Option<u64>,
+    state: String,
+    exec_history: Vec<String>,
 }
 
 fn process_label(node: &ProcessNode) -> String {
@@ -1063,6 +1606,54 @@ fn hit(
     };
     Finding {
         call_id: invocation.call_id,
+        values: vec![
+            ("finding.rule", RowValue::Text(rule.into())),
+            ("finding.version", RowValue::Number(1)),
+            ("finding.severity", RowValue::Text(severity.into())),
+            (
+                "finding.confidence",
+                RowValue::Text(
+                    if event.complete && invocation.exit.as_ref().is_some_and(|exit| exit.complete)
+                    {
+                        "high"
+                    } else {
+                        "limited"
+                    }
+                    .into(),
+                ),
+            ),
+            ("finding.source", RowValue::Text(source.into())),
+            ("finding.summary", RowValue::Text(summary.clone())),
+            ("finding.attempted", RowValue::Bool(true)),
+            (
+                "finding.success",
+                invocation
+                    .exit
+                    .as_ref()
+                    .and_then(|exit| exit.result)
+                    .map_or(RowValue::Missing, |ret| RowValue::Bool(ret >= 0)),
+            ),
+            (
+                "syscall.ret",
+                invocation
+                    .exit
+                    .as_ref()
+                    .and_then(|exit| exit.result)
+                    .map_or(RowValue::Missing, |ret| RowValue::Number(i128::from(ret))),
+            ),
+            ("event.id", RowValue::Number(i128::from(invocation.call_id))),
+            (
+                "event.time_ns",
+                RowValue::Number(i128::from(event.timestamp_ns)),
+            ),
+            ("process.pid", RowValue::Number(i128::from(event.pid))),
+            ("process.tid", RowValue::Number(i128::from(event.tid))),
+            (
+                "process.cookie",
+                RowValue::Number(i128::from(invocation.task_cookie)),
+            ),
+            ("entry.tag", RowValue::Missing),
+        ],
         cells: vec![
             cell(rule, color, false),
             cell(severity, color, false),
@@ -1077,15 +1668,125 @@ fn hit(
                 true,
             ),
             cell("1", theme::text(), true),
+            cell(outcome(invocation), theme::text(), false),
         ],
     }
 }
 
+const FINDING_FIELDS: &[FieldSpec<'static>] = &[
+    FieldSpec::text("finding.rule", "Stable activity rule"),
+    FieldSpec::number("finding.version", "Rule version"),
+    FieldSpec::text("finding.severity", "Activity severity, not malware verdict"),
+    FieldSpec::text("finding.confidence", "Evidence confidence: high or limited"),
+    FieldSpec::text("finding.source", "Rule reference"),
+    FieldSpec::text("finding.summary", "Matching facts"),
+    FieldSpec::boolean("finding.attempted", "A syscall attempt was recorded"),
+    FieldSpec::boolean(
+        "finding.success",
+        "Observed nonnegative syscall exit; missing without exit",
+    ),
+    FieldSpec::number("process.pid", "Observed PID"),
+    FieldSpec::number("process.tid", "Observed TID"),
+    FieldSpec::number("process.cookie", "Stable task cookie"),
+    FieldSpec::number("event.id", "Original invocation ID"),
+    FieldSpec::number("syscall.ret", "Observed signed syscall return"),
+    FieldSpec::number("event.time_ns", "Guest monotonic nanoseconds"),
+    FieldSpec::tags("entry.tag", "Unavailable without a finding annotation"),
+];
+
+const FILE_FIELDS: &[FieldSpec<'static>] = &[
+    FieldSpec::text(
+        "file.path",
+        "Path as displayed; inferred names label their uncertainty",
+    ),
+    FieldSpec::text("file.old_path", "Captured old rename path"),
+    FieldSpec::text("file.new_path", "Captured new rename path"),
+    FieldSpec::number(
+        "file.fd",
+        "Observed descriptor; missing without success/provenance",
+    ),
+    FieldSpec::text("file.operation", "Observed syscall operation"),
+    FieldSpec::text("file.access", "Requested access/creation flags"),
+    FieldSpec::boolean(
+        "file.success",
+        "Observed syscall outcome; missing without exit",
+    ),
+    FieldSpec::number(
+        "file.written_size",
+        "Successful written octets, not requested length",
+    ),
+    FieldSpec::number(
+        "file.requested_size",
+        "Requested scalar write length in octets",
+    ),
+    FieldSpec::number("file.offset", "Captured pwrite offset in octets"),
+    FieldSpec::number("file.count", "One observed operation per evidence row"),
+    FieldSpec::number("process.pid", "Observed PID"),
+    FieldSpec::number("process.tid", "Observed TID"),
+    FieldSpec::number("process.cookie", "Stable task cookie"),
+    FieldSpec::number("event.id", "Original invocation ID"),
+    FieldSpec::number("event.time_ns", "Guest monotonic nanoseconds"),
+    FieldSpec::number("syscall.ret", "Signed observed exit result"),
+];
+
+const HTTP_FIELDS: &[FieldSpec<'static>] = &[
+    FieldSpec::number("frame.number", "Original request frame"),
+    FieldSpec::number("frame.time_us", "Captured Unix microseconds"),
+    FieldSpec::text("network.endpoints", "Recorded source and destination"),
+    FieldSpec::text("http.method", "Request method"),
+    FieldSpec::text("http.host", "Cleartext Host header"),
+    FieldSpec::text("http.uri", "Cleartext request URI"),
+    FieldSpec::text("http.version", "Observed HTTP version"),
+    FieldSpec::number(
+        "http.status",
+        "Correlated response code; missing if unavailable",
+    ),
+    FieldSpec::boolean("entry.complete", "Decoded request completeness"),
+    FieldSpec::text(
+        "network.attribution",
+        "Unknown unless socket identity supports exact attribution",
+    ),
+];
+const DNS_FIELDS: &[FieldSpec<'static>] = &[
+    FieldSpec::number("frame.number", "Original query frame"),
+    FieldSpec::number("frame.time_us", "Captured Unix microseconds"),
+    FieldSpec::text("network.endpoints", "Recorded source and destination"),
+    FieldSpec::number("dns.id", "Transaction ID"),
+    FieldSpec::text("dns.name", "Queried domain"),
+    FieldSpec::text("dns.type", "Query type"),
+    FieldSpec::text("dns.class", "Query class"),
+    FieldSpec::text("dns.protocol", "UDP or TCP"),
+    FieldSpec::number("dns.rcode", "Observed response code"),
+    FieldSpec::tags("dns.answers", "Observed response answers"),
+    FieldSpec::boolean("dns.retry", "Retry when backed by decoder evidence"),
+];
+
+#[derive(Clone, Default)]
+struct ScanRequest {
+    offsets: [usize; 5],
+    filters: [String; 5],
+}
+
+fn keep_page<T>(rows: &mut Vec<T>, skipped: &mut u64, index: &mut usize, offset: usize, row: T) {
+    let at = *index;
+    *index += 1;
+    if at >= offset && rows.len() < STORED_ROWS {
+        rows.push(row);
+    } else {
+        *skipped += 1;
+    }
+}
+
 fn confidence(invocation: &InvocationSummary) -> &'static str {
-    match invocation.exit.as_ref().and_then(|exit| exit.result) {
-        Some(result) if result >= 0 => "observed",
-        Some(_) => "attempted",
-        None => "exit not recorded",
+    if invocation
+        .entry
+        .as_ref()
+        .is_some_and(|event| event.complete)
+        && invocation.exit.as_ref().is_some_and(|event| event.complete)
+    {
+        "high"
+    } else {
+        "limited"
     }
 }
 
@@ -1117,22 +1818,19 @@ fn classic_socket_filter(event: &EventSummary, args: [u64; 6]) -> bool {
 }
 
 fn filter_findings(rows: Vec<Finding>, filter: &str) -> Vec<Finding> {
-    if filter.is_empty() {
-        return rows;
-    }
-    let needle = filter.to_lowercase();
+    let compiled = query::compile_table(filter, FINDING_FIELDS);
     rows.into_iter()
-        .filter(|row| {
-            [0, 2, 3, 7].iter().any(|index| {
-                row.cells
-                    .get(*index)
-                    .is_some_and(|cell| cell.text.to_lowercase().contains(&needle))
-            })
-        })
+        .filter(|row| compiled.keep_table(&row.values))
         .collect()
 }
 
 fn suspicious_rows(invocations: &[InvocationSummary]) -> Vec<Finding> {
+    suspicious_rows_state(invocations, None)
+}
+fn suspicious_rows_state(
+    invocations: &[InvocationSummary],
+    files: Option<&FdState>,
+) -> Vec<Finding> {
     let mut rows = Vec::new();
     for invocation in invocations {
         let Some(event) = trace::representative(invocation) else {
@@ -1143,7 +1841,11 @@ fn suspicious_rows(invocations: &[InvocationSummary]) -> Vec<Finding> {
         let outcome = outcome(invocation);
         if matches!(event.syscall_nr, 9 | 10) && args.get(2).is_some_and(|prot| prot & 7 == 7) {
             rows.push(hit(
-                "memory.rwx",
+                if succeeded(invocation) {
+                    "memory.rwx"
+                } else {
+                    "memory.rwx_attempt"
+                },
                 "high",
                 process.clone(),
                 format!("{} prot {:#x}; {outcome}", event.syscall_name, args[2]),
@@ -1162,6 +1864,52 @@ fn suspicious_rows(invocations: &[InvocationSummary]) -> Vec<Finding> {
                 event,
                 invocation,
             ));
+            let paths = path_list(invocation);
+            if paths.first().is_some_and(|path| {
+                matches!(
+                    path.rsplit('/').next().unwrap_or(""),
+                    "sh" | "bash"
+                        | "dash"
+                        | "zsh"
+                        | "python"
+                        | "python3"
+                        | "perl"
+                        | "ruby"
+                        | "node"
+                )
+            }) {
+                rows.push(hit(
+                    "process.interpreter",
+                    "medium",
+                    process.clone(),
+                    format!(
+                        "captured interpreter/shell path {}; {outcome}",
+                        paths.join(", ")
+                    ),
+                    "MITRE ATT&CK T1059",
+                    event,
+                    invocation,
+                ));
+            }
+            let memfd = files.and_then(|files| {
+                let owner = table_owner(files, invocation.task_cookie, event.tid);
+                (event.syscall_nr == 322 && args[4] & 0x1000 != 0)
+                    .then(|| files.opened.get(&(owner.0, owner.1, args[0])))
+                    .flatten()
+                    .filter(|path| path.starts_with("memfd:"))
+                    .cloned()
+            });
+            if let Some(memfd) = memfd {
+                rows.push(hit(
+                    "process.memfd_exec",
+                    "high",
+                    process.clone(),
+                    format!("execveat AT_EMPTY_PATH references observed {memfd}; {outcome}"),
+                    "MITRE ATT&CK T1620",
+                    event,
+                    invocation,
+                ));
+            }
         }
         if event.syscall_nr == 101 {
             rows.push(hit(
@@ -1207,6 +1955,83 @@ fn suspicious_rows(invocations: &[InvocationSummary]) -> Vec<Finding> {
                 invocation,
             ));
         }
+        if matches!(
+            event.syscall_nr,
+            105 | 106 | 113 | 114 | 117 | 119 | 122 | 123 | 126 | 130
+        ) {
+            rows.push(hit(
+                "privilege.change",
+                "medium",
+                process.clone(),
+                format!("{} args {args:x?}; {outcome}", event.syscall_name),
+                "Observed credential/capability change attempt",
+                event,
+                invocation,
+            ));
+        }
+        if (event.syscall_nr == 317 && args[0] == 1)
+            || (event.syscall_nr == 157 && args[0] == 22 && args[1] == 2)
+        {
+            rows.push(hit(
+                "bpf.seccomp_filter",
+                "medium",
+                process.clone(),
+                format!("classic seccomp filter installation; {outcome}"),
+                "Linux seccomp filter interface",
+                event,
+                invocation,
+            ));
+        }
+        let file_path = files
+            .map(|files| displayed_path(invocation, event, files))
+            .unwrap_or_else(|| path_list(invocation).join(", "));
+        let notable = [
+            "/etc/",
+            "/root/.ssh/",
+            "/var/spool/cron/",
+            "/usr/lib/systemd/",
+            "/lib/systemd/",
+        ]
+        .iter()
+        .any(|prefix| file_path.starts_with(prefix))
+            || (file_path.starts_with("/home/")
+                && ["/.ssh/", "/.config/", "/.bashrc", "/.profile"]
+                    .iter()
+                    .any(|part| file_path.contains(part)));
+        let write_like = matches!(
+            event.syscall_name.as_str(),
+            "write"
+                | "writev"
+                | "pwrite64"
+                | "pwritev"
+                | "pwritev2"
+                | "truncate"
+                | "ftruncate"
+                | "rename"
+                | "renameat"
+                | "renameat2"
+                | "unlink"
+                | "unlinkat"
+                | "chmod"
+                | "fchmod"
+                | "chown"
+                | "fchown"
+        ) || open_flags(invocation, event)
+            .is_some_and(|flags| flags & (0x40 | 0x200) != 0);
+        if notable && write_like {
+            rows.push(hit(
+                "persistence.config_write",
+                "medium",
+                process.clone(),
+                format!(
+                    "{} at notable configuration/persistence path {file_path}; {outcome}",
+                    event.syscall_name
+                ),
+                "Observed configuration location; normal administrative use can be benign",
+                event,
+                invocation,
+            ));
+        }
         if let Some(command) = bpf::command_name(event) {
             if matches!(
                 command,
@@ -1227,7 +2052,7 @@ fn suspicious_rows(invocations: &[InvocationSummary]) -> Vec<Finding> {
             rows.push(hit(
                 "bpf.socket_filter",
                 "medium",
-                process,
+                process.clone(),
                 format!("classic socket filter; {outcome}"),
                 "McCanne and Jacobson, USENIX 1993",
                 event,
@@ -1273,7 +2098,11 @@ fn file_event_row(
     event: &EventSummary,
     names: &[&str],
 ) -> Option<Vec<Cell>> {
-    if !names.iter().any(|name| event.syscall_name == *name) {
+    let changed_view = names.contains(&"write");
+    let flags = open_flags(invocation, event);
+    let creates = OPEN_NAMES.contains(&event.syscall_name.as_str())
+        && flags.is_some_and(|flags| flags & (0x40 | 0x200) != 0);
+    if !names.iter().any(|name| event.syscall_name == *name) && !(changed_view && creates) {
         return None;
     }
     if matches!(event.syscall_name.as_str(), "mmap" | "mmap2") {
@@ -1292,7 +2121,7 @@ fn file_event_row(
         .and_then(|exit| exit.result)
         .map(|value| value.to_string())
         .unwrap_or_else(|| "—".into());
-    Some(vec![
+    let mut row = vec![
         cell(
             if path.is_empty() {
                 "—".to_string()
@@ -1319,7 +2148,153 @@ fn file_event_row(
         ),
         cell(result, theme::text(), true),
         cell(file_outcome(invocation), theme::text(), false),
-    ])
+    ];
+    let paths = path_list(invocation);
+    let ret = invocation.exit.as_ref().and_then(|exit| exit.result);
+    let writing = matches!(
+        event.syscall_name.as_str(),
+        "write" | "writev" | "pwrite64" | "pwritev" | "pwritev2"
+    );
+    let written = writing.then_some(ret).flatten().filter(|ret| *ret >= 0);
+    let requested = matches!(event.syscall_name.as_str(), "write" | "pwrite64")
+        .then(|| call_args(invocation).map(|args| args[2]))
+        .flatten();
+    let access = flags
+        .map(|flags| {
+            format!(
+                "{} flags {flags:#x}",
+                match flags & 3 {
+                    0 => "read",
+                    1 => "write",
+                    2 => "read/write",
+                    _ => "unknown",
+                }
+            )
+        })
+        .unwrap_or_else(|| "—".into());
+    row[0].values = vec![
+        (
+            "file.path",
+            paths
+                .first()
+                .cloned()
+                .or_else(|| (row[0].text != "—").then(|| row[0].text.clone()))
+                .map_or(RowValue::Missing, RowValue::Text),
+        ),
+        (
+            "file.old_path",
+            if matches!(
+                event.syscall_name.as_str(),
+                "rename" | "renameat" | "renameat2"
+            ) {
+                named_path(invocation, event, &["oldname", "old_path"])
+                    .map_or(RowValue::Missing, RowValue::Text)
+            } else {
+                RowValue::Missing
+            },
+        ),
+        (
+            "file.new_path",
+            if matches!(
+                event.syscall_name.as_str(),
+                "rename" | "renameat" | "renameat2"
+            ) {
+                named_path(invocation, event, &["newname", "new_path"])
+                    .map_or(RowValue::Missing, RowValue::Text)
+            } else {
+                RowValue::Missing
+            },
+        ),
+        (
+            "file.fd",
+            file_fd(invocation, event)
+                .parse::<i128>()
+                .map_or(RowValue::Missing, RowValue::Number),
+        ),
+        ("file.operation", RowValue::Text(event.syscall_name.clone())),
+        (
+            "file.access",
+            if flags.is_some() {
+                RowValue::Text(access.clone())
+            } else {
+                RowValue::Missing
+            },
+        ),
+        (
+            "file.success",
+            ret.map_or(RowValue::Missing, |ret| RowValue::Bool(ret >= 0)),
+        ),
+        (
+            "file.written_size",
+            written.map_or(RowValue::Missing, |ret| RowValue::Number(i128::from(ret))),
+        ),
+        (
+            "file.requested_size",
+            requested.map_or(RowValue::Missing, |size| RowValue::Number(i128::from(size))),
+        ),
+        (
+            "file.offset",
+            if event.syscall_name == "pwrite64" {
+                call_args(invocation).map_or(RowValue::Missing, |args| {
+                    RowValue::Number(i128::from(args[3] as i64))
+                })
+            } else {
+                RowValue::Missing
+            },
+        ),
+        ("file.count", RowValue::Number(1)),
+        ("process.pid", RowValue::Number(i128::from(event.pid))),
+        ("process.tid", RowValue::Number(i128::from(event.tid))),
+        (
+            "process.cookie",
+            RowValue::Number(i128::from(invocation.task_cookie)),
+        ),
+        ("event.id", RowValue::Number(i128::from(invocation.call_id))),
+        (
+            "event.time_ns",
+            RowValue::Number(i128::from(event.timestamp_ns)),
+        ),
+        (
+            "syscall.ret",
+            ret.map_or(RowValue::Missing, |ret| RowValue::Number(i128::from(ret))),
+        ),
+    ];
+    row.extend([
+        cell(access, theme::text(), false),
+        cell(event.timestamp_ns.to_string(), theme::text(), true),
+        cell(
+            written.map_or("—".into(), |size| size.to_string()),
+            theme::text(),
+            true,
+        ),
+        cell(
+            requested.map_or("—".into(), |size| size.to_string()),
+            theme::text(),
+            true,
+        ),
+        cell(paths.join(" → "), theme::text(), true),
+        cell(format!("call {}", invocation.call_id), theme::text(), true),
+        cell(event.timestamp_ns.to_string(), theme::text(), true),
+        cell("1", theme::text(), true),
+    ]);
+    Some(row)
+}
+
+fn open_flags(invocation: &InvocationSummary, event: &EventSummary) -> Option<u64> {
+    match event.syscall_name.as_str() {
+        "open" => call_args(invocation).map(|args| args[1]),
+        "openat" => call_args(invocation).map(|args| args[2]),
+        "openat2" => invocation
+            .entry
+            .iter()
+            .chain(invocation.exit.iter())
+            .flat_map(|event| &event.fields)
+            .find(|field| field.key.ends_with(".flags"))
+            .and_then(|field| trace::covered_preview(field).get(..8))
+            .and_then(|bytes| bytes.try_into().ok())
+            .map(u64::from_le_bytes),
+        _ => None,
+    }
 }
 
 const OPEN_NAMES: &[&str] = &["open", "openat", "openat2"];
@@ -1327,8 +2302,8 @@ const CHANGE_NAMES: &[&str] = &[
     "write",
     "writev",
     "pwrite64",
-    "mmap",
-    "mmap2",
+    "pwritev",
+    "pwritev2",
     "unlink",
     "unlinkat",
     "rename",
@@ -1349,8 +2324,84 @@ const CHANGE_NAMES: &[&str] = &[
 ];
 const STORED_ROWS: usize = 2000;
 
+struct FindingJournal {
+    temp: std::path::PathBuf,
+    destination: std::path::PathBuf,
+    file: std::fs::File,
+    size: u64,
+}
+impl FindingJournal {
+    fn new(directory: &Path) -> Result<Self, String> {
+        use std::os::unix::fs::OpenOptionsExt;
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let temp = directory.join(format!(
+            ".triage-findings-{}-{}.tmp",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let file = std::fs::OpenOptions::new()
+            .mode(0o600)
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|error| error.to_string())?;
+        Ok(Self {
+            temp,
+            destination: directory.join("triage-findings-v1.jsonl"),
+            file,
+            size: 0,
+        })
+    }
+    fn push(&mut self, finding: &Finding) -> Result<(), String> {
+        use std::io::Write;
+        let facts = finding
+            .values
+            .iter()
+            .map(|(name, value)| {
+                let value = match value {
+                    RowValue::Number(value) => serde_json::to_value(value)
+                        .unwrap_or_else(|_| serde_json::Value::String(value.to_string())),
+                    RowValue::Text(value) => serde_json::Value::String(value.clone()),
+                    RowValue::Bool(value) => serde_json::Value::Bool(*value),
+                    RowValue::List(value) => serde_json::json!(value),
+                    RowValue::Missing => serde_json::Value::Null,
+                };
+                ((*name).to_owned(), value)
+            })
+            .collect::<serde_json::Map<_, _>>();
+        let row = serde_json::to_vec(&serde_json::json!({"format_version":1, "evidence_call_id":finding.call_id, "facts":facts}))
+            .map_err(|error| error.to_string())?;
+        if self.size.saturating_add(row.len() as u64 + 1) > 256 * 1024 * 1024 {
+            return Err("finding journal exceeded 256 MiB; prior journal retained".into());
+        }
+        self.file
+            .write_all(&row)
+            .and_then(|()| self.file.write_all(b"\n"))
+            .map_err(|error| error.to_string())?;
+        self.size += row.len() as u64 + 1;
+        Ok(())
+    }
+    fn publish(&mut self) -> Result<(), String> {
+        self.file.sync_all().map_err(|error| error.to_string())?;
+        std::fs::rename(&self.temp, &self.destination).map_err(|error| error.to_string())?;
+        std::fs::File::open(
+            self.destination
+                .parent()
+                .ok_or("finding journal directory missing")?,
+        )
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| error.to_string())
+    }
+}
+impl Drop for FindingJournal {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.temp);
+    }
+}
+
 struct ArchiveScan {
     coverage: String,
+    partial: bool,
     process: Vec<ProcessNode>,
     findings: Vec<Finding>,
     findings_omitted: u64,
@@ -1367,11 +2418,28 @@ struct ArchiveScan {
 /// Walk every saved invocation page. Display tables keep at most [`STORED_ROWS`]
 /// matches; the coverage line counts anything left out. Cancellation stops
 /// between pages and does not claim the recording was fully indexed.
+#[cfg(test)]
 fn scan_archive(
     directory: &Path,
     pcap: Option<&Path>,
     pcap_open: bool,
     cancel: &AtomicBool,
+) -> Result<ArchiveScan, String> {
+    scan_archive_query(
+        directory,
+        pcap,
+        pcap_open,
+        &Arc::new(AtomicBool::new(cancel.load(Ordering::Relaxed))),
+        &ScanRequest::default(),
+    )
+}
+
+fn scan_archive_query(
+    directory: &Path,
+    pcap: Option<&Path>,
+    pcap_open: bool,
+    cancel: &Arc<AtomicBool>,
+    request: &ScanRequest,
 ) -> Result<ArchiveScan, String> {
     if cancel.load(Ordering::Relaxed) {
         return Err("cancelled".into());
@@ -1393,52 +2461,86 @@ fn scan_archive(
     let mut nodes = std::collections::BTreeMap::new();
     let mut findings = Vec::new();
     let mut findings_omitted = 0u64;
+    let finding_query = query::compile_table(&request.filters[0], FINDING_FIELDS);
+    let mut finding_count = 0;
     let (seen, complete, issues) = walk_pages(&recording, cancel, |page| {
         note_cookie_sets(&mut cookie_sets, page);
         observe_processes(&mut nodes, page);
-        for finding in suspicious_rows(page) {
-            if findings.len() < STORED_ROWS {
-                findings.push(finding);
-            } else {
-                findings_omitted += 1;
-            }
-        }
         Ok(())
     })?;
     let cookies = resolve_cookies(&cookie_sets);
+    let (mut journal, mut journal_error) = match FindingJournal::new(&recording.directory) {
+        Ok(journal) => (Some(journal), None),
+        Err(error) => (None, Some(error)),
+    };
     let mut files = FdState::default();
     let mut opened = Vec::new();
     let mut changed = Vec::new();
     let mut opened_omitted = 0u64;
     let mut changed_omitted = 0u64;
+    let open_query = query::compile_table(&request.filters[1], FILE_FIELDS);
+    let change_query = query::compile_table(&request.filters[2], FILE_FIELDS);
+    let (mut open_count, mut change_count) = (0, 0);
     let (_, files_complete, _) = walk_pages(&recording, cancel, |page| {
         for invocation in page {
             let Some(event) = trace::representative(invocation) else {
                 continue;
             };
+            for finding in suspicious_rows_state(std::slice::from_ref(invocation), Some(&files)) {
+                if let Some(writer) = &mut journal {
+                    if let Err(error) = writer.push(&finding) {
+                        journal_error = Some(error);
+                        journal = None;
+                    }
+                }
+                if finding_query.keep_table(&finding.values) {
+                    keep_page(
+                        &mut findings,
+                        &mut findings_omitted,
+                        &mut finding_count,
+                        request.offsets[0],
+                        finding,
+                    );
+                }
+            }
             remember_cwd(&mut files, invocation, event);
             remember_open(&mut files, invocation, event);
             apply_dup(&mut files, invocation, event);
             forget_closed(&mut files, invocation, event);
             inherit_open_fds(&mut files, invocation, event, &cookies);
             if let Some(row) = file_event_row(&files, invocation, event, OPEN_NAMES) {
-                if opened.len() < STORED_ROWS {
-                    opened.push(row);
-                } else {
-                    opened_omitted += 1;
+                if open_query.keep_table(&row[0].values) {
+                    keep_page(
+                        &mut opened,
+                        &mut opened_omitted,
+                        &mut open_count,
+                        request.offsets[1],
+                        row,
+                    );
                 }
             }
             if let Some(row) = file_event_row(&files, invocation, event, CHANGE_NAMES) {
-                if changed.len() < STORED_ROWS {
-                    changed.push(row);
-                } else {
-                    changed_omitted += 1;
+                if change_query.keep_table(&row[0].values) {
+                    keep_page(
+                        &mut changed,
+                        &mut changed_omitted,
+                        &mut change_count,
+                        request.offsets[2],
+                        row,
+                    );
                 }
             }
         }
         Ok(())
     })?;
     let complete = complete && files_complete;
+    if complete && !cancel.load(Ordering::Relaxed) {
+        if let Some(writer) = &mut journal {
+            if let Err(error) = writer.publish() {
+                journal_error = Some(error);
+            }
+        }
+    }
     let mut coverage = format!(
         "indexed {seen} saved calls{}; findings stored {}, omitted {findings_omitted}; opened stored {}, omitted {opened_omitted}; changed stored {}, omitted {changed_omitted}",
         total
@@ -1454,14 +2556,21 @@ fn scan_archive(
     if !issues.is_empty() {
         coverage.push_str(&format!("; {} archive read issues", issues.len()));
     }
+    if let Some(error) = journal_error {
+        coverage.push_str(&format!(
+            "; finding journal persistence unavailable: {error}"
+        ));
+    }
     let network = match pcap {
-        Some(path) => scan_pcap(path, pcap_open, cancel).unwrap_or_else(|error| PacketIndex {
-            coverage: format!("pcap index failed: {error}"),
-            http: Vec::new(),
-            http_omitted: 0,
-            dns: Vec::new(),
-            dns_omitted: 0,
-        }),
+        Some(path) => {
+            scan_pcap_query(path, pcap_open, cancel, request).unwrap_or_else(|error| PacketIndex {
+                coverage: format!("pcap index failed: {error}"),
+                http: Vec::new(),
+                http_omitted: 0,
+                dns: Vec::new(),
+                dns_omitted: 0,
+            })
+        }
         None => PacketIndex {
             coverage: "no pcap is recorded for this run; the loaded packet preview was not used"
                 .into(),
@@ -1473,7 +2582,14 @@ fn scan_archive(
     };
     coverage.push_str(". ");
     coverage.push_str(&network.coverage);
+    if cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".into());
+    }
     Ok(ArchiveScan {
+        partial: !complete
+            || !issues.is_empty()
+            || network.coverage.contains("failed")
+            || pcap_open,
         coverage,
         process: finish_processes(nodes),
         findings,
@@ -1489,6 +2605,469 @@ fn scan_archive(
     })
 }
 
+const TSHARK_FIELDS: &[&str] = &[
+    "frame.number",
+    "frame.time_epoch",
+    "ip.src",
+    "ipv6.src",
+    "ip.dst",
+    "ipv6.dst",
+    "tcp.srcport",
+    "tcp.dstport",
+    "udp.srcport",
+    "udp.dstport",
+    "tcp.stream",
+    "http.request.method",
+    "http.host",
+    "http.request.uri",
+    "http.request.version",
+    "http.response.code",
+    "http.response_in",
+    "http.request_in",
+    "dns.id",
+    "dns.qry.name",
+    "dns.qry.type",
+    "dns.qry.class",
+    "dns.flags.response",
+    "dns.flags.rcode",
+    "dns.resp.name",
+    "dns.a",
+    "dns.aaaa",
+    "dns.cname",
+    "dns.response_in",
+    "dns.response_to",
+    "dns.retransmission",
+];
+const HTTP_HEADERS: &[&str] = &[
+    "Frame / stream",
+    "Time (µs)",
+    "Endpoints",
+    "Method",
+    "Host",
+    "URI",
+    "Version",
+    "Response",
+    "Response frames",
+    "Attribution",
+    "Completeness",
+];
+const DNS_HEADERS: &[&str] = &[
+    "Frame",
+    "Time (µs)",
+    "Endpoints",
+    "ID",
+    "Name",
+    "Type",
+    "Class",
+    "Protocol",
+    "Rcode",
+    "Answers",
+    "Response frames",
+    "Retry",
+];
+
+struct PacketSpool {
+    directory: std::path::PathBuf,
+    rows: std::fs::File,
+    offsets: std::fs::File,
+    size: u64,
+}
+impl PacketSpool {
+    fn new() -> Result<Self, String> {
+        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let directory = std::env::temp_dir().join(format!(
+            "antinomie-triage-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .map_err(|error| error.to_string())?;
+        let create = |name| {
+            std::fs::OpenOptions::new()
+                .mode(0o600)
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(directory.join(name))
+                .map_err(|error| error.to_string())
+        };
+        let result = (|| {
+            Ok(Self {
+                rows: create("rows.tsv")?,
+                offsets: create("frames.idx")?,
+                directory: directory.clone(),
+                size: 0,
+            })
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_dir_all(directory);
+        }
+        result
+    }
+    fn push(&mut self, line: &str) -> Result<(), String> {
+        use std::io::Write;
+        let fields = tsv_fields(line)?;
+        let frame = fields
+            .first()
+            .and_then(|number| number.parse::<u64>().ok())
+            .ok_or("TShark frame ID is missing")?;
+        let size = u64::try_from(line.len()).map_err(|_| "metadata line size overflow")? + 1;
+        if self.size.saturating_add(size) > 512 * 1024 * 1024 {
+            return Err(
+                "Triage metadata scratch limit (512 MiB) exceeded; index incomplete".into(),
+            );
+        }
+        self.offsets
+            .write_all(&frame.to_le_bytes())
+            .and_then(|()| self.offsets.write_all(&self.size.to_le_bytes()))
+            .map_err(|error| error.to_string())?;
+        self.rows
+            .write_all(line.as_bytes())
+            .and_then(|()| self.rows.write_all(b"\n"))
+            .map_err(|error| error.to_string())?;
+        self.size += size;
+        Ok(())
+    }
+}
+impl Drop for PacketSpool {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.directory);
+    }
+}
+
+fn tsv_fields(line: &str) -> Result<Vec<String>, String> {
+    let mut values = Vec::new();
+    let mut value = String::new();
+    let mut chars = line.trim_end_matches(['\r', '\n']).chars().peekable();
+    let mut quoted = false;
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' if quoted && chars.peek() == Some(&'"') => {
+                chars.next();
+                value.push('"');
+            }
+            '"' => quoted = !quoted,
+            '\t' if !quoted => {
+                values.push(std::mem::take(&mut value));
+            }
+            _ => value.push(ch),
+        }
+    }
+    if quoted {
+        return Err("TShark field quote was truncated".into());
+    }
+    values.push(value);
+    Ok(values)
+}
+
+fn epoch_us(value: &str) -> Option<u64> {
+    let (seconds, fraction) = value.split_once('.').unwrap_or((value, ""));
+    let seconds = seconds.parse::<u64>().ok()?;
+    if !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let mut fraction = fraction.chars().take(6).collect::<String>();
+    while fraction.len() < 6 {
+        fraction.push('0');
+    }
+    seconds
+        .checked_mul(1_000_000)?
+        .checked_add(fraction.parse().ok()?)
+}
+
+fn spool_response(
+    frame: u64,
+    offsets: &mut std::fs::File,
+    rows: &mut std::io::BufReader<std::fs::File>,
+) -> Result<Vec<String>, String> {
+    use std::io::{BufRead, Read, Seek, SeekFrom};
+    let count = offsets.metadata().map_err(|error| error.to_string())?.len() / 16;
+    let (mut low, mut high) = (0, count);
+    let mut entry = [0u8; 16];
+    while low < high {
+        let mid = low + (high - low) / 2;
+        offsets
+            .seek(SeekFrom::Start(mid * 16))
+            .and_then(|_| offsets.read_exact(&mut entry))
+            .map_err(|error| error.to_string())?;
+        let id = u64::from_le_bytes(
+            entry[..8]
+                .try_into()
+                .map_err(|_| "metadata index frame length")?,
+        );
+        match id.cmp(&frame) {
+            std::cmp::Ordering::Less => low = mid + 1,
+            std::cmp::Ordering::Greater => high = mid,
+            std::cmp::Ordering::Equal => {
+                let offset = u64::from_le_bytes(
+                    entry[8..]
+                        .try_into()
+                        .map_err(|_| "metadata index offset length")?,
+                );
+                rows.seek(SeekFrom::Start(offset))
+                    .map_err(|error| error.to_string())?;
+                let mut line = String::new();
+                rows.read_line(&mut line)
+                    .map_err(|error| error.to_string())?;
+                return tsv_fields(&line);
+            }
+        }
+    }
+    Ok(Vec::new())
+}
+
+/// TShark reassembles the complete saved PCAP or an owned complete-record live
+/// prefix. Output is disk-backed; response lookups use a fixed-size binary
+/// index and memory holds only one query page. Source PCAP is unchanged.
+fn scan_pcap_query(
+    path: &Path,
+    pcap_open: bool,
+    cancel: &Arc<AtomicBool>,
+    request: &ScanRequest,
+) -> Result<PacketIndex, String> {
+    use std::io::{BufRead, BufReader};
+    let identity = antinomie_monitor_core::packet_filter::CaptureIdentity::read(path)?;
+    let spool = Arc::new(std::sync::Mutex::new(PacketSpool::new()?));
+    let writer = Arc::clone(&spool);
+    let extent = antinomie_monitor_core::packet_filter::stream_fields(&identity,
+        "((http.request && !tcp.analysis.retransmission) || http.response || (dns && !tcp.analysis.retransmission))",
+        TSHARK_FIELDS, pcap_open, Arc::clone(cancel), move |line| {
+            writer.lock().map_err(|_| "metadata spool lock poisoned")?.push(line)
+        })?;
+    let state = spool.lock().map_err(|_| "metadata spool lock poisoned")?;
+    let mut rows = BufReader::new(
+        std::fs::File::open(state.directory.join("rows.tsv")).map_err(|error| error.to_string())?,
+    );
+    let mut responses = BufReader::new(
+        std::fs::File::open(state.directory.join("rows.tsv")).map_err(|error| error.to_string())?,
+    );
+    let mut offsets = std::fs::File::open(state.directory.join("frames.idx"))
+        .map_err(|error| error.to_string())?;
+    let mut index = PacketIndex {
+        coverage: String::new(),
+        http: Vec::new(),
+        http_omitted: 0,
+        dns: Vec::new(),
+        dns_omitted: 0,
+    };
+    let (mut http_count, mut dns_count) = (0, 0);
+    let http_query = query::compile_table(&request.filters[3], HTTP_FIELDS);
+    let dns_query = query::compile_table(&request.filters[4], DNS_FIELDS);
+    let mut line = String::new();
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".into());
+        }
+        line.clear();
+        if rows
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?
+            == 0
+        {
+            break;
+        }
+        let fields = tsv_fields(&line)?;
+        if fields.len() != TSHARK_FIELDS.len() {
+            return Err("TShark returned a different field layout".into());
+        }
+        let field = |at: usize| fields[at].as_str();
+        let frame = field(0)
+            .parse::<u64>()
+            .map_err(|_| "invalid TShark frame number")?;
+        let time = epoch_us(field(1));
+        let endpoints = format!(
+            "{}:{} → {}:{}",
+            if field(2).is_empty() {
+                field(3)
+            } else {
+                field(2)
+            },
+            if field(6).is_empty() {
+                field(8)
+            } else {
+                field(6)
+            },
+            if field(4).is_empty() {
+                field(5)
+            } else {
+                field(4)
+            },
+            if field(7).is_empty() {
+                field(9)
+            } else {
+                field(7)
+            }
+        );
+        if !field(11).is_empty() {
+            let methods = field(11).split('\u{1f}').collect::<Vec<_>>();
+            let response_frames = field(16)
+                .split('\u{1f}')
+                .filter_map(|id| id.parse::<u64>().ok())
+                .collect::<Vec<_>>();
+            for (at, method) in methods.iter().enumerate() {
+                let item = |column: usize| field(column).split('\u{1f}').nth(at).unwrap_or("");
+                let response = match response_frames.get(at).copied() {
+                    Some(frame) => spool_response(frame, &mut offsets, &mut responses)?,
+                    None => Vec::new(),
+                };
+                let status = response
+                    .get(15)
+                    .and_then(|value| value.split('\u{1f}').next())
+                    .and_then(|value| value.parse::<u16>().ok());
+                let mut row = vec![
+                    cell(
+                        format!("#{frame} / stream {}", field(10)),
+                        theme::text(),
+                        true,
+                    ),
+                    cell(
+                        time.map_or("—".into(), |time| time.to_string()),
+                        theme::text(),
+                        true,
+                    ),
+                    cell(&endpoints, theme::text(), true),
+                    cell(*method, theme::text(), false),
+                    cell(item(12), theme::text(), false),
+                    cell(item(13), theme::text(), false),
+                    cell(item(14), theme::text(), false),
+                    cell(
+                        status.map_or("—".into(), |status| status.to_string()),
+                        theme::text(),
+                        true,
+                    ),
+                    cell(field(16), theme::text(), true),
+                    cell("unknown", theme::text(), false),
+                    cell("decoded; capture gaps unknown", theme::text(), false),
+                ];
+                row[0].values = vec![
+                    ("frame.number", RowValue::Number(i128::from(frame))),
+                    (
+                        "frame.time_us",
+                        time.map_or(RowValue::Missing, |time| RowValue::Number(i128::from(time))),
+                    ),
+                    ("network.endpoints", RowValue::Text(endpoints.clone())),
+                    ("http.method", RowValue::Text((*method).into())),
+                    ("http.host", text_value(item(12))),
+                    ("http.uri", text_value(item(13))),
+                    ("http.version", text_value(item(14))),
+                    (
+                        "http.status",
+                        status.map_or(RowValue::Missing, |status| {
+                            RowValue::Number(i128::from(status))
+                        }),
+                    ),
+                    ("entry.complete", RowValue::Missing),
+                    ("network.attribution", RowValue::Text("unknown".into())),
+                ];
+                if http_query.keep_table(&row[0].values) {
+                    keep_page(
+                        &mut index.http,
+                        &mut index.http_omitted,
+                        &mut http_count,
+                        request.offsets[3],
+                        row,
+                    );
+                }
+            }
+        }
+        if !field(19).is_empty() && field(22) == "0" {
+            let response_frame = field(28)
+                .split('\u{1f}')
+                .next()
+                .and_then(|id| id.parse::<u64>().ok());
+            let response = match response_frame {
+                Some(frame) => spool_response(frame, &mut offsets, &mut responses)?,
+                None => Vec::new(),
+            };
+            let rcode = response.get(23).and_then(|value| value.parse::<u16>().ok());
+            let answers = [24, 25, 26, 27]
+                .iter()
+                .filter_map(|at| response.get(*at))
+                .filter(|text| !text.is_empty())
+                .flat_map(|text| text.split('\u{1f}').map(str::to_owned))
+                .collect::<Vec<_>>();
+            for (at, name) in field(19).split('\u{1f}').enumerate() {
+                let item = |column: usize| field(column).split('\u{1f}').nth(at).unwrap_or("");
+                let id = field(18).split('\u{1f}').next().and_then(parse_integer);
+                let protocol = if field(6).is_empty() { "UDP" } else { "TCP" };
+                let retry = field(30) == "1";
+                let mut row = vec![
+                    cell(format!("#{frame}"), theme::text(), true),
+                    cell(
+                        time.map_or("—".into(), |time| time.to_string()),
+                        theme::text(),
+                        true,
+                    ),
+                    cell(&endpoints, theme::text(), true),
+                    cell(field(18), theme::text(), true),
+                    cell(name, theme::text(), false),
+                    cell(item(20), theme::text(), false),
+                    cell(item(21), theme::text(), false),
+                    cell(protocol, theme::text(), false),
+                    cell(
+                        rcode.map_or("—".into(), |code| code.to_string()),
+                        theme::text(),
+                        true,
+                    ),
+                    cell(answers.join(", "), theme::text(), false),
+                    cell(field(28), theme::text(), true),
+                    cell(if retry { "retry" } else { "query" }, theme::text(), false),
+                ];
+                row[0].values = vec![
+                    ("frame.number", RowValue::Number(i128::from(frame))),
+                    (
+                        "frame.time_us",
+                        time.map_or(RowValue::Missing, |time| RowValue::Number(i128::from(time))),
+                    ),
+                    ("network.endpoints", RowValue::Text(endpoints.clone())),
+                    ("dns.id", id.map_or(RowValue::Missing, RowValue::Number)),
+                    ("dns.name", RowValue::Text(name.into())),
+                    ("dns.type", text_value(item(20))),
+                    ("dns.class", text_value(item(21))),
+                    ("dns.protocol", RowValue::Text(protocol.into())),
+                    (
+                        "dns.rcode",
+                        rcode.map_or(RowValue::Missing, |code| RowValue::Number(i128::from(code))),
+                    ),
+                    ("dns.answers", RowValue::List(answers.clone())),
+                    ("dns.retry", RowValue::Bool(retry)),
+                ];
+                if dns_query.keep_table(&row[0].values) {
+                    keep_page(
+                        &mut index.dns,
+                        &mut index.dns_omitted,
+                        &mut dns_count,
+                        request.offsets[4],
+                        row,
+                    );
+                }
+            }
+        }
+    }
+    index.coverage = format!("TShark HTTP/1 and DNS/UDP/TCP; {} capture frames; complete-record extent {}/{} octets; HTTP matches {http_count}, DNS matches {dns_count}; response correlation uses decoder frame links; attribution unknown. HTTPS, HTTP/2, HTTP/3 and encrypted DNS unavailable{}",
+        extent.packet_count, extent.complete_extent, extent.file_size,
+        if pcap_open { "; live prefix watermark; final capture requires reanalysis" } else { "" });
+    Ok(index)
+}
+fn text_value(text: &str) -> RowValue {
+    if text.is_empty() {
+        RowValue::Missing
+    } else {
+        RowValue::Text(text.into())
+    }
+}
+fn parse_integer(text: &str) -> Option<i128> {
+    if let Some(hex) = text.strip_prefix("0x") {
+        i128::from_str_radix(hex, 16).ok()
+    } else {
+        text.parse().ok()
+    }
+}
+
+#[cfg(test)]
 const PACKET_BOUND: usize = 4096;
 
 struct PacketIndex {
@@ -1501,6 +3080,7 @@ struct PacketIndex {
 
 /// Read the owned pcap to the end, or to [`PACKET_BOUND`] frames. Reconstruction
 /// uses those frames. A later frame is counted and not decoded.
+#[cfg(test)]
 fn scan_pcap(path: &Path, pcap_open: bool, cancel: &AtomicBool) -> Result<PacketIndex, String> {
     if cancel.load(Ordering::Relaxed) {
         return Err("cancelled".into());
@@ -1590,6 +3170,7 @@ fn scan_pcap(path: &Path, pcap_open: bool, cancel: &AtomicBool) -> Result<Packet
     })
 }
 
+#[cfg(test)]
 fn packet_ends(
     number: Option<u64>,
     held: &[(antinomie_monitor_core::network::NetworkPacket, Vec<u8>)],
@@ -1600,6 +3181,7 @@ fn packet_ends(
         .unwrap_or_else(|| "—".into())
 }
 
+#[cfg(test)]
 fn http_index_row(
     request: &antinomie_monitor_core::network::ReconstructedHttp,
     held: &[(antinomie_monitor_core::network::NetworkPacket, Vec<u8>)],
@@ -1625,6 +3207,7 @@ fn http_index_row(
     row
 }
 
+#[cfg(test)]
 fn dns_index_row(
     query: &antinomie_monitor_core::network::ReconstructedDns,
     held: &[(antinomie_monitor_core::network::NetworkPacket, Vec<u8>)],
@@ -1708,10 +3291,10 @@ fn note_cookie_sets(
             .chain(invocation.exit.iter())
             .chain(invocation.async_events.iter())
         {
-            if event.pid == 0 {
+            if event.tid == 0 {
                 continue;
             }
-            sets.entry(event.pid)
+            sets.entry(event.tid)
                 .or_default()
                 .insert(invocation.task_cookie);
         }
@@ -1769,6 +3352,8 @@ struct FdState {
     /// Child task → the task whose working directory it shares (`CLONE_FS`).
     fs_share: std::collections::BTreeMap<(u64, u32), (u64, u32)>,
     cwd: std::collections::BTreeMap<(u64, u32), String>,
+    cwd_unverified: std::collections::BTreeSet<(u64, u32)>,
+    cloexec: std::collections::BTreeSet<(u64, u32, u64)>,
 }
 
 fn table_owner(files: &FdState, cookie: u64, pid: u32) -> (u64, u32) {
@@ -1797,7 +3382,7 @@ fn follow_share(
 fn file_outcome(invocation: &InvocationSummary) -> String {
     match invocation.exit.as_ref().and_then(|exit| exit.result) {
         Some(result) if result >= 0 => "successful".into(),
-        Some(_) => "attempted".into(),
+        Some(_) => "failed attempt".into(),
         None => "exit not recorded".into(),
     }
 }
@@ -1811,6 +3396,22 @@ fn succeeded(invocation: &InvocationSummary) -> bool {
 }
 
 fn remember_open(files: &mut FdState, invocation: &InvocationSummary, event: &EventSummary) {
+    if event.syscall_name == "memfd_create" && succeeded(invocation) {
+        if let Some(fd) = invocation.exit.as_ref().and_then(|exit| exit.result) {
+            let owner = table_owner(files, invocation.task_cookie, event.tid);
+            let name = event
+                .fields
+                .iter()
+                .find_map(path_text)
+                .unwrap_or_else(|| "unnamed".into());
+            let key = (owner.0, owner.1, fd as u64);
+            files.opened.insert(key, format!("memfd:{name}"));
+            if call_args(invocation).is_some_and(|args| args[1] & 1 != 0) {
+                files.cloexec.insert(key);
+            }
+        }
+        return;
+    }
     if !matches!(event.syscall_name.as_str(), "open" | "openat" | "openat2") {
         return;
     }
@@ -1820,21 +3421,41 @@ fn remember_open(files: &mut FdState, invocation: &InvocationSummary, event: &Ev
     let Some(result) = invocation.exit.as_ref().and_then(|exit| exit.result) else {
         return;
     };
-    let (cookie, pid) = table_owner(files, invocation.task_cookie, event.pid);
+    let (cookie, pid) = table_owner(files, invocation.task_cookie, event.tid);
     let key = (cookie, pid, result as u64);
     let paths = path_list(invocation);
     if paths.is_empty() {
         files.opened.remove(&key);
     } else {
-        files.opened.insert(key, paths.join(", "));
+        files
+            .opened
+            .insert(key, displayed_path(invocation, event, files));
+    }
+    if open_flags(invocation, event).is_some_and(|flags| flags & 0x80000 != 0) {
+        files.cloexec.insert(key);
+    } else {
+        files.cloexec.remove(&key);
     }
 }
 
 fn remember_cwd(files: &mut FdState, invocation: &InvocationSummary, event: &EventSummary) {
-    if !succeeded(invocation) {
+    if !matches!(event.syscall_name.as_str(), "chdir" | "fchdir" | "getcwd") {
         return;
     }
-    let owner = fs_owner(files, invocation.task_cookie, event.pid);
+    let owner = fs_owner(files, invocation.task_cookie, event.tid);
+    if invocation
+        .exit
+        .as_ref()
+        .and_then(|exit| exit.result)
+        .is_some_and(|ret| ret < 0)
+    {
+        return;
+    }
+    if !succeeded(invocation) {
+        files.cwd.remove(&owner);
+        files.cwd_unverified.insert(owner);
+        return;
+    }
     let path = match event.syscall_name.as_str() {
         "getcwd" => path_list(invocation)
             .into_iter()
@@ -1845,7 +3466,7 @@ fn remember_cwd(files: &mut FdState, invocation: &InvocationSummary, event: &Eve
             .next()
             .and_then(|path| resolve_chdir(files, owner, path)),
         "fchdir" => call_args(invocation).and_then(|args| {
-            let (cookie, pid) = table_owner(files, invocation.task_cookie, event.pid);
+            let (cookie, pid) = table_owner(files, invocation.task_cookie, event.tid);
             files
                 .opened
                 .get(&(cookie, pid, args[0]))
@@ -1856,6 +3477,14 @@ fn remember_cwd(files: &mut FdState, invocation: &InvocationSummary, event: &Eve
     };
     if let Some(path) = path {
         files.cwd.insert(owner, path);
+        if event.syscall_name == "getcwd" {
+            files.cwd_unverified.remove(&owner);
+        } else {
+            files.cwd_unverified.insert(owner);
+        }
+    } else {
+        files.cwd.remove(&owner);
+        files.cwd_unverified.insert(owner);
     }
 }
 
@@ -1871,28 +3500,33 @@ fn resolve_chdir(files: &FdState, owner: (u64, u32), path: String) -> Option<Str
 }
 
 fn join_cwd(base: &str, relative: &str) -> String {
-    let mut parts: Vec<&str> = base.split('/').filter(|part| !part.is_empty()).collect();
-    for part in relative.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            other => parts.push(other),
-        }
-    }
-    if parts.is_empty() {
-        "/".to_string()
-    } else {
-        format!("/{}", parts.join("/"))
-    }
+    // chdir resolves '..' after symlinks. Lexical normalization would invent
+    // a physical working directory, so retain the literal observed components.
+    format!("{}/{relative}", base.trim_end_matches('/'))
 }
 
 /// `dup` returns the new descriptor. `dup2` and `dup3` name it in argument 1.
 fn apply_dup(files: &mut FdState, invocation: &InvocationSummary, event: &EventSummary) {
+    if event.syscall_name == "fcntl" && succeeded(invocation) {
+        if let Some(args) = call_args(invocation) {
+            if args[1] == 2 {
+                let owner = table_owner(files, invocation.task_cookie, event.tid);
+                let key = (owner.0, owner.1, args[0]);
+                if args[2] & 1 != 0 {
+                    files.cloexec.insert(key);
+                } else {
+                    files.cloexec.remove(&key);
+                }
+                return;
+            }
+        }
+    }
     let kind = match (event.syscall_nr, event.syscall_name.as_str()) {
         (32, _) | (_, "dup") => DupKind::Return,
         (33, _) | (_, "dup2") | (292, _) | (_, "dup3") => DupKind::Argument,
+        (_, "fcntl") if call_args(invocation).is_some_and(|args| matches!(args[1], 0 | 1030)) => {
+            DupKind::Return
+        }
         _ => return,
     };
     if !succeeded(invocation) {
@@ -1908,12 +3542,22 @@ fn apply_dup(files: &mut FdState, invocation: &InvocationSummary, event: &EventS
         DupKind::Return => result as u64,
         DupKind::Argument => args[1],
     };
-    let (cookie, pid) = table_owner(files, invocation.task_cookie, event.pid);
+    let (cookie, pid) = table_owner(files, invocation.task_cookie, event.tid);
     let Some(path) = files.opened.get(&(cookie, pid, args[0])).cloned() else {
         files.opened.remove(&(cookie, pid, new_fd));
         return;
     };
     files.opened.insert((cookie, pid, new_fd), path);
+    let key = (cookie, pid, new_fd);
+    if new_fd != args[0] {
+        files.cloexec.remove(&key);
+    }
+    if event.syscall_name == "dup3" && args[2] & 0x80000 != 0 {
+        files.cloexec.insert(key);
+    }
+    if event.syscall_name == "fcntl" && args[1] == 1030 {
+        files.cloexec.insert(key);
+    }
 }
 
 enum DupKind {
@@ -1933,10 +3577,10 @@ fn task_cookies(invocations: &[InvocationSummary]) -> std::collections::BTreeMap
             .chain(invocation.exit.iter())
             .chain(invocation.async_events.iter())
         {
-            if event.pid == 0 {
+            if event.tid == 0 {
                 continue;
             }
-            sets.entry(event.pid)
+            sets.entry(event.tid)
                 .or_default()
                 .insert(invocation.task_cookie);
         }
@@ -1950,17 +3594,99 @@ fn task_cookies(invocations: &[InvocationSummary]) -> std::collections::BTreeMap
 
 /// A successful `close` drops that task's descriptor only.
 fn forget_closed(files: &mut FdState, invocation: &InvocationSummary, event: &EventSummary) {
+    if matches!(event.syscall_name.as_str(), "execve" | "execveat") && succeeded(invocation) {
+        detach_files(files, invocation.task_cookie, event.tid);
+        let owner = table_owner(files, invocation.task_cookie, event.tid);
+        let closed = files
+            .cloexec
+            .iter()
+            .filter(|(cookie, tid, _)| (*cookie, *tid) == owner)
+            .copied()
+            .collect::<Vec<_>>();
+        for key in closed {
+            files.opened.remove(&key);
+            files.cloexec.remove(&key);
+        }
+        return;
+    }
+    if event.syscall_name == "close_range" && succeeded(invocation) {
+        if let Some(args) = call_args(invocation) {
+            if args[2] & 2 != 0 {
+                detach_files(files, invocation.task_cookie, event.tid);
+            }
+            let owner = table_owner(files, invocation.task_cookie, event.tid);
+            let keys = files
+                .opened
+                .keys()
+                .filter(|(cookie, tid, fd)| {
+                    (*cookie, *tid) == owner && *fd >= args[0] && *fd <= args[1]
+                })
+                .copied()
+                .collect::<Vec<_>>();
+            for key in keys {
+                if args[2] & 4 != 0 {
+                    files.cloexec.insert(key);
+                } else {
+                    files.opened.remove(&key);
+                    files.cloexec.remove(&key);
+                }
+            }
+        }
+        return;
+    }
     if event.syscall_name != "close" && event.syscall_nr != 3 {
         return;
     }
-    if !succeeded(invocation) {
+    if invocation
+        .exit
+        .as_ref()
+        .and_then(|exit| exit.result)
+        .is_some_and(|ret| ret < 0)
+    {
         return;
     }
     let Some(fd) = fd_argument(invocation, event) else {
         return;
     };
-    let (cookie, pid) = table_owner(files, invocation.task_cookie, event.pid);
+    let (cookie, pid) = table_owner(files, invocation.task_cookie, event.tid);
     files.opened.remove(&(cookie, pid, fd));
+    files.cloexec.remove(&(cookie, pid, fd));
+}
+
+fn detach_files(files: &mut FdState, cookie: u64, tid: u32) {
+    let owner = table_owner(files, cookie, tid);
+    if owner == (cookie, tid) {
+        let sharers = files
+            .share
+            .keys()
+            .copied()
+            .filter(|(c, t)| table_owner(files, *c, *t) == owner)
+            .collect::<Vec<_>>();
+        if let Some(new_owner) = sharers.first().copied() {
+            copy_files(files, owner, new_owner);
+            files.share.remove(&new_owner);
+            for sharer in sharers.into_iter().skip(1) {
+                files.share.insert(sharer, new_owner);
+            }
+        }
+    } else {
+        copy_files(files, owner, (cookie, tid));
+        files.share.remove(&(cookie, tid));
+    }
+}
+fn copy_files(files: &mut FdState, source: (u64, u32), target: (u64, u32)) {
+    let entries = files
+        .opened
+        .iter()
+        .filter(|((cookie, tid, _), _)| (*cookie, *tid) == source)
+        .map(|((_, _, fd), path)| (*fd, path.clone()))
+        .collect::<Vec<_>>();
+    for (fd, path) in entries {
+        files.opened.insert((target.0, target.1, fd), path);
+        if files.cloexec.contains(&(source.0, source.1, fd)) {
+            files.cloexec.insert((target.0, target.1, fd));
+        }
+    }
 }
 
 /// Snapshot the parent's open descriptors onto the new process. The child
@@ -1971,10 +3697,9 @@ fn inherit_open_fds(
     event: &EventSummary,
     cookies: &std::collections::BTreeMap<u32, u64>,
 ) {
-    if !matches!(
-        spawn_kind(invocation, event.syscall_nr, call_args(invocation)),
-        Some(Spawn::Process)
-    ) {
+    if !matches!(event.syscall_nr, FORK | VFORK | CLONE | CLONE3)
+        || (event.syscall_nr == CLONE3 && clone3_flags(invocation).is_none())
+    {
         return;
     }
     let Some(result) = invocation.exit.as_ref().and_then(|exit| exit.result) else {
@@ -1987,34 +3712,23 @@ fn inherit_open_fds(
         return;
     };
     let child_cookie = cookies.get(&child_pid).copied().unwrap_or(0);
-    if child_pid == event.pid && child_cookie == invocation.task_cookie {
+    if child_pid == event.tid && child_cookie == invocation.task_cookie {
         return;
     }
-    let parent = table_owner(files, invocation.task_cookie, event.pid);
+    let parent = table_owner(files, invocation.task_cookie, event.tid);
     if shares_files(invocation, event) {
         files.share.insert((child_cookie, child_pid), parent);
     } else {
-        let inherited: Vec<(u64, String)> = files
-            .opened
-            .iter()
-            .filter(|((cookie, pid, _), _)| (*cookie, *pid) == parent)
-            .map(|((_, _, fd), path)| (*fd, path.clone()))
-            .collect();
-        for (fd, path) in inherited {
-            files
-                .opened
-                .entry((child_cookie, child_pid, fd))
-                .or_insert(path);
-        }
+        copy_files(files, parent, (child_cookie, child_pid));
     }
-    let directory = fs_owner(files, invocation.task_cookie, event.pid);
+    let directory = fs_owner(files, invocation.task_cookie, event.tid);
     if shares_fs(invocation, event) {
         files.fs_share.insert((child_cookie, child_pid), directory);
     } else if let Some(cwd) = files.cwd.get(&directory).cloned() {
-        files
-            .cwd
-            .entry((child_cookie, child_pid))
-            .or_insert(cwd);
+        files.cwd.entry((child_cookie, child_pid)).or_insert(cwd);
+        if files.cwd_unverified.contains(&directory) {
+            files.cwd_unverified.insert((child_cookie, child_pid));
+        }
     }
 }
 
@@ -2051,11 +3765,38 @@ fn clone3_flags(invocation: &InvocationSummary) -> Option<u64> {
 }
 
 fn displayed_path(invocation: &InvocationSummary, event: &EventSummary, files: &FdState) -> String {
+    if matches!(event.syscall_name.as_str(), "renameat" | "renameat2") {
+        let args = call_args(invocation);
+        let old = named_path(invocation, event, &["oldname", "old_path"])
+            .map(|path| {
+                resolve_path_dirfd(&path, invocation, event, files, args.map(|args| args[0]))
+            })
+            .unwrap_or_else(|| "—".into());
+        let new = named_path(invocation, event, &["newname", "new_path"])
+            .map(|path| {
+                resolve_path_dirfd(&path, invocation, event, files, args.map(|args| args[2]))
+            })
+            .unwrap_or_else(|| "—".into());
+        return format!("{old} → {new}");
+    }
     let own = path_list(invocation);
     if !own.is_empty() {
         return own
             .iter()
-            .map(|path| resolve_path(path, invocation, event, files))
+            .enumerate()
+            .map(|(index, path)| {
+                if index == 1 && matches!(event.syscall_name.as_str(), "renameat" | "renameat2") {
+                    resolve_path_dirfd(
+                        path,
+                        invocation,
+                        event,
+                        files,
+                        call_args(invocation).map(|args| args[2]),
+                    )
+                } else {
+                    resolve_path(path, invocation, event, files)
+                }
+            })
             .collect::<Vec<_>>()
             .join(", ");
     }
@@ -2067,7 +3808,7 @@ fn displayed_path(invocation: &InvocationSummary, event: &EventSummary, files: &
         }
         if let Some(fd) = fd_argument(invocation, event) {
             if fd != u64::MAX {
-                let (cookie, pid) = table_owner(files, invocation.task_cookie, event.pid);
+                let (cookie, pid) = table_owner(files, invocation.task_cookie, event.tid);
                 if let Some(path) = files.opened.get(&(cookie, pid, fd)) {
                     return path.clone();
                 }
@@ -2077,10 +3818,20 @@ fn displayed_path(invocation: &InvocationSummary, event: &EventSummary, files: &
     }
     if matches!(
         event.syscall_name.as_str(),
-        "read" | "write" | "readv" | "writev" | "pwrite64"
+        "read"
+            | "write"
+            | "readv"
+            | "writev"
+            | "pwrite64"
+            | "pwritev"
+            | "pwritev2"
+            | "ftruncate"
+            | "fchmod"
+            | "fchown"
+            | "fchdir"
     ) {
         if let Some(fd) = fd_argument(invocation, event) {
-            let (cookie, pid) = table_owner(files, invocation.task_cookie, event.pid);
+            let (cookie, pid) = table_owner(files, invocation.task_cookie, event.tid);
             if let Some(path) = files.opened.get(&(cookie, pid, fd)) {
                 return path.clone();
             }
@@ -2096,23 +3847,41 @@ fn resolve_path(
     event: &EventSummary,
     files: &FdState,
 ) -> String {
+    resolve_path_dirfd(
+        path,
+        invocation,
+        event,
+        files,
+        dirfd_argument(invocation, event),
+    )
+}
+fn resolve_path_dirfd(
+    path: &str,
+    invocation: &InvocationSummary,
+    event: &EventSummary,
+    files: &FdState,
+    dirfd: Option<u64>,
+) -> String {
     if path.starts_with('/') {
         return path.to_string();
     }
-    let (cookie, pid) = table_owner(files, invocation.task_cookie, event.pid);
-    if matches!(event.syscall_name.as_str(), "openat" | "openat2") {
-        if let Some(dirfd) = dirfd_argument(invocation, event) {
+    let (cookie, pid) = table_owner(files, invocation.task_cookie, event.tid);
+    if event.syscall_name.ends_with("at") || event.syscall_name.ends_with("at2") {
+        if let Some(dirfd) = dirfd {
             if dirfd != AT_FDCWD {
                 return match files.opened.get(&(cookie, pid, dirfd)) {
-                    Some(base) if base.starts_with('/') => format!("{base}/{path}"),
+                    Some(base) if base.starts_with('/') => format!(
+                        "{}/{path} (lexical dirfd path; symlinks unknown)",
+                        base.split(" (lexical").next().unwrap_or(base)
+                    ),
                     _ => format!("{path} (relative, dirfd not recorded)"),
                 };
             }
         }
     }
-    let directory = fs_owner(files, invocation.task_cookie, event.pid);
+    let directory = fs_owner(files, invocation.task_cookie, event.tid);
     match files.cwd.get(&directory) {
-        Some(cwd) => format!("{cwd}/{path}"),
+        Some(cwd) => format!("{cwd}/{path} (lexical cwd path; symlinks unknown)"),
         None => format!("{path} (relative, cwd not recorded)"),
     }
 }
@@ -2122,7 +3891,7 @@ fn dirfd_argument(invocation: &InvocationSummary, event: &EventSummary) -> Optio
     let index = (0..args.len()).find(|index| {
         matches!(
             trace::argument_name(event.syscall_nr, *index),
-            "dfd" | "dirfd"
+            "dfd" | "dirfd" | "olddfd"
         )
     })?;
     (index < args.len()).then_some(args[index])
@@ -2135,6 +3904,28 @@ fn path_key(key: &str) -> bool {
             "path" | "pathname" | "filename" | "oldname" | "newname" | "old_path" | "new_path"
         )
     })
+}
+
+fn named_path(
+    invocation: &InvocationSummary,
+    event: &EventSummary,
+    names: &[&str],
+) -> Option<String> {
+    let arguments = (0..6)
+        .filter(|index| names.contains(&trace::argument_name(event.syscall_nr, *index)))
+        .map(|index| format!("arg{index}."))
+        .collect::<Vec<_>>();
+    invocation
+        .entry
+        .iter()
+        .chain(invocation.exit.iter())
+        .flat_map(|event| &event.fields)
+        .filter(|field| {
+            path_key(&field.key)
+                && (field.key.split('.').any(|part| names.contains(&part))
+                    || arguments.iter().any(|prefix| field.key.starts_with(prefix)))
+        })
+        .find_map(path_text)
 }
 
 fn path_text(field: &antinomie_monitor_core::FieldSummary) -> Option<String> {
@@ -2155,7 +3946,9 @@ fn path_list(invocation: &InvocationSummary) -> Vec<String> {
     let mut paths = Vec::new();
     for event in invocation.entry.iter().chain(invocation.exit.iter()) {
         for field in &event.fields {
-            if !path_key(&field.key) {
+            if !path_key(&field.key)
+                && !(event.syscall_name == "getcwd" && field.key.split('.').any(|key| key == "buf"))
+            {
                 continue;
             }
             if let Some(text) = path_text(field) {
@@ -2265,7 +4058,10 @@ fn http_process(packet: &NetworkPacket, invocations: &[InvocationSummary]) -> St
             continue;
         }
         if mentions_endpoint(invocation, &address, &port_text) {
-            return format!("pid {} tid {}", event.pid, event.tid);
+            return format!(
+                "ambiguous: endpoint candidate pid {} tid {}",
+                event.pid, event.tid
+            );
         }
     }
     "—".into()
@@ -2385,11 +4181,16 @@ struct BpfNote {
 fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
     let mut notes = Vec::new();
     // File descriptors returned by successful BPF_PROG_LOAD calls in this slice.
-    let mut program_fds = Vec::new();
+    let mut program_fds = Vec::<(u64, i64)>::new();
     for invocation in input.invocations {
         let Some(event) = trace::representative(invocation) else {
             continue;
         };
+        if event.syscall_name == "close" && succeeded(invocation) {
+            if let Some(fd) = call_args(invocation).and_then(|args| i64::try_from(args[0]).ok()) {
+                program_fds.retain(|key| *key != (invocation.task_cookie, fd));
+            }
+        }
         let recorded_args = event.args.or_else(|| call_args(invocation));
         let args = recorded_args.unwrap_or([0; 6]);
         let Some(command) = bpf_command(event, args) else {
@@ -2413,12 +4214,76 @@ fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
                 tid: Some(event.tid),
                 timestamp_ns: (event.timestamp_ns != 0).then_some(event.timestamp_ns),
                 action: action.to_owned(),
+                source_syscall: event.syscall_name.clone(),
+                event_id: Some(invocation.call_id),
+                result: invocation.exit.as_ref().and_then(|exit| exit.result),
+                attachment_kind: if command == "SO_ATTACH_FILTER" {
+                    "classic socket filter"
+                } else if classic_image(command) {
+                    "classic seccomp filter"
+                } else {
+                    "eBPF program"
+                }
+                .into(),
+                declared_instruction_count: captured_integer(
+                    invocation,
+                    if classic_image(command) {
+                        "len"
+                    } else {
+                        "insn_cnt"
+                    },
+                ),
+                fd: if command == "BPF_PROG_LOAD" {
+                    invocation
+                        .exit
+                        .as_ref()
+                        .and_then(|exit| exit.result)
+                        .filter(|ret| *ret >= 0)
+                } else if command == "SO_ATTACH_FILTER" {
+                    recorded_args.and_then(|args| i64::try_from(args[0]).ok())
+                } else {
+                    captured_integer(invocation, "attach_bpf_fd")
+                        .and_then(|fd| i64::try_from(fd).ok())
+                },
+                capture_issues: invocation
+                    .entry
+                    .iter()
+                    .chain(invocation.exit.iter())
+                    .flat_map(|event| event.issues.iter().cloned())
+                    .chain(
+                        invocation
+                            .entry
+                            .iter()
+                            .chain(invocation.exit.iter())
+                            .flat_map(|event| &event.fields)
+                            .filter(|field| !field.complete)
+                            .map(|field| {
+                                format!(
+                                    "{} incomplete ({}/{:?} captured octets)",
+                                    field.key, field.captured_len, field.logical_len
+                                )
+                            }),
+                    )
+                    .collect(),
+                ..bpf::BpfIdentity::default()
             };
             let exported = bpf::export_capture(bytes, &identity);
             let translation = if classic_image(command) {
-                bpf::translate_classic(bytes)
+                bpf::translate_classic_explained(
+                    bytes,
+                    if command == "SO_ATTACH_FILTER" {
+                        bpf::ClassicContext::Socket
+                    } else if matches!(
+                        command,
+                        "SECCOMP_SET_MODE_FILTER" | "SECCOMP_MODE_FILTER" | "PR_SET_SECCOMP"
+                    ) {
+                        bpf::ClassicContext::Seccomp
+                    } else {
+                        bpf::ClassicContext::Unknown
+                    },
+                )
             } else {
-                bpf::translate(bytes)
+                bpf::translate_explained(bytes)
             };
             let dump = classic_image(command).then(|| bpf::dump(bytes));
             (
@@ -2435,7 +4300,7 @@ fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
         notes.push(BpfNote {
             heading: format!("{}  tid {}  {command}", event.syscall_name, event.tid),
             outcome: outcome(invocation),
-            lifecycle: attach_of_loaded(command, recorded_args, &program_fds)
+            lifecycle: attach_of_loaded(command, invocation, &program_fds)
                 .or_else(|| bpf_lifecycle(command, result)),
             translation,
             dump,
@@ -2445,42 +4310,75 @@ fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
         });
         if command == "BPF_PROG_LOAD" {
             if let Some(fd) = result.filter(|result| *result >= 0) {
-                program_fds.push(fd);
+                program_fds.push((invocation.task_cookie, fd));
             }
         }
     }
     notes
 }
 
+fn captured_integer(invocation: &InvocationSummary, member: &str) -> Option<u64> {
+    invocation
+        .entry
+        .iter()
+        .chain(invocation.exit.iter())
+        .flat_map(|event| &event.fields)
+        .filter(|field| field.key.rsplit('.').next() == Some(member))
+        .find_map(|field| {
+            let bytes = trace::covered_preview(field);
+            match bytes.len() {
+                2 => bytes.try_into().ok().map(u16::from_le_bytes).map(u64::from),
+                4 => bytes.try_into().ok().map(u32::from_le_bytes).map(u64::from),
+                8 => bytes.try_into().ok().map(u64::from_le_bytes),
+                _ => None,
+            }
+        })
+}
+
 /// `attach requested of fd N` when a recorded argument is a program fd from
 /// an earlier successful load in this slice. No fd is guessed from a pointer.
-fn attach_of_loaded(command: &str, args: Option<[u64; 6]>, program_fds: &[i64]) -> Option<String> {
+fn attach_of_loaded(
+    command: &str,
+    invocation: &InvocationSummary,
+    program_fds: &[(u64, i64)],
+) -> Option<String> {
     if command != "BPF_PROG_ATTACH" {
         return None;
     }
-    let fd = args?.into_iter().find_map(|arg| {
-        let fd = i64::try_from(arg).ok()?;
-        program_fds.contains(&fd).then_some(fd)
-    })?;
-    Some(format!("attach requested of fd {fd}"))
+    let fd = i64::try_from(captured_integer(invocation, "attach_bpf_fd")?).ok()?;
+    program_fds
+        .contains(&(invocation.task_cookie, fd))
+        .then(|| {
+            format!(
+                "{} of observed loaded fd {fd}",
+                if succeeded(invocation) {
+                    "attached"
+                } else {
+                    "attach attempted"
+                }
+            )
+        })
 }
 
 fn bpf_lifecycle(command: &str, result: Option<i64>) -> Option<String> {
-    let (phrase, with_fd) = match command {
-        "BPF_PROG_LOAD" => ("load requested", true),
-        "BPF_PROG_ATTACH" => ("attach requested", true),
-        "BPF_PROG_DETACH" => ("detach requested", false),
-        "SO_ATTACH_FILTER" => ("socket attach requested", true),
+    let action = match command {
+        "BPF_PROG_LOAD" => "load",
+        "BPF_PROG_ATTACH" => "attach",
+        "BPF_PROG_DETACH" => "detach",
+        "SO_ATTACH_FILTER" => "socket attachment",
         "SECCOMP_SET_MODE_STRICT"
         | "SECCOMP_SET_MODE_FILTER"
         | "SECCOMP_MODE_STRICT"
         | "SECCOMP_MODE_FILTER"
-        | "PR_SET_SECCOMP" => ("seccomp install requested", true),
+        | "PR_SET_SECCOMP" => "seccomp installation",
         _ => return None,
     };
     Some(match result {
-        Some(result) if with_fd && result >= 0 => format!("{phrase} fd {result}"),
-        _ => phrase.to_string(),
+        Some(fd) if command == "BPF_PROG_LOAD" && fd >= 0 => format!("loaded program fd {fd}"),
+        Some(0) => format!("{action} successful"),
+        Some(ret) if ret < 0 => format!("{action} failed ({ret})"),
+        Some(ret) => format!("{action} returned {ret}; interpretation depends on recorded flags"),
+        None => format!("{action} attempted; exit not recorded"),
     })
 }
 
@@ -2619,6 +4517,159 @@ fn bpf_view(ui: &mut egui::Ui, input: &TriageInput<'_>, status: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quoted_packet_fields_and_epoch_times_preserve_exact_values() {
+        assert_eq!(
+            tsv_fields("\"GET\"\t\"/a\tb\"\"c\"\t\"\"").unwrap(),
+            ["GET", "/a\tb\"c", ""]
+        );
+        assert!(tsv_fields("\"truncated").is_err());
+        assert_eq!(epoch_us("123.123456789"), Some(123_123456));
+        assert_eq!(epoch_us("0.000001"), Some(1));
+        assert_eq!(epoch_us("18446744073709551615.999999"), None);
+        assert_eq!(epoch_us("1.bad"), None);
+    }
+
+    #[test]
+    fn complete_retained_archive_query_pages_every_rwx_finding_and_persists_facts() {
+        use std::io::Write;
+        let temp = PacketSpool::new().unwrap();
+        let mut raw = std::fs::File::create(temp.directory.join("telemetry.raw")).unwrap();
+        for call in 0u64..2051 {
+            for phase in [1u8, 2] {
+                for fragment in [1u8, 5] {
+                    let mut body = vec![0u8; if fragment == 1 { 120 } else { 32 }];
+                    if fragment == 1 {
+                        body[16..24].copy_from_slice(&7u64.to_le_bytes());
+                        body[24..32].copy_from_slice(&(MAP_PRIVATE | MAP_ANONYMOUS).to_le_bytes());
+                        if phase == 2 {
+                            body[49] = 1;
+                            body[56..64].copy_from_slice(&4096u64.to_le_bytes());
+                        }
+                    }
+                    let mut packet = vec![0u8; 136];
+                    packet[..4].copy_from_slice(b"ANTT");
+                    packet[4..6].copy_from_slice(&1u16.to_le_bytes());
+                    packet[6..8].copy_from_slice(&1u16.to_le_bytes());
+                    packet[8..10].copy_from_slice(&136u16.to_le_bytes());
+                    packet[10..12].copy_from_slice(&1u16.to_le_bytes());
+                    packet[12..16].copy_from_slice(&(136u32 + body.len() as u32).to_le_bytes());
+                    packet[20..24].copy_from_slice(&1u32.to_le_bytes());
+                    packet[24..32].copy_from_slice(&1u64.to_le_bytes());
+                    packet[32..40].copy_from_slice(&55u64.to_le_bytes());
+                    packet[40..48].copy_from_slice(&call.to_le_bytes());
+                    packet[48..56].copy_from_slice(&(call * 2 + u64::from(phase)).to_le_bytes());
+                    packet[56..64].copy_from_slice(
+                        &(call * 4 + u64::from(phase) + u64::from(fragment)).to_le_bytes(),
+                    );
+                    packet[64..72].copy_from_slice(&(call * 10 + u64::from(phase)).to_le_bytes());
+                    packet[72..76].copy_from_slice(&55u32.to_le_bytes());
+                    packet[76..80].copy_from_slice(&55u32.to_le_bytes());
+                    packet[88..96].copy_from_slice(&9u64.to_le_bytes());
+                    packet[96..98].copy_from_slice(&1u16.to_le_bytes());
+                    packet[98] = phase;
+                    packet[99] = fragment;
+                    packet[120..124].copy_from_slice(&(body.len() as u32).to_le_bytes());
+                    packet[128..136].copy_from_slice(&55u64.to_le_bytes());
+                    packet.extend(body);
+                    raw.write_all(&(packet.len() as u32).to_le_bytes()).unwrap();
+                    raw.write_all(&packet).unwrap();
+                }
+            }
+        }
+        raw.sync_all().unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let first = scan_archive_query(
+            &temp.directory,
+            None,
+            false,
+            &cancel,
+            &ScanRequest::default(),
+        )
+        .unwrap();
+        assert_eq!(first.findings.len(), STORED_ROWS);
+        assert_eq!(first.findings_omitted, 51);
+        let mut request = ScanRequest::default();
+        request.offsets[0] = STORED_ROWS;
+        request.filters[0] = "finding.rule == \"memory.rwx\" && finding.success == true".into();
+        let second = scan_archive_query(&temp.directory, None, false, &cancel, &request).unwrap();
+        assert_eq!(second.findings.len(), 51);
+        assert_eq!(second.findings_omitted, STORED_ROWS as u64);
+        assert!(second
+            .findings
+            .iter()
+            .all(|finding| finding.call_id >= STORED_ROWS as u64));
+        let journal =
+            std::fs::read_to_string(temp.directory.join("triage-findings-v1.jsonl")).unwrap();
+        assert_eq!(journal.lines().count(), 2051);
+        let fact: serde_json::Value =
+            serde_json::from_str(journal.lines().next().unwrap()).unwrap();
+        assert_eq!(fact["facts"]["finding.rule"], "memory.rwx");
+        assert_eq!(fact["facts"]["finding.version"], 1);
+        assert_eq!(fact["facts"]["finding.success"], true);
+    }
+
+    #[test]
+    fn relative_chdir_retains_symlink_components_and_unknown_fchdir_invalidates_cwd() {
+        let start = path_call(1, 80, "chdir", 0, "/tmp/link");
+        let relative = path_call(1, 80, "chdir", 0, "../child");
+        let mut opened = path_call(1, 257, "openat", 4, "note");
+        opened.entry.as_mut().unwrap().args = Some([AT_FDCWD, 0, 0, 0, 0, 0]);
+        let rows = file_rows(&[start.clone(), relative, opened.clone()], OPEN_NAMES);
+        assert_eq!(
+            rows.rows[0][0].text,
+            "/tmp/link/../child/note (lexical cwd path; symlinks unknown)"
+        );
+        let mut moved = call(1, 81, "fchdir", 0);
+        moved.entry.as_mut().unwrap().args = Some([99, 0, 0, 0, 0, 0]);
+        let rows = file_rows(&[start, moved, opened], OPEN_NAMES);
+        assert_eq!(rows.rows[0][0].text, "note (relative, cwd not recorded)");
+    }
+
+    #[test]
+    fn exec_cloexec_and_shared_tables_keep_parent_descriptor_provenance_separate() {
+        let mut opened = path_call(1, 257, "openat", 7, "/etc/test");
+        opened.entry.as_mut().unwrap().args = Some([AT_FDCWD, 0, 0x80000, 0, 0, 0]);
+        let mut clone = call(1, CLONE, "clone", 42);
+        clone.entry.as_mut().unwrap().args = Some([CLONE_FILES, 0, 0, 0, 0, 0]);
+        let exec = path_call(42, 59, "execve", 0, "/bin/true");
+        let mut child = call(42, 1, "write", 3);
+        child.entry.as_mut().unwrap().args = Some([7, 0, 3, 0, 0, 0]);
+        let mut parent = call(1, 1, "write", 3);
+        parent.entry.as_mut().unwrap().args = Some([7, 0, 3, 0, 0, 0]);
+        let rows = file_rows(&[opened, clone, exec, child, parent], &["write"]);
+        assert_eq!(rows.rows[0][0].text, "—");
+        assert_eq!(rows.rows[1][0].text, "/etc/test");
+        assert_eq!(rows.rows[1][8].text, "3");
+    }
+
+    #[test]
+    fn tshark_saved_and_live_prefix_index_use_all_capture_frames() {
+        if std::process::Command::new("tshark")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_err()
+        {
+            return;
+        }
+        let temp = PacketSpool::new().unwrap();
+        let path = temp.directory.join("capture.pcap");
+        std::fs::write(&path, http_pcap()).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        for live in [false, true] {
+            let index = scan_pcap_query(&path, live, &cancel, &ScanRequest::default()).unwrap();
+            assert_eq!(index.http.len(), 1);
+            assert_eq!(index.http[0][3].text, "GET");
+            assert_eq!(index.http[0][4].text, "example.com");
+            assert_eq!(index.http[0][5].text, "/");
+            assert!(index
+                .coverage
+                .contains("HTTPS, HTTP/2, HTTP/3 and encrypted DNS unavailable"));
+        }
+    }
     use antinomie_monitor_core::{
         network::NetworkPacket, EventSummary, FieldSummary, InvocationSummary,
     };
@@ -3122,7 +5173,7 @@ mod tests {
         assert!(notes[0].heading.contains("BPF_PROG_LOAD"));
         assert!(notes[0].translation.is_none());
         assert_eq!(notes[0].outcome, "returned 0");
-        assert_eq!(notes[0].lifecycle.as_deref(), Some("load requested fd 0"));
+        assert_eq!(notes[0].lifecycle.as_deref(), Some("loaded program fd 0"));
 
         let mut image = call(1, 321, "bpf", 0);
         image.entry.as_mut().unwrap().args = Some([5, 0, 0, 0, 0, 0]);
@@ -3142,7 +5193,7 @@ mod tests {
         assert!(notes[0].translation.is_none());
         assert_eq!(
             notes[0].lifecycle.as_deref(),
-            Some("seccomp install requested fd 0")
+            Some("seccomp installation successful")
         );
 
         let mut prctl = call(1, 157, "prctl", 0);
@@ -3163,32 +5214,32 @@ mod tests {
         denied.entry.as_mut().unwrap().args = Some([5, 0, 0, 0, 0, 0]);
         assert_eq!(
             page_notes(&[denied])[0].lifecycle.as_deref(),
-            Some("load requested")
+            Some("load failed (-13)")
         );
         let mut pending = call(1, 321, "bpf", 4);
         pending.exit = None;
         pending.entry.as_mut().unwrap().args = Some([8, 0, 0, 0, 0, 0]);
         assert_eq!(
             page_notes(&[pending])[0].lifecycle.as_deref(),
-            Some("attach requested")
+            Some("attach attempted; exit not recorded")
         );
         let mut attached_prog = call(1, 321, "bpf", 7);
         attached_prog.entry.as_mut().unwrap().args = Some([8, 0, 0, 0, 0, 0]);
         assert_eq!(
             page_notes(&[attached_prog])[0].lifecycle.as_deref(),
-            Some("attach requested fd 7")
+            Some("attach returned 7; interpretation depends on recorded flags")
         );
         let mut detach = call(1, 321, "bpf", 0);
         detach.entry.as_mut().unwrap().args = Some([9, 0, 0, 0, 0, 0]);
         assert_eq!(
             page_notes(&[detach])[0].lifecycle.as_deref(),
-            Some("detach requested")
+            Some("detach successful")
         );
         let mut socket = call(1, 54, "setsockopt", 0);
         socket.entry.as_mut().unwrap().args = Some([4, 1, 26, 0, 0, 0]);
         assert_eq!(
             page_notes(&[socket])[0].lifecycle.as_deref(),
-            Some("socket attach requested fd 0")
+            Some("socket attachment successful")
         );
     }
 
@@ -3234,7 +5285,7 @@ mod tests {
         let mut thread_write = call(99, 1, "write", 3);
         thread_write.entry.as_mut().unwrap().args = Some([7, 0, 3, 0, 0, 0]);
         let rows = file_rows(&[opened.clone(), thread, thread_write], &["write"]);
-        assert!(!rows.rows[0][0].text.contains("/etc/passwd"));
+        assert_eq!(rows.rows[0][0].text, "/etc/passwd");
 
         let mut missing = call(1, CLONE3, "clone3", 77);
         missing.entry.as_mut().unwrap().args = Some([0, 88, 0, 0, 0, 0]);
@@ -3272,7 +5323,10 @@ mod tests {
             .push(captured("arg1.path", "", b"note\0"));
         let rows = file_rows(&[start, files_only, parent_move, child_open], &["openat"]);
         assert_eq!(rows.rows.len(), 1, "{}", rows.rows.len());
-        assert_eq!(rows.rows[0][0].text, "/tmp/note");
+        assert_eq!(
+            rows.rows[0][0].text,
+            "/tmp/note (lexical cwd path; symlinks unknown)"
+        );
 
         let start = path_call(1, 80, "chdir", 0, "/tmp");
         let relative = path_call(1, 80, "chdir", 0, "sub");
@@ -3285,7 +5339,10 @@ mod tests {
             .fields
             .push(captured("arg1.path", "", b"note\0"));
         let rows = file_rows(&[start, relative, opened], &["openat"]);
-        assert_eq!(rows.rows[0][0].text, "/tmp/sub/note");
+        assert_eq!(
+            rows.rows[0][0].text,
+            "/tmp/sub/note (lexical cwd path; symlinks unknown)"
+        );
 
         let start = path_call(1, 80, "chdir", 0, "/tmp");
         let mut shared = call(1, CLONE, "clone", 42);
@@ -3300,7 +5357,10 @@ mod tests {
             .fields
             .push(captured("arg1.path", "", b"note\0"));
         let rows = file_rows(&[start, shared, parent_move, child_open], &["openat"]);
-        assert_eq!(rows.rows[0][0].text, "/var/note");
+        assert_eq!(
+            rows.rows[0][0].text,
+            "/var/note (lexical cwd path; symlinks unknown)"
+        );
     }
 
     #[test]
@@ -3339,7 +5399,10 @@ mod tests {
             .unwrap()
             .fields
             .push(captured("arg1.addr", "", b"10.0.0.2:80\0"));
-        assert_eq!(http_process(&packets[0], &[connect]), "pid 4 tid 4");
+        assert_eq!(
+            http_process(&packets[0], &[connect]),
+            "ambiguous: endpoint candidate pid 4 tid 4"
+        );
     }
 
     #[test]
@@ -3349,18 +5412,15 @@ mod tests {
         let mut attach = call(1, 321, "bpf", 0);
         attach.entry.as_mut().unwrap().args = Some([8, 6, 0, 0, 0, 0]);
         let notes = page_notes(&[load.clone(), attach]);
-        assert_eq!(notes[0].lifecycle.as_deref(), Some("load requested fd 6"));
-        assert_eq!(
-            notes[1].lifecycle.as_deref(),
-            Some("attach requested of fd 6")
-        );
-        assert_eq!(suspicious_rows(&[load])[0].cells.last().unwrap().text, "1");
+        assert_eq!(notes[0].lifecycle.as_deref(), Some("loaded program fd 6"));
+        assert_eq!(notes[1].lifecycle.as_deref(), Some("attach successful"));
+        assert_eq!(suspicious_rows(&[load])[0].cells[8].text, "1");
 
         let mut other = call(1, 321, "bpf", 7);
         other.entry.as_mut().unwrap().args = Some([8, 4, 0, 0, 0, 0]);
         assert_eq!(
             page_notes(&[other])[0].lifecycle.as_deref(),
-            Some("attach requested fd 7")
+            Some("attach returned 7; interpretation depends on recorded flags")
         );
 
         let mut denied = call(1, 321, "bpf", -13);
@@ -3369,7 +5429,7 @@ mod tests {
         attach_exit.entry.as_mut().unwrap().args = Some([8, 3, 0, 0, 0, 0]);
         assert_eq!(
             page_notes(&[denied, attach_exit])[1].lifecycle.as_deref(),
-            Some("attach requested fd 3")
+            Some("attach returned 3; interpretation depends on recorded flags")
         );
     }
 }

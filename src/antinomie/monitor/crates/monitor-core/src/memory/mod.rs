@@ -12,6 +12,8 @@
 //! plugins write with `--dump` (`files/`). Runs are kept, like Run History, so
 //! every earlier result can be opened again without running it again.
 use serde::{Deserialize, Serialize};
+mod results;
+pub use results::{RESULT_PAGE_MAX_ROWS, ResultPage, read_result_page_with};
 use std::{
     cmp::Ordering,
     fs::{self, File},

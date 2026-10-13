@@ -17,6 +17,7 @@ use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
 use std::{
     collections::BTreeMap,
+    io::Read,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
@@ -28,7 +29,8 @@ use std::{
 };
 
 /// Rows of one result loaded for display.
-const RESULT_LIMIT: usize = 200_000;
+const RESULT_PAGE_LEN: usize = 1024;
+const RESULT_LOG_SIZE: u64 = 2 * 1024 * 1024;
 
 pub(crate) enum MemoryAction {
     /// Dump the running VM's RAM.
@@ -75,10 +77,33 @@ struct LoadedResult {
     /// Indices of the rows the filter keeps, in the chosen order.
     shown: Vec<usize>,
     filter: String,
+    filter_error: Option<String>,
     sort: Option<Sort>,
     /// The shown rows as Volatility prints them, made when first viewed.
     text: Option<Vec<String>>,
     log: String,
+    total: u64,
+    source_rows: u64,
+    start: u64,
+    skipped_lines: u64,
+    record: Vec<(&'static str, crate::query::RowValue)>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ResultRequest {
+    vm_id: Option<String>,
+    boot_id: Option<String>,
+    run_id: String,
+    source: PathBuf,
+    query: String,
+    sort: Option<Sort>,
+    start: u64,
+}
+
+struct ResultLoad {
+    request: ResultRequest,
+    cancel: Arc<AtomicBool>,
+    receiver: Receiver<LoadedResult>,
 }
 
 /// A result ordered by one column (header clicks: ascending, descending, as
@@ -143,7 +168,8 @@ pub(crate) struct MemoryView {
     values: BTreeMap<String, Vec<(String, String)>>,
     show_deprecated: bool,
     result: Option<LoadedResult>,
-    loading: Option<(String, Receiver<LoadedResult>)>,
+    loading: Option<ResultLoad>,
+    pending_result: Option<ResultRequest>,
     filter: String,
     /// Index of the selected row in the loaded result.
     selected_row: Option<usize>,
@@ -184,6 +210,7 @@ impl Default for MemoryView {
             show_deprecated: false,
             result: None,
             loading: None,
+            pending_result: None,
             filter: String::new(),
             selected_row: None,
             show_log: false,
@@ -205,6 +232,9 @@ impl Default for MemoryView {
 
 impl Drop for MemoryView {
     fn drop(&mut self) {
+        if let Some(load) = &self.loading {
+            load.cancel.store(true, Ordering::Relaxed);
+        }
         for job in &self.jobs {
             job.cancel();
         }
@@ -312,9 +342,68 @@ fn value_color(kind: ColumnKind, value: &serde_json::Value) -> egui::Color32 {
     }
 }
 
-fn load_result(run: PluginRun) -> LoadedResult {
-    let table = memory::read_result(&run.output(), RESULT_LIMIT);
-    let log = std::fs::read_to_string(run.log()).unwrap_or_default();
+fn load_result(run: PluginRun, request: &ResultRequest, cancel: &AtomicBool) -> LoadedResult {
+    let annotation = antinomie_monitor_core::annotations::load(&run.dir);
+    let mut record = plugin_result_record(&run, annotation.as_ref().ok());
+    add_dump_identity(
+        &mut record,
+        request.vm_id.as_deref(),
+        request.boot_id.as_deref(),
+    );
+    let mut compiled = None;
+    let mut names = Vec::new();
+    let mut filter_error = None;
+    let page = memory::read_result_page_with(
+        &request.source,
+        request.start,
+        RESULT_PAGE_LEN,
+        request.sort.map(|sort| (sort.column, sort.descending)),
+        cancel,
+        |columns, row| {
+            if compiled.is_none() {
+                names = column_fields(columns);
+                let fields = result_fields(&names, columns);
+                let query = crate::query::compile_table(&request.query, &fields);
+                filter_error = query.error.clone();
+                compiled = Some(query);
+            }
+            compiled.as_ref().is_some_and(|query| {
+                let mut values = result_row(&names, columns, row);
+                values.extend(record.iter().cloned());
+                query.keep_table(&values)
+            })
+        },
+    );
+    let (table, total, source_rows, start, skipped_lines) = match page {
+        Ok(page) => (
+            Ok(page.table),
+            page.total,
+            page.source_rows,
+            page.start,
+            page.skipped_lines,
+        ),
+        Err(error) => (Err(error), 0, 0, request.start, 0),
+    };
+    let mut data = Vec::new();
+    let mut log = match std::fs::File::open(run.log()) {
+        Ok(file) => match file.take(RESULT_LOG_SIZE + 1).read_to_end(&mut data) {
+            Ok(_) => {
+                let truncated = data.len() as u64 > RESULT_LOG_SIZE;
+                data.truncate(RESULT_LOG_SIZE as usize);
+                let mut text = String::from_utf8_lossy(&data).into_owned();
+                if truncated {
+                    text.push_str("\nLog preview truncated at 2 MiB; open the result directory for the complete log.");
+                }
+                text
+            }
+            Err(error) => format!("Cannot read retained log: {error}"),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => format!("Cannot read retained log: {error}"),
+    };
+    if let Err(error) = annotation {
+        log.push_str(&format!("\nAnnotation unavailable: {error}"));
+    }
     let shown = table
         .as_ref()
         .map(|table| (0..table.rows.len()).collect())
@@ -323,42 +412,124 @@ fn load_result(run: PluginRun) -> LoadedResult {
         run,
         table,
         shown,
-        filter: String::new(),
-        sort: None,
+        filter: request.query.clone(),
+        filter_error,
+        sort: request.sort,
         text: None,
         log,
+        total,
+        source_rows,
+        start,
+        skipped_lines,
+        record,
     }
 }
 
-/// Keep the rows matching `filter`, in the order of `sort`.
-fn filter_rows(result: &mut LoadedResult, filter: &str, sort: Option<Sort>) {
-    if result.filter == filter && result.sort == sort {
-        return;
-    }
-    result.filter = filter.to_owned();
-    result.sort = sort;
-    result.text = None;
-    let Ok(table) = &result.table else {
-        return;
-    };
-    let needle = filter.trim().to_lowercase();
-    result.shown = (0..table.rows.len())
-        .filter(|&index| {
-            needle.is_empty()
-                || table.rows[index]
-                    .values
-                    .iter()
-                    .zip(&table.columns)
-                    .any(|(value, column)| {
-                        memory::value_text(column.kind, value)
-                            .to_lowercase()
-                            .contains(&needle)
-                    })
+fn column_fields(columns: &[ResultColumn]) -> Vec<String> {
+    let mut used = std::collections::BTreeSet::from(["depth".to_owned()]);
+    columns
+        .iter()
+        .enumerate()
+        .map(|(index, column)| {
+            let mut name: String = column
+                .name
+                .to_lowercase()
+                .chars()
+                .map(|ch| {
+                    if ch.is_ascii_alphanumeric() || ch == '_' {
+                        ch
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            if name.is_empty()
+                || name.starts_with(|ch: char| ch.is_ascii_digit())
+                || matches!(
+                    name.as_str(),
+                    "and" | "or" | "not" | "contains" | "in" | "exists" | "missing" | "lower"
+                )
+            {
+                name = format!("column_{index}_{name}");
+            }
+            let base = name.clone();
+            let mut suffix = 0;
+            while !used.insert(name.clone()) {
+                name = format!("{base}_{index}_{suffix}");
+                suffix += 1;
+            }
+            name
         })
-        .collect();
-    if let Some(sort) = sort {
-        memory::sort_rows(table, &mut result.shown, sort.column, sort.descending);
-    }
+        .collect()
+}
+
+fn result_fields<'a>(
+    names: &'a [String],
+    columns: &'a [ResultColumn],
+) -> Vec<crate::query::FieldSpec<'a>> {
+    let mut fields = vec![crate::query::FieldSpec::number(
+        "depth",
+        "Result tree depth",
+    )];
+    fields.extend(crate::query::LABEL_FIELDS);
+    fields.extend(
+        names
+            .iter()
+            .zip(columns)
+            .map(|(name, column)| crate::query::FieldSpec {
+                name,
+                detail: &column.name,
+                kind: match column.kind {
+                    ColumnKind::Int | ColumnKind::Hex | ColumnKind::Bin => "integer",
+                    ColumnKind::Bool => "boolean",
+                    _ => "text",
+                },
+            }),
+    );
+    fields
+}
+
+fn result_row<'a>(
+    names: &'a [String],
+    columns: &[ResultColumn],
+    row: &memory::ResultRow,
+) -> Vec<(&'a str, crate::query::RowValue)> {
+    use crate::query::RowValue;
+    let mut values = vec![("depth", RowValue::Number(i128::from(row.depth)))];
+    values.extend(
+        names
+            .iter()
+            .zip(columns)
+            .enumerate()
+            .map(|(index, (name, column))| {
+                let value = row.values.get(index);
+                let value = match value {
+                    None | Some(serde_json::Value::Null) => RowValue::Missing,
+                    Some(value) if value.get("absent").is_some() => RowValue::Missing,
+                    Some(value) => match column.kind {
+                        ColumnKind::Int | ColumnKind::Hex | ColumnKind::Bin => value
+                            .as_i64()
+                            .map(i128::from)
+                            .or_else(|| value.as_u64().map(i128::from))
+                            .or_else(|| {
+                                value.as_str().and_then(|text| {
+                                    text.strip_prefix("0x").map_or_else(
+                                        || text.parse().ok(),
+                                        |text| i128::from_str_radix(text, 16).ok(),
+                                    )
+                                })
+                            })
+                            .map_or(RowValue::Missing, RowValue::Number),
+                        ColumnKind::Bool => {
+                            value.as_bool().map_or(RowValue::Missing, RowValue::Bool)
+                        }
+                        _ => RowValue::Text(memory::value_text(column.kind, value)),
+                    },
+                };
+                (name.as_str(), value)
+            }),
+    );
+    values
 }
 
 /// One row as tab-separated text.
@@ -463,41 +634,127 @@ impl MemoryView {
     fn open_run(&mut self, id: Option<String>) {
         if self.selected_run != id {
             self.sort = None;
+            self.filter.clear();
         }
         self.selected_run = id.clone();
         self.selected_row = None;
         self.show_log = false;
+        self.result = None;
         let Some(run) = id.and_then(|id| self.runs.iter().find(|run| run.id == id).cloned()) else {
-            self.result = None;
-            self.loading = None;
+            self.cancel_result_load();
             return;
         };
         if self.jobs.iter().any(|job| job.run.id == run.id) {
-            self.result = None;
-            self.loading = None;
+            self.cancel_result_load();
             return;
         }
-        let (sender, receiver) = mpsc::channel();
-        let id = run.id.clone();
-        std::thread::spawn(move || {
-            let _ = sender.send(load_result(run));
+        self.request_result(ResultRequest {
+            vm_id: self.dump().map(|dump| dump.vm_id.clone()),
+            boot_id: self.dump().and_then(|dump| dump.boot_id.clone()),
+            run_id: run.id.clone(),
+            source: run.output(),
+            query: self.filter.clone(),
+            sort: self.sort,
+            start: 0,
         });
-        self.loading = Some((id, receiver));
+    }
+
+    fn cancel_result_load(&mut self) {
+        if let Some(load) = &self.loading {
+            load.cancel.store(true, Ordering::Relaxed);
+        }
+        self.pending_result = None;
+    }
+
+    fn request_result(&mut self, request: ResultRequest) {
+        if self.pending_result.as_ref() == Some(&request) {
+            return;
+        }
+        if self
+            .loading
+            .as_ref()
+            .is_some_and(|load| load.request == request && !load.cancel.load(Ordering::Relaxed))
+        {
+            return;
+        }
+        if let Some(load) = &self.loading {
+            load.cancel.store(true, Ordering::Relaxed);
+        }
+        self.pending_result = Some(request);
+        self.selected_row = None;
+        self.start_result_load();
+    }
+
+    fn start_result_load(&mut self) {
+        if self.loading.is_some() {
+            return;
+        }
+        let Some(request) = self.pending_result.take() else {
+            return;
+        };
+        let Some(run) = self
+            .runs
+            .iter()
+            .find(|run| run.id == request.run_id)
+            .cloned()
+        else {
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = Arc::clone(&cancel);
+        let worker_request = request.clone();
+        match std::thread::Builder::new()
+            .name("memory-result-query".into())
+            .spawn(move || {
+                let result = load_result(run, &worker_request, &worker_cancel);
+                let _ = sender.send(result);
+            }) {
+            Ok(_) => {
+                self.loading = Some(ResultLoad {
+                    request,
+                    cancel,
+                    receiver,
+                })
+            }
+            Err(error) => self.status = Some((format!("Cannot start result query: {error}"), true)),
+        }
     }
 
     fn poll(&mut self, ctx: &egui::Context, data_dir: &Path) {
-        let loaded = self
+        let finished = self
             .loading
             .as_ref()
-            .and_then(|(id, receiver)| Some((id.clone(), receiver.try_recv().ok()?)));
-        if let Some((id, mut result)) = loaded {
-            if Some(&id) == self.selected_run.as_ref() {
-                let filter = self.filter.clone();
-                result.filter = "\u{0}".into();
-                filter_rows(&mut result, &filter, self.sort);
-                self.result = Some(result);
+            .and_then(|load| match load.receiver.try_recv() {
+                Ok(result) => Some(Ok(result)),
+                Err(mpsc::TryRecvError::Disconnected) => Some(Err(
+                    "Result query worker stopped without a result".to_owned(),
+                )),
+                Err(mpsc::TryRecvError::Empty) => None,
+            });
+        if let Some(finished) = finished {
+            if let Some(load) = self.loading.take() {
+                if !load.cancel.load(Ordering::Relaxed)
+                    && self.pending_result.is_none()
+                    && self.selected_run.as_ref() == Some(&load.request.run_id)
+                {
+                    match finished {
+                        Ok(result) => {
+                            self.result = Some(result);
+                            self.selected_row = None;
+                        }
+                        Err(error) => self.status = Some((error, true)),
+                    }
+                }
             }
-            self.loading = None;
+            self.start_result_load();
+        }
+        if self
+            .loading
+            .as_ref()
+            .is_some_and(|load| Some(&load.request.run_id) != self.selected_run.as_ref())
+        {
+            self.cancel_result_load();
         }
         let listed = match &self.catalog {
             Catalog::Loading(receiver) => receiver.try_recv().ok(),
@@ -759,6 +1016,55 @@ impl MemoryView {
             });
         }
         ui.add_space(2.0);
+        let mut fields = crate::query::LABEL_FIELDS.to_vec();
+        fields.extend(crate::query::CAPTURE_FIELDS);
+        fields.extend([
+            crate::query::FieldSpec::text("name", "Displayed dump name"),
+            crate::query::FieldSpec::text("state", "Dump state"),
+            crate::query::FieldSpec::text("os", "Guest operating system"),
+            crate::query::FieldSpec::text("system", "Recorded guest system"),
+            crate::query::FieldSpec::number("size", "Dump size in octets"),
+            crate::query::FieldSpec::number("ram_mib", "Configured RAM in MiB"),
+            crate::query::FieldSpec::boolean("imported", "Imported dump"),
+            crate::query::FieldSpec::boolean("symbols", "Retained symbol table"),
+        ]);
+        let annotations: Vec<_> = self
+            .dumps
+            .iter()
+            .map(|dump| crate::evidence::annotation(ui, &dump.dir))
+            .collect();
+        let tags: Vec<_> = annotations
+            .iter()
+            .flatten()
+            .flat_map(|value| value.tags.iter().cloned())
+            .collect();
+        let filter = crate::query::table_filter(
+            ui,
+            "memory-dump-history",
+            "Filter memory dumps",
+            &fields,
+            &tags,
+        );
+        let filter_id = ui.id().with(("table-filter", "memory-dump-history"));
+        let shown: Vec<_> = self
+            .dumps
+            .iter()
+            .enumerate()
+            .filter(|(index, dump)| {
+                filter.keep_table(&memory_dump_row(dump, annotations[*index].as_ref()))
+            })
+            .map(|(_, dump)| dump)
+            .collect();
+        ui.weak(format!("{} / {} dumps", shown.len(), self.dumps.len()));
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|selected| !shown.iter().any(|dump| &dump.id == selected))
+        {
+            self.selected = None;
+            self.selected_run = None;
+            self.result = None;
+        }
         let mut select = None;
         let mut delete = None;
         let font_size = cx.font_size;
@@ -785,7 +1091,7 @@ impl MemoryView {
                     );
                     ui.add(egui::ProgressBar::new(fraction).desired_height(4.0));
                 }
-                for dump in &self.dumps {
+                for dump in shown {
                     if cx
                         .dumping
                         .is_some_and(|progress| progress.dump.id == dump.id)
@@ -819,6 +1125,12 @@ impl MemoryView {
                     }
                     row.context_menu(|ui| {
                         crate::evidence::menu(ui, &dump.dir);
+                        let annotation = crate::evidence::annotation(ui, &dump.dir);
+                        crate::query::table_row_menu(
+                            ui,
+                            filter_id,
+                            &memory_dump_row(dump, annotation.as_ref()),
+                        );
                         ui.separator();
                         if ui.button("Open folder").clicked() {
                             if let Err(error) = open_directory(&dump.dir) {
@@ -1367,6 +1679,51 @@ impl MemoryView {
 
     fn run_list(&mut self, ui: &mut egui::Ui, font_size: f32) {
         theme::section(ui, "Results");
+        let mut fields = crate::query::LABEL_FIELDS.to_vec();
+        fields.extend([
+            crate::query::FieldSpec::text("name", "Displayed plugin result name"),
+            crate::query::FieldSpec::text("plugin", "Full plugin name"),
+            crate::query::FieldSpec::text("state", "Plugin result state"),
+            crate::query::FieldSpec::text("args", "Plugin arguments"),
+            crate::query::FieldSpec::number("rows", "Retained result rows"),
+            crate::query::FieldSpec::number("exit_code", "Tool exit code"),
+        ]);
+        let annotations: Vec<_> = self
+            .runs
+            .iter()
+            .map(|run| crate::evidence::annotation(ui, &run.dir))
+            .collect();
+        let tags: Vec<_> = annotations
+            .iter()
+            .flatten()
+            .flat_map(|value| value.tags.iter().cloned())
+            .collect();
+        let filter = crate::query::table_filter(
+            ui,
+            "memory-plugin-history",
+            "Filter plugin results",
+            &fields,
+            &tags,
+        );
+        let filter_id = ui.id().with(("table-filter", "memory-plugin-history"));
+        let shown: Vec<_> = self
+            .runs
+            .iter()
+            .enumerate()
+            .filter(|(index, run)| {
+                filter.keep_table(&plugin_run_row(run, annotations[*index].as_ref()))
+            })
+            .map(|(_, run)| run)
+            .collect();
+        ui.weak(format!("{} / {} results", shown.len(), self.runs.len()));
+        if self
+            .selected_run
+            .as_ref()
+            .is_some_and(|selected| !shown.iter().any(|run| &run.id == selected))
+        {
+            self.selected_run = None;
+            self.result = None;
+        }
         let mut open = None;
         let mut delete = None;
         let mut rerun = None;
@@ -1375,7 +1732,7 @@ impl MemoryView {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
-                for run in &self.runs {
+                for run in shown {
                     let job = self.jobs.iter().find(|job| job.run.id == run.id);
                     let progress = job.map(RunHandle::progress);
                     let color = match (job, run.state) {
@@ -1416,6 +1773,12 @@ impl MemoryView {
                     }
                     row.context_menu(|ui| {
                         crate::evidence::menu(ui, &run.dir);
+                        let annotation = crate::evidence::annotation(ui, &run.dir);
+                        crate::query::table_row_menu(
+                            ui,
+                            filter_id,
+                            &plugin_run_row(run, annotation.as_ref()),
+                        );
                         ui.separator();
                         if let Some(job) = job {
                             if ui.button("Cancel run").clicked() {
@@ -1512,24 +1875,167 @@ impl MemoryView {
             });
             return;
         }
-        if self.loading.is_some()
-            || self
-                .result
-                .as_ref()
-                .is_none_or(|result| result.run.id != run_id)
+        if self
+            .result
+            .as_ref()
+            .is_none_or(|result| result.run.id != run_id)
         {
+            let mut cancel = false;
+            let mut retry = false;
             ui.horizontal(|ui| {
-                ui.spinner();
-                ui.colored_label(theme::muted(), "Loading the result…");
+                if self.loading.is_some() {
+                    ui.spinner();
+                    ui.colored_label(theme::muted(), "Loading the result…");
+                    cancel = ui.button("Cancel query").clicked();
+                } else {
+                    ui.label("Result not loaded.");
+                    retry = ui.button("Load result").clicked();
+                }
             });
+            if cancel {
+                self.cancel_result_load();
+            }
+            if retry {
+                self.open_run(Some(run_id.clone()));
+            }
             return;
         }
-        let filter = self.filter.clone();
-        let sort = self.sort;
+        let mut request = None;
+        if let Some(result) = self.result.as_ref() {
+            if let Ok(table) = &result.table {
+                let annotation = crate::evidence::annotation(ui, &result.run.dir);
+                let mut record = plugin_result_record(&result.run, annotation.as_ref());
+                add_dump_identity(
+                    &mut record,
+                    self.dump().map(|dump| dump.vm_id.as_str()),
+                    self.dump().and_then(|dump| dump.boot_id.as_deref()),
+                );
+                let tags: &[String] = annotation
+                    .as_ref()
+                    .map_or(&[], |annotation| annotation.tags.as_slice());
+                let names = column_fields(&table.columns);
+                let fields = result_fields(&names, &table.columns);
+                crate::query::filter_edit_fields(
+                    ui,
+                    &mut self.filter,
+                    "Filter result fields",
+                    ui.available_width(),
+                    &fields,
+                    tags,
+                );
+                let compiled = crate::query::compile_table(&self.filter, &fields);
+                if let Some(error) = compiled.error {
+                    ui.colored_label(
+                        theme::warn(),
+                        format!("{error} · showing the last valid filter"),
+                    );
+                } else {
+                    crate::query::remember_valid_filter(ui, &self.filter);
+                    if result.filter != self.filter
+                        || result.sort != self.sort
+                        || result.record != record
+                    {
+                        request = Some(ResultRequest {
+                            vm_id: self.dump().map(|dump| dump.vm_id.clone()),
+                            boot_id: self.dump().and_then(|dump| dump.boot_id.clone()),
+                            run_id: result.run.id.clone(),
+                            source: result.run.output(),
+                            query: self.filter.clone(),
+                            sort: self.sort,
+                            start: 0,
+                        });
+                    }
+                }
+                let page_count = result.total.div_ceil(RESULT_PAGE_LEN as u64).max(1);
+                let page_number = result.start / RESULT_PAGE_LEN as u64 + 1;
+                let mut start = None;
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .add_enabled(
+                            self.loading.is_none() && result.start > 0,
+                            egui::Button::new("Previous"),
+                        )
+                        .clicked()
+                    {
+                        start = Some(result.start.saturating_sub(RESULT_PAGE_LEN as u64));
+                    }
+                    ui.label(format!(
+                        "Page {page_number}/{page_count} · {} matching / {} retained rows",
+                        result.total, result.source_rows
+                    ));
+                    if ui
+                        .add_enabled(
+                            self.loading.is_none()
+                                && result.start + (table.rows.len() as u64) < result.total,
+                            egui::Button::new("Next"),
+                        )
+                        .clicked()
+                    {
+                        start = Some(result.start + RESULT_PAGE_LEN as u64);
+                    }
+                    if ui
+                        .add_enabled(self.loading.is_none(), egui::Button::new("Refresh"))
+                        .clicked()
+                    {
+                        start = Some(result.start);
+                    }
+                });
+                if let Some(start) = start {
+                    request = Some(ResultRequest {
+                        vm_id: self.dump().map(|dump| dump.vm_id.clone()),
+                        boot_id: self.dump().and_then(|dump| dump.boot_id.clone()),
+                        run_id: result.run.id.clone(),
+                        source: result.run.output(),
+                        query: result.filter.clone(),
+                        sort: result.sort,
+                        start,
+                    });
+                }
+                if result.skipped_lines > 0 {
+                    ui.colored_label(
+                        theme::warn(),
+                        format!(
+                            "{} incomplete or invalid saved lines were unavailable",
+                            result.skipped_lines
+                        ),
+                    );
+                }
+            } else if ui.button("Retry result").clicked() {
+                request = Some(ResultRequest {
+                    vm_id: self.dump().map(|dump| dump.vm_id.clone()),
+                    boot_id: self.dump().and_then(|dump| dump.boot_id.clone()),
+                    run_id: result.run.id.clone(),
+                    source: result.run.output(),
+                    query: self.filter.clone(),
+                    sort: self.sort,
+                    start: 0,
+                });
+            }
+        }
+        if let Some(request) = request {
+            self.request_result(request);
+        }
+        if self.loading.is_some() {
+            let mut cancel = false;
+            ui.horizontal_wrapped(|ui| {
+                ui.spinner();
+                ui.label("Querying every retained row…");
+                cancel = ui.button("Cancel query").clicked();
+            });
+            if cancel {
+                self.cancel_result_load();
+                if let Some(result) = &self.result {
+                    self.filter.clone_from(&result.filter);
+                    self.sort = result.sort;
+                }
+            }
+        }
         let Some(result) = self.result.as_mut() else {
             return;
         };
-        filter_rows(result, &filter, sort);
+        if let Some(error) = &result.filter_error {
+            ui.colored_label(theme::warn(), error);
+        }
         let mut status = None;
         // The controls keep their size; the title takes what is left.
         ui.horizontal(|ui| {
@@ -1558,9 +2064,9 @@ impl MemoryView {
                     if ui
                         .button(format!("{} Copy", egui_phosphor::regular::COPY))
                         .on_hover_text(if self.text_view {
-                            "Copy the shown rows as Volatility's text"
+                            "Copy this page as Volatility's text"
                         } else {
-                            "Copy the shown rows as tab-separated text"
+                            "Copy this page as tab-separated text"
                         })
                         .clicked()
                     {
@@ -1571,13 +2077,6 @@ impl MemoryView {
                         });
                     }
                 }
-                crate::query::filter_edit(
-                    ui,
-                    &mut self.filter,
-                    "Filter rows",
-                    ui.available_width().max(180.0),
-                    crate::query::FilterScope::Record,
-                );
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     let mut title = egui::text::LayoutJob::default();
                     let mono = theme::mono(font_size - 1.0);
@@ -1594,11 +2093,7 @@ impl MemoryView {
                         );
                     }
                     if let Ok(table) = &result.table {
-                        let rows = if result.shown.len() == table.rows.len() {
-                            format!("{} rows", table.rows.len())
-                        } else {
-                            format!("{} of {} rows", result.shown.len(), table.rows.len())
-                        };
+                        let rows = format!("{} rows on this page", table.rows.len());
                         title.append(
                             &rows,
                             10.0,
@@ -1607,16 +2102,6 @@ impl MemoryView {
                                 theme::muted(),
                             ),
                         );
-                        if table.truncated {
-                            title.append(
-                                &format!("(first {RESULT_LIMIT} shown)"),
-                                6.0,
-                                egui::TextFormat::simple(
-                                    egui::TextStyle::Body.resolve(ui.style()),
-                                    theme::warn(),
-                                ),
-                            );
-                        }
                     }
                     let hover = title.text.clone();
                     ui.add(egui::Label::new(title).truncate())
@@ -1674,7 +2159,14 @@ impl MemoryView {
             return;
         }
         if table.rows.is_empty() {
-            ui.colored_label(theme::muted(), "The plugin found nothing in this dump.");
+            ui.colored_label(
+                theme::muted(),
+                if result.source_rows == 0 {
+                    "The plugin saved no result rows."
+                } else {
+                    "No retained row matches the filter."
+                },
+            );
         }
         let mono = theme::mono(font_size - 1.0);
         if self.text_view {
@@ -1822,10 +2314,29 @@ impl MemoryView {
                                             ui.ctx().copy_text(row_text(&table.columns, data));
                                             ui.close_menu();
                                         }
-                                        if ui.button("Filter on this value").clicked() {
-                                            self.filter = text.clone();
-                                            ui.close_menu();
+                                        let names = column_fields(&table.columns);
+                                        let mut values = result_row(&names, &table.columns, data);
+                                        values.extend(result.record.iter().cloned());
+                                        if let Some((field, value)) = values.get(index + 1) {
+                                            crate::query::value_menu(
+                                                ui,
+                                                field,
+                                                value,
+                                                &mut self.filter,
+                                            );
                                         }
+                                        ui.menu_button("Filter result metadata", |ui| {
+                                            for (field, value) in &result.record {
+                                                ui.menu_button(*field, |ui| {
+                                                    crate::query::value_menu(
+                                                        ui,
+                                                        field,
+                                                        value,
+                                                        &mut self.filter,
+                                                    )
+                                                });
+                                            }
+                                        });
                                     });
                                 });
                             }
@@ -2455,9 +2966,228 @@ fn empty_state(ui: &mut egui::Ui, text: &str) {
     });
 }
 
+fn memory_dump_row(
+    dump: &MemoryDump,
+    annotation: Option<&antinomie_monitor_core::annotations::Annotation>,
+) -> Vec<(&'static str, crate::query::RowValue)> {
+    use crate::query::RowValue;
+
+    let mut row = crate::query::label_row(
+        &dump.id,
+        annotation.map_or("", |value| &value.name),
+        &dump.path().display().to_string(),
+        annotation.map_or(&[], |value| value.tags.as_slice()),
+    );
+    row.extend([
+        ("capture.kind", RowValue::Text("memory".into())),
+        (
+            "capture.started_ms",
+            RowValue::Number(i128::from(dump.started_ms)),
+        ),
+        (
+            "capture.ended_ms",
+            dump.finished_ms.map_or(RowValue::Missing, |value| {
+                RowValue::Number(i128::from(value))
+            }),
+        ),
+        (
+            "capture.size",
+            dump.bytes.map_or(RowValue::Missing, |value| {
+                RowValue::Number(i128::from(value))
+            }),
+        ),
+        ("capture.complete", RowValue::Bool(dump.complete())),
+        (
+            "capture.state",
+            RowValue::Text(
+                if dump.error.is_some() {
+                    "failed"
+                } else if dump.finished_ms.is_some() {
+                    "finished"
+                } else {
+                    "writing"
+                }
+                .into(),
+            ),
+        ),
+        ("entry.kind", RowValue::Text("memory".into())),
+        ("entry.complete", RowValue::Bool(dump.complete())),
+        (
+            "entry.time_ms",
+            RowValue::Number(i128::from(dump.started_ms)),
+        ),
+        (
+            "entry.size",
+            dump.bytes.map_or(RowValue::Missing, |value| {
+                RowValue::Number(i128::from(value))
+            }),
+        ),
+        ("vm.id", RowValue::Text(dump.vm_id.clone())),
+        (
+            "boot.id",
+            dump.boot_id
+                .as_ref()
+                .map_or(RowValue::Missing, |value| RowValue::Text(value.clone())),
+        ),
+        (
+            "entry.state",
+            RowValue::Text(
+                if dump.error.is_some() {
+                    "failed"
+                } else if dump.finished_ms.is_some() {
+                    "finished"
+                } else {
+                    "writing"
+                }
+                .into(),
+            ),
+        ),
+        (
+            "name",
+            RowValue::Text(
+                annotation
+                    .filter(|value| !value.name.is_empty())
+                    .map_or_else(|| dump_title(dump), |value| value.name.clone()),
+            ),
+        ),
+        (
+            "state",
+            RowValue::Text(
+                if dump.error.is_some() {
+                    "failed"
+                } else if dump.finished_ms.is_some() {
+                    "finished"
+                } else {
+                    "writing"
+                }
+                .into(),
+            ),
+        ),
+        ("os", RowValue::Text(format!("{:?}", dump.os))),
+        ("system", RowValue::Text(dump.system.clone())),
+        (
+            "size",
+            dump.bytes.map_or(RowValue::Missing, |value| {
+                RowValue::Number(i128::from(value))
+            }),
+        ),
+        ("ram_mib", RowValue::Number(i128::from(dump.ram_mib))),
+        ("imported", RowValue::Bool(dump.imported)),
+        ("symbols", RowValue::Bool(dump.symbols)),
+    ]);
+
+    row
+}
+
+fn add_dump_identity(
+    row: &mut Vec<(&'static str, crate::query::RowValue)>,
+    vm_id: Option<&str>,
+    boot_id: Option<&str>,
+) {
+    if let Some(vm_id) = vm_id {
+        row.push(("vm.id", crate::query::RowValue::Text(vm_id.to_owned())));
+    }
+    if let Some(boot_id) = boot_id {
+        row.push(("boot.id", crate::query::RowValue::Text(boot_id.to_owned())));
+    }
+}
+
+fn plugin_result_record(
+    run: &PluginRun,
+    annotation: Option<&antinomie_monitor_core::annotations::Annotation>,
+) -> Vec<(&'static str, crate::query::RowValue)> {
+    plugin_run_row(run, annotation)
+        .into_iter()
+        .filter(|(field, _)| {
+            crate::query::LABEL_FIELDS
+                .iter()
+                .any(|spec| spec.name == *field)
+        })
+        .collect()
+}
+
+fn plugin_run_row(
+    run: &PluginRun,
+    annotation: Option<&antinomie_monitor_core::annotations::Annotation>,
+) -> Vec<(&'static str, crate::query::RowValue)> {
+    use crate::query::RowValue;
+
+    let mut row = crate::query::label_row(
+        &run.id,
+        annotation.map_or("", |value| &value.name),
+        &run.dir.display().to_string(),
+        annotation.map_or(&[], |value| value.tags.as_slice()),
+    );
+    row.extend([
+        ("entry.kind", RowValue::Text("volatility".into())),
+        ("entry.state", RowValue::Text(format!("{:?}", run.state))),
+        (
+            "entry.complete",
+            RowValue::Bool(run.state == RunState::Finished),
+        ),
+        (
+            "entry.time_ms",
+            RowValue::Number(i128::from(run.started_ms)),
+        ),
+        ("run.id", RowValue::Text(run.id.clone())),
+        (
+            "name",
+            RowValue::Text(
+                annotation
+                    .filter(|value| !value.name.is_empty())
+                    .map_or_else(|| run.short_name().to_owned(), |value| value.name.clone()),
+            ),
+        ),
+        ("plugin", RowValue::Text(run.plugin.clone())),
+        ("state", RowValue::Text(format!("{:?}", run.state))),
+        ("args", RowValue::Text(run.args.join(" "))),
+        ("rows", RowValue::Number(i128::from(run.rows))),
+        (
+            "exit_code",
+            run.exit_code.map_or(RowValue::Missing, |value| {
+                RowValue::Number(i128::from(value))
+            }),
+        ),
+    ]);
+
+    row
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_result_column_gets_a_distinct_parseable_filter_keyword() {
+        let columns: Vec<_> = ["X", "X", "X_1_0", "Depth", "and", "lower", "1st", ""]
+            .into_iter()
+            .map(|name| ResultColumn {
+                name: name.into(),
+                kind: ColumnKind::Int,
+            })
+            .collect();
+        let names = column_fields(&columns);
+        assert_eq!(
+            names
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            columns.len()
+        );
+        let fields = result_fields(&names, &columns);
+        let row = memory::ResultRow {
+            depth: 0,
+            values: (0..columns.len())
+                .map(|index| serde_json::json!(index))
+                .collect(),
+        };
+        let values = result_row(&names, &columns, &row);
+        for (index, name) in names.iter().enumerate() {
+            let query = crate::query::compile_table(&format!("{name} == {index}"), &fields);
+            assert!(query.error.is_none(), "{name}: {:?}", query.error);
+            assert!(query.keep_table(&values), "{name}");
+        }
+    }
 
     #[test]
     fn plugins_are_grouped_by_system_and_module() {
@@ -2527,26 +3257,6 @@ mod tests {
             result_tsv(&table.columns, &table, &[0, 1]),
             "PID\tCOMM\n1\tinit\n  42\tsh"
         );
-        let mut loaded = LoadedResult {
-            run: PluginRun::default(),
-            table: Ok(table),
-            shown: vec![0, 1],
-            filter: String::new(),
-            sort: None,
-            text: Some(Vec::new()),
-            log: String::new(),
-        };
-        filter_rows(&mut loaded, "SH", None);
-        assert_eq!(loaded.shown, vec![1]);
-        assert!(loaded.text.is_none(), "the text follows the filter");
-        filter_rows(&mut loaded, "", None);
-        assert_eq!(loaded.shown, vec![0, 1]);
-        let descending = Some(Sort {
-            column: 0,
-            descending: true,
-        });
-        filter_rows(&mut loaded, "", descending);
-        assert_eq!(loaded.shown, vec![1, 0]);
     }
 
     #[test]
@@ -2563,6 +3273,83 @@ mod tests {
         assert!(down.is_some_and(|sort| sort.descending));
         assert_eq!(next_sort(down, 2), None);
         assert_eq!(next_sort(down, 0).map(|sort| sort.column), Some(0));
+    }
+
+    #[test]
+    fn result_worker_filters_beyond_old_prefix_and_sorts_entire_retained_source() {
+        use std::io::Write;
+        let root = std::env::temp_dir().join(format!(
+            "antinomie-paged-memory-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("result.jsonl");
+        let mut output = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
+        writeln!(output, "{{\"columns\":[{{\"name\":\"PID\",\"type\":\"int\"}},{{\"name\":\"COMM\",\"type\":\"str\"}}]}}").unwrap();
+        for index in 0..200_005 {
+            writeln!(
+                output,
+                "{{\"d\":0,\"v\":[{index},\"{}\"]}}",
+                if index == 200_004 {
+                    "beyond-prefix"
+                } else {
+                    "row"
+                }
+            )
+            .unwrap();
+        }
+        output.flush().unwrap();
+        let run = PluginRun {
+            id: "run-one".into(),
+            dir: root.clone(),
+            ..Default::default()
+        };
+        antinomie_monitor_core::annotations::save(
+            &root,
+            &antinomie_monitor_core::annotations::Annotation {
+                name: "Renamed plugin result".into(),
+                tags: vec!["needs review".into()],
+            },
+        )
+        .unwrap();
+        let cancel = AtomicBool::new(false);
+        let mut request = ResultRequest {
+            vm_id: None,
+            boot_id: None,
+            run_id: run.id.clone(),
+            source: path.clone(),
+            query: "comm == \"beyond-prefix\" && tag == \"needs review\" && entry.name == \"Renamed plugin result\"".into(),
+            sort: None,
+            start: 0,
+        };
+        let loaded = load_result(run.clone(), &request, &cancel);
+        assert!(loaded.filter_error.is_none());
+        assert_eq!(
+            (loaded.total, loaded.source_rows, loaded.start),
+            (1, 200_005, 0)
+        );
+        assert_eq!(
+            loaded.table.as_ref().unwrap().rows[0].values[0],
+            serde_json::json!(200_004)
+        );
+        request.query.clear();
+        request.sort = Some(Sort {
+            column: 0,
+            descending: true,
+        });
+        request.start = 1024;
+        let loaded = load_result(run, &request, &cancel);
+        assert_eq!(loaded.table.as_ref().unwrap().rows.len(), 1024);
+        assert_eq!(
+            loaded.table.as_ref().unwrap().rows[0].values[0],
+            serde_json::json!(200_004 - 1024)
+        );
+        assert_eq!(
+            (loaded.total, loaded.source_rows, loaded.start),
+            (200_005, 200_005, 1024)
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

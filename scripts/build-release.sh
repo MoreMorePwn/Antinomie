@@ -71,6 +71,10 @@ Static analysis runs in a bubblewrap sandbox (bwrap). Disassembly, rules
 capabilities (capa) and Detect It Easy use the system's copy when installed;
 otherwise Tools > Analysis tools downloads them for Antinomie.
 
+Packet display filters and HTTP/DNS triage use installed TShark, with
+Bubblewrap and Prlimit isolation/resource limits. On Debian/Ubuntu install
+tshark bubblewrap util-linux. These tools are not bundled in this archive.
+
 Licensing: see LICENSING.md; the executable is a composite of MIT
 application code, its dependencies, the embedded analysis rule sets (their
 own licenses, see THIRD-PARTY-NOTICES.md) and the embedded base build kit.

@@ -50,6 +50,9 @@ read, and anything the app could not decode or lost is marked as such.
   and identification are built in. Decompilation (Ghidra), capabilities
   (capa) and Detect It Easy use the system's copy when installed; otherwise
   **Tools > Analysis tools** downloads them for Antinomie
+- Wireshark packet display filters and HTTP/DNS triage use the installed
+  `tshark` command with `prlimit` resource limits. On Debian/Ubuntu install
+  `tshark util-linux`; these tools are checked in **Tools > App dependencies**.
 
 ## Quick start
 

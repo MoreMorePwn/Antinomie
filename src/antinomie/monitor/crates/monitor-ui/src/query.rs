@@ -24,6 +24,27 @@ On a run or result they match annotation.json, not path text.";
 
 /// Fields the syscall and record filters actually implement.
 const KEYWORDS: &[(&str, &str, &str)] = &[
+    ("event.id", "integer", "Recorded event sequence identity"),
+    ("event.sequence", "integer", "Recorded event sequence"),
+    ("event.time_ns", "integer", "Guest monotonic event timestamp in ns"),
+    ("event.complete", "boolean", "All retained invocation events are complete"),
+    ("event.gap", "text list", "Recorded completeness issues"),
+    ("syscall.group", "text", "Native syscall group"),
+    ("syscall.errno", "integer", "Positive errno for Linux error returns; missing on success"),
+    ("syscall.success", "boolean", "Observed syscall result is not a Linux errno"),
+    ("syscall.duration_ns", "integer", "Exit minus entry guest timestamp in ns"),
+    ("process.cookie", "integer", "Recorded task cookie"),
+    ("process.pid", "integer", "Recorded process ID"),
+    ("process.tgid", "integer", "Recorded process thread-group ID"),
+    ("process.tid", "integer", "Recorded thread ID"),
+    ("process.ppid", "integer", "Recorded parent PID; missing without per-task provenance"),
+    ("process.parent_cookie", "integer", "Recorded parent cookie; missing without per-task provenance"),
+    ("process.uid", "integer", "Recorded task UID; missing when not observed"),
+    ("process.gid", "integer", "Recorded task GID; missing when not observed"),
+    ("process.comm", "text", "Recorded task comm; not guessed from a file basename"),
+    ("process.exe", "text", "Captured executable path on an observed committed exec"),
+    ("process.argv", "text list", "Captured argument strings on an observed committed exec"),
+    ("process.state", "text", "Observed task exit; otherwise missing without state evidence"),
     ("syscall.num", "integer", "Native syscall number"),
     ("syscall.name", "text", "Syscall name, case-sensitive in =="),
     ("tid", "integer", "Thread id"),
@@ -73,10 +94,8 @@ pub(crate) fn guide(ctx: &egui::Context) {
         .open(&mut open)
         .resizable(true)
         .show(ctx, |ui| {
-            ui.label("Use a comparison when you know the field. A bare word searches the row.");
-            ui.label(
-                "This is a native subset with the fields below. It is not a Wireshark display filter.",
-            );
+            ui.label("Use typed fields to compare values. A bare word searches the row. Text comparisons are case-sensitive; lower(field) makes text matching case-insensitive.");
+            ui.label("Unavailable values stay missing. Packet filters use the installed TShark engine and its own field registry.");
             let query_id = egui::Id::new("filter-guide-query");
             let mut query = ui.ctx().data(|data| data.get_temp::<String>(query_id).unwrap_or_default());
             ui.add(
@@ -87,18 +106,22 @@ pub(crate) fn guide(ctx: &egui::Context) {
             let needle = query.to_lowercase();
             ui.ctx().data_mut(|data| data.insert_temp(query_id, query));
             ui.add_space(6.0);
-            ui.strong("Syscall rows");
-            for line in [
-                "syscall.num == 9 && args.prot == 7",
-                "syscall.name == execve",
-                "args.fd < 3",
-                "info contains \"/tmp\"",
-                "tag contains \"bpf\"",
-            ] {
+            ui.strong("Examples");
+            let packet = ctx.data(|data| data.get_temp::<bool>(egui::Id::new("filter-guide-packet"))).unwrap_or(false);
+            let contextual = ui.ctx().data(|data| data.get_temp::<std::sync::Arc<Vec<(String, String, String)>>>(egui::Id::new("filter-guide-fields")));
+            let fallback: Vec<_> = syscall_fields().iter().map(|field| (field.name.to_owned(), field.kind.to_owned(), field.detail.to_owned())).collect();
+            let rows = contextual.as_deref().map(Vec::as_slice).unwrap_or(&fallback);
+            let examples = guide_examples(rows, packet);
+            for line in &examples {
                 ui.monospace(line);
             }
             ui.add_space(4.0);
-            ui.label("Every field this filter implements. A name that is not in this list is an error.");
+            ui.label("Fields available in this filter. Right-click a value to build a clause.");
+            let rows: Vec<_> = rows.iter().filter(|(field, kind, meaning)| {
+                needle.is_empty() || field.to_lowercase().contains(&needle)
+                    || kind.to_lowercase().contains(&needle)
+                    || meaning.to_lowercase().contains(&needle)
+            }).collect();
             use egui_extras::{Column, TableBuilder};
             TableBuilder::new(ui)
                 .id_salt("filter-keywords")
@@ -113,16 +136,9 @@ pub(crate) fn guide(ctx: &egui::Context) {
                         });
                     }
                 })
-                .body(|mut body| {
-                    for (field, kind, meaning) in guide_rows() {
-                        if !needle.is_empty()
-                            && !field.to_lowercase().contains(&needle)
-                            && !kind.to_lowercase().contains(&needle)
-                            && !meaning.to_lowercase().contains(&needle)
-                        {
-                            continue;
-                        }
-                        body.row(22.0, |mut row| {
+                .body(|body| {
+                    body.rows(22.0, rows.len(), |mut row| {
+                            let (field, kind, meaning) = rows[row.index()];
                             row.col(|ui| {
                                 ui.monospace(field);
                             });
@@ -132,30 +148,44 @@ pub(crate) fn guide(ctx: &egui::Context) {
                             row.col(|ui| {
                                 ui.label(meaning);
                             });
-                        });
-                    }
+                    });
                 });
-            ui.add_space(8.0);
-            ui.strong("Examples");
-            for line in [
-                "syscall.num == 9 && args.prot == 7",
-                "syscall.name == execve",
-                "ip.src == 10.0.2.15 && tcp.dstport == 80",
-                "http.request.method == \"GET\"",
-                "dns.qry.name contains \"example\"",
-            ] {
-                if needle.is_empty() || line.to_lowercase().contains(&needle) {
-                    ui.monospace(line);
-                }
-            }
+
         });
     ctx.data_mut(|data| data.insert_temp(id, open));
+}
+
+fn guide_examples(fields: &[(String, String, String)], packet: bool) -> Vec<String> {
+    if packet {
+        return [
+            "ip.src == 10.0.2.15 && tcp.dstport == 80",
+            "http.request.method == \"GET\"",
+            "dns.qry.name contains \"example\"",
+            "tcp && !udp",
+        ]
+        .map(str::to_owned)
+        .into();
+    }
+    let mut examples = vec!["==  !=  <  <=  >  >=  contains  in  &  &&  ||  !  ( )".into()];
+    if let Some((field, _, _)) = fields.iter().find(|(_, kind, _)| kind == "integer") {
+        examples.push(format!("{field} >= 0 && exists({field})"));
+        examples.push(format!("{field} in {{0, 1}}"));
+    }
+    if let Some((field, _, _)) = fields.iter().find(|(_, kind, _)| kind == "text") {
+        examples.push(format!("{field} contains \"sample\""));
+        examples.push(format!("lower({field}) == \"sample\""));
+    }
+    if let Some((field, _, _)) = fields.iter().find(|(_, kind, _)| kind == "text list") {
+        examples.push(format!("{field} == \"needs review\""));
+    }
+    examples
 }
 
 pub(crate) fn open_guide(ctx: &egui::Context) {
     ctx.data_mut(|data| data.insert_temp(egui::Id::new("filter-guide-open"), true));
 }
 
+#[cfg(test)]
 fn guide_rows() -> &'static [(String, String, String)] {
     use std::collections::BTreeSet;
     use std::sync::OnceLock;
@@ -276,6 +306,7 @@ impl Compiled {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn keep_record(&self, labels: &RecordLabels<'_>) -> bool {
         if self.error.is_some() {
             return false;
@@ -303,6 +334,7 @@ pub(crate) fn compile_note(filter: &str) -> Compiled {
 
 /// Run and result rows. `tag` is the annotation on that directory.
 /// An invalid expression is an error and is not a text search.
+#[cfg(test)]
 pub(crate) fn compile_record(filter: &str) -> Compiled {
     compile_with(filter, true)
 }
@@ -322,11 +354,414 @@ fn compile_with(filter: &str, record: bool) -> Compiled {
 }
 
 /// Labels stored beside a run or result. Tags do not come from path text.
+#[cfg(test)]
 pub(crate) struct RecordLabels<'a> {
     pub id: &'a str,
     pub name: &'a str,
     pub path: &'a str,
     pub tags: &'a [String],
+}
+
+/// A table's displayed fields. The same registry validates filters and drives completion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FieldSpec<'a> {
+    pub name: &'a str,
+    pub kind: &'a str,
+    pub detail: &'a str,
+}
+
+impl<'a> FieldSpec<'a> {
+    pub const fn text(name: &'a str, detail: &'a str) -> Self {
+        Self {
+            name,
+            kind: "text",
+            detail,
+        }
+    }
+    pub const fn number(name: &'a str, detail: &'a str) -> Self {
+        Self {
+            name,
+            kind: "integer",
+            detail,
+        }
+    }
+    pub const fn boolean(name: &'a str, detail: &'a str) -> Self {
+        Self {
+            name,
+            kind: "boolean",
+            detail,
+        }
+    }
+    pub const fn tags(name: &'a str, detail: &'a str) -> Self {
+        Self {
+            name,
+            kind: "text list",
+            detail,
+        }
+    }
+}
+
+/// Owned row values; an unavailable cell must use Missing, never a display placeholder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum RowValue {
+    Number(i128),
+    Text(String),
+    Bool(bool),
+    List(Vec<String>),
+    Missing,
+}
+
+impl Compiled {
+    pub(crate) fn keep_table(&self, row: &[(&str, RowValue)]) -> bool {
+        if self.error.is_some() {
+            return false;
+        }
+        match &self.mode {
+            Mode::All => true,
+            Mode::Text(needle) => row.iter().any(|(_, value)| match value {
+                RowValue::Missing => false,
+                RowValue::Text(value) => value.to_lowercase().contains(&needle.to_lowercase()),
+                RowValue::List(values) => values
+                    .iter()
+                    .any(|value| value.to_lowercase().contains(&needle.to_lowercase())),
+                RowValue::Number(value) => value.to_string().contains(needle),
+                RowValue::Bool(value) => value.to_string().contains(&needle.to_lowercase()),
+            }),
+            Mode::Expr(expr) => expr.eval_table(row),
+        }
+    }
+}
+
+/// Parse a table filter against only the fields the table supplies.
+pub(crate) fn compile_table(filter: &str, fields: &[FieldSpec<'_>]) -> Compiled {
+    let parse = || -> Result<Mode, String> {
+        let filter = filter.trim();
+        if filter.is_empty() {
+            return Ok(Mode::All);
+        }
+        if !is_expression(filter)
+            && !fields
+                .iter()
+                .any(|field| field.name.eq_ignore_ascii_case(filter))
+        {
+            return Ok(Mode::Text(filter.into()));
+        }
+        let (tokens, offsets) = tokenize_with_positions(filter)?;
+        let mut parser = Parser { tokens, at: 0 };
+        let mut expr = parser.parse_or().map_err(|error| {
+            position_error(
+                error,
+                filter,
+                offsets.get(parser.at).copied().unwrap_or(filter.len()),
+            )
+        })?;
+        if parser.at != parser.tokens.len() {
+            return Err(position_error(
+                "Unexpected text after the filter".into(),
+                filter,
+                offsets.get(parser.at).copied().unwrap_or(filter.len()),
+            ));
+        }
+        validate_table(&mut expr, fields).map_err(|error| position_error(error, filter, 0))?;
+        Ok(Mode::Expr(expr))
+    };
+    match parse() {
+        Ok(mode) => Compiled { error: None, mode },
+        Err(error) => Compiled {
+            error: Some(error),
+            mode: Mode::All,
+        },
+    }
+}
+
+/// Retain the last valid filter while a draft is incomplete. State is scoped by the caller's UI id.
+pub(crate) fn applied_table(
+    ui: &mut egui::Ui,
+    filter: &str,
+    fields: &[FieldSpec<'_>],
+    id: impl std::hash::Hash,
+) -> Compiled {
+    let id = ui.id().with(("applied-table-filter", id));
+    let compiled = compile_table(filter, fields);
+    if let Some(error) = compiled.error.as_ref() {
+        ui.colored_label(
+            crate::theme::warn(),
+            format!("{error} · showing the last valid filter"),
+        );
+        let applied = ui
+            .data(|data| data.get_temp::<String>(id))
+            .unwrap_or_default();
+        // A changed table schema must never reuse an incompatible expression.
+        let last = compile_table(&applied, fields);
+        if last.error.is_none() {
+            last
+        } else {
+            compile_table("", fields)
+        }
+    } else {
+        ui.data_mut(|data| data.insert_temp(id, filter.to_owned()));
+        compiled
+    }
+}
+
+/// A full-width table filter with local draft/last-applied state.
+pub(crate) fn table_filter(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash,
+    hint: &str,
+    fields: &[FieldSpec<'_>],
+    known_values: &[String],
+) -> Compiled {
+    let id = ui.id().with(("table-filter", id));
+    let mut text = ui
+        .data(|data| data.get_temp::<String>(id))
+        .unwrap_or_default();
+    filter_edit_fields(
+        ui,
+        &mut text,
+        hint,
+        ui.available_width(),
+        fields,
+        known_values,
+    );
+    let history_id = id.with("history");
+    let mut history = ui
+        .data(|data| data.get_temp::<Vec<String>>(history_id))
+        .unwrap_or_default();
+    let applied = applied_table(ui, &text, fields, id);
+    if !text.trim().is_empty()
+        && compile_table(&text, fields).error.is_none()
+        && history.first() != Some(&text)
+    {
+        history.retain(|entry| entry != &text);
+        history.insert(0, text.clone());
+        history.truncate(24);
+    }
+    ui.data_mut(|data| {
+        data.insert_temp(
+            ui.id().with(("filter-edit", hint)).with("history"),
+            history.clone(),
+        );
+        data.insert_temp(history_id, history);
+    });
+    ui.data_mut(|data| data.insert_temp(id, text));
+    applied
+}
+
+/// Context actions build valid typed clauses, including escaped text and unavailable values.
+pub(crate) fn value_menu(ui: &mut egui::Ui, field: &str, value: &RowValue, filter: &mut String) {
+    let clause = match value {
+        RowValue::Missing => format!("missing({field})"),
+        RowValue::Text(value) => format!("{field} == {}", quote_value(value, true)),
+        RowValue::Number(value) => format!("{field} == {value}"),
+        RowValue::Bool(value) => format!("{field} == {value}"),
+        RowValue::List(values) if !values.is_empty() => format!(
+            "{field} in {{{}}}",
+            values
+                .iter()
+                .map(|value| quote_value(value, true))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        RowValue::List(_) => format!("missing({field})"),
+    };
+    for (label, join, exclude) in [
+        ("Apply as filter", None, false),
+        ("Add AND", Some("&&"), false),
+        ("Add OR", Some("||"), false),
+        ("Exclude", Some("&&"), true),
+    ] {
+        if ui.button(label).clicked() {
+            let clause = if exclude {
+                format!("!({clause})")
+            } else {
+                clause.clone()
+            };
+            *filter = if let Some(join) =
+                join.filter(|_| !filter.trim().is_empty() && structured(filter))
+            {
+                format!("({filter}) {join} ({clause})")
+            } else {
+                clause
+            };
+            ui.close_menu();
+        }
+    }
+}
+
+/// Row menu for a table whose draft lives in egui state. The caller supplies its
+/// parent UI's filter id, because a context menu has a different UI identity.
+pub(crate) fn table_row_menu(ui: &mut egui::Ui, filter_id: egui::Id, row: &[(&str, RowValue)]) {
+    ui.menu_button("Filter by field", |ui| {
+        for (field, value) in row {
+            ui.menu_button(*field, |ui| {
+                let mut draft = ui
+                    .data(|data| data.get_temp::<String>(filter_id))
+                    .unwrap_or_default();
+                value_menu(ui, field, value, &mut draft);
+                ui.data_mut(|data| data.insert_temp(filter_id, draft));
+            });
+        }
+    });
+}
+
+pub(crate) const LABEL_FIELDS: &[FieldSpec<'static>] = &[
+    FieldSpec::text("entry.kind", "Evidence category"),
+    FieldSpec::text("entry.id", "Recorded identity"),
+    FieldSpec::text("entry.name", "Annotation name"),
+    FieldSpec::text("entry.path", "Evidence path"),
+    FieldSpec::tags("tag", "Stored annotation tags"),
+    FieldSpec::tags("tags", "Stored annotation tags"),
+    FieldSpec::tags("entry.tag", "Stored annotation tags"),
+    FieldSpec::text("entry.state", "Recorded outcome"),
+    FieldSpec::boolean("entry.complete", "Evidence completeness"),
+    FieldSpec::number("entry.time_ms", "Unix timestamp in milliseconds"),
+    FieldSpec::number("entry.size", "Saved extent in octets"),
+    FieldSpec::text("vm.id", "Recorded VM identity"),
+    FieldSpec::text("boot.id", "Recorded boot identity"),
+    FieldSpec::text("run.id", "Associated run identity"),
+];
+
+pub(crate) const CAPTURE_FIELDS: &[FieldSpec<'static>] = &[
+    FieldSpec::text("capture.kind", "Capture category"),
+    FieldSpec::number(
+        "capture.started_ms",
+        "Unix start milliseconds; missing when not recorded",
+    ),
+    FieldSpec::number(
+        "capture.ended_ms",
+        "Unix end milliseconds; missing when not recorded",
+    ),
+    FieldSpec::number("capture.size", "Retained extent in octets"),
+    FieldSpec::number(
+        "capture.expected_size",
+        "Expected extent in octets; missing when not recorded",
+    ),
+    FieldSpec::boolean("capture.complete", "Recorded capture completeness"),
+    FieldSpec::text("capture.state", "Recorded capture state"),
+    FieldSpec::text(
+        "capture.run_id",
+        "Linked program run identity; missing for unlinked captures",
+    ),
+];
+
+pub(crate) const ANALYSIS_FIELDS: &[FieldSpec<'static>] = &[
+    FieldSpec::text("analysis.id", "Retained analysis identity"),
+    FieldSpec::text("analysis.kind", "Analysis result category"),
+    FieldSpec::tags("analysis.tool", "Tools recorded for this analysis"),
+    FieldSpec::text("analysis.state", "Recorded analysis state"),
+    FieldSpec::text("analysis.sha256", "Recorded specimen SHA-256"),
+    FieldSpec::boolean(
+        "analysis.has_run",
+        "Analysis has a recorded program run link",
+    ),
+    FieldSpec::text("analysis.run_id", "Linked program run identity"),
+    FieldSpec::text("analysis.source", "Recorded analysis source"),
+    FieldSpec::text("analysis.path", "Recorded specimen or result path"),
+];
+
+pub(crate) fn label_row(
+    id: &str,
+    name: &str,
+    path: &str,
+    tags: &[String],
+) -> Vec<(&'static str, RowValue)> {
+    vec![
+        ("entry.id", RowValue::Text(id.into())),
+        (
+            "entry.name",
+            if name.is_empty() {
+                RowValue::Missing
+            } else {
+                RowValue::Text(name.into())
+            },
+        ),
+        ("entry.path", RowValue::Text(path.into())),
+        ("tag", RowValue::List(tags.into())),
+        ("tags", RowValue::List(tags.into())),
+        ("entry.tag", RowValue::List(tags.into())),
+    ]
+}
+
+fn table_kind<'a>(value: &Value, fields: &'a [FieldSpec<'_>]) -> Result<&'a str, String> {
+    match value {
+        Value::Field(name) => fields
+            .iter()
+            .find(|field| field.name.eq_ignore_ascii_case(name))
+            .map(|field| field.kind)
+            .ok_or_else(|| format!("Unknown filter field {name}")),
+        Value::Masked(inner, _) => {
+            if table_kind(inner, fields)? != "integer" {
+                return Err("A bit mask needs an integer field".into());
+            }
+            Ok("integer")
+        }
+        Value::Lower(inner) => {
+            let kind = table_kind(inner, fields)?;
+            if !matches!(kind, "text" | "text list") {
+                return Err("lower needs a text field".into());
+            }
+            Ok(kind)
+        }
+        Value::Raw(index)
+            if fields
+                .iter()
+                .any(|field| field.name == format!("args.raw[{index}]")) =>
+        {
+            Ok("integer")
+        }
+        _ => Err("Expected a field".into()),
+    }
+}
+
+fn literal(value: &mut Value) {
+    if let Value::Field(name) = value {
+        *value = Value::Text(name.clone());
+    }
+}
+
+fn validate_table(expr: &mut Expr, fields: &[FieldSpec<'_>]) -> Result<(), String> {
+    match expr {
+        Expr::Not(inner) => validate_table(inner, fields),
+        Expr::And(left, right) | Expr::Or(left, right) => {
+            validate_table(left, fields)?;
+            validate_table(right, fields)
+        }
+        Expr::Value(value) | Expr::Exists(value) | Expr::Missing(value) => {
+            table_kind(value, fields)?;
+            Ok(())
+        }
+        Expr::Cmp(left, op, right) => {
+            let kind = table_kind(left, fields)?;
+            literal(right);
+            validate_literal(kind, right)?;
+            if matches!(op, Cmp::Lt | Cmp::Le | Cmp::Gt | Cmp::Ge) && kind != "integer" {
+                return Err("Ordering needs an integer field".into());
+            }
+            if matches!(op, Cmp::Contains) && !matches!(kind, "text" | "text list") {
+                return Err("contains needs a text field".into());
+            }
+            Ok(())
+        }
+        Expr::In(left, items) => {
+            let kind = table_kind(left, fields)?;
+            for item in items {
+                literal(item);
+                validate_literal(kind, item)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_literal(kind: &str, value: &Value) -> Result<(), String> {
+    match (kind, value) {
+        ("integer", Value::Number(_)) | ("text" | "text list" | "ip", Value::Text(_)) => Ok(()),
+        ("boolean", Value::Text(value)) if value == "true" || value == "false" => Ok(()),
+        ("boolean", _) => Err("Expected lowercase true or false".into()),
+        ("integer", _) => Err("Expected an integer value".into()),
+        _ => Err("Expected a text value (quote text containing spaces or punctuation)".into()),
+    }
 }
 
 #[cfg(test)]
@@ -343,33 +778,64 @@ fn compiled(filter: &str, record: bool) -> Result<Mode, String> {
     if filter.is_empty() {
         return Ok(Mode::All);
     }
-    if !is_expression(filter) {
+    if !is_expression(filter)
+        && !(if record {
+            known_record_field(filter)
+        } else {
+            known_field(filter)
+        })
+    {
         return Ok(Mode::Text(filter.to_owned()));
     }
-    let tokens = tokenize(filter)?;
+    let (tokens, offsets) = tokenize_with_positions(filter)?;
     let mut parser = Parser { tokens, at: 0 };
-    let expr = parser.parse_or()?;
+    let mut expr = parser.parse_or().map_err(|error| {
+        position_error(
+            error,
+            filter,
+            offsets.get(parser.at).copied().unwrap_or(filter.len()),
+        )
+    })?;
     if parser.at != parser.tokens.len() {
-        return Err("Unexpected text after the filter".into());
+        return Err(position_error(
+            "Unexpected text after the filter".into(),
+            filter,
+            offsets.get(parser.at).copied().unwrap_or(filter.len()),
+        ));
     }
-    check_fields(&expr, record)?;
+    normalize_literals(&mut expr);
+    check_fields(&expr, record).map_err(|error| position_error(error, filter, 0))?;
+    let fields = fields_for(if record {
+        FilterScope::Record
+    } else {
+        FilterScope::Syscall
+    });
+    validate_table(&mut expr, &fields).map_err(|error| position_error(error, filter, 0))?;
     Ok(Mode::Expr(expr))
+}
+
+fn normalize_literals(expr: &mut Expr) {
+    match expr {
+        Expr::Cmp(_, _, right) => literal(right),
+        Expr::Not(inner) => normalize_literals(inner),
+        Expr::And(left, right) | Expr::Or(left, right) => {
+            normalize_literals(left);
+            normalize_literals(right);
+        }
+        _ => {}
+    }
 }
 
 fn check_fields(expr: &Expr, record: bool) -> Result<(), String> {
     match expr {
-        Expr::Value(value) => check_value(value, record),
+        Expr::Value(value) => require_field(value, record),
         Expr::Not(inner) => check_fields(inner, record),
         Expr::And(left, right) | Expr::Or(left, right) => {
             check_fields(left, record)?;
             check_fields(right, record)
         }
         Expr::Cmp(left, _, right) => {
-            if matches!(left, Value::Masked(_, _)) {
-                require_field(left, record)?;
-            } else {
-                check_value(left, record)?;
-            }
+            require_field(left, record)?;
             check_value(right, record)
         }
         Expr::Exists(value) | Expr::Missing(value) => require_field(value, record),
@@ -400,7 +866,7 @@ fn check_value(value: &Value, record: bool) -> Result<(), String> {
             }
             Ok(())
         }
-        Value::Masked(inner, _) => check_value(inner, record),
+        Value::Masked(inner, _) | Value::Lower(inner) => check_value(inner, record),
         Value::Raw(_) if record => Err("args.raw is a syscall field".into()),
         Value::Raw(_) | Value::Number(_) | Value::Text(_) => Ok(()),
     }
@@ -413,7 +879,7 @@ fn require_field(value: &Value, record: bool) -> Result<(), String> {
         Value::Field(name) if record && known_record_field(name) => Ok(()),
         Value::Field(name) if !record && known_field(name) => Ok(()),
         Value::Field(name) => Err(unknown_field(name)),
-        Value::Masked(inner, _) => require_field(inner, record),
+        Value::Masked(inner, _) | Value::Lower(inner) => require_field(inner, record),
         Value::Number(_) | Value::Text(_) => Err("Expected a field".into()),
     }
 }
@@ -461,9 +927,51 @@ fn known_field(name: &str) -> bool {
             | "tags"
             | "call.id"
             | "call_id"
-    ) || key
-        .strip_prefix("args.")
-        .is_some_and(|rest| !rest.is_empty() && !rest.contains('.'))
+            | "event.id"
+            | "event.sequence"
+            | "event.time_ns"
+            | "event.complete"
+            | "event.gap"
+            | "syscall.group"
+            | "syscall.errno"
+            | "syscall.success"
+            | "syscall.duration_ns"
+            | "process.cookie"
+            | "process.pid"
+            | "process.tgid"
+            | "process.tid"
+            | "process.ppid"
+            | "process.parent_cookie"
+            | "process.uid"
+            | "process.gid"
+            | "process.comm"
+            | "process.exe"
+            | "process.argv"
+            | "process.state"
+    ) || key.strip_prefix("args.").is_some_and(|rest| {
+        rest.parse::<usize>().is_ok_and(|slot| slot < 6)
+            || matches!(
+                rest,
+                "addr"
+                    | "address"
+                    | "len"
+                    | "length"
+                    | "prot"
+                    | "protection"
+                    | "buf"
+                    | "buffer"
+                    | "file"
+                    | "filename"
+                    | "pathname"
+                    | "path"
+                    | "old_path"
+                    | "new_path"
+            )
+            || schema_argument_fields()
+                .iter()
+                .any(|field| field.name.eq_ignore_ascii_case(name))
+            || antinomie_monitor_core::filter_members::descriptor(&key).is_some()
+    })
 }
 
 fn is_expression(filter: &str) -> bool {
@@ -477,10 +985,14 @@ fn is_expression(filter: &str) -> bool {
         || filter.contains('&')
         || filter.contains('{')
         || filter.contains('[')
+        || filter.starts_with('!')
         || filter.to_lowercase().contains(" contains ")
         || has_filter_word(filter, "exists")
         || has_filter_word(filter, "missing")
         || has_filter_word(filter, "in")
+        || has_filter_word(filter, "and")
+        || has_filter_word(filter, "or")
+        || has_filter_word(filter, "not")
         || filter.split_whitespace().any(|word| word.contains('.'))
 }
 
@@ -493,7 +1005,7 @@ fn has_filter_word(filter: &str, word: &str) -> bool {
 #[derive(Clone, Debug)]
 enum Token {
     Ident(String),
-    Number(i64),
+    Number(i128),
     Text(String),
     Eq,
     Ne,
@@ -519,9 +1031,29 @@ enum Token {
 }
 
 fn tokenize(input: &str) -> Result<Vec<Token>, String> {
+    tokenize_with_positions(input).map(|(tokens, _)| tokens)
+}
+
+fn position_error(error: String, input: &str, offset: usize) -> String {
+    format!(
+        "{error} at column {}",
+        input[..floor_boundary(input, offset.min(input.len()))]
+            .chars()
+            .count()
+            + 1
+    )
+}
+
+fn tokenize_with_positions(input: &str) -> Result<(Vec<Token>, Vec<usize>), String> {
+    if input.len() > 64 * 1024 {
+        return Err("Filter exceeds 64 KiB at column 1".into());
+    }
     let bytes = input.as_bytes();
     let mut tokens = Vec::new();
+    let mut offsets = Vec::new();
     let mut index = 0;
+    let mut nesting = 0usize;
+    let mut boolean_count = 0usize;
     while index < bytes.len() {
         let byte = bytes[index];
         if byte.is_ascii_whitespace() {
@@ -529,26 +1061,28 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
             continue;
         }
         let rest = &input[index..];
-        let lower = rest.to_ascii_lowercase();
-        if lower.starts_with("&&") {
+        offsets.push(index);
+        if rest.starts_with("&&") {
             tokens.push(Token::And);
             index += 2;
-        } else if lower.starts_with("||") {
+        } else if rest.starts_with("||") {
             tokens.push(Token::Or);
             index += 2;
-        } else if lower.starts_with("==") {
+        } else if rest.starts_with("==") {
             tokens.push(Token::Eq);
             index += 2;
-        } else if lower.starts_with("!=") {
+        } else if rest.starts_with("!=") {
             tokens.push(Token::Ne);
             index += 2;
-        } else if lower.starts_with("<=") {
+        } else if rest.starts_with("<=") {
             tokens.push(Token::Le);
             index += 2;
-        } else if lower.starts_with(">=") {
+        } else if rest.starts_with(">=") {
             tokens.push(Token::Ge);
             index += 2;
-        } else if lower.starts_with("contains")
+        } else if rest
+            .get(..8)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("contains"))
             && rest[8..]
                 .chars()
                 .next()
@@ -591,12 +1125,40 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
             index += 1;
         } else if byte == b'"' || byte == b'\'' {
             let quote = byte as char;
-            let body = &input[index + 1..];
-            let end = body
-                .find(quote)
-                .ok_or_else(|| "Unclosed quote in the filter".to_owned())?;
-            tokens.push(Token::Text(body[..end].to_owned()));
-            index += end + 2;
+            index += 1;
+            let mut value = String::new();
+            let mut closed = false;
+            while index < input.len() {
+                let ch = input[index..]
+                    .chars()
+                    .next()
+                    .ok_or("Unclosed quote in the filter")?;
+                index += ch.len_utf8();
+                if ch == quote {
+                    closed = true;
+                    break;
+                }
+                if ch == '\\' {
+                    let escaped = input[index..]
+                        .chars()
+                        .next()
+                        .ok_or("Incomplete escape in the filter")?;
+                    index += escaped.len_utf8();
+                    match escaped {
+                        '\\' | '"' | '\'' => value.push(escaped),
+                        'n' => value.push('\n'),
+                        'r' => value.push('\r'),
+                        't' => value.push('\t'),
+                        _ => return Err(format!("Unknown escape \\{escaped}")),
+                    }
+                } else {
+                    value.push(ch);
+                }
+            }
+            if !closed {
+                return Err("Unclosed quote in the filter".into());
+            }
+            tokens.push(Token::Text(value));
         } else if byte == b'-' || byte.is_ascii_digit() {
             let start = index;
             index += 1;
@@ -606,9 +1168,11 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                     index += 1;
                 }
                 let text = &input[start..index];
-                let value =
-                    i64::from_str_radix(text.trim_start_matches("0x").trim_start_matches("0X"), 16)
-                        .map_err(|_| format!("Invalid number {text}"))?;
+                let value = i128::from_str_radix(
+                    text.trim_start_matches("0x").trim_start_matches("0X"),
+                    16,
+                )
+                .map_err(|_| format!("Invalid number {text}"))?;
                 tokens.push(Token::Number(value));
             } else {
                 while index < bytes.len() && (bytes[index].is_ascii_digit()) {
@@ -616,7 +1180,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                 }
                 let text = &input[start..index];
                 let value = text
-                    .parse::<i64>()
+                    .parse::<i128>()
                     .map_err(|_| format!("Invalid number {text}"))?;
                 tokens.push(Token::Number(value));
             }
@@ -626,7 +1190,9 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
             while index < bytes.len()
                 && (bytes[index].is_ascii_alphanumeric()
                     || bytes[index] == b'_'
-                    || bytes[index] == b'.')
+                    || bytes[index] == b'.'
+                    || bytes[index] == b'['
+                    || bytes[index] == b']')
             {
                 index += 1;
             }
@@ -647,8 +1213,17 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                 byte as char
             ));
         }
+        match tokens.last() {
+            Some(Token::LParen) => nesting += 1,
+            Some(Token::RParen) => nesting = nesting.saturating_sub(1),
+            Some(Token::And | Token::Or | Token::Not) => boolean_count += 1,
+            _ => {}
+        }
+        if tokens.len() > 2048 || nesting > 64 || boolean_count > 256 {
+            return Err(position_error("Filter is too complex (maximum 2048 tokens, 64 nested parentheses, 256 boolean operators)".into(), input, index));
+        }
     }
-    Ok(tokens)
+    Ok((tokens, offsets))
 }
 
 struct Parser {
@@ -704,12 +1279,26 @@ impl Parser {
             if !matches!(self.pop()?, Token::RParen) {
                 return Err("Missing closing parenthesis".into());
             }
+            if let Expr::Value(left) = inner {
+                if let Some(op) = self.comparison() {
+                    self.at += 1;
+                    return Ok(Expr::Cmp(left, op, self.parse_value()?));
+                }
+                return Ok(Expr::Value(left));
+            }
             return Ok(inner);
         }
         if matches!(self.peek(), Some(Token::Exists | Token::Missing)) {
             let missing = matches!(self.peek(), Some(Token::Missing));
             self.at += 1;
+            let parenthesized = matches!(self.peek(), Some(Token::LParen));
+            if parenthesized {
+                self.at += 1;
+            }
             let field = self.parse_value()?;
+            if parenthesized && !matches!(self.pop()?, Token::RParen) {
+                return Err("Expected ) after the presence field".into());
+            }
             return Ok(if missing {
                 Expr::Missing(field)
             } else {
@@ -727,6 +1316,9 @@ impl Parser {
                 _ => return Err("Expected a number after &".into()),
             };
             left = Value::Masked(Box::new(left), mask);
+            if matches!(self.peek(), Some(Token::RParen)) {
+                return Ok(Expr::Value(left));
+            }
             let op = match self.pop()? {
                 Token::Eq => Cmp::Eq,
                 Token::Ne => Cmp::Ne,
@@ -792,11 +1384,45 @@ impl Parser {
 
     fn parse_value(&mut self) -> Result<Value, String> {
         match self.pop()? {
+            Token::Ident(name) if name == "lower" => {
+                if !matches!(self.pop()?, Token::LParen) {
+                    return Err("Expected ( after lower".into());
+                }
+                let value = self.parse_value()?;
+                if !matches!(self.pop()?, Token::RParen) {
+                    return Err("Expected ) after lower field".into());
+                }
+                Ok(Value::Lower(Box::new(value)))
+            }
             Token::Ident(name) if name.eq_ignore_ascii_case("args.raw") => self.parse_raw_slot(),
+            Token::Ident(name) if name.to_ascii_lowercase().starts_with("args.raw[") => {
+                let index = name
+                    .get(9..)
+                    .and_then(|suffix| suffix.strip_suffix(']'))
+                    .and_then(|index| index.parse::<usize>().ok())
+                    .filter(|index| *index < 6)
+                    .ok_or_else(|| {
+                        "args.raw slot must be an integer from 0 through 5".to_owned()
+                    })?;
+                Ok(Value::Raw(index))
+            }
             Token::Ident(name) => Ok(Value::Field(name)),
             Token::Number(number) => Ok(Value::Number(number)),
             Token::Text(text) => Ok(Value::Text(text)),
             _ => Err("Expected a field, number or quoted text".into()),
+        }
+    }
+
+    fn comparison(&self) -> Option<Cmp> {
+        match self.peek()? {
+            Token::Eq => Some(Cmp::Eq),
+            Token::Ne => Some(Cmp::Ne),
+            Token::Lt => Some(Cmp::Lt),
+            Token::Le => Some(Cmp::Le),
+            Token::Gt => Some(Cmp::Gt),
+            Token::Ge => Some(Cmp::Ge),
+            Token::Contains => Some(Cmp::Contains),
+            _ => None,
         }
     }
 
@@ -844,20 +1470,51 @@ enum Expr {
 
 enum Value {
     Field(String),
-    Number(i64),
+    Number(i128),
     Text(String),
     Raw(usize),
     Masked(Box<Value>, u64),
+    Lower(Box<Value>),
 }
 
 enum Resolved {
-    Number(i64),
+    Number(i128),
     Text(String),
     List(Vec<String>),
+    Bool(bool),
     Missing,
 }
 
 impl Expr {
+    fn eval_table(&self, row: &[(&str, RowValue)]) -> bool {
+        match self {
+            Self::Not(inner) => !inner.eval_table(row),
+            Self::And(left, right) => left.eval_table(row) && right.eval_table(row),
+            Self::Or(left, right) => left.eval_table(row) || right.eval_table(row),
+            Self::Value(Value::Field(name))
+                if row.iter().any(|(field, value)| {
+                    field.eq_ignore_ascii_case(name) && matches!(value, RowValue::Bool(_))
+                }) =>
+            {
+                row.iter().any(|(field, value)| {
+                    field.eq_ignore_ascii_case(name) && matches!(value, RowValue::Bool(true))
+                })
+            }
+            Self::Value(value) => match value.resolve_table(row) {
+                Resolved::Number(number) => number != 0,
+                Resolved::Bool(value) => value,
+                value => is_present(&value),
+            },
+            Self::Exists(value) => is_present(&value.resolve_table(row)),
+            Self::Missing(value) => !is_present(&value.resolve_table(row)),
+            Self::Cmp(left, op, right) => {
+                compare(*op, &left.resolve_table(row), &right.resolve_table(row))
+            }
+            Self::In(left, values) => values
+                .iter()
+                .any(|right| compare(Cmp::Eq, &left.resolve_table(row), &right.resolve_table(row))),
+        }
+    }
     fn eval(&self, invocation: &InvocationSummary) -> Result<bool, String> {
         match self {
             Expr::Not(inner) => Ok(!inner.eval(invocation)?),
@@ -868,6 +1525,7 @@ impl Expr {
                 Resolved::Text(text) => !text.is_empty(),
                 Resolved::List(items) => !items.is_empty(),
                 Resolved::Missing => false,
+                Resolved::Bool(value) => value,
             }),
             Expr::Exists(value) => Ok(is_present(&value.resolve(invocation)?)),
             Expr::Missing(value) => Ok(!is_present(&value.resolve(invocation)?)),
@@ -882,6 +1540,7 @@ impl Expr {
         }
     }
 
+    #[cfg(test)]
     fn eval_record(&self, labels: &RecordLabels<'_>) -> Result<bool, String> {
         match self {
             Expr::Not(inner) => Ok(!inner.eval_record(labels)?),
@@ -892,6 +1551,7 @@ impl Expr {
                 Resolved::Text(text) => !text.is_empty(),
                 Resolved::List(items) => !items.is_empty(),
                 Resolved::Missing => false,
+                Resolved::Bool(value) => value,
             }),
             Expr::Exists(value) => Ok(is_present(&value.resolve_record(labels)?)),
             Expr::Missing(value) => Ok(!is_present(&value.resolve_record(labels)?)),
@@ -926,15 +1586,42 @@ fn in_list(
 fn is_present(value: &Resolved) -> bool {
     match value {
         Resolved::Number(_) => true,
-        Resolved::Text(text) => !text.is_empty(),
+        Resolved::Bool(_) => true,
+        Resolved::Text(_) => true,
         Resolved::List(items) => !items.is_empty(),
         Resolved::Missing => false,
     }
 }
 
 impl Value {
+    fn resolve_table(&self, row: &[(&str, RowValue)]) -> Resolved {
+        match self {
+            Self::Number(number) => Resolved::Number(*number),
+            Self::Text(text) => Resolved::Text(text.clone()),
+            Self::Masked(inner, mask) => match inner.resolve_table(row) {
+                Resolved::Number(number) => Resolved::Number(number & i128::from(*mask)),
+                _ => Resolved::Missing,
+            },
+            Self::Raw(_) => Resolved::Missing,
+            Self::Lower(inner) => lower_value(inner.resolve_table(row)),
+            Self::Field(name) => match row
+                .iter()
+                .find(|(field, _)| field.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value)
+            {
+                Some(RowValue::Number(number)) => Resolved::Number(*number),
+                Some(RowValue::Text(text)) => Resolved::Text(text.clone()),
+                Some(RowValue::Bool(value)) => Resolved::Bool(*value),
+                Some(RowValue::List(values)) if !values.is_empty() => {
+                    Resolved::List(values.clone())
+                }
+                _ => Resolved::Missing,
+            },
+        }
+    }
     fn resolve(&self, invocation: &InvocationSummary) -> Result<Resolved, String> {
         match self {
+            Self::Lower(inner) => Ok(lower_value(inner.resolve(invocation)?)),
             Value::Number(number) => Ok(Resolved::Number(*number)),
             Value::Text(text) => Ok(Resolved::Text(text.clone())),
             Value::Raw(index) => {
@@ -944,11 +1631,11 @@ impl Value {
                 Ok(event
                     .args
                     .and_then(|args| args.get(*index).copied())
-                    .map(|value| Resolved::Number(value as i64))
+                    .map(|value| Resolved::Number(i128::from(value)))
                     .unwrap_or(Resolved::Missing))
             }
             Value::Masked(value, mask) => match value.resolve(invocation)? {
-                Resolved::Number(number) => Ok(Resolved::Number(number & *mask as i64)),
+                Resolved::Number(number) => Ok(Resolved::Number(number & i128::from(*mask))),
                 _ => Ok(Resolved::Missing),
             },
             Value::Field(name) => match field(invocation, name) {
@@ -959,13 +1646,15 @@ impl Value {
         }
     }
 
+    #[cfg(test)]
     fn resolve_record(&self, labels: &RecordLabels<'_>) -> Result<Resolved, String> {
         match self {
+            Self::Lower(inner) => Ok(lower_value(inner.resolve_record(labels)?)),
             Value::Number(number) => Ok(Resolved::Number(*number)),
             Value::Text(text) => Ok(Resolved::Text(text.clone())),
             Value::Raw(_) => Err("args.raw is a syscall field".into()),
             Value::Masked(value, mask) => match value.resolve_record(labels)? {
-                Resolved::Number(number) => Ok(Resolved::Number(number & *mask as i64)),
+                Resolved::Number(number) => Ok(Resolved::Number(number & i128::from(*mask))),
                 _ => Ok(Resolved::Missing),
             },
             Value::Field(name) => record_field(labels, name),
@@ -973,6 +1662,17 @@ impl Value {
     }
 }
 
+fn lower_value(value: Resolved) -> Resolved {
+    match value {
+        Resolved::Text(text) => Resolved::Text(text.to_lowercase()),
+        Resolved::List(values) => {
+            Resolved::List(values.into_iter().map(|text| text.to_lowercase()).collect())
+        }
+        _ => Resolved::Missing,
+    }
+}
+
+#[cfg(test)]
 fn record_field(labels: &RecordLabels<'_>, name: &str) -> Result<Resolved, String> {
     match name.to_ascii_lowercase().as_str() {
         "tag" | "tags" | "entry.tag" => Ok(if labels.tags.is_empty() {
@@ -996,6 +1696,17 @@ fn record_field(labels: &RecordLabels<'_>, name: &str) -> Result<Resolved, Strin
 fn compare(op: Cmp, left: &Resolved, right: &Resolved) -> bool {
     match (left, right) {
         (Resolved::Missing, _) | (_, Resolved::Missing) => false,
+        (Resolved::Bool(left), Resolved::Text(right)) => match op {
+            Cmp::Eq => right == if *left { "true" } else { "false" },
+            Cmp::Ne => right != if *left { "true" } else { "false" },
+            _ => false,
+        },
+        (Resolved::Bool(left), Resolved::Bool(right)) => match op {
+            Cmp::Eq => left == right,
+            Cmp::Ne => left != right,
+            _ => false,
+        },
+        (Resolved::Bool(_), _) | (_, Resolved::Bool(_)) => false,
         (Resolved::List(items), Resolved::Text(needle)) => match op {
             Cmp::Eq => items.iter().any(|item| item == needle),
             Cmp::Ne => !items.iter().any(|item| item == needle),
@@ -1023,17 +1734,19 @@ fn compare(op: Cmp, left: &Resolved, right: &Resolved) -> bool {
                 Resolved::Number(number) => number.to_string(),
                 Resolved::List(items) => items.join(", "),
                 Resolved::Missing => return false,
+                Resolved::Bool(value) => value.to_string(),
             };
             let right = match right {
                 Resolved::Text(text) => text.clone(),
                 Resolved::Number(number) => number.to_string(),
                 Resolved::List(items) => items.join(", "),
                 Resolved::Missing => return false,
+                Resolved::Bool(value) => value.to_string(),
             };
             match op {
-                Cmp::Eq => left.eq_ignore_ascii_case(&right),
-                Cmp::Ne => !left.eq_ignore_ascii_case(&right),
-                Cmp::Contains => left.to_lowercase().contains(&right.to_lowercase()),
+                Cmp::Eq => left == right,
+                Cmp::Ne => left != right,
+                Cmp::Contains => left.contains(&right),
                 Cmp::Lt | Cmp::Le | Cmp::Gt | Cmp::Ge => false,
             }
         }
@@ -1048,11 +1761,12 @@ fn captured_path(event: &EventSummary, names: &[&str]) -> Option<String> {
             if key != *name {
                 return None;
             }
-            let text = String::from_utf8_lossy(crate::trace::covered_preview(field))
-                .trim_end_matches('\0')
-                .trim()
-                .to_owned();
-            (!text.is_empty()).then_some(text)
+            let captured = crate::trace::covered_preview(field);
+            if captured.is_empty() {
+                return None;
+            }
+            let text = String::from_utf8_lossy(captured);
+            Some(text.split('\0').next().unwrap_or_default().to_owned())
         }) {
             return Some(text);
         }
@@ -1076,24 +1790,175 @@ fn path_names(alias: &str, argument: &str) -> Option<&'static [&'static str]> {
 
 fn field(invocation: &InvocationSummary, name: &str) -> Result<Resolved, String> {
     let key = name.to_ascii_lowercase();
+    if antinomie_monitor_core::filter_members::descriptor(&key).is_some() {
+        use antinomie_monitor_core::filter_members::MemberValue;
+        return Ok(
+            match antinomie_monitor_core::filter_members::decode(invocation, &key) {
+                MemberValue::Integer(value) => Resolved::Number(value),
+                MemberValue::Text(value) => Resolved::Text(value),
+                MemberValue::Boolean(value) => Resolved::Bool(value),
+                MemberValue::Missing => Resolved::Missing,
+            },
+        );
+    }
     // Every invocation row carries call_id. A row with no entry, exit, or async
     // event still has that id; there is no separate call record to look up.
     if matches!(key.as_str(), "call.id" | "call_id") {
-        return Ok(Resolved::Number(invocation.call_id as i64));
+        return Ok(Resolved::Number(i128::from(invocation.call_id)));
     }
     let Some(event) = trace::representative(invocation) else {
         return Ok(Resolved::Missing);
     };
     let number = match key.as_str() {
-        "syscall.num" | "syscall.number" => Some(event.syscall_nr as i64),
-        "tid" => Some(i64::from(event.tid)),
-        "pid" => Some(i64::from(event.pid)),
-        "cpu" => Some(i64::from(event.cpu)),
-        "task" | "cookie" | "task.cookie" => Some(event.task_cookie as i64),
+        "syscall.num" | "syscall.number" => Some(i128::from(event.syscall_nr)),
+        "tid" | "process.tid" => Some(i128::from(event.tid)),
+        "pid" | "process.pid" | "process.tgid" if event.pid != 0 => Some(i128::from(event.pid)),
+        "cpu" => Some(i128::from(event.cpu)),
+        "task" | "cookie" | "task.cookie" | "process.cookie" => Some(i128::from(event.task_cookie)),
+        "event.id" | "event.sequence" => Some(i128::from(event.event_seq)),
+        "event.time_ns" => Some(i128::from(event.timestamp_ns)),
         _ => None,
     };
     if let Some(number) = number {
         return Ok(Resolved::Number(number));
+    }
+    if matches!(key.as_str(), "pid" | "process.pid" | "process.tgid") {
+        return Ok(Resolved::Missing);
+    }
+    if matches!(
+        key.as_str(),
+        "process.ppid" | "process.parent_cookie" | "process.uid" | "process.gid" | "process.comm"
+    ) {
+        return Ok(Resolved::Missing);
+    }
+    if key == "process.state" {
+        return Ok(if invocation.task_exit.is_some() {
+            Resolved::Text("exited".into())
+        } else {
+            Resolved::Missing
+        });
+    }
+    if matches!(key.as_str(), "process.exe" | "process.argv") {
+        let events: Vec<_> = invocation
+            .entry
+            .iter()
+            .chain(invocation.exit.iter())
+            .chain(invocation.async_events.iter())
+            .chain(invocation.task_exit.iter())
+            .collect();
+        let committed = events.iter().any(|event| {
+            event.fields.iter().any(|field| {
+                field.key == "lifecycle.exec_commit"
+                    && field.complete
+                    && crate::trace::covered_preview(field).len() >= 8
+            })
+        }) || matches!(event.syscall_nr, 59 | 322)
+            && invocation
+                .exit
+                .as_ref()
+                .and_then(|exit| exit.result)
+                .is_some_and(|result| result == 0);
+        if !committed {
+            return Ok(Resolved::Missing);
+        }
+        if key == "process.exe" {
+            return Ok(events
+                .iter()
+                .find_map(|event| captured_path(event, &["path", "filename", "pathname"]))
+                .map_or(Resolved::Missing, Resolved::Text));
+        }
+        let mut arguments = std::collections::BTreeMap::new();
+        for field in events.iter().flat_map(|event| &event.fields) {
+            let Some(suffix) = field.key.split_once("argv[").map(|(_, suffix)| suffix) else {
+                continue;
+            };
+            let Some(index) = suffix
+                .strip_suffix(']')
+                .and_then(|index| index.parse::<u64>().ok())
+            else {
+                continue;
+            };
+            let data = crate::trace::covered_preview(field);
+            if data.is_empty() || !data.contains(&0) {
+                continue;
+            }
+            let value = String::from_utf8_lossy(data)
+                .split('\0')
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            if arguments
+                .insert(index, value.clone())
+                .is_some_and(|previous| previous != value)
+            {
+                return Ok(Resolved::Missing);
+            }
+        }
+        return Ok(if arguments.is_empty() {
+            Resolved::Missing
+        } else {
+            Resolved::List(arguments.into_values().collect())
+        });
+    }
+    if key == "event.complete" {
+        return Ok(Resolved::Bool(
+            invocation
+                .entry
+                .iter()
+                .chain(invocation.exit.iter())
+                .chain(invocation.async_events.iter())
+                .chain(invocation.task_exit.iter())
+                .all(|event| event.complete),
+        ));
+    }
+    if key == "event.gap" {
+        let issues: Vec<_> = invocation
+            .entry
+            .iter()
+            .chain(invocation.exit.iter())
+            .chain(invocation.async_events.iter())
+            .chain(invocation.task_exit.iter())
+            .flat_map(|event| event.issues.iter().cloned())
+            .collect();
+        return Ok(if issues.is_empty() {
+            Resolved::Missing
+        } else {
+            Resolved::List(issues)
+        });
+    }
+    if key == "syscall.group" {
+        return Ok(
+            antinomie_monitor_core::syscall_groups::SyscallGroup::of(&event.syscall_name)
+                .map_or(Resolved::Missing, |group| {
+                    Resolved::Text(group.label().into())
+                }),
+        );
+    }
+    if key == "syscall.duration_ns" {
+        return Ok(invocation
+            .entry
+            .as_ref()
+            .zip(invocation.exit.as_ref())
+            .and_then(|(entry, exit)| exit.timestamp_ns.checked_sub(entry.timestamp_ns))
+            .map_or(Resolved::Missing, |duration| {
+                Resolved::Number(i128::from(duration))
+            }));
+    }
+    if matches!(key.as_str(), "syscall.errno" | "syscall.success") {
+        let outcome = match invocation.exit.as_ref() {
+            Some(exit) => exit.result,
+            None => event.result,
+        };
+        return Ok(outcome.map_or(Resolved::Missing, |result| {
+            let error = (-4095..=-1).contains(&result);
+            if key == "syscall.success" {
+                Resolved::Bool(!error)
+            } else if error {
+                Resolved::Number(-i128::from(result))
+            } else {
+                Resolved::Missing
+            }
+        }));
     }
     if matches!(key.as_str(), "ret" | "result" | "syscall.ret") {
         // The return is the exit record. `representative` prefers the entry,
@@ -1102,7 +1967,9 @@ fn field(invocation: &InvocationSummary, name: &str) -> Result<Resolved, String>
             Some(exit) => exit.result,
             None => event.result,
         };
-        return Ok(outcome.map_or(Resolved::Missing, Resolved::Number));
+        return Ok(outcome.map_or(Resolved::Missing, |value| {
+            Resolved::Number(i128::from(value))
+        }));
     }
     if matches!(key.as_str(), "syscall.name" | "syscall" | "name") {
         return Ok(Resolved::Text(event.syscall_name.clone()));
@@ -1114,12 +1981,22 @@ fn field(invocation: &InvocationSummary, name: &str) -> Result<Resolved, String>
         return Ok(Resolved::Missing);
     }
     if let Some(index) = key.strip_prefix("args.") {
+        if let Ok(index) = index.parse::<usize>() {
+            return Ok(event
+                .args
+                .and_then(|args| args.get(index).copied())
+                .map_or(Resolved::Missing, |value| {
+                    Resolved::Number(i128::from(value))
+                }));
+        }
         let alias = match index {
             "addr" | "address" => "address",
             "len" | "length" => "length",
             "prot" | "protection" => "protection",
             "buf" | "buffer" => "buf",
             "file" | "filename" | "pathname" => "path",
+            "old_path" | "oldname" => "oldname",
+            "new_path" | "newname" => "newname",
             other => other,
         };
         let slot = if let Ok(index) = alias.parse::<usize>() {
@@ -1128,8 +2005,12 @@ fn field(invocation: &InvocationSummary, name: &str) -> Result<Resolved, String>
             (0..6).find(|index| {
                 let name = argument_name(event.syscall_nr, *index);
                 name.eq_ignore_ascii_case(alias)
+                    || (alias == "address" && name.eq_ignore_ascii_case("addr"))
+                    || (alias == "length" && name.eq_ignore_ascii_case("len"))
                     || (alias == "protection" && name.eq_ignore_ascii_case("prot"))
-                    || (alias == "buf" && name == "buf")
+                    || (alias == "buf" && name.eq_ignore_ascii_case("buffer"))
+                    || (alias == "oldname" && name.eq_ignore_ascii_case("old_path"))
+                    || (alias == "newname" && name.eq_ignore_ascii_case("new_path"))
                     || (alias == "path"
                         && matches!(
                             name,
@@ -1147,7 +2028,19 @@ fn field(invocation: &InvocationSummary, name: &str) -> Result<Resolved, String>
         return Ok(event
             .args
             .and_then(|args| args.get(index).copied())
-            .map(|value| Resolved::Number(value as i64))
+            .map(|value| {
+                let signed_type = antinomie_monitor_core::syscalls::syscall(event.syscall_nr)
+                    .and_then(|syscall| syscall.arguments.get(index))
+                    .map(|argument| argument.c_type.trim());
+                let number = match signed_type {
+                    Some("int" | "pid_t" | "clockid_t" | "key_t" | "mqd_t") => {
+                        i128::from(value as u32 as i32)
+                    }
+                    Some("long" | "off_t" | "loff_t" | "ssize_t") => i128::from(value as i64),
+                    _ => i128::from(value),
+                };
+                Resolved::Number(number)
+            })
             .unwrap_or(Resolved::Missing));
     }
     Err(unknown_field(name))
@@ -1157,7 +2050,9 @@ fn field(invocation: &InvocationSummary, name: &str) -> Result<Resolved, String>
 pub(crate) enum FilterScope {
     Syscall,
     Record,
+    #[cfg(test)]
     Packet,
+    Table(&'static [FieldSpec<'static>]),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1168,33 +2063,74 @@ pub(crate) struct Completion {
     pub detail: String,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn completions(text: &str, cursor: usize, scope: FilterScope) -> Vec<Completion> {
     completions_with(text, cursor, scope, &[])
 }
 
+#[cfg(test)]
 pub(crate) fn completions_with(
     text: &str,
     cursor: usize,
     scope: FilterScope,
     known_values: &[String],
 ) -> Vec<Completion> {
+    completions_fields(text, cursor, &fields_for(scope), known_values, None)
+}
+
+#[cfg(test)]
+fn completions_fields(
+    text: &str,
+    cursor: usize,
+    fields: &[FieldSpec<'_>],
+    known_values: &[String],
+    selection: Option<(usize, usize)>,
+) -> Vec<Completion> {
+    completions_field_iter(
+        text,
+        cursor,
+        fields.iter().copied(),
+        known_values,
+        selection,
+        false,
+    )
+}
+
+fn completions_field_iter<'a>(
+    text: &str,
+    cursor: usize,
+    fields: impl Iterator<Item = FieldSpec<'a>> + Clone,
+    known_values: &[String],
+    selection: Option<(usize, usize)>,
+    packet: bool,
+) -> Vec<Completion> {
     let cursor = floor_boundary(text, cursor.min(text.len()));
-    if unclosed_quote(&text[..cursor]) {
-        return Vec::new();
-    }
-    let start = token_start(text, cursor);
-    let end = token_end(text, cursor);
-    let prefix = &text[start..cursor];
-    let fields = fields_for(scope);
+    let (start, end, prefix_end) =
+        if let Some((start, end)) = selection.filter(|(start, end)| start != end) {
+            let start = floor_boundary(text, start.min(text.len()));
+            let end = floor_boundary(text, end.min(text.len())).max(start);
+            (start, end, end)
+        } else {
+            (token_start(text, cursor), token_end(text, cursor), cursor)
+        };
+    let prefix = &text[start..prefix_end];
     let previous = previous_word(text, start);
     let mut items = Vec::new();
-    let clause_start = previous.as_deref().is_none_or(|word| {
-        matches!(word, "&&" | "||" | "&" | "|" | "(" | "!")
-            || word.eq_ignore_ascii_case("and")
-            || word.eq_ignore_ascii_case("or")
-    });
-    if clause_start {
+    let function = editor_tokens(&text[..start])
+        .windows(2)
+        .last()
+        .and_then(|tokens| {
+            (text[tokens[1].0..tokens[1].1].trim() == "(")
+                .then(|| text[tokens[0].0..tokens[0].1].trim())
+        })
+        .filter(|name| matches!(*name, "lower" | "exists" | "missing"));
+    let clause_start = function.is_none()
+        && previous.as_deref().is_none_or(|word| {
+            matches!(word, "&&" | "||" | "(" | "!")
+                || word.eq_ignore_ascii_case("and")
+                || word.eq_ignore_ascii_case("or")
+        });
+    if clause_start && !packet {
         let needle = prefix.to_ascii_lowercase();
         for (insert, detail) in [
             ("exists", "Recorded field, written before the field name"),
@@ -1212,11 +2148,15 @@ pub(crate) fn completions_with(
     }
     if let Some(field) = previous.as_deref().and_then(|word| {
         fields
-            .iter()
+            .clone()
             .find(|field| field.name.eq_ignore_ascii_case(word))
     }) {
         if prefix.is_empty() || operator_prefix(prefix) {
-            for (insert, detail) in operators(field.kind) {
+            for (insert, detail) in if packet {
+                packet_operators(field.kind)
+            } else {
+                operators(field.kind)
+            } {
                 if insert
                     .trim()
                     .to_ascii_lowercase()
@@ -1234,35 +2174,98 @@ pub(crate) fn completions_with(
         }
     }
     if let Some(field_name) = field_before_operator(text, start) {
-        for (insert, detail) in values_for(&field_name, prefix, known_values) {
+        let quoted_prefix = prefix.starts_with(['"', '\'']);
+        let value_prefix = if quoted_prefix { &prefix[1..] } else { prefix };
+        for (insert, detail) in values_for(&field_name, value_prefix, known_values) {
             items.push(Completion {
                 start,
                 end,
-                insert,
+                insert: if fields.clone().any(|field| {
+                    field.name.eq_ignore_ascii_case(&field_name) && field.kind == "integer"
+                }) {
+                    insert
+                } else {
+                    quote_value(&insert, quoted_prefix)
+                },
                 detail,
             });
+        }
+        if let Some(field) = fields
+            .clone()
+            .find(|field| field.name.eq_ignore_ascii_case(&field_name))
+        {
+            if field.kind == "boolean" || field.kind == "FT_BOOLEAN" {
+                for value in ["true", "false"] {
+                    if value.starts_with(value_prefix) {
+                        items.push(Completion {
+                            start,
+                            end,
+                            insert: value.into(),
+                            detail: "boolean value".into(),
+                        });
+                    }
+                }
+            }
+        }
+        return items;
+    }
+    if unclosed_quote(&text[..cursor]) {
+        return Vec::new();
+    }
+    if let Ok(tokens) = tokenize(text[..start].trim_end()) {
+        let mut parser = Parser { tokens, at: 0 };
+        if parser
+            .parse_or()
+            .is_ok_and(|expr| !matches!(expr, Expr::Value(_)))
+            && parser.at == parser.tokens.len()
+        {
+            for (insert, detail) in [("&&", "And"), ("||", "Or"), ("and", "And"), ("or", "Or")] {
+                if insert.starts_with(&prefix.to_ascii_lowercase()) {
+                    items.push(Completion {
+                        start,
+                        end,
+                        insert: format!(" {insert} "),
+                        detail: detail.into(),
+                    });
+                }
+            }
+            return items;
         }
     }
     let offering_operator = previous.as_deref().is_some_and(|word| {
         fields
-            .iter()
+            .clone()
             .any(|field| field.name.eq_ignore_ascii_case(word))
             && (prefix.is_empty() || operator_prefix(prefix))
     });
     if !offering_operator && !prefix.is_empty() {
         let needle = prefix.to_ascii_lowercase();
-        for field in fields {
-            if field.name.to_ascii_lowercase().starts_with(&needle) {
+        for field in fields.clone() {
+            if function == Some("lower") && !matches!(field.kind, "text" | "text list") {
+                continue;
+            }
+            if field
+                .name
+                .get(..needle.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(&needle))
+            {
                 items.push(Completion {
                     start,
                     end,
                     insert: field.name.into(),
                     detail: format!("{} · {}", field.kind, field.detail),
                 });
+                if items.len() >= 12 {
+                    break;
+                }
             }
         }
     } else if !offering_operator && prefix.is_empty() {
-        for field in fields.iter().take(8) {
+        for field in fields
+            .clone()
+            .filter(|field| function != Some("lower") || matches!(field.kind, "text" | "text list"))
+            .take(8)
+        {
             items.push(Completion {
                 start,
                 end,
@@ -1273,6 +2276,34 @@ pub(crate) fn completions_with(
     }
     items.truncate(12);
     items
+}
+
+fn quote_value(value: &str, force: bool) -> String {
+    let reserved = matches!(
+        value.to_ascii_lowercase().as_str(),
+        "and" | "or" | "not" | "exists" | "missing" | "contains" | "in"
+    );
+    if !force
+        && !reserved
+        && value
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return value.to_owned();
+    }
+    format!(
+        "\"{}\"",
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\t', "\\t")
+    )
 }
 
 pub(crate) fn filter_edit(
@@ -1293,7 +2324,56 @@ pub(crate) fn filter_edit_with(
     scope: FilterScope,
     known_values: &[String],
 ) -> egui::Response {
+    filter_edit_fields(ui, text, hint, width, &fields_for(scope), known_values)
+}
+
+pub(crate) fn filter_edit_fields(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    hint: &str,
+    width: f32,
+    fields: &[FieldSpec<'_>],
+    known_values: &[String],
+) -> egui::Response {
+    filter_edit_field_iter(ui, text, hint, width, fields.iter().copied(), known_values)
+}
+
+/// Borrow large external field registries without allocating a per-frame adapter vector.
+pub(crate) fn filter_edit_field_iter<'a>(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    hint: &str,
+    width: f32,
+    fields: impl Iterator<Item = FieldSpec<'a>> + Clone,
+    known_values: &[String],
+) -> egui::Response {
+    filter_edit_iter(ui, text, hint, width, fields, known_values, false)
+}
+
+pub(crate) fn filter_edit_packet_field_iter<'a>(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    hint: &str,
+    width: f32,
+    fields: impl Iterator<Item = FieldSpec<'a>> + Clone,
+    known_values: &[String],
+) -> egui::Response {
+    filter_edit_iter(ui, text, hint, width, fields, known_values, true)
+}
+
+fn filter_edit_iter<'a>(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    hint: &str,
+    width: f32,
+    fields: impl Iterator<Item = FieldSpec<'a>> + Clone,
+    known_values: &[String],
+    packet: bool,
+) -> egui::Response {
     let id = ui.id().with(("filter-edit", hint));
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(egui::Id::new("filter-history-target"), id.with("history"))
+    });
     let mut dismiss = ui
         .data(|data| data.get_temp::<bool>(id.with("dismiss")))
         .unwrap_or(false);
@@ -1307,6 +2387,7 @@ pub(crate) fn filter_edit_with(
         .data(|data| data.get_temp::<Vec<Completion>>(id.with("items")))
         .unwrap_or_default();
     let mut caret = None;
+    let mut accepted = false;
     if was_focused {
         let reopen = ui.input_mut(|input| {
             input.consume_key(egui::Modifiers::CTRL, egui::Key::Space)
@@ -1338,11 +2419,12 @@ pub(crate) fn filter_edit_with(
                     let byte = apply_completion(text, &item);
                     caret = Some(char_index(text, byte));
                     dismiss = true;
+                    accepted = true;
                 }
             }
         }
     }
-    let output = egui::TextEdit::singleline(text)
+    let mut output = egui::TextEdit::singleline(text)
         .hint_text(hint)
         .desired_width(width)
         .margin(crate::theme::TEXT_EDIT_MARGIN)
@@ -1356,18 +2438,35 @@ pub(crate) fn filter_edit_with(
             )));
         state.store(ui.ctx(), output.response.id);
     }
-    let cursor_chars = output
-        .cursor_range
-        .map(|range| range.primary.ccursor.index)
-        .unwrap_or(text.chars().count());
+    if accepted {
+        output.response.mark_changed();
+    }
+    let cursor_chars = caret.unwrap_or_else(|| {
+        output
+            .cursor_range
+            .map(|range| range.primary.ccursor.index)
+            .unwrap_or(text.chars().count())
+    });
     let cursor = byte_index(text, cursor_chars);
     let changed = output.response.changed();
-    if changed {
+    if changed && !accepted {
         dismiss = false;
         selected = 0;
     }
     let items = if output.response.has_focus() && !dismiss {
-        completions_with(text, cursor, scope, known_values)
+        let selection = output.cursor_range.and_then(|range| {
+            let first = byte_index(text, range.primary.ccursor.index);
+            let second = byte_index(text, range.secondary.ccursor.index);
+            (first != second).then_some((first.min(second), first.max(second)))
+        });
+        completions_field_iter(
+            text,
+            cursor,
+            fields.clone(),
+            known_values,
+            selection,
+            packet,
+        )
     } else {
         Vec::new()
     };
@@ -1388,13 +2487,22 @@ pub(crate) fn filter_edit_with(
             &output.response,
             egui::PopupCloseBehavior::IgnoreClicks,
             |ui| {
-                ui.set_min_width(width.clamp(180.0, 420.0));
+                let popup_width = width
+                    .min(ui.ctx().screen_rect().width() - 24.0)
+                    .clamp(80.0, 560.0);
+                ui.set_min_width(popup_width);
+                ui.set_max_width(popup_width);
                 egui::ScrollArea::vertical()
                     .max_height(240.0)
                     .show(ui, |ui| {
                         for (index, item) in shown.iter().enumerate() {
                             let label = format!("{}  {}", item.insert.trim(), item.detail);
-                            if ui.selectable_label(index == selected, label).clicked() {
+                            let response =
+                                ui.add(egui::Button::new(label).selected(index == selected).wrap());
+                            if index == selected {
+                                response.scroll_to_me(Some(egui::Align::Center));
+                            }
+                            if response.clicked() {
                                 picked = Some(item.clone());
                             }
                         }
@@ -1412,6 +2520,7 @@ pub(crate) fn filter_edit_with(
                 )));
             state.store(ui.ctx(), output.response.id);
             output.response.request_focus();
+            output.response.mark_changed();
             dismiss = true;
         }
     }
@@ -1422,7 +2531,61 @@ pub(crate) fn filter_edit_with(
         data.insert_temp(id.with("focus"), focused);
         data.insert_temp(id.with("items"), items);
     });
+    let mut menu_changed = false;
+    output.response.context_menu(|ui| {
+        let history = ui.data(|data| data.get_temp::<Vec<String>>(id.with("history"))).unwrap_or_default();
+        if !history.is_empty() {
+            ui.menu_button("Recent filters", |ui| {
+                for entry in &history {
+                    if ui.button(entry).clicked() { *text = entry.clone(); menu_changed = true; ui.close_menu(); }
+                }
+            });
+        }
+        if ui.button("Clear filter").clicked() { text.clear(); menu_changed = true; ui.close_menu(); }
+        if ui.button("Filter fields and examples").clicked() {
+            ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("filter-guide-packet"), packet));
+            let rows: Vec<_> = fields.clone().map(|field| (field.name.to_owned(), field.kind.to_owned(), field.detail.to_owned())).collect();
+            ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("filter-guide-fields"), std::sync::Arc::new(rows)));
+            open_guide(ui.ctx());
+            ui.close_menu();
+        }
+        if ui.button("Copy field registry as JSON").clicked() {
+            let rows: Vec<_> = fields.clone().map(|field| serde_json::json!({"name": field.name, "type": field.kind, "meaning": field.detail})).collect();
+            match serde_json::to_string_pretty(&rows) {
+                Ok(json) => ui.ctx().copy_text(json),
+                Err(error) => { ui.colored_label(crate::theme::error(), error.to_string()); }
+            }
+            ui.close_menu();
+        }
+    });
+    if menu_changed {
+        output.response.mark_changed();
+    }
     output.response
+}
+
+/// Call immediately after this UI's filter editor, once its filter has been
+/// validated by the caller's parser or external engine.
+pub(crate) fn remember_valid_filter(ui: &egui::Ui, filter: &str) {
+    if filter.trim().is_empty() {
+        return;
+    }
+    let Some(id) = ui
+        .ctx()
+        .data(|data| data.get_temp::<egui::Id>(egui::Id::new("filter-history-target")))
+    else {
+        return;
+    };
+    ui.ctx().data_mut(|data| {
+        let mut history = data.get_temp::<Vec<String>>(id).unwrap_or_default();
+        if history.first().is_some_and(|entry| entry == filter) {
+            return;
+        }
+        history.retain(|entry| entry != filter);
+        history.insert(0, filter.to_owned());
+        history.truncate(24);
+        data.insert_temp(id, history);
+    });
 }
 
 fn apply_completion(text: &mut String, item: &Completion) -> usize {
@@ -1432,15 +2595,10 @@ fn apply_completion(text: &mut String, item: &Completion) -> usize {
     start + item.insert.len()
 }
 
-struct FieldSpec {
-    name: &'static str,
-    kind: &'static str,
-    detail: &'static str,
-}
-
-fn fields_for(scope: FilterScope) -> Vec<FieldSpec> {
+fn fields_for(scope: FilterScope) -> Vec<FieldSpec<'static>> {
     match scope {
         FilterScope::Syscall => syscall_fields(),
+        FilterScope::Table(fields) => fields.to_vec(),
         FilterScope::Record => vec![
             FieldSpec {
                 name: "entry.id",
@@ -1478,6 +2636,7 @@ fn fields_for(scope: FilterScope) -> Vec<FieldSpec> {
                 detail: "Annotation name",
             },
         ],
+        #[cfg(test)]
         FilterScope::Packet => vec![
             FieldSpec {
                 name: "ip.src",
@@ -1608,13 +2767,45 @@ fn fields_for(scope: FilterScope) -> Vec<FieldSpec> {
     }
 }
 
-fn syscall_fields() -> Vec<FieldSpec> {
-    let mut fields: Vec<FieldSpec> = KEYWORDS
+fn syscall_fields() -> Vec<FieldSpec<'static>> {
+    let mut fields: Vec<FieldSpec<'static>> = KEYWORDS
         .iter()
-        .filter(|(name, _, _)| *name != "args.<name>" && *name != "args.raw[0..5]")
+        .filter(|(name, _, _)| {
+            *name != "args.<name>" && *name != "args.raw[0..5]" && !name.starts_with("entry.")
+        })
         .map(|(name, kind, detail)| FieldSpec { name, kind, detail })
         .collect();
+    fields.extend([
+        FieldSpec::number("syscall.number", "Alias of syscall.num"),
+        FieldSpec::text("syscall", "Alias of syscall.name"),
+        FieldSpec::number("task.cookie", "Alias of task"),
+        FieldSpec::number("call_id", "Alias of call.id"),
+        FieldSpec::number("args.address", "Captured addr or address argument"),
+        FieldSpec::number("args.addr", "Captured addr or address argument"),
+        FieldSpec::number("args.length", "Captured len or length argument"),
+        FieldSpec::number("args.len", "Captured len or length argument"),
+        FieldSpec::number("args.protection", "Captured prot or protection argument"),
+        FieldSpec::number("args.prot", "Captured prot or protection argument"),
+        FieldSpec::number("args.buffer", "Captured buf or buffer pointer"),
+        FieldSpec::number("args.buf", "Captured buf or buffer pointer"),
+        FieldSpec::text("args.file", "Captured path text; pointer is in args.raw"),
+        FieldSpec::text("args.filename", "Captured filename text"),
+        FieldSpec::text("args.pathname", "Captured pathname text"),
+        FieldSpec::text("args.oldname", "Captured old path text"),
+        FieldSpec::text("args.newname", "Captured new path text"),
+    ]);
     for index in 0..6 {
+        fields.push(FieldSpec::number(
+            match index {
+                0 => "args.0",
+                1 => "args.1",
+                2 => "args.2",
+                3 => "args.3",
+                4 => "args.4",
+                _ => "args.5",
+            },
+            "Captured argument word",
+        ));
         fields.push(FieldSpec {
             name: match index {
                 0 => "args.raw[0]",
@@ -1634,10 +2825,26 @@ fn syscall_fields() -> Vec<FieldSpec> {
             .into_iter()
             .filter(|field| !known.contains(field.name)),
     );
+    fields.extend(
+        antinomie_monitor_core::filter_members::registry()
+            .iter()
+            .map(|member| {
+                use antinomie_monitor_core::filter_members::MemberKind;
+                FieldSpec {
+                    name: &member.name,
+                    kind: match member.kind {
+                        MemberKind::Integer => "integer",
+                        MemberKind::Text => "text",
+                        MemberKind::Boolean => "boolean",
+                    },
+                    detail: &member.detail,
+                }
+            }),
+    );
     fields
 }
 
-fn schema_argument_fields() -> Vec<FieldSpec> {
+fn schema_argument_fields() -> Vec<FieldSpec<'static>> {
     use std::sync::OnceLock;
     static FIELDS: OnceLock<Vec<(String, String)>> = OnceLock::new();
     let stored = FIELDS.get_or_init(|| {
@@ -1656,7 +2863,20 @@ fn schema_argument_fields() -> Vec<FieldSpec> {
         .iter()
         .map(|(name, detail)| FieldSpec {
             name: name.as_str(),
-            kind: "integer",
+            kind: if matches!(
+                name.as_str(),
+                "args.path"
+                    | "args.pathname"
+                    | "args.filename"
+                    | "args.old_path"
+                    | "args.new_path"
+                    | "args.oldname"
+                    | "args.newname"
+            ) {
+                "text"
+            } else {
+                "integer"
+            },
             detail: detail.as_str(),
         })
         .collect()
@@ -1668,7 +2888,9 @@ fn operators(kind: &str) -> &'static [(&'static str, &'static str)] {
             ("==", "Equal"),
             ("!=", "Not equal"),
             ("contains", "Substring"),
+            ("in", "Membership set"),
         ],
+        "boolean" => &[("==", "Equal"), ("!=", "Not equal")],
         "ip" => &[("==", "Equal"), ("!=", "Not equal")],
         _ => &[
             ("==", "Equal"),
@@ -1677,8 +2899,55 @@ fn operators(kind: &str) -> &'static [(&'static str, &'static str)] {
             ("<=", "Less than or equal"),
             (">", "Greater than"),
             (">=", "Greater than or equal"),
+            ("in", "Membership set"),
+            ("&", "Bit mask"),
         ],
     }
+}
+
+fn packet_operators(kind: &str) -> &'static [(&'static str, &'static str)] {
+    if kind == "FT_PROTOCOL" {
+        return &[("&&", "And"), ("||", "Or")];
+    }
+    if matches!(kind, "FT_BOOLEAN" | "boolean") {
+        return &[("==", "Equal"), ("!=", "Not equal")];
+    }
+    if kind.starts_with("FT_STRING") || kind == "text" {
+        return &[
+            ("==", "Equal"),
+            ("!=", "Not equal"),
+            ("contains", "Substring"),
+            ("matches", "Regular expression"),
+            ("in", "Membership set"),
+        ];
+    }
+    if matches!(kind, "FT_BYTES" | "FT_UINT_BYTES" | "bytes") {
+        return &[
+            ("==", "Equal"),
+            ("!=", "Not equal"),
+            ("contains", "Byte sequence"),
+            ("in", "Membership set"),
+        ];
+    }
+    if matches!(
+        kind,
+        "FT_IPv4" | "FT_IPv6" | "FT_ETHER" | "FT_GUID" | "FT_OID" | "FT_REL_OID" | "ip"
+    ) {
+        return &[
+            ("==", "Equal"),
+            ("!=", "Not equal"),
+            ("in", "Membership set"),
+        ];
+    }
+    &[
+        ("==", "Equal"),
+        ("!=", "Not equal"),
+        ("<", "Less than"),
+        ("<=", "Less than or equal"),
+        (">", "Greater than"),
+        (">=", "Greater than or equal"),
+        ("in", "Membership set"),
+    ]
 }
 
 fn values_for(field: &str, prefix: &str, known_values: &[String]) -> Vec<(String, String)> {
@@ -1733,43 +3002,41 @@ fn operator_prefix(prefix: &str) -> bool {
 }
 
 fn field_before_operator(text: &str, start: usize) -> Option<String> {
-    let before = text[..start].trim_end();
-    let operator = before
-        .rsplit_once(|ch: char| ch.is_whitespace())
-        .map(|(_, word)| word)
-        .unwrap_or(before);
+    let tokens = tokenize(text[..start].trim_end()).ok()?;
+    if matches!(tokens.last(), Some(Token::LBrace | Token::Comma)) {
+        for pair in tokens.windows(2).rev() {
+            if let [Token::Ident(field), Token::In] = pair {
+                return Some(field.clone());
+            }
+            if matches!(pair[1], Token::And | Token::Or) {
+                break;
+            }
+        }
+    }
+    let mut tail = tokens.iter().rev();
     if !matches!(
-        operator,
-        "==" | "!=" | "<" | "<=" | ">" | ">=" | "contains" | "&"
+        tail.next()?,
+        Token::Eq
+            | Token::Ne
+            | Token::Lt
+            | Token::Le
+            | Token::Gt
+            | Token::Ge
+            | Token::Contains
+            | Token::Amp
     ) {
         return None;
     }
-    let head = before[..before.len() - operator.len()].trim_end();
-    let field = head
-        .rsplit_once(|ch: char| ch.is_whitespace())
-        .map(|(_, word)| word)
-        .unwrap_or(head);
-    if field.is_empty() {
-        None
-    } else {
-        Some(field.to_owned())
+    match tail.next()? {
+        Token::Ident(field) => Some(field.clone()),
+        _ => None,
     }
 }
 
 fn previous_word(text: &str, start: usize) -> Option<String> {
     let before = text[..start].trim_end();
-    if before.is_empty() {
-        return None;
-    }
-    let word = before
-        .rsplit_once(|ch: char| ch.is_whitespace())
-        .map(|(_, word)| word)
-        .unwrap_or(before);
-    if word.is_empty() {
-        None
-    } else {
-        Some(word.to_owned())
-    }
+    let (begin, end) = editor_tokens(before).last().copied()?;
+    Some(before[begin..end].to_owned())
 }
 
 fn byte_index(text: &str, chars: usize) -> usize {
@@ -1784,34 +3051,75 @@ fn char_index(text: &str, byte: usize) -> usize {
 }
 
 fn token_end(text: &str, cursor: usize) -> usize {
-    let bytes = text.as_bytes();
-    let mut end = cursor.min(bytes.len());
-    while end < bytes.len() {
-        let ch = bytes[end];
-        if ch.is_ascii_alphanumeric() || matches!(ch, b'.' | b'_' | b'[' | b']' | b'=' | b'<' | b'>')
-        {
-            end += 1;
-        } else {
-            break;
-        }
-    }
-    end
+    active_token(text, cursor).map_or(cursor, |(_, end)| end)
 }
 
 fn token_start(text: &str, cursor: usize) -> usize {
-    let bytes = text.as_bytes();
-    let mut start = cursor;
-    while start > 0 {
-        let ch = bytes[start - 1];
-        if ch.is_ascii_alphanumeric()
-            || matches!(ch, b'.' | b'_' | b'[' | b']' | b'=' | b'<' | b'>')
-        {
-            start -= 1;
-        } else {
-            break;
+    active_token(text, cursor).map_or(cursor, |(start, _)| start)
+}
+
+fn active_token(text: &str, cursor: usize) -> Option<(usize, usize)> {
+    let tokens = editor_tokens(text);
+    tokens
+        .iter()
+        .copied()
+        .find(|(start, end)| *start <= cursor && cursor < *end)
+        .or_else(|| {
+            tokens.into_iter().find(|(start, end)| {
+                *start < cursor
+                    && cursor == *end
+                    && !matches!(
+                        &text[*start..*end],
+                        "(" | ")" | "{" | "}" | "," | "&&" | "||" | "!"
+                    )
+            })
+        })
+}
+
+fn editor_tokens(text: &str) -> Vec<(usize, usize)> {
+    let mut tokens = Vec::new();
+    let mut iter = text.char_indices().peekable();
+    while let Some((start, ch)) = iter.next() {
+        if ch.is_whitespace() {
+            continue;
         }
+        let mut end = start + ch.len_utf8();
+        if ch == '"' || ch == '\'' {
+            let mut escape = false;
+            for (at, next) in iter.by_ref() {
+                end = at + next.len_utf8();
+                if escape {
+                    escape = false;
+                    continue;
+                }
+                if next == '\\' {
+                    escape = true;
+                } else if next == ch {
+                    break;
+                }
+            }
+        } else if ch.is_alphanumeric() || matches!(ch, '_' | '.' | '-' | '/') {
+            while let Some(&(at, next)) = iter.peek() {
+                if !next.is_alphanumeric()
+                    && !matches!(next, '_' | '.' | '[' | ']' | '-' | '/' | ':')
+                {
+                    break;
+                }
+                end = at + next.len_utf8();
+                iter.next();
+            }
+        } else if matches!(ch, '=' | '!' | '<' | '>' | '&' | '|') {
+            while let Some(&(at, next)) = iter.peek() {
+                if !matches!(next, '=' | '&' | '|') {
+                    break;
+                }
+                end = at + next.len_utf8();
+                iter.next();
+            }
+        }
+        tokens.push((start, end));
     }
-    start
+    tokens
 }
 
 fn floor_boundary(text: &str, mut index: usize) -> usize {
@@ -1822,28 +3130,201 @@ fn floor_boundary(text: &str, mut index: usize) -> usize {
 }
 
 fn unclosed_quote(text: &str) -> bool {
-    let mut quoted = false;
+    let mut quote = None;
     let mut escape = false;
     for ch in text.chars() {
         if escape {
             escape = false;
             continue;
         }
-        if ch == '\\' {
+        if ch == '\\' && quote.is_some() {
             escape = true;
             continue;
         }
-        if ch == '"' {
-            quoted = !quoted;
+        if Some(ch) == quote {
+            quote = None;
+        } else if quote.is_none() && matches!(ch, '"' | '\'') {
+            quote = Some(ch);
         }
     }
-    quoted
+    quote.is_some()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use antinomie_monitor_core::{EventSummary, FieldSummary, InvocationSummary};
+
+    const TABLE_FIELDS: &[FieldSpec<'static>] = &[
+        FieldSpec::text("name", "Displayed name"),
+        FieldSpec::number("address", "Address"),
+        FieldSpec::boolean("complete", "Completeness"),
+        FieldSpec::tags("tag", "Annotation tags"),
+    ];
+
+    #[test]
+    fn typed_tables_preserve_unsigned_addresses_missing_values_and_string_case() {
+        let row = [
+            ("name", RowValue::Text("Needs Review".into())),
+            ("address", RowValue::Number(i128::from(u64::MAX))),
+            ("complete", RowValue::Bool(false)),
+            (
+                "tag",
+                RowValue::List(vec!["needs review".into(), "triaged".into()]),
+            ),
+        ];
+        for filter in [
+            "address == 0xffffffffffffffff",
+            "address > 9223372036854775807",
+            "complete == false",
+            "!complete",
+            "exists(complete)",
+            "lower(name) == \"needs review\"",
+            "tag == \"needs review\"",
+            "tag != \"unknown\"",
+            "tag in {\"unknown\", \"triaged\"}",
+            "name contains \"Review\" and not missing(address)",
+            "(address & 7) == 7",
+            "address & 7 == 7",
+        ] {
+            let compiled = compile_table(filter, TABLE_FIELDS);
+            assert!(compiled.error.is_none(), "{filter}: {:?}", compiled.error);
+            assert!(compiled.keep_table(&row), "{filter}");
+        }
+        for filter in [
+            "complete",
+            "name == \"needs review\"",
+            "tag != \"triaged\"",
+            "name contains \"review\"",
+        ] {
+            assert!(
+                !compile_table(filter, TABLE_FIELDS).keep_table(&row),
+                "{filter}"
+            );
+        }
+        let absent = [("name", RowValue::Missing), ("complete", RowValue::Missing)];
+        for filter in ["name != \"unknown\"", "complete == false", "exists(name)"] {
+            assert!(
+                !compile_table(filter, TABLE_FIELDS).keep_table(&absent),
+                "{filter}"
+            );
+        }
+        assert!(
+            compile_table("missing(name) && missing(complete)", TABLE_FIELDS).keep_table(&absent)
+        );
+        for filter in [
+            "typo == 2",
+            "address contains 7",
+            "name > 7",
+            "complete == FALSE",
+            "complete == 0",
+            "lower(address) == 1",
+            "name ==",
+        ] {
+            assert!(
+                compile_table(filter, TABLE_FIELDS).error.is_some(),
+                "{filter}"
+            );
+        }
+    }
+
+    #[test]
+    fn known_tag_completion_quotes_spaces_quotes_backslashes_and_unicode() {
+        for tag in ["needs review", "a\"b", "a\\b", "révision", "and", "123"] {
+            let source = "tag == ";
+            let item = completions_with(source, source.len(), FilterScope::Record, &[tag.into()])
+                .into_iter()
+                .next()
+                .expect("tag completion");
+            let mut edited = source.to_owned();
+            apply_completion(&mut edited, &item);
+            let compiled = compile_record(&edited);
+            assert!(compiled.error.is_none(), "{edited}: {:?}", compiled.error);
+            assert!(
+                compiled.keep_record(&RecordLabels {
+                    id: "record",
+                    name: "",
+                    path: "/tmp",
+                    tags: &[tag.into()]
+                }),
+                "{edited}"
+            );
+        }
+        let text = "entry.id == \"é\" && tag == \"nee tail\" || entry.id == other";
+        let caret = text.find("nee tail").unwrap() + 3;
+        let item = completions_with(text, caret, FilterScope::Record, &["needs review".into()])
+            .into_iter()
+            .next()
+            .expect("quoted completion");
+        let mut edited = text.to_owned();
+        apply_completion(&mut edited, &item);
+        assert_eq!(
+            edited,
+            "entry.id == \"é\" && tag == \"needs review\" || entry.id == other"
+        );
+    }
+
+    #[test]
+    fn completion_replaces_selection_and_does_not_offer_fields_as_values() {
+        let text = "syscall.num == 9 && args.pr || tid == 2";
+        let start = text.find("args.pr").unwrap();
+        let end = start + 7;
+        let item = completions_fields(
+            text,
+            end,
+            &fields_for(FilterScope::Syscall),
+            &[],
+            Some((start, end)),
+        )
+        .into_iter()
+        .find(|item| item.insert == "args.prot")
+        .expect("selection completion");
+        let mut edited = text.to_owned();
+        apply_completion(&mut edited, &item);
+        assert_eq!(edited, "syscall.num == 9 && args.prot || tid == 2");
+        assert!(completions("syscall.num == ", 15, FilterScope::Syscall).is_empty());
+        assert!(completions("syscall.num ex", 14, FilterScope::Syscall)
+            .iter()
+            .all(|item| !item.insert.starts_with("exists")));
+    }
+
+    #[test]
+    fn incomplete_table_drafts_keep_the_last_applied_filter() {
+        let ctx = egui::Context::default();
+        let row = [("address", RowValue::Number(9))];
+        for (draft, expected) in [
+            ("address == 9", true),
+            ("address ==", true),
+            ("address == 10", false),
+            ("address == 10 &&", false),
+            ("", true),
+        ] {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let compiled = applied_table(ui, draft, TABLE_FIELDS, "retention");
+                    assert!(compiled.keep_table(&row) == expected, "{draft}");
+                });
+            });
+        }
+    }
+
+    #[test]
+    fn oversized_recursive_expressions_are_rejected_before_parser_recursion() {
+        for source in [
+            format!("{}name{}", "(".repeat(65), ")".repeat(65)),
+            format!("{}name", "!".repeat(257)),
+            (0..258)
+                .map(|_| "name == \"x\"")
+                .collect::<Vec<_>>()
+                .join(" || "),
+            format!("name == \"{}\"", "x".repeat(65 * 1024)),
+        ] {
+            let query = compile_table(&source, TABLE_FIELDS);
+            assert!(query.error.is_some(), "large query was accepted");
+        }
+        let source = "name == \"x\"";
+        assert!(compile_table(source, TABLE_FIELDS).error.is_none());
+    }
 
     #[test]
     fn help_lists_schema_argument_names() {
@@ -1907,6 +3388,114 @@ mod tests {
     }
 
     #[test]
+    fn syscall_aliases_are_registered_and_resolve_schema_argument_spellings() {
+        let mmap = call(9, "mmap", [0x1234, 4096, 7, 0, 2, 0]);
+        for filter in [
+            "syscall.number == 9",
+            "syscall == mmap",
+            "task.cookie == 4",
+            "call_id == 1",
+            "args.addr == 4660",
+            "args.address == 4660",
+            "args.len == 4096",
+            "args.length == 4096",
+            "args.prot == 7",
+            "args.protection == 7",
+        ] {
+            assert!(matches(filter, &mmap).unwrap(), "{filter}");
+        }
+        let read = call(0, "read", [0, 0x4321, 10, 0, 0, 0]);
+        for filter in ["args.buf == 17185", "args.buffer == 17185"] {
+            assert!(matches(filter, &read).unwrap(), "{filter}");
+        }
+    }
+
+    #[test]
+    fn generated_captured_members_validate_complete_values_and_missing_ranges() {
+        let mut invocation = call(437, "openat2", [u64::MAX - 99, 0x1000, 0x2000, 24, 0, 0]);
+        let mut preview = Vec::new();
+        for value in [7u64, 0o700, 0x1234] {
+            preview.extend(value.to_le_bytes());
+        }
+        invocation
+            .entry
+            .as_mut()
+            .unwrap()
+            .fields
+            .push(FieldSummary {
+                object_id: 1,
+                key: "arg2.how".into(),
+                layout: "linux-6.12.94/x86_64/open_how".into(),
+                logical_len: Some(24),
+                captured_len: 24,
+                status: None,
+                capture_error: 0,
+                complete: true,
+                preview,
+                raw_path: None,
+                ranges: vec![(0, 24)],
+            });
+        assert!(matches("args.how.flags == 7 && args.how.mode == 448 && args.how.resolve == 4660 && args.how.complete == true", &invocation).unwrap());
+        invocation.entry.as_mut().unwrap().fields[0].ranges = vec![(0, 8), (16, 8)];
+        assert!(matches("missing(args.how.mode) && args.how.flags == 7", &invocation).unwrap());
+        let fields = syscall_fields();
+        let indexed = antinomie_monitor_core::filter_members::registry()
+            .iter()
+            .find(|member| {
+                member.name.contains("[0].")
+                    && member.kind == antinomie_monitor_core::filter_members::MemberKind::Integer
+            })
+            .expect("generated array member");
+        let expression = format!("missing({})", indexed.name);
+        assert!(compile_note(&expression).error.is_none(), "{expression}");
+        assert!(fields.iter().any(|field| field.name == indexed.name));
+        assert!(compile_note("args.how.invented_member == 0")
+            .error
+            .is_some());
+    }
+
+    #[test]
+    fn process_provenance_requires_committed_exec_and_never_guesses_identity() {
+        let mut invocation = call(59, "execve", [0x1000, 0x2000, 0, 0, 0, 0]);
+        invocation.entry.as_mut().unwrap().result = None;
+        for (key, value) in [
+            ("arg0.path", b"/bin/example\0".as_slice()),
+            ("arg1.argv[1]", b"second\0".as_slice()),
+            ("arg1.argv[0]", b"first\0".as_slice()),
+        ] {
+            invocation
+                .entry
+                .as_mut()
+                .unwrap()
+                .fields
+                .push(FieldSummary {
+                    object_id: 1,
+                    key: key.into(),
+                    layout: String::new(),
+                    logical_len: Some(value.len() as u64),
+                    captured_len: value.len() as u64,
+                    status: None,
+                    capture_error: 0,
+                    complete: true,
+                    preview: value.to_vec(),
+                    raw_path: None,
+                    ranges: vec![(0, value.len() as u64)],
+                });
+        }
+        assert!(matches("missing(process.exe) && missing(process.argv)", &invocation).unwrap());
+        let mut exit = invocation.entry.clone().unwrap();
+        exit.phase = 2;
+        exit.result = Some(-2);
+        invocation.exit = Some(exit);
+        assert!(matches("missing(process.exe)", &invocation).unwrap());
+        invocation.exit.as_mut().unwrap().result = Some(0);
+        assert!(matches("process.exe == \"/bin/example\" && process.argv == \"first\" && process.argv == \"second\"", &invocation).unwrap());
+        assert!(matches("missing(process.ppid) && missing(process.parent_cookie) && missing(process.uid) && missing(process.gid) && missing(process.comm) && missing(process.state)", &invocation).unwrap());
+        invocation.task_exit = invocation.exit.clone();
+        assert!(matches("process.state == exited", &invocation).unwrap());
+    }
+
+    #[test]
     fn ret_uses_exit_outcome_when_entry_result_is_absent() {
         let mut paired = call(9, "mmap", [0, 4096, 7, 0, 2, 0]);
         paired.entry.as_mut().unwrap().result = None;
@@ -1922,6 +3511,13 @@ mod tests {
                 "{filter} should use the exit result"
             );
         }
+        paired.entry.as_mut().unwrap().result = Some(3);
+        paired.exit.as_mut().unwrap().result = None;
+        assert!(matches(
+            "missing(syscall.success) && missing(syscall.errno) && missing(ret)",
+            &paired
+        )
+        .unwrap());
     }
 
     #[test]
@@ -1949,7 +3545,18 @@ mod tests {
         assert!(matches(r#"info contains "tmp""#, &row).unwrap());
         assert!(matches(r#"args.path == "/tmp/example""#, &row).unwrap());
         assert!(matches("args.raw[0] == 4096", &row).unwrap());
+        assert!(matches("args.0 == 4096", &row).unwrap());
         assert!(!matches(r#"args.path == "4096""#, &row).unwrap());
+        row.entry.as_mut().unwrap().fields[0].preview = b" /tmp/spaces \0".to_vec();
+        row.entry.as_mut().unwrap().fields[0].ranges = vec![(0, 14)];
+        row.entry.as_mut().unwrap().fields[0].captured_len = 14;
+        row.entry.as_mut().unwrap().fields[0].logical_len = Some(14);
+        assert!(matches(r#"args.path == " /tmp/spaces ""#, &row).unwrap());
+        row.entry.as_mut().unwrap().fields[0].preview = vec![0];
+        row.entry.as_mut().unwrap().fields[0].ranges = vec![(0, 1)];
+        row.entry.as_mut().unwrap().fields[0].captured_len = 1;
+        row.entry.as_mut().unwrap().fields[0].logical_len = Some(1);
+        assert!(matches(r#"exists(args.path) && args.path == """#, &row).unwrap());
     }
 
     #[test]
@@ -2076,10 +3683,14 @@ mod tests {
         let char_caret = char_index(unicode, byte_caret);
         assert_ne!(char_caret, byte_caret);
         assert_eq!(byte_index(unicode, char_caret), byte_caret);
-        let prot = completions(unicode, byte_index(unicode, char_caret), FilterScope::Syscall)
-            .into_iter()
-            .find(|item| item.insert == "args.prot")
-            .expect("unicode caret");
+        let prot = completions(
+            unicode,
+            byte_index(unicode, char_caret),
+            FilterScope::Syscall,
+        )
+        .into_iter()
+        .find(|item| item.insert == "args.prot")
+        .expect("unicode caret");
         let mut edited = unicode.to_owned();
         apply_completion(&mut edited, &prot);
         assert_eq!(edited, "info contains \"é\" && args.prot");

@@ -7,6 +7,13 @@ use antinomie_monitor_core::{
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
 
+const PROCESS_FIELDS: &[crate::query::FieldSpec<'static>] = &[
+    crate::query::FieldSpec::number("pid", "Guest process ID"),
+    crate::query::FieldSpec::text("name", "Guest command name"),
+    crate::query::FieldSpec::number("uid", "Guest user ID"),
+    crate::query::FieldSpec::number("threads", "Thread count"),
+];
+
 #[derive(Default)]
 pub(super) struct ProcessPicker {
     pub purpose: ProcessPurpose,
@@ -79,6 +86,7 @@ impl ProcessPicker {
             .default_width(width)
             .default_pos(egui::pos2((viewport.width() - width - 16.0) * 0.5, 48.0))
             .max_width((viewport.width() - 64.0).max(200.0))
+            .max_height((viewport.height() - 32.0).max(160.0))
             .show(ctx, |ui| {
                 if core {
                     ui.add(egui::Label::new("Briefly pause this process and its threads, capture a native ELF core, then resume. Resident memory only; unavailable pages remain marked. Limit: 64 MiB, 5 seconds.").wrap());
@@ -100,15 +108,36 @@ impl ProcessPicker {
                             format!("{} guest processes", page.processes.len())
                         })
                     });
+                });
                     crate::query::filter_edit(
                         ui,
                         &mut self.filter,
-                        "Filter by name or PID",
-                        ui.available_width().max(180.0),
-                        crate::query::FilterScope::Record,
+                        "Filter process fields",
+                        ui.available_width(),
+                        crate::query::FilterScope::Table(PROCESS_FIELDS),
                     );
-                });
-                let height = (viewport.height() - 300.0).clamp(64.0, 360.0);
+                let filter = crate::query::applied_table(ui, &self.filter, PROCESS_FIELDS, "process-picker");
+                if crate::query::compile_table(&self.filter, PROCESS_FIELDS).error.is_none() {
+                    crate::query::remember_valid_filter(ui, &self.filter);
+                }
+                let total = page.map_or(0, |page| page.processes.len());
+                let processes: Vec<_> = page.map(|page| page.processes.as_slice()).unwrap_or_default().iter().filter(|process| {
+                    use crate::query::RowValue;
+                    filter.keep_table(&[
+                        ("pid", RowValue::Number(i128::from(process.identity.tgid))),
+                        ("name", RowValue::Text(process.command.clone())),
+                        ("uid", RowValue::Number(i128::from(process.uid))),
+                        ("threads", RowValue::Number(i128::from(process.thread_count))),
+                    ])
+                }).collect();
+                ui.weak(format!("{} / {total} processes in this page", processes.len()));
+                if self.selected.as_ref().is_some_and(|selected| !processes.iter().any(|process| &process.identity == selected)) { self.selected = None; }
+                // Table body yields space to the selection summary, final actions,
+                // its header and horizontal scrollbar at every font size.
+                let footer = (font_size + 14.0) * 2.0 + 24.0
+                    + if enabled { 0.0 } else { font_size + 12.0 };
+                let height = (viewport.bottom() - 32.0 - ui.cursor().top()
+                    - (font_size + 12.0) - footer).clamp(32.0, 360.0);
                 egui::ScrollArea::horizontal()
                     .id_salt("process_columns")
                     .show(ui, |ui| {
@@ -132,21 +161,6 @@ impl ProcessPicker {
                                 }
                             })
                             .body(|body| {
-                                let needle = self.filter.trim().to_lowercase();
-                                let processes: Vec<_> = page
-                                    .map(|page| page.processes.as_slice())
-                                    .unwrap_or_default()
-                                    .iter()
-                                    .filter(|process| {
-                                        needle.is_empty()
-                                            || process.command.to_lowercase().contains(&needle)
-                                            || process
-                                                .identity
-                                                .tgid
-                                                .to_string()
-                                                .starts_with(&needle)
-                                    })
-                                    .collect();
                                 body.rows(font_size + 14.0, processes.len(), |mut row| {
                                     let process = &processes[row.index()];
                                     row.set_selected(
@@ -189,7 +203,7 @@ impl ProcessPicker {
                 ui.horizontal_wrapped(|ui| {
                     if ui
                         .add_enabled(
-                            enabled && self.pending.is_none() && selection_current,
+                            enabled && self.pending.is_none() && selection_current && self.selected.is_some(),
                             egui::Button::new(
                                 RichText::new(if core {
                                     format!("{} Dump core", egui_phosphor::regular::FILE)
@@ -248,13 +262,61 @@ pub(super) fn history(
     font_size: f32,
 ) -> Option<(String, bool)> {
     let mut action = None;
+    let pane_id = ui.id().with("capture-history-focus");
+    let pane = ui.interact(ui.max_rect(), pane_id, egui::Sense::click());
+    if pane.clicked() {
+        pane.request_focus();
+    }
+    let fields = capture_fields();
+    let filter_id = ui.id().with(("table-filter", "capture-history"));
+    let annotations: Vec<_> = captures
+        .iter()
+        .map(|capture| crate::evidence::annotation(ui, &capture.directory))
+        .collect();
+    let tags: Vec<_> = annotations
+        .iter()
+        .flatten()
+        .flat_map(|annotation| annotation.tags.iter().cloned())
+        .collect();
+    let filter =
+        crate::query::table_filter(ui, "capture-history", "Filter captures", &fields, &tags);
+    let shown: Vec<_> = captures
+        .iter()
+        .filter(|capture| filter.keep_table(&capture_row(ui, capture)))
+        .collect();
+    ui.weak(format!("{} / {} captures", shown.len(), captures.len()));
+    let focused = ui.memory(|memory| memory.focused());
+    let navigation = if !shown.is_empty() && focused == Some(pane_id) {
+        let selected = shown
+            .iter()
+            .position(|capture| Some(capture.id.as_str()) == selected);
+        ui.input_mut(|input| {
+            if input.consume_key(egui::Modifiers::NONE, egui::Key::Home) {
+                Some(0)
+            } else if input.consume_key(egui::Modifiers::NONE, egui::Key::End) {
+                Some(shown.len() - 1)
+            } else if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+                Some(selected.map_or(0, |index| (index + 1).min(shown.len() - 1)))
+            } else if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+                Some(selected.map_or(shown.len() - 1, |index| index.saturating_sub(1)))
+            } else {
+                None
+            }
+        })
+    } else {
+        None
+    };
+    if let Some(index) = navigation {
+        action = Some((shown[index].id.clone(), false));
+        pane.request_focus();
+    }
     let row_height = theme::row_height(font_size);
     let height = (ui.available_height() - row_height).max(row_height * 2.0);
     egui::ScrollArea::horizontal()
         .id_salt("capture_columns")
         .show(ui, |ui| {
             ui.set_min_width(400.0);
-            TableBuilder::new(ui)
+            let mut table = TableBuilder::new(ui)
                 .id_salt("capture_history")
                 .sense(egui::Sense::click())
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
@@ -262,7 +324,11 @@ pub(super) fn history(
                 .column(Column::exact(205.0))
                 .striped(true)
                 .max_scroll_height(height)
-                .min_scrolled_height(0.0)
+                .min_scrolled_height(0.0);
+            if let Some(index) = navigation {
+                table = table.scroll_to_row(index, Some(egui::Align::Center));
+            }
+            table
                 .header(row_height + 4.0, |mut header| {
                     for label in ["Capture", "State"] {
                         header.col(|ui| {
@@ -271,8 +337,8 @@ pub(super) fn history(
                     }
                 })
                 .body(|body| {
-                    body.rows(row_height, captures.len(), |mut row| {
-                        let capture = &captures[row.index()];
+                    body.rows(row_height, shown.len(), |mut row| {
+                        let capture = shown[row.index()];
                         row.set_selected(selected == Some(capture.id.as_str()));
                         row.col(|ui| {
                             ui.add(
@@ -298,8 +364,15 @@ pub(super) fn history(
                             .on_hover_text(status(capture.state));
                         });
                         let response = row.response();
-                        response.context_menu(|ui| crate::evidence::menu(ui, &capture.directory));
+                        if navigation == Some(row.index()) {
+                            pane.request_focus();
+                        }
+                        response.context_menu(|ui| {
+                            crate::evidence::menu(ui, &capture.directory);
+                            crate::query::table_row_menu(ui, filter_id, &capture_row(ui, capture));
+                        });
                         if response.clicked() || response.double_clicked() {
+                            pane.request_focus();
                             action = Some((capture.id.clone(), response.double_clicked()));
                         }
                     });
@@ -309,6 +382,132 @@ pub(super) fn history(
         ui.colored_label(theme::muted(), "No retained captures for this VM");
     }
     action
+}
+
+/// Caller uses the applied history query to clear a filtered-out inspector selection.
+pub(super) fn matches_capture_filter(ui: &egui::Ui, capture: &CaptureSummary) -> bool {
+    let fields = capture_fields();
+    let filter_id = ui.id().with(("table-filter", "capture-history"));
+    let applied_id = ui.id().with(("applied-table-filter", filter_id));
+    let query = ui
+        .data(|data| data.get_temp::<String>(applied_id))
+        .unwrap_or_default();
+    crate::query::compile_table(&query, &fields).keep_table(&capture_row(ui, capture))
+}
+
+fn capture_fields() -> Vec<crate::query::FieldSpec<'static>> {
+    use crate::query::FieldSpec;
+    let mut fields = crate::query::LABEL_FIELDS.to_vec();
+    fields.extend(crate::query::CAPTURE_FIELDS);
+    fields.extend([
+        FieldSpec::text("name", "Displayed capture name"),
+        FieldSpec::text("state", "Capture state"),
+        FieldSpec::text("scope", "Capture scope"),
+        FieldSpec::text("boot", "Guest boot identity"),
+        FieldSpec::number("cookie", "Observer cookie"),
+        FieldSpec::number("start", "Guest start ns"),
+        FieldSpec::number("stop", "Guest stop ns"),
+        FieldSpec::number(
+            "pid",
+            "Observed root process ID; missing for all-userspace capture",
+        ),
+        FieldSpec::text("error", "Recording error, when present"),
+        FieldSpec::text("incomplete", "Recorded incompleteness reason, when present"),
+    ]);
+    fields
+}
+
+fn capture_row(
+    ui: &egui::Ui,
+    capture: &CaptureSummary,
+) -> Vec<(&'static str, crate::query::RowValue)> {
+    use crate::query::RowValue;
+    let annotation = crate::evidence::annotation(ui, &capture.directory);
+    let mut row = crate::query::label_row(
+        &capture.id,
+        annotation.as_ref().map_or("", |value| &value.name),
+        &capture.directory.display().to_string(),
+        annotation
+            .as_ref()
+            .map_or(&[], |value| value.tags.as_slice()),
+    );
+    row.extend([
+        ("capture.kind", RowValue::Text("observer".into())),
+        (
+            "capture.state",
+            RowValue::Text(status(capture.state).into()),
+        ),
+        (
+            "capture.complete",
+            RowValue::Bool(
+                capture.state == CaptureState::Finalized
+                    && capture.incomplete_reason.is_none()
+                    && capture.recording_error.is_none(),
+            ),
+        ),
+        (
+            "name",
+            RowValue::Text(
+                annotation
+                    .as_ref()
+                    .filter(|value| !value.name.is_empty())
+                    .map_or_else(|| scope(&capture.scope), |value| value.name.clone()),
+            ),
+        ),
+        ("state", RowValue::Text(status(capture.state).into())),
+        ("entry.kind", RowValue::Text("capture".into())),
+        ("entry.state", RowValue::Text(status(capture.state).into())),
+        (
+            "entry.complete",
+            RowValue::Bool(
+                capture.state == CaptureState::Finalized
+                    && capture.incomplete_reason.is_none()
+                    && capture.recording_error.is_none(),
+            ),
+        ),
+        ("vm.id", RowValue::Text(capture.vm_id.clone())),
+        ("boot.id", RowValue::Text(capture.boot_id.clone())),
+        ("scope", RowValue::Text(scope(&capture.scope))),
+        ("boot", RowValue::Text(capture.boot_id.clone())),
+        (
+            "cookie",
+            RowValue::Number(i128::from(capture.capture_cookie)),
+        ),
+        (
+            "start",
+            capture.start_ns.map_or(RowValue::Missing, |value| {
+                RowValue::Number(i128::from(value))
+            }),
+        ),
+        (
+            "stop",
+            capture.stop_ns.map_or(RowValue::Missing, |value| {
+                RowValue::Number(i128::from(value))
+            }),
+        ),
+        (
+            "pid",
+            match &capture.scope {
+                CaptureScope::Process { root } => RowValue::Number(i128::from(root.tgid)),
+                CaptureScope::AllUserspace => RowValue::Missing,
+            },
+        ),
+        (
+            "error",
+            capture
+                .recording_error
+                .as_ref()
+                .map_or(RowValue::Missing, |value| RowValue::Text(value.clone())),
+        ),
+        (
+            "incomplete",
+            capture
+                .incomplete_reason
+                .as_ref()
+                .map_or(RowValue::Missing, |value| RowValue::Text(value.clone())),
+        ),
+    ]);
+    row
 }
 
 pub(super) fn detail(ui: &mut egui::Ui, capture: &CaptureSummary) {
@@ -671,6 +870,129 @@ fn process_hover(process: &CaptureProcess) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_keyboard_selects_rows_without_intercepting_text_editor_navigation() {
+        let ctx = egui::Context::default();
+        let captures: Vec<_> = ["first", "second"]
+            .into_iter()
+            .map(|id| CaptureSummary {
+                id: id.into(),
+                vm_id: "vm".into(),
+                boot_id: "boot".into(),
+                capture_cookie: 1,
+                scope: CaptureScope::AllUserspace,
+                directory: std::path::PathBuf::from(format!("/nonexistent-capture-keyboard/{id}")),
+                state: CaptureState::Finalized,
+                recording_error: None,
+                start_ns: None,
+                stop_ns: None,
+                incomplete_reason: None,
+            })
+            .collect();
+        let mut text = String::new();
+        let mut selected = Some("first".to_owned());
+        let mut actual = None;
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                history(ui, &captures, selected.as_deref(), 16.0);
+                ui.memory_mut(|memory| memory.request_focus(ui.id().with("capture-history-focus")));
+            });
+        });
+        for (key, expected) in [
+            (egui::Key::End, "second"),
+            (egui::Key::ArrowUp, "first"),
+            (egui::Key::ArrowDown, "second"),
+            (egui::Key::Home, "first"),
+        ] {
+            let input = egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    actual = history(ui, &captures, selected.as_deref(), 16.0);
+                });
+            });
+            assert_eq!(
+                actual.as_ref().map(|(id, opened)| (id.as_str(), *opened)),
+                Some((expected, false))
+            );
+            selected = actual.take().map(|(id, _)| id);
+        }
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                history(ui, &captures, selected.as_deref(), 16.0);
+                ui.add(egui::TextEdit::singleline(&mut text))
+                    .request_focus();
+            });
+        });
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::End,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    actual = history(ui, &captures, selected.as_deref(), 16.0);
+                    ui.add(egui::TextEdit::singleline(&mut text));
+                });
+            },
+        );
+        assert!(actual.is_none());
+    }
+
+    #[test]
+    fn capture_selection_uses_last_valid_filter_and_available_identity_fields() {
+        let ctx = egui::Context::default();
+        let capture = CaptureSummary {
+            id: "filter-capture".into(),
+            vm_id: "vm-one".into(),
+            boot_id: "boot-one".into(),
+            capture_cookie: u64::MAX,
+            scope: CaptureScope::Process {
+                root: GuestProcessIdentity {
+                    boot_id: "boot-one".into(),
+                    task_cookie: 9,
+                    tgid: 42,
+                    start_boot_ns: 0,
+                },
+            },
+            directory: std::path::PathBuf::from("/nonexistent-antinomie-filter-fixture"),
+            state: CaptureState::Active,
+            recording_error: None,
+            start_ns: Some(0),
+            stop_ns: None,
+            incomplete_reason: None,
+        };
+        for (draft, expected) in [
+            ("vm.id == \"vm-one\" && pid == 42 && cookie == 18446744073709551615 && start == 0 && missing(stop)", true),
+            ("pid == 41", false),
+            ("pid ==", false),
+            ("", true),
+        ] {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let id = ui.id().with(("table-filter", "capture-history"));
+                    let filter = crate::query::applied_table(ui, draft, &capture_fields(), id);
+                    assert_eq!(filter.keep_table(&capture_row(ui, &capture)), expected);
+                    assert_eq!(matches_capture_filter(ui, &capture), expected);
+                });
+            });
+        }
+    }
 
     #[test]
     fn reused_pid_cycle_keeps_all_observed_processes_visible() {

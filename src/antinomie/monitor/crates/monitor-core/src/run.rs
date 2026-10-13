@@ -25,6 +25,8 @@ pub(crate) struct ProgramRun {
     pub execution_generation: u64,
     /// Terminal READ requests that never received a reply before finalize.
     pub terminal_reads_unanswered: u64,
+    started_ms: u64,
+    ended_ms: Option<u64>,
 }
 
 impl ProgramRun {
@@ -57,6 +59,8 @@ impl ProgramRun {
             disk_base_identity: None,
             execution_generation: 0,
             terminal_reads_unanswered: 0,
+            started_ms: unix_ms(),
+            ended_ms: None,
         };
         run.refresh_analysis_metadata()?;
         run.persist_summary()?;
@@ -107,7 +111,12 @@ impl ProgramRun {
         run.and(manifest)
     }
     fn manifest(&self) -> serde_json::Value {
-        serde_json::json!({"format":"ANTT run raw LE32","run":self.summary,"packets":self.capture.packets,"bytes":self.stored_len(),"persistence_error":self.summary.recording_error,"boot_bundle_identity":self.boot_bundle_identity,"disk_base_identity":self.disk_base_identity})
+        serde_json::json!({"format":"ANTT run raw LE32","run":self.summary,"packets":self.capture.packets,"bytes":self.stored_len(),"persistence_error":self.summary.recording_error,"boot_bundle_identity":self.boot_bundle_identity,"disk_base_identity":self.disk_base_identity,"started_ms":self.started_ms,"ended_ms":self.ended_ms})
+    }
+    pub(crate) fn record_tree_completion(&mut self) {
+        if self.summary.state == RunState::Finished {
+            self.ended_ms.get_or_insert_with(unix_ms);
+        }
     }
     /// Complete only after EOF with every terminal READ reply received.
     pub fn terminal_complete(&self) -> bool {
@@ -266,10 +275,18 @@ impl ProgramRun {
         let (rows, cols) = self.terminal.screen().size();
         storage::atomic_json(
             &self.summary.directory.join("manifest.json"),
-            &serde_json::json!({"format":"ANTT run raw LE32","run":self.summary,"packets":self.capture.packets,"bytes":self.stored_len(),"persistence_error":self.summary.recording_error,"final_state":state,"health":health,"terminal_rows":rows,"terminal_cols":cols,"terminal_complete":self.terminal_complete(),"terminal_issue":self.terminal_issue(),"quota_scope":"VM boot shared raw, fields, transcript, journal and screen","boot_bundle_identity":self.boot_bundle_identity,"disk_base_identity":self.disk_base_identity}),
+            &serde_json::json!({"format":"ANTT run raw LE32","run":self.summary,"packets":self.capture.packets,"bytes":self.stored_len(),"persistence_error":self.summary.recording_error,"final_state":state,"health":health,"terminal_rows":rows,"terminal_cols":cols,"terminal_complete":self.terminal_complete(),"terminal_issue":self.terminal_issue(),"quota_scope":"VM boot shared raw, fields, transcript, journal and screen","boot_bundle_identity":self.boot_bundle_identity,"disk_base_identity":self.disk_base_identity,"started_ms":self.started_ms,"ended_ms":self.ended_ms}),
         )?;
         result
     }
+}
+
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| {
+            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+        })
 }
 
 #[cfg(test)]
@@ -358,10 +375,20 @@ mod tests {
         let mut run = ProgramRun::new(summary, 65536).unwrap();
         run.eof(65536).unwrap();
         assert_eq!(run.summary.state, RunState::Running);
+        run.record_tree_completion();
+        assert!(
+            run.ended_ms.is_none(),
+            "root exit and terminal EOF do not end a surviving tree"
+        );
         let execution = run.summary.execution.as_mut().unwrap();
         execution.live_task_count = 0;
         execution.flags = 11;
         run.summary.state = RunState::Finished;
+        run.record_tree_completion();
+        let first_end = run.ended_ms;
+        assert!(first_end.is_some());
+        run.record_tree_completion();
+        assert_eq!(run.ended_ms, first_end);
         assert!(
             run.capture
                 .append(b"late telemetry after process completion")
@@ -369,6 +396,15 @@ mod tests {
         assert!(run.output(b"late terminal tail", 65536).is_ok());
         run.finalize(65536, "vm-stop", &Health::default()).unwrap();
         assert_eq!(run.summary.state, RunState::Finished);
+        let facts = crate::recording::run_filter_facts(&directory, "run", "vm", "boot").unwrap();
+        assert_eq!(facts.ended_ms, first_end);
+        assert!(facts.started_ms.unwrap() <= facts.ended_ms.unwrap());
+        assert_eq!(facts.transport_loss, Some(0));
+        assert!(
+            crate::recording::run_filter_facts(&directory, "different", "vm", "boot")
+                .unwrap_err()
+                .contains("identity mismatch")
+        );
         assert_eq!(
             run.summary.execution.as_ref().unwrap().root_exit,
             Some(WaitStatus::Exited { code: 7 })

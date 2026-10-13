@@ -22,6 +22,7 @@ pub(crate) struct WorkspaceState {
     record_name: String,
     record_path: String,
     record_tags: Vec<String>,
+    identities: Vec<(&'static str, crate::query::RowValue)>,
 }
 
 impl WorkspaceState {
@@ -30,6 +31,90 @@ impl WorkspaceState {
         self.record_name = name.to_owned();
         self.record_path = path.to_owned();
         self.record_tags = tags;
+    }
+
+    pub(crate) fn set_identities(
+        &mut self,
+        identities: Vec<(&'static str, crate::query::RowValue)>,
+    ) {
+        self.identities = identities;
+    }
+
+    pub(crate) fn record_context(
+        &self,
+        report: &AnalysisReport,
+    ) -> Vec<(&'static str, crate::query::RowValue)> {
+        use crate::query::RowValue as V;
+        let mut row = crate::query::label_row(
+            &report.id,
+            &self.record_name,
+            &report.source_path,
+            &self.record_tags,
+        );
+        row.extend([
+            ("entry.kind", V::Text("analysis".into())),
+            ("entry.state", V::Text(format!("{:?}", report.state))),
+            (
+                "entry.complete",
+                V::Bool(report.state == AnalysisState::Complete),
+            ),
+            (
+                "entry.size",
+                report
+                    .specimen_len
+                    .map_or(V::Missing, |size| V::Number(size.into())),
+            ),
+            ("analysis.id", V::Text(report.id.clone())),
+            ("analysis.state", V::Text(format!("{:?}", report.state))),
+            ("analysis.source", V::Text(report.source_path.clone())),
+            ("analysis.path", V::Text(report.source_path.clone())),
+            (
+                "analysis.sha256",
+                report
+                    .specimen_sha256
+                    .as_ref()
+                    .map_or(V::Missing, |hash| V::Text(hash.clone())),
+            ),
+            (
+                "analysis.tool",
+                V::List(
+                    report
+                        .sections
+                        .iter()
+                        .flat_map(|section| section.tools.iter().cloned())
+                        .collect(),
+                ),
+            ),
+            (
+                "analysis.has_run",
+                V::Bool(self.identities.iter().any(|(key, _)| *key == "run.id")),
+            ),
+        ]);
+        row.extend(self.identities.clone());
+        if let Some((_, value)) = self.identities.iter().find(|(key, _)| *key == "run.id") {
+            row.push(("analysis.run_id", value.clone()));
+        }
+        row
+    }
+
+    pub(crate) fn record_context_for(
+        &self,
+        report: &AnalysisReport,
+        kind: AnalysisKind,
+    ) -> Vec<(&'static str, crate::query::RowValue)> {
+        let mut row = self.record_context(report);
+        row.retain(|(key, _)| *key != "analysis.tool");
+        row.push((
+            "analysis.kind",
+            crate::query::RowValue::Text(format!("{kind:?}")),
+        ));
+        if let Some(section) = report.sections.iter().find(|section| section.kind == kind) {
+            row.push((
+                "analysis.tool",
+                crate::query::RowValue::List(section.tools.clone()),
+            ));
+        }
+        row
     }
 }
 
@@ -53,12 +138,14 @@ impl WorkspaceState {
             let record_name = self.record_name.clone();
             let record_path = self.record_path.clone();
             let record_tags = self.record_tags.clone();
+            let identities = self.identities.clone();
             *self = Self {
                 report_id: Some(report_id.to_owned()),
                 record_id,
                 record_name,
                 record_path,
                 record_tags,
+                identities,
                 ..Self::default()
             };
         }
@@ -338,9 +425,11 @@ fn results(
         );
     }
     if section.listing.is_some() && kind != AnalysisKind::Structures {
+        let record_context = state.record_context_for(report, kind);
         let view_key = format!("{kind:?}/listing");
         state.active_view = Some(view_key.clone());
         let view = state.views.entry(view_key).or_default();
+        view.listing.set_record(record_context);
         let wide = ui.available_width() >= 800.0;
         if wide {
             ui.horizontal_top(|ui| {
@@ -416,9 +505,7 @@ fn results(
     } else {
         Structure::All
     };
-    let record_id = state.record_id.clone();
-    let record_name = state.record_name.clone();
-    let record_path = state.record_path.clone();
+    let record_context = state.record_context_for(report, kind);
     let record_tags = state.record_tags.clone();
     let view_key = format!("{kind:?}/{filter:?}");
     let changed_view = state.active_view.as_ref() != Some(&view_key);
@@ -436,12 +523,12 @@ fn results(
     }
     ui.horizontal(|ui| {
         let label = ui.label("Search");
-        crate::query::filter_edit_with(
+        crate::query::filter_edit_fields(
             ui,
             &mut view.query,
             "Filter retained rows",
             ui.available_width(),
-            crate::query::FilterScope::Record,
+            &super::listing_view::listing_fields(kind),
             &record_tags,
         )
         .labelled_by(label.id);
@@ -449,15 +536,10 @@ fn results(
     if let Some(error) = &view.query_error {
         ui.colored_label(crate::theme::error(), error);
     }
-    let indices = visible(
-        section,
-        filter,
-        view,
-        &record_id,
-        &record_name,
-        &record_path,
-        &record_tags,
-    );
+    let indices = visible(section, filter, view, &record_context);
+    if view.query_error.is_none() {
+        crate::query::remember_valid_filter(ui, &view.applied);
+    }
     ui.label(format!(
         "{} matching / {} retained",
         indices.len(),
@@ -466,11 +548,9 @@ fn results(
     let selected = view
         .selected
         .and_then(|id| {
-            section
-                .entries
-                .iter()
-                .enumerate()
-                .find(|(index, entry)| records::identity(*index, entry) == id)
+            section.entries.iter().enumerate().find(|(index, entry)| {
+                indices.contains(index) && records::identity(*index, entry) == id
+            })
         })
         .map(|(_, entry)| entry);
     if view.selected.is_some() && selected.is_none() {
@@ -533,10 +613,8 @@ fn overview(
             ) {
                 if let Some(reason) = &report.reason {
                     ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(reason).color(crate::theme::warn()),
-                        )
-                        .wrap(),
+                        egui::Label::new(egui::RichText::new(reason).color(crate::theme::warn()))
+                            .wrap(),
                     );
                 }
             }
@@ -609,34 +687,22 @@ fn visible(
     section: &AnalysisSection,
     filter: Structure,
     view: &mut ViewState,
-    record_id: &str,
-    record_name: &str,
-    record_path: &str,
-    record_tags: &[String],
+    context: &[(&'static str, crate::query::RowValue)],
 ) -> Vec<usize> {
-    let draft = crate::query::compile_record(&view.query);
-    if draft.error.is_some() && crate::query::structured(&view.query) {
+    let fields = super::listing_view::listing_fields(section.kind);
+    let draft = crate::query::compile_table(&view.query, &fields);
+    if draft.error.is_some() {
         view.query_error.clone_from(&draft.error);
     } else {
         view.applied.clone_from(&view.query);
         view.query_error = None;
     }
-    let compiled = crate::query::compile_record(&view.applied);
-    let labels = crate::query::RecordLabels {
-        id: record_id,
-        name: record_name,
-        path: record_path,
-        tags: record_tags,
-    };
-    let record_matches = compiled.keep_record(&labels);
+    let compiled = crate::query::compile_table(&view.applied, &fields);
     let query = if crate::query::structured(&view.applied) {
         String::new()
     } else {
         view.applied.to_lowercase()
     };
-    if crate::query::structured(&view.applied) && !record_matches {
-        return Vec::new();
-    }
     let mut indices: Vec<_> = section
         .entries
         .iter()
@@ -644,12 +710,9 @@ fn visible(
         .filter(|(_, entry)| {
             !is_provenance(entry)
                 && filter.accepts(entry)
-                && (query.is_empty()
-                    || records::searchable(entry).contains(&query)
-                    || record_tags
-                        .iter()
-                        .any(|tag| tag.to_lowercase().contains(&query))
-                    || record_name.to_lowercase().contains(&query))
+                && (compiled.keep_table(&super::listing_view::listing_row_with(entry, context))
+                    || (!crate::query::structured(&view.applied)
+                        && (query.is_empty() || records::searchable(entry).contains(&query))))
         })
         .map(|(index, _)| index)
         .collect();
@@ -1054,16 +1117,10 @@ mod tests {
             sort: Some((Column::Size, false)),
             ..Default::default()
         };
-        assert_eq!(
-            visible(&section, Structure::All, &mut view, "", "", "", &[]),
-            [1, 0, 2]
-        );
+        assert_eq!(visible(&section, Structure::All, &mut view, &[]), [1, 0, 2]);
         assert_eq!(selected_entry(&section, &view).unwrap().offset, Some(16));
         view.query = "value2".into();
-        assert_eq!(
-            visible(&section, Structure::All, &mut view, "", "", "", &[]),
-            [1]
-        );
+        assert_eq!(visible(&section, Structure::All, &mut view, &[]), [1]);
         assert_eq!(view.selected, Some((true, 16)));
     }
     #[test]

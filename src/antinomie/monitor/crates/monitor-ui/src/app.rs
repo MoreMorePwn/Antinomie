@@ -123,9 +123,27 @@ struct AnalysisView {
     listing: Option<Result<antinomie_monitor_core::AnalysisListingPage, String>>,
     /// Generation and request of the listing page being read.
     listing_pending: Option<(u64, antinomie_monitor_core::AnalysisKind, u64, String)>,
+    record_context: Option<Vec<(&'static str, crate::query::RowValue)>>,
 }
 
 impl AnalysisView {
+    fn set_record(
+        &mut self,
+        report: &antinomie_monitor_core::AnalysisReport,
+        labels: (String, String, String, Vec<String>),
+        identities: Vec<(&'static str, crate::query::RowValue)>,
+    ) {
+        let (id, name, path, tags) = labels;
+        self.state.set_record(&id, &name, &path, tags);
+        self.state.set_identities(identities);
+        let context = self.state.record_context(report);
+        if self.record_context.as_ref() != Some(&context) {
+            self.listing = None;
+            self.listing_pending = None;
+            self.record_context = Some(context);
+        }
+    }
+
     fn bind(&mut self, report_id: Option<&str>) {
         if self.report_id.as_deref() != report_id {
             self.report_id = report_id.map(str::to_owned);
@@ -134,6 +152,7 @@ impl AnalysisView {
             self.pending = None;
             self.listing = None;
             self.listing_pending = None;
+            self.record_context = None;
         }
     }
 }
@@ -1310,16 +1329,15 @@ impl MonitorApp {
                 self.select_run(None);
             }
         });
-        crate::query::filter_edit(
+        let fields = crate::run_filter::fields();
+        crate::query::filter_edit_fields(
             ui,
             &mut self.run_query,
-            "Filter runs, or tag == \"name\"",
+            "Filter runs: pid == 123 && analysis.available",
             ui.available_width(),
-            crate::query::FilterScope::Record,
+            &fields,
+            &[],
         );
-        if let Some(error) = &self.run_query_error {
-            ui.colored_label(theme::error(), error);
-        }
         let mut runs: Vec<_> = self
             .snapshot
             .runs
@@ -1339,40 +1357,73 @@ impl MonitorApp {
             RunFilter::Live => self.live_history_run(run),
             RunFilter::Past => !self.live_history_run(run),
         });
-        let draft = crate::query::compile_record(&self.run_query);
-        if draft.error.is_some() && crate::query::structured(&self.run_query) {
-            self.run_query_error.clone_from(&draft.error);
+        let unfiltered_count = runs.len();
+        let draft = crate::query::compile_table(&self.run_query, &fields);
+        if let Some(error) = draft.error.as_ref() {
+            self.run_query_error = Some(error.clone());
+            ui.colored_label(
+                theme::error(),
+                format!("{error} · showing last valid filter"),
+            );
         } else {
             self.applied_run_query.clone_from(&self.run_query);
             self.run_query_error = None;
+            crate::query::remember_valid_filter(ui, &self.run_query);
         }
-        let compiled = crate::query::compile_record(&self.applied_run_query);
-        if !self.applied_run_query.trim().is_empty() {
-            let query = self.applied_run_query.trim().to_lowercase();
-            let structured = crate::query::structured(&self.applied_run_query);
-            runs.retain(|run| {
-                let annotation = antinomie_monitor_core::annotations::load(&run.directory)
-                    .unwrap_or_else(|_| antinomie_monitor_core::annotations::Annotation {
-                        name: String::new(),
-                        tags: Vec::new(),
-                    });
-                let labels = crate::query::RecordLabels {
-                    id: &run.id,
-                    name: &annotation.name,
-                    path: &run.request.path,
-                    tags: &annotation.tags,
-                };
-                compiled.keep_record(&labels)
-                    || (!structured && run_status(run).to_lowercase().contains(&query))
-            });
+        let compiled = crate::query::compile_table(&self.applied_run_query, &fields);
+        crate::run_filter::refresh_facts(ui, &runs);
+        runs.retain(|run| {
+            let annotation = crate::evidence::annotation(ui, &run.directory);
+            let mut row = crate::run_filter::row(run, annotation.as_ref(), run_status(run));
+            crate::run_filter::append_facts(ui, run, &mut row);
+            compiled.keep_table(&row)
+        });
+        ui.weak(format!("{} of {unfiltered_count} runs", runs.len()));
+        if self
+            .selected_run
+            .as_ref()
+            .is_some_and(|id| !runs.iter().any(|run| &run.id == id))
+        {
+            self.select_run(None);
+            ui.weak("The selected run is hidden by this filter.");
         }
+        let pane_id = ui.id().with("run-history-focus");
+        let pane = ui.interact(
+            ui.available_rect_before_wrap(),
+            pane_id,
+            egui::Sense::click(),
+        );
+        if pane.clicked() {
+            pane.request_focus();
+        }
+        let navigation =
+            if !runs.is_empty() && ui.memory(|memory| memory.focused()) == Some(pane_id) {
+                let selected = runs
+                    .iter()
+                    .position(|run| self.selected_run.as_ref() == Some(&run.id));
+                ui.input_mut(|input| {
+                    if input.consume_key(egui::Modifiers::NONE, egui::Key::Home) {
+                        Some(0)
+                    } else if input.consume_key(egui::Modifiers::NONE, egui::Key::End) {
+                        Some(runs.len() - 1)
+                    } else if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+                        Some(selected.map_or(0, |index| (index + 1).min(runs.len() - 1)))
+                    } else if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+                        Some(selected.map_or(runs.len() - 1, |index| index.saturating_sub(1)))
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            };
         let height = (ui.available_height() - 36.0).max(50.0);
-        let mut inspect = None;
+        let mut inspect = navigation.map(|index| (runs[index].id.clone(), false));
         ui.allocate_ui_with_layout(
             egui::vec2(ui.available_width(), height + 28.0),
             egui::Layout::top_down(egui::Align::Min),
             |ui| {
-                TableBuilder::new(ui)
+                let mut table = TableBuilder::new(ui)
                     .id_salt("run_history")
                     .sense(egui::Sense::click())
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
@@ -1384,8 +1435,9 @@ impl MonitorApp {
                     .resizable(true)
                     .striped(true)
                     .max_scroll_height(height)
-                    .min_scrolled_height(0.0)
-                    .header(28.0, |mut header| {
+                    .min_scrolled_height(0.0);
+                if let Some(index) = navigation { table = table.scroll_to_row(index, Some(egui::Align::Center)); }
+                table.header(28.0, |mut header| {
                         for name in ["Executable", "Arguments", "Tree status", "Root exit", ""] {
                             header.col(|ui| {
                                 ui.strong(name);
@@ -1469,8 +1521,15 @@ impl MonitorApp {
                                 }
                             });
                             let response = row.response();
-                            response.context_menu(|ui| crate::evidence::menu(ui, &run.directory));
+                            response.context_menu(|ui| {
+                                crate::evidence::menu(ui, &run.directory);
+                                let annotation = crate::evidence::annotation(ui, &run.directory);
+                                for (field, value) in crate::run_filter::row(run, annotation.as_ref(), run_status(run)) {
+                                    crate::query::value_menu(ui, field, &value, &mut self.run_query);
+                                }
+                            });
                             if response.clicked() || response.double_clicked() {
+                                pane.request_focus();
                                 inspect = Some((run.id.clone(), response.double_clicked()));
                             }
                         });
@@ -1853,6 +1912,14 @@ impl MonitorApp {
             self.settings.font_size,
         ) {
             self.select_capture(id, archive);
+        }
+        if self.selected_capture.as_ref().is_some_and(|id| {
+            !items
+                .iter()
+                .any(|capture| &capture.id == id && captures::matches_capture_filter(ui, capture))
+        }) {
+            self.select_run(None);
+            ui.weak("The selected capture is hidden by this filter.");
         }
         if self.selected_capture.is_some() {
             ui.colored_label(
@@ -5370,11 +5437,12 @@ impl MonitorApp {
 
     fn analysis_labels(
         &self,
+        ui: &egui::Ui,
         report: &antinomie_monitor_core::AnalysisReport,
     ) -> (String, String, String, Vec<String>) {
         let annotation = self
             .analysis_directory(&report.id)
-            .and_then(|directory| antinomie_monitor_core::annotations::load(&directory).ok())
+            .and_then(|directory| crate::evidence::annotation(ui, &directory))
             .unwrap_or_else(|| antinomie_monitor_core::annotations::Annotation {
                 name: String::new(),
                 tags: Vec::new(),
@@ -5385,6 +5453,26 @@ impl MonitorApp {
             report.source_path.clone(),
             annotation.tags,
         )
+    }
+
+    fn analysis_identities(&self, report_id: &str) -> Vec<(&'static str, crate::query::RowValue)> {
+        use crate::query::RowValue as V;
+        self.snapshot
+            .runs
+            .iter()
+            .chain(&self.history)
+            .find(|run| {
+                run.analysis
+                    .as_ref()
+                    .is_some_and(|report| report.id == report_id)
+            })
+            .map_or_else(Vec::new, |run| {
+                vec![
+                    ("vm.id", V::Text(run.vm_id.clone())),
+                    ("boot.id", V::Text(run.boot_id.clone())),
+                    ("run.id", V::Text(run.id.clone())),
+                ]
+            })
     }
 
     fn analysis_directory(&self, report_id: &str) -> Option<PathBuf> {
@@ -5505,6 +5593,7 @@ impl MonitorApp {
                 query,
             }) => {
                 let directory = self.analysis_directory(&report_id);
+                let report = self.analysis_report(&report_id).cloned();
                 let Some(view) = self.analysis_views.get_mut(view_key) else {
                     return;
                 };
@@ -5523,6 +5612,10 @@ impl MonitorApp {
                 self.analysis_generation = self.analysis_generation.wrapping_add(1);
                 let generation = self.analysis_generation;
                 view.listing_pending = Some((generation, kind, start, query.clone()));
+                let record_context = report
+                    .as_ref()
+                    .map(|report| view.state.record_context_for(report, kind))
+                    .unwrap_or_default();
                 self.queue_archive(Request::Listing {
                     view_key: view_key.into(),
                     generation,
@@ -5531,6 +5624,7 @@ impl MonitorApp {
                     kind,
                     start,
                     query,
+                    record_context,
                 });
             }
             None => {}
@@ -6020,11 +6114,17 @@ impl MonitorApp {
             Panel::AnalysisSection { report_id, kind } => {
                 let key = format!("section:{report_id}:{kind:?}");
                 let report = self.analysis_windows.get(report_id).cloned();
-                let labels = report.as_ref().map(|report| self.analysis_labels(report));
+                let labels = report
+                    .as_ref()
+                    .map(|report| self.analysis_labels(ui, report));
+                let identities = report
+                    .as_ref()
+                    .map(|report| self.analysis_identities(&report.id))
+                    .unwrap_or_default();
                 let view = self.analysis_views.entry(key.clone()).or_default();
                 view.bind(report.as_ref().map(|report| report.id.as_str()));
-                if let Some((id, name, path, tags)) = labels {
-                    view.state.set_record(&id, &name, &path, tags);
+                if let Some(labels) = labels.zip(report.as_ref()) {
+                    view.set_record(labels.1, labels.0, identities);
                 }
                 let action = crate::analysis::workspace_section(
                     ui,
@@ -6110,6 +6210,15 @@ impl MonitorApp {
                     self.filter = format!("call.id == {call_id}");
                     self.applied_filter = format!("call.id == {call_id}");
                     self.focus_trace();
+                }
+                if let Some(frame_number) = self.triage.take_packet_jump() {
+                    match self.network_view.jump_to_frame(frame_number) {
+                        Ok(()) => self.focus_panel = Some(Panel::Network),
+                        Err(error) => {
+                            self.status = error.clone();
+                            self.log("ERROR", error);
+                        }
+                    }
                 }
             }
             Panel::StaticAnalysis => {
@@ -6206,11 +6315,17 @@ impl MonitorApp {
                         }
                     }
                 }
-                let labels = report.as_ref().map(|report| self.analysis_labels(report));
+                let labels = report
+                    .as_ref()
+                    .map(|report| self.analysis_labels(ui, report));
+                let identities = report
+                    .as_ref()
+                    .map(|report| self.analysis_identities(&report.id))
+                    .unwrap_or_default();
                 let view = self.analysis_views.entry("workspace".into()).or_default();
                 view.bind(report.as_ref().map(|report| report.id.as_str()));
-                if let Some((id, name, path, tags)) = labels {
-                    view.state.set_record(&id, &name, &path, tags);
+                if let Some(labels) = labels.zip(report.as_ref()) {
+                    view.set_record(labels.1, labels.0, identities);
                 }
                 let action = crate::analysis::workspace(
                     ui,
@@ -6305,6 +6420,31 @@ impl eframe::App for MonitorApp {
         self.flush_archive();
         self.drain_archive();
         self.resync_terminals();
+        // Index retained run data independently of whether Triage is visible.
+        let triage_archive = self.trace_archive_directory();
+        let triage_pcap = triage_archive
+            .as_ref()
+            .and_then(|_| self.owned_triage_pcap());
+        let triage_run = self.selected_run.clone();
+        let triage_boot = triage_run
+            .as_ref()
+            .and_then(|id| self.run(id))
+            .map(|run| run.boot_id.clone());
+        self.triage.tick(
+            ctx,
+            crate::triage::TriageInput {
+                invocations: &[],
+                packets: &[],
+                frames: None,
+                vm_id: self.selected.as_deref(),
+                boot_id: triage_boot.as_deref(),
+                run_id: triage_run.as_deref(),
+                coverage: "retained recording index",
+                archive: triage_archive.as_deref(),
+                pcap: triage_pcap.as_ref().map(|owned| owned.0.as_path()),
+                pcap_open: triage_pcap.as_ref().is_some_and(|owned| owned.1),
+            },
+        );
         let close = ctx.input(|input| input.viewport().close_requested())
             || self
                 .smoke
@@ -13016,7 +13156,7 @@ mod tests {
         assert!(
             shown
                 .iter()
-                .any(|text| text == "Filter port 5353: 1 of 2 packets"),
+                .any(|text| text == "Quick search port 5353: 1 of 2 loaded packets"),
             "{shown:?}"
         );
         assert!(!shown.iter().any(|text| text == "TCP"));
@@ -13031,7 +13171,7 @@ mod tests {
         assert!(
             shown
                 .iter()
-                .any(|text| text == "Filter ip 10.0.2.3: 2 of 2 packets"),
+                .any(|text| text == "Quick search ip 10.0.2.3: 2 of 2 loaded packets"),
             "{shown:?}"
         );
         click_label(&mut app, &ctx, size, "Clear filter");

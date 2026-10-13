@@ -13,6 +13,7 @@ use egui_extras::{Column, TableBuilder};
 #[derive(Default)]
 pub(super) struct ListingState {
     pub query: String,
+    applied_query: String,
     /// The selected row: listing index and entry.
     pub selected: Option<(u64, AnalysisEntry)>,
     /// Selected function, stored as "{address:x}:{name}".
@@ -20,6 +21,13 @@ pub(super) struct ListingState {
     /// Function headers already seen, in first-seen order.
     /// Keyed by "{address:x}:{name}". Empty until a page is shown.
     functions: Vec<ListedFunction>,
+    record: Vec<(&'static str, crate::query::RowValue)>,
+}
+
+impl ListingState {
+    pub(crate) fn set_record(&mut self, record: Vec<(&'static str, crate::query::RowValue)>) {
+        self.record = record;
+    }
 }
 
 /// Rows read ahead of the first one that is needed.
@@ -43,9 +51,22 @@ pub(super) fn show(
         })
     };
     let listing = section.listing.as_ref();
+    let fields = listing_fields(kind);
+    let tags = state
+        .record
+        .iter()
+        .find_map(|(field, value)| {
+            if *field == "tag" {
+                if let crate::query::RowValue::List(values) = value {
+                    return Some(values.as_slice());
+                }
+            }
+            None
+        })
+        .unwrap_or_default();
     ui.horizontal(|ui| {
         let label = ui.label(egui_phosphor::regular::MAGNIFYING_GLASS);
-        crate::query::filter_edit(
+        crate::query::filter_edit_fields(
             ui,
             &mut state.query,
             match kind {
@@ -53,38 +74,56 @@ pub(super) fn show(
                 AnalysisKind::Decompilation => "Search decompiled code",
                 _ => "Search all rows",
             },
-            ui.available_width().max(120.0),
-            crate::query::FilterScope::Record,
+            ui.available_width(),
+            &fields,
+            tags,
         )
         .labelled_by(label.id);
-        let current = page
-            .and_then(|page| page.as_ref().ok())
-            .filter(|page| page.kind == kind && page.query == state.query);
-        ui.label(match (current, listing) {
-            (Some(_), Some(listing)) if state.query.is_empty() => {
-                format!("{} rows", listing.rows)
-            }
-            (Some(page), _) => format!("{} matching", page.total),
-            _ => "Reading…".into(),
-        });
+    });
+    let compiled = crate::query::compile_table(&state.query, &fields);
+    if let Some(error) = compiled.error.as_ref() {
+        ui.colored_label(
+            theme::warn(),
+            format!("{error} · showing the last valid filter"),
+        );
+    } else {
+        state.applied_query = state.query.clone();
+        crate::query::remember_valid_filter(ui, &state.applied_query);
+        if state
+            .selected
+            .as_ref()
+            .is_some_and(|(_, entry)| !compiled.keep_table(&listing_row_with(entry, &state.record)))
+        {
+            state.selected = None;
+            ui.weak("The selected row is hidden by this filter.");
+        }
+    }
+    let query = state.applied_query.as_str();
+    let current = page
+        .and_then(|page| page.as_ref().ok())
+        .filter(|page| page.kind == kind && page.query == query);
+    ui.label(match (current, listing) {
+        (Some(page), Some(listing)) => format!("{} / {} rows", page.total, listing.rows),
+        (Some(page), _) => format!("{} matching rows", page.total),
+        _ => "Reading…".into(),
     });
     let page = match page {
-        Some(Ok(page)) if page.kind == kind && page.query == state.query => page,
+        Some(Ok(page)) if page.kind == kind && page.query == query => page,
         Some(Err(error)) => {
             ui.colored_label(theme::error(), error);
             if ui.button("Retry").clicked() {
-                action = request(0, &state.query);
+                action = request(0, query);
             }
             return action;
         }
         _ => {
             ui.label("Reading the listing…");
-            return request(0, &state.query);
+            return request(0, query);
         }
     };
     remember_functions(&mut state.functions, section, page);
     if page.total == 0 {
-        ui.label(if state.query.is_empty() {
+        ui.label(if query.is_empty() {
             "This listing is empty."
         } else {
             "No row matches the search."
@@ -269,6 +308,30 @@ pub(super) fn show(
                             row.set_selected(selected);
                             cells(&mut row, kind, entry, &mono);
                             row.response().context_menu(|ui| {
+                                let field = match kind {
+                                    AnalysisKind::Disassembly => "mnemonic",
+                                    AnalysisKind::Decompilation => "code",
+                                    AnalysisKind::Strings => "text",
+                                    _ => "name",
+                                };
+                                if let Some((_, value)) = listing_row_with(entry, &state.record)
+                                    .iter()
+                                    .find(|(name, _)| *name == field)
+                                {
+                                    crate::query::value_menu(ui, field, value, &mut state.query);
+                                }
+                                ui.menu_button("Filter by field", |ui| {
+                                    for (field, value) in listing_row_with(entry, &state.record) {
+                                        ui.menu_button(field, |ui| {
+                                            crate::query::value_menu(
+                                                ui,
+                                                field,
+                                                &value,
+                                                &mut state.query,
+                                            );
+                                        });
+                                    }
+                                });
                                 if ui.button("Copy complete retained row").clicked() {
                                     ui.ctx()
                                         .copy_text(format!("{}\n{}", entry.label, entry.value));
@@ -286,11 +349,320 @@ pub(super) fn show(
         state.selected = Some(selection);
     }
     if let Some(index) = needed {
-        action = request(index.saturating_sub(LOOK_BEHIND), &state.query);
+        action = request(index.saturating_sub(LOOK_BEHIND), query);
     }
     // Keep the page size in the type system's view of the bound.
     debug_assert!(page.rows.len() <= LISTING_PAGE_MAX_ROWS);
     action
+}
+
+/// Registry used both by the listing input and the whole retained listing reader.
+pub(crate) fn listing_fields(kind: AnalysisKind) -> Vec<crate::query::FieldSpec<'static>> {
+    use crate::query::FieldSpec as F;
+    let mut fields = vec![
+        F::text("name", "Row label"),
+        F::text("value", "Complete retained row value"),
+        F::number("offset", "File offset in octets"),
+        F::number("record.id", "Structured record identity"),
+        F::text("kind", "Structured record kind"),
+    ];
+    fields.extend(crate::query::LABEL_FIELDS);
+    fields.extend(crate::query::ANALYSIS_FIELDS);
+    fields.extend(match kind {
+        AnalysisKind::Disassembly => vec![
+            F::number("address", "Original instruction or function address"),
+            F::text("bytes", "Instruction octets as hex text"),
+            F::text("mnemonic", "Instruction mnemonic"),
+            F::text("operands", "Instruction operands"),
+            F::text("function", "Containing function name"),
+            F::number("size", "Function extent in octets"),
+        ],
+        AnalysisKind::Decompilation => vec![
+            F::number("address", "Original function address"),
+            F::text("function", "Function name"),
+            F::number("line", "Source line number"),
+            F::text("code", "Retained source text"),
+            F::number("size", "Function extent in octets"),
+        ],
+        AnalysisKind::Strings => vec![
+            F::text("encoding", "String encoding"),
+            F::number("length", "Observed string extent in octets"),
+            F::number("retained_len", "Retained text extent in octets"),
+            F::text("text", "Retained string text"),
+        ],
+        AnalysisKind::Structures => vec![
+            F::text("group", "Metadata group"),
+            F::text("scope", "Symbol scope"),
+            F::text("symbol.kind", "Symbol kind"),
+            F::boolean("undefined", "Undefined symbol"),
+            F::text("library", "Import library"),
+            F::number("ordinal", "Import/export ordinal"),
+            F::number("address", "Recorded object address"),
+            F::number("size", "Symbol or virtual section extent in octets"),
+            F::number("file_size", "Section extent in file octets"),
+            F::tags("flags", "Decoded section flags"),
+            F::text("raw_flags", "Original section flags"),
+        ],
+        AnalysisKind::Entropy => vec![
+            F::number("length", "Sampled range extent in octets"),
+            F::number(
+                "milli_bits",
+                "Shannon entropy in thousandths of a bit per octet",
+            ),
+        ],
+        AnalysisKind::Hardening => vec![
+            F::text("scope", "Property scope"),
+            F::text("observed", "Observed property"),
+            F::text("evidence", "Property evidence"),
+        ],
+        AnalysisKind::Rules => vec![
+            F::text("rule", "Rule name"),
+            F::text("namespace", "Rule namespace"),
+            F::tags("rule.tags", "Tags emitted by the rule engine"),
+            F::text("ruleset", "Source rule set"),
+        ],
+        AnalysisKind::Capabilities => vec![
+            F::text("namespace", "Capability namespace"),
+            F::tags("attack", "ATT&CK references"),
+            F::tags("mbc", "Malware behavior references"),
+        ],
+        AnalysisKind::Identification => vec![
+            F::text("category", "Identification category"),
+            F::text("version", "Identified version, when present"),
+        ],
+        AnalysisKind::Metadata => vec![F::text("group", "Metadata group")],
+    });
+    fields
+}
+
+/// An unavailable legacy/typed field remains missing instead of becoming zero or a placeholder.
+pub(crate) fn listing_row_with(
+    entry: &AnalysisEntry,
+    context: &[(&'static str, crate::query::RowValue)],
+) -> Vec<(&'static str, crate::query::RowValue)> {
+    let mut row = listing_row(entry);
+    row.extend(
+        context
+            .iter()
+            .filter(|(field, _)| {
+                crate::query::LABEL_FIELDS
+                    .iter()
+                    .chain(crate::query::ANALYSIS_FIELDS)
+                    .any(|spec| spec.name == *field)
+            })
+            .cloned(),
+    );
+    row
+}
+
+/// A category's own row fields, without evidence annotation metadata.
+pub(crate) fn listing_row(entry: &AnalysisEntry) -> Vec<(&'static str, crate::query::RowValue)> {
+    use crate::query::RowValue as V;
+    let number =
+        |value: Option<u64>| value.map_or(V::Missing, |value| V::Number(i128::from(value)));
+    let text = |value: &Option<String>| {
+        value
+            .as_ref()
+            .map_or(V::Missing, |value| V::Text(value.clone()))
+    };
+    let mut row = vec![
+        ("name", V::Text(entry.label.clone())),
+        ("value", V::Text(entry.value.clone())),
+        ("offset", number(entry.offset)),
+    ];
+    let Some(record) = &entry.record else {
+        return row;
+    };
+    row.push(("record.id", number(Some(record.id))));
+    let kind = match &record.data {
+        AnalysisData::Field { group } => {
+            row.push(("group", V::Text(group.clone())));
+            "field"
+        }
+        AnalysisData::Section {
+            name,
+            address,
+            virtual_size,
+            file_size,
+            raw_flags,
+            flags,
+        } => {
+            row.retain(|(name, _)| *name != "name");
+            row.extend([
+                ("name", V::Text(name.clone())),
+                ("address", number(Some(*address))),
+                ("size", number(Some(*virtual_size))),
+                ("file_size", number(*file_size)),
+                ("raw_flags", V::Text(raw_flags.clone())),
+                ("flags", V::List(flags.clone())),
+            ]);
+            "section"
+        }
+        AnalysisData::Symbol {
+            name,
+            kind,
+            scope,
+            undefined,
+            address,
+            size,
+        } => {
+            row.retain(|(name, _)| *name != "name");
+            row.extend([
+                ("name", V::Text(name.clone())),
+                ("symbol.kind", V::Text(kind.clone())),
+                ("scope", V::Text(scope.clone())),
+                ("undefined", V::Bool(*undefined)),
+                ("address", number(*address)),
+                ("size", number(Some(*size))),
+            ]);
+            "symbol"
+        }
+        AnalysisData::Import {
+            name,
+            library,
+            ordinal,
+        } => {
+            row.retain(|(name, _)| *name != "name");
+            row.extend([
+                ("name", text(name)),
+                ("library", text(library)),
+                ("ordinal", number(*ordinal)),
+            ]);
+            "import"
+        }
+        AnalysisData::Export {
+            name,
+            ordinal,
+            address,
+        } => {
+            row.retain(|(name, _)| *name != "name");
+            row.extend([
+                ("name", text(name)),
+                ("ordinal", number(*ordinal)),
+                ("address", number(*address)),
+            ]);
+            "export"
+        }
+        AnalysisData::String {
+            encoding,
+            byte_len,
+            retained_len,
+        } => {
+            row.extend([
+                ("encoding", V::Text(encoding.clone())),
+                ("length", number(Some(*byte_len))),
+                ("retained_len", number(Some(*retained_len))),
+                ("text", V::Text(entry.value.clone())),
+            ]);
+            "string"
+        }
+        AnalysisData::Entropy { range, milli_bits } => {
+            row.retain(|(name, _)| *name != "offset");
+            row.extend([
+                ("offset", number(Some(range.offset))),
+                ("length", number(Some(range.len))),
+                ("milli_bits", V::Number(i128::from(*milli_bits))),
+            ]);
+            "entropy"
+        }
+        AnalysisData::Property {
+            scope,
+            observed,
+            evidence,
+        } => {
+            row.extend([
+                ("scope", V::Text(scope.clone())),
+                ("observed", V::Text(observed.clone())),
+                ("evidence", V::Text(evidence.clone())),
+            ]);
+            "property"
+        }
+        AnalysisData::Instruction {
+            address,
+            bytes,
+            mnemonic,
+            operands,
+            function,
+        } => {
+            row.extend([
+                ("address", number(Some(*address))),
+                ("bytes", V::Text(bytes.clone())),
+                ("mnemonic", V::Text(mnemonic.clone())),
+                ("operands", V::Text(operands.clone())),
+                ("function", text(function)),
+            ]);
+            "instruction"
+        }
+        AnalysisData::Function {
+            name,
+            address,
+            size,
+        } => {
+            row.extend([
+                ("address", number(Some(*address))),
+                ("function", V::Text(name.clone())),
+                ("size", number(Some(*size))),
+            ]);
+            "function"
+        }
+        AnalysisData::SourceLine {
+            function,
+            address,
+            line,
+        } => {
+            row.extend([
+                ("address", number(*address)),
+                ("function", V::Text(function.clone())),
+                ("line", V::Number(i128::from(*line))),
+                ("code", V::Text(entry.value.clone())),
+            ]);
+            "source_line"
+        }
+        AnalysisData::RuleMatch {
+            rule,
+            namespace,
+            tags,
+            ruleset,
+        } => {
+            row.extend([
+                ("rule", V::Text(rule.clone())),
+                ("namespace", V::Text(namespace.clone())),
+                ("rule.tags", V::List(tags.clone())),
+                ("ruleset", V::Text(ruleset.clone())),
+            ]);
+            "rule_match"
+        }
+        AnalysisData::Capability {
+            name,
+            namespace,
+            attack,
+            mbc,
+        } => {
+            row.retain(|(name, _)| *name != "name");
+            row.extend([
+                ("name", V::Text(name.clone())),
+                ("namespace", V::Text(namespace.clone())),
+                ("attack", V::List(attack.clone())),
+                ("mbc", V::List(mbc.clone())),
+            ]);
+            "capability"
+        }
+        AnalysisData::Identification {
+            category,
+            name,
+            version,
+        } => {
+            row.retain(|(name, _)| *name != "name");
+            row.extend([
+                ("name", V::Text(name.clone())),
+                ("category", V::Text(category.clone())),
+                ("version", text(version)),
+            ]);
+            "identification"
+        }
+    };
+    row.push(("kind", V::Text(kind.into())));
+    row
 }
 
 /// Adds function headers from this page and from `section.entries`.
@@ -700,6 +1072,34 @@ fn highlight(line: &str, font: &FontId) -> LayoutJob {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn listing_annotation_context_does_not_replace_typed_row_fields() {
+        use crate::query::RowValue as V;
+        let entry = AnalysisEntry {
+            label: "retained string".into(),
+            value: "sample text".into(),
+            offset: Some(0),
+            record: None,
+        };
+        let mut state = ListingState::default();
+        state.set_record(vec![
+            ("entry.name", V::Text("renamed report".into())),
+            ("tag", V::List(vec!["needs review".into()])),
+            ("vm.id", V::Text("vm-one".into())),
+            ("name", V::Text("wrong override".into())),
+            ("offset", V::Number(123)),
+        ]);
+        let row = listing_row_with(&entry, &state.record);
+        let query = crate::query::compile_table("name == \"retained string\" && offset == 0 && entry.name == \"renamed report\" && tag == \"needs review\" && vm.id == \"vm-one\"", &listing_fields(AnalysisKind::Strings));
+        assert!(query.error.is_none(), "{:?}", query.error);
+        assert!(query.keep_table(&row));
+        assert!(!crate::query::compile_table(
+            "name == \"wrong override\"",
+            &listing_fields(AnalysisKind::Strings)
+        )
+        .keep_table(&row));
+    }
 
     #[test]
     fn ghidra_markers_reopen_with_the_same_identities() {
