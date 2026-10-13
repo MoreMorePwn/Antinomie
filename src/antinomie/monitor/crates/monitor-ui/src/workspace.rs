@@ -227,16 +227,23 @@ impl WorkspaceLayout {
 
     pub(crate) fn validate(&mut self) {
         let mut seen = Vec::new();
-        self.dock.retain_tabs(|tab| {
-            if matches!(tab, Panel::Terminal(_) | Panel::AnalysisSection { .. })
-                || seen.contains(tab)
-            {
-                false
-            } else {
-                seen.push(tab.clone());
-                true
+        // Retain each tree in place. DockState::retain_tabs compacts surface
+        // indices, which would associate saved geometry with another window.
+        for index in 0..self.dock.surfaces_count() {
+            if self.dock.is_surface_valid(SurfaceIndex(index)) {
+                self.dock[SurfaceIndex(index)].retain_tabs(|tab| {
+                    if matches!(tab, Panel::Terminal(_) | Panel::AnalysisSection { .. })
+                        || seen.contains(tab)
+                    {
+                        false
+                    } else {
+                        seen.push(tab.clone());
+                        true
+                    }
+                });
             }
-        });
+        }
+        self.remove_empty_windows();
         for panel in [
             Panel::Summary,
             Panel::RunHistory,
@@ -255,6 +262,19 @@ impl WorkspaceLayout {
         }
         self.geometry
             .retain(|_, rect| rect.is_finite() && rect.width() >= 200.0 && rect.height() >= 100.0);
+    }
+
+    fn remove_empty_windows(&mut self) {
+        // An empty root node can remain allocated, so test tabs rather than
+        // Tree::is_empty. Remove in reverse without shifting retained indices.
+        for index in (1..self.dock.surfaces_count()).rev() {
+            let surface = SurfaceIndex(index);
+            if self.dock.is_surface_valid(surface) && self.dock[surface].tabs().next().is_none() {
+                self.dock.remove_surface(surface);
+                self.geometry.remove(&index);
+                self.native_builders.remove(&index);
+            }
+        }
     }
 
     pub(crate) fn focus(&mut self, panel: Panel) {
@@ -282,6 +302,7 @@ impl WorkspaceLayout {
                 }
             }
         }
+        self.remove_empty_windows();
         egui::CentralPanel::default()
             .frame(theme::frame(theme::bg()))
             .show(ctx, |ui| self.show_surface(app, ui, SurfaceIndex::main()));
@@ -1433,6 +1454,45 @@ mod tests {
                 .count(),
             1
         );
+        assert!((1..layout.dock.surfaces_count())
+            .all(|index| !layout.dock.is_surface_valid(SurfaceIndex(index))
+                || layout.dock[SurfaceIndex(index)].tabs().next().is_some()));
+    }
+
+    #[test]
+    fn restored_empty_windows_preserve_later_surface_geometry_and_live_panels() {
+        let mut layout = WorkspaceLayout::default();
+        let stale = layout
+            .dock
+            .add_window(vec![Panel::Terminal("ended".into())]);
+        let trace = layout.dock.find_tab(&Panel::Trace).unwrap();
+        let rectangle = Rect::from_min_size(egui::pos2(560.0, 240.0), egui::vec2(700.0, 400.0));
+        let retained = layout.dock.detach_tab(trace, rectangle);
+        layout.geometry.insert(
+            stale.0,
+            Rect::from_min_size(egui::pos2(30.0, 40.0), egui::vec2(600.0, 300.0)),
+        );
+        layout.geometry.insert(retained.0, rectangle);
+        let mut restored = WorkspaceLayout::restore(Some(layout));
+        restored.validate();
+        assert!(!restored.dock.is_surface_valid(stale));
+        assert!(!restored.geometry.contains_key(&stale.0));
+        assert_eq!(restored.dock.find_tab(&Panel::Trace).unwrap().0, retained);
+        assert_eq!(restored.geometry.get(&retained.0), Some(&rectangle));
+        assert_eq!(restored.dock.iter_all_tabs().count(), 10);
+
+        let ended = restored
+            .dock
+            .add_window(vec![Panel::Terminal("later".into())]);
+        let location = restored
+            .dock
+            .find_tab(&Panel::Terminal("later".into()))
+            .unwrap();
+        restored.dock.remove_tab(location);
+        restored.remove_empty_windows();
+        assert!(!restored.dock.is_surface_valid(ended));
+        assert_eq!(restored.dock.find_tab(&Panel::Trace).unwrap().0, retained);
+        assert_eq!(restored.geometry.get(&retained.0), Some(&rectangle));
     }
 
     #[test]
