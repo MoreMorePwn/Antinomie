@@ -25,6 +25,10 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, VecDeque},
     path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -232,6 +236,7 @@ pub struct MonitorApp {
     run_tree: Option<(String, crate::archive::ProcessTreeResult)>,
     run_tree_pending: Option<String>,
     archive_total: Option<u64>,
+    archive_source_total: Option<u64>,
     evidence_jobs: crate::evidence_jobs::EvidenceJobs,
     /// Whether the Details panel shows the selected packet or syscall.
     pub(crate) details_follow: crate::workspace::DetailsFollow,
@@ -262,12 +267,15 @@ pub struct MonitorApp {
     pending_archive: Option<Request>,
     history: Vec<RunSummary>,
     archive_generation: u64,
+    archive_page_generation: u64,
     archive_page: Vec<InvocationSummary>,
     archive_offset: u64,
     archive_next: Option<u64>,
     archive_previous: Vec<u64>,
     archive_pending: bool,
     archive_error: Option<String>,
+    archive_read_cancel: Option<Arc<AtomicBool>>,
+    archive_hidden_categories: Vec<SyscallGroup>,
     inspector: Inspector,
     data_windows: crate::data_view::DataWindows,
     layout: WorkspaceLayout,
@@ -365,6 +373,7 @@ impl MonitorApp {
             run_tree: None,
             run_tree_pending: None,
             archive_total: None,
+            archive_source_total: None,
             evidence_jobs: Default::default(),
             details_follow: Default::default(),
             archived_processes: None,
@@ -391,12 +400,15 @@ impl MonitorApp {
             pending_archive: None,
             history: Vec::new(),
             archive_generation: 0,
+            archive_page_generation: 0,
             archive_page: Vec::new(),
             archive_offset: 0,
             archive_next: None,
             archive_previous: Vec::new(),
             archive_pending: false,
             archive_error: None,
+            archive_read_cancel: None,
+            archive_hidden_categories: Vec::new(),
             inspector: Inspector::default(),
             data_windows: crate::data_view::DataWindows::default(),
             layout: WorkspaceLayout::restore(
@@ -1083,11 +1095,14 @@ impl MonitorApp {
                 {
                     self.run_tree_pending = None;
                 }
-                Request::Invocations { generation, .. }
-                    if generation == self.archive_generation =>
-                {
-                    self.archive_pending = false;
-                    self.archive_error = Some("Read superseded".into());
+                Request::Invocations {
+                    generation, cancel, ..
+                } => {
+                    cancel.store(true, Ordering::Relaxed);
+                    if generation == self.archive_generation {
+                        self.archive_pending = false;
+                        self.archive_error = Some("Read superseded".into());
+                    }
                 }
                 Request::Captured { generation, .. } if generation == self.inspector.generation => {
                     self.inspector.pending = false;
@@ -1193,6 +1208,9 @@ impl MonitorApp {
     }
 
     fn reset_trace_selection(&mut self) {
+        if let Some(cancel) = self.archive_read_cancel.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
         self.selected_event = None;
         self.inspector.clear();
         if matches!(
@@ -1203,9 +1221,11 @@ impl MonitorApp {
         }
         self.archive_generation = self.archive_generation.wrapping_add(1);
         self.archive_page.clear();
+        self.archive_page_generation = 0;
         self.archive_previous.clear();
         self.archive_next = None;
         self.archive_total = None;
+        self.archive_source_total = None;
         self.archive_offset = 0;
         self.archive_pending = false;
         self.archive_error = None;
@@ -1216,16 +1236,24 @@ impl MonitorApp {
             return;
         };
         self.archive_generation = self.archive_generation.wrapping_add(1);
+        if let Some(cancel) = self.archive_read_cancel.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.archive_read_cancel = Some(Arc::clone(&cancel));
+        self.archive_hidden_categories
+            .clone_from(&self.settings.hidden_trace_categories);
         self.archive_pending = false;
         self.archive_error = None;
-        self.selected_event = None;
-        self.inspector.clear();
         let request = Request::Invocations {
             generation: self.archive_generation,
             directory,
             offset,
             capture: self.selected_capture.is_some(),
             pid: self.selected_process,
+            query: self.applied_filter.clone(),
+            hidden_categories: self.archive_hidden_categories.clone(),
+            cancel,
         };
         self.queue_archive(request);
         self.archive_pending = true;
@@ -2062,6 +2090,7 @@ impl MonitorApp {
                 generation,
                 offset,
                 total,
+                source_total,
                 result,
             } if generation == self.archive_generation
                 && self.trace_archive_directory().is_some() =>
@@ -2070,7 +2099,18 @@ impl MonitorApp {
                 match result {
                     Ok(page) => {
                         self.archive_total = total;
+                        self.archive_source_total = source_total;
                         self.archive_page = page.invocations;
+                        self.archive_page_generation = generation;
+                        if self.selected_event.is_some_and(|selected| {
+                            !self
+                                .archive_page
+                                .iter()
+                                .any(|row| trace::key(row) == selected)
+                        }) {
+                            self.selected_event = None;
+                            self.inspector.clear();
+                        }
                         self.archive_offset = offset;
                         self.archive_next = page.next_offset;
                         self.archive_error =
@@ -3309,60 +3349,64 @@ impl MonitorApp {
                 let loss = |count: u64| if count == 0 { theme::good() } else { theme::warn() };
                 let saved = persisted as f64 / 1_073_741_824.0;
                 ui.add_space(3.0);
-                ui.horizontal(|ui| {
+                // Allocate the right-aligned figures first. The remaining
+                // left rectangle bounds both message layout and painting.
+                let row_size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+                ui.allocate_ui_with_layout(row_size, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // A name stays next to its number. Groups are separated.
                     ui.spacing_mut().item_spacing.x = 8.0;
-                    if let Some(error) = &persistence {
-                        status_line(
-                            ui,
-                            egui_phosphor::regular::WARNING,
-                            &format!("Saving stopped: {error}"),
-                            theme::error(),
-                        );
-                    } else if let Some(error) = &last_error {
-                        status_line(
-                            ui,
-                            egui_phosphor::regular::WARNING_CIRCLE,
-                            error,
-                            theme::error(),
-                        );
-                    } else if closing {
-                        ui.spinner();
-                        ui.colored_label(
-                            theme::warn(),
-                            "Waiting for guest shutdown and recording finalization…",
-                        );
-                    } else if !status.is_empty() {
-                        status_line(ui, egui_phosphor::regular::INFO, &status, theme::info());
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // A name stays next to its number. Groups are separated.
-                        ui.spacing_mut().item_spacing.x = 8.0;
-                        let version = ui.monospace(format!("Antinomie {APP_VERSION}"));
-                        ui.add_space(16.0);
-                        let cap = ui.monospace(format!("CAP {saved:.1}/{quota} GiB"));
-                        ui.add_space(16.0);
-                        let storage_color = if persistence.is_some() {
-                            theme::error()
-                        } else {
-                            loss(storage_dropped)
-                        };
-                        let stl =
-                            status_value_rtl(ui, "STL", &storage_dropped.to_string(), storage_color);
-                        ui.add_space(16.0);
-                        let uil =
-                            status_value_rtl(ui, "UIL", &ui_dropped.to_string(), loss(ui_dropped));
-                        ui.add_space(16.0);
-                        let trl = status_value_rtl(ui, "TRL", &dropped.to_string(), loss(dropped));
-                        let meters = version | cap | stl | uil | trl;
-                        meters.on_hover_text(format!(
-                            "TRL transport loss: {dropped} of {attempted} records the guest could not hand over\n\
-                             UIL interface loss: {ui_dropped} preview records not drawn\n\
-                             STL storage loss: {storage_dropped} packets not retained\n\
-                             CAP saved / quota: {saved:.1} / {quota} GiB\n\
-                             Capture All shedding: {}\n\
-                             Antinomie {APP_VERSION}",
-                            if shedding { "dropping events" } else { "off" }
-                        ));
+                    let version = ui.monospace(format!("Antinomie {APP_VERSION}"));
+                    ui.add_space(16.0);
+                    let cap = ui.monospace(format!("CAP {saved:.1}/{quota} GiB"));
+                    ui.add_space(16.0);
+                    let storage_color = if persistence.is_some() {
+                        theme::error()
+                    } else {
+                        loss(storage_dropped)
+                    };
+                    let stl =
+                        status_value_rtl(ui, "STL", &storage_dropped.to_string(), storage_color);
+                    ui.add_space(16.0);
+                    let uil =
+                        status_value_rtl(ui, "UIL", &ui_dropped.to_string(), loss(ui_dropped));
+                    ui.add_space(16.0);
+                    let trl = status_value_rtl(ui, "TRL", &dropped.to_string(), loss(dropped));
+                    let meters = version | cap | stl | uil | trl;
+                    meters.on_hover_text(format!(
+                        "TRL transport loss: {dropped} of {attempted} records the guest could not hand over\n\
+                         UIL interface loss: {ui_dropped} preview records not drawn\n\
+                         STL storage loss: {storage_dropped} packets not retained\n\
+                         CAP saved / quota: {saved:.1} / {quota} GiB\n\
+                         Capture All shedding: {}\n\
+                         Antinomie {APP_VERSION}",
+                        if shedding { "dropping events" } else { "off" }
+                    ));
+                    ui.add_space(16.0);
+                    let message_size = ui.available_size();
+                    ui.allocate_ui_with_layout(message_size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
+                        if let Some(error) = &persistence {
+                            status_line(
+                                ui,
+                                egui_phosphor::regular::WARNING,
+                                &format!("Saving stopped: {error}"),
+                                theme::error(),
+                            );
+                        } else if let Some(error) = &last_error {
+                            status_line(
+                                ui,
+                                egui_phosphor::regular::WARNING_CIRCLE,
+                                error,
+                                theme::error(),
+                            );
+                        } else if closing {
+                            ui.spinner();
+                            let message = "Waiting for guest shutdown and recording finalization…";
+                            ui.add(egui::Label::new(RichText::new(message).color(theme::warn())).truncate())
+                                .on_hover_text(message);
+                        } else if !status.is_empty() {
+                            status_line(ui, egui_phosphor::regular::INFO, &status, theme::info());
+                        }
                     });
                 });
                 ui.add_space(3.0);
@@ -3642,9 +3686,33 @@ impl MonitorApp {
     fn commit_trace_filter(&mut self) -> crate::query::Compiled {
         let draft = crate::query::compile_note(&self.filter);
         if draft.error.is_none() {
+            let changed = self.applied_filter != self.filter;
             self.applied_filter.clone_from(&self.filter);
+            if changed && self.trace_archive_directory().is_some() {
+                self.refresh_archive_matches(&draft);
+            }
         }
         draft
+    }
+
+    fn refresh_archive_matches(&mut self, filter: &crate::query::Compiled) {
+        let hidden = &self.settings.hidden_trace_categories;
+        if self.selected_event.is_some_and(|selected| {
+            !self.archive_page.iter().any(|row| {
+                trace::key(row) == selected
+                    && filter.keep(row)
+                    && trace::representative(row).is_some_and(|event| {
+                        SyscallGroup::of(&event.syscall_name)
+                            .is_none_or(|group| !hidden.contains(&group))
+                    })
+            })
+        }) {
+            self.selected_event = None;
+            self.inspector.clear();
+        }
+        self.archive_previous.clear();
+        self.archive_next = None;
+        self.request_page(0);
     }
 
     fn events(&mut self, ui: &mut egui::Ui) {
@@ -3652,7 +3720,6 @@ impl MonitorApp {
             self.empty_trace(ui);
             return;
         }
-        let all = self.invocations();
         ui.horizontal_wrapped(|ui| {
             theme::section(ui, "Syscalls");
             if let Some(capture) = self.selected_capture_summary() {
@@ -3691,17 +3758,40 @@ impl MonitorApp {
                     "Reload archive page",
                     !self.archive_pending,
                 ) {
-                    self.request_page(self.archive_offset);
+                    let offset = if self.archive_page_generation != self.archive_generation
+                        && self.archive_previous.is_empty()
+                    {
+                        0
+                    } else {
+                        self.archive_offset
+                    };
+                    self.request_page(offset);
                 }
                 if let Some(total) = self.archive_total {
-                    ui.label(format!(
-                        "Page {} of {} · 100 calls/page · {total} saved calls",
-                        self.archive_previous.len() + 1,
-                        total.div_ceil(100).max(1)
-                    ));
+                    if self.archive_page_generation == self.archive_generation {
+                        ui.label(format!(
+                            "Page {} of {} · 100 calls/page · {total} matching / {} saved calls",
+                            self.archive_previous.len() + 1,
+                            total.div_ceil(100).max(1),
+                            self.archive_source_total.unwrap_or(total)
+                        ));
+                    } else {
+                        ui.label(format!(
+                            "Previous results: {total} matching / {} saved calls",
+                            self.archive_source_total.unwrap_or(total)
+                        ));
+                    }
                 }
                 ui.label(if self.archive_pending {
-                    "Reading archive..."
+                    if self.archive_page.is_empty() {
+                        "Reading archive matches..."
+                    } else {
+                        "Reading matches · previous results shown"
+                    }
+                } else if self.archive_page_generation != self.archive_generation
+                    && !self.archive_page.is_empty()
+                {
+                    "Previous results · refresh to retry"
                 } else {
                     "History"
                 });
@@ -3729,7 +3819,12 @@ impl MonitorApp {
         } else {
             crate::query::compile_note(&self.applied_filter)
         };
+        let all = self.invocations();
         self.trace_categories(ui, &all);
+        let archived = self.trace_archive_directory().is_some();
+        if archived && self.archive_hidden_categories != self.settings.hidden_trace_categories {
+            self.refresh_archive_matches(&filter);
+        }
         let total = all.len();
         let hidden = self.settings.hidden_trace_categories.clone();
         let invocations: Vec<_> = all
@@ -3738,17 +3833,21 @@ impl MonitorApp {
                 let Some(event) = trace::representative(invocation) else {
                     return false;
                 };
-                if SyscallGroup::of(&event.syscall_name)
-                    .is_some_and(|group| hidden.contains(&group))
+                if !archived
+                    && SyscallGroup::of(&event.syscall_name)
+                        .is_some_and(|group| hidden.contains(&group))
                 {
                     return false;
                 }
-                filter.keep(invocation)
+                archived || filter.keep(invocation)
             })
             .collect();
         let mut invocations = invocations;
         if let Some((column, descending)) = self.trace_sort {
             sort_invocations(&mut invocations, column, descending);
+            if archived {
+                ui.colored_label(theme::muted(), "Sort applies to this page");
+            }
         }
         if invocations.len() != total {
             ui.colored_label(
@@ -7812,9 +7911,10 @@ fn status_value_rtl(
 fn status_line(ui: &mut egui::Ui, icon: &str, text: &str, color: egui::Color32) {
     ui.horizontal(|ui| {
         ui.colored_label(color, icon);
-        ui.add(egui::Label::new(RichText::new(text).color(color)).truncate())
-            .on_hover_text(text);
-    });
+        ui.add(egui::Label::new(RichText::new(text).color(color)).truncate());
+    })
+    .response
+    .on_hover_text(text);
 }
 
 fn icon(ui: &mut egui::Ui, icon: &str, tooltip: &str, enabled: bool) -> bool {
@@ -7913,6 +8013,7 @@ mod tests {
             run_tree: None,
             run_tree_pending: None,
             archive_total: None,
+            archive_source_total: None,
             evidence_jobs: Default::default(),
             details_follow: Default::default(),
             archived_processes: None,
@@ -7939,12 +8040,15 @@ mod tests {
             pending_archive: None,
             history: Vec::new(),
             archive_generation: 0,
+            archive_page_generation: 0,
             archive_page: Vec::new(),
             archive_offset: 0,
             archive_next: None,
             archive_previous: Vec::new(),
             archive_pending: false,
             archive_error: None,
+            archive_read_cancel: None,
+            archive_hidden_categories: Vec::new(),
             inspector: Inspector::default(),
             data_windows: crate::data_view::DataWindows::default(),
             layout,
@@ -8015,6 +8119,83 @@ mod tests {
         assert_eq!(app.applied_filter, "read");
         assert!(crate::query::compile_note(&app.applied_filter).keep(&invocation));
         assert!(!crate::query::compile_note(&app.filter).keep(&invocation));
+    }
+
+    #[test]
+    fn archive_filter_changes_cancel_old_scan_preserve_page_and_reject_invalid_draft() {
+        let mut app = app();
+        let mut past = run("past");
+        past.state = RunState::Finalized;
+        app.history.push(past);
+        app.select_run(Some("past".into()));
+        let old_generation = app.archive_generation;
+        let old_cancel = Arc::clone(app.archive_read_cancel.as_ref().unwrap());
+        app.archive_page = pair_events(&[event(1, 0)]);
+        app.archive_previous = vec![0, 100];
+        app.selected_event = Some(trace::key(&app.archive_page[0]));
+        app.filter = "syscall.num == 9".into();
+        assert!(app.commit_trace_filter().error.is_none());
+        assert!(old_cancel.load(Ordering::Relaxed));
+        assert!(app.archive_previous.is_empty());
+        assert_eq!(app.archive_page.len(), 1);
+        assert!(app.selected_event.is_none());
+        assert!(
+            matches!(&app.pending_archive, Some(Request::Invocations { offset: 0, query, .. }) if query == "syscall.num == 9")
+        );
+        let generation = app.archive_generation;
+        app.filter = "syscall.num ==".into();
+        assert!(app.commit_trace_filter().error.is_some());
+        assert_eq!(app.applied_filter, "syscall.num == 9");
+        assert_eq!(app.archive_generation, generation);
+        assert!(!app
+            .archive_read_cancel
+            .as_ref()
+            .unwrap()
+            .load(Ordering::Relaxed));
+        app.handle_archive_answer(Answer::Invocations {
+            generation: old_generation,
+            offset: 99,
+            total: Some(9),
+            source_total: Some(350),
+            result: Ok(antinomie_monitor_core::InvocationPage {
+                invocations: Vec::new(),
+                next_offset: None,
+                issues: Vec::new(),
+            }),
+        });
+        assert_eq!(app.archive_page.len(), 1);
+        assert!(app.archive_pending);
+        let selected_cancel = Arc::clone(app.archive_read_cancel.as_ref().unwrap());
+        app.select_process(captures::ProcessSelection::Process(99));
+        assert!(selected_cancel.load(Ordering::Relaxed));
+        assert!(
+            matches!(&app.pending_archive, Some(Request::Invocations { offset: 0, pid: Some(99), query, .. }) if query == "syscall.num == 9")
+        );
+    }
+
+    #[test]
+    fn archive_category_predicate_restarts_global_matches_and_retains_visible_selection() {
+        let mut app = app();
+        let mut past = run("past");
+        past.state = RunState::Finalized;
+        app.history.push(past);
+        app.select_run(Some("past".into()));
+        app.archive_page = pair_events(&[event(1, 0)]);
+        let selected = trace::key(&app.archive_page[0]);
+        app.selected_event = Some(selected);
+        app.filter = "syscall.num == 0".into();
+        assert!(app.commit_trace_filter().error.is_none());
+        assert_eq!(app.selected_event, Some(selected));
+        let cancel = Arc::clone(app.archive_read_cancel.as_ref().unwrap());
+        let group = SyscallGroup::of("read").unwrap();
+        app.settings.hidden_trace_categories = vec![group];
+        app.refresh_archive_matches(&crate::query::compile_note(&app.applied_filter));
+        assert!(cancel.load(Ordering::Relaxed));
+        assert!(app.selected_event.is_none());
+        assert_eq!(app.archive_page.len(), 1);
+        assert!(
+            matches!(&app.pending_archive, Some(Request::Invocations { offset: 0, hidden_categories, .. }) if hidden_categories == &[group])
+        );
     }
 
     #[test]
@@ -8192,6 +8373,7 @@ mod tests {
             generation,
             offset: 0,
             total: None,
+            source_total: None,
             result: Ok(antinomie_monitor_core::InvocationPage {
                 invocations: pair_events(&[event(1, 9)]),
                 next_offset: None,
@@ -8219,6 +8401,7 @@ mod tests {
             generation,
             offset: 0,
             total: None,
+            source_total: None,
             result: Ok(antinomie_monitor_core::InvocationPage {
                 invocations: pair_events(&[event(1, 4)]),
                 next_offset: Some(64),
@@ -8695,6 +8878,95 @@ mod tests {
                 },
                 |ctx| app.draw(ctx),
             );
+        }
+    }
+
+    #[test]
+    fn long_health_messages_do_not_overlap_figures_and_keep_full_hover_text() {
+        let error = "guest command 25713 timed out: outcome unknown; run status polling paused until its reply arrives or transport reconnects";
+        let closing = "Waiting for guest shutdown and recording finalization…";
+        for (width, font_size) in [(1280.0, 16.0), (800.0, 24.0)] {
+            for shutting_down in [false, true] {
+                let mut app = app();
+                let ctx = egui::Context::default();
+                theme::install(&ctx);
+                theme::text_size(&ctx, font_size);
+                ctx.style_mut(|style| {
+                    style.interaction.tooltip_delay = 0.0;
+                    style.interaction.tooltip_grace_time = 0.0;
+                });
+                app.closing = shutting_down;
+                let message = if shutting_down { closing } else { error };
+                if !shutting_down {
+                    app.snapshot.last_error = Some(error.into());
+                }
+                let size = egui::vec2(width, 900.0);
+                let mut output = egui::FullOutput::default();
+                for frame in 0..4 {
+                    output = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                            time: Some(frame as f64),
+                            ..Default::default()
+                        },
+                        |ctx| app.health(ctx),
+                    );
+                }
+                let visible = texts(&output);
+                let message_rect = visible
+                    .iter()
+                    .find(|(text, _)| text == message)
+                    .unwrap_or_else(|| {
+                        panic!("missing bounded message at {width}/{font_size}: {visible:?}")
+                    })
+                    .1;
+                let mut figure_rects = Vec::new();
+                for label in ["TRL", "UIL", "STL", "CAP 0.0/4 GiB", "Antinomie 0.6.0"] {
+                    let rect = visible
+                        .iter()
+                        .find(|(text, _)| text == label)
+                        .unwrap_or_else(|| panic!("missing figure {label}: {visible:?}"))
+                        .1;
+                    assert!(
+                        rect.min.x >= 0.0 && rect.max.x <= width,
+                        "figure remains inside viewport"
+                    );
+                    assert!(
+                        !rect.intersects(message_rect),
+                        "message overlaps {label}: {message_rect:?} / {rect:?}"
+                    );
+                    figure_rects.push(rect);
+                }
+                assert!(
+                    message_rect.max.x
+                        < figure_rects
+                            .iter()
+                            .map(|rect| rect.min.x)
+                            .fold(f32::INFINITY, f32::min)
+                );
+                assert!(
+                    message_rect.height() <= font_size * 1.6,
+                    "status stays one compact row"
+                );
+                let mut hovered = output;
+                for frame in 4..8 {
+                    hovered = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                            time: Some(frame as f64),
+                            events: vec![egui::Event::PointerMoved(message_rect.center())],
+                            ..Default::default()
+                        },
+                        |ctx| app.health(ctx),
+                    );
+                }
+                assert!(
+                    texts(&hovered)
+                        .iter()
+                        .any(|(text, rect)| text == message && rect.min.y < message_rect.min.y),
+                    "hover preserves the complete message above the footer"
+                );
+            }
         }
     }
 
@@ -11301,6 +11573,7 @@ mod tests {
             generation: generation.wrapping_sub(1),
             offset: 99,
             total: None,
+            source_total: None,
             result: Ok(antinomie_monitor_core::InvocationPage {
                 invocations: pair_events(&[event(2, 3)]),
                 next_offset: None,
@@ -11323,6 +11596,7 @@ mod tests {
             generation,
             offset: 99,
             total: None,
+            source_total: None,
             result: Ok(antinomie_monitor_core::InvocationPage {
                 invocations: pair_events(&[event(2, 3)]),
                 next_offset: None,

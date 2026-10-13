@@ -700,85 +700,166 @@ pub fn decompile_captured_core(
     let (core, bound_note) = bounded_core_image(core_path, 64 * 1024 * 1024)?;
     let plan = sparse_core_plan(&core)?;
     let image = synthetic_captured_elf(&core, &plan)?;
-    fs::create_dir_all(work).map_err(|error| error.to_string())?;
-    let image_path = work.join("captured-image.elf");
-    fs::write(&image_path, &image).map_err(|error| error.to_string())?;
-    let plan_note = format!(
-        "captured {} octets across {} extents; {} unavailable tail octets omitted",
-        plan.captured_bytes(),
-        plan.extents.len(),
-        plan.unavailable_tails()
-    );
-    let plan_note = format!("{plan_note}. {bound_note}");
-    fs::write(work.join("sparse-plan.txt"), &plan_note).map_err(|error| error.to_string())?;
-    let ghidra = find_ghidra(tools_dir)?;
-    let scripts = work.join("ghidra-scripts");
-    let project = work.join("ghidra-project");
-    fs::create_dir_all(&scripts).map_err(|error| error.to_string())?;
-    fs::create_dir_all(&project).map_err(|error| error.to_string())?;
-    fs::write(scripts.join("AntinomieCoreExport.java"), CORE_SCRIPT)
+    crate::storage::private_dir(work).map_err(|error| error.to_string())?;
+    let attempt = work.join(format!("ghidra-attempt-{}", crate::storage::unique_id()));
+    crate::storage::private_dir(&attempt).map_err(|error| error.to_string())?;
+    let result = (|| {
+        let image_path = attempt.join("captured-image.elf");
+        fs::write(&image_path, &image).map_err(|error| error.to_string())?;
+        let plan_note = format!(
+            "captured {} octets across {} extents; {} unavailable tail octets omitted",
+            plan.captured_bytes(),
+            plan.extents.len(),
+            plan.unavailable_tails()
+        );
+        let plan_note = format!("{plan_note}. {bound_note}");
+        fs::write(work.join("sparse-plan.txt"), &plan_note).map_err(|error| error.to_string())?;
+        let ghidra = find_ghidra(tools_dir)?;
+        let scripts = attempt.join("ghidra-scripts");
+        let project = attempt.join("ghidra-project");
+        fs::create_dir_all(&scripts).map_err(|error| error.to_string())?;
+        fs::create_dir_all(&project).map_err(|error| error.to_string())?;
+        fs::write(scripts.join("AntinomieCoreExport.java"), CORE_SCRIPT)
+            .map_err(|error| error.to_string())?;
+        let export = attempt.join("decompiled.txt");
+        let home = attempt.join("ghidra-home");
+        fs::create_dir_all(&home).map_err(|error| error.to_string())?;
+        let export_s = export.to_string_lossy().into_owned();
+        let project_s = project.to_string_lossy().into_owned();
+        let scripts_s = scripts.to_string_lossy().into_owned();
+        let image_s = image_path.to_string_lossy().into_owned();
+        let home_s = home.to_string_lossy().into_owned();
+        let ghidra_s = ghidra.to_string_lossy().into_owned();
+        // LaunchSupport starts a JVM before the headless launcher's explicit -Xmx.
+        // Bound both JVMs so their reserved address spaces fit the sandbox's AS
+        // limit. These settings are confined to this isolated process tree.
+        let mut env = vec![
+            ("HOME", home_s.as_str()),
+            (
+                "JAVA_TOOL_OPTIONS",
+                "-Xmx2g -XX:ReservedCodeCacheSize=256m -XX:CompressedClassSpaceSize=256m",
+            ),
+        ];
+        let java_home;
+        if ghidra_s.contains("antinomie-tools") {
+            java_home = "/opt/antinomie-tools/ghidra/jdk".to_string();
+            env.push(("JAVA_HOME", java_home.as_str()));
+        }
+        let args = vec![
+            project_s,
+            "antinomie".into(),
+            "-import".into(),
+            image_s,
+            "-overwrite".into(),
+            "-scriptPath".into(),
+            scripts_s,
+            "-postScript".into(),
+            "AntinomieCoreExport.java".into(),
+            export_s.clone(),
+            "90".into(),
+            "-analysisTimeoutPerFile".into(),
+            "90".into(),
+            "-max-cpu".into(),
+            "4".into(),
+        ];
+        let mut extra = Vec::new();
+        if !ghidra.starts_with("/usr") {
+            extra.push(tools_dir.to_path_buf());
+        }
+        super::jobs::run_sandboxed(
+            &ghidra,
+            &args,
+            work,
+            &extra,
+            &env,
+            Duration::from_secs(180),
+            cancel,
+        )?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".into());
+        }
+        let mut captured = Vec::new();
+        crate::archive_io::open_regular(&attempt, &export)
+        .and_then(|file| file.take(LISTING_MAX_SIZE + 1).read_to_end(&mut captured))
+        .map_err(|error| format!("Ghidra produced no decompilation ({error}). The sparse plan file is not a result. Diagnostics: {}/ghidra-*.log", work.display()))?;
+        if captured.len() as u64 > LISTING_MAX_SIZE {
+            return Err(
+                "Ghidra decompilation exceeded the retained listing bound; prior export preserved"
+                    .into(),
+            );
+        }
+        let text = String::from_utf8(captured)
+            .map_err(|error| format!("Ghidra export is not UTF-8: {error}"))?;
+        if !text
+            .lines()
+            .any(|line| line.starts_with("@@ANTINOMIE-FUNCTION"))
+            && !text.contains("@@ANTINOMIE-TIMEOUT")
+            && !text.contains("@@ANTINOMIE-BASE")
+        {
+            return Err("Ghidra export has no function marker.".into());
+        }
+        // A retry must not replace a prior successful export or project until the
+        // new result is complete, bounded, and valid. copy_project verifies actual
+        // native project members before a directory becomes the retained interface.
+        let retained = attempt.join("retained-project");
+        super::export::copy_project(&project, &retained)?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err("cancelled; prior Ghidra export and project preserved".into());
+        }
+        promote_core_result(work, &attempt, &retained, &export)?;
+        Ok(text)
+    })();
+    // Failed attempts keep the diagnostic log and sparse plan, not a partial
+    // database or synthetic image. Successful attempts retain the root project
+    // and export expected by the UI and remove the superseded backup.
+    if attempt.join("prior-project").exists() && result.is_err() {
+        // A filesystem failure during rollback must not erase the sole backup.
+        return result;
+    }
+    if let Err(error) = fs::remove_dir_all(&attempt) {
+        return Err(format!(
+            "Ghidra attempt cleanup failed: {error}; diagnostics retained in {}",
+            work.display()
+        ));
+    }
+    result
+}
+
+fn promote_core_result(
+    work: &Path,
+    attempt: &Path,
+    project: &Path,
+    export: &Path,
+) -> Result<(), String> {
+    let target_export = work.join("decompiled.txt");
+    if fs::symlink_metadata(&target_export).is_ok_and(|metadata| !metadata.is_file()) {
+        return Err("Ghidra export destination is not a regular file; sparse-plan.txt is not a load result; prior project preserved".into());
+    }
+    let target_project = work.join("ghidra-project");
+    let backup = attempt.join("prior-project");
+    if fs::symlink_metadata(&target_project).is_ok_and(|metadata| !metadata.is_dir()) {
+        return Err("prior Ghidra project is not a directory; preserved without promotion".into());
+    }
+    let previous = target_project
+        .try_exists()
         .map_err(|error| error.to_string())?;
-    let export = work.join("decompiled.txt");
-    let _ = fs::remove_file(&export);
-    let home = work.join("ghidra-home");
-    fs::create_dir_all(&home).map_err(|error| error.to_string())?;
-    let export_s = export.to_string_lossy().into_owned();
-    let project_s = project.to_string_lossy().into_owned();
-    let scripts_s = scripts.to_string_lossy().into_owned();
-    let image_s = image_path.to_string_lossy().into_owned();
-    let home_s = home.to_string_lossy().into_owned();
-    let ghidra_s = ghidra.to_string_lossy().into_owned();
-    let mut env = vec![("HOME", home_s.as_str())];
-    let java_home;
-    if ghidra_s.contains("antinomie-tools") {
-        java_home = "/opt/antinomie-tools/ghidra/jdk".to_string();
-        env.push(("JAVA_HOME", java_home.as_str()));
+    if previous {
+        fs::rename(&target_project, &backup).map_err(|error| error.to_string())?;
     }
-    let args = vec![
-        project_s,
-        "antinomie".into(),
-        "-import".into(),
-        image_s,
-        "-overwrite".into(),
-        "-scriptPath".into(),
-        scripts_s,
-        "-postScript".into(),
-        "AntinomieCoreExport.java".into(),
-        export_s.clone(),
-        "90".into(),
-        "-analysisTimeoutPerFile".into(),
-        "90".into(),
-        "-max-cpu".into(),
-        "4".into(),
-    ];
-    let mut extra = Vec::new();
-    if !ghidra.starts_with("/usr") {
-        extra.push(tools_dir.to_path_buf());
+    let promotion =
+        fs::rename(project, &target_project).and_then(|()| fs::rename(export, &target_export));
+    if let Err(error) = promotion {
+        if target_project.exists() {
+            fs::remove_dir_all(&target_project).map_err(|cleanup| format!("Ghidra promotion failed: {error}; new project cleanup failed: {cleanup}; prior project retained at {}", backup.display()))?;
+        }
+        if previous {
+            fs::rename(&backup, &target_project).map_err(|restore| format!("Ghidra promotion failed: {error}; prior project restore failed: {restore}; preserved at {}", backup.display()))?;
+        }
+        return Err(format!(
+            "Ghidra export promotion failed: {error}; prior result preserved"
+        ));
     }
-    super::jobs::run_sandboxed(
-        &ghidra,
-        &args,
-        work,
-        &extra,
-        &env,
-        Duration::from_secs(180),
-        cancel,
-    )?;
-    if cancel.load(Ordering::Relaxed) {
-        return Err("cancelled".into());
-    }
-    let text = fs::read_to_string(&export).map_err(|_| {
-        "Ghidra produced no decompilation. The sparse plan file is not a result.".to_string()
-    })?;
-    if !text
-        .lines()
-        .any(|line| line.starts_with("@@ANTINOMIE-FUNCTION"))
-        && !text.contains("@@ANTINOMIE-TIMEOUT")
-        && !text.contains("@@ANTINOMIE-BASE")
-    {
-        return Err("Ghidra export has no function marker.".into());
-    }
-    Ok(text)
+    Ok(())
 }
 
 fn find_ghidra(tools_dir: &Path) -> Result<std::path::PathBuf, String> {
@@ -932,6 +1013,24 @@ mod sparse_tests {
         let kept_before = std::fs::read(&kept).ok();
         let work = std::env::temp_dir().join("antinomie-ghidra-cancel");
         let _ = std::fs::remove_dir_all(&work);
+        crate::storage::private_dir(&work).unwrap();
+        let previous = kept_before.clone().unwrap_or_else(|| {
+            b"@@ANTINOMIE-FUNCTION\t4194304\t1\tprevious\nprevious successful result\n".to_vec()
+        });
+        std::fs::write(work.join("decompiled.txt"), &previous).unwrap();
+        let original_project = kept.parent().unwrap().join("ghidra-project");
+        if original_project.is_dir() {
+            super::super::export::copy_project(&original_project, &work.join("ghidra-project"))
+                .unwrap();
+        } else {
+            std::fs::create_dir(work.join("ghidra-project")).unwrap();
+            std::fs::write(
+                work.join("ghidra-project/antinomie.gpr"),
+                b"prior project sentinel",
+            )
+            .unwrap();
+        }
+        let previous_project = std::fs::read(work.join("ghidra-project/antinomie.gpr")).unwrap();
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let cancel_thread = std::sync::Arc::clone(&cancel);
         std::thread::spawn(move || {
@@ -946,14 +1045,36 @@ mod sparse_tests {
         )
         .expect_err("cancellation must not return an export");
         assert!(error.contains("cancelled"), "{error}");
-        assert!(!work.join("decompiled.txt").is_file());
+        assert_eq!(
+            std::fs::read(work.join("decompiled.txt")).unwrap(),
+            previous
+        );
+        assert_eq!(
+            std::fs::read(work.join("ghidra-project/antinomie.gpr")).unwrap(),
+            previous_project
+        );
+        assert!(!std::fs::read_dir(&work).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("ghidra-attempt-")
+        }));
+        let logs: Vec<_> = std::fs::read_dir(&work)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "log"))
+            .collect();
+        assert_eq!(logs.len(), 1);
+        assert!(std::fs::metadata(&logs[0]).unwrap().len() <= 2 * 1024 * 1024);
+        assert!(error.contains(&logs[0].display().to_string()), "{error}");
         if let Some(before) = kept_before {
             assert_eq!(std::fs::read(&kept).unwrap(), before);
         }
     }
 
     #[test]
-    fn ghidra_script_failure_is_not_a_successful_load() {
+    fn ghidra_export_promotion_failure_is_not_a_successful_load() {
         if std::env::var_os("ANTINOMIE_GHIDRA").is_none() {
             return;
         }
@@ -963,6 +1084,12 @@ mod sparse_tests {
         std::fs::write(&core, elf_core()).unwrap();
         let work = dir.join("work");
         std::fs::create_dir_all(work.join("decompiled.txt")).unwrap();
+        std::fs::create_dir(work.join("ghidra-project")).unwrap();
+        std::fs::write(
+            work.join("ghidra-project/antinomie.gpr"),
+            b"prior successful project",
+        )
+        .unwrap();
         let cancel = std::sync::atomic::AtomicBool::new(false);
         let error = super::decompile_captured_core(
             &core,
@@ -976,6 +1103,64 @@ mod sparse_tests {
             "{error}"
         );
         assert!(work.join("sparse-plan.txt").is_file());
+        assert_eq!(
+            std::fs::read(work.join("ghidra-project/antinomie.gpr")).unwrap(),
+            b"prior successful project"
+        );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ghidra_invalid_argument_retains_real_failure_diagnostics_when_requested() {
+        if std::env::var_os("ANTINOMIE_GHIDRA").is_none() {
+            return;
+        }
+        let work = std::env::temp_dir().join(format!(
+            "antinomie-ghidra-failure-log-{}",
+            crate::storage::unique_id()
+        ));
+        crate::storage::private_dir(&work).unwrap();
+        let home = work.join("home");
+        crate::storage::private_dir(&home).unwrap();
+        let home_s = home.to_string_lossy();
+        let ghidra = find_ghidra(Path::new("/tmp/no-antinomie-tools")).unwrap();
+        let error = super::super::jobs::run_sandboxed(
+            &ghidra,
+            &[
+                work.to_string_lossy().into_owned(),
+                "antinomie".into(),
+                "-antinomie-deliberately-invalid-option".into(),
+            ],
+            &work,
+            &[],
+            &[
+                ("HOME", &home_s),
+                (
+                    "JAVA_TOOL_OPTIONS",
+                    "-Xmx2g -XX:ReservedCodeCacheSize=256m -XX:CompressedClassSpaceSize=256m",
+                ),
+            ],
+            Duration::from_secs(30),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .expect_err("installed Ghidra must reject an invalid invocation");
+        let logs: Vec<_> = std::fs::read_dir(&work)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "log"))
+            .collect();
+        assert_eq!(logs.len(), 1);
+        let log = std::fs::read_to_string(&logs[0]).unwrap();
+        let diagnostic = log.to_lowercase();
+        assert!(
+            diagnostic.contains("argument")
+                || diagnostic.contains("usage")
+                || diagnostic.contains("invalid"),
+            "{log}"
+        );
+        assert!(error.contains(&logs[0].display().to_string()), "{error}");
+        assert!(error.contains("not a load result"), "{error}");
+        assert!(std::fs::metadata(&logs[0]).unwrap().len() <= 2 * 1024 * 1024);
+        std::fs::remove_dir_all(work).unwrap();
     }
 }

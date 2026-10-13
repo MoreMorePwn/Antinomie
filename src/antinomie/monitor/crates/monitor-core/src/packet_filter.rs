@@ -6,7 +6,10 @@ use crate::network::{self, NetworkPacket};
 use std::{
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
-    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
+    os::{
+        fd::AsFd,
+        unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
+    },
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -302,6 +305,7 @@ struct Shared {
     stop: Arc<AtomicBool>,
     result: Mutex<Option<PacketFilterEvent>>,
     fields: Mutex<FieldRegistry>,
+    cleanup_error: Mutex<Option<String>>,
 }
 
 /// One latest-request-only worker. Child processes have deadlines, bounded
@@ -324,6 +328,7 @@ impl PacketFilterWorker {
             stop: Arc::new(AtomicBool::new(false)),
             result: Mutex::new(None),
             fields: Mutex::new(FieldRegistry::Loading),
+            cleanup_error: Mutex::new(None),
         });
         let worker = Arc::clone(&shared);
         let thread = thread::Builder::new()
@@ -428,6 +433,15 @@ impl PacketFilterWorker {
     }
 
     pub fn fields(&self) -> FieldRegistry {
+        if let Some(error) = self
+            .shared
+            .cleanup_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
+            return FieldRegistry::Unavailable(error);
+        }
         self.shared
             .fields
             .lock()
@@ -538,6 +552,7 @@ pub fn stream_fields(
         stop: cancel,
         result: Mutex::new(None),
         fields: Mutex::new(FieldRegistry::Loading),
+        cleanup_error: Mutex::new(None),
     };
     let snapshot = make_snapshot(identity, &shared, 0, live)?;
     let mut command = Command::new("tshark");
@@ -864,12 +879,85 @@ fn read_lines(
     }
 }
 
+const CLEANUP_BUDGET: Duration = Duration::from_secs(1);
+
+/// The parser sees ordinary blocking Read semantics, with a bounded abort check.
+struct ProcessReader<R> {
+    inner: R,
+    abort: Arc<AtomicBool>,
+}
+impl<R: Read + AsFd> ProcessReader<R> {
+    fn new(inner: R, abort: Arc<AtomicBool>) -> Result<Self, String> {
+        let flags = rustix::fs::fcntl_getfl(&inner).map_err(|e| e.to_string())?;
+        rustix::fs::fcntl_setfl(&inner, flags | rustix::fs::OFlags::NONBLOCK)
+            .map_err(|e| e.to_string())?;
+        Ok(Self { inner, abort })
+    }
+}
+impl<R: Read> Read for ProcessReader<R> {
+    fn read(&mut self, data: &mut [u8]) -> std::io::Result<usize> {
+        if data.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            if self.abort.load(Ordering::Acquire) {
+                return Err(std::io::Error::other(
+                    "packet output stopped for process cleanup",
+                ));
+            }
+            match self.inner.read(data) {
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                result => return result,
+            }
+        }
+    }
+}
+
+fn cleanup_process(
+    process: &mut crate::sandbox_process::SandboxProcess,
+    shared: &Shared,
+    reason: &str,
+) -> Result<(), String> {
+    let started = Instant::now();
+    let mut failure = None;
+    loop {
+        match process.cleanup_poll() {
+            Ok(true) => {
+                *shared
+                    .cleanup_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = None;
+                return failure.map_or(Ok(()), Err);
+            }
+            Ok(false) => {}
+            Err(error) => failure = Some(error),
+        }
+        if failure.is_some() || started.elapsed() >= CLEANUP_BUDGET {
+            let detail = failure
+                .as_deref()
+                .unwrap_or("termination/reaping exceeded cleanup budget");
+            *shared
+                .cleanup_error
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) =
+                Some(format!("{reason}; cleanup pending: {detail}"));
+            thread::sleep(Duration::from_millis(250));
+        } else {
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
 fn run_process<T: Send + 'static>(
     command: Command,
     shared: &Shared,
     generation: Option<u64>,
     deadline: Duration,
-    read_output: impl FnOnce(std::process::ChildStdout) -> Result<T, String> + Send + 'static,
+    read_output: impl FnOnce(ProcessReader<std::process::ChildStdout>) -> Result<T, String>
+    + Send
+    + 'static,
 ) -> Result<T, String> {
     crate::dependencies::require_tool(Path::new(command.get_program()), "tshark").map_err(
         |error| format!("TShark unavailable: {error}. Install tshark to enable display filters"),
@@ -923,6 +1011,7 @@ fn run_process<T: Send + 'static>(
             }
         }
     }
+    let launch = crate::sandbox_process::prepare(&mut bounded)?;
     bounded
         .arg("--")
         .arg(command.get_program())
@@ -950,16 +1039,36 @@ fn run_process<T: Send + 'static>(
     bounded
         .env_remove("WIRESHARK_DATA_DIR")
         .env_remove("WIRESHARK_RUN_FROM_BUILD_DIRECTORY");
-    let mut child = bounded
-        .stdin(Stdio::null())
+    let child = bounded
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| {
             format!("bounded TShark runtime is unavailable: {e}. Install tshark, bubblewrap and util-linux (prlimit) to enable display filters")
         })?;
-    let stdout = child.stdout.take().expect("piped TShark stdout");
-    let stderr = child.stderr.take().expect("piped TShark stderr");
+    // Command retains configured stream descriptors; release its info writer so
+    // EOF reflects only the sandbox monitor, not this owner's command builder.
+    drop(bounded);
+    let mut process = crate::sandbox_process::SandboxProcess::adopt(child, launch);
+    let stdout = process.take_stdout().expect("piped TShark stdout");
+    let stderr = process.take_stderr().expect("piped TShark stderr");
+    let abort = Arc::new(AtomicBool::new(false));
+    let stdout = match ProcessReader::new(stdout, Arc::clone(&abort)) {
+        Ok(stdout) => stdout,
+        Err(error) => {
+            cleanup_process(&mut process, shared, &error)
+                .map_err(|cleanup| format!("{error}; {cleanup}"))?;
+            return Err(error);
+        }
+    };
+    let stderr = match ProcessReader::new(stderr, Arc::clone(&abort)) {
+        Ok(stderr) => stderr,
+        Err(error) => {
+            cleanup_process(&mut process, shared, &error)
+                .map_err(|cleanup| format!("{error}; {cleanup}"))?;
+            return Err(error);
+        }
+    };
     let parser_failed = Arc::new(AtomicBool::new(false));
     let failed = Arc::clone(&parser_failed);
     let output = match thread::Builder::new()
@@ -971,9 +1080,11 @@ fn run_process<T: Send + 'static>(
         }) {
         Ok(thread) => thread,
         Err(error) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(format!("TShark output worker: {error}"));
+            let reason = format!("TShark output worker: {error}");
+            abort.store(true, Ordering::Release);
+            cleanup_process(&mut process, shared, &reason)
+                .map_err(|cleanup| format!("{reason}; {cleanup}"))?;
+            return Err(reason);
         }
     };
     let errors = match thread::Builder::new()
@@ -995,56 +1106,63 @@ fn run_process<T: Send + 'static>(
         }) {
         Ok(thread) => thread,
         Err(error) => {
-            let _ = child.kill();
-            let _ = child.wait();
+            let reason = format!("TShark diagnostic worker: {error}");
+            abort.store(true, Ordering::Release);
+            let cleanup = cleanup_process(&mut process, shared, &reason);
             let _ = output.join();
-            return Err(format!("TShark diagnostic worker: {error}"));
+            cleanup.map_err(|cleanup| format!("{reason}; {cleanup}"))?;
+            return Err(reason);
         }
     };
     let started = Instant::now();
+    let mut exit_status = None;
     let status = loop {
-        if parser_failed.load(Ordering::Acquire) {
-            let _ = child.kill();
-            let reaped = child.wait();
-            let result = output.join().map_err(|_| "TShark output reader stopped")?;
+        let cancelled =
+            shared.stop.load(Ordering::Acquire) || generation.is_some_and(|g| cancelled(shared, g));
+        // Freeze the triggering reason before cleanup/drain time can pass a deadline.
+        let reason = if cancelled {
+            Some("packet filtering cancelled".to_string())
+        } else if started.elapsed() >= deadline {
+            Some("TShark evaluation timed out after its bounded deadline".to_string())
+        } else if parser_failed.load(Ordering::Acquire) {
+            Some("TShark output parser failed".to_string())
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            abort.store(true, Ordering::Release);
+            let cleanup = cleanup_process(&mut process, shared, &reason);
+            let parsed = output.join().map_err(|_| "TShark output reader stopped")?;
             let _ = errors.join();
-            reaped.map_err(|e| format!("TShark reap after parser failure: {e}"))?;
-            return result;
-        }
-        if shared.stop.load(Ordering::Acquire)
-            || generation.is_some_and(|g| cancelled(shared, g))
-            || started.elapsed() >= deadline
-        {
-            let kill = child.kill();
-            let wait = child.wait();
-            let _ = output.join();
-            let _ = errors.join();
-            if let Err(error) = wait {
-                return Err(format!("TShark reap: {error}"));
-            }
-            if let Err(error) = kill
-                && error.kind() != std::io::ErrorKind::InvalidInput
-            {
-                return Err(format!("TShark termination: {error}"));
-            }
-            return Err(if started.elapsed() >= deadline {
-                "TShark evaluation timed out after its bounded deadline"
+            cleanup.map_err(|error| format!("{reason}; {error}"))?;
+            return if reason == "TShark output parser failed" {
+                parsed
             } else {
-                "packet filtering cancelled"
-            }
-            .into());
+                Err(reason)
+            };
         }
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => thread::sleep(Duration::from_millis(20)),
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
+        let polled = process.poll_status();
+        match polled {
+            Ok(Some(status)) => exit_status = Some(status),
+            Ok(None) => {}
+            Err(reason) => {
+                abort.store(true, Ordering::Release);
+                let cleanup = cleanup_process(&mut process, shared, &reason);
                 let _ = output.join();
                 let _ = errors.join();
-                return Err(format!("TShark status: {error}"));
+                cleanup.map_err(|error| format!("{reason}; {error}"))?;
+                return Err(reason);
             }
         }
+        // Continue enforcing cancellation/deadline until both readers finish,
+        // even if an exited launcher left a namespace child holding its pipes.
+        if let Some(status) = exit_status
+            && output.is_finished()
+            && errors.is_finished()
+        {
+            break status;
+        }
+        thread::sleep(Duration::from_millis(20));
     };
     let diagnostics = errors
         .join()
@@ -1070,6 +1188,7 @@ fn run_process<T: Send + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::net::UnixStream;
 
     fn shared() -> Shared {
         Shared {
@@ -1079,7 +1198,37 @@ mod tests {
             stop: Arc::new(AtomicBool::new(false)),
             result: Mutex::new(None),
             fields: Mutex::new(FieldRegistry::Loading),
+            cleanup_error: Mutex::new(None),
         }
+    }
+
+    #[test]
+    fn packet_filter_cleanup_notice_preserves_registry_and_clears_after_reap() {
+        let worker = PacketFilterWorker {
+            shared: Arc::new(shared()),
+            thread: None,
+        };
+        let registry = Arc::new(vec![PacketField {
+            name: "frame.number".into(),
+            kind: "FT_UINT32".into(),
+            description: "Frame number".into(),
+        }]);
+        *worker.shared.fields.lock().unwrap() = FieldRegistry::Ready(Arc::clone(&registry));
+        *worker.shared.cleanup_error.lock().unwrap() = Some("cleanup pending".into());
+        assert!(
+            matches!(worker.fields(), FieldRegistry::Unavailable(message) if message == "cleanup pending")
+        );
+        *worker.shared.cleanup_error.lock().unwrap() = None;
+        assert!(
+            matches!(worker.fields(), FieldRegistry::Ready(fields) if Arc::ptr_eq(&fields, &registry))
+        );
+        *worker.shared.cleanup_error.lock().unwrap() = Some("cleanup pending".into());
+        *worker.shared.fields.lock().unwrap() =
+            FieldRegistry::Unavailable("registry discovery failed".into());
+        *worker.shared.cleanup_error.lock().unwrap() = None;
+        assert!(
+            matches!(worker.fields(), FieldRegistry::Unavailable(message) if message == "registry discovery failed")
+        );
     }
 
     fn ipv4(src: [u8; 4], dst: [u8; 4], transport: u8, payload: &[u8]) -> Vec<u8> {
@@ -1307,6 +1456,34 @@ mod tests {
     }
 
     #[test]
+    fn packet_filter_reader_abort_is_bounded_while_another_writer_stays_open() {
+        let (reader, writer) = UnixStream::pair().unwrap();
+        let abort = Arc::new(AtomicBool::new(false));
+        let mut reader = ProcessReader::new(reader, Arc::clone(&abort)).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
+            let mut output = Vec::new();
+            let result = reader.read_to_end(&mut output);
+            sender.send(result).unwrap();
+        });
+        thread::sleep(Duration::from_millis(20));
+        let started = Instant::now();
+        abort.store(true, Ordering::Release);
+        let result = receiver.recv_timeout(Duration::from_millis(500));
+        // Close the writer even on failure so a failed test cannot strand a reader.
+        drop(writer);
+        worker.join().unwrap();
+        assert!(
+            result
+                .unwrap()
+                .unwrap_err()
+                .to_string()
+                .contains("process cleanup")
+        );
+        assert!(started.elapsed() < Duration::from_millis(500));
+    }
+
+    #[test]
     fn packet_filter_missing_engine_and_cancelled_process_are_errors() {
         let state = shared();
         assert!(
@@ -1325,8 +1502,9 @@ mod tests {
         let result = run_process(command, &state, Some(0), Duration::from_secs(2), |reader| {
             read_lines(reader, |_| Ok(()))
         });
-        assert!(result.unwrap_err().contains("cancelled"));
-        assert!(started.elapsed() < Duration::from_secs(2));
+        let error = result.unwrap_err();
+        assert!(error.contains("cancelled"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(2), "{error}");
         setter.join().unwrap();
     }
 

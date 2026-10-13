@@ -4,7 +4,7 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
-## 0.6.0 — Unreleased
+## 0.6.0 — 2026-10-14
 
 - **VM Summary.** A Summary tab immediately before Run History shows selected VM
   status, base, network and configured CPU/RAM/disk. Active VM health reports
@@ -22,12 +22,15 @@ it runs.
   context actions. Invalid expressions retain the previous valid result.
   Native syscall argument names come from the pinned schema; captured structure
   members use checked x86-64 layouts. Missing capture bytes remain unavailable.
+  Syscall predicates scan every retained call in a cancellable worker; pages
+  and counts reflect all matching calls, including matches beyond the first page.
   Volatility queries and sorting cover every retained row with bounded pages.
 - **Wireshark packet filters.** An installed TShark supplies its display-filter
   grammar and field glossary. Filtering runs in an isolated, resource-bounded
   background job over the whole capture; live captures use a complete-record
   prefix. Capture names/tags have a separate Record filter. Original PCAP files
-  remain intact; quick text search is labeled separately.
+  remain intact; quick text search is labeled separately. Cancellation confirms
+  sandbox child termination before reporting cleanup complete.
 - **Triage and BPF.** Process, file, HTTP and DNS views read complete retained
   recordings with refresh controls, paged results and versioned findings linked
   to their evidence. Classic socket/seccomp and eBPF instruction views provide
@@ -39,6 +42,15 @@ it runs.
 - **Retained-result navigation.** Run/capture selection updates Details and
   supports keyboard navigation. Labels, related-run links, mapping/function
   filters and export/directory actions preserve original evidence identity.
+- **Core analysis and exports.** Genuine process cores support on-demand
+  disassembly and sandboxed Ghidra decompilation, with saved function lists,
+  colored code, horizontal scrolling and native project exports. Exported
+  projects use the current account's ownership metadata so Ghidra can reopen
+  them; original evidence stays unchanged. Failed or cancelled jobs retain
+  earlier successful results and bounded diagnostic logs. Per-process memory
+  and file-descriptor limits apply to external analysis jobs. Isolated workers
+  retain process ownership through cancellation and shutdown, including setup
+  failures; incomplete cleanup remains visible and blocks new workers.
 - **Live Dump core.** The toolbar and Core dumps offer a process picker for
   pause/capture/resume using exact guest identities. Requires revision 16; older
   bases display the reason capture is unavailable. Repeated cores have separate
@@ -59,6 +71,8 @@ it runs.
   Core dumps use Memory's resizable capture sidebar and right-hand analysis area.
   Import controls open in a dialog; mappings and function lists are resizable,
   and analysis controls stay reachable at large font sizes.
+  Unfinished captures update automatically as retained metadata and memory become
+  available, preserving loaded thread, mapping, code and filter selections.
 - **Bounded core acquisition.** Linux's memory filter remains effective. The
   default 64 MiB/5-second serialization limits retain explicit partial results;
   four handles and 128 MiB bound guest reservations. Thread rendezvous and faulting
@@ -71,6 +85,12 @@ it runs.
   reconnect validate guest identity before reading into a fresh evidence timeline;
   earlier files remain retained. Launch/arm side effects are never replayed.
   Transfers preserve available prefixes, hashes and quota/failure information.
+- **Reliable status and imports.** Late run-status replies remain associated
+  with their original run and execution generation, and successful recovery
+  clears that poll's stale diagnostic. CLI base imports wait for the verified
+  result instead of reporting failure while a large desktop image is still
+  being installed. Long status messages stay within the space beside the
+  right-aligned loss counters and retain their complete text on hover.
 
 ## 0.5.0 — 2026-10-12
 

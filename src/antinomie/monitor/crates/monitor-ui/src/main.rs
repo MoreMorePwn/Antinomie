@@ -27,10 +27,7 @@ mod workspace;
 
 use antinomie_monitor_core::{Backend, BackendOptions, Command, Notification};
 use clap::Parser;
-use std::{
-    path::PathBuf,
-    time::{Duration, Instant},
-};
+use std::{path::PathBuf, time::Duration};
 
 #[derive(Parser)]
 #[command(
@@ -118,28 +115,84 @@ fn main() -> eframe::Result<()> {
 fn install_base(options: BackendOptions, directory: PathBuf) -> Result<(), String> {
     let mut backend = Backend::new(options)?;
     let id = backend.send(Command::ImportBase { directory })?;
-    let deadline = Instant::now() + Duration::from_secs(120);
-    let result = loop {
+    // Copying and verifying a desktop image can exceed two minutes. The worker
+    // owns that operation until completion, including during shutdown, so a
+    // frontend deadline cannot cancel it or truthfully report its outcome.
+    let result = wait_for_base_import(id, |timeout| backend.recv_timeout(timeout));
+    let shutdown = backend.shutdown();
+    match (result, shutdown) {
+        (Ok(message), Ok(())) => {
+            println!("{message}");
+            Ok(())
+        }
+        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+        (Err(error), Err(shutdown)) => Err(format!("{error}; shutdown: {shutdown}")),
+    }
+}
+
+fn wait_for_base_import(
+    id: u64,
+    mut receive: impl FnMut(Duration) -> Result<Option<Notification>, String>,
+) -> Result<String, String> {
+    loop {
         if let Some(Notification::CommandResult {
             id: reply,
             success,
             message,
-        }) = backend.try_recv()
+        }) = receive(Duration::from_secs(1))?
         {
             if reply == id {
-                break if success {
-                    println!("{message}");
-                    Ok(())
-                } else {
-                    Err(message)
-                };
+                return if success { Ok(message) } else { Err(message) };
             }
         }
-        if Instant::now() >= deadline {
-            break Err("base import timed out".into());
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
-    backend.shutdown()?;
-    result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base_import_waits_past_two_minutes_of_receive_timeouts_for_its_result() {
+        let mut polls = 0;
+        let result = wait_for_base_import(7, |timeout| {
+            assert_eq!(timeout, Duration::from_secs(1));
+            polls += 1;
+            Ok((polls > 130).then(|| Notification::CommandResult {
+                id: 7,
+                success: true,
+                message: "base imported".into(),
+            }))
+        });
+        assert_eq!(result.as_deref(), Ok("base imported"));
+        assert_eq!(polls, 131);
+    }
+
+    #[test]
+    fn base_import_ignores_other_commands_and_preserves_its_failure() {
+        let mut notifications = [
+            Notification::CommandResult {
+                id: 6,
+                success: true,
+                message: "another command completed".into(),
+            },
+            Notification::CommandResult {
+                id: 7,
+                success: false,
+                message: "bundle changed during import; copies rejected".into(),
+            },
+        ]
+        .into_iter();
+        let result = wait_for_base_import(7, |_| Ok(notifications.next()));
+        assert_eq!(
+            result,
+            Err("bundle changed during import; copies rejected".into())
+        );
+    }
+
+    #[test]
+    fn base_import_reports_disconnected_worker_without_claiming_success() {
+        let result = wait_for_base_import(7, |_| Err("backend owner disconnected".into()));
+        assert_eq!(result, Err("backend owner disconnected".into()));
+    }
 }

@@ -306,6 +306,7 @@ impl Session {
             pending_overflow: false,
             terminal_cursor: 0,
             late_reads: BTreeMap::new(),
+            run_status_poll: RunStatusPoll::default(),
             last_process_save: Instant::now(),
             network_bytes_done: 0,
             network_bytes: 0,
@@ -320,6 +321,7 @@ impl Session {
         })
     }
     fn forget_unanswered(&mut self) {
+        self.run_status_poll.forget_unanswered();
         for cookie in std::mem::take(&mut self.late_reads).into_values() {
             if let Some(run) = self.runs.get_mut(&cookie) {
                 run.terminal_reads_unanswered = run.terminal_reads_unanswered.saturating_add(1);

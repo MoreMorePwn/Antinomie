@@ -78,6 +78,21 @@ their notices does not authorize removal of those requirements.
 
 ## Other components and release gate
 
+The 0.6.0 archive includes the complete Linux dependency notice inventory in
+`LICENSES/third-party/locked-dependencies-0.6.0.tar.gz`. It records the 459
+resolved third-party crates, checked against the locked package checksums,
+their retained upstream license/notice texts and the embedded font/rule notices.
+Two published MIT packages provide their declaration without a separate license
+text; their unchanged published packages and canonical MIT terms are retained.
+The inventory records the exact provenance and preserves combined license terms.
+It contains public third-party material, without Antinomie's private host source.
+
+Guest kernel source, exact bootstrap/desktop package sources and guest notices
+are supplied alongside the 0.6.0 bases at
+https://huggingface.co/buckets/MoreMorePwn/antinomie-bases/tree/sources/0.6.0.
+The source inventory associates each distributed base with its exact kernel
+configuration, patch series and package versions.
+
 Static-analysis executable parsing uses `object 0.40.0` with read/std features
 only (no write, build or automatic compression). The MIT option is selected;
 its unmodified locked crate notice is retained in

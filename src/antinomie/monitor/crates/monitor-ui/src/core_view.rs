@@ -6,7 +6,9 @@ use antinomie_monitor_core::{ProcessCoreCapture, ProcessCorePhase};
 use eframe::egui::{self, RichText};
 use std::{
     fs,
+    hash::Hasher,
     io::{Read, Write},
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -22,8 +24,7 @@ const WINDOW_SIZE: u64 = 16 * 1024 * 1024;
 const DISASSEMBLY_BYTES: usize = 65536;
 const FUNCTION_DISASSEMBLY_LIMIT: u64 = 65536;
 enum Reply {
-    Records(CoreCatalog),
-    Open(Box<CoreRecord>, String),
+    Open(Box<CoreRecord>, String, Option<CoreFileStamp>),
     Chosen(Option<PathBuf>),
     Page(u64, Vec<Option<u8>>),
     Code(String),
@@ -31,7 +32,118 @@ enum Reply {
     Done(String),
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CoreFileStamp {
+    device: u64,
+    inode: u64,
+    file_size: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
+
+/// Called only by inspection/catalog workers, never by the rendering path.
+fn core_file_stamp(path: &Path) -> Option<CoreFileStamp> {
+    let metadata = fs::metadata(path).ok()?;
+    metadata.is_file().then(|| CoreFileStamp {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        file_size: metadata.len(),
+        modified: (metadata.mtime(), metadata.mtime_nsec()),
+        changed: (metadata.ctime(), metadata.ctime_nsec()),
+    })
+}
+
+fn opened_reply(record: CoreRecord, code: String) -> Reply {
+    let stamp = core_file_stamp(&record.core.source)
+        .filter(|stamp| stamp.file_size == record.core.source_size);
+    Reply::Open(Box::new(record), code, stamp)
+}
+
+type CatalogStamp = u64;
+
+struct InspectionReply {
+    generation: u64,
+    roots: Vec<PathBuf>,
+    vm_id: Option<String>,
+    initialized: bool,
+    selected_stamp: Option<CoreFileStamp>,
+    result: Result<Reply, String>,
+}
+
+struct SelectedCoreRefresh {
+    directory: PathBuf,
+    source: PathBuf,
+    previous_stamp: Option<CoreFileStamp>,
+    stamp: Option<CoreFileStamp>,
+    core: Result<Option<CoreDump>, String>,
+}
+
+struct SelectedCoreProbe {
+    directory: PathBuf,
+    source: PathBuf,
+    source_size: u64,
+    stamp: Option<CoreFileStamp>,
+}
+
+struct CatalogReply {
+    generation: u64,
+    roots: Vec<PathBuf>,
+    vm_id: Option<String>,
+    catalog: Result<CoreCatalog, String>,
+    stamp: Option<CatalogStamp>,
+    selected: Option<SelectedCoreRefresh>,
+}
+
+fn catalog_stamp(catalog: &CoreCatalog) -> Option<CatalogStamp> {
+    // Hash the bounded decoded metadata, not a later filesystem timestamp:
+    // a sidecar can be sealed while a catalog worker is reading its old value.
+    struct MetadataHash(std::collections::hash_map::DefaultHasher);
+    impl Write for MetadataHash {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.write(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut hash = MetadataHash(std::collections::hash_map::DefaultHasher::new());
+    serde_json::to_writer(&mut hash, catalog).ok()?;
+    Some(hash.0.finish())
+}
+
+fn selected_core_refresh(probe: SelectedCoreProbe) -> SelectedCoreRefresh {
+    let stamp = core_file_stamp(&probe.source);
+    let core = if stamp == probe.stamp
+        && stamp.is_some_and(|stamp| stamp.file_size == probe.source_size)
+    {
+        Ok(None)
+    } else if probe.stamp.is_none()
+        && stamp.is_some_and(|stamp| stamp.file_size == probe.source_size)
+    {
+        // A restored view may have no stamp yet. Establish its baseline without
+        // inspecting unchanged bytes; ordinary opens carry their worker stamp.
+        Ok(None)
+    } else {
+        CoreDump::open(&probe.source)
+            .map(Some)
+            .map_err(|error| error.to_string())
+    };
+    SelectedCoreRefresh {
+        directory: probe.directory,
+        source: probe.source,
+        previous_stamp: probe.stamp,
+        stamp: stamp.filter(|stamp| {
+            core.as_ref()
+                .ok()
+                .and_then(|core| core.as_ref())
+                .is_none_or(|core| core.source_size == stamp.file_size)
+        }),
+        core,
+    }
+}
+
+#[derive(Default, serde::Serialize)]
 struct CoreCatalog {
     imported: Vec<CoreRecord>,
     acquired: Vec<AcquiredCore>,
@@ -66,7 +178,7 @@ fn manual_status(core: &ProcessCoreCapture) -> String {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize)]
 struct AcquiredCore {
     vm_id: String,
     boot_id: String,
@@ -233,14 +345,19 @@ pub(crate) struct CoreView {
     roots: Vec<PathBuf>,
     vm_id: Option<String>,
     catalog_checked: Option<Instant>,
+    catalog_generation: u64,
+    scope_generation: u64,
+    scope_initialized: bool,
+    catalog_stamp: Option<CatalogStamp>,
     records: Vec<CoreRecord>,
     acquired: Vec<AcquiredCore>,
     manual: Vec<ProcessCoreCapture>,
     catalog_issues: Vec<String>,
     selected: Option<CoreRecord>,
+    selected_stamp: Option<CoreFileStamp>,
     selected_directory: Option<PathBuf>,
     import_open: bool,
-    job: Option<Receiver<Result<Reply, String>>>,
+    job: Option<Receiver<InspectionReply>>,
     status: String,
     source_path: String,
     destination: usize,
@@ -255,11 +372,12 @@ pub(crate) struct CoreView {
     functions: Vec<CoreFunction>,
     symbol_status: String,
     hide_list: bool,
-    catalog_job: Option<Receiver<Result<CoreCatalog, String>>>,
+    catalog_job: Option<Receiver<CatalogReply>>,
     function_bodies: Vec<String>,
     code_function: Option<usize>,
     show_decompiled: bool,
     cancelled: Arc<AtomicBool>,
+    project_export_active: bool,
     /// Function address chosen by a click, decoded once when no job is running.
     pending_function_decode: Option<u64>,
     /// Address already given to `decode_window`, so later frames do not restart it.
@@ -323,7 +441,7 @@ impl CoreView {
                 }
                 None => acquired_record(&source)?,
             };
-            Ok(Reply::Open(Box::new(record), String::new()))
+            Ok(opened_reply(record, String::new()))
         });
     }
 
@@ -332,10 +450,25 @@ impl CoreView {
             return;
         }
         let (sender, receiver) = mpsc::sync_channel(1);
+        let generation = self.scope_generation;
+        let initialized = self.scope_initialized;
+        let roots = self.roots.clone();
+        let vm_id = self.vm_id.clone();
+        let selected_stamp = self.selected_stamp;
         match std::thread::Builder::new()
             .name("core-inspection".into())
             .spawn(move || {
-                if sender.send(work()).is_err() {
+                if sender
+                    .send(InspectionReply {
+                        generation,
+                        roots,
+                        vm_id,
+                        initialized,
+                        selected_stamp,
+                        result: work(),
+                    })
+                    .is_err()
+                {
                     eprintln!("core inspection view closed before job completed");
                 }
             }) {
@@ -350,21 +483,49 @@ impl CoreView {
         let result = match receiver.try_recv() {
             Ok(result) => result,
             Err(mpsc::TryRecvError::Empty) => return,
-            Err(mpsc::TryRecvError::Disconnected) => {
-                Err("core inspection worker stopped unexpectedly".into())
-            }
+            Err(mpsc::TryRecvError::Disconnected) => InspectionReply {
+                generation: self.scope_generation,
+                roots: self.roots.clone(),
+                vm_id: self.vm_id.clone(),
+                initialized: self.scope_initialized,
+                selected_stamp: self.selected_stamp,
+                result: Err("core inspection worker stopped unexpectedly".into()),
+            },
         };
         self.job = None;
         self.decompile_active = false;
-        match result {
+        if self.project_export_active {
+            self.cancelled.store(false, Ordering::Relaxed);
+        }
+        self.project_export_active = false;
+        if result.generation != self.scope_generation
+            || (result.initialized && (result.roots != self.roots || result.vm_id != self.vm_id))
+        {
+            return;
+        }
+        // An operation started before the panel's first scope is adopted only
+        // when its opened record belongs to that scope's recording roots.
+        if !result.initialized && self.scope_initialized {
+            if let Ok(Reply::Open(record, _, _)) = &result.result {
+                if !self.roots.iter().any(|root| record.dir.starts_with(root)) {
+                    return;
+                }
+            }
+        }
+        // A byte-page worker can finish after the selected file has grown.
+        if matches!(&result.result, Ok(Reply::Page(_, _)))
+            && result.selected_stamp != self.selected_stamp
+        {
+            return;
+        }
+        match result.result {
             Err(error) => self.status = error,
-            Ok(Reply::Records(catalog)) => self.apply_catalog(catalog),
             Ok(Reply::Chosen(path)) => {
                 if let Some(path) = path {
                     self.source_path = path.display().to_string();
                 }
             }
-            Ok(Reply::Open(record, code)) => {
+            Ok(Reply::Open(record, code, stamp)) => {
                 let record = *record;
                 if record.core.source.parent() != Some(record.dir.as_path())
                     && !self.records.iter().any(|old| old.dir == record.dir)
@@ -379,6 +540,7 @@ impl CoreView {
                     .map_or_else(String::new, |address| format!("{address:x}"));
                 self.selected_directory = Some(record.dir.clone());
                 self.selected = Some(record);
+                self.selected_stamp = stamp;
                 self.import_open = false;
                 self.thread_index = 0;
                 self.mapping_index = 0;
@@ -401,10 +563,7 @@ impl CoreView {
                     self.code_function = self.functions.first().map(|_| 0);
                     self.show_decompiled = true;
                     self.code = text;
-                    self.symbol_status = format!(
-                        "{} functions from Ghidra. Names follow Ghidra's default analysis.",
-                        self.functions.len()
-                    );
+                    self.symbol_status = format!("{} Ghidra functions", self.functions.len());
                 }
             }
             Ok(Reply::Page(address, data)) => self.page = Some((address, data)),
@@ -420,10 +579,7 @@ impl CoreView {
                 self.code_function = self.functions.first().map(|_| 0);
                 self.show_decompiled = true;
                 self.code = text;
-                self.symbol_status = format!(
-                    "{} functions from Ghidra. Names follow Ghidra's default analysis.",
-                    self.functions.len()
-                );
+                self.symbol_status = format!("{} Ghidra functions", self.functions.len());
                 self.status = "Decompilation saved in the result directory.".into();
             }
             Ok(Reply::Done(message)) => self.status = message,
@@ -435,12 +591,30 @@ impl CoreView {
             return;
         }
         let (sender, receiver) = mpsc::sync_channel(1);
+        let generation = self.catalog_generation;
         let roots = self.roots.clone();
         let vm_id = self.vm_id.clone();
+        let selected = self.selected.as_ref().map(|record| SelectedCoreProbe {
+            directory: record.dir.clone(),
+            source: record.core.source.clone(),
+            source_size: record.core.source_size,
+            stamp: self.selected_stamp,
+        });
+        self.catalog_checked = Some(Instant::now());
         if std::thread::Builder::new()
             .name("core-catalog".into())
             .spawn(move || {
-                let _ = sender.send(catalog(&roots, vm_id.as_deref()));
+                let catalog = catalog(&roots, vm_id.as_deref());
+                let stamp = catalog.as_ref().ok().and_then(catalog_stamp);
+                let selected = selected.map(selected_core_refresh);
+                let _ = sender.send(CatalogReply {
+                    generation,
+                    roots,
+                    vm_id,
+                    catalog,
+                    stamp,
+                    selected,
+                });
             })
             .is_err()
         {
@@ -454,8 +628,8 @@ impl CoreView {
         let Some(receiver) = self.catalog_job.as_ref() else {
             return;
         };
-        let result = match receiver.try_recv() {
-            Ok(result) => result,
+        let reply = match receiver.try_recv() {
+            Ok(reply) => reply,
             Err(mpsc::TryRecvError::Empty) => return,
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.catalog_job = None;
@@ -463,10 +637,162 @@ impl CoreView {
             }
         };
         self.catalog_job = None;
-        match result {
-            Ok(catalog) => self.apply_catalog(catalog),
+        if reply.generation != self.catalog_generation
+            || reply.roots != self.roots
+            || reply.vm_id != self.vm_id
+        {
+            return;
+        }
+        self.catalog_checked = Some(Instant::now());
+        match reply.catalog {
+            Ok(catalog) => {
+                if reply.stamp.is_none()
+                    || self.catalog_stamp != reply.stamp
+                    || self.catalog_issues != catalog.issues
+                {
+                    self.apply_catalog(catalog);
+                    self.catalog_stamp = reply.stamp;
+                }
+            }
             Err(error) => self.status = error,
         }
+        if let Some(refresh) = reply.selected {
+            self.apply_selected_refresh(refresh);
+        }
+    }
+
+    fn apply_selected_refresh(&mut self, refresh: SelectedCoreRefresh) {
+        let Some(record) = self.selected.as_mut() else {
+            return;
+        };
+        if record.dir != refresh.directory
+            || record.core.source != refresh.source
+            || self.selected_stamp != refresh.previous_stamp
+        {
+            return;
+        }
+        match refresh.core {
+            Ok(Some(core)) => {
+                let tid = record
+                    .core
+                    .threads
+                    .get(self.thread_index)
+                    .map(|thread| thread.tid);
+                let mapping = record.core.mappings.get(self.mapping_index).map(|mapping| {
+                    (
+                        mapping.start,
+                        mapping.file_offset,
+                        mapping.memory_size,
+                        mapping.flags,
+                    )
+                });
+                self.thread_index = tid
+                    .and_then(|tid| core.threads.iter().position(|thread| thread.tid == tid))
+                    .unwrap_or(0);
+                self.mapping_index = mapping
+                    .and_then(|identity| {
+                        core.mappings.iter().position(|mapping| {
+                            (
+                                mapping.start,
+                                mapping.file_offset,
+                                mapping.memory_size,
+                                mapping.flags,
+                            ) == identity
+                        })
+                    })
+                    .unwrap_or(0);
+                if let Some(mapping) = core.mappings.get(self.mapping_index) {
+                    self.window_offset = self
+                        .window_offset
+                        .min(mapping.memory_size.saturating_sub(1) / 16 * 16);
+                }
+                record.core = core;
+                self.selected_stamp = refresh.stamp;
+                self.page = None;
+            }
+            Ok(None) => self.selected_stamp = refresh.stamp,
+            Err(error) => self.status = format!("Core metadata refresh: {error}"),
+        }
+    }
+
+    fn invalidate_catalog(&mut self) {
+        self.catalog_generation = self.catalog_generation.wrapping_add(1);
+        self.catalog_checked = None;
+    }
+
+    fn set_catalog_scope(&mut self, roots: &[PathBuf], vm_id: Option<&str>) {
+        if self.roots == roots && self.vm_id.as_deref() == vm_id {
+            return;
+        }
+        let changed_vm = self.scope_initialized && self.vm_id.as_deref() != vm_id;
+        if self.scope_initialized {
+            self.scope_generation = self.scope_generation.wrapping_add(1);
+        }
+        self.scope_initialized = true;
+        self.invalidate_catalog();
+        self.catalog_stamp = None;
+        self.acquired.clear();
+        self.manual.clear();
+        self.records.clear();
+        self.catalog_issues.clear();
+        self.import_open = false;
+        if changed_vm
+            || self
+                .selected_directory
+                .as_ref()
+                .is_some_and(|directory| !roots.iter().any(|root| directory.starts_with(root)))
+        {
+            self.selected = None;
+            self.selected_directory = None;
+            self.selected_stamp = None;
+        }
+        self.roots = roots.to_vec();
+        self.vm_id = vm_id.map(str::to_owned);
+        if self.destination >= self.roots.len() {
+            self.destination = 0;
+        }
+    }
+
+    fn catalog_interval(&self, active: bool) -> Option<Duration> {
+        let unfinished = self
+            .manual
+            .iter()
+            .any(|capture| capture.phase != ProcessCorePhase::Finished)
+            || self.acquired.iter().any(|capture| {
+                matches!(
+                    capture.state,
+                    antinomie_monitor_core::RunArtifactState::Queued
+                        | antinomie_monitor_core::RunArtifactState::WaitingForRootExit
+                        | antinomie_monitor_core::RunArtifactState::InProgress
+                )
+            });
+        if unfinished {
+            Some(Duration::from_secs(1))
+        } else if active {
+            Some(Duration::from_secs(5))
+        } else {
+            None
+        }
+    }
+
+    fn refresh_catalog_if_due(&mut self, active: bool, now: Instant) -> Option<Duration> {
+        let interval = self.catalog_interval(active);
+        let due = self.catalog_checked.is_none()
+            || interval.is_some_and(|interval| {
+                self.catalog_checked
+                    .is_some_and(|checked| now.saturating_duration_since(checked) >= interval)
+            });
+        if due && self.catalog_job.is_none() {
+            self.start_catalog();
+        }
+        if self.catalog_job.is_some() {
+            return Some(Duration::from_millis(200));
+        }
+        interval.map(|interval| {
+            interval.saturating_sub(self.catalog_checked.map_or(Duration::ZERO, |checked| {
+                now.saturating_duration_since(checked)
+            }))
+        })
     }
 
     /// Disk catalog is authoritative inside the recording roots it scanned.
@@ -521,7 +847,7 @@ impl CoreView {
     /// | `ui` | Core panel surface |
     /// | `recording_roots` | User-configured durable recording directories |
     /// | `vm_id` | Selected VM identity; filters all retained capture records |
-    /// | `active` | Kept for the caller. A running VM no longer repaints this panel on a timer. |
+    /// | `active` | Enables bounded background discovery; unfinished metadata refreshes sooner. |
     /// | `controls` | Acquisition availability and owned live capture statuses |
     /// | Return | Optional capture/cancel intent for the backend owner |
     pub(crate) fn show(
@@ -529,46 +855,13 @@ impl CoreView {
         ui: &mut egui::Ui,
         recording_roots: &[PathBuf],
         vm_id: Option<&str>,
-        _active: bool,
+        active: bool,
         controls: CoreControls<'_>,
     ) -> Option<CoreAction> {
+        // Invalidate scope before consuming any reply from the previous VM.
+        self.set_catalog_scope(recording_roots, vm_id);
         self.poll();
         self.poll_catalog();
-        // A timer here used to redraw the whole panel every five seconds.
-        // Refresh the catalog when the VM or recording roots change, and
-        // keep painting only while a job is actually running.
-        if self.catalog_job.is_some() {
-            ui.ctx().request_repaint_after(Duration::from_millis(200));
-        }
-        if self.job.is_some() {
-            ui.ctx().request_repaint_after(Duration::from_millis(75));
-        }
-        let changed = self.roots != recording_roots || self.vm_id.as_deref() != vm_id;
-        let refresh = self.catalog_job.is_none() && self.catalog_checked.is_none();
-        if changed || refresh {
-            if changed {
-                self.acquired.clear();
-                self.manual.clear();
-                self.records.clear();
-                self.catalog_issues.clear();
-                self.import_open = false;
-                if self.selected_directory.as_ref().is_some_and(|directory| {
-                    !recording_roots
-                        .iter()
-                        .any(|root| directory.starts_with(root))
-                }) {
-                    self.selected = None;
-                    self.selected_directory = None;
-                }
-            }
-            self.roots = recording_roots.to_vec();
-            if self.destination >= self.roots.len() {
-                self.destination = 0;
-            }
-            self.vm_id = vm_id.map(str::to_owned);
-            self.catalog_checked = Some(Instant::now());
-            self.start_catalog();
-        }
         for capture in controls
             .captures
             .iter()
@@ -585,6 +878,12 @@ impl CoreView {
             }
         }
         self.manual.truncate(4096);
+        if let Some(delay) = self.refresh_catalog_if_due(active, Instant::now()) {
+            ui.ctx().request_repaint_after(delay);
+        }
+        if self.job.is_some() {
+            ui.ctx().request_repaint_after(Duration::from_millis(75));
+        }
         let mut action = None;
         self.list_toolbar(ui);
         if !self.hide_list {
@@ -666,9 +965,9 @@ impl CoreView {
                     .on_hover_text("Refresh the list")
                     .clicked()
                 {
-                    let roots = self.roots.clone();
-                    let vm_id = self.vm_id.clone();
-                    self.start(move || catalog(&roots, vm_id.as_deref()).map(Reply::Records));
+                    self.invalidate_catalog();
+                    self.start_catalog();
+                    ui.ctx().request_repaint_after(Duration::from_millis(200));
                 }
             });
         });
@@ -705,14 +1004,18 @@ impl CoreView {
             self.status.clear();
         }
         if self.job.is_some() {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.spinner();
                 ui.label("Working…");
+                if self.project_export_active && ui.button("Cancel export").clicked() {
+                    self.cancelled.store(true, Ordering::Relaxed);
+                }
             });
         }
         let mut acquired_selection = None;
         let mut imported_selection = None;
         let mut file_action: Option<(bool, PathBuf)> = None;
+        let mut project_action = None;
         let font_size = egui::TextStyle::Body.resolve(ui.style()).size;
         let mut fields = crate::query::LABEL_FIELDS.to_vec();
         fields.extend(crate::query::CAPTURE_FIELDS);
@@ -821,6 +1124,7 @@ impl CoreView {
                         crate::evidence::menu(ui, &core.directory);
                         crate::query::table_row_menu(ui, filter_id, &manual_filter_row(ui, core));
                         core_file_menu(ui, core_file.as_deref(), &mut file_action);
+                        core_project_menu(ui, &core.directory, self.job.is_none(), &mut project_action);
                         if core.phase != ProcessCorePhase::Finished && can_cancel
                             && ui.button("Cancel capture and resume").clicked() {
                             action = Some(CoreAction::Cancel(core.id.clone()));
@@ -851,6 +1155,7 @@ impl CoreView {
                         crate::evidence::menu(ui, &core.directory);
                         crate::query::table_row_menu(ui, filter_id, &acquired_filter_row(ui, core));
                         core_file_menu(ui, core_file.as_deref(), &mut file_action);
+                        core_project_menu(ui, &core.directory, self.job.is_none(), &mut project_action);
                     });
                     if row.clicked() && self.job.is_none() {
                         acquired_selection = Some((core.directory.clone(), core.file.clone()));
@@ -873,6 +1178,7 @@ impl CoreView {
                         crate::evidence::menu(ui, &record.dir);
                         crate::query::table_row_menu(ui, filter_id, &imported_filter_row(ui, record));
                         core_file_menu(ui, Some(&core_file), &mut file_action);
+                        core_project_menu(ui, &record.dir, self.job.is_none(), &mut project_action);
                     });
                     if row.clicked() && self.job.is_none() {
                         imported_selection = Some(record.clone());
@@ -904,7 +1210,7 @@ impl CoreView {
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
                     Err(error) => return Err(error.to_string()),
                 };
-                Ok(Reply::Open(Box::new(record), code))
+                Ok(opened_reply(record, code))
             });
         }
         if let Some((export, path)) = file_action {
@@ -917,7 +1223,46 @@ impl CoreView {
                 });
             }
         }
+        if let Some(source) = project_action {
+            self.export_project(source);
+        }
         action
+    }
+
+    fn export_project(&mut self, source: PathBuf) {
+        if self.job.is_some() {
+            return;
+        }
+        self.cancelled.store(false, Ordering::Relaxed);
+        self.project_export_active = true;
+        let cancelled = Arc::clone(&self.cancelled);
+        self.start(move || {
+            let Some(destination) = choose_path(
+                true,
+                "Export Ghidra project — choose a new directory path",
+                &cancelled,
+            )?
+            else {
+                return Ok(Reply::Done("Ghidra project export cancelled.".into()));
+            };
+            if cancelled.load(Ordering::Relaxed) {
+                return Ok(Reply::Done("Ghidra project export cancelled.".into()));
+            }
+            antinomie_monitor_core::analysis::copy_project(&source, &destination)?;
+            if cancelled.load(Ordering::Relaxed) {
+                fs::remove_dir_all(&destination).map_err(|error| {
+                    format!("Ghidra export cancelled; partial project cleanup failed: {error}")
+                })?;
+                return Ok(Reply::Done("Ghidra project export cancelled.".into()));
+            }
+            Ok(Reply::Done(format!(
+                "Exported Ghidra project to {}",
+                destination.display()
+            )))
+        });
+        if self.job.is_none() {
+            self.project_export_active = false;
+        }
     }
 
     fn export_source(&mut self, source: PathBuf) {
@@ -1001,7 +1346,7 @@ impl CoreView {
                     if ui.add_enabled(self.job.is_none() && self.roots.get(self.destination).is_some() && !self.source_path.trim().is_empty(), egui::Button::new("Import core")).clicked() {
                         if let Some(root) = self.roots.get(self.destination).cloned() {
                             let path = crate::folders::user_path(&self.source_path);
-                            self.start(move || CoreRecord::import(&path, &root).map(|record| Reply::Open(Box::new(record), String::new())).map_err(|error| error.to_string()));
+                            self.start(move || CoreRecord::import(&path, &root).map(|record| opened_reply(record, String::new())).map_err(|error| error.to_string()));
                         }
                     }
                     cancel = ui.button(if self.job.is_some() { "Close" } else { "Cancel" }).clicked();
@@ -1471,15 +1816,38 @@ impl CoreView {
                 ..Default::default()
             }))
             .show_inside(ui, |ui| {
-                let filter = crate::query::table_filter(ui, ("core-function-filter", &record.dir), "Filter functions", FUNCTION_FIELDS, &[]);
-                let filter_id = ui.id().with(("table-filter", ("core-function-filter", &record.dir)));
-                let shown: Vec<_> = self.functions.iter().enumerate().filter(|(_, function)| filter.keep_table(&function_filter_row(function))).map(|(index, _)| index).collect();
-                ui.weak(format!("{} / {} functions", shown.len(), self.functions.len()));
-                if self.code_function.is_some_and(|index| !shown.contains(&index)) {
-                    self.code_function = None; self.pending_function_decode = None;
+                let filter = crate::query::table_filter(
+                    ui,
+                    ("core-function-filter", &record.dir),
+                    "Filter functions",
+                    FUNCTION_FIELDS,
+                    &[],
+                );
+                let filter_id = ui
+                    .id()
+                    .with(("table-filter", ("core-function-filter", &record.dir)));
+                let shown: Vec<_> = self
+                    .functions
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, function)| filter.keep_table(&function_filter_row(function)))
+                    .map(|(index, _)| index)
+                    .collect();
+                ui.weak(format!(
+                    "{} / {} functions",
+                    shown.len(),
+                    self.functions.len()
+                ));
+                if self
+                    .code_function
+                    .is_some_and(|index| !shown.contains(&index))
+                {
+                    self.code_function = None;
+                    self.pending_function_decode = None;
                     self.status = "The selected function is hidden by this filter.".into();
                 }
-                filtered_without_selection = shown.len() != self.functions.len() && self.code_function.is_none();
+                filtered_without_selection =
+                    shown.len() != self.functions.len() && self.code_function.is_none();
                 if ui.button("Export functions").clicked() {
                     match export_saved_functions(&record.dir) {
                         Ok(path) => {
@@ -1489,9 +1857,10 @@ impl CoreView {
                     }
                 }
                 if self.functions.is_empty() {
-                    ui.add(egui::Label::new("No function symbols loaded. Decompile with Ghidra to name functions from its default analysis.").wrap());
+                    ui.add(egui::Label::new("No functions indexed").wrap());
                 }
-                let row_height = ui.text_style_height(&egui::TextStyle::Body) * 4.0 + ui.spacing().item_spacing.y * 2.0;
+                let row_height = ui.text_style_height(&egui::TextStyle::Body) * 4.0
+                    + ui.spacing().item_spacing.y * 2.0;
                 egui::ScrollArea::vertical()
                     .id_salt("core-functions")
                     .show_rows(ui, row_height, shown.len(), |ui, range| {
@@ -1502,8 +1871,15 @@ impl CoreView {
                                 "symbol {}\naddress {:x}\nmodule not recorded\n{} octets",
                                 function.name, function.address, function.size
                             );
-                            let response = ui.selectable_label(self.code_function == Some(index), label);
-                            response.context_menu(|ui| crate::query::table_row_menu(ui, filter_id, &function_filter_row(function)));
+                            let response =
+                                ui.selectable_label(self.code_function == Some(index), label);
+                            response.context_menu(|ui| {
+                                crate::query::table_row_menu(
+                                    ui,
+                                    filter_id,
+                                    &function_filter_row(function),
+                                )
+                            });
                             if response.clicked() {
                                 let address = function.address;
                                 self.code_function = Some(index);
@@ -1585,7 +1961,7 @@ impl CoreView {
                         .code_function
                         .and_then(|index| self.function_bodies.get(index))
                         .map(String::as_str)
-                        .unwrap_or("Select a function. Names follow Ghidra's default analysis.");
+                        .unwrap_or("Select a function.");
                     paint_source(ui, body);
                 } else {
                     let lines = self.asm_lines();
@@ -1877,8 +2253,14 @@ fn mapping_choices(core: &CoreDump) -> Vec<(String, String)> {
             let permissions = mapping.permissions();
             let shown = if name == "unknown" || name.starts_with("unknown ") {
                 "unknown".to_owned()
-            } else {
+            } else if name.ends_with(" file extents)") {
                 name.clone()
+            } else {
+                Path::new(&name)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(&name)
+                    .to_owned()
             };
             let label = format!(
                 "mmap {:x}-{:x} {permissions} [{shown}]",
@@ -1953,6 +2335,24 @@ fn core_file_menu(ui: &mut egui::Ui, file: Option<&Path>, action: &mut Option<(b
     }
     if ui.button("Export core…").clicked() {
         *action = Some((true, file.to_owned()));
+        ui.close_menu();
+    }
+}
+
+fn core_project_menu(
+    ui: &mut egui::Ui,
+    directory: &Path,
+    enabled: bool,
+    action: &mut Option<PathBuf>,
+) {
+    let source = directory.join("ghidra-project");
+    if source.join("antinomie.gpr").is_file()
+        && source.join("antinomie.rep").is_dir()
+        && ui
+            .add_enabled(enabled, egui::Button::new("Export Ghidra project…"))
+            .clicked()
+    {
+        *action = Some(source);
         ui.close_menu();
     }
 }
@@ -2314,7 +2714,17 @@ fn notes_table(ui: &mut egui::Ui, record: &CoreRecord, query: &mut String) {
         ui.data_mut(|data| data.remove::<NoteRow>(selection_id));
     }
 
+    let selected_detail = ui.data(|data| data.get_temp::<NoteRow>(selection_id));
+    let detail_height = if selected_detail.is_some() {
+        160.0
+    } else {
+        0.0
+    };
+    let header_height =
+        ui.text_style_height(&egui::TextStyle::Body).max(20.0) + ui.spacing().item_spacing.y;
+    let table_height = (ui.available_height() - detail_height - header_height).max(80.0);
     TableBuilder::new(ui)
+        .max_scroll_height(table_height)
         .striped(true)
         .sense(egui::Sense::click())
         .column(Column::auto().at_least(64.0))
@@ -2389,7 +2799,13 @@ fn notes_table(ui: &mut egui::Ui, record: &CoreRecord, query: &mut String) {
         egui::CollapsingHeader::new("Selected note")
             .default_open(true)
             .show(ui, |ui| {
-                ui.add(egui::Label::new(detail).selectable(true).wrap());
+                egui::ScrollArea::vertical()
+                    .id_salt(("core-note-detail-scroll", &record.dir))
+                    .max_height(128.0)
+                    .show(ui, |ui| {
+                        ui.set_max_width((ui.clip_rect().right() - ui.max_rect().left()).max(80.0));
+                        ui.add(egui::Label::new(detail).selectable(true).wrap());
+                    });
             });
     }
 }
@@ -2465,7 +2881,7 @@ fn paint_source(ui: &mut egui::Ui, body: &str) {
                         },
                     );
                 }
-                ui.label(job);
+                ui.add(egui::Label::new(job).extend());
             }
         });
 }
@@ -2639,8 +3055,11 @@ impl Drop for CoreView {
     }
 }
 fn choose_file(save: bool, cancelled: &AtomicBool) -> Result<Option<PathBuf>, String> {
+    choose_path(save, "Select process core", cancelled)
+}
+fn choose_path(save: bool, title: &str, cancelled: &AtomicBool) -> Result<Option<PathBuf>, String> {
     let mut command = Command::new("zenity");
-    command.args(["--file-selection", "--title=Select process core"]);
+    command.args(["--file-selection", "--title", title]);
     if save {
         command.args(["--save", "--confirm-overwrite"]);
     }
@@ -2726,6 +3145,402 @@ mod tests {
     struct Fixture {
         view: CoreView,
         directory: PathBuf,
+    }
+
+    fn wait_catalog(view: &mut CoreView) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while view.catalog_job.is_some() {
+            view.poll_catalog();
+            assert!(Instant::now() < deadline, "catalog worker did not finish");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn timed_refresh(view: &mut CoreView, active: bool) {
+        let now = view.catalog_checked.unwrap_or_else(Instant::now) + Duration::from_secs(5);
+        view.refresh_catalog_if_due(active, now);
+        assert!(
+            view.catalog_job.is_some(),
+            "a due refresh starts without clicking Refresh"
+        );
+        wait_catalog(view);
+    }
+
+    fn growing_elf(path: &Path) -> usize {
+        // Two real PRSTATUS notes and two PT_LOAD mappings; the second load is
+        // advertised as 32 octets but initially only its first 16 are retained.
+        let note_offset = 64 + 3 * 56;
+        let payload_offset = note_offset + 2 * 356;
+        let mut data = vec![0u8; payload_offset + 32];
+        data[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+        data[16..18].copy_from_slice(&4u16.to_le_bytes());
+        data[18..20].copy_from_slice(&62u16.to_le_bytes());
+        data[32..40].copy_from_slice(&64u64.to_le_bytes());
+        data[54..56].copy_from_slice(&56u16.to_le_bytes());
+        data[56..58].copy_from_slice(&3u16.to_le_bytes());
+        data[64..68].copy_from_slice(&4u32.to_le_bytes());
+        data[72..80].copy_from_slice(&(note_offset as u64).to_le_bytes());
+        data[96..104].copy_from_slice(&712u64.to_le_bytes());
+        for index in 0..2 {
+            let header = 120 + index * 56;
+            data[header..header + 4].copy_from_slice(&1u32.to_le_bytes());
+            data[header + 4..header + 8].copy_from_slice(&5u32.to_le_bytes());
+            data[header + 8..header + 16]
+                .copy_from_slice(&((payload_offset + index * 16) as u64).to_le_bytes());
+            data[header + 16..header + 24]
+                .copy_from_slice(&(0x400000u64 + index as u64 * 0x1000).to_le_bytes());
+            data[header + 32..header + 40]
+                .copy_from_slice(&(if index == 0 { 16u64 } else { 32u64 }).to_le_bytes());
+            data[header + 40..header + 48].copy_from_slice(&4096u64.to_le_bytes());
+            let note = note_offset + index * 356;
+            data[note..note + 4].copy_from_slice(&5u32.to_le_bytes());
+            data[note + 4..note + 8].copy_from_slice(&336u32.to_le_bytes());
+            data[note + 8..note + 12].copy_from_slice(&1u32.to_le_bytes());
+            data[note + 12..note + 17].copy_from_slice(b"CORE\0");
+            data[note + 52..note + 56].copy_from_slice(&(77u32 + index as u32).to_le_bytes());
+        }
+        fs::write(path, &data).unwrap();
+        data.len()
+    }
+
+    #[test]
+    fn live_catalog_tracks_real_capture_lifecycle_without_resetting_selection() {
+        use antinomie_monitor_core::RunArtifactState as State;
+        let mut fixture = Fixture::new();
+        let roots = vec![fixture.directory.clone()];
+        fixture.view.set_catalog_scope(&roots, Some("chosen"));
+        let selected = fixture.directory.join("runs/live/core");
+        fs::create_dir_all(&selected).unwrap();
+        fixture.view.selected = None;
+        fixture.view.selected_directory = Some(selected.clone());
+        fixture.view.code = "saved code".into();
+        fixture.view.notes_query = "pid == 123".into();
+        fixture.view.hide_list = true;
+        for state in [
+            State::WaitingForRootExit,
+            State::InProgress,
+            State::Complete,
+        ] {
+            let artifacts = antinomie_monitor_core::RunArtifacts {
+                vm_id: "chosen".into(),
+                boot_id: "boot".into(),
+                run_id: "live".into(),
+                core_state: state,
+                core_dump: (state != State::WaitingForRootExit)
+                    .then(|| selected.join("process.elf")),
+                ..Default::default()
+            };
+            fs::write(
+                selected.parent().unwrap().join("artifacts.json"),
+                serde_json::to_vec(&artifacts).unwrap(),
+            )
+            .unwrap();
+            // Deliberately not an ELF: catalog discovery must never parse it.
+            if state != State::WaitingForRootExit {
+                fs::write(selected.join("process.elf"), b"unfinished prefix").unwrap();
+            }
+            timed_refresh(&mut fixture.view, true);
+            assert_eq!(fixture.view.acquired[0].state, state);
+            assert_eq!(fixture.view.selected_directory.as_ref(), Some(&selected));
+            assert!(fixture.view.selected.is_none() && fixture.view.job.is_none());
+            assert_eq!(fixture.view.code, "saved code");
+            assert_eq!(fixture.view.notes_query, "pid == 123");
+            assert!(fixture.view.hide_list);
+        }
+        assert!(fixture.view.catalog_issues.is_empty());
+        assert_eq!(fixture.view.catalog_interval(false), None);
+        assert_eq!(
+            fixture.view.catalog_interval(true),
+            Some(Duration::from_secs(5))
+        );
+        assert!(!selected.join("metadata.json").exists());
+    }
+
+    #[test]
+    fn live_manual_metadata_refresh_keeps_loaded_inspection_and_filters() {
+        use antinomie_monitor_core::RunArtifactState as State;
+        let mut fixture = Fixture::new();
+        fixture
+            .view
+            .set_catalog_scope(&[fixture.directory.clone()], Some("chosen"));
+        fixture.view.selected_directory = Some(fixture.directory.clone());
+        fixture.view.thread_index = 1;
+        fixture.view.code = "saved analysis".into();
+        fixture.view.notes_query = "NT_FILE".into();
+        let directory = fixture.directory.join("core-captures/manual");
+        fs::create_dir_all(&directory).unwrap();
+        let mut capture = ProcessCoreCapture {
+            format: 1,
+            id: "manual".into(),
+            vm_id: "chosen".into(),
+            boot_id: "boot".into(),
+            source_run_id: None,
+            restored_from_capture_id: None,
+            target: antinomie_monitor_core::GuestProcessIdentity {
+                boot_id: "boot".into(),
+                task_cookie: 42,
+                tgid: 123,
+                start_boot_ns: 1,
+            },
+            directory: directory.clone(),
+            file: None,
+            state: State::WaitingForRootExit,
+            phase: ProcessCorePhase::Admission,
+            stored_size: 0,
+            guest_size: None,
+            sha256: None,
+            pause_released: None,
+            max_size: 1024 * 1024,
+            timeout_ms: 5000,
+            nonce: [1, 2],
+            guest_handle: None,
+            guest_status: None,
+            issue: None,
+        };
+        for (phase, state) in [
+            (ProcessCorePhase::Admission, State::WaitingForRootExit),
+            (ProcessCorePhase::Transfer, State::InProgress),
+            (ProcessCorePhase::Finished, State::Complete),
+        ] {
+            capture.phase = phase;
+            capture.state = state;
+            if phase == ProcessCorePhase::Finished {
+                capture.file = Some(directory.join("process.elf"));
+                capture.stored_size = 64;
+                capture.guest_size = Some(64);
+                capture.sha256 = Some("0".repeat(64));
+                capture.pause_released = Some(true);
+                fs::write(directory.join("process.elf"), [0; 64]).unwrap();
+            }
+            fs::write(
+                directory.join("core.json"),
+                serde_json::to_vec(&capture).unwrap(),
+            )
+            .unwrap();
+            timed_refresh(&mut fixture.view, true);
+            assert_eq!(fixture.view.manual[0].phase, phase);
+            assert_eq!(fixture.view.manual[0].state, state);
+            assert_eq!(
+                fixture.view.selected_directory.as_ref(),
+                Some(&fixture.directory)
+            );
+            assert_eq!(
+                fixture.view.selected.as_ref().unwrap().core.threads[fixture.view.thread_index].tid,
+                102
+            );
+            assert!(fixture.view.page.is_some());
+            assert_eq!(fixture.view.code, "saved analysis");
+            assert_eq!(fixture.view.notes_query, "NT_FILE");
+            assert!(fixture.view.job.is_none());
+        }
+        assert!(fixture.view.catalog_issues.is_empty());
+        assert_eq!(fixture.view.catalog_interval(false), None);
+    }
+
+    #[test]
+    fn initial_open_is_adopted_but_old_prefix_page_is_rejected() {
+        let mut fixture = Fixture::new();
+        let record = fixture.view.selected.as_ref().unwrap().clone();
+        fixture
+            .view
+            .start(move || Ok(opened_reply(record, String::new())));
+        fixture
+            .view
+            .set_catalog_scope(&[fixture.directory.clone()], Some("chosen"));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while fixture.view.job.is_some() {
+            fixture.view.poll();
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            fixture.view.selected.as_ref().unwrap().core.threads[0].tid,
+            101
+        );
+        let (release, wait) = mpsc::sync_channel(1);
+        fixture.view.start(move || {
+            wait.recv().unwrap();
+            Ok(Reply::Page(0x400000, vec![Some(0x90)]))
+        });
+        fixture.view.selected_stamp = None;
+        release.send(()).unwrap();
+        while fixture.view.job.is_some() {
+            fixture.view.poll();
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            fixture.view.page.is_none(),
+            "old prefix page cannot undo metadata invalidation"
+        );
+    }
+
+    #[test]
+    fn growing_selected_core_refreshes_prefix_and_preserves_loaded_view() {
+        let mut fixture = Fixture::new();
+        fixture
+            .view
+            .set_catalog_scope(&[fixture.directory.clone()], Some("chosen"));
+        let file = fixture.directory.join("growing.elf");
+        let initial_size = growing_elf(&file);
+        let mut record = fixture.view.selected.take().unwrap();
+        record.core = CoreDump::open(&file).unwrap();
+        fixture.view.selected_stamp = core_file_stamp(&file);
+        fixture.view.selected_directory = Some(record.dir.clone());
+        fixture.view.selected = Some(record);
+        fixture.view.thread_index = 1;
+        fixture.view.mapping_index = 1;
+        fixture.view.window_offset = 16;
+        fixture.view.code = "retained disassembly".into();
+        fixture.view.code_address = "401010".into();
+        fixture.view.notes_query = "tid == 78".into();
+        fixture.view.tab = Tab::Code;
+        fixture.view.hide_list = true;
+        timed_refresh(&mut fixture.view, true);
+        let catalog_stamp = fixture.view.catalog_stamp;
+        assert!(
+            fixture.view.page.is_some(),
+            "unchanged source preserves cached page"
+        );
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&file)
+            .unwrap()
+            .write_all(&[0x90; 16])
+            .unwrap();
+        timed_refresh(&mut fixture.view, true);
+        let core = &fixture.view.selected.as_ref().unwrap().core;
+        assert_eq!(core.source_size, initial_size as u64 + 16);
+        assert_eq!(core.threads[fixture.view.thread_index].tid, 78);
+        assert_eq!(core.mappings[fixture.view.mapping_index].start, 0x401000);
+        assert_eq!(core.mappings[1].available_size, 32);
+        assert_eq!(fixture.view.window_offset, 16);
+        assert_eq!(fixture.view.code, "retained disassembly");
+        assert_eq!(fixture.view.code_address, "401010");
+        assert_eq!(fixture.view.notes_query, "tid == 78");
+        assert!(fixture.view.tab == Tab::Code && fixture.view.hide_list);
+        assert_eq!(
+            fixture.view.catalog_stamp, catalog_stamp,
+            "source refresh works with unchanged catalog metadata"
+        );
+        assert!(fixture.view.page.is_none() && fixture.view.job.is_none());
+        // Malformed changed prefixes retain the last valid view and retry later.
+        fs::write(&file, b"invalid ELF").unwrap();
+        timed_refresh(&mut fixture.view, true);
+        assert_eq!(
+            fixture.view.selected.as_ref().unwrap().core.source_size,
+            initial_size as u64 + 16
+        );
+        assert!(fixture.view.status.starts_with("Core metadata refresh:"));
+    }
+
+    #[test]
+    fn parsed_size_mismatch_remains_dirty_even_with_equal_file_stamp() {
+        let fixture = Fixture::new();
+        let file = fixture.directory.join("growing.elf");
+        growing_elf(&file);
+        let record = acquired_record(&file).unwrap();
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&file)
+            .unwrap()
+            .write_all(&[0; 16])
+            .unwrap();
+        let current = core_file_stamp(&file);
+        assert!(matches!(
+            opened_reply(record.clone(), String::new()),
+            Reply::Open(_, _, None)
+        ));
+        let refresh = selected_core_refresh(SelectedCoreProbe {
+            directory: record.dir,
+            source: file,
+            source_size: record.core.source_size,
+            stamp: current,
+        });
+        assert_eq!(
+            refresh.core.unwrap().unwrap().source_size,
+            current.unwrap().file_size
+        );
+    }
+
+    #[test]
+    fn late_catalog_reply_is_rejected_for_vm_and_roots_and_current_refresh_is_queued() {
+        let mut fixture = Fixture::new();
+        let original_roots = vec![fixture.directory.clone()];
+        for (roots, vm) in [
+            (original_roots.clone(), "other-vm"),
+            (vec![fixture.directory.join("other-root")], "chosen"),
+        ] {
+            fixture
+                .view
+                .set_catalog_scope(&original_roots, Some("chosen"));
+            let (sender, receiver) = mpsc::sync_channel(1);
+            let stale = CatalogReply {
+                generation: fixture.view.catalog_generation,
+                roots: original_roots.clone(),
+                vm_id: Some("chosen".into()),
+                catalog: Ok(CoreCatalog {
+                    acquired: vec![AcquiredCore {
+                        vm_id: "chosen".into(),
+                        boot_id: "boot".into(),
+                        run_id: "stale".into(),
+                        directory: fixture.directory.join("old"),
+                        file: None,
+                        state: antinomie_monitor_core::RunArtifactState::WaitingForRootExit,
+                    }],
+                    ..Default::default()
+                }),
+                stamp: Some(123),
+                selected: None,
+            };
+            fixture.view.catalog_job = Some(receiver);
+            fixture.view.set_catalog_scope(&roots, Some(vm));
+            fixture.view.refresh_catalog_if_due(true, Instant::now());
+            sender.send(stale).unwrap();
+            fixture.view.poll_catalog();
+            assert!(fixture.view.acquired.is_empty());
+            assert!(fixture.view.catalog_checked.is_none());
+            fixture.view.refresh_catalog_if_due(true, Instant::now());
+            wait_catalog(&mut fixture.view);
+            assert!(fixture.view.acquired.is_empty());
+        }
+    }
+
+    #[test]
+    fn previous_vm_inspection_finishes_files_without_applying_open_code_or_decompiled() {
+        let mut fixture = Fixture::new();
+        let roots = vec![fixture.directory.clone()];
+        for reply in [
+            opened_reply(
+                fixture.view.selected.as_ref().unwrap().clone(),
+                "old open".into(),
+            ),
+            Reply::Code("old code".into()),
+            Reply::Decompiled("old decompilation".into()),
+        ] {
+            fixture.view.set_catalog_scope(&roots, Some("previous"));
+            let output = fixture.directory.join("completed-worker-output");
+            let worker_output = output.clone();
+            let (release, wait) = mpsc::sync_channel(1);
+            fixture.view.start(move || {
+                wait.recv().unwrap();
+                fs::write(worker_output, b"retained old operation output").unwrap();
+                Ok(reply)
+            });
+            fixture.view.set_catalog_scope(&roots, Some("current"));
+            fixture.view.code = "current selection".into();
+            release.send(()).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while fixture.view.job.is_some() {
+                fixture.view.poll();
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert_eq!(fs::read(&output).unwrap(), b"retained old operation output");
+            assert!(fixture.view.selected.is_none());
+            assert_eq!(fixture.view.code, "current selection");
+            assert!(fixture.view.functions.is_empty());
+        }
     }
 
     #[test]
@@ -3259,6 +4074,45 @@ mod tests {
     }
 
     #[test]
+    fn long_decompiled_lines_scroll_horizontally_at_large_font() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        crate::theme::text_size(&ctx, 24.0);
+        let mut fixture = Fixture::new();
+        fixture.view.tab = Tab::Code;
+        fixture.view.show_decompiled = true;
+        fixture.view.code_function = Some(0);
+        fixture.view.functions.push(CoreFunction {
+            address: 0x400000,
+            size: 16,
+            name: "FUN_00400000".into(),
+        });
+        let line = "return CONCAT44((int)(in_RAX >> 0x20), (int)uVar3) & 0x7fffffffffffffff;";
+        fixture.view.function_bodies.push(line.into());
+        fixture.view.code = line.into();
+        let output = settle(&ctx, &mut fixture.view, egui::vec2(800.0, 900.0));
+        let content = texts(&output);
+        let (_, rect) = content
+            .iter()
+            .find(|(text, _)| text == line)
+            .expect("retained decompiled line is rendered");
+        let font_id = egui::TextStyle::Monospace.resolve(&ctx.style());
+        let row_height = ctx.fonts(|fonts| fonts.row_height(&font_id));
+        assert!(
+            rect.height() <= row_height + 0.5,
+            "decompiled line stays one visual row: {rect:?}"
+        );
+        assert!(
+            rect.max.x > 800.0,
+            "long line extends beyond the viewport for horizontal scrolling: {rect:?}"
+        );
+        assert!(
+            fixture.view.job.is_none(),
+            "viewing saved decompilation starts no job"
+        );
+    }
+
+    #[test]
     fn viewing_code_does_not_decode_until_disassemble_is_clicked() {
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);
@@ -3273,7 +4127,7 @@ mod tests {
         let content = texts(&output);
         assert!(content
             .iter()
-            .any(|(text, _)| text.contains("No function symbols loaded")));
+            .any(|(text, _)| text.contains("No functions indexed")));
         let position = content
             .iter()
             .find(|(text, _)| text == "Disassemble captured code")
@@ -3341,8 +4195,7 @@ mod tests {
         let core = &fixture.view.selected.as_ref().unwrap().core;
         let choices = mapping_choices(core);
         assert!(
-            choices[0].0.starts_with("mmap 400000-")
-                && choices[0].0.contains("r-x [/synthetic/sample]"),
+            choices[0].0.starts_with("mmap 400000-") && choices[0].0.contains("r-x [sample]"),
             "{}",
             choices[0].0
         );
@@ -3375,6 +4228,18 @@ mod tests {
         let choices = mapping_choices(&duplicated);
         assert!(choices[0].0.contains("400000-"), "{}", choices[0].0);
         assert!(choices[1].0.contains("500000-"), "{}", choices[1].0);
+        assert!(choices
+            .iter()
+            .all(|(label, tip)| label.contains("[sample]") && tip == "/synthetic/sample"));
+        let mut ambiguous = core.clone();
+        let mut overlapping = ambiguous.files[0].clone();
+        overlapping.path = "/other/module".into();
+        ambiguous.files.push(overlapping);
+        let choices = mapping_choices(&ambiguous);
+        assert!(choices[0]
+            .0
+            .contains("[/synthetic/sample (+1 file extents)]"));
+        assert!(choices[0].1.contains("/synthetic/sample"));
         assert_eq!(captured_code_origin(&unnamed, ""), Ok(0x400000));
         unnamed.mappings[0].flags = 4;
         unnamed.threads[0].registers.clear();
@@ -3574,16 +4439,38 @@ mod tests {
             "genuine core missing: {}",
             source.display()
         );
-        let root = std::env::temp_dir().join(format!(
-            "antinomie-native-core-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir(&root).unwrap();
-        let record = CoreRecord::import(&source, &root).expect("import genuine core by reference");
+        let existing = std::env::var_os("ANTINOMIE_CORE_QA_RECORD_DIR").map(PathBuf::from);
+        let (root, record) = if let Some(directory) = existing {
+            let root = directory
+                .parent()
+                .and_then(Path::parent)
+                .expect("QA record is nested under a core-dumps catalog")
+                .to_owned();
+            assert_eq!(
+                directory.parent().and_then(Path::file_name),
+                Some(std::ffi::OsStr::new("core-dumps"))
+            );
+            let record = core_dump::list_records(std::slice::from_ref(&root))
+                .expect("list existing owned QA records")
+                .into_iter()
+                .find(|record| record.dir == directory)
+                .expect("requested QA record is in its catalog");
+            assert_eq!(record.core.source, fs::canonicalize(&source).unwrap());
+            (root, record)
+        } else {
+            let root = std::env::temp_dir().join(format!(
+                "antinomie-native-core-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir(&root).unwrap();
+            let record =
+                CoreRecord::import(&source, &root).expect("import genuine core by reference");
+            (root, record)
+        };
         let status_path = PathBuf::from("/tmp/antinomie-genuine-core-status");
         struct App {
             view: CoreView,
@@ -3606,6 +4493,7 @@ mod tests {
                         },
                     );
                 });
+                crate::evidence::dialogs(ctx);
                 let code_lines = self
                     .view
                     .code
@@ -3664,7 +4552,8 @@ mod tests {
                     "context" => Tab::Context,
                     _ => Tab::Code,
                 };
-                view.selected = Some(record);
+                view.records.push(record.clone());
+                view.open(&record.core.source);
                 Ok(Box::new(App {
                     view,
                     root,
