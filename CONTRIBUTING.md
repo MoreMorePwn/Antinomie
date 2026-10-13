@@ -266,6 +266,21 @@ limitations, snapshot id.
 
 ## 12. Versioning
 
+Start every new version on a fresh `release-X.Y.Z` branch before implementation:
+
+```bash
+scripts/new-release.sh X.Y.Z
+```
+
+Run the helper from the current release branch after committing existing work.
+It rejects invalid/non-increasing versions, dirty checkouts and existing local
+or fetched remote branches. It branches from the current reviewed source, not
+an assumed up-to-date `main`. Host, UI, guest and packaging changes for that
+release stay on its branch; do not reuse an older version's branch. Kernel author
+repositories likewise use `release-X.Y.Z` for the new release's guest work.
+The helper does not bump versions, push, open a PR or publish a release.
+Use project-focused branch names and commit messages without tool/model names.
+
 Antinomie uses semantic versioning. The one version number is
 `[workspace.package] version` in `src/antinomie/monitor/Cargo.toml`; the app
 shows it in its title bar, **Help > About Antinomie** and
@@ -308,6 +323,10 @@ checks that the tag matches the version, runs the tests, builds the archive
 with `scripts/build-release.sh` and publishes the GitHub release with the
 version's changelog section as notes. Bases are built and uploaded
 separately (see the base distribution notes).
+
+See [project layout](docs/project-layout.md) before retaining or cleaning build
+artifacts. Published tags remain immutable; housekeeping after publication does
+not replace the tag or imply that an existing release archive was rebuilt.
 
 Every push runs `.github/workflows/ci.yml` (`scripts/check-privacy.sh`,
 `cargo fmt --check`, strict Clippy, the release-mode tests, the build-script

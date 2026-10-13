@@ -15,13 +15,17 @@ accepted shared contract, disjoint ownership and coordinator review/integration.
 Do not implement a new version/redesign or unrelated fix without user approval;
 record proposed changes in Backlog. Reread guidance explicitly after updates.
 
-Read MONITOR-IMPLEMENTATION.md and CONTRIBUTING.md before changing code.
+Read docs/implementation.md and CONTRIBUTING.md before changing code.
 The implementation brief records accepted scope; ask the coordinator about
 contract changes instead of independently redesigning a neighboring module.
 
 ## Ownership and maintainability
 
-- Use neutral feature/version branch names and project-focused commit messages.
+- Every new application release starts on a fresh `release-X.Y.Z` branch before
+  versioned work begins; use `scripts/new-release.sh X.Y.Z` from the current
+  release branch. Keep each release's changes on that branch, including host,
+  guest and UI work. Do not reuse an older release branch for a newer version.
+- Use project-focused commit messages.
   Never include agent or model names in branch names, commit messages or trailers.
 - Rust: snake_case functions/fields/modules, PascalCase types, SCREAMING_SNAKE
   constants. Kernel: existing Linux conventions and checkpatch where applicable.
@@ -72,6 +76,9 @@ Skills are named here; agents find them in their own installed skills.
   documentation. No nested subagents. Preserve unrelated user changes.
 - Full kernel source trees and VM images stay outside tracked source files.
 - User-created persistent VM data never lives in disposable work/ build trees.
+- Follow docs/project-layout.md: `work/` and Cargo `target/` are disposable;
+  retain important source inputs, release provenance and reusable scripts in
+  explicitly named external cache/archive/release locations before cleaning.
 
 ## Licensing and provenance
 

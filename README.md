@@ -171,8 +171,14 @@ Panels can be dragged out into their own windows and docked back;
 
 Kernel changes, the patch workflow, building kernels and base images, and the
 test suites are described in [CONTRIBUTING.md](CONTRIBUTING.md) and
-[MONITOR-IMPLEMENTATION.md](MONITOR-IMPLEMENTATION.md). Coding agents follow
+[the implementation contract](docs/implementation.md). Coding agents follow
 [AGENTS.md](AGENTS.md).
+
+See [project layout and artifact retention](docs/project-layout.md) for the
+source/build/release boundaries. Each new version starts on its own
+`release-X.Y.Z` branch with `scripts/new-release.sh X.Y.Z`; finish and tag that
+version on the same branch. The helper creates the branch without bumping the
+application version or publishing anything.
 
 ## License
 
