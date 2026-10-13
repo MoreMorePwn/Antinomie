@@ -640,7 +640,12 @@ fn trend(
         response.rect.min + egui::vec2(3.0, font.size + 3.0),
         response.rect.max - egui::vec2(3.0, font.size + 4.0),
     );
-    let top = if kind == 0 {
+    let top = if !values
+        .iter()
+        .any(|value| value.is_some_and(|value| value.is_finite()))
+    {
+        "—".into()
+    } else if kind == 0 {
         format!("{scale:.0}%")
     } else {
         size(scale.max(0.0) as u64)
@@ -1139,6 +1144,12 @@ mod tests {
         assert!(!text.contains("Other VM recording failure"));
         assert!(!text.contains("123.4%"));
         assert!(!text.contains("Resource sample warning"));
+        assert!(
+            !texts
+                .iter()
+                .any(|(label, _)| label == "1 B" || label == "1%"),
+            "an empty chart must not display its internal fallback scale as a measurement"
+        );
     }
 
     #[test]
