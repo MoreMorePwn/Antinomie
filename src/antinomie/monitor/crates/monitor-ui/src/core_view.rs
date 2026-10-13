@@ -3574,9 +3574,15 @@ mod tests {
             "genuine core missing: {}",
             source.display()
         );
-        let root = PathBuf::from("/tmp/antinomie-t0066-recording");
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "antinomie-native-core-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&root).unwrap();
         let record = CoreRecord::import(&source, &root).expect("import genuine core by reference");
         let status_path = PathBuf::from("/tmp/antinomie-genuine-core-status");
         struct App {

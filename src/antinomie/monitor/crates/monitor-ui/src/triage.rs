@@ -2973,7 +2973,7 @@ fn scan_pcap_query(
                 }
             }
         }
-        if !field(19).is_empty() && field(22) == "0" {
+        if !field(19).is_empty() && tshark_boolean(field(22)) == Some(false) {
             let response_frame = field(28)
                 .split('\u{1f}')
                 .next()
@@ -2993,7 +2993,7 @@ fn scan_pcap_query(
                 let item = |column: usize| field(column).split('\u{1f}').nth(at).unwrap_or("");
                 let id = field(18).split('\u{1f}').next().and_then(parse_integer);
                 let protocol = if field(6).is_empty() { "UDP" } else { "TCP" };
-                let retry = field(30) == "1";
+                let retry = tshark_boolean(field(30));
                 let mut row = vec![
                     cell(format!("#{frame}"), theme::text(), true),
                     cell(
@@ -3014,7 +3014,15 @@ fn scan_pcap_query(
                     ),
                     cell(answers.join(", "), theme::text(), false),
                     cell(field(28), theme::text(), true),
-                    cell(if retry { "retry" } else { "query" }, theme::text(), false),
+                    cell(
+                        match retry {
+                            Some(true) => "retry",
+                            Some(false) => "query",
+                            None => "—",
+                        },
+                        theme::text(),
+                        false,
+                    ),
                 ];
                 row[0].values = vec![
                     ("frame.number", RowValue::Number(i128::from(frame))),
@@ -3033,7 +3041,7 @@ fn scan_pcap_query(
                         rcode.map_or(RowValue::Missing, |code| RowValue::Number(i128::from(code))),
                     ),
                     ("dns.answers", RowValue::List(answers.clone())),
-                    ("dns.retry", RowValue::Bool(retry)),
+                    ("dns.retry", retry.map_or(RowValue::Missing, RowValue::Bool)),
                 ];
                 if dns_query.keep_table(&row[0].values) {
                     keep_page(
@@ -3058,6 +3066,26 @@ fn text_value(text: &str) -> RowValue {
     } else {
         RowValue::Text(text.into())
     }
+}
+
+/// TShark releases format FT_BOOLEAN as textual True/False or numeric 1/0.
+/// An absent, malformed or mixed repeated field stays unknown.
+fn tshark_boolean(text: &str) -> Option<bool> {
+    let mut value = None;
+    for item in text.split('\u{1f}') {
+        let next = match item {
+            "1" => true,
+            "0" => false,
+            text if text.eq_ignore_ascii_case("true") => true,
+            text if text.eq_ignore_ascii_case("false") => false,
+            _ => return None,
+        };
+        if value.is_some_and(|value| value != next) {
+            return None;
+        }
+        value = Some(next);
+    }
+    value
 }
 fn parse_integer(text: &str) -> Option<i128> {
     if let Some(hex) = text.strip_prefix("0x") {
@@ -4517,6 +4545,152 @@ fn bpf_view(ui: &mut egui::Ui, input: &TriageInput<'_>, status: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tshark_boolean_formats_preserve_missing_and_reject_malformed_or_mixed_values() {
+        for text in ["False", "false", "FALSE", "0", "False\u{1f}0"] {
+            assert_eq!(tshark_boolean(text), Some(false));
+        }
+        for text in ["True", "true", "TRUE", "1", "True\u{1f}1"] {
+            assert_eq!(tshark_boolean(text), Some(true));
+        }
+        for text in ["", "2", "Falsehood", " True ", "False\u{1f}True", "0\u{1f}"] {
+            assert_eq!(tshark_boolean(text), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn real_tshark_dns_ipv4_ipv6_and_retry_rows_preserve_original_frames_and_responses() {
+        if !std::process::Command::new("tshark")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+        {
+            return;
+        }
+        let temp = PacketSpool::new().unwrap();
+        let path = temp.directory.join("dns.pcap");
+        std::fs::write(&path, dns_pcap()).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        for live in [false, true] {
+            let index = scan_pcap_query(&path, live, &cancel, &ScanRequest::default()).unwrap();
+            assert_eq!(index.dns.len(), 3, "{}", index.coverage);
+            assert_eq!(
+                index
+                    .dns
+                    .iter()
+                    .map(|row| row[0].text.as_str())
+                    .collect::<Vec<_>>(),
+                ["#1", "#2", "#4"]
+            );
+            assert!(index.dns.iter().all(|row| row[4].text == "example.com"));
+            assert_eq!(index.dns[0][10].text, "3");
+            assert_eq!(index.dns[2][10].text, "5");
+            assert!(index.dns[0][9].text.contains("93.184.216.34"));
+            assert!(index.dns[2][2].text.contains("::1"));
+            assert_eq!(index.dns[1][11].text, "retry");
+            assert!(
+                index.dns[1][0]
+                    .values
+                    .iter()
+                    .any(|(name, value)| *name == "dns.retry"
+                        && matches!(value, RowValue::Bool(true)))
+            );
+        }
+        let mut request = ScanRequest::default();
+        request.filters[4] = "dns.retry == true".into();
+        let index = scan_pcap_query(&path, false, &cancel, &request).unwrap();
+        assert_eq!(index.dns.len(), 1);
+        assert_eq!(index.dns[0][0].text, "#2");
+    }
+
+    fn dns_pcap() -> Vec<u8> {
+        fn message(response: bool) -> Vec<u8> {
+            let mut bytes = Vec::new();
+            for word in [
+                0x1234u16,
+                if response { 0x8180 } else { 0x0100 },
+                1,
+                u16::from(response),
+                0,
+                0,
+            ] {
+                bytes.extend(word.to_be_bytes());
+            }
+            bytes.extend(b"\x07example\x03com\0");
+            bytes.extend(1u16.to_be_bytes());
+            bytes.extend(1u16.to_be_bytes());
+            if response {
+                bytes.extend([0xc0, 0x0c]);
+                bytes.extend(1u16.to_be_bytes());
+                bytes.extend(1u16.to_be_bytes());
+                bytes.extend(60u32.to_be_bytes());
+                bytes.extend(4u16.to_be_bytes());
+                bytes.extend([93, 184, 216, 34]);
+            }
+            bytes
+        }
+        fn frame(response: bool, ipv6: bool) -> Vec<u8> {
+            let payload = message(response);
+            let mut udp = Vec::new();
+            udp.extend(if response { 53u16 } else { 5353u16 }.to_be_bytes());
+            udp.extend(if response { 5353u16 } else { 53u16 }.to_be_bytes());
+            udp.extend(((payload.len() + 8) as u16).to_be_bytes());
+            udp.extend([0; 2]);
+            udp.extend(payload);
+            let mut bytes = vec![0; 12];
+            if ipv6 {
+                bytes.extend(0x86ddu16.to_be_bytes());
+                let local = "::1".parse::<std::net::Ipv6Addr>().unwrap().octets();
+                let remote = "2001:db8::53"
+                    .parse::<std::net::Ipv6Addr>()
+                    .unwrap()
+                    .octets();
+                bytes.extend(0x60000000u32.to_be_bytes());
+                bytes.extend((udp.len() as u16).to_be_bytes());
+                bytes.extend([17, 64]);
+                bytes.extend(if response { remote } else { local });
+                bytes.extend(if response { local } else { remote });
+            } else {
+                bytes.extend(0x0800u16.to_be_bytes());
+                bytes.extend([0x45, 0]);
+                bytes.extend(((udp.len() + 20) as u16).to_be_bytes());
+                bytes.extend([0; 4]);
+                bytes.extend([64, 17]);
+                bytes.extend([0; 2]);
+                bytes.extend(if response {
+                    [8, 8, 8, 8]
+                } else {
+                    [10, 0, 2, 15]
+                });
+                bytes.extend(if response {
+                    [10, 0, 2, 15]
+                } else {
+                    [8, 8, 8, 8]
+                });
+            }
+            bytes.extend(udp);
+            bytes
+        }
+        let frames = [
+            frame(false, false),
+            frame(false, false),
+            frame(true, false),
+            frame(false, true),
+            frame(true, true),
+        ];
+        let mut bytes = http_pcap()[..24].to_vec();
+        for (index, frame) in frames.iter().enumerate() {
+            bytes.extend((1_700_000_000u32 + index as u32).to_le_bytes());
+            bytes.extend(0u32.to_le_bytes());
+            bytes.extend((frame.len() as u32).to_le_bytes());
+            bytes.extend((frame.len() as u32).to_le_bytes());
+            bytes.extend(frame);
+        }
+        bytes
+    }
 
     #[test]
     fn quoted_packet_fields_and_epoch_times_preserve_exact_values() {

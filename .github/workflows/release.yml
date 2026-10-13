@@ -19,8 +19,30 @@ jobs:
       - name: System packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config libsqlite3-dev libxkbcommon-dev libwayland-dev qemu-system-x86 qemu-utils
+          printf '%s\n' 'wireshark-common wireshark-common/install-setuid boolean false' | sudo debconf-set-selections
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            pkg-config libsqlite3-dev libxkbcommon-dev libwayland-dev \
+            qemu-system-x86 qemu-utils tshark bubblewrap util-linux
+      - name: Packet decoder sandbox prerequisites
+        run: |
+          packet_sandbox() {
+            prlimit --as=2147483648 --core=0 --nofile=128 -- \
+              bwrap --ro-bind / / --proc /proc --dev /dev \
+              --unshare-net --unshare-pid --unshare-user --uid 65534 --gid 65534 \
+              --cap-drop ALL --die-with-parent --new-session -- \
+              /bin/sh -c 'test "$(id -u)" -eq 65534 && tshark --version'
+          }
+          if ! packet_sandbox; then
+            # Ubuntu 24.04 may deny capabilities in unconfined user namespaces.
+            # Adjust only this disposable runner's per-boot restriction, if needed.
+            restriction=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+            if [[ ! -r "$restriction" ]] || [[ "$(cat "$restriction")" -eq 0 ]]; then
+              echo 'Packet decoder sandbox failed without an enabled AppArmor userns restriction.' >&2
+              exit 1
+            fi
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+            packet_sandbox
+          fi
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable branch
         with:
           toolchain: 1.98.1
