@@ -307,7 +307,26 @@ fn export_controls_emit_report_scoped_actions_and_wrap_long_failure_reason() {
     for _ in 0..2 {
         output = render(&ctx, &report, &mut state, size, Vec::new(), None).0;
     }
-    let reason = output
+    // Result panes reserve their height for evidence; the report warning belongs in Overview.
+    assert!(!texts(&output)
+        .iter()
+        .any(|(text, _)| Some(text.as_str()) == report.reason.as_deref()));
+    let mut overview_state = WorkspaceState::default();
+    let mut overview_output = egui::FullOutput::default();
+    for _ in 0..3 {
+        overview_output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    workspace(ui, Some(&report), &mut overview_state, None, None);
+                });
+            },
+        );
+    }
+    let reason = overview_output
         .shapes
         .iter()
         .find_map(|shape| match &shape.shape {

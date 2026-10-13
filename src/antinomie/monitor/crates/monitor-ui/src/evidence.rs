@@ -62,6 +62,21 @@ pub(crate) fn title(ui: &egui::Ui, directory: &Path, fallback: &str) -> String {
     }
 }
 
+/// Shared bounded annotation cache used by table filters and evidence labels.
+pub(crate) fn annotation(ui: &egui::Ui, directory: &Path) -> Option<Annotation> {
+    let shared = state(ui.ctx());
+    let mut data = shared.lock().unwrap_or_else(|error| error.into_inner());
+    if data.labels.len() >= 4096 && !data.labels.contains_key(directory) {
+        data.labels.clear();
+    }
+    data.labels
+        .entry(directory.to_owned())
+        .or_insert_with(|| annotations::load(directory))
+        .as_ref()
+        .ok()
+        .cloned()
+}
+
 pub(crate) fn menu(ui: &mut egui::Ui, directory: &Path) {
     if ui.button("Rename…").clicked() {
         open_editor(ui, directory, Field::Name);

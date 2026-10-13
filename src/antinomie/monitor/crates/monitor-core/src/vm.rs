@@ -287,7 +287,12 @@ impl Qmp {
         self.reply("")?;
         Ok(())
     }
-    /// Connects, retrying for `wait` while QEMU is still creating the socket.
+    /// Connects, retrying for `wait` while QEMU is still creating the socket
+    /// or has not reached the main loop that sends the greeting.
+    ///
+    /// `server=on,wait=off` listens before QEMU can write that greeting.
+    /// A read against the accepted connection then returns EAGAIN when its
+    /// receive timeout expires, which is the same code as a nonblocking read.
     fn connect(path: &Path, wait: Duration) -> Result<Self, String> {
         let deadline = std::time::Instant::now() + wait;
         let socket = loop {
@@ -299,8 +304,12 @@ impl Qmp {
                 Err(error) => return Err(error.to_string()),
             }
         };
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err("QMP read: timed out waiting for a reply".into());
+        }
         socket
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(remaining))
             .and_then(|_| socket.set_write_timeout(Some(Duration::from_secs(5))))
             .map_err(|e| e.to_string())?;
         let mut qmp = Qmp {
@@ -308,6 +317,10 @@ impl Qmp {
             reader: std::io::BufReader::new(socket),
         };
         qmp.reply("")?;
+        qmp.reader
+            .get_mut()
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .map_err(|e| e.to_string())?;
         qmp.reply("{\"execute\":\"qmp_capabilities\"}\n")?;
         Ok(qmp)
     }
@@ -321,9 +334,15 @@ impl Qmp {
         }
         loop {
             let mut line = String::new();
-            if std::io::BufRead::read_line(&mut self.reader, &mut line)
-                .map_err(|e| format!("QMP read: {e}"))?
-                == 0
+            if std::io::BufRead::read_line(&mut self.reader, &mut line).map_err(|error| {
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    || error.kind() == std::io::ErrorKind::TimedOut
+                {
+                    "QMP read: timed out waiting for a reply".to_string()
+                } else {
+                    format!("QMP read: {error}")
+                }
+            })? == 0
             {
                 return Err("QMP closed".into());
             }
@@ -500,7 +519,10 @@ impl VmProcess {
     }
     /// Confirms over QMP that QEMU placed guest RAM where the transport maps it.
     pub fn verify_ram_layout(&self) -> Result<(), String> {
-        let mut qmp = Qmp::connect(&self.qmp_path, Duration::from_secs(10))
+        // The socket is created before machine and display setup. On a busy
+        // host that work runs well past a few seconds, so the greeting wait
+        // has to cover startup rather than only the listen backlog.
+        let mut qmp = Qmp::connect(&self.qmp_path, Duration::from_secs(60))
             .map_err(|error| format!("QMP connect for RAM layout: {error}"))?;
         let mtree = qmp.reply(
             "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info mtree\"}}\n",
@@ -820,6 +842,54 @@ impl Drop for VmProcess {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn qmp_connect_waits_for_a_greeting_sent_after_the_socket_listens() {
+        use std::io::{BufRead, BufReader};
+        use std::os::unix::net::UnixListener;
+        use std::thread;
+        let root = std::env::temp_dir().join(format!("ant-qmp-greeting-{}", unique_id()));
+        private_dir(&root).unwrap();
+        let path = root.join("qmp.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let server = thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            thread::sleep(Duration::from_secs(6));
+            let mut socket = socket;
+            socket.write_all(b"{\"QMP\":{}}\n").unwrap();
+            let mut line = String::new();
+            BufReader::new(socket.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            socket.write_all(b"{\"return\":{}}\n").unwrap();
+        });
+        let started = std::time::Instant::now();
+        Qmp::connect(&path, Duration::from_secs(15)).expect("delayed greeting");
+        assert!(started.elapsed() >= Duration::from_secs(6));
+        server.join().unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
+    fn qmp_connect_reports_timeout_instead_of_a_temporary_read_error() {
+        use std::os::unix::net::UnixListener;
+        use std::thread;
+        let root = std::env::temp_dir().join(format!("ant-qmp-timeout-{}", unique_id()));
+        private_dir(&root).unwrap();
+        let path = root.join("qmp.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let server = thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            thread::sleep(Duration::from_secs(2));
+            drop(socket);
+        });
+        let error = match Qmp::connect(&path, Duration::from_millis(400)) {
+            Ok(_) => panic!("greeting arrived from a silent peer"),
+            Err(error) => error,
+        };
+        assert!(error.contains("timed out waiting for a reply"), "{error}");
+        assert!(!error.contains("os error 11"), "{error}");
+        server.join().unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
     #[test]
     fn external_state_capture_restores_shared_ram_paused_and_allows_repeated_pivots() {
         use std::io::{Seek, SeekFrom};

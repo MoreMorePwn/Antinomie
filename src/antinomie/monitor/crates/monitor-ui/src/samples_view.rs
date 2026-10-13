@@ -1,8 +1,10 @@
 //! Tools → Malware samples: search MalwareBazaar or MalShare, download samples (kept in
 //! their encrypted archives) and send them into the running VM, optionally
 //! running them there. Nothing is run or unpacked on the host.
+use crate::query::{self, FieldSpec, RowValue};
 use crate::theme::{self, ValueKind};
 use antinomie_monitor_core::{
+    malshare::{CatalogProgress, DatedCatalog},
     samples::{self, SampleInfo, Source, StoredSample},
     ExecRequest,
 };
@@ -11,7 +13,11 @@ use egui_extras::{Column, TableBuilder};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
-    sync::mpsc::{self, Receiver},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -19,6 +25,29 @@ pub(crate) const WINDOW_ID: &str = "malware_samples";
 
 /// Samples asked of a source per search, the most MalwareBazaar answers.
 const SEARCH_LIMIT: u32 = 1000;
+
+const SAMPLE_FIELDS: &[FieldSpec<'static>] = &[
+    FieldSpec::text(
+        "sample.sha256",
+        "Verified/source-provided SHA-256; missing on MD5-only rows",
+    ),
+    FieldSpec::text("sample.source", "Metadata source credit"),
+    FieldSpec::text("sample.type", "Source or analyzed type; unknown is missing"),
+    FieldSpec::text("sample.arch", "Analyzed/source architecture"),
+    FieldSpec::text("sample.family", "Source family"),
+    FieldSpec::number(
+        "sample.first_seen_ms",
+        "Exact source timestamp unavailable on daily hashes",
+    ),
+    FieldSpec::text("sample.archive_day", "UTC date-only archive observation"),
+    FieldSpec::boolean(
+        "sample.cached",
+        "Specimen retained in encrypted local storage",
+    ),
+    FieldSpec::text("entry.name", "Source filename"),
+    FieldSpec::tags("entry.tag", "Source tags and archive date"),
+    FieldSpec::number("entry.size", "Source/analyzed specimen size in octets"),
+];
 
 pub(crate) struct SamplesContext<'a> {
     pub data_dir: &'a Path,
@@ -66,7 +95,7 @@ impl Col {
     ];
     fn label(self) -> &'static str {
         match self {
-            Col::Seen => "First seen",
+            Col::Seen => "Seen / archive day",
             Col::File => "File",
             Col::Hash => "SHA-256",
             Col::Family => "Family",
@@ -84,6 +113,14 @@ impl Col {
 struct Sort {
     column: Col,
     descending: bool,
+}
+
+impl Drop for SamplesView {
+    fn drop(&mut self) {
+        if let Some(cancel) = &self.search_cancel {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
 }
 
 fn next_sort(sort: Option<Sort>, column: Col) -> Option<Sort> {
@@ -130,6 +167,79 @@ fn listed_hash(sample: &SampleInfo) -> Option<&str> {
     ]
     .into_iter()
     .find(|hash| !hash.is_empty())
+}
+
+fn sample_date(sample: &SampleInfo) -> &str {
+    if !sample.first_seen.is_empty() {
+        return &sample.first_seen;
+    }
+    sample
+        .tags
+        .iter()
+        .find_map(|tag| tag.strip_prefix("archive-date:"))
+        .unwrap_or("—")
+}
+
+fn sample_values(
+    sample: &SampleInfo,
+    source: Source,
+    stored: &[StoredSample],
+) -> Vec<(&'static str, RowValue)> {
+    let text = |value: &str| {
+        if value.is_empty() || value == "unknown" {
+            RowValue::Missing
+        } else {
+            RowValue::Text(value.into())
+        }
+    };
+    vec![
+        ("sample.sha256", text(&sample.sha256_hash)),
+        ("sample.source", RowValue::Text(source.label().into())),
+        ("sample.type", text(&sample.file_type)),
+        (
+            "sample.arch",
+            arch(sample).map_or(RowValue::Missing, RowValue::Text),
+        ),
+        (
+            "sample.family",
+            sample
+                .signature
+                .clone()
+                .map_or(RowValue::Missing, RowValue::Text),
+        ),
+        (
+            "sample.first_seen_ms",
+            antinomie_monitor_core::malshare::catalog_timestamp_ms(&sample.first_seen)
+                .map_or(RowValue::Missing, |time| RowValue::Number(i128::from(time))),
+        ),
+        (
+            "sample.archive_day",
+            sample
+                .tags
+                .iter()
+                .find_map(|tag| tag.strip_prefix("archive-date:"))
+                .map_or(RowValue::Missing, |day| RowValue::Text(day.into())),
+        ),
+        (
+            "sample.cached",
+            RowValue::Bool(
+                !sample.sha256_hash.is_empty()
+                    && stored
+                        .iter()
+                        .any(|stored| stored.info.sha256_hash == sample.sha256_hash),
+            ),
+        ),
+        ("entry.name", text(&sample.file_name)),
+        ("entry.tag", RowValue::List(sample.tags.clone())),
+        (
+            "entry.size",
+            if sample.file_size == 0 {
+                RowValue::Missing
+            } else {
+                RowValue::Number(i128::from(sample.file_size))
+            },
+        ),
+    ]
 }
 
 /// What the dropdowns keep of the results.
@@ -188,7 +298,7 @@ fn shown(results: &[SampleInfo], filters: &Filters, sort: Option<Sort>) -> Vec<u
     if let Some(sort) = sort {
         let text = |sample: &SampleInfo| -> String {
             match sort.column {
-                Col::Seen => sample.first_seen.clone(),
+                Col::Seen => sample_date(sample).to_owned(),
                 Col::File => sample.file_name.to_lowercase(),
                 Col::Hash => listed_hash(sample).unwrap_or("").to_owned(),
                 Col::Family => sample.signature.clone().unwrap_or_default().to_lowercase(),
@@ -217,6 +327,12 @@ fn shown(results: &[SampleInfo], filters: &Filters, sort: Option<Sort>) -> Vec<u
 
 type Found = Result<(String, Vec<SampleInfo>), String>;
 
+enum SearchUpdate {
+    Finished(u64, Source, Found),
+    Progress(u64, CatalogProgress),
+    Catalog(u64, Result<DatedCatalog, String>),
+}
+
 #[derive(Default)]
 pub(crate) struct SamplesView {
     pub(crate) open: bool,
@@ -241,7 +357,12 @@ pub(crate) struct SamplesView {
     results: Vec<SampleInfo>,
     filters: Filters,
     sort: Option<Sort>,
-    searching: Option<Receiver<Found>>,
+    searching: Option<Receiver<SearchUpdate>>,
+    search_generation: u64,
+    search_cancel: Option<Arc<AtomicBool>>,
+    catalog_progress: Option<CatalogProgress>,
+    catalog_errors: Vec<String>,
+    offline: bool,
     downloads: BTreeMap<String, Receiver<Result<StoredSample, String>>>,
     stored: Option<Vec<StoredSample>>,
     /// Run pushed samples as root instead of the guest user.
@@ -363,18 +484,50 @@ impl SamplesView {
     }
 
     fn poll(&mut self, ctx: &egui::Context) {
-        if let Some(found) = self.searching.as_ref().and_then(|r| r.try_recv().ok()) {
-            self.searching = None;
-            match found {
-                Ok((listing, found)) => {
-                    self.listing = listing;
-                    self.results_source = self.source;
-                    self.results = found;
-                    self.filters = Filters::default();
-                    self.sort = None;
-                    self.status = None;
+        loop {
+            let update = self.searching.as_ref().map(|r| r.try_recv());
+            match update {
+                Some(Ok(SearchUpdate::Progress(generation, progress))) => {
+                    if generation == self.search_generation {
+                        self.catalog_progress = Some(progress);
+                    }
                 }
-                Err(error) => self.status = Some((error, true)),
+                Some(Ok(SearchUpdate::Finished(generation, source, found))) => {
+                    self.searching = None;
+                    self.search_cancel = None;
+                    if generation == self.search_generation && source == self.source {
+                        self.apply_found(source, found);
+                    }
+                }
+                Some(Ok(SearchUpdate::Catalog(generation, result))) => {
+                    self.searching = None;
+                    self.search_cancel = None;
+                    if generation == self.search_generation && self.source == Source::MalShare {
+                        match result {
+                            Ok(catalog) => {
+                                let listing = catalog.listing();
+                                let partial = catalog.cancelled || !catalog.failed_days.is_empty();
+                                self.catalog_errors = catalog.failed_days;
+                                // Preserve useful previous results when the entire job failed.
+                                if catalog.scanned_days > 0 || catalog.requested_days == 0 {
+                                    self.apply_found(
+                                        Source::MalShare,
+                                        Ok((listing.clone(), catalog.samples)),
+                                    );
+                                }
+                                self.status = partial.then_some((listing, true));
+                            }
+                            Err(error) => self.status = Some((error, true)),
+                        }
+                    }
+                }
+                Some(Err(mpsc::TryRecvError::Disconnected)) => {
+                    self.searching = None;
+                    self.search_cancel = None;
+                    self.status =
+                        Some(("Catalog job stopped before reporting a result".into(), true));
+                }
+                _ => break,
             }
         }
         let mut finished = Vec::new();
@@ -410,31 +563,68 @@ impl SamplesView {
         }
     }
 
+    fn apply_found(&mut self, source: Source, found: Found) {
+        match found {
+            Ok((listing, found)) => {
+                self.listing = listing;
+                self.results_source = source;
+                self.results = found;
+                self.status = None;
+            }
+            Err(error) => self.status = Some((error, true)),
+        }
+    }
+
     /// The source's newest samples of every type.
-    fn search_dated(&mut self, cx: &SamplesContext<'_>) {
-        let (sender, receiver) = mpsc::channel();
+    fn search_dated(&mut self, cx: &SamplesContext<'_>, all_cached: bool) {
+        let (sender, receiver) = mpsc::sync_channel(2);
         let curl = cx.curl.to_path_buf();
         let cache = cx.data_dir.join("malshare-daily");
         let start = self.range_start.clone();
         let end = self.range_end.clone();
-        std::thread::spawn(move || {
-            let _ = sender.send(antinomie_monitor_core::malshare::dated_hashes(
-                &curl,
-                &cache,
-                &start,
-                &end,
-                SEARCH_LIMIT as usize,
-            ));
-        });
+        let offline = self.offline || all_cached;
+        self.search_generation = self.search_generation.wrapping_add(1);
+        let generation = self.search_generation;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = Arc::clone(&cancel);
+        if let Err(error) = std::thread::Builder::new()
+            .name("malshare-metadata".into())
+            .spawn(move || {
+                let result = antinomie_monitor_core::malshare::dated_catalog(
+                    &curl,
+                    &cache,
+                    (!all_cached).then_some((start.as_str(), end.as_str())),
+                    offline,
+                    SEARCH_LIMIT as usize,
+                    &worker_cancel,
+                    |progress| {
+                        let _ = sender.try_send(SearchUpdate::Progress(generation, progress));
+                    },
+                );
+                let _ = sender.send(SearchUpdate::Catalog(generation, result));
+            })
+        {
+            self.status = Some((format!("Could not start metadata job: {error}"), true));
+            return;
+        }
         self.searching = Some(receiver);
+        self.search_cancel = Some(cancel);
+        self.catalog_progress = None;
+        self.catalog_errors.clear();
         self.status = None;
     }
 
     fn search_all(&mut self, cx: &SamplesContext<'_>) {
         let (sender, receiver) = mpsc::channel();
         let (curl, key, source) = (cx.curl.to_path_buf(), self.key.clone(), self.source);
+        self.search_generation = self.search_generation.wrapping_add(1);
+        let generation = self.search_generation;
         std::thread::spawn(move || {
-            let _ = sender.send(source.newest_all(&curl, &key, SEARCH_LIMIT));
+            let _ = sender.send(SearchUpdate::Finished(
+                generation,
+                source,
+                source.newest_all(&curl, &key, SEARCH_LIMIT),
+            ));
         });
         self.searching = Some(receiver);
         self.status = None;
@@ -444,8 +634,14 @@ impl SamplesView {
     fn search(&mut self, cx: &SamplesContext<'_>, text: String) {
         let (sender, receiver) = mpsc::channel();
         let (curl, key, source) = (cx.curl.to_path_buf(), self.key.clone(), self.source);
+        self.search_generation = self.search_generation.wrapping_add(1);
+        let generation = self.search_generation;
         std::thread::spawn(move || {
-            let _ = sender.send(source.find(&curl, &key, &text, SEARCH_LIMIT));
+            let _ = sender.send(SearchUpdate::Finished(
+                generation,
+                source,
+                source.find(&curl, &key, &text, SEARCH_LIMIT),
+            ));
         });
         self.searching = Some(receiver);
         self.status = None;
@@ -456,6 +652,7 @@ impl SamplesView {
         ctx: &egui::Context,
         cx: &SamplesContext<'_>,
     ) -> Option<SamplesAction> {
+        self.poll(ctx);
         if !self.open {
             return None;
         }
@@ -474,7 +671,6 @@ impl SamplesView {
             self.listed = true;
             self.search(cx, String::new());
         }
-        self.poll(ctx);
         let stored = self
             .stored
             .get_or_insert_with(|| samples::stored(cx.data_dir))
@@ -528,6 +724,9 @@ impl SamplesView {
             });
         if !open || ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.open = false;
+            if let Some(cancel) = &self.search_cancel {
+                cancel.store(true, Ordering::Relaxed);
+            }
         }
         action
     }
@@ -668,7 +867,17 @@ impl SamplesView {
             }
         });
         if let Some(source) = switch {
+            if let Some(cancel) = &self.search_cancel {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            self.search_generation = self.search_generation.wrapping_add(1);
             self.source = source;
+            if source == Source::MalShare && self.range_start.is_empty() {
+                if let Ok((start, end)) = antinomie_monitor_core::malshare::recent_date_range(7) {
+                    self.range_start = start;
+                    self.range_end = end;
+                }
+            }
             self.key = samples::source_key(cx.data_dir, source);
             self.key_saved = !self.key.is_empty();
             self.editing_key = false;
@@ -678,6 +887,8 @@ impl SamplesView {
             self.sort = None;
             self.status = None;
             self.text.clear();
+            self.catalog_errors.clear();
+            self.catalog_progress = None;
             // The newest samples of the new source, once there is a key.
             self.listed = false;
         }
@@ -772,7 +983,7 @@ impl SamplesView {
                         )
                         .clicked()
                 {
-                    self.search_dated(cx);
+                    self.search_dated(cx, false);
                 }
                 if ui
                     .add_enabled(ready, egui::Button::new("Newest Linux"))
@@ -831,7 +1042,18 @@ impl SamplesView {
         });
         ui.add_space(6.0);
         if self.source == Source::MalShare {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (label, day_count) in [("7 days", 7), ("30 days", 30)] {
+                    if ui.button(label).clicked() {
+                        match antinomie_monitor_core::malshare::recent_date_range(day_count) {
+                            Ok((start, end)) => {
+                                self.range_start = start;
+                                self.range_end = end;
+                            }
+                            Err(error) => self.status = Some((error, true)),
+                        }
+                    }
+                }
                 ui.label("From");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.range_start)
@@ -844,10 +1066,46 @@ impl SamplesView {
                         .desired_width(120.0)
                         .hint_text("YYYY-MM-DD"),
                 );
+                ui.checkbox(&mut self.offline, "Offline");
+                if ui
+                    .add_enabled(
+                        self.searching.is_none(),
+                        egui::Button::new("All cached metadata"),
+                    )
+                    .clicked()
+                {
+                    self.search_dated(cx, true);
+                }
+                if self.search_cancel.is_some() && ui.button("Cancel").clicked() {
+                    if let Some(cancel) = &self.search_cancel {
+                        cancel.store(true, Ordering::Relaxed);
+                    }
+                }
             });
+            if let Some(progress) = &self.catalog_progress {
+                ui.colored_label(
+                    theme::muted(),
+                    format!(
+                        "{}: {}/{} days, {} cached, {} unavailable",
+                        progress.day,
+                        progress.done_days,
+                        progress.total_days,
+                        progress.cached_days,
+                        progress.failed_days
+                    ),
+                );
+            }
+            if !self.catalog_errors.is_empty() {
+                egui::CollapsingHeader::new("Unavailable days / retry details").show(ui, |ui| {
+                    for error in &self.catalog_errors {
+                        ui.label(error);
+                    }
+                    ui.label("Retry the range to resume. Successfully cached days are reused.");
+                });
+            }
             ui.colored_label(
                 theme::muted(),
-                "Samples from MalShare (malshare.com). Newest and Newest Linux are the last 24 hours. Newest in range reads the official dated SHA-256 lists and is not a sample download.",
+                "MalShare: API lists cover the last 24 hours. Ranges cover up to 366 inclusive UTC days; cached-only mode covers local metadata. Archive dates are date-only observations, not first-seen timestamps. Type and architecture remain unknown.",
             );
             if all {
                 self.search_all(cx);
@@ -971,18 +1229,44 @@ impl SamplesView {
             ui.colored_label(theme::muted(), text);
             return;
         }
-        let order = shown(&self.results, &self.filters, self.sort);
+        let compiled = query::table_filter(
+            ui,
+            "sample-records",
+            "Filter catalog fields",
+            SAMPLE_FIELDS,
+            &[],
+        );
+        let order = shown(&self.results, &self.filters, self.sort)
+            .into_iter()
+            .filter(|index| {
+                compiled.keep_table(&sample_values(
+                    &self.results[*index],
+                    self.results_source,
+                    stored,
+                ))
+            })
+            .collect::<Vec<_>>();
+        ui.colored_label(
+            theme::muted(),
+            format!(
+                "{} / {} retained catalog rows",
+                order.len(),
+                self.results.len()
+            ),
+        );
         if order.is_empty() {
             ui.add_space(8.0);
             ui.colored_label(theme::muted(), "No sample matches the filters.");
             return;
         }
+        let filter_id = ui.id().with(("table-filter", "sample-records"));
         let mono = theme::mono(cx.font_size - 1.0);
         let row_height = theme::row_height(cx.font_size).max(ui.spacing().interact_size.y + 4.0);
         let mut download = None;
         let mut clicked = None;
         TableBuilder::new(ui)
             .id_salt("samples_results")
+            .sense(egui::Sense::click())
             .striped(true)
             .resizable(true)
             .auto_shrink([false, false])
@@ -1032,7 +1316,7 @@ impl SamplesView {
                     let sample = &self.results[order[row.index()]];
                     row.col(|ui| {
                         ui.label(
-                            RichText::new(&sample.first_seen)
+                            RichText::new(sample_date(sample))
                                 .font(mono.clone())
                                 .color(theme::muted()),
                         );
@@ -1134,6 +1418,13 @@ impl SamplesView {
                         {
                             download = Some(sample.clone());
                         }
+                    });
+                    row.response().context_menu(|ui| {
+                        query::table_row_menu(
+                            ui,
+                            filter_id,
+                            &sample_values(sample, self.results_source, stored),
+                        );
                     });
                 });
             });
@@ -1422,20 +1713,16 @@ mod tests {
             nat: false,
             font_size: 14.0,
         };
-        let mut view = SamplesView {
-            open: true,
-            ..SamplesView::default()
-        };
+        let mut view = SamplesView::default();
+        view.open = true;
         let ctx = egui::Context::default();
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             assert!(view.show(ctx, &cx).is_none());
         });
         assert!(view.open && !view.acknowledged);
         samples::acknowledge(&data).unwrap();
-        let mut view = SamplesView {
-            open: true,
-            ..SamplesView::default()
-        };
+        let mut view = SamplesView::default();
+        view.open = true;
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             view.show(ctx, &cx);
         });

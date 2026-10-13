@@ -68,6 +68,8 @@ fn manual_status(core: &ProcessCoreCapture) -> String {
 
 #[derive(Clone)]
 struct AcquiredCore {
+    vm_id: String,
+    boot_id: String,
     run_id: String,
     directory: PathBuf,
     file: Option<PathBuf>,
@@ -161,6 +163,8 @@ fn catalog(roots: &[PathBuf], vm_id: Option<&str>) -> Result<CoreCatalog, String
                 continue;
             }
             result.acquired.push(AcquiredCore {
+                vm_id: artifacts.vm_id,
+                boot_id: artifacts.boot_id,
                 run_id: artifacts.run_id,
                 directory: path.join("core"),
                 file: artifacts.core_dump,
@@ -710,6 +714,90 @@ impl CoreView {
         let mut imported_selection = None;
         let mut file_action: Option<(bool, PathBuf)> = None;
         let font_size = egui::TextStyle::Body.resolve(ui.style()).size;
+        let mut fields = crate::query::LABEL_FIELDS.to_vec();
+        fields.extend(crate::query::CAPTURE_FIELDS);
+        fields.extend([
+            crate::query::FieldSpec::text("name", "Displayed core name"),
+            crate::query::FieldSpec::text("state", "Capture or imported core state"),
+            crate::query::FieldSpec::number("pid", "Captured process ID, when retained"),
+            crate::query::FieldSpec::number("threads", "Inspected core thread count"),
+            crate::query::FieldSpec::number("mappings", "Inspected core mapping count"),
+            crate::query::FieldSpec::number("size", "Stored core size in octets, when retained"),
+            crate::query::FieldSpec::number("core.thread_count", "Inspected core thread count"),
+            crate::query::FieldSpec::boolean(
+                "core.partial",
+                "Explicit partial acquisition; missing when undetermined",
+            ),
+            crate::query::FieldSpec::number(
+                "core.signal",
+                "Signal recorded in an inspected core thread note",
+            ),
+        ]);
+        let tags: Vec<_> = self
+            .manual
+            .iter()
+            .map(|core| &core.directory)
+            .chain(self.acquired.iter().map(|core| &core.directory))
+            .chain(self.records.iter().map(|record| &record.dir))
+            .filter_map(|directory| crate::evidence::annotation(ui, directory))
+            .flat_map(|annotation| annotation.tags)
+            .collect();
+        let filter =
+            crate::query::table_filter(ui, "core-history", "Filter core dumps", &fields, &tags);
+        let filter_id = ui.id().with(("table-filter", "core-history"));
+        let manual_shown: Vec<_> = self
+            .manual
+            .iter()
+            .map(|core| filter.keep_table(&manual_filter_row(ui, core)))
+            .collect();
+        let acquired_shown: Vec<_> = self
+            .acquired
+            .iter()
+            .map(|core| filter.keep_table(&acquired_filter_row(ui, core)))
+            .collect();
+        let imported_shown: Vec<_> = self
+            .records
+            .iter()
+            .map(|record| filter.keep_table(&imported_filter_row(ui, record)))
+            .collect();
+        let matched = manual_shown
+            .iter()
+            .chain(&acquired_shown)
+            .chain(&imported_shown)
+            .filter(|shown| **shown)
+            .count();
+        ui.weak(format!(
+            "{matched} / {} cores",
+            self.manual.len() + self.acquired.len() + self.records.len()
+        ));
+        if let Some(directory) = self.selected_directory.as_ref() {
+            let visible = self
+                .manual
+                .iter()
+                .zip(&manual_shown)
+                .any(|(core, shown)| *shown && &core.directory == directory)
+                || self
+                    .acquired
+                    .iter()
+                    .zip(&acquired_shown)
+                    .any(|(core, shown)| *shown && &core.directory == directory)
+                || self
+                    .records
+                    .iter()
+                    .zip(&imported_shown)
+                    .any(|(record, shown)| *shown && &record.dir == directory);
+            let known = self.manual.iter().any(|core| &core.directory == directory)
+                || self
+                    .acquired
+                    .iter()
+                    .any(|core| &core.directory == directory)
+                || self.records.iter().any(|record| &record.dir == directory);
+            if known && !visible {
+                self.selected = None;
+                self.selected_directory = None;
+                self.page = None;
+            }
+        }
         egui::ScrollArea::vertical()
             .id_salt("core_capture_list")
             .auto_shrink([false, false])
@@ -719,7 +807,8 @@ impl CoreView {
                     ui.add_space(8.0);
                     ui.add(egui::Label::new("No core dumps. Dump a live process, enable Core Dump on Exit in Run program, or import a core.").wrap());
                 }
-                for core in &self.manual {
+                for (index, core) in self.manual.iter().enumerate() {
+                    if !manual_shown[index] { continue; }
                     let fallback = format!("PID {} · {}", core.target.tgid, core.id);
                     let title = crate::evidence::title(ui, &core.directory, &fallback);
                     let selected = self.selected_directory.as_ref() == Some(&core.directory);
@@ -730,6 +819,7 @@ impl CoreView {
                     let core_file = core.file.clone();
                     row.context_menu(|ui| {
                         crate::evidence::menu(ui, &core.directory);
+                        crate::query::table_row_menu(ui, filter_id, &manual_filter_row(ui, core));
                         core_file_menu(ui, core_file.as_deref(), &mut file_action);
                         if core.phase != ProcessCorePhase::Finished && can_cancel
                             && ui.button("Cancel capture and resume").clicked() {
@@ -741,7 +831,8 @@ impl CoreView {
                         acquired_selection = Some((core.directory.clone(), core.file.clone()));
                     }
                 }
-                for core in &self.acquired {
+                for (index, core) in self.acquired.iter().enumerate() {
+                    if !acquired_shown[index] { continue; }
                     let fallback = format!("Run {}", core.run_id);
                     let title = crate::evidence::title(ui, &core.directory, &fallback);
                     let selected = self.selected_directory.as_ref() == Some(&core.directory)
@@ -758,6 +849,7 @@ impl CoreView {
                     let core_file = core.file.clone();
                     row.context_menu(|ui| {
                         crate::evidence::menu(ui, &core.directory);
+                        crate::query::table_row_menu(ui, filter_id, &acquired_filter_row(ui, core));
                         core_file_menu(ui, core_file.as_deref(), &mut file_action);
                     });
                     if row.clicked() && self.job.is_none() {
@@ -768,7 +860,8 @@ impl CoreView {
                     ui.add_space(8.0);
                     crate::theme::section(ui, "Imported cores");
                 }
-                for record in &self.records {
+                for (index, record) in self.records.iter().enumerate() {
+                    if !imported_shown[index] { continue; }
                     let title = crate::evidence::title(ui, &record.dir, &record.label);
                     let selected = self.selected_directory.as_ref() == Some(&record.dir)
                         || self.selected.as_ref().is_some_and(|current| current.dir == record.dir);
@@ -778,6 +871,7 @@ impl CoreView {
                     let core_file = record.core.source.clone();
                     row.context_menu(|ui| {
                         crate::evidence::menu(ui, &record.dir);
+                        crate::query::table_row_menu(ui, filter_id, &imported_filter_row(ui, record));
                         core_file_menu(ui, Some(&core_file), &mut file_action);
                     });
                     if row.clicked() && self.job.is_none() {
@@ -1161,25 +1255,50 @@ impl CoreView {
     }
     fn mappings(&mut self, ui: &mut egui::Ui, record: &CoreRecord) {
         let mut requested_page = None;
-        let Some(mapping) = record.core.mappings.get(self.mapping_index) else {
-            ui.label("No PT_LOAD mappings.");
-            return;
-        };
+        let filter = crate::query::table_filter(
+            ui,
+            ("core-mappings", &record.dir),
+            "Filter memory mappings",
+            MAPPING_FIELDS,
+            &[],
+        );
+        let filter_id = ui
+            .id()
+            .with(("table-filter", ("core-mappings", &record.dir)));
+        let shown: Vec<_> = record
+            .core
+            .mappings
+            .iter()
+            .enumerate()
+            .filter(|(_, mapping)| filter.keep_table(&mapping_filter_row(&record.core, mapping)))
+            .map(|(index, _)| index)
+            .collect();
+        ui.weak(format!(
+            "{} / {} mappings",
+            shown.len(),
+            record.core.mappings.len()
+        ));
+        if !shown.contains(&self.mapping_index) {
+            self.mapping_index = usize::MAX;
+            self.page = None;
+            self.window_offset = 0;
+        }
         let choices = mapping_choices(&record.core);
         let (selected_label, selected_tip) = choices
             .get(self.mapping_index)
             .map(|(label, tip)| (label.clone(), tip.clone()))
             .unwrap_or_else(|| {
                 (
-                    "unknown".into(),
-                    "No NT_FILE name overlaps this mapping.".into(),
+                    "Select a mapping".into(),
+                    "Select a retained mapping matching the filter.".into(),
                 )
             });
         egui::ComboBox::from_id_salt("core-mapping")
             .width(ui.available_width())
             .selected_text(selected_label)
             .show_ui(ui, |ui| {
-                for (index, (label, tip)) in choices.iter().enumerate() {
+                for &index in &shown {
+                    let (label, tip) = &choices[index];
                     let row = ui
                         .selectable_value(&mut self.mapping_index, index, label)
                         .on_hover_text(tip);
@@ -1187,10 +1306,25 @@ impl CoreView {
                         self.window_offset = 0;
                         self.page = None;
                     }
+                    row.context_menu(|ui| {
+                        crate::query::table_row_menu(
+                            ui,
+                            filter_id,
+                            &mapping_filter_row(&record.core, &record.core.mappings[index]),
+                        )
+                    });
                 }
             })
             .response
             .on_hover_text(selected_tip);
+        let Some(mapping) = record.core.mappings.get(self.mapping_index) else {
+            ui.label(if shown.is_empty() {
+                "No retained mapping matches this filter."
+            } else {
+                "Select a mapping to inspect its captured bytes."
+            });
+            return;
+        };
         let wide = ui.available_width() >= 760.0;
         if wide {
             egui::SidePanel::right("core-mapping-info")
@@ -1327,6 +1461,7 @@ impl CoreView {
     }
 
     fn disassembly(&mut self, ui: &mut egui::Ui, record: &CoreRecord) {
+        let mut filtered_without_selection = false;
         egui::SidePanel::left("core_function_list")
             .resizable(true)
             .default_width(220.0)
@@ -1336,6 +1471,15 @@ impl CoreView {
                 ..Default::default()
             }))
             .show_inside(ui, |ui| {
+                let filter = crate::query::table_filter(ui, ("core-function-filter", &record.dir), "Filter functions", FUNCTION_FIELDS, &[]);
+                let filter_id = ui.id().with(("table-filter", ("core-function-filter", &record.dir)));
+                let shown: Vec<_> = self.functions.iter().enumerate().filter(|(_, function)| filter.keep_table(&function_filter_row(function))).map(|(index, _)| index).collect();
+                ui.weak(format!("{} / {} functions", shown.len(), self.functions.len()));
+                if self.code_function.is_some_and(|index| !shown.contains(&index)) {
+                    self.code_function = None; self.pending_function_decode = None;
+                    self.status = "The selected function is hidden by this filter.".into();
+                }
+                filtered_without_selection = shown.len() != self.functions.len() && self.code_function.is_none();
                 if ui.button("Export functions").clicked() {
                     match export_saved_functions(&record.dir) {
                         Ok(path) => {
@@ -1347,18 +1491,20 @@ impl CoreView {
                 if self.functions.is_empty() {
                     ui.add(egui::Label::new("No function symbols loaded. Decompile with Ghidra to name functions from its default analysis.").wrap());
                 }
-                let row_height = ui.text_style_height(&egui::TextStyle::Body) + ui.spacing().item_spacing.y;
+                let row_height = ui.text_style_height(&egui::TextStyle::Body) * 4.0 + ui.spacing().item_spacing.y * 2.0;
                 egui::ScrollArea::vertical()
                     .id_salt("core-functions")
-                    .show_rows(ui, row_height, self.functions.len(), |ui, range| {
-                        for index in range {
+                    .show_rows(ui, row_height, shown.len(), |ui, range| {
+                        for slot in range {
+                            let index = shown[slot];
                             let function = &self.functions[index];
                             let label = format!(
                                 "symbol {}\naddress {:x}\nmodule not recorded\n{} octets",
                                 function.name, function.address, function.size
                             );
-                            let _ = record;
-                            if ui.selectable_label(self.code_function == Some(index), label).clicked() {
+                            let response = ui.selectable_label(self.code_function == Some(index), label);
+                            response.context_menu(|ui| crate::query::table_row_menu(ui, filter_id, &function_filter_row(function)));
+                            if response.clicked() {
                                 let address = function.address;
                                 self.code_function = Some(index);
                                 self.code_address = format!("{address:x}");
@@ -1379,6 +1525,10 @@ impl CoreView {
                     }),
             )
             .show_inside(ui, |ui| {
+                if filtered_without_selection {
+                    ui.label("Select a function matching the filter to inspect its code.");
+                    return;
+                }
                 self.follow_function_decode(record);
                 let idle = self.code.is_empty() && !self.show_decompiled;
                 if idle {
@@ -1448,16 +1598,11 @@ impl CoreView {
                         egui::ScrollArea::both()
                             .id_salt("core-code")
                             .auto_shrink([false, false])
-                            .show_rows(
-                            ui,
-                            row_height,
-                            lines.len(),
-                            |ui, range| {
+                            .show_rows(ui, row_height, lines.len(), |ui, range| {
                                 for index in range {
                                     paint_asm(ui, lines[index]);
                                 }
-                            },
-                        );
+                            });
                     }
                 }
             });
@@ -1626,6 +1771,78 @@ impl CoreView {
     }
 }
 
+const MAPPING_FIELDS: &[crate::query::FieldSpec<'static>] = &[
+    crate::query::FieldSpec::number("memory.start", "Virtual mapping start address"),
+    crate::query::FieldSpec::number("memory.end", "Exclusive virtual mapping end address"),
+    crate::query::FieldSpec::number("memory.size", "Virtual mapping extent in octets"),
+    crate::query::FieldSpec::number(
+        "memory.captured_size",
+        "Retained available extent in octets",
+    ),
+    crate::query::FieldSpec::text("memory.permissions", "Recorded ELF mapping permissions"),
+    crate::query::FieldSpec::tags(
+        "memory.path",
+        "Overlapping NT_FILE paths; missing when unrecorded",
+    ),
+    crate::query::FieldSpec::boolean(
+        "memory.available",
+        "Some mapping octets are retained; inspect extent for gaps",
+    ),
+];
+
+fn mapping_filter_row(
+    core: &CoreDump,
+    mapping: &CoreMapping,
+) -> Vec<(&'static str, crate::query::RowValue)> {
+    use crate::query::RowValue as V;
+    let paths: Vec<_> = core
+        .files
+        .iter()
+        .filter(|file| {
+            file.start < mapping.end() && mapping.start < file.end && !file.path.is_empty()
+        })
+        .map(|file| file.path.clone())
+        .collect();
+    vec![
+        ("memory.start", V::Number(i128::from(mapping.start))),
+        ("memory.end", V::Number(i128::from(mapping.end()))),
+        ("memory.size", V::Number(i128::from(mapping.memory_size))),
+        (
+            "memory.captured_size",
+            V::Number(i128::from(mapping.available_size)),
+        ),
+        ("memory.permissions", V::Text(mapping.permissions())),
+        (
+            "memory.path",
+            if paths.is_empty() {
+                V::Missing
+            } else {
+                V::List(paths)
+            },
+        ),
+        ("memory.available", V::Bool(mapping.available_size > 0)),
+    ]
+}
+
+const FUNCTION_FIELDS: &[crate::query::FieldSpec<'static>] = &[
+    crate::query::FieldSpec::text(
+        "function.kind",
+        "Original function kind; missing when not retained",
+    ),
+    crate::query::FieldSpec::text("function.name", "Retained function name"),
+    crate::query::FieldSpec::number("function.address", "Original function address"),
+    crate::query::FieldSpec::number("function.size", "Recorded function extent in octets"),
+];
+
+fn function_filter_row(function: &CoreFunction) -> Vec<(&'static str, crate::query::RowValue)> {
+    use crate::query::RowValue as V;
+    vec![
+        ("function.name", V::Text(function.name.clone())),
+        ("function.address", V::Number(i128::from(function.address))),
+        ("function.size", V::Number(i128::from(function.size))),
+    ]
+}
+
 fn mapping_name(core: &CoreDump, mapping: &CoreMapping) -> String {
     let mut paths = Vec::new();
     for file in &core.files {
@@ -1740,22 +1957,262 @@ fn core_file_menu(ui: &mut egui::Ui, file: Option<&Path>, action: &mut Option<(b
     }
 }
 
+fn manual_filter_row(
+    ui: &egui::Ui,
+    core: &antinomie_monitor_core::ProcessCoreCapture,
+) -> Vec<(&'static str, crate::query::RowValue)> {
+    use crate::query::RowValue as V;
+    let mut row = core_history_row(
+        ui,
+        &core.directory,
+        &core.id,
+        &format!("PID {} · {}", core.target.tgid, core.id),
+        &manual_status(core),
+        CoreRowMetrics {
+            pid: Some(u64::from(core.target.tgid)),
+            size: Some(core.stored_size),
+            ..Default::default()
+        },
+    );
+    row.extend([
+        ("vm.id", V::Text(core.vm_id.clone())),
+        ("boot.id", V::Text(core.boot_id.clone())),
+        (
+            "run.id",
+            core.source_run_id
+                .as_ref()
+                .map_or(V::Missing, |id| V::Text(id.clone())),
+        ),
+        (
+            "entry.complete",
+            V::Bool(core.state == antinomie_monitor_core::RunArtifactState::Complete),
+        ),
+        (
+            "capture.complete",
+            V::Bool(core.state == antinomie_monitor_core::RunArtifactState::Complete),
+        ),
+        (
+            "capture.run_id",
+            core.source_run_id
+                .as_ref()
+                .map_or(V::Missing, |id| V::Text(id.clone())),
+        ),
+        (
+            "capture.expected_size",
+            core.guest_size
+                .map_or(V::Missing, |size| V::Number(i128::from(size))),
+        ),
+        (
+            "core.partial",
+            match core.state {
+                antinomie_monitor_core::RunArtifactState::Complete => V::Bool(false),
+                antinomie_monitor_core::RunArtifactState::Partial => V::Bool(true),
+                _ => V::Missing,
+            },
+        ),
+    ]);
+    row
+}
+fn acquired_filter_row(
+    ui: &egui::Ui,
+    core: &AcquiredCore,
+) -> Vec<(&'static str, crate::query::RowValue)> {
+    use crate::query::RowValue as V;
+    let mut row = core_history_row(
+        ui,
+        &core.directory,
+        &core.run_id,
+        &format!("Run {}", core.run_id),
+        crate::app::core_capture_status(core.state),
+        CoreRowMetrics::default(),
+    );
+    row.extend([
+        ("vm.id", V::Text(core.vm_id.clone())),
+        ("boot.id", V::Text(core.boot_id.clone())),
+        ("run.id", V::Text(core.run_id.clone())),
+        (
+            "entry.complete",
+            V::Bool(core.state == antinomie_monitor_core::RunArtifactState::Complete),
+        ),
+        (
+            "capture.complete",
+            V::Bool(core.state == antinomie_monitor_core::RunArtifactState::Complete),
+        ),
+        ("capture.run_id", V::Text(core.run_id.clone())),
+        (
+            "core.partial",
+            match core.state {
+                antinomie_monitor_core::RunArtifactState::Complete => V::Bool(false),
+                antinomie_monitor_core::RunArtifactState::Partial => V::Bool(true),
+                _ => V::Missing,
+            },
+        ),
+    ]);
+    row
+}
+fn imported_filter_row(
+    ui: &egui::Ui,
+    record: &CoreRecord,
+) -> Vec<(&'static str, crate::query::RowValue)> {
+    let mut row = core_history_row(
+        ui,
+        &record.dir,
+        &record.dir.display().to_string(),
+        &record.label,
+        "imported",
+        CoreRowMetrics {
+            threads: Some(record.core.threads.len() as u64),
+            mappings: Some(record.core.mappings.len() as u64),
+            size: Some(record.core.source_size),
+            ..Default::default()
+        },
+    );
+    row.push((
+        "core.signal",
+        record
+            .core
+            .threads
+            .first()
+            .map_or(crate::query::RowValue::Missing, |thread| {
+                crate::query::RowValue::Number(i128::from(thread.signal))
+            }),
+    ));
+    row
+}
+
+#[derive(Default)]
+struct CoreRowMetrics {
+    pid: Option<u64>,
+    threads: Option<u64>,
+    mappings: Option<u64>,
+    size: Option<u64>,
+}
+
+fn core_history_row(
+    ui: &egui::Ui,
+    directory: &Path,
+    id: &str,
+    fallback: &str,
+    state: &str,
+    metrics: CoreRowMetrics,
+) -> Vec<(&'static str, crate::query::RowValue)> {
+    use crate::query::RowValue;
+    let CoreRowMetrics {
+        pid,
+        threads,
+        mappings,
+        size,
+    } = metrics;
+    let annotation = crate::evidence::annotation(ui, directory);
+    let mut row = crate::query::label_row(
+        id,
+        annotation.as_ref().map_or("", |value| &value.name),
+        &directory.display().to_string(),
+        annotation
+            .as_ref()
+            .map_or(&[], |value| value.tags.as_slice()),
+    );
+    row.extend([
+        ("capture.kind", RowValue::Text("core".into())),
+        ("capture.state", RowValue::Text(state.into())),
+        (
+            "capture.size",
+            size.map_or(RowValue::Missing, |value| {
+                RowValue::Number(i128::from(value))
+            }),
+        ),
+        (
+            "core.thread_count",
+            threads.map_or(RowValue::Missing, |value| {
+                RowValue::Number(i128::from(value))
+            }),
+        ),
+        ("entry.kind", RowValue::Text("core".into())),
+        ("entry.state", RowValue::Text(state.into())),
+        (
+            "entry.size",
+            size.map_or(RowValue::Missing, |value| {
+                RowValue::Number(i128::from(value))
+            }),
+        ),
+        (
+            "name",
+            RowValue::Text(
+                annotation
+                    .as_ref()
+                    .filter(|value| !value.name.is_empty())
+                    .map_or_else(|| fallback.into(), |value| value.name.clone()),
+            ),
+        ),
+        ("state", RowValue::Text(state.into())),
+        (
+            "pid",
+            pid.map_or(RowValue::Missing, |value| {
+                RowValue::Number(i128::from(value))
+            }),
+        ),
+        (
+            "threads",
+            threads.map_or(RowValue::Missing, |value| {
+                RowValue::Number(i128::from(value))
+            }),
+        ),
+        (
+            "mappings",
+            mappings.map_or(RowValue::Missing, |value| {
+                RowValue::Number(i128::from(value))
+            }),
+        ),
+        (
+            "size",
+            size.map_or(RowValue::Missing, |value| {
+                RowValue::Number(i128::from(value))
+            }),
+        ),
+    ]);
+    row
+}
+
+const NOTE_FIELDS: &[crate::query::FieldSpec<'static>] = &[
+    crate::query::FieldSpec::text("note.kind", "Recovered note kind"),
+    crate::query::FieldSpec::text("note.name", "Recovered note name"),
+    crate::query::FieldSpec::number(
+        "note.thread_id",
+        "Recorded thread ID; missing for unscoped notes",
+    ),
+    crate::query::FieldSpec::text("note.source", "ELF note source"),
+    crate::query::FieldSpec::boolean("note.complete", "Recovered note entry is available"),
+    crate::query::FieldSpec::text("note.summary", "Recovered value or inventory summary"),
+    crate::query::FieldSpec::text("kind", "Recovered note kind"),
+    crate::query::FieldSpec::text("name", "Recovered note name"),
+    crate::query::FieldSpec::number("thread", "Thread ID; missing for notes without a thread"),
+    crate::query::FieldSpec::text("value", "Rendered recovered value"),
+    crate::query::FieldSpec::number("value.num", "Numeric AUXV value"),
+    crate::query::FieldSpec::text("source", "ELF note source"),
+    crate::query::FieldSpec::text("availability", "Captured or unavailable"),
+];
+
 fn notes_table(ui: &mut egui::Ui, record: &CoreRecord, query: &mut String) {
     use egui_extras::{Column, TableBuilder};
     const EM_DASH: &str = "—";
     ui.label(
         "Other notes are inventoried below; floating-point/XSAVE payloads are not decoded here.",
     );
-    ui.horizontal(|ui| {
-        ui.label("Search");
-        crate::query::filter_edit(
-            ui,
-            query,
-            "Filter by substring",
-            ui.available_width().max(280.0),
-            crate::query::FilterScope::Record,
-        );
-    });
+    crate::query::filter_edit(
+        ui,
+        query,
+        "Filter recovered notes",
+        ui.available_width(),
+        crate::query::FilterScope::Table(NOTE_FIELDS),
+    );
+    let filter = crate::query::applied_table(ui, query, NOTE_FIELDS, ("core-notes", &record.dir));
+    if crate::query::compile_table(query, NOTE_FIELDS)
+        .error
+        .is_none()
+    {
+        crate::query::remember_valid_filter(ui, query);
+    }
+    #[derive(Clone)]
     struct NoteRow {
         kind: &'static str,
         name: String,
@@ -1763,6 +2220,7 @@ fn notes_table(ui: &mut egui::Ui, record: &CoreRecord, query: &mut String) {
         value: String,
         source: &'static str,
         availability: &'static str,
+        number: Option<u64>,
     }
     let mut rows = Vec::new();
     for (key, value) in &record.core.auxv {
@@ -1773,6 +2231,7 @@ fn notes_table(ui: &mut egui::Ui, record: &CoreRecord, query: &mut String) {
             value: format!("0x{value:x}"),
             source: "NT_AUXV",
             availability: "captured",
+            number: Some(*value),
         });
     }
     for note in &record.core.notes {
@@ -1783,6 +2242,7 @@ fn notes_table(ui: &mut egui::Ui, record: &CoreRecord, query: &mut String) {
             value: EM_DASH.to_string(),
             source: "core note",
             availability: "captured",
+            number: None,
         });
     }
     for file in &record.core.files {
@@ -1796,26 +2256,67 @@ fn notes_table(ui: &mut egui::Ui, record: &CoreRecord, query: &mut String) {
             ),
             source: "NT_FILE",
             availability: "captured",
+            number: None,
         });
     }
-    let needle = query.to_lowercase();
-    if !needle.is_empty() {
-        rows.retain(|row| {
-            [
-                row.kind,
-                row.name.as_str(),
-                row.thread,
-                row.value.as_str(),
-                row.source,
-                row.availability,
+    let total = rows.len();
+    impl NoteRow {
+        fn values(&self) -> Vec<(&'static str, crate::query::RowValue)> {
+            let row = self;
+            use crate::query::RowValue;
+            vec![
+                ("note.kind", RowValue::Text(row.kind.into())),
+                ("note.name", RowValue::Text(row.name.clone())),
+                ("note.thread_id", RowValue::Missing),
+                ("note.source", RowValue::Text(row.source.into())),
+                (
+                    "note.complete",
+                    RowValue::Bool(row.availability == "captured"),
+                ),
+                (
+                    "note.summary",
+                    RowValue::Text(if row.value == EM_DASH {
+                        row.name.clone()
+                    } else {
+                        row.value.clone()
+                    }),
+                ),
+                ("kind", RowValue::Text(row.kind.into())),
+                ("name", RowValue::Text(row.name.clone())),
+                ("thread", RowValue::Missing),
+                (
+                    "value",
+                    if row.value == EM_DASH {
+                        RowValue::Missing
+                    } else {
+                        RowValue::Text(row.value.clone())
+                    },
+                ),
+                (
+                    "value.num",
+                    row.number.map_or(RowValue::Missing, |value| {
+                        RowValue::Number(i128::from(value))
+                    }),
+                ),
+                ("source", RowValue::Text(row.source.into())),
+                ("availability", RowValue::Text(row.availability.into())),
             ]
-            .iter()
-            .any(|field| field.to_lowercase().contains(&needle))
-        });
+        }
     }
+    rows.retain(|row| filter.keep_table(&row.values()));
     let row_count = rows.len();
+    ui.weak(format!("{row_count} / {total} notes"));
+    let selection_id = ui.id().with(("core-note-detail", &record.dir));
+    if ui
+        .data(|data| data.get_temp::<NoteRow>(selection_id))
+        .is_some_and(|selected| !filter.keep_table(&selected.values()))
+    {
+        ui.data_mut(|data| data.remove::<NoteRow>(selection_id));
+    }
+
     TableBuilder::new(ui)
         .striped(true)
+        .sense(egui::Sense::click())
         .column(Column::auto().at_least(64.0))
         .column(Column::remainder().at_least(120.0))
         .column(Column::auto().at_least(64.0))
@@ -1841,11 +2342,56 @@ fn notes_table(ui: &mut egui::Ui, record: &CoreRecord, query: &mut String) {
                     note.availability,
                 ] {
                     row.col(|ui| {
-                        ui.label(text);
+                        ui.add(egui::Label::new(text).truncate())
+                            .on_hover_text(text);
                     });
                 }
+                if row.response().clicked() {
+                    row.response().request_focus();
+                    row.response().ctx.data_mut(|data| {
+                        data.insert_temp(selection_id, note.clone());
+                    });
+                }
+                row.response().context_menu(|ui| {
+                    crate::query::value_menu(
+                        ui,
+                        "name",
+                        &crate::query::RowValue::Text(note.name.clone()),
+                        query,
+                    );
+                    ui.menu_button("Filter by field", |ui| {
+                        for (field, value) in note.values() {
+                            ui.menu_button(field, |ui| {
+                                crate::query::value_menu(ui, field, &value, query)
+                            });
+                        }
+                    });
+                    if ui.button("Copy complete note").clicked() {
+                        ui.ctx().copy_text(format!(
+                            "{}\t{}\t{}\t{}\t{}\t{}",
+                            note.kind,
+                            note.name,
+                            note.thread,
+                            note.value,
+                            note.source,
+                            note.availability
+                        ));
+                        ui.close_menu();
+                    }
+                });
             });
         });
+    if let Some(note) = ui.data(|data| data.get_temp::<NoteRow>(selection_id)) {
+        let detail = format!(
+            "{} · {} · {}\n{}",
+            note.kind, note.name, note.source, note.value
+        );
+        egui::CollapsingHeader::new("Selected note")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.add(egui::Label::new(detail).selectable(true).wrap());
+            });
+    }
 }
 
 fn paint_asm(ui: &mut egui::Ui, line: &str) {
@@ -2450,6 +2996,8 @@ mod tests {
         let mut fixture = Fixture::new();
         let directory = fixture.directory.join("runs/waiting/core");
         fixture.view.acquired.push(AcquiredCore {
+            vm_id: "fixture-vm".into(),
+            boot_id: "fixture-boot".into(),
             run_id: "waiting".into(),
             directory: directory.clone(),
             file: None,
@@ -2793,7 +3341,8 @@ mod tests {
         let core = &fixture.view.selected.as_ref().unwrap().core;
         let choices = mapping_choices(core);
         assert!(
-            choices[0].0.starts_with("mmap 400000-") && choices[0].0.contains("r-x [/synthetic/sample]"),
+            choices[0].0.starts_with("mmap 400000-")
+                && choices[0].0.contains("r-x [/synthetic/sample]"),
             "{}",
             choices[0].0
         );
@@ -2830,6 +3379,53 @@ mod tests {
         unnamed.mappings[0].flags = 4;
         unnamed.threads[0].registers.clear();
         assert!(captured_code_origin(&unnamed, "").is_err());
+    }
+
+    #[test]
+    fn mapping_filter_clears_hidden_hexdump_and_preserves_missing_paths() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut fixture = Fixture::new();
+        let record = fixture.view.selected.as_ref().unwrap().clone();
+        for (draft, index) in [
+            (
+                "memory.permissions == \"r-x\" && memory.available == true",
+                0,
+            ),
+            ("memory.permissions == \"rw-\"", usize::MAX),
+        ] {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let id = ui
+                        .id()
+                        .with(("table-filter", ("core-mappings", &record.dir)));
+                    ui.data_mut(|data| data.insert_temp(id, draft.to_owned()));
+                    fixture.view.mappings(ui, &record);
+                });
+            });
+            assert_eq!(fixture.view.mapping_index, index);
+        }
+        assert!(fixture.view.page.is_none());
+        let mut unknown = record.core.clone();
+        unknown.files.clear();
+        assert!(crate::query::compile_table(
+            "missing(memory.path) && memory.start == 4194304 && memory.captured_size == 4096",
+            MAPPING_FIELDS
+        )
+        .keep_table(&mapping_filter_row(&unknown, &unknown.mappings[0])));
+        let mut unavailable = unknown.mappings[0].clone();
+        unavailable.available_size = 0;
+        assert!(crate::query::compile_table(
+            "memory.available == false && memory.captured_size == 0",
+            MAPPING_FIELDS
+        )
+        .keep_table(&mapping_filter_row(&unknown, &unavailable)));
+        let function = CoreFunction {
+            name: "FUN_fffffffffffffffe".into(),
+            address: u64::MAX - 1,
+            size: 0,
+        };
+        assert!(crate::query::compile_table("function.address == 0xfffffffffffffffe && function.size == 0 && missing(function.kind)", FUNCTION_FIELDS).keep_table(&function_filter_row(&function)));
     }
 
     #[test]
@@ -2969,9 +3565,10 @@ mod tests {
     #[ignore = "native X11; opens a genuine process core and waits for a Disassemble click"]
     fn native_genuine_core_disassemble() {
         use winit::platform::x11::EventLoopBuilderExtX11;
-        let source = PathBuf::from(std::env::var("ANTINOMIE_GENUINE_CORE").unwrap_or_else(|_| {
-            "/home/kali/antinomie/memory_test_17bc3c772460b5aef551e1bc56fd315d/memory/fc0b9d2bfdd7a015094efbf1c30718dc/memory.elf".into()
-        }));
+        let source = PathBuf::from(
+            std::env::var("ANTINOMIE_GENUINE_CORE")
+                .expect("Set ANTINOMIE_GENUINE_CORE to a retained native process ELF core"),
+        );
         assert!(
             source.is_file(),
             "genuine core missing: {}",

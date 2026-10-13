@@ -23,6 +23,8 @@ pub enum Dependency {
     Curl,
     DebianAccount,
     Bubblewrap,
+    Tshark,
+    Prlimit,
 }
 
 /// One checked requirement, its affected action and a concrete repair hint.
@@ -143,6 +145,20 @@ pub fn check(options: &BackendOptions) -> Report {
             "Run static analysis",
             Path::new("/usr/bin/bwrap"),
             "On Debian/Ubuntu: sudo apt install bubblewrap",
+        ),
+        tool(
+            Tshark,
+            "TShark",
+            "Apply Wireshark packet display filters",
+            Path::new("tshark"),
+            "On Debian/Ubuntu: sudo apt install tshark",
+        ),
+        tool(
+            Prlimit,
+            "prlimit",
+            "Bound packet-filter and network-triage engine resources",
+            Path::new("prlimit"),
+            "On Debian/Ubuntu: sudo apt install util-linux",
         ),
     ];
     if !options.headless {

@@ -25,6 +25,9 @@
 //! `"vm": {"transport": {"ring_kib": 4096, "lossless": true, "max_wait_ms": 100,
 //! "event_table": 16384}}` sets the VM's transport settings (any subset).
 //!
+//! A run may set `"core_dump_on_exit"`, `"memory_dump_on_exit"`, and
+//! `"capture_network"` (each boolean).
+//!
 //! `"capture_all": true` starts Capture All once the guest is up, before the
 //! runs, and stops it after them; the report then includes its summary.
 //!
@@ -375,6 +378,18 @@ fn run() -> Result<Value, String> {
                 .transpose()
                 .map_err(|e| format!("run.run_in: {e}"))?
                 .unwrap_or_default(),
+            capture_network: spec
+                .get("capture_network")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            memory_dump_on_exit: spec
+                .get("memory_dump_on_exit")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            core_dump_on_exit: spec
+                .get("core_dump_on_exit")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             ..ExecRequest::default()
         };
         let launched = Instant::now();
@@ -483,6 +498,7 @@ fn run() -> Result<Value, String> {
             .find(|c| c.id == id)
             .and_then(|c| serde_json::to_value(c).ok());
     }
+    session.settle(|snapshot| snapshot.memory_dump.is_none(), 180)?;
     let recorder = session.command(Command::RecorderStats, 120)?;
     let health = session.snapshot.health.clone();
     // Stopping waits for queued recording writes, which a long never-drop
@@ -509,16 +525,54 @@ fn run() -> Result<Value, String> {
     )
 }
 
-/// Save the VM screen as PNG through QEMU's QMP socket, which sits next to
-/// the serial log in the VM's runtime directory.
+/// Find the exact QMP endpoint of the QEMU process owning this serial log.
+/// Long recording paths cause the app to place its socket in a short private dir.
+fn owned_qmp(serial: &std::path::Path) -> Result<PathBuf, String> {
+    let mut found = None;
+    for entry in std::fs::read_dir("/proc").map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        if std::fs::read_link(entry.path().join("fd/1"))
+            .ok()
+            .as_deref()
+            != Some(serial)
+        {
+            continue;
+        }
+        let command =
+            std::fs::read(entry.path().join("cmdline")).map_err(|error| error.to_string())?;
+        if command.len() > 64 * 1024 {
+            return Err("test-owned QEMU command exceeds bound".into());
+        }
+        let arguments: Vec<_> = command.split(|&byte| byte == 0).collect();
+        if let Some(pair) = arguments.windows(2).find(|pair| pair[0] == b"-qmp") {
+            let socket = qmp_option(pair[1])?;
+            if found.replace(socket).is_some() {
+                return Err("multiple QEMU owners for test serial log".into());
+            }
+        }
+    }
+    found.ok_or_else(|| "test-owned QEMU QMP socket not found".into())
+}
+
+fn qmp_option(argument: &[u8]) -> Result<PathBuf, String> {
+    let argument = std::str::from_utf8(argument).map_err(|error| error.to_string())?;
+    let socket = argument
+        .strip_prefix("unix:")
+        .and_then(|argument| argument.strip_suffix(",server=on,wait=off"))
+        .filter(|socket| !socket.is_empty())
+        .ok_or("unexpected test-owned QMP option")?;
+    Ok(PathBuf::from(socket.replace(",,", ",")))
+}
+
+/// Save the VM screen through its exact owned QMP endpoint.
 fn screendump(snapshot: &Snapshot, path: &str) -> Result<String, String> {
     use std::io::{BufRead, BufReader, Write};
-    let socket = snapshot
-        .serial_log
-        .as_ref()
-        .and_then(|log| log.parent())
-        .map(|dir| dir.join("qmp.sock"))
-        .ok_or("no VM runtime directory for the screenshot")?;
+    let socket = owned_qmp(
+        snapshot
+            .serial_log
+            .as_deref()
+            .ok_or("no VM serial log for the screenshot")?,
+    )?;
     let stream = std::os::unix::net::UnixStream::connect(&socket)
         .map_err(|e| format!("QMP {}: {e}", socket.display()))?;
     stream
@@ -559,6 +613,30 @@ fn main() {
         Err(error) => {
             eprintln!("{error}");
             std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn screenshot_uses_exact_owned_qmp_options_including_escaped_commas() {
+        assert_eq!(
+            qmp_option(b"unix:/tmp/ant-owned/qmp.sock,server=on,wait=off").unwrap(),
+            PathBuf::from("/tmp/ant-owned/qmp.sock")
+        );
+        assert_eq!(
+            qmp_option(b"unix:/tmp/ant,,owned/qmp.sock,server=on,wait=off").unwrap(),
+            PathBuf::from("/tmp/ant,owned/qmp.sock")
+        );
+        for invalid in [
+            b"tcp:localhost:1".as_slice(),
+            b"unix:,server=on,wait=off",
+            b"unix:/tmp/q,server=on",
+            &[0xff],
+        ] {
+            assert!(qmp_option(invalid).is_err());
         }
     }
 }

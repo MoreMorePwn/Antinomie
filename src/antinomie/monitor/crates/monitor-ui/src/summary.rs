@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: MIT
-//! Selected-VM overview; live values are always scoped to the active VM.
+//! Native per-VM operational dashboard. Host observations never imply guest utilization.
 use crate::theme;
 use antinomie_monitor_core::{Snapshot, VmConfig, VmResources, VmState};
-use eframe::egui::{self, RichText};
-use std::collections::VecDeque;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use eframe::egui::{self, Color32, RichText};
+use std::collections::{BTreeMap, VecDeque};
+use std::ops::Deref;
+use std::sync::LazyLock;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const HISTORY_LIMIT: usize = 60;
+const HISTORY_LIMIT: usize = 120;
+const SESSION_LIMIT: usize = 16;
+const WINDOW: Duration = Duration::from_secs(120);
 
 #[derive(Clone)]
 struct RetainedSample {
@@ -19,118 +23,192 @@ struct RetainedSample {
     error: Option<String>,
     seen: Instant,
 }
-
 #[derive(Clone, Default)]
-pub(crate) struct CpuHistory {
+pub(crate) struct VmHistory {
     identity: Option<(String, Option<String>)>,
     sequence: Option<u64>,
     uptime_ms: Option<u64>,
     samples: VecDeque<Option<f64>>,
     times: VecDeque<Option<Instant>>,
+    residents: VecDeque<Option<f64>>,
+    disk_available: VecDeque<Option<f64>>,
     retained: Option<RetainedSample>,
     stopped_at: Option<SystemTime>,
+    last_gap: Option<Instant>,
 }
-
+#[derive(Clone, Default)]
+pub(crate) struct CpuHistory {
+    sessions: BTreeMap<String, VmHistory>,
+    selected: Option<String>,
+}
+impl Deref for CpuHistory {
+    type Target = VmHistory;
+    fn deref(&self) -> &VmHistory {
+        static EMPTY: LazyLock<VmHistory> = LazyLock::new(VmHistory::default);
+        self.selected
+            .as_ref()
+            .and_then(|id| self.sessions.get(id))
+            .unwrap_or(&EMPTY)
+    }
+}
 impl CpuHistory {
     pub(crate) fn observe(&mut self, snapshot: &Snapshot, selected: Option<&str>) {
-        let Some(selected) = selected else {
-            *self = Self::default();
+        self.observe_at(snapshot, selected, Instant::now());
+    }
+    fn observe_at(&mut self, snapshot: &Snapshot, selected: Option<&str>, now: Instant) {
+        self.selected = selected.map(str::to_owned);
+        let running = matches!(
+            snapshot.state,
+            VmState::Running | VmState::Starting | VmState::Stopping
+        );
+        let active = snapshot.active_vm.as_deref().filter(|_| running);
+        for (id, series) in &mut self.sessions {
+            if Some(id.as_str()) != active && series.stopped_at.is_none() {
+                series.stopped_at = Some(SystemTime::now());
+            }
+        }
+        let Some(id) = active else {
             return;
         };
-        let active = snapshot.active_vm.as_deref() == Some(selected);
         let sample = snapshot
             .vm_resources
             .as_ref()
-            .filter(|sample| sample.vm_id == selected);
-        if !active {
-            if self.identity.as_ref().is_some_and(|(id, _)| id == selected) {
-                if self.stopped_at.is_none() {
-                    self.stopped_at = Some(SystemTime::now());
-                }
-                return;
+            .filter(|sample| sample.vm_id == id);
+        if !self.sessions.contains_key(id) && self.sessions.len() >= SESSION_LIMIT {
+            let oldest = self
+                .sessions
+                .iter()
+                .filter(|(key, _)| key.as_str() != id)
+                .min_by_key(|(_, value)| value.retained.as_ref().map(|sample| sample.seen))
+                .map(|(key, _)| key.clone());
+            if let Some(oldest) = oldest {
+                self.sessions.remove(&oldest);
             }
-            *self = Self::default();
-            return;
         }
-        let Some(resources) = sample else {
-            *self = Self::default();
+        let series = self.sessions.entry(id.to_owned()).or_default();
+        let previous_boot = series.identity.as_ref().and_then(|(_, boot)| boot.clone());
+        if snapshot
+            .boot_id
+            .as_ref()
+            .is_some_and(|after| previous_boot.as_ref() != Some(after))
+        {
+            *series = VmHistory::default();
+        }
+        series.identity = Some((id.to_owned(), snapshot.boot_id.clone().or(previous_boot)));
+        series.stopped_at = None;
+        let Some(sample) = sample else {
+            if series.retained.as_ref().is_some_and(|last| {
+                now.saturating_duration_since(last.seen) >= Duration::from_secs(1)
+            }) && series
+                .last_gap
+                .is_none_or(|last| now.saturating_duration_since(last) >= Duration::from_secs(1))
+            {
+                series.push(now, None, None, None);
+                series.last_gap = Some(now);
+            }
             return;
         };
-        let identity = (resources.vm_id.clone(), snapshot.boot_id.clone());
-        let restarted = self
-            .sequence
-            .is_some_and(|sequence| resources.sample_sequence < sequence)
-            || self
-                .uptime_ms
-                .zip(resources.uptime_ms)
-                .is_some_and(|(old, new)| new < old);
-        if self.identity.as_ref() != Some(&identity) || restarted {
-            *self = Self {
-                identity: Some(identity),
-                ..Self::default()
-            };
-        }
-        if self.sequence == Some(resources.sample_sequence) {
-            self.stopped_at = None;
+        if series.sequence == Some(sample.sample_sequence) {
             return;
         }
-        self.stopped_at = None;
-        if let Some(previous) = self.sequence {
-            let gaps = resources
+        let restarted = series
+            .sequence
+            .is_some_and(|previous| sample.sample_sequence < previous)
+            || series
+                .uptime_ms
+                .zip(sample.uptime_ms)
+                .is_some_and(|(before, after)| after < before);
+        if restarted {
+            *series = VmHistory {
+                identity: series.identity.clone(),
+                ..Default::default()
+            };
+        }
+        if let Some(previous) = series.sequence {
+            let gap_count = sample
                 .sample_sequence
                 .saturating_sub(previous)
                 .saturating_sub(1)
                 .min(HISTORY_LIMIT as u64);
-            for _ in 0..gaps {
-                self.push(None);
+            let old_time = series.times.back().copied().flatten().unwrap_or(now);
+            let span = now.saturating_duration_since(old_time);
+            for gap in 0..gap_count {
+                let part = (gap + 1) as f64 / (gap_count + 1) as f64;
+                series.push(old_time + span.mul_f64(part), None, None, None);
             }
         }
-        self.push(cpu_value(resources.qemu_cpu_percent));
-        self.retained = Some(RetainedSample {
-            cpu: cpu_value(resources.qemu_cpu_percent),
-            rss: resources.qemu_resident_size,
-            host_ram: resources.host_memory_total_size,
-            disk_free: resources.data_disk_available_size,
-            disk_total: resources.data_disk_total_size,
-            uptime_ms: resources.uptime_ms,
-            error: resources.sample_error.clone(),
-            seen: Instant::now(),
+        series.push(
+            now,
+            cpu_value(sample.qemu_cpu_percent),
+            sample.qemu_resident_size.map(|value| value as f64),
+            sample.data_disk_available_size.map(|value| value as f64),
+        );
+        series.retained = Some(RetainedSample {
+            cpu: cpu_value(sample.qemu_cpu_percent),
+            rss: sample.qemu_resident_size,
+            host_ram: sample.host_memory_total_size,
+            disk_free: sample.data_disk_available_size,
+            disk_total: sample.data_disk_total_size,
+            uptime_ms: sample.uptime_ms,
+            error: sample.sample_error.clone(),
+            seen: now,
         });
-        self.sequence = Some(resources.sample_sequence);
-        if resources.uptime_ms.is_some() {
-            self.uptime_ms = resources.uptime_ms;
-        }
+        series.sequence = Some(sample.sample_sequence);
+        series.uptime_ms = sample.uptime_ms.or(series.uptime_ms);
+        series.last_gap = None;
     }
-
-    fn push(&mut self, value: Option<f64>) {
+    fn for_vm(&self, id: &str) -> Option<&VmHistory> {
+        self.sessions.get(id)
+    }
+}
+impl VmHistory {
+    fn push(&mut self, time: Instant, cpu: Option<f64>, rss: Option<f64>, disk: Option<f64>) {
         if self.samples.len() == HISTORY_LIMIT {
             self.samples.pop_front();
             self.times.pop_front();
+            self.residents.pop_front();
+            self.disk_available.pop_front();
         }
-        self.times.push_back(value.map(|_| Instant::now()));
-        self.samples.push_back(value);
+        self.samples.push_back(cpu);
+        self.times.push_back(Some(time));
+        self.residents.push_back(rss);
+        self.disk_available.push_back(disk);
     }
-
     fn scale(&self, cpus: u16) -> f64 {
-        let maximum = self
+        let peak = self
             .samples
             .iter()
             .flatten()
             .copied()
             .fold(f64::from(cpus.max(1)) * 100.0, f64::max);
-        let rounded = (maximum / 100.0).ceil() * 100.0;
-        if rounded.is_finite() {
-            rounded
-        } else {
-            maximum
-        }
+        (peak / 100.0).ceil() * 100.0
     }
 }
-
 fn cpu_value(value: Option<f64>) -> Option<f64> {
     value.filter(|value| value.is_finite() && *value >= 0.0)
 }
-
+fn fraction(value: Option<u64>, total: Option<u64>) -> Option<f64> {
+    value
+        .zip(total.filter(|total| *total > 0))
+        .map(|(value, total)| value as f64 / total as f64)
+}
+fn accent(index: usize) -> Color32 {
+    match index {
+        0 => Color32::from_rgb(234, 174, 79),
+        1 => Color32::from_rgb(82, 190, 184),
+        _ => Color32::from_rgb(115, 153, 213),
+    }
+}
+fn cpu_load_color(percent: f64, cpus: u16) -> Color32 {
+    let fraction = percent / (f64::from(cpus.max(1)) * 100.0);
+    if fraction >= 1.0 {
+        theme::error()
+    } else if fraction >= 0.8 {
+        theme::warn()
+    } else {
+        accent(0)
+    }
+}
 pub(crate) fn show(
     ui: &mut egui::Ui,
     snapshot: &Snapshot,
@@ -138,102 +216,174 @@ pub(crate) fn show(
     quota_gib: u32,
     history: &CpuHistory,
 ) {
-    let bound = ui.available_width();
+    let width = ui.available_width();
     egui::ScrollArea::vertical()
         .id_salt("vm-summary")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.set_max_width(bound);
+            ui.set_max_width(width);
             let Some(vm) = selected.and_then(|id| snapshot.vms.iter().find(|vm| vm.id == id))
             else {
-                ui.label("Select a VM from the sidebar to see its status and configuration.");
+                ui.heading("Select a VM");
+                ui.label("Choose a VM to see its status, resources and recording health.");
                 if snapshot.vms.is_empty() {
                     ui.label("Create a VM from File → New VM, or add a base first.");
                 }
                 return;
             };
-            let active = snapshot.active_vm.as_deref() == Some(vm.id.as_str());
-            let base = crate::app::selected_base(snapshot, vm.base_identity.as_deref());
-            let identity = |ui: &mut egui::Ui| {
-                ui.label(RichText::new(&vm.name).strong());
+            let active = snapshot.active_vm.as_deref() == Some(vm.id.as_str())
+                && snapshot.state != VmState::Stopped;
+            let narrow = width < ui.text_style_height(&egui::TextStyle::Body) * 32.0;
+            if narrow {
+                ui.add(egui::Label::new(RichText::new(&vm.name).heading().strong()).wrap());
+            }
+            ui.horizontal_wrapped(|ui| {
+                if !narrow {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(&vm.name)
+                                .size(ui.text_style_height(&egui::TextStyle::Heading))
+                                .strong(),
+                        )
+                        .wrap(),
+                    );
+                }
                 indicator(
                     ui,
                     state_label(snapshot, active),
                     state_color(snapshot, active),
                 );
+                ui.colored_label(theme::muted(), format!("{} vCPU", vm.cpus));
+                ui.colored_label(theme::muted(), network_label(vm));
+            });
+            if let Some(base) = crate::app::selected_base(snapshot, vm.base_identity.as_deref()) {
                 ui.add(
-                    egui::Label::new(base.map_or("Unavailable", |base| base.label.as_str())).wrap(),
+                    egui::Label::new(RichText::new(&base.label).small().color(theme::muted()))
+                        .wrap(),
                 );
-                if let Some(revision) = base.and_then(|base| base.revision) {
-                    ui.label(format!("rev {revision}"));
-                }
-                ui.label(network_label(vm));
-                ui.label(format!("{} vCPU", vm.cpus));
-            };
-            if bound < 720.0 {
-                ui.vertical(|ui| identity(ui));
-            } else {
-                ui.horizontal_wrapped(|ui| {
-                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                    ui.spacing_mut().item_spacing.x = 12.0;
-                    identity(ui);
-                });
             }
-            if active {
-                if let Some(error) = &snapshot.last_error {
-                    ui.add(egui::Label::new(RichText::new(error).color(theme::error())).wrap());
-                }
-            }
-
-            section(ui, "Resources");
+            let series = history.for_vm(&vm.id);
             let live = active
                 .then_some(snapshot.vm_resources.as_ref())
                 .flatten()
-                .filter(|resources| resources.vm_id == vm.id);
-            if let Some(resources) = live {
-                resource_cards(ui, resources, vm, quota_gib, None);
-                cpu_chart(ui, &history, Some(resources), None, vm.cpus);
-            } else if !active
-                && history
-                    .identity
-                    .as_ref()
-                    .is_some_and(|(id, _)| id == &vm.id)
-            {
-                if let Some(retained) = &history.retained {
-                    ui.label(match history.stopped_at {
-                        Some(stopped) => format!(
-                            "Stopped {} · last observation {}",
-                            format_utc(stopped),
-                            age(retained.seen)
-                        ),
-                        None => format!("Last observation {}", age(retained.seen)),
-                    });
-                    resource_cards(
-                        ui,
-                        &retained_resources(retained, &vm.id),
-                        vm,
-                        quota_gib,
-                        Some(retained),
-                    );
-                    cpu_chart(ui, &history, None, Some(retained), vm.cpus);
+                .filter(|sample| sample.vm_id == vm.id);
+            let retained = series.and_then(|series| series.retained.as_ref());
+            let fallback = retained.map(|last| retained_resources(last, &vm.id));
+            let resources = live.or(fallback.as_ref());
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(theme::muted(), "Resources");
+                if let Some(sample) = resources {
+                    if let Some(value) = sample.uptime_ms {
+                        ui.colored_label(theme::muted(), uptime(value));
+                    }
                 }
-            } else if active {
-                ui.label("Waiting for the first resource sample.");
+                if live.is_some() {
+                    ui.colored_label(theme::good(), "Live");
+                } else if let Some(last) = retained {
+                    ui.colored_label(
+                        theme::muted(),
+                        format!("Last observation {}", age(last.seen)),
+                    );
+                    if let Some(stopped) = series.and_then(|series| series.stopped_at) {
+                        ui.colored_label(
+                            theme::muted(),
+                            format!("Stopped {}", format_utc(stopped)),
+                        );
+                    }
+                } else {
+                    ui.colored_label(
+                        theme::muted(),
+                        if active {
+                            "Waiting for the first resource sample"
+                        } else {
+                            "No retained observation"
+                        },
+                    );
+                }
+            });
+            ui.add_space(6.0);
+            let empty = VmResources {
+                vm_id: vm.id.clone(),
+                ..Default::default()
+            };
+            let values = resources.unwrap_or(&empty);
+            let columns = if width >= ui.text_style_height(&egui::TextStyle::Body) * 48.0 {
+                3
+            } else if width >= ui.text_style_height(&egui::TextStyle::Body) * 32.0 {
+                2
             } else {
-                ui.label("No retained resource sample for this VM.");
-            }
-
-            section(ui, "Health");
+                1
+            };
+            let gap = 10.0;
+            let panel_width = ((width - gap * (columns - 1) as f32) / columns as f32).max(80.0);
+            egui::Grid::new("summary-resources")
+                .num_columns(columns)
+                .spacing(egui::vec2(gap, gap))
+                .show(ui, |ui| {
+                    for kind in 0..3 {
+                        resource_panel(ui, panel_width, kind, values, vm, series);
+                        if (kind + 1) % columns == 0 {
+                            ui.end_row();
+                        }
+                    }
+                    if 3 % columns != 0 {
+                        ui.end_row();
+                    }
+                });
+            ui.add_space(10.0);
+            egui::Frame::new()
+                .fill(theme::bg())
+                .stroke(egui::Stroke::new(1.0_f32, theme::line()))
+                .inner_margin(10)
+                .show(ui, |ui| {
+                    ui.set_min_width((width - 22.0).max(80.0));
+                    ui.horizontal_wrapped(|ui| {
+                        ui.strong("Capture storage");
+                        ui.label(if active {
+                            format!("{} / {quota_gib} GiB", size(snapshot.health.persisted_len))
+                        } else {
+                            format!("Limit {quota_gib} GiB")
+                        });
+                        ui.colored_label(theme::muted(), "Retained recording quota");
+                    });
+                    if active {
+                        meter(
+                            ui,
+                            fraction(
+                                Some(snapshot.health.persisted_len),
+                                Some(u64::from(quota_gib) * 1_073_741_824),
+                            ),
+                            theme::blue(),
+                            "Quota unavailable",
+                        );
+                    }
+                });
+            ui.add_space(10.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.strong("Health");
+                if active {
+                    let (label, color) = health_state(snapshot);
+                    indicator(ui, label, color);
+                } else {
+                    ui.colored_label(theme::muted(), "No live health observation");
+                }
+            });
             if active {
-                let (label, color) = health_state(snapshot);
-                indicator(ui, label, color);
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(format!("Transport drops: {}", snapshot.health.dropped));
-                    ui.label(format!(
-                        "Storage drops: {}",
-                        snapshot.health.storage_dropped_packets
-                    ));
-                    ui.label(format!("UI preview drops: {}", snapshot.health.ui_dropped));
+                    for (label, value) in [
+                        ("Transport drops", snapshot.health.dropped),
+                        ("Storage drops", snapshot.health.storage_dropped_packets),
+                        ("UI preview drops", snapshot.health.ui_dropped),
+                    ] {
+                        ui.colored_label(
+                            if value == 0 {
+                                theme::muted()
+                            } else {
+                                theme::warn()
+                            },
+                            format!("{label}: {value}"),
+                        );
+                    }
                 });
                 if snapshot.health.shedding {
                     ui.add(
@@ -249,30 +399,391 @@ pub(crate) fn show(
                 if let Some(error) = &snapshot.health.persistence_error {
                     ui.add(egui::Label::new(RichText::new(error).color(theme::error())).wrap());
                 }
-                egui::CollapsingHeader::new("Health counters")
-                    .id_salt("summary-health-counters")
-                    .show(ui, |ui| health(ui, snapshot));
-            } else {
-                ui.label("Live health is available while this VM is active.");
-                if snapshot.active_vm.is_some() {
-                    ui.label("Another VM is active; its health is shown in its own Summary.");
+                if let Some(error) = &snapshot.last_error {
+                    ui.add(egui::Label::new(RichText::new(error).color(theme::error())).wrap());
                 }
+                egui::CollapsingHeader::new("More health details")
+                    .show(ui, |ui| health(ui, snapshot));
+            }
+            if let Some(error) = resources.and_then(|sample| sample.sample_error.as_ref()) {
+                ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
             }
         });
 }
-
-fn indicator(ui: &mut egui::Ui, label: &str, color: egui::Color32) {
-    ui.horizontal_wrapped(|ui| {
-        let height = ui.text_style_height(&egui::TextStyle::Body);
-        let (rect, _) =
-            ui.allocate_exact_size(egui::vec2(height * 0.65, height), egui::Sense::hover());
-        ui.painter()
-            .circle_filled(rect.center(), height * 0.17, color);
-        ui.colored_label(color, label);
+fn resource_panel(
+    ui: &mut egui::Ui,
+    width: f32,
+    kind: usize,
+    sample: &VmResources,
+    vm: &VmConfig,
+    history: Option<&VmHistory>,
+) {
+    egui::Frame::new()
+        .fill(theme::bg())
+        .stroke(egui::Stroke::new(1.0_f32, theme::line()))
+        .inner_margin(12)
+        .show(ui, |ui| {
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                let inner = (width - 26.0).max(54.0);
+                ui.set_min_width(inner);
+                ui.set_max_width(inner);
+                let (title, value, unit, ratio, note) = match kind {
+                    0 => (
+                        "QEMU host CPU",
+                        cpu_value(sample.qemu_cpu_percent).map(|v| format!("{v:.1}")),
+                        "%",
+                        cpu_value(sample.qemu_cpu_percent)
+                            .map(|v| v / (f64::from(vm.cpus.max(1)) * 100.0)),
+                        format!("{} vCPU capacity · 100% = one host core", vm.cpus),
+                    ),
+                    1 => {
+                        let (v, u) = split_size(sample.qemu_resident_size);
+                        (
+                            "QEMU resident memory",
+                            v,
+                            u,
+                            fraction(sample.qemu_resident_size, sample.host_memory_total_size),
+                            format!(
+                                "Guest capacity {} · host visible {}",
+                                size(u64::from(vm.ram_mib) * 1_048_576),
+                                optional_size(sample.host_memory_total_size)
+                            ),
+                        )
+                    }
+                    _ => {
+                        let (v, u) = split_size(sample.data_disk_available_size);
+                        (
+                            "Host data volume free",
+                            v,
+                            u,
+                            sample
+                                .data_disk_available_size
+                                .zip(sample.data_disk_total_size)
+                                .filter(|(a, t)| a <= t)
+                                .and_then(|(a, t)| fraction(Some(a), Some(t))),
+                            format!(
+                                "{} volume · {} guest disk",
+                                optional_size(sample.data_disk_total_size),
+                                size(u64::from(vm.disk_gib) * 1_073_741_824)
+                            ),
+                        )
+                    }
+                };
+                ui.strong(title);
+                let font = ui.text_style_height(&egui::TextStyle::Body);
+                let color = if kind == 0 {
+                    sample
+                        .qemu_cpu_percent
+                        .map(|v| cpu_load_color(v, vm.cpus))
+                        .unwrap_or_else(theme::muted)
+                } else {
+                    accent(kind)
+                };
+                gauge(
+                    ui,
+                    ratio,
+                    value.as_deref().unwrap_or("—"),
+                    unit,
+                    color,
+                    inner,
+                    (font * 6.0).clamp(96.0, 160.0),
+                );
+                ui.add(egui::Label::new(RichText::new(note).small().color(theme::muted())).wrap());
+                if value.is_none() {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new("Unavailable measurement")
+                                .small()
+                                .color(theme::muted()),
+                        )
+                        .wrap(),
+                    );
+                } else if ratio.is_none() {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new("Capacity unavailable")
+                                .small()
+                                .color(theme::muted()),
+                        )
+                        .wrap(),
+                    );
+                }
+                ui.add_space(5.0);
+                let (data, scale) = if let Some(series) = history {
+                    match kind {
+                        0 => (&series.samples, series.scale(vm.cpus)),
+                        1 => (
+                            &series.residents,
+                            sample
+                                .host_memory_total_size
+                                .map(|v| v as f64)
+                                .unwrap_or_else(|| {
+                                    series
+                                        .residents
+                                        .iter()
+                                        .flatten()
+                                        .copied()
+                                        .fold(1.0, f64::max)
+                                }),
+                        ),
+                        _ => (
+                            &series.disk_available,
+                            sample
+                                .data_disk_total_size
+                                .map(|v| v as f64)
+                                .unwrap_or_else(|| {
+                                    series
+                                        .disk_available
+                                        .iter()
+                                        .flatten()
+                                        .copied()
+                                        .fold(1.0, f64::max)
+                                }),
+                        ),
+                    }
+                } else {
+                    (&VecDeque::new(), 1.0)
+                };
+                trend(
+                    ui,
+                    history,
+                    data,
+                    scale,
+                    kind,
+                    color,
+                    (font * 5.0).clamp(88.0, 140.0),
+                );
+                if kind == 1 {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new("Guest RAM utilization unavailable")
+                                .small()
+                                .color(theme::muted()),
+                        )
+                        .wrap(),
+                    );
+                }
+            });
+        });
+}
+fn gauge(
+    ui: &mut egui::Ui,
+    ratio: Option<f64>,
+    value: &str,
+    unit: &str,
+    color: Color32,
+    width: f32,
+    height: f32,
+) {
+    let (response, painter) = ui.allocate_painter(egui::vec2(width, height), egui::Sense::hover());
+    let radius = (width * 0.40).min(height * 0.77).max(12.0);
+    let center = egui::pos2(response.rect.center().x, response.rect.top() + radius + 5.0);
+    let arc = |part: f64| -> Vec<egui::Pos2> {
+        (0..=48)
+            .map(|n| {
+                let angle =
+                    std::f32::consts::PI + (n as f32 / 48.0) * std::f32::consts::PI * part as f32;
+                center + egui::vec2(angle.cos() * radius, angle.sin() * radius)
+            })
+            .collect()
+    };
+    painter.add(egui::Shape::line(
+        arc(1.0),
+        egui::Stroke::new(6.0_f32, theme::line()),
+    ));
+    if let Some(part) = ratio.filter(|v| v.is_finite()) {
+        painter.add(egui::Shape::line(
+            arc(part.clamp(0.0, 1.0)),
+            egui::Stroke::new(6.0_f32, color),
+        ));
+    }
+    let number_font = egui::FontId::proportional((radius * 0.45).clamp(24.0, 46.0));
+    painter.text(
+        center - egui::vec2(0.0, 8.0),
+        egui::Align2::CENTER_BOTTOM,
+        value,
+        number_font,
+        if ratio.is_some() {
+            theme::text()
+        } else {
+            theme::muted()
+        },
+    );
+    painter.text(
+        center + egui::vec2(0.0, 4.0),
+        egui::Align2::CENTER_TOP,
+        unit,
+        egui::FontId::proportional(ui.text_style_height(&egui::TextStyle::Small)),
+        theme::muted(),
+    );
+    response.on_hover_text(if let Some(value) = ratio {
+        format!("{:.1}% of the labeled capacity", value * 100.0)
+    } else {
+        "Unavailable observation or capacity; not zero".into()
     });
 }
-
-fn state_color(snapshot: &Snapshot, active: bool) -> egui::Color32 {
+fn trend(
+    ui: &mut egui::Ui,
+    history: Option<&VmHistory>,
+    values: &VecDeque<Option<f64>>,
+    scale: f64,
+    kind: usize,
+    color: Color32,
+    height: f32,
+) {
+    let (response, painter) = ui.allocate_painter(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::hover(),
+    );
+    let font = egui::FontId::proportional(ui.text_style_height(&egui::TextStyle::Small));
+    let plot = egui::Rect::from_min_max(
+        response.rect.min + egui::vec2(3.0, font.size + 3.0),
+        response.rect.max - egui::vec2(3.0, font.size + 4.0),
+    );
+    let top = if kind == 0 {
+        format!("{scale:.0}%")
+    } else {
+        size(scale.max(0.0) as u64)
+    };
+    painter.text(
+        response.rect.min,
+        egui::Align2::LEFT_TOP,
+        top,
+        font.clone(),
+        theme::muted(),
+    );
+    for n in 0..=3 {
+        let y = plot.top() + plot.height() * n as f32 / 3.0;
+        painter.line_segment(
+            [egui::pos2(plot.left(), y), egui::pos2(plot.right(), y)],
+            egui::Stroke::new(0.6_f32, theme::line()),
+        );
+    }
+    let anchor = history
+        .and_then(|h| h.times.back().copied().flatten())
+        .unwrap_or_else(Instant::now);
+    let start = anchor.checked_sub(WINDOW).unwrap_or(anchor);
+    let mut previous: Option<egui::Pos2> = None;
+    let mut closest: Option<(f32, f64, Instant)> = None;
+    if let Some(history) = history {
+        for (value, time) in values.iter().zip(&history.times) {
+            let Some(time) = time else {
+                previous = None;
+                continue;
+            };
+            let Some(value) = value.filter(|v| v.is_finite()) else {
+                previous = None;
+                continue;
+            };
+            if *time < start {
+                previous = None;
+                continue;
+            }
+            let x = plot.left()
+                + plot.width() * time.saturating_duration_since(start).as_secs_f64() as f32
+                    / WINDOW.as_secs_f32();
+            let point = egui::pos2(
+                x,
+                plot.bottom() - plot.height() * (value / scale.max(1.0)).clamp(0.0, 1.0) as f32,
+            );
+            if let Some(before) = previous {
+                painter.line_segment([before, point], egui::Stroke::new(1.8_f32, color));
+                painter.add(egui::Shape::convex_polygon(
+                    vec![
+                        egui::pos2(before.x, plot.bottom()),
+                        before,
+                        point,
+                        egui::pos2(point.x, plot.bottom()),
+                    ],
+                    color.linear_multiply(0.08),
+                    egui::Stroke::NONE,
+                ));
+            }
+            previous = Some(point);
+            if let Some(mouse) = response.hover_pos() {
+                let distance = (mouse.x - x).abs();
+                if closest.is_none_or(|(old, _, _)| distance < old) {
+                    closest = Some((distance, value, *time));
+                }
+            }
+        }
+    }
+    painter.text(
+        egui::pos2(plot.left(), response.rect.bottom()),
+        egui::Align2::LEFT_BOTTOM,
+        "−2 min",
+        font.clone(),
+        theme::muted(),
+    );
+    painter.text(
+        egui::pos2(plot.right(), response.rect.bottom()),
+        egui::Align2::RIGHT_BOTTOM,
+        if history.is_some_and(|h| h.stopped_at.is_some()) {
+            "last"
+        } else {
+            "now"
+        },
+        font,
+        theme::muted(),
+    );
+    if let Some((_, value, time)) = closest {
+        response.on_hover_text(format!(
+            "{} · {}",
+            if kind == 0 {
+                format!("{value:.1}%")
+            } else {
+                size(value as u64)
+            },
+            age(time)
+        ));
+    }
+}
+fn indicator(ui: &mut egui::Ui, label: &str, color: Color32) {
+    ui.add(egui::Label::new(RichText::new(format!("● {label}")).color(color)).wrap());
+}
+fn meter(ui: &mut egui::Ui, ratio: Option<f64>, color: Color32, unavailable: &str) {
+    let (response, painter) =
+        ui.allocate_painter(egui::vec2(ui.available_width(), 8.0), egui::Sense::hover());
+    painter.rect_filled(response.rect, 2.0, theme::line());
+    if let Some(ratio) = ratio.filter(|v| v.is_finite()) {
+        let filled = egui::Rect::from_min_size(
+            response.rect.min,
+            egui::vec2(
+                response.rect.width() * ratio.clamp(0.0, 1.0) as f32,
+                response.rect.height(),
+            ),
+        );
+        painter.rect_filled(filled, 2.0, color);
+    } else {
+        response.on_hover_text(unavailable);
+    }
+}
+fn retained_resources(last: &RetainedSample, id: &str) -> VmResources {
+    VmResources {
+        vm_id: id.into(),
+        sample_sequence: 0,
+        uptime_ms: last.uptime_ms,
+        qemu_cpu_percent: last.cpu,
+        qemu_resident_size: last.rss,
+        host_memory_total_size: last.host_ram,
+        data_disk_available_size: last.disk_free,
+        data_disk_total_size: last.disk_total,
+        sample_error: last.error.clone(),
+    }
+}
+fn state_label(snapshot: &Snapshot, active: bool) -> &'static str {
+    if !active {
+        return "Stopped";
+    }
+    match snapshot.state {
+        VmState::Running => "Running",
+        VmState::Starting => "Starting",
+        VmState::Stopping => "Stopping",
+        VmState::Failed => "Failed",
+        VmState::Stopped => "Stopped",
+    }
+}
+fn state_color(snapshot: &Snapshot, active: bool) -> Color32 {
     if !active {
         return theme::muted();
     }
@@ -283,484 +794,6 @@ fn state_color(snapshot: &Snapshot, active: bool) -> egui::Color32 {
         VmState::Stopped => theme::muted(),
     }
 }
-
-fn cpu_load_color(percent: f64, cpus: u16) -> egui::Color32 {
-    let capacity = f64::from(cpus.max(1)) * 100.0;
-    let fraction = percent / capacity;
-    if fraction >= 1.0 {
-        theme::error()
-    } else if fraction >= 0.8 {
-        theme::warn()
-    } else {
-        theme::blue()
-    }
-}
-
-fn age(seen: Instant) -> String {
-    let seconds = seen.elapsed().as_secs();
-    if seconds < 60 {
-        format!("{seconds} s ago")
-    } else {
-        format!("{} m ago", seconds / 60)
-    }
-}
-
-fn format_utc(time: SystemTime) -> String {
-    let Ok(duration) = time.duration_since(UNIX_EPOCH) else {
-        return "Unavailable".into();
-    };
-    let secs = duration.as_secs();
-    let day_seconds = secs % 86_400;
-    let (year, month, day) = civil_from_days((secs / 86_400) as i64);
-    format!(
-        "{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02} UTC",
-        day_seconds / 3600,
-        day_seconds / 60 % 60,
-        day_seconds % 60
-    )
-}
-
-fn civil_from_days(z: i64) -> (i32, u32, u32) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let year = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let month_part = (5 * doy + 2) / 153;
-    let day = doy - (153 * month_part + 2) / 5 + 1;
-    let month = if month_part < 10 {
-        month_part + 3
-    } else {
-        month_part - 9
-    };
-    let year = if month <= 2 { year + 1 } else { year };
-    (year as i32, month as u32, day as u32)
-}
-
-fn retained_resources(sample: &RetainedSample, vm_id: &str) -> VmResources {
-    VmResources {
-        vm_id: vm_id.to_owned(),
-        sample_sequence: 0,
-        uptime_ms: sample.uptime_ms,
-        qemu_cpu_percent: sample.cpu,
-        qemu_resident_size: sample.rss,
-        host_memory_total_size: sample.host_ram,
-        data_disk_available_size: sample.disk_free,
-        data_disk_total_size: sample.disk_total,
-        sample_error: sample.error.clone(),
-    }
-}
-
-fn resource_cards(
-    ui: &mut egui::Ui,
-    resources: &VmResources,
-    vm: &VmConfig,
-    quota_gib: u32,
-    _retained: Option<&RetainedSample>,
-) {
-    let width = ui.available_width();
-    let columns: usize = if width >= 980.0 {
-        3
-    } else if width >= 640.0 {
-        2
-    } else {
-        1
-    };
-    let gap = 10.0;
-    let card_width =
-        ((width - gap * (columns.saturating_sub(1) as f32)) / columns as f32).max(140.0);
-    let mut index = 0usize;
-    egui::Grid::new("summary-resource-cards")
-        .num_columns(columns)
-        .spacing(egui::vec2(gap, gap))
-        .show(ui, |ui| {
-            place(ui, columns, &mut index, card_width, |ui| {
-                ui.label(RichText::new("QEMU host CPU").strong());
-                row(
-                    ui,
-                    "QEMU CPU",
-                    cpu_value(resources.qemu_cpu_percent).map_or_else(
-                        || "Unavailable".into(),
-                        |value| format!("{value:.1}% (100% = one host CPU core)"),
-                    ),
-                );
-                let fraction = cpu_value(resources.qemu_cpu_percent)
-                    .map(|value| value / (f64::from(vm.cpus.max(1)) * 100.0));
-                let color = cpu_value(resources.qemu_cpu_percent)
-                    .map(|value| cpu_load_color(value, vm.cpus))
-                    .unwrap_or_else(theme::muted);
-                meter(ui, fraction, color, "Waiting for a CPU sample");
-                ui.label(
-                    RichText::new("100% = one host CPU core")
-                        .small()
-                        .color(theme::muted()),
-                );
-            });
-            place(ui, columns, &mut index, card_width, |ui| {
-                memory_meter(ui, resources)
-            });
-            place(ui, columns, &mut index, card_width, |ui| {
-                ui.label(RichText::new("Configured guest RAM").strong());
-                row(ui, "Capacity", format!("{} MiB", vm.ram_mib));
-                ui.add(
-                    egui::Label::new(
-                        RichText::new("guest RAM utilization is unavailable").color(theme::muted()),
-                    )
-                    .wrap(),
-                );
-                meter(ui, None, theme::muted(), "No guest RAM usage telemetry");
-            });
-            place(ui, columns, &mut index, card_width, |ui| disk_meter(ui, resources));
-            place(ui, columns, &mut index, card_width, |ui| {
-                ui.label(RichText::new("Capture quota").strong());
-                row(ui, "Configured limit", format!("{quota_gib} GiB"));
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(
-                            "Recording limit for this monitor. The footer CAP counter is bytes stored.",
-                        )
-                        .color(theme::muted()),
-                    )
-                    .wrap(),
-                );
-            });
-            if index % columns != 0 {
-                ui.end_row();
-            }
-        });
-    row(
-        ui,
-        "VM uptime",
-        resources
-            .uptime_ms
-            .map_or_else(|| "Unavailable".into(), uptime),
-    );
-    ui.add(
-        egui::Label::new(
-            RichText::new(
-                "QEMU CPU and RSS include host overhead. Guest RAM utilization is unavailable.",
-            )
-            .color(theme::muted()),
-        )
-        .wrap(),
-    );
-    if let Some(error) = &resources.sample_error {
-        ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
-    }
-}
-
-fn place(
-    ui: &mut egui::Ui,
-    columns: usize,
-    index: &mut usize,
-    width: f32,
-    body: impl FnOnce(&mut egui::Ui),
-) {
-    card(ui, width, body);
-    *index += 1;
-    if *index % columns == 0 {
-        ui.end_row();
-    }
-}
-
-fn card(ui: &mut egui::Ui, width: f32, body: impl FnOnce(&mut egui::Ui)) {
-    let min_height = ui.text_style_height(&egui::TextStyle::Body) * 8.2;
-    ui.allocate_ui_with_layout(
-        egui::vec2(width, min_height),
-        egui::Layout::top_down(egui::Align::Min),
-        |ui| {
-            ui.set_min_width(width);
-            egui::Frame::new()
-                .fill(theme::raised())
-                .stroke(egui::Stroke::new(1.0_f32, theme::line()))
-                .inner_margin(egui::Margin::same(10))
-                .show(ui, |ui| {
-                    ui.set_min_width((width - 22.0).max(80.0));
-                    ui.set_min_height((min_height - 22.0).max(72.0));
-                    body(ui);
-                });
-        },
-    );
-}
-
-fn cpu_chart(
-    ui: &mut egui::Ui,
-    history: &CpuHistory,
-    resources: Option<&VmResources>,
-    retained: Option<&RetainedSample>,
-    cpus: u16,
-) {
-    let _ = (resources, retained);
-    let scale = history.scale(cpus);
-    ui.add(egui::Label::new(RichText::new(format!("Recent 60 samples · Scale 0–{scale:.0}%")).color(theme::muted())).wrap())
-        .on_hover_text("Samples are retained while Summary is visible. Missing observations break the line; they are not zero CPU usage. The graph starts at the configured vCPU scale and expands for QEMU overhead.");
-    let height = (ui.text_style_height(&egui::TextStyle::Body) * 5.0).max(120.0);
-    let (response, painter) = ui.allocate_painter(
-        egui::vec2(ui.available_width(), height),
-        egui::Sense::hover(),
-    );
-    let font = egui::FontId::proportional(ui.text_style_height(&egui::TextStyle::Small));
-    let label_width = 48.0_f32.min(response.rect.width() * 0.2);
-    let plot = egui::Rect::from_min_max(
-        response.rect.min + egui::vec2(label_width, 2.0),
-        response.rect.max - egui::vec2(4.0, font.size + 6.0),
-    );
-    painter.rect_filled(plot, 3.0, theme::bg());
-    painter.rect_stroke(
-        plot,
-        3.0,
-        egui::Stroke::new(1.0_f32, theme::line()),
-        egui::StrokeKind::Inside,
-    );
-    painter.text(
-        egui::pos2(response.rect.left(), plot.top()),
-        egui::Align2::LEFT_TOP,
-        format!("{scale:.0}%"),
-        font.clone(),
-        theme::muted(),
-    );
-    painter.text(
-        egui::pos2(response.rect.left(), plot.center().y),
-        egui::Align2::LEFT_CENTER,
-        format!("{:.0}%", scale / 2.0),
-        font.clone(),
-        theme::muted(),
-    );
-    painter.text(
-        egui::pos2(response.rect.left(), plot.bottom()),
-        egui::Align2::LEFT_BOTTOM,
-        "0%",
-        font.clone(),
-        theme::muted(),
-    );
-    let older = history
-        .times
-        .iter()
-        .flatten()
-        .next()
-        .map(|instant| format!("{} s ago", instant.elapsed().as_secs()))
-        .unwrap_or_else(|| "older".into());
-    painter.text(
-        egui::pos2(plot.left(), plot.bottom() + 2.0),
-        egui::Align2::LEFT_TOP,
-        older,
-        font.clone(),
-        theme::muted(),
-    );
-    painter.text(
-        egui::pos2(plot.right(), plot.bottom() + 2.0),
-        egui::Align2::RIGHT_TOP,
-        "now",
-        font.clone(),
-        theme::muted(),
-    );
-    for step in 1..4 {
-        let y = plot.bottom() - plot.height() * step as f32 / 4.0;
-        painter.line_segment(
-            [egui::pos2(plot.left(), y), egui::pos2(plot.right(), y)],
-            egui::Stroke::new(0.5_f32, theme::line()),
-        );
-    }
-    let mut previous: Option<(egui::Pos2, f64)> = None;
-    let start = HISTORY_LIMIT - history.samples.len();
-    for (index, value) in history.samples.iter().enumerate() {
-        let Some(value) = value else {
-            previous = None;
-            continue;
-        };
-        let point = egui::pos2(
-            plot.left() + plot.width() * (start + index) as f32 / (HISTORY_LIMIT - 1) as f32,
-            plot.bottom() - plot.height() * (value / scale).clamp(0.0, 1.0) as f32,
-        );
-        let color = cpu_load_color(*value, cpus);
-        if let Some((before, _)) = previous {
-            painter.add(egui::Shape::convex_polygon(
-                vec![
-                    egui::pos2(before.x, plot.bottom()),
-                    before,
-                    point,
-                    egui::pos2(point.x, plot.bottom()),
-                ],
-                egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 35),
-                egui::Stroke::NONE,
-            ));
-            painter.line_segment([before, point], egui::Stroke::new(1.8_f32, color));
-        } else {
-            painter.circle_filled(point, 2.0, color);
-        }
-        previous = Some((point, *value));
-    }
-    if let Some(pointer) = response.hover_pos() {
-        if let Some((value, when)) = nearest_sample(history, plot, pointer.x) {
-            let when = when
-                .map(|instant| format!("{} s ago", instant.elapsed().as_secs()))
-                .unwrap_or_else(|| "sample".into());
-            response
-                .clone()
-                .on_hover_text(format!("{value:.1}% · {when}"));
-        }
-    }
-}
-
-fn nearest_sample(
-    history: &CpuHistory,
-    plot: egui::Rect,
-    x: f32,
-) -> Option<(f64, Option<Instant>)> {
-    let start = HISTORY_LIMIT - history.samples.len();
-    let mut best: Option<(f32, f64, Option<Instant>)> = None;
-    for (index, value) in history.samples.iter().enumerate() {
-        let Some(value) = value else {
-            continue;
-        };
-        let point_x =
-            plot.left() + plot.width() * (start + index) as f32 / (HISTORY_LIMIT - 1) as f32;
-        let distance = (point_x - x).abs();
-        let when = history.times.get(index).copied().flatten();
-        if best
-            .as_ref()
-            .is_none_or(|(best_distance, _, _)| distance < *best_distance)
-        {
-            best = Some((distance, *value, when));
-        }
-    }
-    best.map(|(_, value, when)| (value, when))
-}
-
-fn fraction(value: Option<u64>, total: Option<u64>) -> Option<f64> {
-    value
-        .zip(total.filter(|total| *total > 0))
-        .map(|(value, total)| value as f64 / total as f64)
-}
-
-fn meter(ui: &mut egui::Ui, fraction: Option<f64>, color: egui::Color32, unavailable: &str) {
-    let height = (ui.text_style_height(&egui::TextStyle::Body) * 0.6).max(10.0);
-    let (response, painter) = ui.allocate_painter(
-        egui::vec2(ui.available_width(), height),
-        egui::Sense::hover(),
-    );
-    let rect = response.rect;
-    painter.rect_filled(rect, 3.0, theme::bg());
-    painter.rect_stroke(
-        rect,
-        3.0,
-        egui::Stroke::new(1.0_f32, theme::line()),
-        egui::StrokeKind::Inside,
-    );
-    if let Some(fraction) = fraction.filter(|fraction| fraction.is_finite()) {
-        let filled = egui::Rect::from_min_size(
-            rect.min,
-            egui::vec2(
-                rect.width() * fraction.clamp(0.0, 1.0) as f32,
-                rect.height(),
-            ),
-        );
-        if filled.width() > 0.0 {
-            painter.rect_filled(filled, 3.0, color);
-        }
-    } else {
-        painter.rect_stroke(
-            rect,
-            3.0,
-            egui::Stroke::new(1.0_f32, theme::line()),
-            egui::StrokeKind::Inside,
-        );
-        ui.colored_label(theme::muted(), unavailable);
-    }
-}
-
-fn memory_meter(ui: &mut egui::Ui, resources: &VmResources) {
-    ui.label(RichText::new("QEMU RSS").strong());
-    row(ui, "Resident", optional_size(resources.qemu_resident_size));
-    row(
-        ui,
-        "Host-visible RAM",
-        optional_size(resources.host_memory_total_size),
-    );
-    let ratio = fraction(
-        resources.qemu_resident_size,
-        resources.host_memory_total_size,
-    );
-    if let Some(ratio) = ratio {
-        row(
-            ui,
-            "QEMU share",
-            format!("{:.1}% of host-visible RAM", ratio * 100.0),
-        );
-    }
-    meter(
-        ui,
-        ratio,
-        theme::blue(),
-        if resources
-            .host_memory_total_size
-            .is_none_or(|total| total == 0)
-        {
-            "Capacity unavailable"
-        } else {
-            "Resident measurement unavailable"
-        },
-    );
-}
-
-fn disk_meter(ui: &mut egui::Ui, resources: &VmResources) {
-    ui.label(RichText::new("Host data volume").strong());
-    row(
-        ui,
-        "Available to app",
-        optional_size(resources.data_disk_available_size),
-    );
-    row(
-        ui,
-        "Volume capacity",
-        optional_size(resources.data_disk_total_size),
-    );
-    let ratio = resources
-        .data_disk_available_size
-        .zip(resources.data_disk_total_size)
-        .filter(|(available, total)| available <= total)
-        .and_then(|(available, total)| fraction(Some(available), Some(total)));
-    if let Some(ratio) = ratio {
-        row(ui, "Available share", format!("{:.1}%", ratio * 100.0));
-    }
-    if let Some(unavailable) = resources
-        .data_disk_total_size
-        .zip(resources.data_disk_available_size)
-        .and_then(|(total, available)| total.checked_sub(available))
-    {
-        row(ui, "Unavailable to app", size(unavailable));
-    }
-    meter(
-        ui,
-        ratio,
-        theme::good(),
-        if resources
-            .data_disk_total_size
-            .is_none_or(|total| total == 0)
-        {
-            "Capacity unavailable"
-        } else if resources.data_disk_available_size.is_none() {
-            "Available-space measurement unavailable"
-        } else {
-            "Inconsistent volume measurement"
-        },
-    );
-}
-
-fn state_label(snapshot: &Snapshot, active: bool) -> &'static str {
-    if !active {
-        return "Stopped";
-    }
-    match snapshot.state {
-        VmState::Stopped => "Stopped",
-        VmState::Starting => "Starting",
-        VmState::Running => "Running",
-        VmState::Stopping => "Stopping",
-        VmState::Failed => "Failed",
-    }
-}
-
 fn network_label(vm: &VmConfig) -> &'static str {
     if vm.isolated_network {
         "Isolated"
@@ -770,119 +803,93 @@ fn network_label(vm: &VmConfig) -> &'static str {
         "Disabled"
     }
 }
-
-fn health_state(snapshot: &Snapshot) -> (&'static str, egui::Color32) {
-    let health = &snapshot.health;
-    let impaired = health.dropped > 0
-        || health.storage_dropped_packets > 0
-        || health.parser_errors > 0
-        || health.parser_evicted_count > 0
-        || health.ui_dropped > 0
-        || health.bad_commands > 0
-        || health.reply_stalls > 0
-        || health.transport_health != 0
-        || health.persistence_error.is_some()
-        || health.shedding;
-    if health.persistence_error.is_some() {
+fn health_state(snapshot: &Snapshot) -> (&'static str, Color32) {
+    if snapshot.health.persistence_error.is_some() {
         ("Recording error", theme::error())
-    } else if impaired {
-        ("Loss or errors recorded", theme::warn())
+    } else if snapshot.health.dropped > 0
+        || snapshot.health.ui_dropped > 0
+        || snapshot.health.storage_dropped_packets > 0
+        || snapshot.health.shedding
+    {
+        ("Loss observed", theme::warn())
     } else {
-        ("No loss or errors reported", theme::good())
+        ("No recorded losses", theme::good())
     }
 }
-
 fn health(ui: &mut egui::Ui, snapshot: &Snapshot) {
-    let health = &snapshot.health;
-    let (label, color) = health_state(snapshot);
-    ui.colored_label(color, label);
-    ui.add(egui::Label::new(RichText::new(
-        "Counters describe this VM session and capture completeness; they do not assess malware risk.",
-    ).color(theme::muted())).wrap());
-    row(ui, "Guest sends attempted", health.attempted.to_string());
-    row(ui, "Guest transport drops", health.dropped.to_string());
-    row(
-        ui,
-        "Host packets received",
-        health.received_packets.to_string(),
-    );
-    row(
-        ui,
-        "Storage packet drops",
-        health.storage_dropped_packets.to_string(),
-    );
-    row(
-        ui,
-        "Parser errors / evictions",
-        format!("{} / {}", health.parser_errors, health.parser_evicted_count),
-    );
-    row(ui, "UI preview drops", health.ui_dropped.to_string());
-    row(
-        ui,
-        "Bad commands / reply stalls",
-        format!("{} / {}", health.bad_commands, health.reply_stalls),
-    );
-    row(
-        ui,
-        "Transport status flags",
-        format!("0x{:08x}", health.transport_health),
-    );
-    row(
-        ui,
-        "Capture All shedding",
-        if health.shedding {
-            "Active — telemetry is being dropped"
-        } else {
-            "Inactive"
-        },
-    );
-    row(
-        ui,
-        "Packets persisted",
-        health.persisted_packets.to_string(),
-    );
-    row(ui, "Recording written", size(health.persisted_len));
-    row(ui, "Recording write backlog", size(health.write_backlog));
-    row(
-        ui,
-        "Transport waits",
-        format!(
-            "{} ({:.3} s total)",
-            health.transport_waits,
-            health.transport_wait_ns as f64 / 1_000_000_000.0
-        ),
-    );
-    if let Some(error) = &health.persistence_error {
-        ui.add(egui::Label::new(RichText::new(error).color(theme::error())).wrap());
+    let h = &snapshot.health;
+    for (label, value) in [
+        ("Packets persisted", h.persisted_packets.to_string()),
+        ("Write backlog", size(h.write_backlog)),
+        ("Parser errors", h.parser_errors.to_string()),
+        ("Reply stalls", h.reply_stalls.to_string()),
+    ] {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(label);
+            ui.monospace(value);
+        });
     }
 }
-
-fn section(ui: &mut egui::Ui, label: &str) {
-    ui.add_space(8.0);
-    ui.separator();
-    ui.label(RichText::new(label).strong().color(theme::heading()));
+fn age(time: Instant) -> String {
+    let seconds = time.elapsed().as_secs();
+    if seconds < 60 {
+        format!("{seconds} s ago")
+    } else {
+        format!("{} m ago", seconds / 60)
+    }
 }
-
-/// Rows wrap the value onto the next line instead of clipping at large font sizes.
-fn row(ui: &mut egui::Ui, label: &str, value: impl AsRef<str>) {
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(format!("{label}:")).color(theme::muted()));
-        ui.add(egui::Label::new(value.as_ref()).wrap());
-    });
+fn format_utc(time: SystemTime) -> String {
+    let Ok(d) = time.duration_since(UNIX_EPOCH) else {
+        return "Unavailable".into();
+    };
+    let seconds = d.as_secs();
+    let (y, m, day) = civil_from_days((seconds / 86400) as i64);
+    format!(
+        "{y:04}-{m:02}-{day:02} {:02}:{:02}:{:02} UTC",
+        seconds / 3600 % 24,
+        seconds / 60 % 60,
+        seconds % 60
+    )
 }
-
+fn civil_from_days(z: i64) -> (i32, u32, u32) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    ((y + i64::from(m <= 2)) as i32, m as u32, d as u32)
+}
+fn split_size(value: Option<u64>) -> (Option<String>, &'static str) {
+    let Some(value) = value else {
+        return (None, "Unavailable");
+    };
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut n = value as f64;
+    let mut unit = 0;
+    while n >= 1024.0 && unit < 4 {
+        n /= 1024.0;
+        unit += 1;
+    }
+    (
+        Some(if unit == 0 {
+            format!("{n:.0}")
+        } else {
+            format!("{n:.1}")
+        }),
+        UNITS[unit],
+    )
+}
+fn size(value: u64) -> String {
+    let (n, u) = split_size(Some(value));
+    format!("{} {u}", n.unwrap_or_else(|| "—".into()))
+}
 fn optional_size(value: Option<u64>) -> String {
     value.map_or_else(|| "Unavailable".into(), size)
 }
-
-fn size(value: u64) -> String {
-    if value >= 1_073_741_824 {
-        format!("{:.1} GiB", value as f64 / 1_073_741_824.0)
-    } else {
-        format!("{:.1} MiB", value as f64 / 1_048_576.0)
-    }
-}
-
 fn uptime(milliseconds: u64) -> String {
     let seconds = milliseconds / 1000;
     format!(
@@ -952,42 +959,86 @@ mod tests {
     }
 
     #[test]
-    fn history_is_bounded_and_resets_at_selection_boot_sequence_and_uptime_boundaries() {
+    fn transient_missing_boot_identity_preserves_observed_series() {
+        let mut snapshot = fixture();
+        snapshot.boot_id = Some("known-boot".into());
+        let mut history = CpuHistory::default();
+        history.observe(&snapshot, Some("active"));
+        snapshot.boot_id = None;
+        snapshot.vm_resources.as_mut().unwrap().sample_sequence = 2;
+        history.observe(&snapshot, Some("active"));
+        assert_eq!(history.samples.len(), 2);
+        assert_eq!(
+            history.identity.as_ref().unwrap().1.as_deref(),
+            Some("known-boot")
+        );
+        snapshot.boot_id = Some("known-boot".into());
+        snapshot.vm_resources.as_mut().unwrap().sample_sequence = 3;
+        history.observe(&snapshot, Some("active"));
+        assert_eq!(history.samples.len(), 3);
+    }
+
+    #[test]
+    fn history_survives_selection_and_missing_observations_but_resets_on_new_boot() {
         let mut snapshot = fixture();
         let mut history = CpuHistory::default();
-        for sequence in 1..=120 {
+        let now = Instant::now();
+        for sequence in 1..=HISTORY_LIMIT as u64 {
             snapshot.vm_resources.as_mut().unwrap().sample_sequence = sequence;
-            history.observe(&snapshot, Some("active"));
+            history.observe_at(
+                &snapshot,
+                Some("active"),
+                now + Duration::from_secs(sequence),
+            );
         }
         assert_eq!(history.samples.len(), HISTORY_LIMIT);
         history.observe(&snapshot, Some("stopped"));
         assert!(history.samples.is_empty());
+        assert_eq!(
+            history.for_vm("active").unwrap().samples.len(),
+            HISTORY_LIMIT
+        );
         history.observe(&snapshot, Some("active"));
+        assert_eq!(history.samples.len(), HISTORY_LIMIT);
+        let mut missing = snapshot.clone();
+        missing.vm_resources = None;
+        history.observe_at(&missing, Some("active"), now + Duration::from_secs(122));
+        assert_eq!(history.samples.len(), HISTORY_LIMIT);
+        assert!(history.retained.is_some());
+        assert_eq!(history.samples.back(), Some(&None));
         let mut stopped = snapshot.clone();
         stopped.active_vm = None;
         stopped.state = VmState::Stopped;
         history.observe(&stopped, Some("active"));
-        assert_eq!(history.samples.len(), 1);
-        assert!(history.retained.is_some());
-        history.observe(&snapshot, Some("active"));
-        assert_eq!(history.samples.len(), 1);
+        assert_eq!(history.samples.len(), HISTORY_LIMIT);
+        assert!(history.stopped_at.is_some());
         snapshot.boot_id = Some("new-boot".into());
         history.observe(&snapshot, Some("active"));
         assert_eq!(history.samples.len(), 1);
-        snapshot.vm_resources.as_mut().unwrap().sample_sequence = 121;
+        snapshot.vm_resources.as_mut().unwrap().sample_sequence += 1;
         history.observe(&snapshot, Some("active"));
         assert_eq!(history.samples.len(), 2);
         snapshot.vm_resources.as_mut().unwrap().sample_sequence = 1;
         history.observe(&snapshot, Some("active"));
         assert_eq!(history.samples.len(), 1);
-        snapshot.vm_resources.as_mut().unwrap().sample_sequence = 2;
-        history.observe(&snapshot, Some("active"));
-        snapshot.vm_resources.as_mut().unwrap().uptime_ms = Some(1);
-        history.observe(&snapshot, Some("active"));
-        assert_eq!(history.samples.len(), 1);
         snapshot.vm_resources.as_mut().unwrap().vm_id = "wrong-vm".into();
         history.observe(&snapshot, Some("active"));
-        assert!(history.samples.is_empty());
+        assert_eq!(history.samples.len(), 1);
+    }
+
+    #[test]
+    fn collection_tracks_active_vm_when_its_dashboard_is_hidden() {
+        let mut snapshot = fixture();
+        let mut history = CpuHistory::default();
+        history.observe(&snapshot, Some("stopped"));
+        assert_eq!(history.for_vm("active").unwrap().samples.len(), 1);
+        snapshot.active_vm = Some("stopped".into());
+        snapshot.boot_id = Some("second-boot".into());
+        snapshot.vm_resources.as_mut().unwrap().vm_id = "stopped".into();
+        history.observe(&snapshot, None);
+        assert_eq!(history.for_vm("stopped").unwrap().samples.len(), 1);
+        assert_eq!(history.for_vm("active").unwrap().samples.len(), 1);
+        assert!(history.for_vm("active").unwrap().stopped_at.is_some());
     }
 
     #[test]
@@ -1029,12 +1080,12 @@ mod tests {
             .iter()
             .map(|(text, _)| text.as_str())
             .collect();
-        assert!(text.contains("1.0 MiB"));
-        assert!(text.contains("11.8 MiB"));
+        assert!(text.contains("1.0") && text.contains("MiB"));
+        assert!(text.contains("11.8") && text.contains("MiB"));
         assert!(text.contains("Capacity unavailable"));
         assert!(!text.contains("QEMU share:"));
         assert!(!text.contains("Available share:"));
-        assert!(text.contains("guest RAM utilization is unavailable"));
+        assert!(text.contains("Guest RAM utilization unavailable"));
     }
 
     fn render(
@@ -1057,9 +1108,8 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        show(ui, snapshot, selected, 4, &history)
-                    });
+                    egui::CentralPanel::default()
+                        .show(ctx, |ui| show(ui, snapshot, selected, 4, &history));
                 },
             );
         }
@@ -1120,9 +1170,9 @@ mod tests {
         assert!(text.contains("Recording error"));
         assert!(text.contains("Disk full while recording"));
         assert!(text.contains("Active — telemetry is being dropped"));
-        assert!(text.contains("123.4% (100% = one host CPU core)"));
+        assert!(text.contains("123.4") && text.contains("100% = one host core"));
         assert!(text.contains("1 h 01 m 01 s"));
-        assert!(text.contains("guest RAM utilization is unavailable"));
+        assert!(text.contains("Guest RAM utilization unavailable"));
     }
 
     #[test]
@@ -1141,7 +1191,7 @@ mod tests {
             .iter()
             .map(|(text, _)| text.as_str())
             .collect();
-        assert!(text.contains("QEMU CPU:") && text.contains("Unavailable"));
+        assert!(text.contains("QEMU host CPU") && text.contains("Unavailable"));
         assert!(!text.contains("0.0% (100% = one host CPU core)"));
     }
 
@@ -1231,7 +1281,11 @@ mod tests {
                     } else {
                         Some(180.0 + (sequence as f64 * 0.25).sin() * 100.0)
                     };
-                    history.observe(&snapshot, Some("active"));
+                    history.observe_at(
+                        &snapshot,
+                        Some("active"),
+                        Instant::now() - WINDOW + Duration::from_secs(sequence),
+                    );
                 }
                 Ok(Box::new(Fixture {
                     snapshot,

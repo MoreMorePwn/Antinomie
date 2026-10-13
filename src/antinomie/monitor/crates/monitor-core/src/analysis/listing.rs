@@ -177,6 +177,34 @@ pub fn read_listing_page(
     count: usize,
     query: &str,
 ) -> Result<AnalysisListingPage, String> {
+    let needle = query.to_lowercase();
+    read_listing_page_with(directory, report_id, kind, start, count, query, |entry| {
+        needle.is_empty()
+            || entry.label.to_lowercase().contains(&needle)
+            || entry.value.to_lowercase().contains(&needle)
+    })
+}
+
+/// Read the whole retained listing with a caller's typed row predicate.
+///
+/// | Argument | Meaning |
+/// |---|---|
+/// | `directory`, `report_id`, `kind` | Retained report/category identity, validated before reading. |
+/// | `start`, `count` | First matching row and bounded page length. |
+/// | `query` | Query identity echoed in the returned page; interpretation belongs to `keep`. |
+/// | `keep` | Predicate evaluated for each decoded row, on the archive worker. |
+///
+/// Returns a bounded page and the exact matching count; no rows are skipped by a
+/// substring shortcut when the caller supplies a structured filter.
+pub fn read_listing_page_with(
+    directory: &Path,
+    report_id: &str,
+    kind: AnalysisKind,
+    start: u64,
+    count: usize,
+    query: &str,
+    mut keep: impl FnMut(&AnalysisEntry) -> bool,
+) -> Result<AnalysisListingPage, String> {
     let report = super::open_report(directory)?;
     if report.id != report_id {
         return Err("saved analysis report identity mismatch".into());
@@ -193,38 +221,29 @@ pub fn read_listing_page(
     if file.metadata().map_err(|e| e.to_string())?.len() != listing.bytes {
         return Err("listing changed after it was saved".into());
     }
-    let needle = query.to_lowercase();
     let count = count.min(LISTING_PAGE_MAX_ROWS);
     let mut rows = Vec::new();
     let mut total = 0u64;
+    let mut seen = 0u64;
     for (index, line) in BufReader::new(file).split(b'\n').enumerate() {
-        let line = line.map_err(|e| format!("listing: {e}"))?;
-        let parse = || -> Result<AnalysisEntry, String> {
-            serde_json::from_slice(&line).map_err(|e| format!("listing row malformed: {e}"))
-        };
-        if needle.is_empty() {
-            if total >= start && rows.len() < count {
-                rows.push((index as u64, parse()?));
-            }
-            total += 1;
-            continue;
+        let line = line.map_err(|error| format!("listing: {error}"))?;
+        let entry: AnalysisEntry = serde_json::from_slice(&line)
+            .map_err(|error| format!("listing row malformed: {error}"))?;
+        seen = seen.checked_add(1).ok_or("listing row count overflow")?;
+        let record = entry.record.as_ref().ok_or("listing row without record")?;
+        if record.revision != 1 || record.id != seen {
+            return Err("listing row id out of sequence".into());
         }
-        // The raw line holds escapes, so it can only rule rows out.
-        if !String::from_utf8_lossy(&line)
-            .to_lowercase()
-            .contains(&needle)
-        {
-            continue;
-        }
-        let entry = parse()?;
-        if entry.label.to_lowercase().contains(&needle)
-            || entry.value.to_lowercase().contains(&needle)
-        {
+        super::jobs::validate_record(kind, &entry, record, report.specimen_len)?;
+        if keep(&entry) {
             if total >= start && rows.len() < count {
                 rows.push((index as u64, entry));
             }
-            total += 1;
+            total = total.checked_add(1).ok_or("listing row count overflow")?;
         }
+    }
+    if seen != listing.rows {
+        return Err("listing row count disagrees with its report".into());
     }
     Ok(AnalysisListingPage {
         report_id: report_id.into(),
@@ -234,4 +253,104 @@ pub fn read_listing_page(
         total,
         rows,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn predicate_reads_every_row_counts_matches_and_rejects_corruption_even_when_filtered_out() {
+        let root =
+            std::env::temp_dir().join(format!("ant-listing-{}", crate::storage::unique_id()));
+        crate::storage::private_dir(&root).unwrap();
+        std::fs::create_dir(root.join("listings")).unwrap();
+        let mut writer = ListingWriter::create(
+            &root.join("listings"),
+            AnalysisKind::Decompilation,
+            LISTING_MAX_SIZE,
+        )
+        .unwrap();
+        for line in 1..=2400 {
+            assert!(writer.push(
+                "routine",
+                format!("source {line}"),
+                None,
+                AnalysisData::SourceLine {
+                    function: "routine".into(),
+                    address: None,
+                    line
+                }
+            ));
+        }
+        let mut section = AnalysisSection::new(AnalysisKind::Decompilation);
+        section.state = AnalysisSectionState::Partial;
+        section.listing = Some(writer.finish(true).unwrap());
+        let report = AnalysisReport {
+            id: "retained".into(),
+            state: AnalysisState::Partial,
+            source_path: "/fixture".into(),
+            specimen_sha256: None,
+            specimen_len: None,
+            reason: Some("partial fixture".into()),
+            sections: vec![section],
+        };
+        std::fs::write(
+            root.join("report.json"),
+            serde_json::to_vec(&report).unwrap(),
+        )
+        .unwrap();
+        let page = read_listing_page_with(
+            &root,
+            "retained",
+            AnalysisKind::Decompilation,
+            5,
+            3,
+            "line >= 2200 && line < 2300",
+            |entry| {
+                matches!(
+                    entry.record.as_ref().map(|record| &record.data),
+                    Some(AnalysisData::SourceLine {
+                        line: 2200..2300,
+                        ..
+                    })
+                )
+            },
+        )
+        .unwrap();
+        assert_eq!(page.total, 100);
+        assert_eq!(page.rows.len(), 3);
+        assert_eq!(page.rows[0].0, 2204);
+        assert_eq!(page.rows[0].1.value, "source 2205");
+        assert!(
+            read_listing_page_with(
+                &root,
+                "wrong",
+                AnalysisKind::Decompilation,
+                0,
+                1,
+                "",
+                |_| true
+            )
+            .is_err()
+        );
+        let path = root.join("listings/decompilation.jsonl");
+        let mut encoded = std::fs::read(&path).unwrap();
+        encoded[0] = b'!';
+        std::fs::write(&path, encoded).unwrap();
+        assert!(
+            read_listing_page_with(
+                &root,
+                "retained",
+                AnalysisKind::Decompilation,
+                0,
+                1,
+                "never",
+                |_| false
+            )
+            .unwrap_err()
+            .contains("malformed")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

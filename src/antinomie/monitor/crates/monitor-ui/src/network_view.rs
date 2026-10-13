@@ -6,12 +6,17 @@ use crate::theme::{self, PacketColor, ValueKind};
 use antinomie_monitor_core::network::{
     self, FieldKind, NetworkCapture, NetworkPacket, PacketLayer,
 };
+use antinomie_monitor_core::packet_filter::{
+    CaptureIdentity, FieldRegistry, PacketFilterEvent, PacketFilterIndex, PacketFilterWorker,
+    PAGE_SIZE,
+};
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
 use std::{
     collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -55,7 +60,7 @@ struct PacketList {
     truncated: bool,
     error: Option<String>,
     last_read: Option<Instant>,
-    selected: Option<usize>,
+    selected: Option<NetworkPacket>,
     frame: Option<(u64, Result<Vec<u8>, String>)>,
     /// The selected frame's decoded layers, and the chosen layer (and field)
     /// whose bytes are marked.
@@ -77,6 +82,29 @@ pub(crate) struct NetworkView {
     /// invalid expression still sitting in the box.
     applied_filter: String,
     filter_error: Option<String>,
+    display_filter: String,
+    display_index: Option<Arc<PacketFilterIndex>>,
+    display_next_index: Option<Arc<PacketFilterIndex>>,
+    display_page: Vec<NetworkPacket>,
+    display_page_start: u64,
+    display_error: Option<String>,
+    display_rejected: Option<String>,
+    display_worker: Option<PacketFilterWorker>,
+    display_worker_error: Option<String>,
+    display_generation: u64,
+    display_pending: bool,
+    display_requested: Option<(CaptureIdentity, String, bool)>,
+    display_edited: Option<Instant>,
+    display_identity_checked: Option<Instant>,
+    display_identity: Option<CaptureIdentity>,
+    display_follow_live: bool,
+    display_jump: Option<u64>,
+    display_validate_selection: bool,
+    display_jump_note: Option<String>,
+    record_filter: String,
+    record_shown: HashSet<PathBuf>,
+    record_history: Vec<String>,
+    display_history: Vec<String>,
     /// Captures of the selected VM, newest first, and the current and retained
     /// recording folders they were listed from.
     captures: Vec<NetworkCapture>,
@@ -94,6 +122,151 @@ struct PayloadCache {
     offsets: Vec<u64>,
     frames: Vec<Vec<u8>>,
     note: Option<String>,
+}
+
+fn capture_fields() -> Vec<crate::query::FieldSpec<'static>> {
+    use crate::query::FieldSpec;
+    let mut fields = crate::query::LABEL_FIELDS.to_vec();
+    fields.extend([
+        FieldSpec::text("name", "Displayed capture name"),
+        FieldSpec::text("state", "Live, completed or unfinished capture"),
+        FieldSpec::text("boot", "Recorded guest boot identity"),
+        FieldSpec::number("start", "Unix start time in milliseconds"),
+        FieldSpec::number("stop", "Unix stop time in milliseconds"),
+        FieldSpec::number("packets", "Packet count recorded on finalization"),
+        FieldSpec::number("size", "PCAP extent recorded on finalization, in octets"),
+        FieldSpec::boolean("whole_boot", "Whole-boot recording"),
+    ]);
+    fields
+}
+
+fn remember_filter(history: &mut Vec<String>, expression: &str) {
+    if !expression.trim().is_empty() && history.first().is_none_or(|prior| prior != expression) {
+        history.retain(|prior| prior != expression);
+        history.insert(0, expression.into());
+        history.truncate(24);
+    }
+}
+
+fn packet_display_clauses(packet: &NetworkPacket) -> Vec<(String, String)> {
+    let mut clauses = vec![
+        (
+            "Frame number".into(),
+            format!("frame.number == {}", packet.number),
+        ),
+        (
+            "Frame length".into(),
+            format!("frame.len == {}", packet.length),
+        ),
+    ];
+    for (label, side, address) in [
+        ("Source address", "src", packet.src_ip),
+        ("Destination address", "dst", packet.dst_ip),
+    ] {
+        if let Some(address) = address {
+            let prefix = if address.is_ipv4() { "ip" } else { "ipv6" };
+            clauses.push((label.into(), format!("{prefix}.{side} == {address}")));
+        }
+    }
+    let transport = if packet.tcp_flags.is_some() {
+        Some("tcp")
+    } else if matches!(packet.protocol.as_str(), "UDP" | "DNS" | "DHCP") {
+        Some("udp")
+    } else {
+        None
+    };
+    if let Some(transport) = transport {
+        clauses.push(("Transport protocol".into(), transport.into()));
+        for (label, side, port) in [
+            ("Source port", "srcport", packet.src_port),
+            ("Destination port", "dstport", packet.dst_port),
+        ] {
+            if let Some(port) = port {
+                clauses.push((label.into(), format!("{transport}.{side} == {port}")));
+            }
+        }
+    }
+    clauses
+}
+
+fn display_clause_menu(ui: &mut egui::Ui, clause: &str, filter: &mut String) {
+    for (label, join, exclude) in [
+        ("Apply as filter", None, false),
+        ("Add AND", Some("&&"), false),
+        ("Add OR", Some("||"), false),
+        ("Exclude", Some("&&"), true),
+    ] {
+        if ui.button(label).clicked() {
+            let clause = if exclude {
+                format!("!({clause})")
+            } else {
+                clause.to_owned()
+            };
+            *filter = join.filter(|_| !filter.trim().is_empty()).map_or_else(
+                || clause.clone(),
+                |join| format!("({filter}) {join} ({clause})"),
+            );
+            ui.close_menu();
+        }
+    }
+}
+
+fn capture_row_values(
+    capture: &NetworkCapture,
+    annotation: Option<&antinomie_monitor_core::annotations::Annotation>,
+    live: bool,
+) -> Vec<(&'static str, crate::query::RowValue)> {
+    use crate::query::RowValue;
+    let state = if live {
+        "live"
+    } else if capture.stopped_ms.is_some() {
+        "completed"
+    } else {
+        "unfinished"
+    };
+    let number = |value: Option<u64>| {
+        value.map_or(RowValue::Missing, |value| {
+            RowValue::Number(i128::from(value))
+        })
+    };
+    let name = annotation
+        .filter(|value| !value.name.is_empty())
+        .map_or_else(
+            || {
+                if live {
+                    "Live capture".into()
+                } else {
+                    format_date(capture.started_ms / 1000)
+                }
+            },
+            |value| value.name.clone(),
+        );
+    let mut row = crate::query::label_row(
+        &capture.id,
+        annotation.map_or("", |value| &value.name),
+        &capture.file.display().to_string(),
+        annotation.map_or(&[], |value| value.tags.as_slice()),
+    );
+    row.extend([
+        ("entry.kind", RowValue::Text("network".into())),
+        ("entry.state", RowValue::Text(state.into())),
+        (
+            "entry.complete",
+            RowValue::Bool(capture.stopped_ms.is_some()),
+        ),
+        ("entry.time_ms", number(Some(capture.started_ms))),
+        ("entry.size", number(capture.bytes)),
+        ("boot.id", RowValue::Text(capture.boot_id.clone())),
+        ("name", RowValue::Text(name)),
+        ("state", RowValue::Text(state.into())),
+        ("boot", RowValue::Text(capture.boot_id.clone())),
+        ("start", number(Some(capture.started_ms))),
+        ("stop", number(capture.stopped_ms)),
+        ("packets", number(capture.packets)),
+        ("size", number(capture.bytes)),
+        ("whole_boot", RowValue::Bool(capture.whole_boot)),
+    ]);
+    row
 }
 
 /// Capture identity is stable when a recording folder is copied or moved.
@@ -128,85 +301,47 @@ fn capture_history(current: Option<&Path>, retained: &[PathBuf]) -> Vec<NetworkC
     captures
 }
 
-/// A packet filter, typed or set by clicking a value.
+/// Native quick search, separate from the external display-filter grammar.
 #[derive(Clone, Debug, PartialEq)]
 enum Filter {
     All,
-    /// `port 80`: either TCP/UDP port.
     Port(u16),
-    /// `ip 10.0.2.15` (or a bare address): either address.
     Address(IpAddr),
-    /// `10.0.2.15:5353`: that address and port, either direction.
     Endpoint(IpAddr, u16),
-    /// `proto DNS`: the Protocol column.
     Protocol(String),
-    /// Any other text: found in Source, Destination, Protocol or Info.
     Text(String),
-    And(Box<Filter>, Box<Filter>),
-    Or(Box<Filter>, Box<Filter>),
-    Not(Box<Filter>),
-    /// `frame contains "GET"`.
-    Contains(String),
-    /// `ip.src == 10.0.2.15`, `tcp.dstport == 80`, `frame.number > 10`.
-    Compare {
-        field: String,
-        op: Cmp,
-        value: String,
-    },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Cmp {
-    Eq,
-    Ne,
-    Lt,
-    Le,
-    Gt,
-    Ge,
-    Contains,
 }
 
 impl Filter {
-    fn parse(text: &str) -> Result<Filter, String> {
+    fn parse(text: &str) -> Filter {
         let text = text.trim();
         if text.is_empty() {
-            return Ok(Filter::All);
-        }
-        let display = is_display_filter(text);
-        if display {
-            if let Some(filter) = parse_display(text) {
-                if let Some(field) = unknown_display_field(&filter) {
-                    return Err(format!("Unknown field: {field}"));
-                }
-                return Ok(filter);
-            }
+            return Filter::All;
         }
         let lower = text.to_lowercase();
-        let argument = |prefix: &str| lower.strip_prefix(prefix).map(str::trim);
-        if let Some(port) = argument("port ").and_then(|port| port.parse().ok()) {
-            return Ok(Filter::Port(port));
-        }
-        if let Some(address) = argument("ip ")
-            .or_else(|| argument("host "))
-            .and_then(|address| address.parse().ok())
+        if let Some(port) = lower
+            .strip_prefix("port ")
+            .and_then(|p| p.trim().parse().ok())
         {
-            return Ok(Filter::Address(address));
+            return Filter::Port(port);
         }
-        if let Some(protocol) = argument("proto ") {
-            return Ok(Filter::Protocol(protocol.to_owned()));
+        if let Some(address) = lower
+            .strip_prefix("ip ")
+            .or_else(|| lower.strip_prefix("host "))
+            .and_then(|a| a.trim().parse().ok())
+        {
+            return Filter::Address(address);
+        }
+        if let Some(protocol) = lower.strip_prefix("proto ") {
+            return Filter::Protocol(protocol.trim().into());
         }
         if let Ok(endpoint) = text.parse::<SocketAddr>() {
-            return Ok(Filter::Endpoint(endpoint.ip(), endpoint.port()));
+            return Filter::Endpoint(endpoint.ip(), endpoint.port());
         }
         if let Ok(address) = text.parse() {
-            return Ok(Filter::Address(address));
+            return Filter::Address(address);
         }
-        // A display expression that did not parse must not become a text search.
-        // Shorthand port, address, and protocol filters above still apply.
-        if display {
-            return Err(format!("Invalid display filter: {text}"));
-        }
-        Ok(Filter::Text(lower))
+        Filter::Text(lower)
     }
 
     fn matches(&self, packet: &NetworkPacket) -> bool {
@@ -220,15 +355,7 @@ impl Filter {
                 (packet.src_ip == Some(*address) && packet.src_port == Some(*port))
                     || (packet.dst_ip == Some(*address) && packet.dst_port == Some(*port))
             }
-            Filter::Protocol(protocol) => packet
-                .protocol
-                .to_lowercase()
-                .contains(&protocol.to_lowercase()),
-            Filter::And(left, right) => left.matches(packet) && right.matches(packet),
-            Filter::Or(left, right) => left.matches(packet) || right.matches(packet),
-            Filter::Not(inner) => !inner.matches(packet),
-            Filter::Contains(needle) => packet_text(packet).contains(&needle.to_lowercase()),
-            Filter::Compare { field, op, value } => compare_field(packet, field, *op, value),
+            Filter::Protocol(protocol) => packet.protocol.to_lowercase().contains(protocol),
             Filter::Text(needle) => [
                 &packet.source,
                 &packet.destination,
@@ -238,467 +365,6 @@ impl Filter {
             .iter()
             .any(|text| text.to_lowercase().contains(needle)),
         }
-    }
-}
-
-fn is_display_filter(text: &str) -> bool {
-    let lower = text.to_lowercase();
-    lower.contains("==")
-        || lower.contains("!=")
-        || lower.contains("&&")
-        || lower.contains("||")
-        || lower.contains(" contains ")
-        || lower.split_whitespace().any(|word| word.contains('.'))
-        || matches!(
-            lower.as_str(),
-            "http" | "dns" | "tls" | "tcp" | "udp" | "arp" | "icmp" | "dhcp"
-        )
-}
-
-fn parse_display(text: &str) -> Option<Filter> {
-    let text = text.trim();
-    if text.is_empty() {
-        return Some(Filter::All);
-    }
-    if let Some((left, right)) = split_top(text, "||") {
-        return Some(Filter::Or(
-            Box::new(parse_display(left)?),
-            Box::new(parse_display(right)?),
-        ));
-    }
-    if let Some((left, right)) = split_top(text, "&&") {
-        return Some(Filter::And(
-            Box::new(parse_display(left)?),
-            Box::new(parse_display(right)?),
-        ));
-    }
-    if let Some(inner) = text.strip_prefix('!').map(str::trim) {
-        if !inner.starts_with('=') {
-            return Some(Filter::Not(Box::new(parse_display(inner)?)));
-        }
-    }
-    if let Some(inner) = strip_parens(text) {
-        return parse_display(inner);
-    }
-    let lower = text.to_lowercase();
-    if let Some((field, value)) = lower.split_once(" contains ") {
-        let field = field.trim();
-        let value = value.trim().trim_matches('"').trim_matches('\'');
-        if field.is_empty() || value.is_empty() {
-            return None;
-        }
-        if field == "frame" {
-            return Some(Filter::Contains(value.to_owned()));
-        }
-        return Some(Filter::Compare {
-            field: field.to_owned(),
-            op: Cmp::Contains,
-            value: value.to_owned(),
-        });
-    }
-    if matches!(
-        lower.as_str(),
-        "http" | "dns" | "tls" | "tcp" | "udp" | "arp" | "icmp" | "dhcp"
-    ) {
-        // Same column substring as `proto icmp` matching ICMPv6.
-        return Some(Filter::Protocol(lower));
-    }
-    if matches!(
-        lower.as_str(),
-        "http.request"
-            | "dns.qry.name"
-            | "http.host"
-            | "tcp.flags.syn"
-            | "tcp.flags.ack"
-            | "tcp.flags.fin"
-            | "tcp.flags.reset"
-            | "tcp.flags.push"
-    ) {
-        return Some(Filter::Compare {
-            field: lower,
-            op: Cmp::Eq,
-            value: String::new(),
-        });
-    }
-    let (field, op, value) = if let Some((field, value)) = lower.split_once("==") {
-        (field, Cmp::Eq, value)
-    } else if let Some((field, value)) = lower.split_once("!=") {
-        (field, Cmp::Ne, value)
-    } else if let Some((field, value)) = lower.split_once(">=") {
-        (field, Cmp::Ge, value)
-    } else if let Some((field, value)) = lower.split_once("<=") {
-        (field, Cmp::Le, value)
-    } else if let Some((field, value)) = lower.split_once('>') {
-        (field, Cmp::Gt, value)
-    } else if let Some((field, value)) = lower.split_once('<') {
-        (field, Cmp::Lt, value)
-    } else {
-        return None;
-    };
-    let field = field.trim();
-    let value = value.trim().trim_matches('"');
-    // `frame.len >=` is an unfinished comparison, not a text search.
-    if field.is_empty() || value.is_empty() {
-        return None;
-    }
-    Some(Filter::Compare {
-        field: field.to_owned(),
-        op,
-        value: value.to_owned(),
-    })
-}
-
-fn known_display_field(field: &str) -> bool {
-    matches!(
-        field,
-        "ip.src"
-            | "ip.dst"
-            | "ip.addr"
-            | "ip.host"
-            | "tcp.srcport"
-            | "udp.srcport"
-            | "tcp.dstport"
-            | "udp.dstport"
-            | "tcp.port"
-            | "udp.port"
-            | "frame.number"
-            | "frame.num"
-            | "frame.len"
-            | "frame.protocol"
-            | "proto"
-            | "ipv6.addr"
-            | "tcp.flags.syn"
-            | "tcp.flags.ack"
-            | "tcp.flags.fin"
-            | "tcp.flags.reset"
-            | "tcp.flags.push"
-            | "http.request"
-            | "http.request.method"
-            | "http.request.uri"
-            | "http.host"
-            | "dns.qry.name"
-            | "frame.info"
-    )
-}
-
-fn unknown_display_field(filter: &Filter) -> Option<&str> {
-    match filter {
-        Filter::Compare { field, .. } if !known_display_field(field) => Some(field.as_str()),
-        Filter::And(left, right) | Filter::Or(left, right) => {
-            unknown_display_field(left).or_else(|| unknown_display_field(right))
-        }
-        Filter::Not(inner) => unknown_display_field(inner),
-        _ => None,
-    }
-}
-
-fn strip_parens(text: &str) -> Option<&str> {
-    if !text.starts_with('(') || !text.ends_with(')') {
-        return None;
-    }
-    let mut depth = 0i32;
-    for (index, byte) in text.bytes().enumerate() {
-        if byte == b'(' {
-            depth += 1;
-        } else if byte == b')' {
-            depth -= 1;
-            if depth == 0 && index + 1 != text.len() {
-                return None;
-            }
-        }
-    }
-    (depth == 0).then_some(text[1..text.len() - 1].trim())
-}
-
-fn split_top<'a>(text: &'a str, needle: &str) -> Option<(&'a str, &'a str)> {
-    let bytes = text.as_bytes();
-    let mut index = 0;
-    let mut quoted = false;
-    let mut depth = 0i32;
-    while index + needle.len() <= bytes.len() {
-        let byte = bytes[index];
-        if byte == b'"' {
-            quoted = !quoted;
-        }
-        if !quoted {
-            if byte == b'(' {
-                depth += 1;
-            } else if byte == b')' {
-                depth -= 1;
-            } else if depth == 0 && text[index..].starts_with(needle) {
-                return Some((text[..index].trim(), text[index + needle.len()..].trim()));
-            }
-        }
-        index += 1;
-    }
-    None
-}
-
-// monitor-core exports TCP_FIN, TCP_SYN and TCP_RST. ACK (0x10) and PSH (0x08)
-// are the header bits `transport` reads; they are not named exports.
-fn tcp_flag_matches(is_tcp: bool, flags: Option<u8>, bit: u8, op: Cmp, value: &str) -> bool {
-    let Some(flags) = flags.filter(|_| is_tcp) else {
-        return false;
-    };
-    let set = flags & bit != 0;
-    match op {
-        Cmp::Eq if value.is_empty() || value == "1" => set,
-        Cmp::Eq if value == "0" => !set,
-        Cmp::Ne if value.is_empty() || value == "1" => !set,
-        Cmp::Ne if value == "0" => set,
-        _ => false,
-    }
-}
-
-fn ipv6_addr_matches(packet: &NetworkPacket, op: Cmp, value: &str) -> bool {
-    let Ok(want) = value.parse::<IpAddr>() else {
-        return false;
-    };
-    let ipv6 = |ip: Option<IpAddr>| matches!(ip, Some(IpAddr::V6(_)));
-    match op {
-        Cmp::Eq => {
-            matches!(want, IpAddr::V6(_))
-                && (packet.src_ip == Some(want) || packet.dst_ip == Some(want))
-        }
-        Cmp::Ne => {
-            ipv6(packet.src_ip)
-                && ipv6(packet.dst_ip)
-                && packet.src_ip != Some(want)
-                && packet.dst_ip != Some(want)
-        }
-        _ => false,
-    }
-}
-
-/// `Host:` as its own header token. A longer word such as `Ghost:` or
-/// `localhost:` does not count, and the host value is the following token.
-fn info_host_token(info: &str, host: Option<&str>) -> bool {
-    let lower = info.to_ascii_lowercase();
-    let bytes = lower.as_bytes();
-    let needle = "host:";
-    let mut from = 0;
-    while let Some(rel) = lower[from..].find(needle) {
-        let at = from + rel;
-        let left_ok = at == 0
-            || !matches!(
-                bytes[at - 1],
-                b'0'..=b'9' | b'a'..=b'z' | b'_' | b'-'
-            );
-        if left_ok {
-            match host {
-                None => return true,
-                Some(host) => {
-                    let token = lower[at + needle.len()..]
-                        .split_whitespace()
-                        .next()
-                        .unwrap_or("");
-                    if token.eq_ignore_ascii_case(host) {
-                        return true;
-                    }
-                }
-            }
-        }
-        from = at + needle.len();
-    }
-    false
-}
-
-fn http_host_matches(packet: &NetworkPacket, op: Cmp, value: &str) -> bool {
-    if !packet.protocol.eq_ignore_ascii_case("http") {
-        return false;
-    }
-    match op {
-        Cmp::Eq if value.is_empty() => info_host_token(&packet.info, None),
-        Cmp::Eq => info_host_token(&packet.info, Some(value)),
-        Cmp::Ne if value.is_empty() => !info_host_token(&packet.info, None),
-        Cmp::Ne => !info_host_token(&packet.info, Some(value)),
-        _ => false,
-    }
-}
-
-fn info_starts_with_http_method(info: &str) -> bool {
-    info.split_whitespace().next().is_some_and(|word| {
-        matches!(
-            word.to_ascii_uppercase().as_str(),
-            "GET" | "POST" | "PUT" | "HEAD" | "PATCH" | "DELETE" | "OPTIONS"
-        )
-    })
-}
-
-fn packet_text(packet: &NetworkPacket) -> String {
-    format!(
-        "{} {} {} {}",
-        packet.source, packet.destination, packet.protocol, packet.info
-    )
-    .to_lowercase()
-}
-
-fn text_op(left: &str, op: Cmp, value: &str) -> bool {
-    match op {
-        Cmp::Eq => left.eq_ignore_ascii_case(value),
-        Cmp::Ne => !left.eq_ignore_ascii_case(value),
-        Cmp::Contains => left.to_lowercase().contains(&value.to_lowercase()),
-        Cmp::Lt | Cmp::Le | Cmp::Gt | Cmp::Ge => false,
-    }
-}
-
-/// Method and request-target from a decoded HTTP request line. A status line
-/// has no method.
-fn http_request_line(packet: &NetworkPacket) -> Option<(&str, &str)> {
-    if !packet.protocol.eq_ignore_ascii_case("http") {
-        return None;
-    }
-    let mut parts = packet.info.split_whitespace();
-    let method = parts.next()?;
-    let uri = parts.next()?;
-    if method.starts_with("HTTP/") {
-        return None;
-    }
-    Some((method, uri))
-}
-
-/// Query name from `query TYPE name` or `response TYPE name`.
-fn dns_query_name(packet: &NetworkPacket) -> Option<String> {
-    if !packet.protocol.eq_ignore_ascii_case("dns") {
-        return None;
-    }
-    let mut parts = packet.info.split_whitespace();
-    let kind = parts.next()?;
-    if kind != "query" && kind != "response" {
-        return None;
-    }
-    let _qtype = parts.next()?;
-    let name = parts.next()?.trim_end_matches(':');
-    (!name.is_empty()).then(|| name.to_owned())
-}
-
-fn compare_field(packet: &NetworkPacket, field: &str, op: Cmp, value: &str) -> bool {
-    let number = |text: &str| text.parse::<u64>().ok();
-    let address = |text: &str| text.parse::<IpAddr>().ok();
-    let eq_text = |left: &str| match op {
-        Cmp::Eq => left.eq_ignore_ascii_case(value),
-        Cmp::Ne => !left.eq_ignore_ascii_case(value),
-        Cmp::Contains => left.to_lowercase().contains(&value.to_lowercase()),
-        Cmp::Lt | Cmp::Le | Cmp::Gt | Cmp::Ge => false,
-    };
-    let eq_num = |left: u64| match (op, number(value)) {
-        (Cmp::Eq, Some(right)) => left == right,
-        (Cmp::Ne, Some(right)) => left != right,
-        (Cmp::Lt, Some(right)) => left < right,
-        (Cmp::Le, Some(right)) => left <= right,
-        (Cmp::Gt, Some(right)) => left > right,
-        (Cmp::Ge, Some(right)) => left >= right,
-        _ => false,
-    };
-    let same_ip = |ip: IpAddr| match (op, address(value)) {
-        (Cmp::Eq, Some(want)) => ip == want,
-        (Cmp::Ne, Some(want)) => ip != want,
-        _ => false,
-    };
-    let either_ip = |packet: &NetworkPacket| match (op, address(value)) {
-        (Cmp::Eq, Some(want)) => packet.src_ip == Some(want) || packet.dst_ip == Some(want),
-        // Neither endpoint is the address. A missing side is not that address.
-        (Cmp::Ne, Some(want)) => packet.src_ip != Some(want) && packet.dst_ip != Some(want),
-        _ => false,
-    };
-    let transport = |name: &str| {
-        packet.protocol.eq_ignore_ascii_case(name)
-            || packet
-                .protocol
-                .to_ascii_lowercase()
-                .starts_with(&format!("{name} "))
-    };
-    match field {
-        "ip.src" => packet.src_ip.is_some_and(same_ip),
-        "ip.dst" => packet.dst_ip.is_some_and(same_ip),
-        "ip.addr" | "ip.host" => either_ip(packet),
-        "tcp.srcport" => {
-            transport("tcp") && packet.src_port.is_some_and(|port| eq_num(u64::from(port)))
-        }
-        "udp.srcport" => {
-            transport("udp") && packet.src_port.is_some_and(|port| eq_num(u64::from(port)))
-        }
-        "tcp.dstport" => {
-            transport("tcp") && packet.dst_port.is_some_and(|port| eq_num(u64::from(port)))
-        }
-        "udp.dstport" => {
-            transport("udp") && packet.dst_port.is_some_and(|port| eq_num(u64::from(port)))
-        }
-        "tcp.port" => {
-            transport("tcp")
-                && (packet.src_port.is_some_and(|port| eq_num(u64::from(port)))
-                    || packet.dst_port.is_some_and(|port| eq_num(u64::from(port))))
-        }
-        "udp.port" => {
-            transport("udp")
-                && (packet.src_port.is_some_and(|port| eq_num(u64::from(port)))
-                    || packet.dst_port.is_some_and(|port| eq_num(u64::from(port))))
-        }
-        "frame.number" | "frame.num" => eq_num(packet.number),
-        "frame.len" => eq_num(u64::from(packet.length)),
-        "frame.protocol" | "proto" => eq_text(&packet.protocol),
-        "http.request" => {
-            // Bare field: an HTTP request line, not a status line and not an
-            // equality check of the whole Info column.
-            let request = packet.protocol.eq_ignore_ascii_case("http")
-                && info_starts_with_http_method(&packet.info);
-            match op {
-                Cmp::Eq if value.is_empty() => request,
-                Cmp::Ne if value.is_empty() => !request,
-                _ => false,
-            }
-        }
-        "dns.qry.name" => {
-            // A value is the name in the decoded summary ("query A example.com"
-            // or "response A example.com"). An empty value still means the
-            // packet is DNS, including summaries that did not carry a name.
-            if value.is_empty() {
-                let dns = packet.protocol.eq_ignore_ascii_case("dns");
-                return match op {
-                    Cmp::Eq => dns,
-                    Cmp::Ne => !dns,
-                    _ => false,
-                };
-            }
-            dns_query_name(packet).is_some_and(|name| text_op(&name, op, value))
-        }
-        "http.request.method" => {
-            http_request_line(packet).is_some_and(|(method, _)| text_op(method, op, value))
-        }
-        "http.request.uri" => {
-            http_request_line(packet).is_some_and(|(_, uri)| text_op(uri, op, value))
-        }
-        "tcp.flags.syn" => tcp_flag_matches(
-            transport("tcp"),
-            packet.tcp_flags,
-            network::TCP_SYN,
-            op,
-            value,
-        ),
-        "tcp.flags.ack" => tcp_flag_matches(transport("tcp"), packet.tcp_flags, 0x10, op, value),
-        "tcp.flags.fin" => tcp_flag_matches(
-            transport("tcp"),
-            packet.tcp_flags,
-            network::TCP_FIN,
-            op,
-            value,
-        ),
-        "tcp.flags.reset" => tcp_flag_matches(
-            transport("tcp"),
-            packet.tcp_flags,
-            network::TCP_RST,
-            op,
-            value,
-        ),
-        "tcp.flags.push" => tcp_flag_matches(transport("tcp"), packet.tcp_flags, 0x08, op, value),
-        "ipv6.addr" => ipv6_addr_matches(packet, op, value),
-        "http.host" => http_host_matches(packet, op, value),
-        "frame.info" => match op {
-            Cmp::Eq => packet.info.eq_ignore_ascii_case(value),
-            Cmp::Ne => !packet.info.eq_ignore_ascii_case(value),
-            _ => packet.info.to_lowercase().contains(&value.to_lowercase()),
-        },
-        _ => false,
     }
 }
 
@@ -831,9 +497,7 @@ impl PacketList {
                 0
             }
         };
-        let Ok(parsed) = Filter::parse(filter) else {
-            return;
-        };
+        let parsed = Filter::parse(filter);
         let packets = &self.packets;
         self.rows
             .extend((done..packets.len()).filter(|&i| parsed.matches(&packets[i])));
@@ -853,7 +517,62 @@ impl NetworkView {
     pub(crate) fn open(&mut self, path: Option<PathBuf>) {
         if self.list.path != path {
             self.list = PacketList::new(path);
+            self.reset_display_capture();
         }
+    }
+
+    fn reset_display_capture(&mut self) {
+        if let Some(worker) = &self.display_worker {
+            worker.cancel();
+        }
+        self.display_index = None;
+        self.display_next_index = None;
+        self.display_page.clear();
+        self.display_page_start = 0;
+        self.display_pending = false;
+        self.display_requested = None;
+        self.display_identity = None;
+        self.display_identity_checked = None;
+        self.display_error = None;
+        self.display_rejected = None;
+        self.display_jump = None;
+        self.display_validate_selection = false;
+        self.display_jump_note = None;
+        self.payloads = None;
+    }
+
+    /// Select an original PCAP frame, including a frame outside the current
+    /// display page. Its display filter and quick search remain applied.
+    pub(crate) fn jump_to_frame(&mut self, frame_number: u64) -> Result<(), String> {
+        if self.list.path.is_none() {
+            return Err("open the request's PCAP capture before selecting its frame".into());
+        }
+        if frame_number == 0 {
+            return Err("PCAP frame numbers start at 1".into());
+        }
+        if let Some(worker) = &self.display_worker {
+            if let FieldRegistry::Unavailable(error) = worker.fields() {
+                return Err(error);
+            }
+        }
+        if self.display_index.is_none() {
+            if let Some(error) = self
+                .display_worker_error
+                .as_ref()
+                .or(self.display_error.as_ref())
+            {
+                return Err(format!("frame navigation is unavailable: {error}"));
+            }
+        }
+        self.display_jump = Some(frame_number);
+        self.display_validate_selection = false;
+        self.display_jump_note = Some(format!("Locating frame {frame_number}…"));
+        self.display_follow_live = false;
+        self.list.selected = None;
+        self.list.frame = None;
+        self.list.layers.clear();
+        self.list.field = None;
+        Ok(())
     }
 
     pub(crate) fn loaded_packets(&self) -> &[antinomie_monitor_core::network::NetworkPacket] {
@@ -958,14 +677,278 @@ impl NetworkView {
     /// including an unknown dotted field, does not become a text search.
     fn apply_filter(&mut self) {
         let text = self.filter.trim();
-        match Filter::parse(text) {
-            Ok(_) => {
-                self.applied_filter = text.to_owned();
-                self.filter_error = None;
-            }
-            Err(error) => self.filter_error = Some(error),
+        if self.applied_filter != text
+            && self
+                .list
+                .selected
+                .as_ref()
+                .is_some_and(|packet| !Filter::parse(text).matches(packet))
+        {
+            self.list.selected = None;
+            self.list.frame = None;
+            self.list.layers.clear();
+            self.list.field = None;
+            self.display_jump_note = Some(
+                "The quick search hides the previously selected frame. Select a visible packet."
+                    .into(),
+            );
         }
-        self.list.filter_rows(&self.applied_filter);
+        self.applied_filter = text.to_owned();
+        self.filter_error = None;
+        if self.display_index.is_some() {
+            let parsed = Filter::parse(text);
+            self.list.rows = self
+                .display_page
+                .iter()
+                .enumerate()
+                .filter_map(|(i, packet)| parsed.matches(packet).then_some(i))
+                .collect();
+            self.list.rows_for = None;
+        } else {
+            self.list.filter_rows(&self.applied_filter);
+        }
+    }
+
+    fn refresh_display(&mut self, live: bool, ctx: &egui::Context) {
+        if self.display_worker.is_none() && self.display_worker_error.is_none() {
+            match PacketFilterWorker::new() {
+                Ok(worker) => self.display_worker = Some(worker),
+                Err(error) => self.display_worker_error = Some(error),
+            }
+        }
+        let Some(worker) = &self.display_worker else {
+            return;
+        };
+        if let Some(event) = worker.poll() {
+            match event {
+                PacketFilterEvent::Evaluated {
+                    generation,
+                    identity,
+                    expression,
+                    result,
+                } if generation == self.display_generation
+                    && self
+                        .display_requested
+                        .as_ref()
+                        .is_some_and(|(requested, query, _)| {
+                            requested == &identity && query == &expression
+                        }) =>
+                {
+                    self.display_pending = false;
+                    match result {
+                        Ok(index) => {
+                            remember_filter(&mut self.display_history, &expression);
+                            if self
+                                .display_identity
+                                .as_ref()
+                                .is_some_and(|current| identity.permits_append(current))
+                            {
+                                let changed = self
+                                    .display_index
+                                    .as_ref()
+                                    .is_none_or(|prior| prior.expression != expression);
+                                let page_start = if live
+                                    && self.display_follow_live
+                                    && self.list.selected.is_none()
+                                {
+                                    index.matching_count.saturating_sub(1) / PAGE_SIZE as u64
+                                        * PAGE_SIZE as u64
+                                } else if changed {
+                                    0
+                                } else {
+                                    self.display_page_start.min(
+                                        index.matching_count.saturating_sub(1) / PAGE_SIZE as u64
+                                            * PAGE_SIZE as u64,
+                                    )
+                                };
+                                self.display_generation =
+                                    worker.request_page(Arc::clone(&index), page_start);
+                                self.display_pending = true;
+                                self.display_next_index = Some(index);
+                                if expression == self.display_filter.trim() {
+                                    self.display_error = None;
+                                    self.display_rejected = None;
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            self.display_error = Some(error);
+                            self.display_rejected = Some(expression);
+                        }
+                    }
+                }
+                PacketFilterEvent::Page {
+                    generation,
+                    start,
+                    result,
+                } if generation == self.display_generation => {
+                    self.display_pending = false;
+                    match result {
+                        Ok(packets) => {
+                            self.display_page = packets;
+                            self.display_page_start = start;
+                            if let Some(index) = self.display_next_index.take() {
+                                if self
+                                    .display_index
+                                    .as_ref()
+                                    .is_some_and(|prior| prior.expression != index.expression)
+                                {
+                                    self.display_jump =
+                                        self.list.selected.as_ref().map(|packet| packet.number);
+                                    self.display_validate_selection = self.display_jump.is_some();
+                                }
+                                self.display_index = Some(index);
+                            }
+                            self.list.rows_for = None;
+                        }
+                        Err(error) => self.display_error = Some(error),
+                    }
+                }
+                PacketFilterEvent::Frame {
+                    generation,
+                    number,
+                    result,
+                } if generation == self.display_generation => {
+                    self.display_pending = false;
+                    match result {
+                        Ok((packet, position)) => {
+                            if self.display_validate_selection && position.is_none() {
+                                self.list.selected = None;
+                                self.list.frame = None;
+                                self.list.layers.clear();
+                                self.list.field = None;
+                                self.display_validate_selection = false;
+                                self.display_jump_note = Some(format!("The display filter hides frame {number}. Select a visible packet."));
+                            } else {
+                                self.display_validate_selection = false;
+                                self.list.selected = Some(packet.clone());
+                                self.list.frame = None;
+                                self.list.field = None;
+                                self.display_jump_note = if position.is_none() {
+                                    Some(format!("Frame {number} is selected in Details and hidden by the current display filter."))
+                                } else if !Filter::parse(&self.filter).matches(&packet) {
+                                    Some(format!("Frame {number} is selected in Details and hidden by the current quick search."))
+                                } else {
+                                    Some(format!("Selected frame {number}"))
+                                };
+                                if let (Some(position), Some(index)) =
+                                    (position, &self.display_index)
+                                {
+                                    let start = position / PAGE_SIZE as u64 * PAGE_SIZE as u64;
+                                    if start != self.display_page_start {
+                                        self.display_generation =
+                                            worker.request_page(Arc::clone(index), start);
+                                        self.display_pending = true;
+                                    }
+                                }
+                            }
+                        }
+                        Err(error) => self.display_jump_note = Some(error),
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !self.display_pending {
+            if let (Some(number), Some(index)) = (self.display_jump, &self.display_index) {
+                self.display_jump = None;
+                self.display_generation = worker.request_frame(Arc::clone(index), number);
+                self.display_pending = true;
+            }
+        }
+        if self
+            .display_identity_checked
+            .is_none_or(|at| at.elapsed() >= Duration::from_secs(1))
+        {
+            self.display_identity_checked = Some(Instant::now());
+            if let Some(path) = &self.list.path {
+                match CaptureIdentity::read(path) {
+                    Ok(identity) => {
+                        if self
+                            .display_identity
+                            .as_ref()
+                            .is_some_and(|previous| !previous.permits_append(&identity))
+                        {
+                            worker.cancel();
+                            self.display_pending = false;
+                            self.display_index = None;
+                            self.display_next_index = None;
+                            self.display_page.clear();
+                            self.display_requested = None;
+                            self.list.selected = None;
+                            self.list.frame = None;
+                            self.list.packets.clear();
+                            self.list.next_offset = 0;
+                            self.list.next_number = 0;
+                            self.list.truncated = false;
+                            self.list.rows_for = None;
+                            self.list.counts = None;
+                            self.list.last_read = None;
+                            self.payloads = None;
+                        }
+                        self.display_identity = Some(identity);
+                    }
+                    Err(error) => {
+                        self.display_error = Some(error);
+                        worker.cancel();
+                        self.display_pending = false;
+                    }
+                }
+            }
+        }
+        if matches!(worker.fields(), FieldRegistry::Ready(_))
+            && !self.display_pending
+            && self
+                .display_edited
+                .is_none_or(|at| at.elapsed() >= Duration::from_millis(350))
+        {
+            if let Some(identity) = self
+                .display_identity
+                .as_ref()
+                .filter(|identity| identity.file_size >= 24)
+            {
+                let expression = self.display_filter.trim().to_owned();
+                // Invalid edited expressions are only retried on a new edit. Live
+                // updates continue evaluating the prior valid expression instead.
+                if self.display_rejected.as_deref() == Some(expression.as_str())
+                    && self.display_index.is_none()
+                {
+                    return;
+                }
+                let expression = if self.display_rejected.as_deref() == Some(expression.as_str()) {
+                    self.display_index
+                        .as_ref()
+                        .map_or(expression.clone(), |index| index.expression.clone())
+                } else {
+                    expression
+                };
+                let request = (identity.clone(), expression.clone(), live);
+                if self.display_requested.as_ref() != Some(&request) {
+                    self.display_generation = worker.request(identity.clone(), expression, live);
+                    self.display_requested = Some(request);
+                    self.display_pending = true;
+                }
+            }
+        }
+        if self.display_pending || matches!(worker.fields(), FieldRegistry::Loading) {
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
+        if self.display_jump.is_some() && self.display_index.is_none() && !self.display_pending {
+            let error = match worker.fields() {
+                FieldRegistry::Unavailable(error) => Some(error),
+                _ => self.display_error.clone(),
+            };
+            if let Some(error) = error {
+                self.display_jump = None;
+                self.display_jump_note = Some(format!("frame navigation is unavailable: {error}"));
+            }
+        }
+        if let Some(at) = self
+            .display_edited
+            .filter(|at| at.elapsed() < Duration::from_millis(350))
+        {
+            ctx.request_repaint_after(Duration::from_millis(350).saturating_sub(at.elapsed()));
+        }
     }
 
     fn scan(&mut self, recordings: Option<&Path>, recording_roots: &[PathBuf]) {
@@ -996,6 +979,7 @@ impl NetworkView {
                 .map(|(_, file)| file.clone())
                 .or_else(|| self.captures.first().map(|capture| capture.file.clone()));
             self.list = PacketList::new(first);
+            self.reset_display_capture();
             self.seen_active = active.clone();
         } else if self.seen_active != active {
             // A capture started or stopped: list it, and show a new one live.
@@ -1007,7 +991,10 @@ impl NetworkView {
         }
         let is_live =
             active.is_some() && self.list.path.as_ref() == active.as_ref().map(|(_, file)| file);
-        self.list.refresh(is_live);
+        self.refresh_display(is_live, ui.ctx());
+        if self.display_index.is_none() {
+            self.list.refresh(is_live);
+        }
         if active.is_some() {
             ui.ctx().request_repaint_after(Duration::from_secs(1));
         }
@@ -1099,25 +1086,184 @@ impl NetworkView {
             ui.separator();
             ui.label(RichText::new(egui_phosphor::regular::FUNNEL).color(theme::muted()));
             let width = ui.available_width().max(180.0);
-            crate::query::filter_edit(
-                ui,
-                &mut self.filter,
-                "Filter packets",
-                width,
-                crate::query::FilterScope::Packet,
-            )
-            .on_hover_text(
-                "port N: either port\nip ADDRESS: either address\n\
-                 ADDRESS:PORT: that endpoint, either direction\n\
-                 proto NAME: the Protocol column\n\
-                 ip.src == 10.0.2.15 && tcp.dstport == 80\n\
-                 ip.dst  tcp.srcport  tcp.dstport  udp.port  frame.number  frame.len\n\
-                 http  dns  tls  tcp  udp  arp  icmp  dhcp\n\
-                 frame contains \"GET\"\n\
-                 == != && || !\n\
-                 Other text: found in any column.",
-            );
+            ui.add(
+                egui::TextEdit::singleline(&mut self.filter)
+                    .hint_text(if self.display_index.is_some() { "Quick search on this page" } else { "Quick search loaded packets" })
+                    .desired_width(width),
+            ).on_hover_text("Native quick search: port N, ip ADDRESS, ADDRESS:PORT, proto NAME, or column text. Quick search affects only the loaded page; use the display filter below for the whole capture.");
         });
+        let registry = self.display_worker.as_ref().map(PacketFilterWorker::fields);
+        let mut edited = false;
+        ui.horizontal(|ui| {
+            ui.label("Display filter");
+            let width = ui.available_width().max(100.0);
+            match &registry {
+                Some(FieldRegistry::Ready(fields)) => {
+                    ui.data_mut(|data| data.insert_temp(ui.id().with(("filter-edit", "Wireshark expression for the whole capture")).with("history"), self.display_history.clone()));
+                    let schema = fields.iter().map(|field| crate::query::FieldSpec {
+                        name: &field.name,
+                        kind: &field.kind,
+                        detail: &field.description,
+                    });
+                    edited = crate::query::filter_edit_packet_field_iter(
+                        ui, &mut self.display_filter, "Wireshark expression for the whole capture", width, schema, &[],
+                    ).on_hover_text("Evaluated by installed TShark with two-pass Wireshark display-filter semantics. Field suggestions come from that installation. Example: tcp.port in {80, 443} && ip.addr == 10.0.2.15").changed();
+                }
+                _ => {
+                    ui.add_enabled(false, egui::TextEdit::singleline(&mut self.display_filter)
+                        .hint_text("Install tshark to enable display filters").desired_width(width));
+                }
+            }
+        });
+        if edited {
+            if let Some(worker) = &self.display_worker {
+                worker.cancel();
+            }
+            self.display_pending = false;
+            self.display_next_index = None;
+            self.display_edited = Some(Instant::now());
+            self.display_requested = None;
+            self.display_rejected = None;
+            self.display_error = None;
+            ui.ctx().request_repaint_after(Duration::from_millis(350));
+        }
+        let fields = capture_fields();
+        let captures: Vec<_> = cx
+            .active
+            .into_iter()
+            .chain(
+                self.captures
+                    .iter()
+                    .filter(|capture| cx.active.is_none_or(|active| active.file != capture.file)),
+            )
+            .cloned()
+            .collect();
+        let annotations: Vec<_> = captures
+            .iter()
+            .map(|capture| {
+                crate::evidence::annotation(ui, &capture.file.with_extension("metadata"))
+            })
+            .collect();
+        let tags: Vec<_> = annotations
+            .iter()
+            .flatten()
+            .flat_map(|annotation| annotation.tags.iter().cloned())
+            .collect();
+        egui::CollapsingHeader::new("Record filter")
+            .id_salt("network_record_filter")
+            .show(ui, |ui| {
+                ui.data_mut(|data| {
+                    data.insert_temp(
+                        ui.id()
+                            .with(("filter-edit", "Filter capture name, tags and metadata"))
+                            .with("history"),
+                        self.record_history.clone(),
+                    )
+                });
+                crate::query::filter_edit_fields(
+                    ui,
+                    &mut self.record_filter,
+                    "Filter capture name, tags and metadata",
+                    ui.available_width(),
+                    &fields,
+                    &tags,
+                );
+                ui.weak("Record metadata AND packet display filter. Tags belong to the capture.");
+            });
+        let record_filter =
+            crate::query::applied_table(ui, &self.record_filter, &fields, "network-records");
+        if crate::query::compile_table(&self.record_filter, &fields)
+            .error
+            .is_none()
+        {
+            remember_filter(&mut self.record_history, &self.record_filter);
+        }
+        self.record_shown = captures
+            .iter()
+            .zip(annotations.iter())
+            .filter_map(|(capture, annotation)| {
+                let live = cx.active.is_some_and(|active| active.file == capture.file);
+                record_filter
+                    .keep_table(&capture_row_values(capture, annotation.as_ref(), live))
+                    .then(|| capture.file.clone())
+            })
+            .collect();
+        if self.list.path.as_ref().is_some_and(|path| {
+            captures.iter().any(|capture| &capture.file == path)
+                && !self.record_shown.contains(path)
+        }) {
+            self.open(None);
+            self.display_jump_note = Some("The record filter hides the selected capture. Select another capture or clear the record filter.".into());
+        }
+        if !self.record_filter.trim().is_empty() {
+            ui.weak(format!(
+                "{} of {} captures match the record filter",
+                self.record_shown.len(),
+                captures.len()
+            ));
+        }
+        match registry {
+            Some(FieldRegistry::Loading) => {
+                ui.colored_label(theme::muted(), "Loading installed TShark fields…");
+            }
+            Some(FieldRegistry::Unavailable(error)) => {
+                ui.colored_label(theme::warn(), error);
+            }
+            _ => {}
+        }
+        if let Some(error) = &self.display_worker_error {
+            ui.colored_label(theme::warn(), error);
+        }
+        if let Some(error) = &self.display_error {
+            ui.colored_label(theme::warn(), error);
+        }
+        if let Some(note) = &self.display_jump_note {
+            ui.colored_label(theme::muted(), note);
+        }
+        if self.display_pending {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.colored_label(
+                    theme::muted(),
+                    "Applying display filter… Previous result stays visible.",
+                );
+            });
+        }
+        if let Some(index) = &self.display_index {
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(
+                    theme::blue(),
+                    format!(
+                        "{} of {} packets · Display filter: {}",
+                        index.matching_count,
+                        index.packet_count(),
+                        if index.expression.is_empty() {
+                            "(all)"
+                        } else {
+                            &index.expression
+                        }
+                    ),
+                );
+                if !self.display_filter.is_empty()
+                    && ui.small_button("Clear display filter").clicked()
+                {
+                    self.display_filter.clear();
+                    if let Some(worker) = &self.display_worker {
+                        worker.cancel();
+                    }
+                    self.display_pending = false;
+                    self.display_next_index = None;
+                    self.display_edited = None;
+                    self.display_requested = None;
+                    self.display_rejected = None;
+                    self.display_error = None;
+                    ui.ctx().request_repaint();
+                }
+            });
+            if index.complete_extent() < index.identity().file_size {
+                ui.colored_label(theme::muted(), "The current display result includes complete records; an unfinished live record is waiting for more data.");
+            }
+        }
         if let Some(error) = &self.filter_error {
             ui.colored_label(theme::warn(), error);
         }
@@ -1126,7 +1272,11 @@ impl NetworkView {
         } else {
             self.filter.trim().to_owned()
         };
-        let total = self.list.packets.len();
+        let total = if self.display_index.is_some() {
+            self.display_page.len()
+        } else {
+            self.list.packets.len()
+        };
         if !shown_filter.is_empty() || cx.pending {
             ui.horizontal_wrapped(|ui| {
                 if cx.pending {
@@ -1137,7 +1287,7 @@ impl NetworkView {
                     ui.colored_label(
                         theme::blue(),
                         format!(
-                            "Filter {shown_filter}: {} of {total} packets",
+                            "Quick search {shown_filter}: {} of {total} loaded packets",
                             self.list.rows.len()
                         ),
                     );
@@ -1153,7 +1303,12 @@ impl NetworkView {
     /// one returns its filter.
     fn quick_filters(&mut self, ui: &mut egui::Ui) -> Option<String> {
         let mut chosen = None;
-        let empty = self.list.packets.is_empty();
+        let page_counts = self
+            .display_index
+            .as_ref()
+            .map(|_| counts(&self.display_page));
+        let counts = page_counts.as_ref().unwrap_or_else(|| self.list.counts());
+        let empty = counts.protocols.is_empty();
         let mono = theme::mono(ui.style().text_styles[&egui::TextStyle::Body].size - 1.0);
         // A value and its packet count, as one menu entry.
         let entry = |ui: &mut egui::Ui, value: String, color: egui::Color32, count: usize| {
@@ -1172,7 +1327,7 @@ impl NetworkView {
                 .width(90.0)
                 .height(420.0)
                 .show_ui(ui, |ui| {
-                    for (port, count) in self.list.counts().ports.iter().take(QUICK_ENTRIES) {
+                    for (port, count) in counts.ports.iter().take(QUICK_ENTRIES) {
                         if entry(
                             ui,
                             format!("Port {port}"),
@@ -1188,8 +1343,7 @@ impl NetworkView {
                 .width(110.0)
                 .height(420.0)
                 .show_ui(ui, |ui| {
-                    for (address, count) in self.list.counts().addresses.iter().take(QUICK_ENTRIES)
-                    {
+                    for (address, count) in counts.addresses.iter().take(QUICK_ENTRIES) {
                         if entry(ui, address.to_string(), theme::text(), *count) {
                             chosen = Some(format!("ip {address}"));
                         }
@@ -1200,8 +1354,7 @@ impl NetworkView {
                 .width(100.0)
                 .height(420.0)
                 .show_ui(ui, |ui| {
-                    for (protocol, count) in self.list.counts().protocols.iter().take(QUICK_ENTRIES)
-                    {
+                    for (protocol, count) in counts.protocols.iter().take(QUICK_ENTRIES) {
                         if entry(ui, protocol.clone(), protocol_color(protocol), *count) {
                             chosen = Some(format!("proto {protocol}"));
                         }
@@ -1307,7 +1460,10 @@ impl NetworkView {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
-                if let Some(active) = cx.active {
+                if let Some(active) = cx
+                    .active
+                    .filter(|capture| self.record_shown.contains(&capture.file))
+                {
                     let selected = self.list.path.as_ref() == Some(&active.file);
                     let loaded = selected.then_some(self.list.packets.len());
                     let title = crate::evidence::title(
@@ -1315,23 +1471,29 @@ impl NetworkView {
                         &active.file.with_extension("metadata"),
                         &format!("{} Live capture", egui_phosphor::regular::RECORD),
                     );
-                    if capture_row(
+                    let response = capture_row(
                         ui,
                         selected,
                         (&title, theme::error()),
                         &capture_detail(active, true, loaded),
                         font_size,
                     )
-                    .on_hover_text(active.file.display().to_string())
-                    .clicked()
-                    {
+                    .on_hover_text(active.file.display().to_string());
+                    response.context_menu(|ui| {
+                        self.capture_menu(ui, active, true);
+                    });
+                    if response.clicked() {
                         open = Some(active.file.clone());
                     }
                 }
                 let earlier: Vec<_> = self
                     .captures
                     .iter()
-                    .filter(|capture| Some(capture.id.as_str()) != cx.active.map(|a| a.id.as_str()))
+                    .filter(|capture| {
+                        Some(capture.id.as_str()) != cx.active.map(|a| a.id.as_str())
+                            && self.record_shown.contains(&capture.file)
+                    })
+                    .cloned()
                     .collect();
                 for capture in &earlier {
                     let selected = self.list.path.as_ref() == Some(&capture.file);
@@ -1342,7 +1504,7 @@ impl NetworkView {
                         &capture.file.with_extension("metadata"),
                         started.trim_end_matches(" UTC"),
                     );
-                    if capture_row(
+                    let response = capture_row(
                         ui,
                         selected,
                         (&title, theme::text()),
@@ -1353,9 +1515,11 @@ impl NetworkView {
                         "Started {started}\nBoot {}\n{}",
                         capture.boot_id,
                         capture.file.display()
-                    ))
-                    .clicked()
-                    {
+                    ));
+                    response.context_menu(|ui| {
+                        self.capture_menu(ui, capture, false);
+                    });
+                    if response.clicked() {
                         open = Some(capture.file.clone());
                     }
                 }
@@ -1367,6 +1531,23 @@ impl NetworkView {
             self.open(Some(path));
         }
         action
+    }
+
+    fn capture_menu(&mut self, ui: &mut egui::Ui, capture: &NetworkCapture, live: bool) {
+        let directory = capture.file.with_extension("metadata");
+        crate::evidence::menu(ui, &directory);
+        if ui.button("Open PCAP directory").clicked() {
+            if let Some(parent) = capture.file.parent() {
+                crate::evidence::reveal(ui.ctx(), parent);
+            }
+            ui.close_menu();
+        }
+        let annotation = crate::evidence::annotation(ui, &directory);
+        for (field, value) in capture_row_values(capture, annotation.as_ref(), live) {
+            ui.menu_button(field, |ui| {
+                crate::query::value_menu(ui, field, &value, &mut self.record_filter);
+            });
+        }
     }
 
     fn packets(&mut self, ui: &mut egui::Ui, is_live: bool, cx: &NetworkContext<'_>) {
@@ -1421,7 +1602,7 @@ impl NetworkView {
         if let Some(error) = &self.list.error {
             ui.colored_label(theme::warn(), error);
         }
-        if self.list.truncated {
+        if self.list.truncated && self.display_index.is_none() {
             ui.colored_label(
                 theme::warn(),
                 format!(
@@ -1429,21 +1610,79 @@ impl NetworkView {
                 ),
             );
         }
+        if let Some(index) = self.display_index.clone() {
+            let mut requested_page = None;
+            let page_count = index.matching_count.div_ceil(PAGE_SIZE as u64).max(1);
+            let current_page = self.display_page_start / PAGE_SIZE as u64 + 1;
+            ui.horizontal_wrapped(|ui| {
+                ui.add_enabled_ui(!self.display_pending, |ui| {
+                    if ui
+                        .add_enabled(current_page > 1, egui::Button::new("Previous page"))
+                        .clicked()
+                    {
+                        requested_page = Some(current_page - 1);
+                    }
+                    let mut page = current_page;
+                    ui.label("Page");
+                    if ui
+                        .add(egui::DragValue::new(&mut page).range(1..=page_count))
+                        .changed()
+                    {
+                        requested_page = Some(page);
+                    }
+                    ui.label(format!("of {page_count}"));
+                    if ui
+                        .add_enabled(current_page < page_count, egui::Button::new("Next page"))
+                        .clicked()
+                    {
+                        requested_page = Some(current_page + 1);
+                    }
+                    ui.label(format!(
+                        "{}–{} of {} matching packets",
+                        if index.matching_count == 0 {
+                            0
+                        } else {
+                            self.display_page_start + 1
+                        },
+                        (self.display_page_start + self.display_page.len() as u64)
+                            .min(index.matching_count),
+                        index.matching_count
+                    ));
+                });
+                if is_live {
+                    ui.checkbox(&mut self.display_follow_live, "Follow live");
+                }
+            });
+            if let (Some(page), Some(worker)) = (requested_page, &self.display_worker) {
+                self.display_generation = worker.request_page(index, (page - 1) * PAGE_SIZE as u64);
+                self.display_pending = true;
+                ui.ctx().request_repaint_after(Duration::from_millis(50));
+            }
+        }
         let font_size = cx.font_size;
         let mono = theme::mono(font_size - 1.0);
         // Data columns fit their monospace contents; Info gets the rest.
         let char_width = ui.fonts(|fonts| fonts.glyph_width(&mono, '0'));
         let chars = |count: f32| count * char_width + 8.0;
-        let start = self.list.packets.first().map_or(0, |p| p.time_us);
+        let start = self.display_index.as_ref().map_or_else(
+            || self.list.packets.first().map_or(0, |p| p.time_us),
+            |index| index.first_time_us(),
+        );
         let mut clicked = None;
         let mut filter = None;
+        let mut display_filter = self.display_filter.clone();
         let list = &self.list;
+        let packets = if self.display_index.is_some() {
+            &self.display_page
+        } else {
+            &list.packets
+        };
         let filtering = !self.filter.trim().is_empty();
         egui::ScrollArea::horizontal()
             .id_salt("network_columns")
             .show(ui, |ui| {
                 TableBuilder::new(ui)
-                    .id_salt("network_packets")
+                    .id_salt(("network_packets", self.display_page_start))
                     .sense(egui::Sense::click())
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                     .striped(true)
@@ -1486,8 +1725,11 @@ impl NetworkView {
                     .body(|body| {
                         body.rows(theme::row_height(font_size), list.rows.len(), |mut row| {
                             let index = list.rows[row.index()];
-                            let packet = &list.packets[index];
-                            let selected = list.selected == Some(index);
+                            let packet = &packets[index];
+                            let selected = list
+                                .selected
+                                .as_ref()
+                                .is_some_and(|selected| selected.number == packet.number);
                             row.set_selected(selected);
                             let tint = packet_color(packet)
                                 .filter(|_| !selected)
@@ -1563,9 +1805,16 @@ impl NetworkView {
                             }
                             let response = row.response();
                             if response.clicked() {
-                                clicked = Some(index);
+                                clicked = Some(packet.clone());
                             }
                             response.context_menu(|ui| {
+                                ui.menu_button("Display filter", |ui| {
+                                    for (field, clause) in packet_display_clauses(packet) {
+                                        ui.menu_button(field, |ui| {
+                                            display_clause_menu(ui, &clause, &mut display_filter);
+                                        });
+                                    }
+                                });
                                 if let Some(set) = filter_menu(ui, packet, filtering) {
                                     filter = Some(set);
                                     ui.close_menu();
@@ -1577,30 +1826,46 @@ impl NetworkView {
         if list.rows.is_empty() {
             ui.colored_label(
                 theme::muted(),
-                if list.packets.is_empty() {
+                if packets.is_empty()
+                    && self
+                        .display_index
+                        .as_ref()
+                        .is_none_or(|index| index.packet_count() == 0)
+                {
                     "No packets yet"
                 } else {
                     "No packets match the filter"
                 },
             );
         }
-        if let Some(index) = clicked {
-            self.list.selected = Some(index);
+        if let Some(packet) = clicked {
+            self.list.selected = Some(packet);
         }
         if let Some(set) = filter {
             self.filter = set;
+        }
+        if display_filter != self.display_filter {
+            self.display_filter = display_filter;
+            if let Some(worker) = &self.display_worker {
+                worker.cancel();
+            }
+            self.display_pending = false;
+            self.display_next_index = None;
+            self.display_edited = None;
+            self.display_requested = None;
+            self.display_rejected = None;
+            self.display_error = None;
+            ui.ctx().request_repaint();
         }
     }
 
     /// The selected packet for the Details panel: its decoded layers on the
     /// left, its bytes on the right with the chosen field's bytes marked.
     pub(crate) fn details(&mut self, ui: &mut egui::Ui, font_size: f32) {
-        let Some(packet) = self
-            .list
-            .selected
-            .and_then(|i| self.list.packets.get(i))
-            .cloned()
-        else {
+        let Some(packet) = self.list.selected.clone() else {
+            if let Some(note) = &self.display_jump_note {
+                ui.colored_label(theme::muted(), note);
+            }
             empty_state(
                 ui,
                 if self.list.packets.is_empty() {
@@ -1620,7 +1885,11 @@ impl NetworkView {
             .is_none_or(|(offset, _)| *offset != packet.offset)
         {
             if let Some(path) = &self.list.path {
-                let frame = network::frame(path, packet.offset);
+                let frame = if let Some(index) = &self.display_index {
+                    index.frame(packet.offset)
+                } else {
+                    network::frame(path, packet.offset)
+                };
                 self.list.layers = frame
                     .as_ref()
                     .map(|bytes| network::dissect(bytes))
@@ -1629,7 +1898,10 @@ impl NetworkView {
                 self.list.field = None;
             }
         }
-        let start = self.list.packets.first().map_or(0, |p| p.time_us);
+        let start = self.display_index.as_ref().map_or_else(
+            || self.list.packets.first().map_or(0, |p| p.time_us),
+            |index| index.first_time_us(),
+        );
         let mono = theme::mono(font_size - 1.0);
         ui.horizontal_wrapped(|ui| {
             ui.label(
@@ -2180,7 +2452,7 @@ mod tests {
     use super::*;
 
     fn ok_filter(text: &str) -> Filter {
-        Filter::parse(text).unwrap_or_else(|error| panic!("{text}: {error}"))
+        Filter::parse(text)
     }
 
     fn packet(protocol: &str, source: &str, destination: &str) -> NetworkPacket {
@@ -2203,6 +2475,187 @@ mod tests {
             tcp_flags: (protocol == "TCP").then_some(0x10),
             ..NetworkPacket::default()
         }
+    }
+
+    #[test]
+    fn display_filter_preserves_page_selection_and_prior_result_on_error_if_tshark_installed() {
+        use std::io::Write;
+        if !std::process::Command::new("tshark")
+            .arg("-v")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+        {
+            return;
+        }
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "antinomie-packet-view-{}-{stamp}.pcap",
+            std::process::id()
+        ));
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(&0xa1b2c3d4u32.to_le_bytes()).unwrap();
+        file.write_all(&2u16.to_le_bytes()).unwrap();
+        file.write_all(&4u16.to_le_bytes()).unwrap();
+        file.write_all(&[0; 8]).unwrap();
+        file.write_all(&65535u32.to_le_bytes()).unwrap();
+        file.write_all(&1u32.to_le_bytes()).unwrap();
+        for number in 0..520u32 {
+            file.write_all(&(1_700_000_000 + number).to_le_bytes())
+                .unwrap();
+            file.write_all(&0u32.to_le_bytes()).unwrap();
+            file.write_all(&14u32.to_le_bytes()).unwrap();
+            file.write_all(&14u32.to_le_bytes()).unwrap();
+            file.write_all(&[0; 14]).unwrap();
+        }
+        drop(file);
+        let original = std::fs::read(&path).unwrap();
+        let ctx = egui::Context::default();
+        let mut view = NetworkView::default();
+        view.open(Some(path.clone()));
+        view.display_filter = "frame.number > 10".into();
+        let wait = |view: &mut NetworkView, error: bool| {
+            let started = Instant::now();
+            loop {
+                view.refresh_display(false, &ctx);
+                if !view.display_pending
+                    && if error {
+                        view.display_error.is_some()
+                    } else {
+                        view.display_index.is_some()
+                    }
+                {
+                    break;
+                }
+                assert!(
+                    started.elapsed() < Duration::from_secs(10),
+                    "display worker timeout: {:?}",
+                    view.display_error
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        wait(&mut view, false);
+        assert_eq!(view.display_index.as_ref().unwrap().matching_count, 510);
+        assert_eq!(view.display_page.first().unwrap().number, 11);
+        assert_eq!(view.display_page.last().unwrap().number, 510);
+        view.list.selected = Some(view.display_page[20].clone());
+        let selected = view.list.selected.clone().unwrap();
+        view.list.frame = Some((selected.offset, Ok(vec![0; 14])));
+        let index = Arc::clone(view.display_index.as_ref().unwrap());
+        view.display_generation = view
+            .display_worker
+            .as_ref()
+            .unwrap()
+            .request_page(index, 500);
+        view.display_pending = true;
+        wait(&mut view, false);
+        assert_eq!(view.display_page_start, 500);
+        assert_eq!(view.display_page.first().unwrap().number, 511);
+        assert_eq!(view.display_page.len(), 10);
+        assert_eq!(view.list.selected, Some(selected.clone()));
+        assert_eq!(view.list.frame, Some((selected.offset, Ok(vec![0; 14]))));
+        view.display_filter = "tcp.port in {".into();
+        view.display_requested = None;
+        wait(&mut view, true);
+        assert_eq!(
+            view.display_index.as_ref().unwrap().expression,
+            "frame.number > 10"
+        );
+        assert_eq!(view.display_page_start, 500);
+        assert_eq!(view.list.selected, Some(selected));
+        view.apply_filter();
+        assert_eq!(view.list.rows.len(), 10);
+        view.jump_to_frame(20).unwrap();
+        wait(&mut view, false);
+        assert_eq!(view.list.selected.as_ref().unwrap().number, 20);
+        assert_eq!(view.display_page_start, 0);
+        view.jump_to_frame(520).unwrap();
+        wait(&mut view, false);
+        assert_eq!(view.list.selected.as_ref().unwrap().number, 520);
+        assert_eq!(view.display_page_start, 500);
+        view.jump_to_frame(5).unwrap();
+        wait(&mut view, false);
+        assert_eq!(view.list.selected.as_ref().unwrap().number, 5);
+        assert!(view
+            .display_jump_note
+            .as_ref()
+            .unwrap()
+            .contains("hidden by the current display filter"));
+        assert_eq!(
+            view.display_index.as_ref().unwrap().expression,
+            "frame.number > 10"
+        );
+        assert_eq!(view.display_filter, "tcp.port in {");
+        assert_eq!(view.display_page_start, 500);
+        view.filter = "missing-packet-text".into();
+        view.apply_filter();
+        assert!(view.list.selected.is_none());
+        view.jump_to_frame(510).unwrap();
+        view.jump_to_frame(515).unwrap();
+        wait(&mut view, false);
+        assert_eq!(view.list.selected.as_ref().unwrap().number, 515);
+        assert!(view
+            .display_jump_note
+            .as_ref()
+            .unwrap()
+            .contains("hidden by the current quick search"));
+        assert!(view.jump_to_frame(0).is_err());
+        view.filter.clear();
+        view.apply_filter();
+        view.display_filter = "frame.number > 515".into();
+        view.display_requested = None;
+        view.display_rejected = None;
+        wait(&mut view, false);
+        assert!(view.list.selected.is_none());
+        assert!(view
+            .display_jump_note
+            .as_ref()
+            .unwrap()
+            .contains("hides frame 515"));
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        drop(view);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn capture_record_filters_cover_annotations_partial_state_and_missing_counts() {
+        use antinomie_monitor_core::annotations::Annotation;
+        let capture = NetworkCapture {
+            id: "capture-a".into(),
+            boot_id: "boot-a".into(),
+            file: PathBuf::from("/recordings/network/a.pcap"),
+            started_ms: 12,
+            stopped_ms: None,
+            packets: None,
+            bytes: None,
+            whole_boot: true,
+        };
+        let annotation = Annotation {
+            name: "First DNS query".into(),
+            tags: vec!["needs review".into()],
+        };
+        let row = capture_row_values(&capture, Some(&annotation), false);
+        let query = crate::query::compile_table("tag == \"needs review\" && name contains \"DNS\" && state == \"unfinished\" && missing(packets) && whole_boot == true", &capture_fields());
+        assert!(query.error.is_none(), "{:?}", query.error);
+        assert!(query.keep_table(&row));
+        let zero = crate::query::compile_table("packets == 0", &capture_fields());
+        assert!(!zero.keep_table(&row));
+        let mut completed = capture;
+        completed.stopped_ms = Some(24);
+        completed.packets = Some(0);
+        completed.bytes = Some(24);
+        assert!(zero.keep_table(&capture_row_values(&completed, Some(&annotation), false)));
+        let identity = crate::query::compile_table("entry.kind == \"network\" && boot.id == \"boot-a\" && entry.complete == true && entry.size == 24", &capture_fields());
+        assert!(identity.keep_table(&capture_row_values(&completed, Some(&annotation), false)));
     }
 
     #[test]
@@ -2383,280 +2836,5 @@ mod tests {
         assert_eq!(captures[2].file, legacy);
         assert!(captures[2].whole_boot);
         std::fs::remove_dir_all(fixture).unwrap();
-    }
-
-    #[test]
-    fn packet_filter_respects_operator_protocol_precedence_and_parens() {
-        let involved = packet("UDP", "10.0.2.15:5353", "10.0.2.3:53");
-        let other = packet("TCP", "1.1.1.1:443", "8.8.8.8:443");
-        assert!(!ok_filter("ip.addr != 10.0.2.15").matches(&involved));
-        assert!(!ok_filter("ip.host != 10.0.2.15").matches(&involved));
-        assert!(ok_filter("ip.addr == 10.0.2.15").matches(&involved));
-        assert!(ok_filter("ip.addr != 10.0.2.15").matches(&other));
-
-        let mut udp = packet("UDP", "10.0.2.15:40000", "93.184.216.34:80");
-        udp.length = 120;
-        let mut tcp = packet("TCP", "10.0.2.15:40000", "93.184.216.34:80");
-        tcp.length = 120;
-        assert!(!ok_filter("tcp.port == 80").matches(&udp));
-        assert!(!ok_filter("tcp.srcport == 40000").matches(&udp));
-        assert!(!ok_filter("tcp.dstport == 80").matches(&udp));
-        assert!(ok_filter("tcp.port == 80").matches(&tcp));
-        assert!(ok_filter("tcp.srcport == 40000").matches(&tcp));
-        assert!(ok_filter("tcp.dstport == 80").matches(&tcp));
-        assert!(!ok_filter("udp.port == 80").matches(&tcp));
-        assert!(!ok_filter("udp.dstport == 80").matches(&tcp));
-        assert!(ok_filter("udp.port == 80").matches(&udp));
-        assert!(ok_filter("udp.dstport == 80").matches(&udp));
-
-        assert_eq!(
-            ok_filter("frame.len >= 100"),
-            Filter::Compare {
-                field: "frame.len".into(),
-                op: Cmp::Ge,
-                value: "100".into(),
-            }
-        );
-        assert!(ok_filter("frame.len >= 100").matches(&udp));
-        assert!(ok_filter("(udp || tcp) && frame.len > 100").matches(&udp));
-        assert!(matches!(
-            ok_filter("(udp || tcp) && frame.len > 100"),
-            Filter::And(left, right)
-                if matches!(left.as_ref(), Filter::Or(_, _))
-                    && matches!(
-                        right.as_ref(),
-                        Filter::Compare {
-                            op: Cmp::Gt,
-                            value,
-                            ..
-                        } if value == "100"
-                    )
-        ));
-
-        assert!(ok_filter("!tcp || udp").matches(&udp));
-        assert!(!ok_filter("!tcp || udp").matches(&tcp));
-        assert!(matches!(
-            ok_filter("!tcp || udp"),
-            Filter::Or(left, right)
-                if matches!(
-                    left.as_ref(),
-                    Filter::Not(inner)
-                        if matches!(inner.as_ref(), Filter::Protocol(name) if name == "tcp")
-                ) && matches!(right.as_ref(), Filter::Protocol(name) if name == "udp")
-        ));
-
-        let mut request = packet("HTTP", "10.0.2.15:40000", "93.184.216.34:80");
-        request.info = "GET / HTTP/1.1".into();
-        let mut status = request.clone();
-        status.info = "HTTP/1.1 200 OK".into();
-        let mut mentioned = packet("UDP", "10.0.2.15:1", "1.2.3.4:2");
-        mentioned.info = "see http.request in the text".into();
-        assert!(ok_filter("http.request").matches(&request));
-        assert!(!ok_filter("http.request").matches(&status));
-        assert!(!ok_filter("http.request").matches(&mentioned));
-        assert!(!ok_filter("http.request == \"GET / HTTP/1.1\"").matches(&request));
-
-        let mut dns = packet("DNS", "10.0.2.15:5353", "10.0.2.3:53");
-        dns.info = "example.com".into();
-        assert!(ok_filter("dns.qry.name").matches(&dns));
-        assert!(!ok_filter("dns.qry.name").matches(&udp));
-        assert!(!ok_filter("dns.qry.name == example.com").matches(&dns));
-        let mut api = request.clone();
-        api.info = "GET /api HTTP/1.1".into();
-        assert!(ok_filter("http.request.method == \"GET\"").matches(&api));
-        assert!(ok_filter("http.request.uri contains \"/api\"").matches(&api));
-        assert!(!ok_filter("http.request.method == \"POST\"").matches(&api));
-        assert!(!ok_filter("http.request.uri contains \"/api\"").matches(&status));
-        let mut named = packet("DNS", "10.0.2.15:5353", "10.0.2.3:53");
-        named.info = "query A example.com".into();
-        assert!(ok_filter("dns.qry.name contains \"example\"").matches(&named));
-        assert!(ok_filter("dns.qry.name == example.com").matches(&named));
-        assert!(!ok_filter("dns.qry.name == other.test").matches(&named));
-    }
-
-    #[test]
-    fn packet_filter_invalid_display_expression_is_not_a_text_search() {
-        let mut decoy = packet("UDP", "10.0.2.15:9", "1.2.3.4:9");
-        decoy.info = "frame.len >= no.such == 1".into();
-        let dns = packet("DNS", "10.0.2.15:5353", "10.0.2.3:53");
-        for text in ["frame.len >=", "no.such == 1"] {
-            let parsed = Filter::parse(text);
-            assert!(parsed.is_err(), "{text}: {parsed:?}");
-            assert!(!matches!(parsed, Ok(Filter::Text(_))));
-        }
-
-        let mut view = NetworkView::default();
-        view.list.packets.push(decoy);
-        view.list.packets.push(dns);
-        view.filter = "no.such == 1".into();
-        view.apply_filter();
-        assert!(view.filter_error.is_some());
-        assert_eq!(view.applied_filter, "");
-        // An empty applied filter matches every packet. A text search would
-        // have kept only the decoy whose info contains the expression.
-        assert_eq!(view.list.rows, [0, 1]);
-
-        view.filter = "port 53".into();
-        view.apply_filter();
-        assert!(view.filter_error.is_none());
-        assert_eq!(view.list.rows, [1]);
-
-        view.filter = "frame.len >=".into();
-        view.apply_filter();
-        assert!(view
-            .filter_error
-            .as_deref()
-            .is_some_and(|error| !error.is_empty()));
-        assert_eq!(view.applied_filter, "port 53");
-        assert_eq!(view.list.rows, [1]);
-
-        view.filter = "no.such == 1".into();
-        view.apply_filter();
-        assert!(view
-            .filter_error
-            .as_deref()
-            .is_some_and(|error| error.contains("no.such")));
-        assert_eq!(view.applied_filter, "port 53");
-        assert_eq!(view.list.rows, [1]);
-    }
-
-    #[test]
-    fn packet_filter_tcp_flags_ipv6_addr_and_http_host() {
-        let udp = packet("UDP", "10.0.2.15:40000", "93.184.216.34:80");
-        let mut udp_syn = udp.clone();
-        udp_syn.tcp_flags = Some(network::TCP_SYN);
-        let ack = packet("TCP", "10.0.2.15:40000", "93.184.216.34:80");
-        let mut syn = ack.clone();
-        syn.tcp_flags = Some(network::TCP_SYN);
-        let mut fin = ack.clone();
-        fin.tcp_flags = Some(network::TCP_FIN);
-        let mut reset = ack.clone();
-        reset.tcp_flags = Some(network::TCP_RST);
-        let mut push = ack.clone();
-        push.tcp_flags = Some(0x08);
-        let mut syn_ack = ack.clone();
-        syn_ack.tcp_flags = Some(network::TCP_SYN | 0x10);
-        let mut none = ack.clone();
-        none.tcp_flags = None;
-        let mut http_syn = packet("HTTP", "10.0.2.15:40000", "93.184.216.34:80");
-        http_syn.tcp_flags = Some(network::TCP_SYN);
-
-        assert!(ok_filter("tcp.flags.syn").matches(&syn));
-        assert!(ok_filter("tcp.flags.syn == 1").matches(&syn));
-        assert!(ok_filter("TCP.FLAGS.SYN == 1").matches(&syn));
-        assert!(!ok_filter("tcp.flags.syn == 0").matches(&syn));
-        assert!(!ok_filter("tcp.flags.syn").matches(&ack));
-        assert!(ok_filter("tcp.flags.syn == 0").matches(&ack));
-        assert!(ok_filter("tcp.flags.ack").matches(&ack));
-        assert!(ok_filter("tcp.flags.ack == 1").matches(&ack));
-        assert!(!ok_filter("tcp.flags.ack == 0").matches(&ack));
-        assert!(ok_filter("tcp.flags.ack == 0").matches(&syn));
-        assert!(ok_filter("tcp.flags.fin").matches(&fin));
-        assert!(ok_filter("tcp.flags.fin == 1").matches(&fin));
-        assert!(ok_filter("tcp.flags.fin == 0").matches(&ack));
-        assert!(ok_filter("tcp.flags.reset").matches(&reset));
-        assert!(ok_filter("tcp.flags.reset == 1").matches(&reset));
-        assert!(ok_filter("tcp.flags.reset == 0").matches(&ack));
-        assert!(ok_filter("tcp.flags.push").matches(&push));
-        assert!(ok_filter("tcp.flags.push == 1").matches(&push));
-        assert!(ok_filter("tcp.flags.push == 0").matches(&ack));
-        assert!(ok_filter("tcp.flags.syn == 1").matches(&syn_ack));
-        assert!(ok_filter("tcp.flags.ack == 1").matches(&syn_ack));
-        assert!(ok_filter("tcp.flags.fin == 0").matches(&syn_ack));
-        for filter in [
-            "tcp.flags.syn",
-            "tcp.flags.syn == 1",
-            "tcp.flags.syn == 0",
-            "tcp.flags.ack",
-            "tcp.flags.ack == 0",
-            "tcp.flags.fin == 1",
-            "tcp.flags.reset == 0",
-            "tcp.flags.push == 1",
-        ] {
-            assert!(!ok_filter(filter).matches(&udp), "{filter}");
-            assert!(!ok_filter(filter).matches(&udp_syn), "{filter}");
-            assert!(!ok_filter(filter).matches(&http_syn), "{filter}");
-        }
-        assert!(!ok_filter("tcp.flags.syn").matches(&none));
-        assert!(!ok_filter("tcp.flags.syn == 0").matches(&none));
-        assert!(Filter::parse("tcp.flags.cwr == 1").is_err());
-        assert!(!matches!(
-            Filter::parse("tcp.flags.cwr == 1"),
-            Ok(Filter::Text(_))
-        ));
-
-        let v6 = packet("UDP", "[fe80::1]:546", "[ff02::1:2]:547");
-        let other = packet("ICMPv6", "fe80::2", "ff02::1");
-        let v4 = packet("UDP", "10.0.2.15:1", "1.2.3.4:2");
-        let mixed = packet("TCP", "10.0.2.15:1", "[fe80::1]:80");
-        assert!(ok_filter("ipv6.addr == fe80::1").matches(&v6));
-        assert!(ok_filter("ipv6.addr == ff02::1:2").matches(&v6));
-        assert!(ok_filter("IPv6.ADDR == FE80::1").matches(&v6));
-        assert!(!ok_filter("ipv6.addr == fe80::2").matches(&v6));
-        assert!(!ok_filter("ipv6.addr != fe80::1").matches(&v6));
-        assert!(ok_filter("ipv6.addr != fe80::9").matches(&v6));
-        assert!(ok_filter("ipv6.addr != fe80::1").matches(&other));
-        assert!(!ok_filter("ipv6.addr == fe80::1").matches(&v4));
-        assert!(!ok_filter("ipv6.addr != fe80::1").matches(&v4));
-        assert!(!ok_filter("ipv6.addr == 10.0.2.15").matches(&v4));
-        assert!(!ok_filter("ipv6.addr != 10.0.2.15").matches(&v4));
-        assert!(ok_filter("ipv6.addr == fe80::1").matches(&mixed));
-        assert!(!ok_filter("ipv6.addr != fe80::1").matches(&mixed));
-        assert!(!ok_filter("ipv6.addr != fe80::2").matches(&mixed));
-        assert!(Filter::parse("ipv6.addr").is_err());
-        assert!(!matches!(Filter::parse("ipv6.addr"), Ok(Filter::Text(_))));
-        assert!(Filter::parse("ipv6.host == fe80::1").is_err());
-
-        let mut host = packet("HTTP", "10.0.2.15:40000", "93.184.216.34:80");
-        host.info = "GET / HTTP/1.1\r\nHost: example.com\r\nUser-Agent: curl".into();
-        assert!(ok_filter("http.host").matches(&host));
-        assert!(ok_filter("http.host == \"example.com\"").matches(&host));
-        assert!(ok_filter("http.host == \"Example.COM\"").matches(&host));
-        assert!(!ok_filter("http.host == \"example.org\"").matches(&host));
-        assert!(!ok_filter("http.host == \"example\"").matches(&host));
-
-        let mut bare = host.clone();
-        bare.info = "see Host: with no value".into();
-        assert!(ok_filter("http.host").matches(&bare));
-        assert!(!ok_filter("http.host == \"example.com\"").matches(&bare));
-
-        let mut spaced = host.clone();
-        spaced.info = "HOST:example.com".into();
-        assert!(ok_filter("http.host == example.com").matches(&spaced));
-
-        let mut ghost = host.clone();
-        ghost.info = "Ghost: example.com".into();
-        assert!(!ok_filter("http.host").matches(&ghost));
-        assert!(!ok_filter("http.host == \"example.com\"").matches(&ghost));
-
-        let mut local = host.clone();
-        local.info = "localhost: example.com".into();
-        assert!(!ok_filter("http.host").matches(&local));
-        assert!(!ok_filter("http.host == \"example.com\"").matches(&local));
-
-        let mut longer = host.clone();
-        longer.info = "Host: example.com.evil".into();
-        assert!(ok_filter("http.host").matches(&longer));
-        assert!(!ok_filter("http.host == \"example.com\"").matches(&longer));
-
-        let mut prefix = host.clone();
-        prefix.info = "Host: notexample.com".into();
-        assert!(!ok_filter("http.host == \"example.com\"").matches(&prefix));
-
-        let mut word = host.clone();
-        word.info = "GET /example.com HTTP/1.1".into();
-        assert!(!ok_filter("http.host").matches(&word));
-        assert!(!ok_filter("http.host == \"example.com\"").matches(&word));
-
-        let mut udp_host = packet("UDP", "10.0.2.15:1", "1.2.3.4:2");
-        udp_host.info = "Host: example.com".into();
-        assert!(!ok_filter("http.host").matches(&udp_host));
-        assert!(!ok_filter("http.host == \"example.com\"").matches(&udp_host));
-        assert!(!ok_filter("http.host != \"example.com\"").matches(&udp_host));
-
-        let mut other_host = host.clone();
-        other_host.info = "Host: other.example".into();
-        assert!(ok_filter("http.host != \"example.com\"").matches(&other_host));
-        assert!(!ok_filter("http.host != \"other.example\"").matches(&other_host));
     }
 }

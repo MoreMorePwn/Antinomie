@@ -75,6 +75,7 @@ pub(crate) enum Request {
         kind: antinomie_monitor_core::AnalysisKind,
         start: u64,
         query: String,
+        record_context: Vec<(&'static str, crate::query::RowValue)>,
     },
 }
 
@@ -302,15 +303,30 @@ impl ArchiveWorker {
                             kind,
                             start,
                             query,
+                            record_context,
                         } => Answer::Listing {
-                            result: antinomie_monitor_core::read_listing_page(
-                                &directory,
-                                &report_id,
-                                kind,
-                                start,
-                                antinomie_monitor_core::LISTING_PAGE_MAX_ROWS,
-                                &query,
-                            ),
+                            result: {
+                                let fields = crate::analysis::listing_fields(kind);
+                                let filter = crate::query::compile_table(&query, &fields);
+                                if let Some(error) = filter.error.clone() {
+                                    Err(error)
+                                } else {
+                                    antinomie_monitor_core::read_listing_page_with(
+                                        &directory,
+                                        &report_id,
+                                        kind,
+                                        start,
+                                        antinomie_monitor_core::LISTING_PAGE_MAX_ROWS,
+                                        &query,
+                                        |entry| {
+                                            filter.keep_table(&crate::analysis::listing_row_with(
+                                                entry,
+                                                &record_context,
+                                            ))
+                                        },
+                                    )
+                                }
+                            },
                             view_key,
                             generation,
                         },

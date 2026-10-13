@@ -1080,6 +1080,7 @@ impl Session {
                     run.execution_generation = execution.generation;
                     run.summary.state = crate::execution::state(&execution);
                     run.summary.execution = Some(execution);
+                    run.record_tree_completion();
                     run.persist_summary()?;
                 }
                 Ok(())

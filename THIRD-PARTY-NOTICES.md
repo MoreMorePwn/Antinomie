@@ -130,6 +130,14 @@ Use the locked Cargo metadata and actual packaged artifacts, not just the
 application manifest, to inventory a release. The source workspace's MIT
 metadata describes its own crates, not all dependencies.
 
+Optional packet display filtering and HTTP/DNS triage invoke an independently
+installed Wireshark TShark executable, licensed under GPL-2.0-or-later, through
+its command-line interface with PCAP input and field output. Antinomie's host
+archive does not include or link Wireshark code. The installed util-linux
+`prlimit` command bounds these external processes; its upstream terms remain
+applicable. Distributors who include either tool must preserve its notices and
+provide its required source arrangement separately.
+
 The image builder uses Linux, BusyBox, e2fsprogs utilities and guest libraries.
 Kernel/BusyBox/e2fsprogs GPL and library-specific terms still apply. Before
 publishing executables or guest images, review every distributed component,

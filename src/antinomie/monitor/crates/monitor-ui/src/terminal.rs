@@ -645,7 +645,9 @@ mod tests {
         assert_eq!(terminal.parser.screen().size(), size);
         assert!(input.is_empty(), "hidden return does not take input");
         assert!(
-            rendered(&output).iter().any(|row| row.contains("while-hidden")),
+            rendered(&output)
+                .iter()
+                .any(|row| row.contains("while-hidden")),
             "{:?}",
             rendered(&output)
         );

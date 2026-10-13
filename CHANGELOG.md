@@ -12,9 +12,33 @@ it runs.
   shedding. Host measurements show QEMU CPU, resident memory, uptime and free
   space on the data volume. Missing values stay unavailable; capacities are
   distinguished from actual usage. Saved layouts preserve custom windows.
-  Performance-style status indicators, a 60-sample CPU history and RAM/data-volume
-  gauges show measured values with explicit gaps. RAM gauges describe QEMU's
+  Aligned CPU, resident-memory and data-volume gauges with two-minute, per-VM
+  timestamped histories show measured values with explicit gaps. Switching VMs
+  preserves each history; stopped VMs retain their last observation and age.
+  RAM gauges describe QEMU's
   share of host-visible RAM; guest RAM utilization is unavailable.
+- **Structured filters.** History, triage, static results, core mappings and
+  Volatility tables use typed fields, quoted tags, inline completion and field
+  context actions. Invalid expressions retain the previous valid result.
+  Native syscall argument names come from the pinned schema; captured structure
+  members use checked x86-64 layouts. Missing capture bytes remain unavailable.
+  Volatility queries and sorting cover every retained row with bounded pages.
+- **Wireshark packet filters.** An installed TShark supplies its display-filter
+  grammar and field glossary. Filtering runs in an isolated, resource-bounded
+  background job over the whole capture; live captures use a complete-record
+  prefix. Capture names/tags have a separate Record filter. Original PCAP files
+  remain intact; quick text search is labeled separately.
+- **Triage and BPF.** Process, file, HTTP and DNS views read complete retained
+  recordings with refresh controls, paged results and versioned findings linked
+  to their evidence. Classic socket/seccomp and eBPF instruction views provide
+  exact raw exports, helper names and explanatory pseudocode; failed attempts
+  and missing observations remain distinct from successful operations.
+- **Historical MalShare.** Last-24-hour, seven-day, thirty-day, custom-range and
+  all-cached metadata modes validate dated lists, retain progress and resume
+  offline. Archive dates are labeled separately from first-seen timestamps.
+- **Retained-result navigation.** Run/capture selection updates Details and
+  supports keyboard navigation. Labels, related-run links, mapping/function
+  filters and export/directory actions preserve original evidence identity.
 - **Live Dump core.** The toolbar and Core dumps offer a process picker for
   pause/capture/resume using exact guest identities. Requires revision 16; older
   bases display the reason capture is unavailable. Repeated cores have separate
