@@ -87,11 +87,12 @@ text; their unchanged published packages and canonical MIT terms are retained.
 The inventory records the exact provenance and preserves combined license terms.
 It contains public third-party material, without Antinomie's private host source.
 
-Guest kernel source, exact bootstrap/desktop package sources and guest notices
-are supplied alongside the 0.6.0 bases at
-https://huggingface.co/buckets/MoreMorePwn/antinomie-bases/tree/sources/0.6.0.
-The source inventory associates each distributed base with its exact kernel
-configuration, patch series and package versions.
+The `MoreMorePwn/antinomie-bases` Hugging Face bucket is reserved for the VM
+image catalog and required image files. Guest kernel source, exact
+bootstrap/desktop package sources and guest notices belong in a separate
+publication. Release notes must provide the verified source location before
+the release is published. The source inventory associates each distributed
+base with its exact kernel configuration, patch series and package versions.
 
 Static-analysis executable parsing uses `object 0.40.0` with read/std features
 only (no write, build or automatic compression). The MIT option is selected;

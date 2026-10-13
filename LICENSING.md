@@ -47,6 +47,12 @@ release packaging must include applicable notices and source/source-offer
 arrangements where required. This source licensing change is not a complete
 binary/image distribution compliance audit.
 
+The Hugging Face `MoreMorePwn/antinomie-bases` bucket contains only the image
+catalog, its README and required VM bundle files. Publish corresponding guest
+sources and separate notices elsewhere, with verified access links in the
+release documentation. Keeping the image catalog separate does not remove
+component-specific source distribution obligations.
+
 The documentation guide's `Agents/Licensing and Provenance.md` governs clean
 product commits and required exceptions. Unnecessary reference mockups, copied
 branding and research artifacts stay out of the product repository; required
