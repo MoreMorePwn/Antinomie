@@ -1212,7 +1212,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires X11 native rendering; exits after 20 seconds"]
+    #[ignore = "requires X11 native rendering; bounded state/viewport fixture"]
     fn native_summary_fixture() {
         use std::time::{Duration, Instant};
         use winit::platform::x11::EventLoopBuilderExtX11;
@@ -1234,20 +1234,33 @@ mod tests {
             }
         }
         let wide = std::env::var_os("ANTINOMIE_SUMMARY_QA_WIDE").is_some();
+        let state = std::env::var("ANTINOMIE_SUMMARY_QA_STATE").unwrap_or_else(|_| "active".into());
+        assert!(
+            matches!(state.as_str(), "active" | "stopped" | "unknown"),
+            "ANTINOMIE_SUMMARY_QA_STATE must be active, stopped or unknown"
+        );
         let font = std::env::var("ANTINOMIE_SUMMARY_QA_FONT")
             .ok()
             .and_then(|value| value.parse::<f32>().ok())
-            .unwrap_or(if wide { 16.0 } else { 24.0 });
+            .filter(|font| font.is_finite())
+            .unwrap_or(if wide { 16.0 } else { 24.0 })
+            .clamp(8.0, 36.0);
         let seconds = std::env::var("ANTINOMIE_SUMMARY_QA_SECONDS")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(12)
             .clamp(1, 120);
-        let size = if wide {
-            [1280.0, 860.0]
-        } else {
-            [520.0, 900.0]
-        };
+        let width = std::env::var("ANTINOMIE_SUMMARY_QA_WIDTH")
+            .ok()
+            .map(|value| {
+                value
+                    .parse::<u32>()
+                    .expect("ANTINOMIE_SUMMARY_QA_WIDTH must be an integer")
+            })
+            .unwrap_or(if wide { 1280 } else { 520 })
+            .clamp(320, 1920);
+        let size = [width as f32, if width >= 960 { 860.0 } else { 900.0 }];
+        println!("Summary native fixture: state={state}, width={width}, font={font}, duration={seconds}s");
         eframe::run_native(
             "Antinomie Summary QA",
             eframe::NativeOptions {
@@ -1269,7 +1282,17 @@ mod tests {
                 snapshot.health.dropped = 7;
                 snapshot.health.shedding = true;
                 let mut history = CpuHistory::default();
-                for sequence in 1..=HISTORY_LIMIT as u64 {
+                let observed_at = Instant::now()
+                    - if state == "stopped" {
+                        Duration::from_secs(30)
+                    } else {
+                        Duration::ZERO
+                    };
+                for sequence in 1..=if state == "unknown" {
+                    0
+                } else {
+                    HISTORY_LIMIT as u64
+                } {
                     let resources = snapshot.vm_resources.as_mut().unwrap();
                     resources.sample_sequence = sequence;
                     resources.qemu_resident_size = Some(6 * 1_073_741_824);
@@ -1284,8 +1307,22 @@ mod tests {
                     history.observe_at(
                         &snapshot,
                         Some("active"),
-                        Instant::now() - WINDOW + Duration::from_secs(sequence),
+                        observed_at - WINDOW + Duration::from_secs(sequence),
                     );
+                }
+                match state.as_str() {
+                    "stopped" => {
+                        snapshot.state = VmState::Stopped;
+                        snapshot.active_vm = None;
+                        snapshot.vm_resources = None;
+                        history.observe(&snapshot, Some("active"));
+                    }
+                    "unknown" => {
+                        // A running VM without any resource observation has no
+                        // retained fallback, so the real view paints unknown values.
+                        snapshot.vm_resources = None;
+                    }
+                    _ => {}
                 }
                 Ok(Box::new(Fixture {
                     snapshot,
