@@ -6,6 +6,10 @@ it runs.
 
 ## 0.6.1 — Unreleased
 
+- **Tab dragging.** Drag docked tab labels directly to split or join panes,
+  or reorder them within a tab bar. A shadowed ghost follows the pointer;
+  a blue pane highlight or insertion line previews the exact destination.
+  Escape cancels, ordinary clicks still select, and moved tabs receive focus.
 - **Guest resource monitoring.** A temporary bundled static collector reads
   guest `/proc/meminfo` and root `statvfs` every two seconds. VM Status shows RAM
   used/available and root filesystem used/free/available, with age and stale or

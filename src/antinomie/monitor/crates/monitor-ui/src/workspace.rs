@@ -1,4 +1,6 @@
 //! A single dock tree rendered by moving each surface into its native viewport.
+#[path = "workspace_drag.rs"]
+mod workspace_drag;
 use crate::{app::MonitorApp, theme};
 use antinomie_monitor_core::AnalysisKind;
 use eframe::egui::{self, Rect};
@@ -151,6 +153,8 @@ pub(crate) struct WorkspaceLayout {
     #[serde(skip)]
     target_headers: Vec<(SurfaceIndex, NodeIndex, Rect)>,
     #[serde(skip)]
+    tab_targets: Vec<(Panel, SurfaceIndex, Rect)>,
+    #[serde(skip)]
     released: Option<(SurfaceIndex, egui::Pos2)>,
     #[serde(skip)]
     detach: Option<Panel>,
@@ -188,6 +192,7 @@ impl Default for WorkspaceLayout {
             drag: None,
             targets: Vec::new(),
             target_headers: Vec::new(),
+            tab_targets: Vec::new(),
             released: None,
             detach: None,
             dock_back: None,
@@ -287,6 +292,7 @@ impl WorkspaceLayout {
     pub(crate) fn show(&mut self, app: &mut MonitorApp, ctx: &egui::Context) {
         self.targets.clear();
         self.target_headers.clear();
+        self.tab_targets.clear();
         self.native_builders
             .retain(|index, _| self.dock.is_surface_valid(SurfaceIndex(*index)));
         self.cancel_drag = false;
@@ -360,7 +366,15 @@ impl WorkspaceLayout {
         if let Some(panel) = self.dock_back.take() {
             self.dock_panel(panel);
         }
+        let dropped = self
+            .released
+            .as_ref()
+            .and_then(|_| self.drag.as_ref().map(|(panel, _)| panel.clone()));
         self.finish_drag();
+        if let Some(panel) = dropped {
+            app.details_follow.chose(&panel);
+            ctx.request_repaint();
+        }
         for (report_id, kind) in app.take_analysis_sections() {
             let panel = Panel::AnalysisSection { report_id, kind };
             if self.dock.find_tab(&panel).is_none() {
@@ -490,51 +504,36 @@ impl WorkspaceLayout {
             Some(window) => Surface::Window(tree, window),
             None => Surface::Main(tree),
         };
+        self.show_drag_preview(ui, surface, origin, app);
     }
 
     fn drop_panel(&mut self, panel: &Panel, source: SurfaceIndex, position: egui::Pos2) {
         let Some(location) = self.dock.find_tab(panel) else {
             return;
         };
-        if let Some((surface, node, rect)) = self
-            .targets
-            .iter()
-            .rev()
-            .find(|(_, _, rect)| rect.contains(position))
-            .copied()
-        {
-            if self.dock[surface].is_empty() {
-                self.dock
-                    .move_tab(location, TabDestination::EmptySurface(surface));
-                return;
+        if let Some(target) = self.drop_target(panel, position) {
+            use workspace_drag::DropAction;
+            match target.action {
+                DropAction::Stay => self.focus(panel.clone()),
+                DropAction::Empty => self
+                    .dock
+                    .move_tab(location, TabDestination::EmptySurface(target.surface)),
+                DropAction::Append => self
+                    .dock
+                    .move_tab(location, (target.surface, target.node, TabInsert::Append)),
+                DropAction::Insert(index) => self.dock.move_tab(
+                    location,
+                    (
+                        target.surface,
+                        target.node,
+                        TabInsert::Insert(TabIndex(index)),
+                    ),
+                ),
+                DropAction::Split(split) => self.dock.move_tab(
+                    location,
+                    (target.surface, target.node, TabInsert::Split(split)),
+                ),
             }
-            let rel = (position - rect.min) / rect.size();
-            let on_header =
-                self.target_headers
-                    .iter()
-                    .any(|(header_surface, header_node, header)| {
-                        *header_surface == surface
-                            && *header_node == node
-                            && header.contains(position)
-                    });
-            if on_header && location.0 == surface && location.1 == node {
-                self.focus(panel.clone());
-                return;
-            }
-            let insert = if on_header {
-                TabInsert::Append
-            } else if rel.x < 0.2 {
-                TabInsert::Split(egui_dock::Split::Left)
-            } else if rel.x > 0.8 {
-                TabInsert::Split(egui_dock::Split::Right)
-            } else if rel.y < 0.2 {
-                TabInsert::Split(egui_dock::Split::Above)
-            } else if rel.y > 0.8 {
-                TabInsert::Split(egui_dock::Split::Below)
-            } else {
-                TabInsert::Append
-            };
-            self.dock.move_tab(location, (surface, node, insert));
         } else if !location.0.is_main() && self.dock[location.0].num_tabs() == 1 {
             let size = self
                 .geometry
@@ -560,6 +559,7 @@ impl WorkspaceLayout {
             );
             self.native_builders.remove(&surface.0);
         }
+        self.focus(panel.clone());
         if !self.dock.is_surface_valid(source) {
             self.geometry.remove(&source.0);
             self.native_builders.remove(&source.0);
@@ -733,13 +733,33 @@ impl TabViewer for Viewer<'_> {
         true
     }
     fn on_tab_button(&mut self, tab: &mut Panel, response: &egui::Response) {
+        let origin = response
+            .ctx
+            .input(|input| input.viewport().inner_rect.map(|rect| rect.min))
+            .unwrap_or_default();
+        let visible = response.interact_rect.intersect(response.ctx.screen_rect());
+        if visible.is_positive() {
+            self.layout.tab_targets.push((
+                tab.clone(),
+                self.surface,
+                visible.translate(origin.to_vec2()),
+            ));
+        }
         if response.drag_started_by(egui::PointerButton::Primary) {
             self.layout.drag = Some((tab.clone(), self.surface));
         }
         if response.clicked() {
             self.app.details_follow.chose(tab);
         }
-        response.clone().on_hover_text(self.app.panel_title(tab));
+        if self.layout.drag.is_none() {
+            response
+                .clone()
+                .on_hover_cursor(egui::CursorIcon::Grab)
+                .on_hover_text(format!(
+                    "{}\nDrag to reorder or dock at a pane edge. Right-click to detach.",
+                    self.app.panel_title(tab)
+                ));
+        }
     }
     fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Panel, _: SurfaceIndex, _: NodeIndex) {
         if !self.surface.is_main()
@@ -773,6 +793,407 @@ fn primary_release(input: &egui::InputState) -> Option<egui::Pos2> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pointer_frame(
+        layout: &mut WorkspaceLayout,
+        app: &mut MonitorApp,
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 900.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| layout.show(app, ctx),
+        )
+    }
+
+    #[test]
+    fn actual_pointer_drag_moves_a_docked_tab_without_detaching() {
+        let mut layout = WorkspaceLayout::default();
+        let mut app = crate::app::tests::app();
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut output = egui::FullOutput::default();
+        for _ in 0..4 {
+            output = pointer_frame(&mut layout, &mut app, &ctx, Vec::new());
+        }
+        let start = crate::app::tests::texts(&output)
+            .into_iter()
+            .find(|(label, _)| label == "Core dumps")
+            .expect("core tab")
+            .1
+            .center();
+        let destination = layout
+            .dock
+            .find_main_surface_tab(&Panel::Details)
+            .unwrap()
+            .0;
+        let target = layout
+            .targets
+            .iter()
+            .find(|(surface, node, _)| surface.is_main() && *node == destination)
+            .unwrap()
+            .2
+            .center();
+        pointer_frame(
+            &mut layout,
+            &mut app,
+            &ctx,
+            vec![
+                egui::Event::PointerMoved(start),
+                egui::Event::PointerButton {
+                    pos: start,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        let feedback = pointer_frame(
+            &mut layout,
+            &mut app,
+            &ctx,
+            vec![egui::Event::PointerMoved(target)],
+        );
+        assert!(
+            crate::app::tests::texts(&feedback)
+                .iter()
+                .any(|(text, _)| text == "Join tabs · Esc cancels"),
+            "drag ghost describes the drop"
+        );
+        assert!(
+            feedback.shapes.iter().any(
+                |shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.blur_width > 0.0)
+            ),
+            "the ghost has a real shadow"
+        );
+        assert_eq!(
+            layout.drag,
+            Some((Panel::CoreDump, SurfaceIndex::main())),
+            "tab press/move must enter an actual drag"
+        );
+        pointer_frame(
+            &mut layout,
+            &mut app,
+            &ctx,
+            vec![egui::Event::PointerButton {
+                pos: target,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert_eq!(
+            layout
+                .dock
+                .find_main_surface_tab(&Panel::CoreDump)
+                .unwrap()
+                .0,
+            destination
+        );
+        assert!(layout.drag.is_none());
+    }
+
+    #[test]
+    fn real_app_pointer_drag_shows_preview_and_splits_without_detach() {
+        for (width, font) in [(1280.0, 16.0), (1600.0, 24.0)] {
+            let mut app = crate::app::tests::app();
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            theme::text_size(&ctx, font);
+            let screen = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 900.0));
+            let frame = |app: &mut MonitorApp, events: Vec<egui::Event>| {
+                crate::app::tests::draw_input(
+                    app,
+                    &ctx,
+                    egui::RawInput {
+                        screen_rect: Some(screen),
+                        events,
+                        ..Default::default()
+                    },
+                )
+            };
+            let mut output = egui::FullOutput::default();
+            for _ in 0..4 {
+                output = frame(&mut app, Vec::new());
+            }
+            let start = crate::app::tests::texts(&output)
+                .into_iter()
+                .find(|(label, _)| label == "Network")
+                .expect("network tab")
+                .1
+                .center();
+            let layout = crate::app::tests::workspace(&mut app);
+            let source = layout
+                .dock
+                .find_main_surface_tab(&Panel::Network)
+                .unwrap()
+                .0;
+            let pane = layout
+                .targets
+                .iter()
+                .find(|(surface, node, _)| surface.is_main() && *node == source)
+                .unwrap()
+                .2;
+            let target = egui::pos2(pane.right() - 25.0, pane.center().y);
+            frame(&mut app, vec![egui::Event::PointerMoved(start)]);
+            frame(
+                &mut app,
+                vec![egui::Event::PointerButton {
+                    pos: start,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            let output = frame(&mut app, vec![egui::Event::PointerMoved(target)]);
+            let feedback = crate::app::tests::texts(&output);
+            assert!(
+                feedback
+                    .iter()
+                    .any(|(text, rect)| text == "Dock right · Esc cancels"
+                        && screen.contains_rect(*rect)),
+                "full-app drag has visible, bounded feedback: {feedback:?}"
+            );
+            assert_eq!(
+                output.platform_output.cursor_icon,
+                egui::CursorIcon::Grabbing
+            );
+            frame(
+                &mut app,
+                vec![egui::Event::PointerButton {
+                    pos: target,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            let layout = crate::app::tests::workspace(&mut app);
+            let location = layout.dock.find_tab(&Panel::Network).unwrap();
+            assert!(
+                location.0.is_main(),
+                "direct drag must not require a detached window"
+            );
+            assert_ne!(location.1, source);
+            assert_eq!(
+                layout
+                    .dock
+                    .iter_all_tabs()
+                    .filter(|(_, tab)| **tab == Panel::Network)
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn actual_pointer_reorders_both_directions_in_the_same_tab_bar() {
+        let mut layout = WorkspaceLayout::default();
+        let mut app = crate::app::tests::app();
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut output = egui::FullOutput::default();
+        for _ in 0..4 {
+            output = pointer_frame(&mut layout, &mut app, &ctx, Vec::new());
+        }
+        for before in [true, false] {
+            let texts = crate::app::tests::texts(&output);
+            let start = texts
+                .iter()
+                .find(|(text, _)| text == "Core dumps")
+                .unwrap()
+                .1
+                .center();
+            let title = if before { "Summary" } else { "Static Analysis" };
+            let rect = texts.iter().find(|(text, _)| text == title).unwrap().1;
+            let target = egui::pos2(
+                if before { rect.left() } else { rect.right() },
+                rect.center().y,
+            );
+            pointer_frame(
+                &mut layout,
+                &mut app,
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(start),
+                    egui::Event::PointerButton {
+                        pos: start,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            let feedback = pointer_frame(
+                &mut layout,
+                &mut app,
+                &ctx,
+                vec![egui::Event::PointerMoved(target)],
+            );
+            assert!(crate::app::tests::texts(&feedback)
+                .iter()
+                .any(|(text, _)| text == "Reorder tabs · Esc cancels"));
+            let _ = pointer_frame(
+                &mut layout,
+                &mut app,
+                &ctx,
+                vec![egui::Event::PointerButton {
+                    pos: target,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            let (surface, node, index) = layout.dock.find_tab(&Panel::CoreDump).unwrap();
+            assert!(surface.is_main());
+            assert_eq!(
+                index.0,
+                if before {
+                    0
+                } else {
+                    layout.dock[surface][node].tabs_count() - 1
+                }
+            );
+            output = pointer_frame(&mut layout, &mut app, &ctx, Vec::new());
+        }
+    }
+
+    #[test]
+    fn escape_cancels_an_actual_drag_even_when_released_over_a_target() {
+        let mut layout = WorkspaceLayout::default();
+        let mut app = crate::app::tests::app();
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut output = egui::FullOutput::default();
+        for _ in 0..4 {
+            output = pointer_frame(&mut layout, &mut app, &ctx, Vec::new());
+        }
+        let before = layout.dock.find_tab(&Panel::CoreDump).unwrap();
+        let start = crate::app::tests::texts(&output)
+            .into_iter()
+            .find(|(text, _)| text == "Core dumps")
+            .unwrap()
+            .1
+            .center();
+        let target = layout.targets.last().unwrap().2.center();
+        pointer_frame(
+            &mut layout,
+            &mut app,
+            &ctx,
+            vec![
+                egui::Event::PointerMoved(start),
+                egui::Event::PointerButton {
+                    pos: start,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        pointer_frame(
+            &mut layout,
+            &mut app,
+            &ctx,
+            vec![egui::Event::PointerMoved(target)],
+        );
+        let output = pointer_frame(
+            &mut layout,
+            &mut app,
+            &ctx,
+            vec![
+                egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos: target,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        assert!(layout.drag.is_none());
+        assert_eq!(layout.dock.find_tab(&Panel::CoreDump).unwrap(), before);
+        assert!(!crate::app::tests::texts(&output)
+            .iter()
+            .any(|(text, _)| text.contains("Esc cancels")));
+    }
+
+    #[test]
+    fn normal_tab_click_selects_without_starting_a_drag_or_showing_a_ghost() {
+        let mut layout = WorkspaceLayout::default();
+        let mut app = crate::app::tests::app();
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut output = egui::FullOutput::default();
+        for _ in 0..4 {
+            output = pointer_frame(&mut layout, &mut app, &ctx, Vec::new());
+        }
+        let point = crate::app::tests::texts(&output)
+            .into_iter()
+            .find(|(text, _)| text == "Core dumps")
+            .unwrap()
+            .1
+            .center();
+        let hovered = pointer_frame(
+            &mut layout,
+            &mut app,
+            &ctx,
+            vec![egui::Event::PointerMoved(point)],
+        );
+        assert_eq!(hovered.platform_output.cursor_icon, egui::CursorIcon::Grab);
+        for pressed in [true, false] {
+            output = pointer_frame(
+                &mut layout,
+                &mut app,
+                &ctx,
+                vec![egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+        let (surface, node, index) = layout.dock.find_tab(&Panel::CoreDump).unwrap();
+        let egui_dock::Node::Leaf { active, .. } = &layout.dock[surface][node] else {
+            panic!("tab leaf");
+        };
+        assert_eq!(*active, index);
+        assert!(layout.drag.is_none());
+        assert!(!crate::app::tests::texts(&output)
+            .iter()
+            .any(|(text, _)| text.contains("Esc cancels")));
+    }
+
+    #[test]
+    fn lone_tab_preview_does_not_promise_an_empty_split() {
+        let mut layout = WorkspaceLayout {
+            dock: DockState::new(vec![Panel::CoreDump]),
+            ..WorkspaceLayout::default()
+        };
+        layout.targets.push((
+            SurfaceIndex::main(),
+            NodeIndex::root(),
+            Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 500.0)),
+        ));
+        let point = egui::pos2(20.0, 250.0);
+        let target = layout.drop_target(&Panel::CoreDump, point).unwrap();
+        assert_eq!(target.action, workspace_drag::DropAction::Stay);
+        layout.drop_panel(&Panel::CoreDump, SurfaceIndex::main(), point);
+        assert!(layout.dock.main_surface()[NodeIndex::root()].is_leaf());
+        assert_eq!(layout.dock.main_surface().num_tabs(), 1);
+    }
 
     #[test]
     fn observed_geometry_does_not_drive_live_placement() {

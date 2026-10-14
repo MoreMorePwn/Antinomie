@@ -74,6 +74,18 @@ snapshots and reconnect, never replay uncertain side effects or carry readings
 across a timeline. Collector syscalls remain observable in Capture All; this is
 not a stealth guarantee. Kernel-native production is deferred to 0.7.0.
 
+## Accepted ANT-T0085 tab dragging and docking feedback (0.6.1)
+
+The user reports unclear/nonworking tab movement and requests the expected
+drag shadow. Preserve the native dock tree and saved arrangements. Drag tab
+labels directly, show a bounded shadowed title and explicit docking action,
+and use one resolver for the highlighted destination and the committed drop.
+Pane edges split, centers join, and visible tab headers allow insertion/reorder
+with source-index removal accounted for. Show grab/grabbing cursors, focus moved
+tabs and update the corresponding Details context on a committed drop. Escape
+and missing-release cancellation must not silently detach or move a tab; a lone
+tab cannot promise a split into an empty source group. No guest/backend changes.
+
 ## Accepted ANT-T0057 manual cores and performance Summary (0.6.0)
 
 User authorized a real Dump core action beside Dump memory and inside Core dumps,

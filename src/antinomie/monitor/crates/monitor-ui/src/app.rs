@@ -9395,6 +9395,18 @@ pub(crate) mod tests {
         )
     }
 
+    pub(crate) fn workspace(app: &mut MonitorApp) -> &mut WorkspaceLayout {
+        &mut app.layout
+    }
+
+    pub(crate) fn draw_input(
+        app: &mut MonitorApp,
+        ctx: &egui::Context,
+        input: egui::RawInput,
+    ) -> egui::FullOutput {
+        ctx.run(input, |ctx| app.draw(ctx))
+    }
+
     pub(crate) fn texts(output: &egui::FullOutput) -> Vec<(String, egui::Rect)> {
         fn collect(shape: &egui::Shape, clip: egui::Rect, texts: &mut Vec<(String, egui::Rect)>) {
             match shape {
