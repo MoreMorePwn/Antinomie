@@ -19,6 +19,10 @@ use antinomie_monitor_core::{
 };
 #[path = "captures.rs"]
 mod captures;
+#[path = "upload_dialog.rs"]
+mod upload;
+#[path = "upload_browser.rs"]
+mod upload_browser;
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
 use serde::{Deserialize, Serialize};
@@ -89,16 +93,8 @@ enum Confirm {
     Reset(String),
     Delete(String),
     DeleteBase(String),
-    Upload {
-        source: PathBuf,
-        destination: String,
-        executable: bool,
-        vm_id: Option<String>,
-    },
-    Nat {
-        vm: VmConfig,
-        creating: bool,
-    },
+    Upload(upload::Intent),
+    Nat { vm: VmConfig, creating: bool },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -288,6 +284,8 @@ pub struct MonitorApp {
     destination: String,
     executable: bool,
     overwrite: bool,
+    upload_browser: upload_browser::Browser,
+    pending_upload: Option<upload::Pending>,
     pending_launch: Option<u64>,
     started: Instant,
     smoke: Option<Duration>,
@@ -424,6 +422,8 @@ impl MonitorApp {
             destination: "/tmp/program".into(),
             executable: false,
             overwrite: false,
+            upload_browser: Default::default(),
+            pending_upload: None,
             pending_launch: None,
             started: Instant::now(),
             smoke,
@@ -448,6 +448,11 @@ impl MonitorApp {
     }
 
     fn send(&mut self, command: Command) {
+        self.send_request(command);
+    }
+
+    /// Return the accepted request identity for workflows waiting on completion.
+    fn send_request(&mut self, command: Command) -> Option<u64> {
         let vm_snapshot = matches!(
             &command,
             Command::RefreshVmSnapshots { .. }
@@ -467,7 +472,7 @@ impl MonitorApp {
             }
             self.status = error.clone();
             self.log("ERROR", error);
-            return;
+            return None;
         }
         let launch = matches!(&command, Command::Execute(_));
         let observer = matches!(
@@ -489,16 +494,18 @@ impl MonitorApp {
         if let Err(error) = admission {
             self.status = error.clone();
             self.log("ERROR", error);
-            return;
+            return None;
         }
         #[cfg(test)]
         if self.submitted.len() < 1024 {
             self.submitted.push(command.clone());
         }
         let mut failure = None;
+        let mut accepted = None;
         if let Some(backend) = &self.backend {
             match backend.send(command) {
                 Ok(id) => {
+                    accepted = Some(id);
                     if vm_snapshot {
                         self.vm_snapshots.pending = Some(id);
                         self.vm_snapshots.result = None;
@@ -535,6 +542,11 @@ impl MonitorApp {
             }
             self.log("ERROR", error);
         }
+        #[cfg(test)]
+        if self.backend.is_none() {
+            accepted = Some(self.submitted.len() as u64);
+        }
+        accepted
     }
 
     fn drain(&mut self) {
@@ -550,6 +562,13 @@ impl MonitorApp {
                     FolderKind::Recording if target.generation == self.draft_generation => {
                         self.draft.recording_root = Some(path)
                     }
+                    FolderKind::UploadRoot
+                        if self.upload_open
+                            && target.generation == self.upload_browser.generation =>
+                    {
+                        self.upload_browser.reset(path);
+                        self.source.clear();
+                    }
                     _ => {}
                 },
                 Err(error) => {
@@ -562,6 +581,7 @@ impl MonitorApp {
         let mut activity = Vec::new();
         // A sample sent into the guest that is to run next.
         let mut launch_sample = None;
+        let mut upload_result = None;
         let mut analysis_changed = false;
         let was_offline = self.trace_archive_directory().is_some();
         if let Some(backend) = &self.backend {
@@ -628,6 +648,13 @@ impl MonitorApp {
                         self.vm_snapshots.complete(id, success, &message);
                         if let Some(run) = self.samples.complete(id, success, &message) {
                             launch_sample = Some(run);
+                        }
+                        if self
+                            .pending_upload
+                            .as_ref()
+                            .is_some_and(|upload| upload.id == id)
+                        {
+                            upload_result = Some((id, success));
                         }
                         if self.pending_observer == Some(id) {
                             self.pending_observer = None;
@@ -751,6 +778,16 @@ impl MonitorApp {
         }
         if let Some(run) = launch_sample {
             self.launch_sample(run);
+        }
+        if let Some((id, success)) = upload_result {
+            self.complete_upload(id, success);
+        }
+        if self
+            .pending_upload
+            .as_ref()
+            .is_some_and(|upload| !upload.intent.same_session(&self.snapshot))
+        {
+            self.pending_upload = None;
         }
         if !was_offline && self.trace_archive_directory().is_some() {
             self.request_page(0);
@@ -2335,7 +2372,7 @@ impl MonitorApp {
             self.launch_open = true;
         }
         if pressed(keys::UPLOAD) && self.running() {
-            self.upload_open = true;
+            self.open_upload();
         }
         if pressed(keys::SETTINGS) {
             self.settings_open = true;
@@ -2507,7 +2544,7 @@ impl MonitorApp {
                             .add_enabled(self.running(), item("Upload file…", Some(keys::UPLOAD)))
                             .clicked()
                         {
-                            self.upload_open = true;
+                            self.open_upload();
                             ui.close_menu();
                         }
                         ui.separator();
@@ -3558,72 +3595,6 @@ impl MonitorApp {
                     self.launch_action_rects = Some((run.rect, analyze.rect));
                 }
             });
-        });
-    }
-
-    fn upload_form(&mut self, ui: &mut egui::Ui) {
-        ui.add_enabled_ui(self.running(), |ui| {
-            dialog_section(ui, "File");
-            form_grid("upload", ui).show(ui, |ui| {
-                ui.label("Host file");
-                ui.add(
-                    text_field(&mut self.source)
-                        .font(egui::TextStyle::Monospace)
-                        .hint_text(RichText::new("/path/on/this/computer").color(theme::muted()))
-                        .desired_width(320.0),
-                );
-                ui.end_row();
-                ui.label("Guest path");
-                ui.add(
-                    text_field(&mut self.destination)
-                        .font(egui::TextStyle::Monospace)
-                        .desired_width(320.0),
-                );
-                ui.end_row();
-                ui.label("Options");
-                ui.vertical(|ui| {
-                    ui.checkbox(&mut self.executable, "Executable");
-                    ui.checkbox(&mut self.overwrite, "Overwrite existing file");
-                });
-                ui.end_row();
-            });
-            let mut cancel = false;
-            dialog_footer(ui, |ui| {
-                if ui
-                    .add_enabled(
-                        !self.source.trim().is_empty() && !self.destination.trim().is_empty(),
-                        primary_button(&format!(
-                            "{} Upload",
-                            egui_phosphor::regular::UPLOAD_SIMPLE
-                        )),
-                    )
-                    .clicked()
-                {
-                    if self.overwrite {
-                        self.confirm = Some(Confirm::Upload {
-                            source: crate::folders::user_path(&self.source),
-                            destination: self.destination.clone(),
-                            executable: self.executable,
-                            vm_id: self.snapshot.active_vm.clone(),
-                        });
-                    } else {
-                        self.upload();
-                    }
-                }
-                cancel = ui.button("Cancel").clicked();
-            });
-            if cancel {
-                self.upload_open = false;
-            }
-        });
-    }
-
-    fn upload(&mut self) {
-        self.send(Command::Upload {
-            source: crate::folders::user_path(&self.source),
-            destination: self.destination.clone(),
-            overwrite: self.overwrite,
-            executable: self.executable,
         });
     }
 
@@ -4687,17 +4658,19 @@ impl MonitorApp {
                 .id(Dialog::Upload.window_id())
                 .open(&mut open)
                 .collapsible(false)
-                .resizable(false)
-                .default_width(520.0)
+                .resizable(true)
+                .default_width(660.0)
                 .default_height(0.0)
-                .max_width(620.0)
+                .max_width((ctx.screen_rect().width() - 50.0).max(300.0))
                 .max_height((ctx.screen_rect().height() - 90.0).max(200.0))
                 .show(ctx, |ui| {
                     scroll_dialog(ui, ctx, |ui| {
                         self.upload_form(ui);
                     });
                 });
-            self.upload_open &= open;
+            if !open {
+                self.close_upload();
+            }
         }
         if self.settings_open {
             self.settings_window(ctx);
@@ -4722,7 +4695,7 @@ impl MonitorApp {
                     "Delete base",
                     true,
                 ),
-                Confirm::Upload { .. } => (
+                Confirm::Upload(_) => (
                     "Overwrite file",
                     "Overwrite the chosen guest path with this host file?",
                     "Overwrite",
@@ -4762,10 +4735,10 @@ impl MonitorApp {
                         Confirm::Reset(_) | Confirm::Delete(_) | Confirm::DeleteBase(_) => {
                             self.snapshot.active_vm.is_none()
                         }
-                        Confirm::Upload { vm_id, .. } => {
-                            vm_id.is_some()
-                                && self.snapshot.active_vm == *vm_id
+                        Confirm::Upload(intent) => {
+                            intent.same_session(&self.snapshot)
                                 && self.snapshot.state == VmState::Running
+                                && self.pending_upload.is_none()
                         }
                         Confirm::Nat { vm, creating } => {
                             if *creating {
@@ -4807,17 +4780,7 @@ impl MonitorApp {
                             identity,
                             confirmed: true,
                         }),
-                        Confirm::Upload {
-                            source,
-                            destination,
-                            executable,
-                            ..
-                        } => self.send(Command::Upload {
-                            source,
-                            destination,
-                            executable,
-                            overwrite: true,
-                        }),
+                        Confirm::Upload(intent) => self.submit_upload(intent, true),
                         Confirm::Nat { mut vm, creating } => {
                             vm.nat = true;
                             vm.isolated_network = false;
@@ -5366,7 +5329,7 @@ impl MonitorApp {
                 self.credentials.reset();
             }
             Dialog::Launch => self.launch_open = false,
-            Dialog::Upload => self.upload_open = false,
+            Dialog::Upload => self.close_upload(),
             Dialog::Settings => self.settings_open = false,
             Dialog::Import => self.import_open = false,
             Dialog::Download => self.download_open = false,
@@ -8061,6 +8024,8 @@ mod tests {
             destination: "/tmp/program".into(),
             executable: false,
             overwrite: false,
+            upload_browser: Default::default(),
+            pending_upload: None,
             pending_launch: None,
             started: Instant::now(),
             smoke: None,
@@ -8068,6 +8033,193 @@ mod tests {
             submitted: Vec::new(),
             launch_action_rects: None,
         }
+    }
+
+    fn upload_app() -> MonitorApp {
+        let mut app = app();
+        app.selected = Some("vm".into());
+        app.snapshot.active_vm = Some("vm".into());
+        app.snapshot.state = VmState::Running;
+        app.snapshot.boot_id = Some("boot".into());
+        app.snapshot.capture_dir = Some(PathBuf::from("/tmp/session"));
+        app.source = "/tmp/host file".into();
+        app.destination = "/tmp/guest file".into();
+        app.open_upload();
+        app
+    }
+
+    #[test]
+    fn upload_and_run_waits_for_matching_success_without_executing() {
+        let mut app = upload_app();
+        app.args = "--keep-this-setting".into();
+        app.request_upload(true);
+        let id = app.pending_upload.as_ref().unwrap().id;
+        assert!(matches!(&app.submitted[0], Command::Upload {
+            destination, executable: true, overwrite: false, ..
+        } if destination == "/tmp/guest file"));
+        assert!(!app.launch_open);
+        app.complete_upload(id + 1, true);
+        assert!(app.pending_upload.is_some() && !app.launch_open);
+        // A later edit cannot change the destination of the queued transfer.
+        app.destination = "/tmp/another".into();
+        app.complete_upload(id, true);
+        assert!(app.launch_open && !app.upload_open);
+        assert_eq!(app.exec.path, "/tmp/guest file");
+        assert_eq!(app.args, "--keep-this-setting");
+        assert!(!app
+            .submitted
+            .iter()
+            .any(|command| matches!(command, Command::Execute(_))));
+    }
+
+    #[test]
+    fn upload_failure_plain_upload_and_closed_handoffs_never_open_run() {
+        for (run_after, success, close) in [
+            (true, false, false),
+            (false, true, false),
+            (true, true, true),
+        ] {
+            let mut app = upload_app();
+            app.request_upload(run_after);
+            let id = app.pending_upload.as_ref().unwrap().id;
+            if close {
+                app.close_dialog(Dialog::Upload);
+            }
+            app.complete_upload(id, success);
+            assert!(app.pending_upload.is_none() && !app.launch_open);
+            assert_eq!(app.submitted.len(), 1);
+        }
+    }
+
+    #[test]
+    fn upload_handoff_rejects_changed_vm_boot_recording_selection_and_shutdown() {
+        for change in 0..6 {
+            let mut app = upload_app();
+            app.request_upload(true);
+            let id = app.pending_upload.as_ref().unwrap().id;
+            match change {
+                0 => app.snapshot.active_vm = Some("other".into()),
+                1 => app.snapshot.boot_id = Some("restored".into()),
+                2 => app.snapshot.capture_dir = Some(PathBuf::from("/tmp/restored")),
+                3 => app.selected = Some("other".into()),
+                4 => app.snapshot.state = VmState::Stopping,
+                _ => app.closing = true,
+            }
+            app.complete_upload(id, true);
+            assert!(!app.launch_open, "change {change}");
+            assert!(app.pending_upload.is_none());
+        }
+    }
+
+    #[test]
+    fn upload_overwrite_confirmation_freezes_action_and_session() {
+        for change_session in [false, true] {
+            let mut app = upload_app();
+            app.overwrite = true;
+            app.request_upload(true);
+            assert!(app.submitted.is_empty());
+            let Some(Confirm::Upload(intent)) = app.confirm.take() else {
+                panic!("confirmation")
+            };
+            app.destination = "/tmp/edited".into();
+            if change_session {
+                app.snapshot.capture_dir = Some(PathBuf::from("/tmp/restored"));
+            }
+            app.submit_upload(intent, true);
+            if change_session {
+                assert!(app.submitted.is_empty() && app.pending_upload.is_none());
+            } else {
+                assert!(matches!(&app.submitted[0], Command::Upload {
+                    destination, overwrite: true, executable: true, ..
+                } if destination == "/tmp/guest file"));
+                let id = app.pending_upload.as_ref().unwrap().id;
+                app.complete_upload(id, true);
+                assert!(app.launch_open);
+            }
+        }
+    }
+
+    #[test]
+    fn upload_rejects_duplicates_and_stopped_guests() {
+        let mut app = upload_app();
+        app.request_upload(true);
+        app.request_upload(true);
+        assert_eq!(app.submitted.len(), 1);
+        let mut stopped = upload_app();
+        stopped.snapshot.state = VmState::Stopped;
+        stopped.request_upload(true);
+        assert!(stopped.submitted.is_empty() && stopped.pending_upload.is_none());
+    }
+
+    #[test]
+    fn upload_tree_preserves_exact_selected_host_path() {
+        let mut app = upload_app();
+        let path = PathBuf::from("/tmp/ folder / file with trailing space ");
+        app.upload_browser.selected = Some(path.clone());
+        app.source = path.to_string_lossy().into_owned();
+        app.request_upload(false);
+        assert!(matches!(&app.submitted[0], Command::Upload { source, .. } if source == &path));
+    }
+
+    #[test]
+    fn upload_buttons_pointer_clicks_chain_to_run_at_normal_and_large_fonts() {
+        for (size, font_size) in [
+            (egui::vec2(1280.0, 900.0), 16.0),
+            (egui::vec2(800.0, 700.0), 24.0),
+        ] {
+            let mut app = upload_app();
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            theme::text_size(&ctx, font_size);
+            click_label(&mut app, &ctx, size, "Upload and Run");
+            let id = app
+                .pending_upload
+                .as_ref()
+                .expect("button submits upload")
+                .id;
+            app.complete_upload(id, true);
+            for _ in 0..3 {
+                render(&mut app, &ctx, size);
+            }
+            let visible = texts(&render(&mut app, &ctx, size));
+            assert!(visible.iter().any(|(text, _)| text == "Run program"));
+            assert!(!visible.iter().any(|(text, _)| text == "Upload file"));
+            assert_eq!(app.exec.path, "/tmp/guest file");
+        }
+    }
+
+    #[test]
+    fn upload_tree_expands_subfolders_and_selects_file_and_guest_basename() {
+        let fixture = upload_browser::tests::Fixture::new();
+        let directory = fixture.0.join("nested samples");
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("sample script.sh");
+        std::fs::write(&path, b"#!/bin/sh\necho test\n").unwrap();
+        let mut app = upload_app();
+        app.upload_browser.reset(fixture.0.clone());
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 900.0);
+        let wait_for = |app: &mut MonitorApp, label: &str| {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                let output = render(app, &ctx, size);
+                if texts(&output).iter().any(|(text, _)| text == label) {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "missing {label}");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        wait_for(&mut app, "nested samples");
+        click_label(&mut app, &ctx, size, "nested samples");
+        wait_for(&mut app, "sample script.sh");
+        click_label(&mut app, &ctx, size, "sample script.sh");
+        assert_eq!(app.upload_browser.selected.as_ref(), Some(&path));
+        assert_eq!(app.source, path.to_str().unwrap());
+        assert_eq!(app.destination, "/tmp/sample script.sh");
+        click_label(&mut app, &ctx, size, "Upload and Run");
+        assert!(matches!(&app.submitted[0], Command::Upload { source, .. } if source == &path));
     }
 
     fn event(phase: u8, cpu: u32) -> antinomie_monitor_core::EventSummary {
@@ -8954,7 +9106,8 @@ mod tests {
                     })
                     .1;
                 let mut figure_rects = Vec::new();
-                for label in ["TRL", "UIL", "STL", "CAP 0.0/4 GiB", "Antinomie 0.6.0"] {
+                let app_label = format!("Antinomie {APP_VERSION}");
+                for label in ["TRL", "UIL", "STL", "CAP 0.0/4 GiB", &app_label] {
                     let rect = visible
                         .iter()
                         .find(|(text, _)| text == label)
@@ -12139,7 +12292,7 @@ mod tests {
                     .1;
                 assert!(label.right() < loss.left());
                 assert!(
-                    rect("Antinomie 0.6.0").right() > size.x - 48.0,
+                    rect(&format!("Antinomie {APP_VERSION}")).right() > size.x - 48.0,
                     "loss meters must sit on the right edge"
                 );
                 assert!(rect("File").bottom() < rect("Syscalls").top());

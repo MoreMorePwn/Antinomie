@@ -10,6 +10,7 @@ pub(crate) enum Kind {
     Disk,
     Recording,
     BaseImport,
+    UploadRoot,
 }
 
 #[derive(Clone, Copy)]
@@ -32,10 +33,13 @@ impl FolderPicker {
     }
 
     pub(crate) fn available(&self) -> bool {
-        self.child.is_none()
-            && std::env::var_os("PATH").is_some_and(|paths| {
-                std::env::split_paths(&paths).any(|directory| directory.join("zenity").is_file())
-            })
+        self.child.is_none() && Self::installed()
+    }
+
+    pub(crate) fn installed() -> bool {
+        std::env::var_os("PATH").is_some_and(|paths| {
+            std::env::split_paths(&paths).any(|directory| directory.join("zenity").is_file())
+        })
     }
 
     pub(crate) fn choose(&mut self, target: Target) -> Result<(), String> {

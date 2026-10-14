@@ -33,6 +33,18 @@ V7-only restriction; older requirements remain recorded for their releases.
 - V7 no snapshot/reconnect. No next transport version. Existing transport API
   is opaque; frontend/backend never manage CPU rings.
 
+## Accepted ANT-T0082 upload browser and Run handoff (0.6.1)
+
+User authorized a new release-0.6.1 branch and an Upload file workflow that
+chooses a host folder through the filesystem explorer, displays its expandable
+filesystem tree and selects a file to upload. Keep manual path entry and plain
+Upload. Upload and Run makes the uploaded file executable and, only after the
+matching successful upload in the same VM session, opens the editable Run program
+window with its guest path. It never executes without the user's Run action.
+Overwrite confirmation retains the chosen action; closing cancels the handoff
+without claiming to cancel a guest write already submitted. Reuse the existing
+single-file guest protocol and 0.6.0 bases; no guest/image/transport changes.
+
 ## Accepted ANT-T0057 manual cores and performance Summary (0.6.0)
 
 User authorized a real Dump core action beside Dump memory and inside Core dumps,
