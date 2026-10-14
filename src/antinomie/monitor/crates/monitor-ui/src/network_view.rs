@@ -1002,6 +1002,14 @@ impl NetworkView {
 
         let mut action = None;
         self.toolbar(ui, is_live, &cx);
+        if !cx.nat
+            && cx.active.is_none()
+            && (cx.running || cx.recordings.is_some() || self.list.path.is_some())
+        {
+            ui.add(egui::Label::new(RichText::new(
+                "Disconnected: network capture is unavailable. Choose Isolated or NAT in VM settings. Saved captures can still be inspected.",
+            ).color(theme::warn())).wrap());
+        }
         if !self.hide_list {
             egui::SidePanel::left("network_captures")
                 .resizable(true)
@@ -2450,6 +2458,59 @@ pub(crate) fn format_date(seconds: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disconnected_capture_warning_is_visible_while_inspecting_saved_packets() {
+        for enabled in [false, true] {
+            let mut view = NetworkView {
+                captures_for: Some((None, vec![])),
+                list: PacketList::new(Some(PathBuf::from("/tmp/missing-saved-network.pcap"))),
+                ..Default::default()
+            };
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let mut output = egui::FullOutput::default();
+            for _ in 0..3 {
+                output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1000.0, 700.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            view.show(
+                                ui,
+                                NetworkContext {
+                                    active: None,
+                                    recordings: None,
+                                    recording_roots: &[],
+                                    nat: enabled,
+                                    running: true,
+                                    pending: false,
+                                    font_size: 16.0,
+                                },
+                            );
+                        });
+                    },
+                );
+            }
+            let text: String = crate::app::tests::texts(&output)
+                .into_iter()
+                .map(|(text, _)| text)
+                .collect();
+            assert_eq!(
+                text.contains("Disconnected: network capture is unavailable"),
+                !enabled
+            );
+            assert!(
+                view.list.path.is_some(),
+                "saved capture selection is retained"
+            );
+        }
+    }
 
     fn ok_filter(text: &str) -> Filter {
         Filter::parse(text)

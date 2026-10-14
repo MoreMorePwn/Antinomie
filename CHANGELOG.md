@@ -6,6 +6,17 @@ it runs.
 
 ## 0.6.1 — Unreleased
 
+- **Resource observations.** Host RAM availability comes from checked
+  `/proc/meminfo` values. Data-volume used, free and user-available space come
+  from `statvfs`; reserved free blocks remain free. These host observations are
+  labelled separately from guest capacities and retained with the selected VM's
+  history. Guest utilization remains unavailable without a guest producer.
+- **Capture and loss guidance.** Disconnected mode visibly explains why packet
+  capture is unavailable in VM settings and Network, including while browsing
+  saved PCAPs. TRL, UIL and STL names and values each explain their loss type.
+- **Stable dialogs.** Import Base reserves room for its folder button rather
+  than growing horizontally each frame. Repeated-frame checks cover floating
+  dialogs, captured-data windows and detached terminal/analysis panels.
 - **Sidebar Explorer.** Below Base images, choose and retain a host folder with
   an expandable file tree. Double-click a file or right-click **Send and Run**
   to upload it and open Run program on success. **Open Directory** reveals the

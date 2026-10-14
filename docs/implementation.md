@@ -52,6 +52,20 @@ success-only Run dialog handoff. Right-click Open Directory opens the containing
 host folder (the folder itself for directory entries). Stopped/wrongly selected
 VMs and pending uploads cannot admit another send. Folded bases never hide Explorer.
 
+## Accepted ANT-T0084 resource observations and UI repairs (0.6.1)
+
+The user's follow-up requests explicit disconnected-network capture warnings,
+loss-counter definitions on hover and repair of growing subwindows, while keeping
+the folder Upload and Run workflow. Fix the reproduced Import Base row feedback;
+validate floating/detached views at normal and large text sizes. Extend the
+existing host resource producer with checked MemAvailable and statvfs used/free
+values. Label their host scope and preserve session/retention identity.
+
+Guest resource sampling through a temporary collector or a kernel/base update
+is a separate pending architecture choice. Existing host observations must never
+be presented as guest utilization; do not install/run a guest helper or change
+the kernel-only producer contract before that choice is accepted.
+
 ## Accepted ANT-T0057 manual cores and performance Summary (0.6.0)
 
 User authorized a real Dump core action beside Dump memory and inside Core dumps,
