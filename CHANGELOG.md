@@ -4,7 +4,7 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
-## 0.6.1 — Unreleased
+## 0.6.1 — 2026-10-15
 
 - **Aligned VM status cards.** Guest and host resource cards in the same row
   share the tallest card's height, including wrapped notes and unavailable
