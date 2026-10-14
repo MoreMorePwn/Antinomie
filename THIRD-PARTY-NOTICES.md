@@ -78,7 +78,7 @@ their notices does not authorize removal of those requirements.
 
 ## Other components and release gate
 
-The 0.6.0 archive includes the complete Linux dependency notice inventory in
+The 0.6.0 and 0.6.1 archives include the shared Linux dependency notice inventory in
 `LICENSES/third-party/locked-dependencies-0.6.0.tar.gz`. It records the 459
 resolved third-party crates, checked against the locked package checksums,
 their retained upstream license/notice texts and the embedded font/rule notices.
@@ -86,6 +86,9 @@ Two published MIT packages provide their declaration without a separate license
 text; their unchanged published packages and canonical MIT terms are retained.
 The inventory records the exact provenance and preserves combined license terms.
 It contains public third-party material, without Antinomie's private host source.
+The third-party Cargo.lock entries are unchanged in 0.6.1; only the two project
+package versions changed. Rust 1.98.1's retained standard-library notice is also
+unchanged. The new static resource collector's musl notices are listed below.
 
 The `MoreMorePwn/antinomie-bases` Hugging Face bucket is reserved for the VM
 image catalog and required image files. Guest kernel source, exact
