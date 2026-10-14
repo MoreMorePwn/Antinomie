@@ -29,6 +29,7 @@ pub(super) struct Pending {
 impl MonitorApp {
     pub(super) fn open_upload(&mut self) {
         self.upload_browser.invalidate();
+        self.launch_open = false;
         self.upload_open = true;
     }
 
@@ -41,54 +42,28 @@ impl MonitorApp {
     }
 
     pub(super) fn upload_form(&mut self, ui: &mut egui::Ui) {
-        dialog_section(ui, "Host files");
+        dialog_section(ui, "Host file");
         ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(
                     self.folder_picker.available() && self.pending_upload.is_none(),
-                    egui::Button::new("Choose host folder…"),
+                    egui::Button::new("Choose file…"),
                 )
-                .on_hover_text("Choose a folder with the filesystem explorer")
+                .on_hover_text("Choose a file with the filesystem explorer")
                 .clicked()
             {
                 if let Err(error) = self.folder_picker.choose(FolderTarget {
                     generation: self.upload_browser.generation,
-                    kind: FolderKind::UploadRoot,
+                    kind: FolderKind::UploadFile,
                 }) {
-                    self.status = format!("Host folder: {error}");
+                    self.status = format!("Host file: {error}");
                 }
-            }
-            if ui
-                .add_enabled(
-                    self.upload_browser.root.is_some(),
-                    egui::Button::new("Refresh"),
-                )
-                .clicked()
-            {
-                self.upload_browser.invalidate();
             }
             if !FolderPicker::installed() {
                 ui.colored_label(
                     theme::muted(),
-                    "Folder explorer requires Zenity; you can type a file path below.",
+                    "File selection requires Zenity; you can type a file path below.",
                 );
-            }
-        });
-        if let Some(root) = &self.upload_browser.root {
-            ui.label(RichText::new(root.display().to_string()).monospace());
-        }
-        ui.add_enabled_ui(self.pending_upload.is_none(), |ui| {
-            if let Some(path) = self.upload_browser.show(ui) {
-                if let Some(source) = path.to_str() {
-                    self.source = source.into();
-                    if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
-                        let parent = std::path::Path::new(&self.destination)
-                            .parent()
-                            .filter(|path| path.is_absolute())
-                            .unwrap_or_else(|| std::path::Path::new("/tmp"));
-                        self.destination = parent.join(name).to_string_lossy().into_owned();
-                    }
-                }
             }
         });
         dialog_section(ui, "Upload destination");
@@ -99,7 +74,7 @@ impl MonitorApp {
                     .add(
                         text_field(&mut self.source)
                             .font(egui::TextStyle::Monospace)
-                            .hint_text("Select a file above or enter its path")
+                            .hint_text("Choose a file or enter its path")
                             .desired_width(400.0),
                     )
                     .changed()
@@ -158,6 +133,33 @@ impl MonitorApp {
                 self.close_upload();
             }
         });
+    }
+
+    pub(super) fn accept_upload_file(&mut self, generation: u64, path: PathBuf) {
+        if !self.upload_open
+            || self.pending_upload.is_some()
+            || generation != self.upload_browser.generation
+        {
+            return;
+        }
+        let Some(source) = path.to_str() else {
+            self.status = "The selected file path is not valid UTF-8".into();
+            return;
+        };
+        if !path.is_file() {
+            self.status = "Choose a regular file to upload".into();
+            return;
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            return;
+        };
+        let parent = std::path::Path::new(&self.destination)
+            .parent()
+            .filter(|path| path.is_absolute())
+            .unwrap_or_else(|| std::path::Path::new("/tmp"));
+        self.destination = parent.join(name).to_string_lossy().into_owned();
+        self.source = source.into();
+        self.upload_browser.selected = Some(path);
     }
 
     pub(super) fn request_upload(&mut self, run_after: bool) {
