@@ -1239,6 +1239,57 @@ mod tests {
     }
 
     #[test]
+    fn embedded_floating_surfaces_show_one_ghost_for_the_viewport() {
+        let mut layout = WorkspaceLayout::default();
+        let mut app = crate::app::tests::app();
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        ctx.set_embed_viewports(true);
+        let location = layout.dock.find_tab(&Panel::Memory).unwrap();
+        layout.dock.detach_tab(
+            location,
+            Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(500.0, 400.0)),
+        );
+        for _ in 0..4 {
+            pointer_frame(&mut layout, &mut app, &ctx, Vec::new());
+        }
+        let details = layout
+            .dock
+            .find_main_surface_tab(&Panel::Details)
+            .unwrap()
+            .0;
+        let point = layout
+            .targets
+            .iter()
+            .find(|(s, n, _)| s.is_main() && *n == details)
+            .unwrap()
+            .2
+            .center();
+        layout.drag = Some((Panel::CoreDump, SurfaceIndex::main()));
+        let output = pointer_frame(
+            &mut layout,
+            &mut app,
+            &ctx,
+            vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        assert_eq!(
+            crate::app::tests::texts(&output)
+                .iter()
+                .filter(|(text, _)| text.contains("Esc cancels"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn observed_geometry_does_not_drive_live_placement() {
         let mut layout = WorkspaceLayout::default();
         let source = layout

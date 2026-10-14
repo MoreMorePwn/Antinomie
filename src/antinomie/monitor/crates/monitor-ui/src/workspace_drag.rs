@@ -171,10 +171,15 @@ impl WorkspaceLayout {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         ui.ctx().request_repaint();
         let target = self.drop_target(panel, pointer + origin.to_vec2());
-        let painter = ui.ctx().layer_painter(egui::LayerId::new(
+        let layer = egui::LayerId::new(
             egui::Order::Tooltip,
-            egui::Id::new(("workspace-drag-preview", surface.0)),
-        ));
+            egui::Id::new(("workspace-drag-preview", ui.ctx().viewport_id())),
+        );
+        // Embedded floating surfaces share a viewport. The final surface has
+        // all target geometry: replace our earlier preview, never stack ghosts.
+        ui.ctx()
+            .graphics_mut(|graphics| *graphics.entry(layer) = Default::default());
+        let painter = ui.ctx().layer_painter(layer);
         let caption = match target.as_ref().map(|target| target.action) {
             Some(DropAction::Stay) => "Keep position",
             Some(DropAction::Empty | DropAction::Append) => "Join tabs",
@@ -195,7 +200,9 @@ impl WorkspaceLayout {
             Some(DropAction::Split(egui_dock::Split::Below)) => "Dock below",
             None => "Detach window",
         };
-        if let Some(target) = target.filter(|target| target.surface == surface) {
+        if let Some(target) =
+            target.filter(|target| target.surface == surface || ui.ctx().embed_viewports())
+        {
             let highlight = target.highlight.translate(-origin.to_vec2());
             painter.rect_filled(highlight, 3.0, theme::blue().gamma_multiply(0.22));
             painter.rect_stroke(
