@@ -87,8 +87,11 @@ text; their unchanged published packages and canonical MIT terms are retained.
 The inventory records the exact provenance and preserves combined license terms.
 It contains public third-party material, without Antinomie's private host source.
 The third-party Cargo.lock entries are unchanged in 0.6.1; only the two project
-package versions changed. Rust 1.98.1's retained standard-library notice is also
-unchanged. The new static resource collector's musl notices are listed below.
+package versions changed. The current Rust 1.98.1 standard-library notice is
+retained separately in
+[Rust-Standard-Library-COPYRIGHT.html](LICENSES/third-party/Rust-Standard-Library-COPYRIGHT.html);
+the inventory's earlier snapshot remains intact. The new static resource
+collector's musl notices are listed below.
 
 The `MoreMorePwn/antinomie-bases` Hugging Face bucket is reserved for the VM
 image catalog and required image files. Guest kernel source, exact
