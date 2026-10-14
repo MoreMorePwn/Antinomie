@@ -17,6 +17,10 @@ it runs.
   and is stopped before snapshots; reconnect verifies ownership before cleanup.
   Existing images need no packages or rebuild. Kernel-native monitoring is
   deferred to 0.7.0; other guest mounts are outside the root meter.
+  Collector startup tolerates `/tmp` not being ready during boot: only a
+  confirmed Upload Begin or Exec ENOENT is retried, every two seconds for at most
+  one minute. Exec readiness reuses the committed file. Unknown transfer outcomes
+  and other failures are not replayed.
 - **Host resource observations.** Host RAM availability comes from checked
   `/proc/meminfo` values. Data-volume used, free and user-available space come
   from `statvfs`; reserved free blocks remain free. These host observations are
@@ -30,16 +34,19 @@ it runs.
   dialogs, captured-data windows and detached terminal/analysis panels.
 - **Sidebar Explorer.** Below Base images, choose and retain a host folder with
   an expandable file tree. Double-click a file or right-click **Send and Run**
-  to upload it and open Run program on success. **Open Directory** reveals the
+  to prefill the Upload dialog. Press **Upload and Run** to transfer it and
+  open Run program on success. **Open Directory** reveals the
   containing folder; folders have their own directory action. VM and base lists
-  leave space for Explorer, including when Base images is folded.
-- **Upload browser.** Choose a host folder with the filesystem explorer and
-  select a file from an expandable tree. Directory reads run in a background
-  worker; large folders have Previous/Next entry controls. Manual file paths,
+  leave space for Explorer, including when Base images is folded. The tree fills
+  the sidebar width; the folder header and Refresh align left with proportional text.
+- **Upload file picker.** Choose a file in the filesystem dialog rather than
+  displaying another tree inside Upload. Manual file paths,
   executable permissions and overwrite confirmation remain available.
 - **Upload and Run.** After a successful upload, open Run program with the
   uploaded guest path. Review arguments and other launch settings before pressing
   Run. Failed uploads, cancelled handoffs and changed VM sessions do not open it.
+  Opening Upload hides an existing Run program dialog; Explorer never submits
+  an upload before the user confirms the destination.
 - **History navigation.** Captures no longer intercepts pointer clicks on the
   Runs tab. Capture filters and keyboard selection retain their focus behavior.
 - Compatible with the existing 0.6.0 revision-16 BusyBox and

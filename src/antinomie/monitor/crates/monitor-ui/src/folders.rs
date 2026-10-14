@@ -10,7 +10,7 @@ pub(crate) enum Kind {
     Disk,
     Recording,
     BaseImport,
-    UploadRoot,
+    UploadFile,
     ExplorerRoot,
 }
 
@@ -47,12 +47,17 @@ impl FolderPicker {
         if self.child.is_some() {
             return Err("folder selection is already open".into());
         }
-        let child = Command::new("zenity")
-            .args([
+        let arguments: &[&str] = if matches!(target.kind, Kind::UploadFile) {
+            &["--file-selection", "--title=Choose file to upload"]
+        } else {
+            &[
                 "--file-selection",
                 "--directory",
                 "--title=Choose host folder",
-            ])
+            ]
+        };
+        let child = Command::new("zenity")
+            .args(arguments)
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()

@@ -247,21 +247,6 @@ impl Browser {
         }
     }
 
-    pub(crate) fn show(&mut self, ui: &mut egui::Ui) -> Option<PathBuf> {
-        match self.show_view(
-            ui,
-            View {
-                id: "upload_host_tree",
-                height: 240.0,
-                actions: false,
-                can_send: false,
-            },
-        ) {
-            Some(Action::Select(path)) => Some(path),
-            _ => None,
-        }
-    }
-
     pub(crate) fn show_explorer(
         &mut self,
         ui: &mut egui::Ui,
@@ -291,6 +276,7 @@ impl Browser {
         let mut selected = None;
         egui::ScrollArea::both()
             .id_salt(view.id)
+            .auto_shrink([false, false])
             .max_height(view.height.max(24.0))
             .min_scrolled_height(view.height.clamp(24.0, 100.0))
             .show(ui, |ui| self.directory(ui, &root, 0, view, &mut selected));
@@ -591,6 +577,37 @@ pub(crate) mod tests {
             .0;
         }
         assert_eq!(action, Some(Action::OpenDirectory(fixture.0.clone())));
+    }
+
+    #[test]
+    fn short_explorer_contents_fill_available_width_at_normal_and_large_fonts() {
+        let fixture = Fixture::new();
+        std::fs::write(fixture.0.join("a"), b"test").unwrap();
+        for font in [16.0, 24.0] {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            theme::text_size(&ctx, font);
+            let mut browser = Browser::default();
+            browser.reset(fixture.0.clone());
+            browser.listings.insert(
+                fixture.0.clone(),
+                Listing {
+                    offset: 0,
+                    result: Some(read_page(&fixture.0, 0, &AtomicBool::new(false))),
+                },
+            );
+            let _ = ctx.run(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 400.0))),
+                ..Default::default()
+            }, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let expected = ui.available_rect_before_wrap().right();
+                    let area = ui.scope(|ui| { browser.show_explorer(ui, 250.0, true); });
+                    assert!((area.response.rect.right() - expected).abs() < 1.0,
+                        "Explorer must fill the pane, even with one short filename: {:?} vs {expected}", area.response.rect);
+                });
+            });
+        }
     }
 
     #[test]

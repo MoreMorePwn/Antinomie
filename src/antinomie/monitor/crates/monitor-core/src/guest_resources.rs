@@ -10,6 +10,7 @@ const INTERVAL: Duration = Duration::from_secs(2);
 const DEADLINE: Duration = Duration::from_secs(4);
 const STALE: Duration = Duration::from_secs(6);
 const OUTPUT_LIMIT: usize = 1024;
+const STARTUP_WINDOW: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy)]
 enum ReplyKind {
@@ -29,8 +30,10 @@ pub(crate) struct Collector {
     pub(crate) cookie: u64,
     pub(crate) token: String,
     pub(crate) launch_uncertain: bool,
+    pub(crate) uploaded: bool,
     pending: Option<Pending>,
     restart_after: Option<Instant>,
+    startup_deadline: Option<Instant>,
     ready: bool,
     sequence: u64,
     sampling: Option<Instant>,
@@ -48,8 +51,10 @@ impl Default for Collector {
             cookie: 0,
             token: storage::unique_id(),
             launch_uncertain: false,
+            uploaded: false,
             pending: None,
             restart_after: None,
+            startup_deadline: None,
             ready: false,
             sequence: 0,
             sampling: None,
@@ -78,7 +83,31 @@ impl Collector {
     pub(crate) fn ready_to_start(&self, now: Instant) -> bool {
         !self.attempted || self.restart_after.is_some_and(|when| now >= when)
     }
+    pub(crate) fn begin_attempt(&mut self) {
+        if self.startup_deadline.is_some() {
+            // A rejected start owns no terminal. Preserve an acknowledged upload
+            // and its token, so terminal readiness never replays the file write.
+            self.error = None;
+            self.restart_after = None;
+        } else {
+            *self = Self {
+                attempted: true,
+                ..Self::default()
+            };
+        }
+    }
+    /// Only typed UPLOAD_BEGIN or EXEC ENOENT rejections permit this retry.
+    /// Keep one boot-readiness deadline across attempts, including token changes.
+    pub(crate) fn defer_boot_readiness(&mut self, now: Instant) {
+        let deadline = *self.startup_deadline.get_or_insert(now + STARTUP_WINDOW);
+        if now + INTERVAL <= deadline {
+            self.restart_after = Some(now + INTERVAL);
+        }
+    }
     pub(crate) fn started(&mut self, terminal: u64) {
+        self.startup_deadline = None;
+        self.restart_after = None;
+        self.uploaded = false;
         self.terminal = Some(terminal);
         self.sampling = Some(Instant::now());
         self.next = Instant::now();
@@ -315,6 +344,55 @@ fn parse(data: &[u8], token: &str, sequence: u64, boot_id: &str) -> Result<Guest
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn boot_readiness_retries_have_one_deadline_and_unknown_failures_do_not_retry() {
+        let now = std::time::Instant::now();
+        let mut collector = super::Collector::default();
+        collector.begin_attempt();
+        collector.defer_boot_readiness(now);
+        collector.fail("upload begin rejected ENOENT".into());
+        assert!(!collector.ready_to_start(now + std::time::Duration::from_secs(1)));
+        assert!(collector.ready_to_start(now + std::time::Duration::from_secs(2)));
+        for seconds in (2..=60).step_by(2) {
+            collector.begin_attempt();
+            collector.defer_boot_readiness(now + std::time::Duration::from_secs(seconds));
+        }
+        assert!(!collector.ready_to_start(now + std::time::Duration::from_secs(120)));
+        let mut uncertain = super::Collector::default();
+        uncertain.begin_attempt();
+        uncertain.fail("timeout; begin outcome unknown".into());
+        assert!(!uncertain.ready_to_start(now + std::time::Duration::from_secs(120)));
+        let mut ready = super::Collector::default();
+        ready.begin_attempt();
+        ready.defer_boot_readiness(now);
+        ready.begin_attempt();
+        ready.started(1);
+        assert!(ready.startup_deadline.is_none());
+        assert!(!ready.ready_to_start(now + std::time::Duration::from_secs(120)));
+    }
+
+    #[test]
+    fn rejected_exec_keeps_the_uploaded_file_and_token_without_reuploading() {
+        let now = std::time::Instant::now();
+        let mut collector = super::Collector::default();
+        collector.begin_attempt();
+        let token = collector.token.clone();
+        collector.uploaded = true;
+        collector.defer_boot_readiness(now);
+        collector.fail("exec rejected ENOENT before PTY readiness".into());
+        collector.begin_attempt();
+        assert!(collector.uploaded);
+        assert_eq!(collector.token, token);
+        assert_eq!(
+            collector.startup_deadline,
+            Some(now + super::STARTUP_WINDOW)
+        );
+        assert!(collector.error.is_none() && collector.restart_after.is_none());
+        collector.started(123);
+        assert!(!collector.uploaded);
+        assert_eq!(collector.terminal, Some(123));
+        assert!(collector.startup_deadline.is_none());
+    }
     use super::*;
     const TOKEN: &str = "0123456789abcdef0123456789abcdef";
     fn frame() -> Vec<u8> {

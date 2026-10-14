@@ -27,7 +27,7 @@ impl MonitorApp {
                 let mut refresh = false;
                 let mut open = false;
                 ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         refresh = icon(
                             ui,
                             egui_phosphor::regular::ARROW_CLOCKWISE,
@@ -36,8 +36,7 @@ impl MonitorApp {
                         );
                         let response = ui
                             .add(
-                                egui::Label::new(RichText::new(label.as_ref()).monospace())
-                                    .truncate(),
+                                egui::Label::new(RichText::new(label.as_ref()).strong()).truncate(),
                             )
                             .on_hover_text(root.display().to_string());
                         response.context_menu(|ui| {
@@ -111,6 +110,6 @@ impl MonitorApp {
         self.source = source.into();
         self.destination = destination;
         self.upload_browser.selected = Some(path);
-        self.request_upload(true);
+        self.status = "Review the upload destination, then press Upload and Run".into();
     }
 }

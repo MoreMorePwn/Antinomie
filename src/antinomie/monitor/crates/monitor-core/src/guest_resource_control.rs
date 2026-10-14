@@ -11,18 +11,51 @@ impl Session {
         stopping: &AtomicBool,
     ) -> Result<(), String> {
         let path = format!("/tmp/.antinomie-resource-{}", self.guest_resources.token);
-        let mut executable = crate::guest_resources::EXECUTABLE;
-        upload_stream(
-            self,
-            snapshot,
-            sender,
-            stopping,
-            Duration::from_secs(2),
-            &mut executable,
-            crate::guest_resources::EXECUTABLE.len() as u64,
-            (&path, false, true),
-        )
-        .map_err(|error| format!("{error}; collector upload path {path}"))?;
+        if !self.guest_resources.uploaded {
+            // INFO can arrive before init mounts the real root and creates /tmp.
+            // Retry only a definite Begin rejection: no file/transfer was admitted.
+            let reply = match self.request_typed(
+                control::UPLOAD_BEGIN,
+                &control::upload_begin(
+                    &path,
+                    crate::guest_resources::EXECUTABLE.len() as u64,
+                    false,
+                    true,
+                )?,
+                snapshot,
+                sender,
+                Duration::from_secs(2),
+            ) {
+                Ok(reply) => reply,
+                Err(error) => {
+                    if matches!(error, RequestError::Rejected { status: -2, .. }) {
+                        self.guest_resources.defer_boot_readiness(Instant::now());
+                    }
+                    return Err(format!(
+                        "{}; collector upload path {path}",
+                        error.into_message()
+                    ));
+                }
+            };
+            if reply.len() != 8 {
+                return Err("invalid collector upload begin reply; outcome unknown".into());
+            }
+            let upload = u64_at(&reply, 0).map_err(|error| error.to_string())?;
+            let mut executable = crate::guest_resources::EXECUTABLE;
+            upload_contents(
+                self,
+                snapshot,
+                sender,
+                stopping,
+                Duration::from_secs(2),
+                &mut executable,
+                crate::guest_resources::EXECUTABLE.len() as u64,
+                &path,
+                upload,
+            )
+            .map_err(|error| format!("{error}; collector upload path {path}"))?;
+            self.guest_resources.uploaded = true;
+        }
         let request = ExecRequest {
             path,
             args: vec![self.guest_resources.token.clone()],
@@ -45,6 +78,12 @@ impl Session {
         ) {
             Ok(reply) => reply,
             Err(error) => {
+                // UMH_WAIT_EXEC rejection proves the collector did not exec.
+                // /dev/ptmx can appear after /tmp; retain the committed file and
+                // retry only this known rejection, never a timeout/unknown launch.
+                if matches!(error, RequestError::Rejected { status: -2, .. }) {
+                    self.guest_resources.defer_boot_readiness(Instant::now());
+                }
                 self.guest_resources.launch_uncertain =
                     !matches!(error, RequestError::Rejected { .. });
                 return Err(format!(
@@ -163,7 +202,7 @@ impl Worker {
         let Some(session) = self.session.as_mut() else {
             return;
         };
-        // Wait for INFO so the guest's regular controls and boot are available.
+        // INFO establishes control support, but does not certify userspace readiness.
         let Some(kernel) = self.snapshot.guest_kernel.as_ref() else {
             return;
         };
@@ -176,8 +215,7 @@ impl Worker {
             return;
         }
         if session.guest_resources.ready_to_start(Instant::now()) {
-            session.guest_resources = crate::guest_resources::Collector::default();
-            session.guest_resources.attempted = true;
+            session.guest_resources.begin_attempt();
             if let Err(error) =
                 session.start_guest_resources(&mut self.snapshot, &self.sender, &self.stopping)
             {

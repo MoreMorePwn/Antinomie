@@ -34,7 +34,27 @@ V7-only restriction; older requirements remain recorded for their releases.
 - V7 no snapshot/reconnect. No next transport version. Existing transport API
   is opaque; frontend/backend never manage CPU rings.
 
-## Accepted ANT-T0082 upload browser and Run handoff (0.6.1)
+## Accepted ANT-T0086 upload/picker and collector follow-up (0.6.1)
+
+The latest user clarification supersedes the dialog-tree and immediate-send
+portions of ANT-T0082/83: keep the sidebar Explorer tree, fill its pane width,
+and align folder/Refresh left using proportional text. Upload has a native file
+chooser button and manual path fields, with no second tree. Sidebar Send and Run
+only prefills Upload; it does not submit. Opening Upload hides Run program.
+Upload and Run retains the matching-success, same-session editable Run handoff.
+File-picker callbacks preserve exact paths and reject closed/reopened/pending
+dialog choices. Keep native host chooser asynchronous and manual entry usable.
+
+Boot INFO proves kernel control support before userspace has necessarily mounted
+the real root and created `/tmp`. For the temporary collector, retry only typed
+Upload Begin and Exec ENOENT rejections at two-second intervals within one
+60-second readiness window; `/dev/ptmx` can appear after `/tmp` on Debian.
+The UMH_WAIT_EXEC rejection proves the helper did not exec. Preserve a committed
+upload and token across Exec readiness attempts; never upload it again. Unknown
+outcomes, other rejections and transfer failures are never retried. Existing guest images,
+kernel and protocol stay unchanged; the producer backlog remains 0.7.0.
+
+## Historical accepted ANT-T0082 upload browser and Run handoff (0.6.1)
 
 User authorized a new release-0.6.1 branch and an Upload file workflow that
 chooses a host folder through the filesystem explorer, displays its expandable

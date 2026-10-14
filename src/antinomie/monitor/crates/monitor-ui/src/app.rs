@@ -575,13 +575,7 @@ impl MonitorApp {
                     FolderKind::Recording if target.generation == self.draft_generation => {
                         self.draft.recording_root = Some(path)
                     }
-                    FolderKind::UploadRoot
-                        if self.upload_open
-                            && target.generation == self.upload_browser.generation =>
-                    {
-                        self.upload_browser.reset(path);
-                        self.source.clear();
-                    }
+                    FolderKind::UploadFile => self.accept_upload_file(target.generation, path),
                     FolderKind::ExplorerRoot
                         if target.generation == self.explorer_browser.generation =>
                     {
@@ -8191,7 +8185,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn upload_tree_preserves_exact_selected_host_path() {
+    fn upload_preserves_exact_selected_host_path() {
         let mut app = upload_app();
         let path = PathBuf::from("/tmp/ folder / file with trailing space ");
         app.upload_browser.selected = Some(path.clone());
@@ -8228,37 +8222,48 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn upload_tree_expands_subfolders_and_selects_file_and_guest_basename() {
+    fn upload_file_picker_keeps_exact_path_and_rejects_stale_or_pending_choices() {
         let fixture = upload_browser::tests::Fixture::new();
         let directory = fixture.0.join("nested samples");
         std::fs::create_dir(&directory).unwrap();
-        let path = directory.join("sample script.sh");
+        let path = directory.join(" sample script.sh ");
         std::fs::write(&path, b"#!/bin/sh\necho test\n").unwrap();
+        let other = fixture.0.join("other");
+        std::fs::write(&other, b"other").unwrap();
         let mut app = upload_app();
-        app.upload_browser.reset(fixture.0.clone());
+        let generation = app.upload_browser.generation;
+        let original = app.source.clone();
+        app.accept_upload_file(generation + 1, path.clone());
+        assert_eq!(app.source, original);
+        app.accept_upload_file(generation, directory);
+        assert_eq!(app.source, original);
+        app.accept_upload_file(generation, path.clone());
+        assert_eq!(app.upload_browser.selected.as_ref(), Some(&path));
+        assert_eq!(app.source, path.to_str().unwrap());
+        assert_eq!(app.destination, "/tmp/ sample script.sh ");
         let ctx = egui::Context::default();
         theme::install(&ctx);
         let size = egui::vec2(1280.0, 900.0);
-        let wait_for = |app: &mut MonitorApp, label: &str| {
-            let deadline = Instant::now() + Duration::from_secs(3);
-            loop {
-                let output = render(app, &ctx, size);
-                if texts(&output).iter().any(|(text, _)| text == label) {
-                    break;
-                }
-                assert!(Instant::now() < deadline, "missing {label}");
-                std::thread::sleep(Duration::from_millis(10));
-            }
-        };
-        wait_for(&mut app, "nested samples");
-        click_label(&mut app, &ctx, size, "nested samples");
-        wait_for(&mut app, "sample script.sh");
-        click_label(&mut app, &ctx, size, "sample script.sh");
-        assert_eq!(app.upload_browser.selected.as_ref(), Some(&path));
-        assert_eq!(app.source, path.to_str().unwrap());
-        assert_eq!(app.destination, "/tmp/sample script.sh");
+        for _ in 0..3 {
+            render(&mut app, &ctx, size);
+        }
+        let visible = texts(&render(&mut app, &ctx, size));
+        assert!(visible.iter().any(|(text, _)| text == "Choose file…"));
+        assert!(!visible.iter().any(|(text, _)| text == "nested samples"));
+        assert!(!visible
+            .iter()
+            .any(|(text, _)| text == "Choose host folder…"));
         click_label(&mut app, &ctx, size, "Upload and Run");
         assert!(matches!(&app.submitted[0], Command::Upload { source, .. } if source == &path));
+        app.accept_upload_file(generation, other.clone());
+        assert_eq!(app.upload_browser.selected.as_ref(), Some(&path));
+        app.complete_upload(app.pending_upload.as_ref().unwrap().id, false);
+        app.close_upload();
+        app.accept_upload_file(generation, other.clone());
+        assert_eq!(app.upload_browser.selected.as_ref(), Some(&path));
+        app.open_upload();
+        app.accept_upload_file(generation, other);
+        assert_eq!(app.upload_browser.selected.as_ref(), Some(&path));
     }
 
     #[test]
@@ -8363,7 +8368,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn explorer_file_double_click_uploads_once_and_opens_run_on_success() {
+    fn explorer_file_double_click_only_opens_upload_then_run_on_matching_success() {
         let fixture = upload_browser::tests::Fixture::new();
         let path = fixture.0.join("sidebar-sample.sh");
         std::fs::write(&path, b"#!/bin/sh\necho explorer\n").unwrap();
@@ -8376,6 +8381,10 @@ pub(crate) mod tests {
         click_label(&mut app, &ctx, size, "sidebar-sample.sh");
         assert!(app.submitted.is_empty());
         click_label(&mut app, &ctx, size, "sidebar-sample.sh");
+        assert!(app.submitted.is_empty());
+        assert!(app.upload_open && !app.launch_open);
+        assert_eq!(app.source, path.to_str().unwrap());
+        click_label(&mut app, &ctx, size, "Upload and Run");
         assert_eq!(app.submitted.len(), 1);
         assert!(matches!(&app.submitted[0], Command::Upload {
             source, destination, executable: true, ..
@@ -8407,6 +8416,9 @@ pub(crate) mod tests {
         let visible = texts(&render(&mut app, &ctx, size));
         assert!(visible.iter().any(|(text, _)| text == "Open Directory"));
         click_label(&mut app, &ctx, size, "Send and Run");
+        assert!(app.submitted.is_empty());
+        assert!(app.upload_open && !app.launch_open);
+        click_label(&mut app, &ctx, size, "Upload and Run");
         assert_eq!(app.submitted.len(), 1);
         app.complete_upload(app.pending_upload.as_ref().unwrap().id, false);
         assert!(!app.launch_open);
@@ -8416,14 +8428,12 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn explorer_and_upload_trees_keep_independent_selection() {
+    fn explorer_selection_does_not_change_upload_file_selection() {
         let fixture = upload_browser::tests::Fixture::new();
         let path = fixture.0.join("shared-file.txt");
         std::fs::write(&path, b"test").unwrap();
         let mut app = upload_app();
         explorer_fixture(&mut app, &fixture.0);
-        app.upload_open = true;
-        app.upload_browser.reset(fixture.0.clone());
         let ctx = egui::Context::default();
         theme::install(&ctx);
         let size = egui::vec2(1280.0, 900.0);
@@ -8431,6 +8441,25 @@ pub(crate) mod tests {
         click_label(&mut app, &ctx, size, "shared-file.txt");
         assert_eq!(app.explorer_browser.selected, Some(path));
         assert!(app.upload_browser.selected.is_none());
+    }
+
+    #[test]
+    fn opening_upload_hides_an_existing_run_dialog_and_never_submits() {
+        let mut app = upload_app();
+        app.upload_open = false;
+        app.launch_open = true;
+        app.open_upload();
+        assert!(app.upload_open && !app.launch_open);
+        assert!(app.submitted.is_empty());
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 900.0);
+        for _ in 0..3 {
+            render(&mut app, &ctx, size);
+        }
+        let visible = texts(&render(&mut app, &ctx, size));
+        assert!(visible.iter().any(|(text, _)| text == "Upload file"));
+        assert!(!visible.iter().any(|(text, _)| text == "Run program"));
     }
 
     #[test]

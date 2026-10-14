@@ -242,6 +242,32 @@ fn upload_stream(
         return Err("invalid upload begin reply".into());
     }
     let upload = u64_at(&reply, 0).map_err(|e| e.to_string())?;
+    upload_contents(
+        session,
+        snapshot,
+        sender,
+        stopping,
+        timeout,
+        source,
+        total,
+        destination,
+        upload,
+    )
+}
+
+/// Continue only an acknowledged Upload Begin; failures abort the owned transfer.
+#[allow(clippy::too_many_arguments)]
+fn upload_contents(
+    session: &mut Session,
+    snapshot: &mut Snapshot,
+    sender: &SyncSender<Notification>,
+    stopping: &AtomicBool,
+    timeout: Duration,
+    source: &mut dyn Read,
+    total: u64,
+    destination: &str,
+    upload: u64,
+) -> Result<String, String> {
     let result = (|| -> Result<(), String> {
         let chunk_size = session
             .transport
