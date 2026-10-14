@@ -17,8 +17,11 @@ struct RetainedSample {
     cpu: Option<f64>,
     rss: Option<u64>,
     host_ram: Option<u64>,
+    host_available: Option<u64>,
     disk_free: Option<u64>,
     disk_total: Option<u64>,
+    disk_free_all: Option<u64>,
+    disk_used: Option<u64>,
     uptime_ms: Option<u64>,
     error: Option<String>,
     seen: Instant,
@@ -147,8 +150,11 @@ impl CpuHistory {
             cpu: cpu_value(sample.qemu_cpu_percent),
             rss: sample.qemu_resident_size,
             host_ram: sample.host_memory_total_size,
+            host_available: sample.host_memory_available_size,
             disk_free: sample.data_disk_available_size,
             disk_total: sample.data_disk_total_size,
+            disk_free_all: sample.data_disk_free_size,
+            disk_used: sample.data_disk_used_size,
             uptime_ms: sample.uptime_ms,
             error: sample.sample_error.clone(),
             seen: now,
@@ -554,6 +560,10 @@ fn resource_panel(
                     (font * 5.0).clamp(88.0, 140.0),
                 );
                 if kind == 1 {
+                    if let Some(available) = sample.host_memory_available_size {
+                        ui.add(egui::Label::new(RichText::new(format!("Host RAM available: {:.2} GiB", available as f64 / 1_073_741_824.0)).small().color(theme::muted())).wrap())
+                            .on_hover_text("Host /proc/meminfo MemAvailable, including reclaimable memory; this is not guest RAM usage.");
+                    }
                     ui.add(
                         egui::Label::new(
                             RichText::new("Guest RAM utilization unavailable")
@@ -562,6 +572,15 @@ fn resource_panel(
                         )
                         .wrap(),
                     );
+                }
+                if kind == 2 {
+                    if let Some(used) = sample.data_disk_used_size {
+                        ui.add(egui::Label::new(RichText::new(format!("Data volume used: {:.2} GiB", used as f64 / 1_073_741_824.0)).small().color(theme::muted())).wrap())
+                            .on_hover_text("Host statvfs: (f_blocks - f_bfree) × f_frsize. Reserved free blocks are not counted as used; this is not guest filesystem usage.");
+                    }
+                    if let Some(free) = sample.data_disk_free_size {
+                        ui.add(egui::Label::new(RichText::new(format!("Free including reserved: {:.2} GiB", free as f64 / 1_073_741_824.0)).small().color(theme::muted())).wrap());
+                    }
                 }
             });
         });
@@ -771,8 +790,11 @@ fn retained_resources(last: &RetainedSample, id: &str) -> VmResources {
         qemu_cpu_percent: last.cpu,
         qemu_resident_size: last.rss,
         host_memory_total_size: last.host_ram,
+        host_memory_available_size: last.host_available,
         data_disk_available_size: last.disk_free,
         data_disk_total_size: last.disk_total,
+        data_disk_free_size: last.disk_free_all,
+        data_disk_used_size: last.disk_used,
         sample_error: last.error.clone(),
     }
 }
@@ -937,6 +959,7 @@ mod tests {
                 data_disk_available_size: Some(12_345_678),
                 data_disk_total_size: Some(512 * 1_073_741_824),
                 sample_error: Some("Resource sample warning".into()),
+                ..VmResources::default()
             }),
             ..Snapshot::default()
         }
@@ -1183,6 +1206,32 @@ mod tests {
         assert!(text.contains("Active — telemetry is being dropped"));
         assert!(text.contains("123.4") && text.contains("100% = one host core"));
         assert!(text.contains("1 h 01 m 01 s"));
+        assert!(text.contains("Guest RAM utilization unavailable"));
+    }
+
+    #[test]
+    fn host_meminfo_and_statvfs_measurements_are_named_and_retained() {
+        let mut snapshot = fixture();
+        let sample = snapshot.vm_resources.as_mut().unwrap();
+        sample.host_memory_available_size = Some(8 * 1_073_741_824);
+        sample.data_disk_free_size = Some(20 * 1_073_741_824);
+        sample.data_disk_used_size = Some(492 * 1_073_741_824);
+        let mut history = CpuHistory::default();
+        history.observe(&snapshot, Some("active"));
+        let retained = retained_resources(
+            history.for_vm("active").unwrap().retained.as_ref().unwrap(),
+            "active",
+        );
+        assert_eq!(retained.host_memory_available_size, Some(8 * 1_073_741_824));
+        assert_eq!(retained.data_disk_free_size, Some(20 * 1_073_741_824));
+        assert_eq!(retained.data_disk_used_size, Some(492 * 1_073_741_824));
+        let text: String = render(&snapshot, Some("active"), 900.0, 16.0)
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+        assert!(text.contains("Host RAM available: 8.00 GiB"));
+        assert!(text.contains("Data volume used: 492.00 GiB"));
+        assert!(text.contains("Free including reserved: 20.00 GiB"));
         assert!(text.contains("Guest RAM utilization unavailable"));
     }
 

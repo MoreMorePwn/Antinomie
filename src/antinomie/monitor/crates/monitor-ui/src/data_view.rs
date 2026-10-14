@@ -1010,6 +1010,53 @@ mod tests {
     }
 
     #[test]
+    fn captured_data_window_keeps_its_size_across_repeated_frames() {
+        for (size, font_size) in [
+            (egui::vec2(1280.0, 900.0), 16.0),
+            (egui::vec2(800.0, 600.0), 24.0),
+        ] {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            theme::text_size(&ctx, font_size);
+            let mut windows = DataWindows::default();
+            windows.open(
+                &ctx,
+                OpenData {
+                    key: "size-stability".into(),
+                    title: "Captured data stability".into(),
+                    field: field(&vec![b'x'; 8192]),
+                },
+                None,
+            );
+            let id = windows.windows[0].id();
+            let mut settled = None;
+            for frame in 0..90 {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        time: Some(frame as f64 / 60.0),
+                        ..Default::default()
+                    },
+                    |ctx| windows.show(ctx),
+                );
+                let rect = ctx.memory(|memory| memory.area_rect(id)).unwrap();
+                if frame == 2 {
+                    settled = Some(rect.size());
+                }
+                if frame > 2 {
+                    let first = settled.unwrap();
+                    assert!(
+                        (rect.width() - first.x).abs() <= 1.0
+                            && (rect.height() - first.y).abs() <= 1.0,
+                        "window grows at {size:?}/{font_size}, frame {frame}: {first:?} -> {:?}",
+                        rect.size()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn data_window_shows_utf8_first_and_switches_format() {
         let ctx = egui::Context::default();
         theme::install(&ctx);

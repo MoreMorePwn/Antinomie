@@ -1414,6 +1414,57 @@ mod tests {
     }
 
     #[test]
+    fn detached_analysis_panels_do_not_expand_the_floating_window_every_frame() {
+        for panel in [
+            Panel::Network,
+            Panel::Memory,
+            Panel::CoreDump,
+            Panel::StaticAnalysis,
+            Panel::Summary,
+        ] {
+            for (size, font_size) in [
+                (egui::vec2(1280.0, 900.0), 16.0),
+                (egui::vec2(800.0, 600.0), 24.0),
+            ] {
+                let mut app = crate::app::tests::upload_app();
+                let mut layout = WorkspaceLayout::default();
+                let location = layout.dock.find_tab(&panel).unwrap();
+                let surface = layout.dock.detach_tab(
+                    location,
+                    Rect::from_min_size(egui::pos2(50.0, 50.0), egui::vec2(500.0, 400.0)),
+                );
+                let id = egui::Id::new(("workspace-fallback", surface.0));
+                let ctx = egui::Context::default();
+                theme::install(&ctx);
+                theme::text_size(&ctx, font_size);
+                ctx.set_embed_viewports(true);
+                let mut settled = None;
+                for frame in 0..90 {
+                    let _ = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, size)),
+                            time: Some(frame as f64 / 60.0),
+                            ..Default::default()
+                        },
+                        |ctx| layout.show(&mut app, ctx),
+                    );
+                    let rect = ctx
+                        .memory(|memory| memory.area_rect(id))
+                        .expect("detached panel");
+                    if frame == 2 {
+                        settled = Some(rect.size());
+                    }
+                    if frame > 2 {
+                        let first = settled.unwrap();
+                        assert!((rect.width()-first.x).abs() <= 1.0 && (rect.height()-first.y).abs() <= 1.0,
+                            "{panel:?} grows at {size:?}/{font_size}, frame {frame}: {first:?} -> {:?}", rect.size());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn terminal_drag_preserves_stable_owner_and_other_surface() {
         let mut layout = WorkspaceLayout::default();
         let first = Panel::Terminal("first".into());

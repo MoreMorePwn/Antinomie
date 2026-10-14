@@ -1376,10 +1376,16 @@ pub struct VmResources {
     pub qemu_resident_size: Option<u64>,
     /// Total RAM visible to the host kernel, in octets.
     pub host_memory_total_size: Option<u64>,
+    /// Host MemAvailable from /proc/meminfo, including reclaimable memory.
+    pub host_memory_available_size: Option<u64>,
     /// Space available to this user on the data-directory filesystem.
     pub data_disk_available_size: Option<u64>,
     /// Total capacity of the data-directory filesystem, in octets.
     pub data_disk_total_size: Option<u64>,
+    /// Free host filesystem space including privileged reserved blocks.
+    pub data_disk_free_size: Option<u64>,
+    /// Allocated host filesystem space: (f_blocks - f_bfree) * f_frsize.
+    pub data_disk_used_size: Option<u64>,
     pub sample_error: Option<String>,
 }
 

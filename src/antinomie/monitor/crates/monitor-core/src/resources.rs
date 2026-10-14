@@ -48,22 +48,63 @@ fn process_stat(text: &str) -> Result<ProcessStat, String> {
 }
 
 fn memory_total(text: &str) -> Result<u64, String> {
-    let value = text
-        .lines()
-        .find_map(|line| line.strip_prefix("MemTotal:"))
-        .ok_or("host memory total is missing")?;
+    memory_field(text, "MemTotal")?
+        .filter(|&size| size != 0)
+        .ok_or_else(|| "host memory total is missing or zero".into())
+}
+
+fn memory_field(text: &str, name: &str) -> Result<Option<u64>, String> {
+    let mut values = text.lines().filter_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        (key == name).then_some(value)
+    });
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    if values.next().is_some() {
+        return Err(format!("duplicate host {name} field"));
+    }
     let mut fields = value.split_whitespace();
     let size = fields
         .next()
-        .ok_or("host memory total is missing")?
+        .ok_or("host memory value is missing")?
         .parse::<u64>()
-        .map_err(|_| "invalid host memory total")?;
+        .map_err(|_| "invalid host memory value")?;
     if fields.next() != Some("kB") || fields.next().is_some() {
-        return Err("unsupported host memory total unit".into());
+        return Err("unsupported host memory unit".into());
     }
     size.checked_mul(1024)
-        .filter(|&size| size != 0)
-        .ok_or_else(|| "host memory total is zero or overflows".into())
+        .map(Some)
+        .ok_or_else(|| "host memory size overflow".into())
+}
+
+struct FilesystemSizes {
+    total_size: u64,
+    free_size: u64,
+    available_size: u64,
+    used_size: u64,
+}
+
+fn filesystem_sizes(
+    blocks: u64,
+    free: u64,
+    available: u64,
+    fragment_size: u64,
+) -> Result<FilesystemSizes, String> {
+    if fragment_size == 0 || free > blocks || available > free {
+        return Err("invalid data-volume block counts".into());
+    }
+    let size = |blocks: u64| {
+        blocks
+            .checked_mul(fragment_size)
+            .ok_or("data-volume capacity overflow".to_owned())
+    };
+    Ok(FilesystemSizes {
+        total_size: size(blocks)?,
+        free_size: size(free)?,
+        available_size: size(available)?,
+        used_size: size(blocks - free)?,
+    })
 }
 
 impl ResourceSampler {
@@ -75,8 +116,26 @@ impl ResourceSampler {
             ..VmResources::default()
         };
         let mut issues = Vec::new();
-        match read_small(Path::new("/proc/meminfo")).and_then(|text| memory_total(&text)) {
-            Ok(size) => sample.host_memory_total_size = Some(size),
+        match read_small(Path::new("/proc/meminfo")) {
+            Ok(text) => {
+                match memory_total(&text) {
+                    Ok(size) => sample.host_memory_total_size = Some(size),
+                    Err(error) => issues.push(error),
+                }
+                match memory_field(&text, "MemAvailable") {
+                    Ok(Some(size))
+                        if sample
+                            .host_memory_total_size
+                            .is_some_and(|total| size <= total) =>
+                    {
+                        sample.host_memory_available_size = Some(size)
+                    }
+                    Ok(Some(_)) => issues
+                        .push("host available memory exceeds total or total is unavailable".into()),
+                    Ok(None) => issues.push("host MemAvailable is unavailable".into()),
+                    Err(error) => issues.push(error),
+                }
+            }
             Err(error) => issues.push(error),
         }
         let ticks_per_second = rustix::param::clock_ticks_per_second();
@@ -123,17 +182,18 @@ impl ResourceSampler {
                 issues.push(format!("QEMU resources: {error}"));
             }
         }
-        match rustix::fs::statvfs(data_dir) {
-            Ok(stat) => {
-                sample.data_disk_available_size = stat.f_bavail.checked_mul(stat.f_frsize);
-                sample.data_disk_total_size = stat.f_blocks.checked_mul(stat.f_frsize);
-                if sample.data_disk_available_size.is_none()
-                    || sample.data_disk_total_size.is_none()
-                {
-                    issues.push("data-volume capacity overflow".into());
-                }
+        match rustix::fs::statvfs(data_dir)
+            .map_err(|error| format!("data-volume resources: {error}"))
+            .and_then(|stat| {
+                filesystem_sizes(stat.f_blocks, stat.f_bfree, stat.f_bavail, stat.f_frsize)
+            }) {
+            Ok(sizes) => {
+                sample.data_disk_available_size = Some(sizes.available_size);
+                sample.data_disk_total_size = Some(sizes.total_size);
+                sample.data_disk_free_size = Some(sizes.free_size);
+                sample.data_disk_used_size = Some(sizes.used_size);
             }
-            Err(error) => issues.push(format!("data-volume resources: {error}")),
+            Err(error) => issues.push(error),
         }
         if !issues.is_empty() {
             sample.sample_error = Some(issues.join("; "));
@@ -183,6 +243,53 @@ mod tests {
             2
         );
         assert!(sampler.previous.is_none());
+    }
+
+    #[test]
+    fn available_memory_is_checked_and_missing_values_are_unknown() {
+        assert_eq!(
+            memory_field("MemAvailable: 0 kB", "MemAvailable").unwrap(),
+            Some(0)
+        );
+        assert_eq!(
+            memory_field("MemAvailable: 1024 kB", "MemAvailable").unwrap(),
+            Some(1024 * 1024)
+        );
+        assert_eq!(
+            memory_field("MemFree: 1024 kB", "MemAvailable").unwrap(),
+            None
+        );
+        for text in [
+            "MemAvailable: -1 kB",
+            "MemAvailable: 3 MB",
+            "MemAvailable: 1 kB\nMemAvailable: 2 kB",
+            "MemAvailable: 18446744073709551615 kB",
+        ] {
+            assert!(memory_field(text, "MemAvailable").is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn filesystem_usage_does_not_count_reserved_free_blocks_as_used() {
+        let sizes = filesystem_sizes(100, 40, 30, 4096).unwrap();
+        assert_eq!(
+            (
+                sizes.total_size,
+                sizes.free_size,
+                sizes.available_size,
+                sizes.used_size
+            ),
+            (409600, 163840, 122880, 245760)
+        );
+        assert_eq!(sizes.free_size + sizes.used_size, sizes.total_size);
+        for (blocks, free, available, fragment_size) in [
+            (1, 2, 0, 4096),
+            (2, 1, 2, 4096),
+            (1, 0, 0, 0),
+            (u64::MAX, 0, 0, 4096),
+        ] {
+            assert!(filesystem_sizes(blocks, free, available, fragment_size).is_err());
+        }
     }
 
     #[test]
