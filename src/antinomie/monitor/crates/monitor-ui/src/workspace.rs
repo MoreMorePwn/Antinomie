@@ -428,6 +428,15 @@ impl WorkspaceLayout {
     }
 
     fn show_surface(&mut self, app: &mut MonitorApp, ui: &mut egui::Ui, surface: SurfaceIndex) {
+        // Cancel our drag before a focused terminal or editor can consume Escape.
+        if self.drag.is_some()
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.drag = None;
+            self.released = None;
+            ui.ctx().stop_dragging();
+            ui.ctx().request_repaint();
+        }
         let Some(slot) = self.dock.get_surface_mut(surface) else {
             return;
         };
@@ -1193,6 +1202,40 @@ mod tests {
         layout.drop_panel(&Panel::CoreDump, SurfaceIndex::main(), point);
         assert!(layout.dock.main_surface()[NodeIndex::root()].is_leaf());
         assert_eq!(layout.dock.main_surface().num_tabs(), 1);
+    }
+
+    #[test]
+    fn escape_without_a_workspace_drag_does_not_cancel_another_widget_drag() {
+        let mut layout = WorkspaceLayout::default();
+        let mut app = crate::app::tests::app();
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let foreign = egui::Id::new("another-widget-drag");
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 900.0),
+                )),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                ctx.set_dragged_id(foreign);
+                layout.show(&mut app, ctx);
+                assert_eq!(ctx.dragged_id(), Some(foreign));
+                assert!(
+                    ctx.input(|input| input.key_pressed(egui::Key::Escape)),
+                    "unowned Escape stays available to the focused widget"
+                );
+            },
+        );
     }
 
     #[test]
