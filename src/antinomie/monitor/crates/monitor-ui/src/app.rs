@@ -8583,6 +8583,39 @@ mod tests {
     }
 
     #[test]
+    fn history_tabs_switch_back_from_captures_with_empty_and_populated_lists() {
+        for populated in [false, true] {
+            for (size, font_size) in [
+                (egui::vec2(1280.0, 820.0), 16.0),
+                (egui::vec2(800.0, 600.0), 24.0),
+            ] {
+                let ctx = egui::Context::default();
+                theme::install(&ctx);
+                theme::text_size(&ctx, font_size);
+                let mut app = app();
+                observer_fixture(&mut app);
+                app.settings.font_size = font_size;
+                if populated {
+                    app.snapshot.runs.push(run("live-run"));
+                    app.snapshot
+                        .captures
+                        .push(observer("active", CaptureState::Active));
+                }
+                app.layout.focus(Panel::RunHistory);
+                for _ in 0..3 {
+                    click_label(&mut app, &ctx, size, "Captures");
+                    assert!(app.capture_tab, "Captures must open at {size:?}");
+                    click_label(&mut app, &ctx, size, "Runs");
+                    assert!(
+                        !app.capture_tab,
+                        "Runs must reopen at {size:?}, populated={populated}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn core_picker_captures_the_complete_identity_and_requires_supported_selected_vm() {
         let ctx = egui::Context::default();
         theme::install(&ctx);

@@ -263,7 +263,12 @@ pub(super) fn history(
 ) -> Option<(String, bool)> {
     let mut action = None;
     let pane_id = ui.id().with("capture-history-focus");
-    let pane = ui.interact(ui.max_rect(), pane_id, egui::Sense::click());
+    // Tabs and refresh controls above the list retain their own interactions.
+    let pane = ui.interact(
+        ui.available_rect_before_wrap(),
+        pane_id,
+        egui::Sense::click(),
+    );
     if pane.clicked() {
         pane.request_focus();
     }
