@@ -149,6 +149,9 @@ impl WorkspaceLayout {
         origin: egui::Pos2,
         app: &MonitorApp,
     ) {
+        if self.drag.is_none() {
+            return;
+        }
         if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.drag = None;
             self.released = None;
