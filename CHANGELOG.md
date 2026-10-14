@@ -6,11 +6,18 @@ it runs.
 
 ## 0.6.1 — Unreleased
 
-- **Resource observations.** Host RAM availability comes from checked
+- **Guest resource monitoring.** A temporary bundled static collector reads
+  guest `/proc/meminfo` and root `statvfs` every two seconds. VM Status shows RAM
+  used/available and root filesystem used/free/available, with age and stale or
+  unavailable states. The collector self-unlinks, expires without host input,
+  and is stopped before snapshots; reconnect verifies ownership before cleanup.
+  Existing images need no packages or rebuild. Kernel-native monitoring is
+  deferred to 0.7.0; other guest mounts are outside the root meter.
+- **Host resource observations.** Host RAM availability comes from checked
   `/proc/meminfo` values. Data-volume used, free and user-available space come
   from `statvfs`; reserved free blocks remain free. These host observations are
   labelled separately from guest capacities and retained with the selected VM's
-  history. Guest utilization remains unavailable without a guest producer.
+  history. They remain separate from the guest resource meters.
 - **Capture and loss guidance.** Disconnected mode visibly explains why packet
   capture is unavailable in VM settings and Network, including while browsing
   saved PCAPs. TRL, UIL and STL names and values each explain their loss type.
@@ -31,7 +38,7 @@ it runs.
   Run. Failed uploads, cancelled handoffs and changed VM sessions do not open it.
 - **History navigation.** Captures no longer intercepts pointer clicks on the
   Runs tab. Capture filters and keyboard selection retain their focus behavior.
-- Host-only update; compatible with the existing 0.6.0 revision-16 BusyBox and
+- Compatible with the existing 0.6.0 revision-16 BusyBox and
   Debian GNOME bases. No guest image or transport change.
 
 ## 0.6.0 — 2026-10-14

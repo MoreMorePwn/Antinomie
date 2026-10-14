@@ -25,6 +25,7 @@ struct RetainedSample {
     uptime_ms: Option<u64>,
     error: Option<String>,
     seen: Instant,
+    guest: Option<antinomie_monitor_core::GuestResources>,
 }
 #[derive(Clone, Default)]
 pub(crate) struct VmHistory {
@@ -158,6 +159,7 @@ impl CpuHistory {
             uptime_ms: sample.uptime_ms,
             error: sample.sample_error.clone(),
             seen: now,
+            guest: sample.guest.clone(),
         });
         series.sequence = Some(sample.sample_sequence);
         series.uptime_ms = sample.uptime_ms.or(series.uptime_ms);
@@ -320,6 +322,19 @@ pub(crate) fn show(
             } else {
                 1
             };
+            guest_panels(
+                ui,
+                values.guest.as_ref().filter(|guest| {
+                    !active
+                        || snapshot
+                            .boot_id
+                            .as_ref()
+                            .is_none_or(|boot| guest.boot_id == *boot)
+                }),
+                active,
+                width,
+            );
+            ui.add_space(10.0);
             let gap = 10.0;
             let panel_width = ((width - gap * (columns - 1) as f32) / columns as f32).max(80.0);
             egui::Grid::new("summary-resources")
@@ -415,6 +430,66 @@ pub(crate) fn show(
                 ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
             }
         });
+}
+/// Guest scope stays separate from QEMU/host gauges, including retained data.
+fn guest_panels(
+    ui: &mut egui::Ui,
+    guest: Option<&antinomie_monitor_core::GuestResources>,
+    active: bool,
+    width: f32,
+) {
+    ui.horizontal_wrapped(|ui| {
+        ui.strong("Guest resources");
+        let stale = !active || guest.is_none_or(|guest| guest.stale);
+        ui.colored_label(
+            if stale { theme::muted() } else { theme::good() },
+            if stale {
+                "Stale / unavailable"
+            } else {
+                "Live · 2 s sampling"
+            },
+        );
+        if let Some(age) = guest.and_then(|guest| guest.age_ms) {
+            ui.label(format!("Last reading {:.1} s ago", age as f64 / 1000.0));
+        }
+    });
+    let columns = if width >= ui.text_style_height(&egui::TextStyle::Body) * 32.0 {
+        2
+    } else {
+        1
+    };
+    let panel_width = ((width - 10.0 * (columns - 1) as f32) / columns as f32).max(80.0);
+    egui::Grid::new("guest-resource-panels").num_columns(columns).spacing(egui::vec2(10.0, 10.0)).show(ui, |ui| {
+        for kind in 0..2 {
+            egui::Frame::new().fill(theme::bg()).stroke(egui::Stroke::new(1.0_f32, theme::line())).inner_margin(10).show(ui, |ui| {
+                ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.set_min_width((panel_width - 22.0).max(58.0));
+                ui.set_max_width((panel_width - 22.0).max(58.0));
+                ui.strong(if kind == 0 { "Guest RAM" } else { "Guest root filesystem /" });
+                let (used, total, available, free) = guest.map(|g| if kind == 0 {
+                    (g.memory_used_size, g.memory_total_size, g.memory_available_size, None)
+                } else {
+                    (g.root_used_size, g.root_total_size, g.root_available_size, g.root_free_size)
+                }).unwrap_or((None, None, None, None));
+                ui.add(egui::Label::new(format!("{} used / {}", optional_size(used), optional_size(total))).wrap());
+                meter(ui, fraction(used, total), accent(kind + 1), "Guest measurement unavailable");
+                ui.add(egui::Label::new(format!("Available: {}", optional_size(available))).wrap()).on_hover_text(
+                    if kind == 0 { "Guest /proc/meminfo: used = MemTotal − MemAvailable. Reclaimable cache is included in available memory." }
+                    else { "Guest statvfs(/): available = f_bavail × f_frsize; used = (f_blocks − f_bfree) × f_frsize. Other mounts are outside this meter." });
+                if let Some(free) = free {
+                    ui.add(egui::Label::new(format!("Free including reserved: {}", size(free))).wrap());
+                }
+                if used.is_none() {
+                    ui.add(egui::Label::new(if kind == 0 { "Guest RAM utilization unavailable" } else { "Guest root filesystem unavailable" }).wrap());
+                }
+                });
+            });
+            if (kind + 1) % columns == 0 { ui.end_row(); }
+        }
+    });
+    if let Some(error) = guest.and_then(|guest| guest.error.as_ref()) {
+        ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
+    }
 }
 fn resource_panel(
     ui: &mut egui::Ui,
@@ -564,14 +639,7 @@ fn resource_panel(
                         ui.add(egui::Label::new(RichText::new(format!("Host RAM available: {:.2} GiB", available as f64 / 1_073_741_824.0)).small().color(theme::muted())).wrap())
                             .on_hover_text("Host /proc/meminfo MemAvailable, including reclaimable memory; this is not guest RAM usage.");
                     }
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new("Guest RAM utilization unavailable")
-                                .small()
-                                .color(theme::muted()),
-                        )
-                        .wrap(),
-                    );
+
                 }
                 if kind == 2 {
                     if let Some(used) = sample.data_disk_used_size {
@@ -796,6 +864,15 @@ fn retained_resources(last: &RetainedSample, id: &str) -> VmResources {
         data_disk_free_size: last.disk_free_all,
         data_disk_used_size: last.disk_used,
         sample_error: last.error.clone(),
+        guest: last.guest.clone().map(|mut guest| {
+            guest.stale = true;
+            guest.age_ms = guest.age_ms.map(|age| {
+                age.saturating_add(
+                    u64::try_from(last.seen.elapsed().as_millis()).unwrap_or(u64::MAX),
+                )
+            });
+            guest
+        }),
     }
 }
 fn state_label(snapshot: &Snapshot, active: bool) -> &'static str {
@@ -1157,6 +1234,59 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn guest_metrics_have_explicit_scope_age_and_retained_stale_state() {
+        let mut snapshot = fixture();
+        snapshot.boot_id = Some("guest-boot".into());
+        snapshot.vm_resources.as_mut().unwrap().guest =
+            Some(antinomie_monitor_core::GuestResources {
+                boot_id: "guest-boot".into(),
+                sample_sequence: 1,
+                age_ms: Some(1250),
+                memory_total_size: Some(2 * 1_073_741_824),
+                memory_available_size: Some(1_073_741_824),
+                memory_used_size: Some(1_073_741_824),
+                root_total_size: Some(8 * 1_073_741_824),
+                root_used_size: Some(3 * 1_073_741_824),
+                root_available_size: Some(4 * 1_073_741_824),
+                root_free_size: Some(5 * 1_073_741_824),
+                ..Default::default()
+            });
+        let text: String = render(&snapshot, Some("active"), 700.0, 16.0)
+            .iter()
+            .map(|(text, _)| text.as_str())
+            .collect();
+        assert!(text.contains("Guest RAM") && text.contains("Guest root filesystem /"));
+        assert!(text.contains("Live · 2 s sampling") && text.contains("Last reading 1.2 s ago"));
+        assert!(!text.contains("Guest RAM utilization unavailable"));
+        let mut history = CpuHistory::default();
+        history.observe(&snapshot, Some("active"));
+        let retained = retained_resources(
+            history.for_vm("active").unwrap().retained.as_ref().unwrap(),
+            "active",
+        );
+        assert!(retained.guest.unwrap().stale);
+        snapshot
+            .vm_resources
+            .as_mut()
+            .unwrap()
+            .guest
+            .as_mut()
+            .unwrap()
+            .stale = true;
+        let text: String = render(&snapshot, Some("active"), 520.0, 24.0)
+            .iter()
+            .map(|(text, _)| text.as_str())
+            .collect();
+        assert!(text.contains("Stale / unavailable"));
+        snapshot.boot_id = Some("other-timeline".into());
+        let text: String = render(&snapshot, Some("active"), 700.0, 16.0)
+            .iter()
+            .map(|(text, _)| text.as_str())
+            .collect();
+        assert!(text.contains("Guest RAM utilization unavailable"));
+        assert!(!text.contains("Live · 2 s sampling"));
+    }
     #[test]
     fn stopped_selection_does_not_show_another_vms_health_or_resources() {
         let mut snapshot = fixture();

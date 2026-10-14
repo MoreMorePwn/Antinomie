@@ -26,6 +26,7 @@ fn main() {
         .compile("ant_host");
     println!("cargo:rerun-if-changed={transport}");
     println!("cargo:rerun-if-changed=src/ffi_layout.c");
+    build_guest_resources();
     build_kit();
 }
 
@@ -68,4 +69,32 @@ fn build_kit() {
     source.push_str("];\n");
     let out = Path::new(&env::var("OUT_DIR").expect("OUT_DIR")).join("kit_files.rs");
     fs::write(out, source).expect("write kit file list");
+}
+
+/// A static x86-64 guest probe also works in the libc-free BusyBox base.
+fn build_guest_resources() {
+    println!("cargo:rerun-if-changed=src/guest_resources.c");
+    println!("cargo:rerun-if-env-changed=ANTINOMIE_GUEST_CC");
+    let compiler = env::var_os("ANTINOMIE_GUEST_CC").unwrap_or_else(|| "musl-gcc".into());
+    let output = Path::new(&env::var_os("OUT_DIR").expect("OUT_DIR")).join("guest-resources");
+    let status = std::process::Command::new(compiler)
+        .args([
+            "-static",
+            "-Os",
+            "-s",
+            "-std=c11",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-fno-ident",
+            "-o",
+        ])
+        .arg(output)
+        .arg("src/guest_resources.c")
+        .status()
+        .expect("guest resource collector compiler; install musl-tools");
+    assert!(
+        status.success(),
+        "guest resource collector compilation failed"
+    );
 }

@@ -169,3 +169,12 @@ Xfce, Xorg, fonts and libraries retain their individual upstream terms. A local
 development image is not a license-cleared redistribution bundle. Distributing
 it requires the same component-specific notice/source review above, including
 the exact patched kernel build.
+
+## Temporary guest resource collector (0.6.1)
+
+The embedded x86-64 executable is original MIT project code compiled statically
+with musl libc (`musl-tools`; this build uses Debian 1.2.5-3). musl's MIT and
+file-specific notices are retained in
+[libc/musl-copyright.txt](LICENSES/third-party/libc/musl-copyright.txt), copied
+from the installed Debian package copyright inventory. The collector does not
+embed glibc or require a guest dynamic linker. Retain this notice with binaries.
