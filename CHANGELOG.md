@@ -6,6 +6,11 @@ it runs.
 
 ## 0.6.1 — Unreleased
 
+- **Sidebar Explorer.** Below Base images, choose and retain a host folder with
+  an expandable file tree. Double-click a file or right-click **Send and Run**
+  to upload it and open Run program on success. **Open Directory** reveals the
+  containing folder; folders have their own directory action. VM and base lists
+  leave space for Explorer, including when Base images is folded.
 - **Upload browser.** Choose a host folder with the filesystem explorer and
   select a file from an expandable tree. Directory reads run in a background
   worker; large folders have Previous/Next entry controls. Manual file paths,

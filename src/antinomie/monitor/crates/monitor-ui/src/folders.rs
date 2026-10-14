@@ -11,6 +11,7 @@ pub(crate) enum Kind {
     Recording,
     BaseImport,
     UploadRoot,
+    ExplorerRoot,
 }
 
 #[derive(Clone, Copy)]
