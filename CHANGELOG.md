@@ -4,6 +4,20 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
+## 0.6.1 — Unreleased
+
+- **Upload browser.** Choose a host folder with the filesystem explorer and
+  select a file from an expandable tree. Directory reads run in a background
+  worker; large folders have Previous/Next entry controls. Manual file paths,
+  executable permissions and overwrite confirmation remain available.
+- **Upload and Run.** After a successful upload, open Run program with the
+  uploaded guest path. Review arguments and other launch settings before pressing
+  Run. Failed uploads, cancelled handoffs and changed VM sessions do not open it.
+- **History navigation.** Captures no longer intercepts pointer clicks on the
+  Runs tab. Capture filters and keyboard selection retain their focus behavior.
+- Host-only update; compatible with the existing 0.6.0 revision-16 BusyBox and
+  Debian GNOME bases. No guest image or transport change.
+
 ## 0.6.0 — 2026-10-14
 
 - **VM Summary.** A Summary tab immediately before Run History shows selected VM
