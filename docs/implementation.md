@@ -34,6 +34,15 @@ V7-only restriction; older requirements remain recorded for their releases.
 - V7 no snapshot/reconnect. No next transport version. Existing transport API
   is opaque; frontend/backend never manage CPU rings.
 
+## Accepted ANT-T0087 aligned VM status cards (0.6.1)
+
+The ANT-T0087 visual clarification requires equal-height VM Status resource
+cards within each responsive row. Render the contents once, measure that row's
+tallest card and extend all of its frame backgrounds to the shared height in
+the same frame. Apply this to guest pairs and host pairs/triples; single-column
+cards retain natural height. Width/data/font changes must not depend on a stale
+height cache or clip wrapped notes. Measurements and monitoring stay unchanged.
+
 ## Accepted ANT-T0086 upload/picker and collector follow-up (0.6.1)
 
 The latest user clarification supersedes the dialog-tree and immediate-send

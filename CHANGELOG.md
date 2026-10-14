@@ -6,6 +6,10 @@ it runs.
 
 ## 0.6.1 — Unreleased
 
+- **Aligned VM status cards.** Guest and host resource cards in the same row
+  share the tallest card's height, including wrapped notes and unavailable
+  measurements. Responsive single-column cards keep their natural heights.
+
 - **Tab dragging.** Drag docked tab labels directly to split or join panes,
   or reorder them within a tab bar. A shadowed ghost follows the pointer;
   a blue pane highlight or insertion line previews the exact destination.
