@@ -26,6 +26,8 @@ fi
 export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$HOME=/home/builder \
 --remap-path-prefix=$RUSTUP_DIR=/rustup --remap-path-prefix=$CARGO_DIR=/cargo \
 --remap-path-prefix=$REPO=/antinomie"
+# Standard modules ship generated sources; rebuilding must not mutate the cache.
+export YRX_REGENERATE_MODULES_RS="${YRX_REGENERATE_MODULES_RS:-false}"
 (cd "$MONITOR" && cargo build --release --locked)
 
 version="$("$TARGET_DIR/release/antinomie-monitor" --version | awk '{print $2}')"
@@ -46,6 +48,36 @@ cp "$REPO/install.sh" "$REPO/CHANGELOG.md" "$REPO/LICENSE" "$REPO/LICENSING.md" 
    "$REPO/THIRD-PARTY-NOTICES.md" "$package/"
 cp "$MONITOR/assets/antinomie.desktop" "$MONITOR/assets/antinomie.svg" "$package/"
 cp -r "$REPO/LICENSES" "$package/"
+# Preserve notices from the toolchain/libc actually used by this build.
+rust_notice="$(rustc --print sysroot)/share/doc/rust/COPYRIGHT-library.html"
+test -f "$rust_notice"
+cp "$rust_notice" "$package/LICENSES/third-party/Rust-Standard-Library-COPYRIGHT.html"
+if [[ -f /usr/share/doc/musl/copyright ]]; then
+    cp /usr/share/doc/musl/copyright "$package/LICENSES/third-party/libc/musl-copyright.txt"
+fi
+python3 - "$REPO" "$package" "$version" <<'PY'
+import hashlib, json, os, pathlib, subprocess, sys
+repo, package = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+def output(command):
+    result = subprocess.run(command, cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, check=False)
+    return result.stdout.strip() if result.returncode == 0 else None
+compiler = os.environ.get('ANTINOMIE_GUEST_CC', 'musl-gcc')
+info = {
+    'version': sys.argv[3],
+    'source_commit': output(['git', 'rev-parse', 'HEAD']),
+    'source_dirty': bool(output(['git', 'status', '--porcelain'])),
+    'rustc': output(['rustc', '--version']),
+    'guest_compiler': pathlib.Path(compiler).name,
+    'guest_compiler_version': output([compiler, '--version']),
+    'musl_package_version': output(['dpkg-query', '-W', '-f=${Version}', 'musl']),
+    'notice_sha256': {
+        name: hashlib.sha256((package / name).read_bytes()).hexdigest()
+        for name in ['LICENSES/third-party/Rust-Standard-Library-COPYRIGHT.html',
+                     'LICENSES/third-party/libc/musl-copyright.txt']
+    },
+}
+(package / 'BUILD-INFO.json').write_text(json.dumps(info, indent=2) + '\n')
+PY
 cat > "$package/README.txt" <<TEXT
 Antinomie $version (Linux x86-64)
 
@@ -78,6 +110,7 @@ tshark bubblewrap util-linux. These tools are not bundled in this archive.
 Licensing: see LICENSING.md; the executable is a composite of MIT
 application code, its dependencies, the embedded analysis rule sets (their
 own licenses, see THIRD-PARTY-NOTICES.md) and the embedded base build kit.
+BUILD-INFO.json records the source revision, compiler, musl package and notices.
 TEXT
 mkdir -p "$OUT"
 archive="$OUT/$name-linux-x86_64.tar.gz"
