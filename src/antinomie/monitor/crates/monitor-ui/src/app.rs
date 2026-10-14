@@ -19,6 +19,8 @@ use antinomie_monitor_core::{
 };
 #[path = "captures.rs"]
 mod captures;
+#[path = "explorer.rs"]
+mod explorer;
 #[path = "upload_dialog.rs"]
 mod upload;
 #[path = "upload_browser.rs"]
@@ -56,6 +58,9 @@ struct Settings {
     /// Sidebar sections folded away.
     vms_collapsed: bool,
     bases_collapsed: bool,
+    /// Sidebar host-file explorer; no guest paths or upload intent are persisted.
+    explorer_collapsed: bool,
+    explorer_root: Option<PathBuf>,
     /// The latest program each VM ran, for the sidebar.
     last_runs: BTreeMap<String, LastRun>,
 }
@@ -84,6 +89,8 @@ impl Default for Settings {
             memory_online_symbols: true,
             vms_collapsed: false,
             bases_collapsed: false,
+            explorer_collapsed: false,
+            explorer_root: None,
             last_runs: BTreeMap::new(),
         }
     }
@@ -285,6 +292,7 @@ pub struct MonitorApp {
     executable: bool,
     overwrite: bool,
     upload_browser: upload_browser::Browser,
+    explorer_browser: upload_browser::Browser,
     pending_upload: Option<upload::Pending>,
     pending_launch: Option<u64>,
     started: Instant,
@@ -325,6 +333,10 @@ impl MonitorApp {
         let exec = ExecRequest::default();
         let env = exec.env.join("\n");
         let dependencies = crate::dependencies_window::DependenciesWindow::start(&options);
+        let mut explorer_browser = upload_browser::Browser::default();
+        if let Some(root) = settings.explorer_root.clone() {
+            explorer_browser.reset(root);
+        }
         let mut app = Self {
             backend,
             snapshot: Snapshot::default(),
@@ -423,6 +435,7 @@ impl MonitorApp {
             executable: false,
             overwrite: false,
             upload_browser: Default::default(),
+            explorer_browser,
             pending_upload: None,
             pending_launch: None,
             started: Instant::now(),
@@ -568,6 +581,13 @@ impl MonitorApp {
                     {
                         self.upload_browser.reset(path);
                         self.source.clear();
+                    }
+                    FolderKind::ExplorerRoot
+                        if target.generation == self.explorer_browser.generation =>
+                    {
+                        self.settings.explorer_root = Some(path.clone());
+                        self.settings.explorer_collapsed = false;
+                        self.explorer_browser.reset(path);
                     }
                     _ => {}
                 },
@@ -3086,7 +3106,9 @@ impl MonitorApp {
                     let budget = ui.available_height();
                     egui::ScrollArea::vertical()
                         .id_salt("vm_list")
-                        .max_height(if self.settings.bases_collapsed {
+                        .max_height(if !self.settings.explorer_collapsed {
+                            budget * 0.35
+                        } else if self.settings.bases_collapsed {
                             budget - ui.spacing().interact_size.y - 16.0
                         } else {
                             budget * 0.6
@@ -3170,12 +3192,15 @@ impl MonitorApp {
                         }
                     },
                 );
-                if self.settings.bases_collapsed {
-                    return;
-                }
+                if !self.settings.bases_collapsed {
                 egui::ScrollArea::vertical()
                     .id_salt("base_list")
-                    .auto_shrink([false, false])
+                    .max_height(if self.settings.explorer_collapsed {
+                        ui.available_height() - 40.0
+                    } else {
+                        ui.available_height() * 0.35
+                    }.max(36.0))
+                    .auto_shrink([false, true])
                     .show(ui, |ui| {
                         if self.snapshot.bases_checking {
                             ui.horizontal(|ui| {
@@ -3305,6 +3330,9 @@ impl MonitorApp {
                             });
                         }
                     });
+                }
+                ui.add_space(6.0);
+                self.explorer_sidebar(ui);
             });
         if new_vm {
             self.new_image();
@@ -8025,6 +8053,7 @@ mod tests {
             executable: false,
             overwrite: false,
             upload_browser: Default::default(),
+            explorer_browser: Default::default(),
             pending_upload: None,
             pending_launch: None,
             started: Instant::now(),
@@ -8220,6 +8249,178 @@ mod tests {
         assert_eq!(app.destination, "/tmp/sample script.sh");
         click_label(&mut app, &ctx, size, "Upload and Run");
         assert!(matches!(&app.submitted[0], Command::Upload { source, .. } if source == &path));
+    }
+
+    #[test]
+    fn explorer_persists_root_and_old_preferences_remain_compatible() {
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert!(old.explorer_root.is_none() && !old.explorer_collapsed);
+        let settings = Settings {
+            explorer_root: Some(PathBuf::from("/tmp/host folder")),
+            explorer_collapsed: true,
+            ..Settings::default()
+        };
+        let loaded: Settings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(loaded.explorer_root, settings.explorer_root);
+        assert!(loaded.explorer_collapsed);
+    }
+
+    fn explorer_fixture(app: &mut MonitorApp, root: &std::path::Path) {
+        app.upload_open = false;
+        app.settings.explorer_root = Some(root.to_owned());
+        app.explorer_browser.reset(root.to_owned());
+    }
+
+    fn wait_for_label(app: &mut MonitorApp, ctx: &egui::Context, size: egui::Vec2, label: &str) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if texts(&render(app, ctx, size))
+                .iter()
+                .any(|(text, _)| text == label)
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline, "missing {label}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn secondary_click_label(
+        app: &mut MonitorApp,
+        ctx: &egui::Context,
+        size: egui::Vec2,
+        label: &str,
+    ) {
+        let pos = texts(&render(app, ctx, size))
+            .into_iter()
+            .find(|(text, _)| text == label)
+            .unwrap()
+            .1
+            .center();
+        for pressed in [true, false] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events: vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Secondary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ctx| app.draw(ctx),
+            );
+        }
+    }
+
+    #[test]
+    fn explorer_remains_below_bases_with_folded_lists_and_large_fonts() {
+        for (size, font_size) in [
+            (egui::vec2(1280.0, 900.0), 16.0),
+            (egui::vec2(800.0, 600.0), 24.0),
+        ] {
+            for bases_folded in [false, true] {
+                let mut app = app();
+                app.settings.bases_collapsed = bases_folded;
+                app.snapshot.bases = (0..12)
+                    .map(|index| test_base(&format!("base {index}"), true))
+                    .collect();
+                let ctx = egui::Context::default();
+                theme::install(&ctx);
+                theme::text_size(&ctx, font_size);
+                for _ in 0..3 {
+                    render(&mut app, &ctx, size);
+                }
+                let visible = texts(&render(&mut app, &ctx, size));
+                let rect = |name: &str| {
+                    visible
+                        .iter()
+                        .find(|(text, _)| text == name)
+                        .unwrap_or_else(|| panic!("missing {name} at {size:?}: {visible:?}"))
+                        .1
+                };
+                assert!(rect("Explorer").top() > rect("Base images").bottom());
+                assert!(rect("Choose folder…").bottom() < size.y);
+                click_label(&mut app, &ctx, size, "Explorer");
+                assert!(app.settings.explorer_collapsed);
+            }
+        }
+    }
+
+    #[test]
+    fn explorer_file_double_click_uploads_once_and_opens_run_on_success() {
+        let fixture = upload_browser::tests::Fixture::new();
+        let path = fixture.0.join("sidebar-sample.sh");
+        std::fs::write(&path, b"#!/bin/sh\necho explorer\n").unwrap();
+        let mut app = upload_app();
+        explorer_fixture(&mut app, &fixture.0);
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 900.0);
+        wait_for_label(&mut app, &ctx, size, "sidebar-sample.sh");
+        click_label(&mut app, &ctx, size, "sidebar-sample.sh");
+        assert!(app.submitted.is_empty());
+        click_label(&mut app, &ctx, size, "sidebar-sample.sh");
+        assert_eq!(app.submitted.len(), 1);
+        assert!(matches!(&app.submitted[0], Command::Upload {
+            source, destination, executable: true, ..
+        } if source == &path && destination == "/tmp/sidebar-sample.sh"));
+        let id = app.pending_upload.as_ref().unwrap().id;
+        app.send_explorer_file(path);
+        assert_eq!(app.submitted.len(), 1);
+        app.complete_upload(id, true);
+        assert!(app.launch_open && !app.upload_open);
+        assert_eq!(app.exec.path, "/tmp/sidebar-sample.sh");
+        assert!(!app
+            .submitted
+            .iter()
+            .any(|command| matches!(command, Command::Execute(_))));
+    }
+
+    #[test]
+    fn explorer_file_context_menu_sends_and_stopped_guests_cannot_send() {
+        let fixture = upload_browser::tests::Fixture::new();
+        let path = fixture.0.join("context-sample.sh");
+        std::fs::write(&path, b"test").unwrap();
+        let mut app = upload_app();
+        explorer_fixture(&mut app, &fixture.0);
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 900.0);
+        wait_for_label(&mut app, &ctx, size, "context-sample.sh");
+        secondary_click_label(&mut app, &ctx, size, "context-sample.sh");
+        let visible = texts(&render(&mut app, &ctx, size));
+        assert!(visible.iter().any(|(text, _)| text == "Open Directory"));
+        click_label(&mut app, &ctx, size, "Send and Run");
+        assert_eq!(app.submitted.len(), 1);
+        app.complete_upload(app.pending_upload.as_ref().unwrap().id, false);
+        assert!(!app.launch_open);
+        app.snapshot.state = VmState::Stopped;
+        app.send_explorer_file(path);
+        assert_eq!(app.submitted.len(), 1);
+    }
+
+    #[test]
+    fn explorer_and_upload_trees_keep_independent_selection() {
+        let fixture = upload_browser::tests::Fixture::new();
+        let path = fixture.0.join("shared-file.txt");
+        std::fs::write(&path, b"test").unwrap();
+        let mut app = upload_app();
+        explorer_fixture(&mut app, &fixture.0);
+        app.upload_open = true;
+        app.upload_browser.reset(fixture.0.clone());
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 900.0);
+        wait_for_label(&mut app, &ctx, size, "shared-file.txt");
+        click_label(&mut app, &ctx, size, "shared-file.txt");
+        assert_eq!(app.explorer_browser.selected, Some(path));
+        assert!(app.upload_browser.selected.is_none());
     }
 
     fn event(phase: u8, cpu: u32) -> antinomie_monitor_core::EventSummary {
@@ -9009,7 +9210,7 @@ mod tests {
         )
     }
 
-    fn texts(output: &egui::FullOutput) -> Vec<(String, egui::Rect)> {
+    pub(super) fn texts(output: &egui::FullOutput) -> Vec<(String, egui::Rect)> {
         fn collect(shape: &egui::Shape, clip: egui::Rect, texts: &mut Vec<(String, egui::Rect)>) {
             match shape {
                 egui::Shape::Text(text) => {

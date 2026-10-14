@@ -45,6 +45,13 @@ Overwrite confirmation retains the chosen action; closing cancels the handoff
 without claiming to cancel a guest write already submitted. Reuse the existing
 single-file guest protocol and 0.6.0 bases; no guest/image/transport changes.
 
+The accepted ANT-T0083 clarification adds a persistent Explorer section below
+Base images. Choose its host root independently of the Upload dialog; double-click
+a regular file or use right-click Send and Run to submit the existing upload and
+success-only Run dialog handoff. Right-click Open Directory opens the containing
+host folder (the folder itself for directory entries). Stopped/wrongly selected
+VMs and pending uploads cannot admit another send. Folded bases never hide Explorer.
+
 ## Accepted ANT-T0057 manual cores and performance Summary (0.6.0)
 
 User authorized a real Dump core action beside Dump memory and inside Core dumps,
