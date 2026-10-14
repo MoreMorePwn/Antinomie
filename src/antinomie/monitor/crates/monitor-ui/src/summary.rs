@@ -337,20 +337,17 @@ pub(crate) fn show(
             ui.add_space(10.0);
             let gap = 10.0;
             let panel_width = ((width - gap * (columns - 1) as f32) / columns as f32).max(80.0);
-            egui::Grid::new("summary-resources")
-                .num_columns(columns)
-                .spacing(egui::vec2(gap, gap))
-                .show(ui, |ui| {
-                    for kind in 0..3 {
-                        resource_panel(ui, panel_width, kind, values, vm, series);
-                        if (kind + 1) % columns == 0 {
-                            ui.end_row();
-                        }
-                    }
-                    if 3 % columns != 0 {
-                        ui.end_row();
-                    }
-                });
+            resource_cards(
+                ui,
+                "summary-resources",
+                3,
+                columns,
+                panel_width,
+                12,
+                |ui, kind| {
+                    resource_contents(ui, kind, values, vm, series);
+                },
+            );
             ui.add_space(10.0);
             egui::Frame::new()
                 .fill(theme::bg())
@@ -459,199 +456,282 @@ fn guest_panels(
         1
     };
     let panel_width = ((width - 10.0 * (columns - 1) as f32) / columns as f32).max(80.0);
-    egui::Grid::new("guest-resource-panels").num_columns(columns).spacing(egui::vec2(10.0, 10.0)).show(ui, |ui| {
-        for kind in 0..2 {
-            egui::Frame::new().fill(theme::bg()).stroke(egui::Stroke::new(1.0_f32, theme::line())).inner_margin(10).show(ui, |ui| {
-                ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                ui.set_min_width((panel_width - 22.0).max(58.0));
-                ui.set_max_width((panel_width - 22.0).max(58.0));
-                ui.strong(if kind == 0 { "Guest RAM" } else { "Guest root filesystem /" });
-                let (used, total, available, free) = guest.map(|g| if kind == 0 {
-                    (g.memory_used_size, g.memory_total_size, g.memory_available_size, None)
-                } else {
-                    (g.root_used_size, g.root_total_size, g.root_available_size, g.root_free_size)
-                }).unwrap_or((None, None, None, None));
-                ui.add(egui::Label::new(format!("{} used / {}", optional_size(used), optional_size(total))).wrap());
-                meter(ui, fraction(used, total), accent(kind + 1), "Guest measurement unavailable");
-                ui.add(egui::Label::new(format!("Available: {}", optional_size(available))).wrap()).on_hover_text(
+    resource_cards(
+        ui,
+        "guest-resource-panels",
+        2,
+        columns,
+        panel_width,
+        10,
+        |ui, kind| {
+            ui.strong(if kind == 0 {
+                "Guest RAM"
+            } else {
+                "Guest root filesystem /"
+            });
+            let (used, total, available, free) = guest
+                .map(|g| {
+                    if kind == 0 {
+                        (
+                            g.memory_used_size,
+                            g.memory_total_size,
+                            g.memory_available_size,
+                            None,
+                        )
+                    } else {
+                        (
+                            g.root_used_size,
+                            g.root_total_size,
+                            g.root_available_size,
+                            g.root_free_size,
+                        )
+                    }
+                })
+                .unwrap_or((None, None, None, None));
+            ui.add(
+                egui::Label::new(format!(
+                    "{} used / {}",
+                    optional_size(used),
+                    optional_size(total)
+                ))
+                .wrap(),
+            );
+            meter(
+                ui,
+                fraction(used, total),
+                accent(kind + 1),
+                "Guest measurement unavailable",
+            );
+            ui.add(egui::Label::new(format!("Available: {}", optional_size(available))).wrap()).on_hover_text(
                     if kind == 0 { "Guest /proc/meminfo: used = MemTotal − MemAvailable. Reclaimable cache is included in available memory." }
                     else { "Guest statvfs(/): available = f_bavail × f_frsize; used = (f_blocks − f_bfree) × f_frsize. Other mounts are outside this meter." });
-                if let Some(free) = free {
-                    ui.add(egui::Label::new(format!("Free including reserved: {}", size(free))).wrap());
-                }
-                if used.is_none() {
-                    ui.add(egui::Label::new(if kind == 0 { "Guest RAM utilization unavailable" } else { "Guest root filesystem unavailable" }).wrap());
-                }
-                });
-            });
-            if (kind + 1) % columns == 0 { ui.end_row(); }
-        }
-    });
+            if let Some(free) = free {
+                ui.add(egui::Label::new(format!("Free including reserved: {}", size(free))).wrap());
+            }
+            if used.is_none() {
+                ui.add(
+                    egui::Label::new(if kind == 0 {
+                        "Guest RAM utilization unavailable"
+                    } else {
+                        "Guest root filesystem unavailable"
+                    })
+                    .wrap(),
+                );
+            }
+        },
+    );
     if let Some(error) = guest.and_then(|guest| guest.error.as_ref()) {
         ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
     }
 }
-fn resource_panel(
+/// Render contents once, reserve each natural extent, then paint row backgrounds
+/// to the tallest content height. Width/data/font changes need no height cache.
+fn resource_cards(
     ui: &mut egui::Ui,
-    width: f32,
+    id: &str,
+    count: usize,
+    columns: usize,
+    panel_width: f32,
+    inner_margin: i8,
+    mut contents: impl FnMut(&mut egui::Ui, usize),
+) {
+    let columns = columns.max(1);
+    let frame = egui::Frame::new()
+        .fill(theme::bg())
+        .stroke(egui::Stroke::new(1.0_f32, theme::line()))
+        .inner_margin(inner_margin);
+    let inner_width = (panel_width - frame.total_margin().sum().x).max(0.0);
+    let content_spacing = ui.spacing().item_spacing;
+    ui.push_id(id, |ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
+        for first in (0..count).step_by(columns) {
+            ui.horizontal_top(|ui| {
+                let mut cards = Vec::with_capacity(columns);
+                let mut height = 0.0_f32;
+                for kind in first..(first + columns).min(count) {
+                    let mut prepared = frame.begin(ui);
+                    prepared.content_ui.spacing_mut().item_spacing = content_spacing;
+                    prepared.content_ui.with_layout(
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            ui.set_min_width(inner_width);
+                            ui.set_max_width(inner_width);
+                            contents(ui, kind);
+                        },
+                    );
+                    height = height.max(prepared.content_ui.min_rect().height());
+                    // The tallest natural allocation already reserves the final
+                    // row height. Defer painting until every card is measured.
+                    prepared.allocate_space(ui);
+                    cards.push(prepared);
+                }
+                for mut card in cards {
+                    card.content_ui.set_min_height(height);
+                    card.paint(ui);
+                }
+            });
+        }
+    });
+}
+
+fn resource_contents(
+    ui: &mut egui::Ui,
     kind: usize,
     sample: &VmResources,
     vm: &VmConfig,
     history: Option<&VmHistory>,
 ) {
-    egui::Frame::new()
-        .fill(theme::bg())
-        .stroke(egui::Stroke::new(1.0_f32, theme::line()))
-        .inner_margin(12)
-        .show(ui, |ui| {
-            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                let inner = (width - 26.0).max(54.0);
-                ui.set_min_width(inner);
-                ui.set_max_width(inner);
-                let (title, value, unit, ratio, note) = match kind {
-                    0 => (
-                        "QEMU host CPU",
-                        cpu_value(sample.qemu_cpu_percent).map(|v| format!("{v:.1}")),
-                        "%",
-                        cpu_value(sample.qemu_cpu_percent)
-                            .map(|v| v / (f64::from(vm.cpus.max(1)) * 100.0)),
-                        format!("{} vCPU capacity · 100% = one host core", vm.cpus),
-                    ),
-                    1 => {
-                        let (v, u) = split_size(sample.qemu_resident_size);
-                        (
-                            "QEMU resident memory",
-                            v,
-                            u,
-                            fraction(sample.qemu_resident_size, sample.host_memory_total_size),
-                            format!(
-                                "Guest capacity {} · host visible {}",
-                                size(u64::from(vm.ram_mib) * 1_048_576),
-                                optional_size(sample.host_memory_total_size)
-                            ),
-                        )
-                    }
-                    _ => {
-                        let (v, u) = split_size(sample.data_disk_available_size);
-                        (
-                            "Host data volume free",
-                            v,
-                            u,
-                            sample
-                                .data_disk_available_size
-                                .zip(sample.data_disk_total_size)
-                                .filter(|(a, t)| a <= t)
-                                .and_then(|(a, t)| fraction(Some(a), Some(t))),
-                            format!(
-                                "{} volume · {} guest disk",
-                                optional_size(sample.data_disk_total_size),
-                                size(u64::from(vm.disk_gib) * 1_073_741_824)
-                            ),
-                        )
-                    }
-                };
-                ui.strong(title);
-                let font = ui.text_style_height(&egui::TextStyle::Body);
-                let color = if kind == 0 {
-                    sample
-                        .qemu_cpu_percent
-                        .map(|v| cpu_load_color(v, vm.cpus))
-                        .unwrap_or_else(theme::muted)
-                } else {
-                    accent(kind)
-                };
-                gauge(
-                    ui,
-                    ratio,
-                    value.as_deref().unwrap_or("—"),
-                    unit,
-                    color,
-                    inner,
-                    (font * 6.0).clamp(96.0, 160.0),
-                );
-                ui.add(egui::Label::new(RichText::new(note).small().color(theme::muted())).wrap());
-                if value.is_none() {
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new("Unavailable measurement")
-                                .small()
-                                .color(theme::muted()),
-                        )
-                        .wrap(),
-                    );
-                } else if ratio.is_none() {
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new("Capacity unavailable")
-                                .small()
-                                .color(theme::muted()),
-                        )
-                        .wrap(),
-                    );
-                }
-                ui.add_space(5.0);
-                let (data, scale) = if let Some(series) = history {
-                    match kind {
-                        0 => (&series.samples, series.scale(vm.cpus)),
-                        1 => (
-                            &series.residents,
-                            sample
-                                .host_memory_total_size
-                                .map(|v| v as f64)
-                                .unwrap_or_else(|| {
-                                    series
-                                        .residents
-                                        .iter()
-                                        .flatten()
-                                        .copied()
-                                        .fold(1.0, f64::max)
-                                }),
-                        ),
-                        _ => (
-                            &series.disk_available,
-                            sample
-                                .data_disk_total_size
-                                .map(|v| v as f64)
-                                .unwrap_or_else(|| {
-                                    series
-                                        .disk_available
-                                        .iter()
-                                        .flatten()
-                                        .copied()
-                                        .fold(1.0, f64::max)
-                                }),
-                        ),
-                    }
-                } else {
-                    (&VecDeque::new(), 1.0)
-                };
-                trend(
-                    ui,
-                    history,
-                    data,
-                    scale,
-                    kind,
-                    color,
-                    (font * 5.0).clamp(88.0, 140.0),
-                );
-                if kind == 1 {
-                    if let Some(available) = sample.host_memory_available_size {
-                        ui.add(egui::Label::new(RichText::new(format!("Host RAM available: {:.2} GiB", available as f64 / 1_073_741_824.0)).small().color(theme::muted())).wrap())
+    let inner = ui.available_width();
+    let (title, value, unit, ratio, note) = match kind {
+        0 => (
+            "QEMU host CPU",
+            cpu_value(sample.qemu_cpu_percent).map(|v| format!("{v:.1}")),
+            "%",
+            cpu_value(sample.qemu_cpu_percent).map(|v| v / (f64::from(vm.cpus.max(1)) * 100.0)),
+            format!("{} vCPU capacity · 100% = one host core", vm.cpus),
+        ),
+        1 => {
+            let (v, u) = split_size(sample.qemu_resident_size);
+            (
+                "QEMU resident memory",
+                v,
+                u,
+                fraction(sample.qemu_resident_size, sample.host_memory_total_size),
+                format!(
+                    "Guest capacity {} · host visible {}",
+                    size(u64::from(vm.ram_mib) * 1_048_576),
+                    optional_size(sample.host_memory_total_size)
+                ),
+            )
+        }
+        _ => {
+            let (v, u) = split_size(sample.data_disk_available_size);
+            (
+                "Host data volume free",
+                v,
+                u,
+                sample
+                    .data_disk_available_size
+                    .zip(sample.data_disk_total_size)
+                    .filter(|(a, t)| a <= t)
+                    .and_then(|(a, t)| fraction(Some(a), Some(t))),
+                format!(
+                    "{} volume · {} guest disk",
+                    optional_size(sample.data_disk_total_size),
+                    size(u64::from(vm.disk_gib) * 1_073_741_824)
+                ),
+            )
+        }
+    };
+    ui.strong(title);
+    let font = ui.text_style_height(&egui::TextStyle::Body);
+    let color = if kind == 0 {
+        sample
+            .qemu_cpu_percent
+            .map(|v| cpu_load_color(v, vm.cpus))
+            .unwrap_or_else(theme::muted)
+    } else {
+        accent(kind)
+    };
+    gauge(
+        ui,
+        ratio,
+        value.as_deref().unwrap_or("—"),
+        unit,
+        color,
+        inner,
+        (font * 6.0).clamp(96.0, 160.0),
+    );
+    ui.add(egui::Label::new(RichText::new(note).small().color(theme::muted())).wrap());
+    if value.is_none() {
+        ui.add(
+            egui::Label::new(
+                RichText::new("Unavailable measurement")
+                    .small()
+                    .color(theme::muted()),
+            )
+            .wrap(),
+        );
+    } else if ratio.is_none() {
+        ui.add(
+            egui::Label::new(
+                RichText::new("Capacity unavailable")
+                    .small()
+                    .color(theme::muted()),
+            )
+            .wrap(),
+        );
+    }
+    ui.add_space(5.0);
+    let (data, scale) = if let Some(series) = history {
+        match kind {
+            0 => (&series.samples, series.scale(vm.cpus)),
+            1 => (
+                &series.residents,
+                sample
+                    .host_memory_total_size
+                    .map(|v| v as f64)
+                    .unwrap_or_else(|| {
+                        series
+                            .residents
+                            .iter()
+                            .flatten()
+                            .copied()
+                            .fold(1.0, f64::max)
+                    }),
+            ),
+            _ => (
+                &series.disk_available,
+                sample
+                    .data_disk_total_size
+                    .map(|v| v as f64)
+                    .unwrap_or_else(|| {
+                        series
+                            .disk_available
+                            .iter()
+                            .flatten()
+                            .copied()
+                            .fold(1.0, f64::max)
+                    }),
+            ),
+        }
+    } else {
+        (&VecDeque::new(), 1.0)
+    };
+    trend(
+        ui,
+        history,
+        data,
+        scale,
+        kind,
+        color,
+        (font * 5.0).clamp(88.0, 140.0),
+    );
+    if kind == 1 {
+        if let Some(available) = sample.host_memory_available_size {
+            ui.add(egui::Label::new(RichText::new(format!("Host RAM available: {:.2} GiB", available as f64 / 1_073_741_824.0)).small().color(theme::muted())).wrap())
                             .on_hover_text("Host /proc/meminfo MemAvailable, including reclaimable memory; this is not guest RAM usage.");
-                    }
-
-                }
-                if kind == 2 {
-                    if let Some(used) = sample.data_disk_used_size {
-                        ui.add(egui::Label::new(RichText::new(format!("Data volume used: {:.2} GiB", used as f64 / 1_073_741_824.0)).small().color(theme::muted())).wrap())
+        }
+    }
+    if kind == 2 {
+        if let Some(used) = sample.data_disk_used_size {
+            ui.add(egui::Label::new(RichText::new(format!("Data volume used: {:.2} GiB", used as f64 / 1_073_741_824.0)).small().color(theme::muted())).wrap())
                             .on_hover_text("Host statvfs: (f_blocks - f_bfree) × f_frsize. Reserved free blocks are not counted as used; this is not guest filesystem usage.");
-                    }
-                    if let Some(free) = sample.data_disk_free_size {
-                        ui.add(egui::Label::new(RichText::new(format!("Free including reserved: {:.2} GiB", free as f64 / 1_073_741_824.0)).small().color(theme::muted())).wrap());
-                    }
-                }
-            });
-        });
+        }
+        if let Some(free) = sample.data_disk_free_size {
+            ui.add(
+                egui::Label::new(
+                    RichText::new(format!(
+                        "Free including reserved: {:.2} GiB",
+                        free as f64 / 1_073_741_824.0
+                    ))
+                    .small()
+                    .color(theme::muted()),
+                )
+                .wrap(),
+            );
+        }
+    }
 }
 fn gauge(
     ui: &mut egui::Ui,
@@ -1398,6 +1478,96 @@ mod tests {
                     "{text:?} extends beyond {width}: {rect:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn resource_cards_share_row_edges_on_first_frame_and_after_reflow() {
+        for font in [16.0, 24.0] {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            theme::text_size(&ctx, font);
+            let mut history = CpuHistory::default();
+            let mut paired_rows = 0;
+            for width in [1400.0, 520.0, 1800.0, 320.0, 900.0, 1400.0] {
+                for mode in 0..3 {
+                    let mut snapshot = fixture();
+                    snapshot.boot_id = Some("card-layout".into());
+                    let sample = snapshot.vm_resources.as_mut().unwrap();
+                    sample.host_memory_available_size = Some(8 * 1_073_741_824);
+                    sample.data_disk_used_size = Some(492 * 1_073_741_824);
+                    sample.data_disk_free_size = Some(20 * 1_073_741_824);
+                    if mode != 0 {
+                        sample.guest = Some(antinomie_monitor_core::GuestResources {
+                            boot_id: "card-layout".into(),
+                            memory_total_size: Some(2 * 1_073_741_824),
+                            memory_used_size: (mode == 1).then_some(1_073_741_824),
+                            memory_available_size: Some(1_073_741_824),
+                            root_total_size: Some(8 * 1_073_741_824),
+                            root_used_size: Some(3 * 1_073_741_824),
+                            root_available_size: Some(4 * 1_073_741_824),
+                            root_free_size: Some(5 * 1_073_741_824),
+                            ..Default::default()
+                        });
+                    }
+                    history.observe(&snapshot, Some("active"));
+                    let output = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 6000.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::CentralPanel::default()
+                                .show(ctx, |ui| show(ui, &snapshot, Some("active"), 4, &history));
+                        },
+                    );
+                    let mut cards: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| {
+                            if let egui::Shape::Rect(rect) = &shape.shape {
+                                (rect.fill == theme::bg()
+                                    && rect.stroke.color == theme::line()
+                                    && rect.stroke.width == 1.0
+                                    && rect.rect.height() > 20.0)
+                                    .then_some(rect.rect)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    assert_eq!(
+                        cards.len(),
+                        6,
+                        "five resource cards plus capture storage must remain visible"
+                    );
+                    cards.sort_by(|a, b| {
+                        a.top()
+                            .total_cmp(&b.top())
+                            .then_with(|| a.left().total_cmp(&b.left()))
+                    });
+                    for row in cards.chunk_by(|a, b| a.top() < b.bottom() && b.top() < a.bottom()) {
+                        if row.len() > 1 {
+                            paired_rows += 1;
+                        }
+                        for card in row {
+                            assert!(
+                                (card.top() - row[0].top()).abs() < 0.5
+                                    && (card.bottom() - row[0].bottom()).abs() < 0.5,
+                                "uneven row at {width}px / {font}pt, mode {mode}: {row:?}"
+                            );
+                            assert!(card.right() <= width + 1.0);
+                        }
+                    }
+                }
+            }
+            assert!(
+                paired_rows >= 6,
+                "exercise paired/triple layouts, not just stacked cards"
+            );
         }
     }
 
