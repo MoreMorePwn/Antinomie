@@ -1,5 +1,7 @@
 #[path = "core_sink.rs"]
 mod core_sink;
+#[path = "guest_resource_control.rs"]
+mod guest_resource_control;
 #[path = "manual_core.rs"]
 mod manual_core;
 #[path = "process_core.rs"]
@@ -382,6 +384,7 @@ const PUMP_BUDGET: Duration = Duration::from_millis(20);
 const BUSY_PACKETS: usize = 32;
 struct Session {
     resources: crate::resources::ResourceSampler,
+    guest_resources: crate::guest_resources::Collector,
     last_resource_check: Option<Instant>,
     analysis: crate::analysis::jobs::Jobs,
     transport: Transport,
@@ -1588,6 +1591,12 @@ impl Session {
         snapshot: &mut Snapshot,
         sender: &SyncSender<Notification>,
     ) {
+        if self
+            .guest_resources
+            .reply(reply_id, status, payload, &self.boot_id, Instant::now())
+        {
+            return;
+        }
         if self.kernel_probe_reply(reply_id, status, payload, snapshot) {
             return;
         }
@@ -2688,6 +2697,7 @@ impl Worker {
             self.poll_build();
             self.poll_tool();
             self.check_network_capture();
+            self.check_guest_resources();
             self.check_resources();
             self.check_process_cores();
             self.check_manual_cores();
@@ -3463,6 +3473,7 @@ impl Worker {
             capture.manifest(&vm, &bundle, &disk_bundle, "running")?;
             Ok(Session {
                 resources: crate::resources::ResourceSampler::default(),
+                guest_resources: crate::guest_resources::Collector::default(),
                 last_resource_check: None,
                 analysis: crate::analysis::jobs::Jobs::with_tools(
                     crate::analysis_tools::tools_dir(&self.options.data_dir),
@@ -3916,11 +3927,18 @@ impl Worker {
             return;
         }
         session.last_resource_check = Some(Instant::now());
-        self.snapshot.vm_resources = Some(session.resources.sample(
+        let mut sample = session.resources.sample(
             session.process.child.id(),
             &session.vm.id,
             &self.options.data_dir,
+        );
+        sample.guest = Some(session.guest_resources.sample(
+            &session.boot_id,
+            self.reconnect.1.is_some()
+                || self.snapshot.memory_dump.is_some()
+                || self.snapshot.state != VmState::Running,
         ));
+        self.snapshot.vm_resources = Some(sample);
         self.publish();
     }
     fn stop(&mut self) -> Result<(), String> {

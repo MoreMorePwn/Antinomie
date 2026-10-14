@@ -187,3 +187,6 @@ Original Antinomie host and tooling code is [MIT licensed](LICENSE), copyright
 terms. Read the [licensing scope](LICENSING.md) and
 [third-party notices](THIRD-PARTY-NOTICES.md) before redistributing; the kernel
 and guest images as a whole are not MIT licensed.
+
+Building 0.6.1 from source also requires `musl-tools` for the embedded static
+guest resource collector. Prebuilt installations need no guest packages.

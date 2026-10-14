@@ -21,7 +21,7 @@ jobs:
           sudo apt-get update
           printf '%s\n' 'wireshark-common wireshark-common/install-setuid boolean false' | sudo debconf-set-selections
           sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            pkg-config libsqlite3-dev libxkbcommon-dev libwayland-dev \
+            musl-tools pkg-config libsqlite3-dev libxkbcommon-dev libwayland-dev \
             qemu-system-x86 qemu-utils tshark bubblewrap util-linux
       - name: Packet decoder sandbox prerequisites
         run: |

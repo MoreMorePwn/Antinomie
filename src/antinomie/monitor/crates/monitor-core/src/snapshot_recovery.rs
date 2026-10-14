@@ -281,6 +281,7 @@ impl Session {
         }
         Ok(Self {
             resources: crate::resources::ResourceSampler::default(),
+            guest_resources: crate::guest_resources::Collector::default(),
             last_resource_check: None,
             analysis: crate::analysis::jobs::Jobs::with_tools(crate::analysis_tools::tools_dir(
                 &options.data_dir,
@@ -455,6 +456,12 @@ impl Worker {
             self.session.as_mut().ok_or("VM is stopped")?.suspend_run_network(
                 "snapshot boundary: VM-wide network capture paused; a fresh segment resumes afterwards",
             )?;
+        }
+        if running {
+            self.session
+                .as_mut()
+                .ok_or("VM is stopped")?
+                .stop_guest_resources(&mut self.snapshot, &self.sender)?;
         }
         self.snapshot_stage(id, "Preparing checkpoint");
         let consistency = if full {
@@ -779,6 +786,10 @@ impl Worker {
                 return self.reconnect_failed(old, error);
             }
         };
+        // The old helper must not survive into the newly attached timeline.
+        if let Err(error) = old.stop_guest_resources(&mut self.snapshot, &self.sender) {
+            return self.reconnect_failed(old, error);
+        }
         old.forget_unanswered();
         if let Err(error) = old.prepare_manual_reconnect(&mut self.snapshot, &self.sender) {
             return self.reconnect_failed(old, error);

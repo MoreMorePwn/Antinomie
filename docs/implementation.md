@@ -17,7 +17,8 @@ V7-only restriction; older requirements remain recorded for their releases.
 - Host file upload to guest path: overwrite confirmation, separate executable
   option. Never execute automatically after upload.
 - Kernel implements control, upload, execution, tracing, and terminal I/O;
-  no auxiliary guest helper process. Ordinary init, shell and target programs
+  no auxiliary guest control helper, except the explicitly approved temporary
+  resource-only collector in ANT-T0084 below. Ordinary init, shell and target programs
   remain userspace processes.
 - Launch path, argument list, cwd, environment, UID/GID. Default unprivileged.
 - Interactive terminal in host control view, independent of QEMU console.
@@ -61,10 +62,17 @@ validate floating/detached views at normal and large text sizes. Extend the
 existing host resource producer with checked MemAvailable and statvfs used/free
 values. Label their host scope and preserve session/retention identity.
 
-Guest resource sampling through a temporary collector or a kernel/base update
-is a separate pending architecture choice. Existing host observations must never
-be presented as guest utilization; do not install/run a guest helper or change
-the kernel-only producer contract before that choice is accepted.
+The user selected a temporary guest resource collector for 0.6.1, an explicit
+resource-only exception to the kernel-only producer contract. Build/embed a
+static x86-64 musl executable and use existing Upload/Exec/Input/Read/Signal
+controls, without guest packages, shell interpolation or image/kernel changes.
+Read guest MemTotal/MemAvailable and statvfs of `/`; label other mounts outside
+coverage. Poll every two seconds, bound replies and retain one outstanding
+request, validate session/token/sequence and expose unavailable/stale readings.
+Self-unlink at launch and exit after 30 seconds without input. Stop/reap before
+snapshots and reconnect, never replay uncertain side effects or carry readings
+across a timeline. Collector syscalls remain observable in Capture All; this is
+not a stealth guarantee. Kernel-native production is deferred to 0.7.0.
 
 ## Accepted ANT-T0057 manual cores and performance Summary (0.6.0)
 

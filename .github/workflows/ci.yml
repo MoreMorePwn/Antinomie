@@ -30,7 +30,7 @@ jobs:
           printf '%s\n' 'wireshark-common wireshark-common/install-setuid boolean false' | sudo debconf-set-selections
           sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             pkg-config libsqlite3-dev libxkbcommon-dev libwayland-dev \
-            qemu-system-x86 qemu-utils shellcheck file tshark bubblewrap util-linux
+            qemu-system-x86 qemu-utils shellcheck file tshark bubblewrap util-linux musl-tools
       - name: Packet decoder sandbox prerequisites
         run: |
           packet_sandbox() {
@@ -71,6 +71,7 @@ jobs:
         run: cargo test --release --locked --no-fail-fast
       - name: Build-script tests
         run: |
+          python3 tests/monitor/test-guest-resources.py
           python3 tests/monitor/test-build-base.py
           python3 tests/monitor/test-debian-image.py
           python3 tests/monitor/test-native-coverage.py

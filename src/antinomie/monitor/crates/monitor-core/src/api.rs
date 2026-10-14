@@ -1362,7 +1362,28 @@ pub struct Snapshot {
     pub last_error: Option<String>,
 }
 
-/// Configured guest capacities remain in VmConfig; these are host measurements.
+/// Validated guest observations from the temporary collector; octets throughout.
+#[derive(Clone, Debug, Default)]
+pub struct GuestResources {
+    pub boot_id: String,
+    pub sample_sequence: u64,
+    /// Host elapsed time since the last validated reply, milliseconds.
+    pub age_ms: Option<u64>,
+    /// Paused/disconnected, failed producer or older than six seconds.
+    pub stale: bool,
+    pub memory_total_size: Option<u64>,
+    pub memory_available_size: Option<u64>,
+    /// MemTotal - MemAvailable, rather than total minus completely free pages.
+    pub memory_used_size: Option<u64>,
+    /// Root filesystem only; does not aggregate tmpfs or other mounts.
+    pub root_total_size: Option<u64>,
+    pub root_free_size: Option<u64>,
+    pub root_available_size: Option<u64>,
+    pub root_used_size: Option<u64>,
+    pub error: Option<String>,
+}
+
+/// Configured capacities remain in VmConfig; host and guest scopes are explicit.
 #[derive(Clone, Debug, Default)]
 pub struct VmResources {
     pub vm_id: String,
@@ -1387,6 +1408,7 @@ pub struct VmResources {
     /// Allocated host filesystem space: (f_blocks - f_bfree) * f_frsize.
     pub data_disk_used_size: Option<u64>,
     pub sample_error: Option<String>,
+    pub guest: Option<GuestResources>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
