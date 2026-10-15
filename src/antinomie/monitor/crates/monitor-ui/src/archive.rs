@@ -462,6 +462,7 @@ mod tests {
         // Creating a new directory must succeed; never reuse/remove an existing path.
         fs::create_dir(&directory).unwrap();
         let summary = CaptureSummary {
+            started_ms: None,
             id: "observation".into(),
             vm_id: "vm".into(),
             boot_id: "boot".into(),

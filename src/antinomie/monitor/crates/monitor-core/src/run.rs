@@ -30,7 +30,8 @@ pub(crate) struct ProgramRun {
 }
 
 impl ProgramRun {
-    pub fn new(summary: RunSummary, quota: u64) -> Result<Self, String> {
+    pub fn new(mut summary: RunSummary, quota: u64) -> Result<Self, String> {
+        let started_ms = *summary.started_ms.get_or_insert_with(unix_ms);
         let capture = RawCapture::new(summary.directory.clone(), quota)?;
         let assembler =
             Assembler::new(summary.directory.join("objects"), quota).map_err(|e| e.to_string())?;
@@ -59,7 +60,7 @@ impl ProgramRun {
             disk_base_identity: None,
             execution_generation: 0,
             terminal_reads_unanswered: 0,
-            started_ms: unix_ms(),
+            started_ms,
             ended_ms: None,
         };
         run.refresh_analysis_metadata()?;
@@ -73,6 +74,18 @@ impl ProgramRun {
             .saturating_add(self.terminal_len)
             .saturating_add(self.screen_len)
             .saturating_add(self.analysis_metadata_len)
+    }
+    pub(crate) fn observe_clock(&mut self, guest_ns: u64) {
+        self.summary
+            .clock_anchor
+            .get_or_insert_with(|| HostClockAnchor {
+                guest_ns,
+                host_us: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |duration| {
+                        u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
+                    }),
+            });
     }
     /// Count only the new report's contribution to the two existing metadata files.
     pub fn refresh_analysis_metadata(&mut self) -> Result<(), String> {
@@ -254,6 +267,7 @@ impl ProgramRun {
         Ok(())
     }
     pub fn finalize(&mut self, available: u64, state: &str, health: &Health) -> Result<(), String> {
+        self.ended_ms.get_or_insert_with(unix_ms);
         if !matches!(self.summary.state, RunState::Finished | RunState::Stopped) {
             self.summary.state = RunState::Finalized;
         }
@@ -297,6 +311,8 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("ant-analysis-metadata-{}", storage::unique_id()));
         let summary = RunSummary {
+            started_ms: None,
+            clock_anchor: None,
             id: "run".into(),
             vm_id: "vm".into(),
             boot_id: "boot".into(),
@@ -358,6 +374,8 @@ mod tests {
             total_task_count: 2,
         };
         let summary = RunSummary {
+            started_ms: None,
+            clock_anchor: None,
             id: "run".into(),
             vm_id: "vm".into(),
             boot_id: "boot".into(),
@@ -418,6 +436,8 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("ant-terminal-reads-{}", storage::unique_id()));
         let summary = RunSummary {
+            started_ms: None,
+            clock_anchor: None,
             id: "run".into(),
             vm_id: "vm".into(),
             boot_id: "boot".into(),
@@ -454,6 +474,8 @@ mod tests {
     fn headless_terminal_reopens_journal_screen_and_quota_failure_preserves_prefix() {
         let directory = std::env::temp_dir().join(format!("ant-terminal-{}", storage::unique_id()));
         let summary = RunSummary {
+            started_ms: None,
+            clock_anchor: None,
             id: "run".into(),
             vm_id: "vm".into(),
             boot_id: "boot".into(),

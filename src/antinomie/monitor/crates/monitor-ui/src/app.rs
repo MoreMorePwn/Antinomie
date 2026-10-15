@@ -1,3 +1,5 @@
+#[path = "app_triage.rs"]
+mod triage_ui;
 use crate::{
     archive::{Answer, ArchiveWorker, Request},
     build_wizard,
@@ -225,6 +227,7 @@ pub struct MonitorApp {
     /// Trace table order: the clicked column and whether it is descending.
     trace_sort: Option<(TraceColumn, bool)>,
     selected_event: Option<InvocationKey>,
+    trace_evidence: Option<InvocationKey>,
     selected_run: Option<String>,
     selected_capture: Option<String>,
     /// Guest process (thread group ID) the selected capture's trace shows.
@@ -371,6 +374,7 @@ impl MonitorApp {
             applied_filter: String::new(),
             trace_sort: None,
             selected_event: None,
+            trace_evidence: None,
             selected_run: None,
             selected_capture: None,
             selected_process: None,
@@ -1263,6 +1267,7 @@ impl MonitorApp {
             cancel.store(true, Ordering::Relaxed);
         }
         self.selected_event = None;
+        self.trace_evidence = None;
         self.inspector.clear();
         if matches!(
             self.pending_archive,
@@ -1292,8 +1297,11 @@ impl MonitorApp {
         }
         let cancel = Arc::new(AtomicBool::new(false));
         self.archive_read_cancel = Some(Arc::clone(&cancel));
-        self.archive_hidden_categories
-            .clone_from(&self.settings.hidden_trace_categories);
+        self.archive_hidden_categories = if self.trace_evidence.is_some() {
+            Vec::new()
+        } else {
+            self.settings.hidden_trace_categories.clone()
+        };
         self.archive_pending = false;
         self.archive_error = None;
         let request = Request::Invocations {
@@ -1436,6 +1444,11 @@ impl MonitorApp {
             RunFilter::Live => self.live_history_run(run),
             RunFilter::Past => !self.live_history_run(run),
         });
+        runs.sort_by(|a, b| {
+            b.started_ms
+                .cmp(&a.started_ms)
+                .then_with(|| b.id.cmp(&a.id))
+        });
         let unfiltered_count = runs.len();
         let draft = crate::query::compile_table(&self.run_query, &fields);
         if let Some(error) = draft.error.as_ref() {
@@ -1504,6 +1517,7 @@ impl MonitorApp {
             |ui| {
                 let mut table = TableBuilder::new(ui)
                     .id_salt("run_history")
+                    .column(Column::initial(225.0).at_least(150.0))
                     .sense(egui::Sense::click())
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                     .column(Column::remainder().at_least(120.0))
@@ -1517,7 +1531,7 @@ impl MonitorApp {
                     .min_scrolled_height(0.0);
                 if let Some(index) = navigation { table = table.scroll_to_row(index, Some(egui::Align::Center)); }
                 table.header(28.0, |mut header| {
-                        for name in ["Executable", "Arguments", "Tree status", "Root exit", ""] {
+                        for name in ["Start time", "Executable", "Arguments", "Tree status", "Root exit", ""] {
                             header.col(|ui| {
                                 ui.strong(name);
                             });
@@ -1527,6 +1541,7 @@ impl MonitorApp {
                         body.rows(self.settings.font_size + 16.0, runs.len(), |mut row| {
                             let run = &runs[row.index()];
                             row.set_selected(self.selected_run.as_ref() == Some(&run.id));
+                            row.col(|ui| { ui.add(egui::Label::new(crate::time_format::unix_ms(run.started_ms)).truncate().selectable(false).sense(egui::Sense::hover())); });
                             row.col(|ui| {
                                 ui.add(
                                     egui::Label::new(format!("{}{}", crate::evidence::title(ui, &run.directory, &run.request.path), if run.analysis.is_some() { "  [static analysis]" } else { "" }))
@@ -1616,11 +1631,9 @@ impl MonitorApp {
             },
         );
         if let Some((id, open)) = inspect {
-            if open {
-                self.select_archive_run(id);
-            } else {
-                self.select_run(Some(id));
-            }
+            let _ = open;
+            self.select_run(Some(id));
+            self.focus_panel = Some(Panel::Triage);
         }
         if runs.is_empty() {
             ui.colored_label(theme::muted(), "No retained runs for this VM");
@@ -3676,6 +3689,9 @@ impl MonitorApp {
         if draft.error.is_none() {
             let changed = self.applied_filter != self.filter;
             self.applied_filter.clone_from(&self.filter);
+            if changed {
+                self.trace_evidence = None;
+            }
             if changed && self.trace_archive_directory().is_some() {
                 self.refresh_archive_matches(&draft);
             }
@@ -3810,7 +3826,10 @@ impl MonitorApp {
         let all = self.invocations();
         self.trace_categories(ui, &all);
         let archived = self.trace_archive_directory().is_some();
-        if archived && self.archive_hidden_categories != self.settings.hidden_trace_categories {
+        if archived
+            && self.trace_evidence.is_none()
+            && self.archive_hidden_categories != self.settings.hidden_trace_categories
+        {
             self.refresh_archive_matches(&filter);
         }
         let total = all.len();
@@ -4079,6 +4098,7 @@ impl MonitorApp {
                 *counts.entry(group).or_default() += 1;
             }
         }
+        let previous_hidden = self.settings.hidden_trace_categories.clone();
         let hidden = &mut self.settings.hidden_trace_categories;
         // Chips wrap onto a second line instead of overflowing a narrow
         // panel; past two lines (large text) they scroll within those two.
@@ -4170,6 +4190,9 @@ impl MonitorApp {
                 theme::muted(),
                 "All categories are hidden; click All to show them.",
             );
+        }
+        if self.settings.hidden_trace_categories != previous_hidden {
+            self.trace_evidence = None;
         }
     }
 
@@ -5955,6 +5978,7 @@ impl MonitorApp {
     /// and the slice is empty. An archived trace, or a selected run that is
     /// not the live running run, also has no proven pcap join. Anything else
     /// is the live VM and keeps the packets currently loaded.
+    #[cfg(test)]
     fn triage_hides_packets(&self) -> bool {
         if self.selected_capture.is_some() {
             return !self.selected_capture_owns_loaded_pcap();
@@ -5978,6 +6002,7 @@ impl MonitorApp {
     /// The loaded pcap is one this run recorded: the live boot capture, or a
     /// path listed in that run's artifacts. A path that is merely open is not
     /// treated as this run's capture.
+    #[cfg(test)]
     fn loaded_pcap_belongs_to_run(&self, run: &RunSummary) -> bool {
         let Some(loaded) = self.network_view.loaded_path() else {
             return false;
@@ -6019,7 +6044,10 @@ impl MonitorApp {
         let artifacts = antinomie_monitor_core::RunArtifacts::load(&run.directory)
             .ok()
             .flatten()?;
-        if artifacts.run_id != run.id {
+        if artifacts.run_id != run.id
+            || artifacts.vm_id != run.vm_id
+            || artifacts.boot_id != run.boot_id
+        {
             return None;
         }
         artifacts
@@ -6029,6 +6057,7 @@ impl MonitorApp {
             .map(|file| (file, false))
     }
 
+    #[cfg(test)]
     fn selected_capture_owns_loaded_pcap(&self) -> bool {
         let Some(loaded) = self
             .network_view
@@ -6225,91 +6254,7 @@ impl MonitorApp {
                 );
                 self.analysis_action(&key, action);
             }
-            Panel::Triage => {
-                let invocations = self.invocations();
-                if self.trace_archive_directory().is_some() {
-                    let archive_offset = self.archive_offset;
-                    let archive_page_len = self.archive_page.len();
-                    let archive_total = self
-                        .archive_total
-                        .map(|total| total.to_string())
-                        .unwrap_or_else(|| "—".to_string());
-                    ui.colored_label(
-                        theme::muted(),
-                        format!(
-                            "Triage is archive page offset {archive_offset}, {archive_page_len} calls of {archive_total} saved."
-                        ),
-                    );
-                    if self.archive_next.is_some()
-                        && !self.archive_pending
-                        && ui.button("Next archive page").clicked()
-                    {
-                        self.next_archive_page();
-                    }
-                }
-                let hide_packets = self.triage_hides_packets();
-                if hide_packets {
-                    ui.colored_label(
-                        theme::muted(),
-                        "Packet rows are hidden because the open capture is not this run.",
-                    );
-                }
-                let (frame_owned, frame_note) = if hide_packets {
-                    (None, None)
-                } else {
-                    self.network_view.captured_payloads()
-                };
-                let packets = if hide_packets {
-                    &[]
-                } else {
-                    self.network_view.loaded_packets()
-                };
-                if let Some(note) = &frame_note {
-                    ui.colored_label(theme::muted(), note);
-                }
-                let frames = frame_owned.as_deref();
-                let vm_id = self.selected.clone();
-                let run_id = self.selected_run.clone();
-                let boot_id = run_id
-                    .as_ref()
-                    .and_then(|id| self.run(id))
-                    .map(|run| run.boot_id.clone());
-                let archive_dir = self.trace_archive_directory();
-                let owned_pcap = archive_dir.as_ref().and_then(|_| self.owned_triage_pcap());
-                let coverage = if archive_dir.is_some() {
-                    "visible archive page until the saved-recording index reports its own coverage"
-                } else {
-                    "syscalls loaded in this session; not a finished whole-run index"
-                };
-                if let Some(call_id) = self.triage.show(
-                    ui,
-                    crate::triage::TriageInput {
-                        invocations: &invocations,
-                        packets,
-                        frames,
-                        vm_id: vm_id.as_deref(),
-                        boot_id: boot_id.as_deref(),
-                        run_id: run_id.as_deref(),
-                        coverage,
-                        archive: archive_dir.as_deref(),
-                        pcap: owned_pcap.as_ref().map(|owned| owned.0.as_path()),
-                        pcap_open: owned_pcap.as_ref().is_some_and(|owned| owned.1),
-                    },
-                ) {
-                    self.filter = format!("call.id == {call_id}");
-                    self.applied_filter = format!("call.id == {call_id}");
-                    self.focus_trace();
-                }
-                if let Some(frame_number) = self.triage.take_packet_jump() {
-                    match self.network_view.jump_to_frame(frame_number) {
-                        Ok(()) => self.focus_panel = Some(Panel::Network),
-                        Err(error) => {
-                            self.status = error.clone();
-                            self.log("ERROR", error);
-                        }
-                    }
-                }
-            }
+            Panel::Triage => self.show_triage(ui),
             Panel::StaticAnalysis => {
                 let mut reports = BTreeMap::new();
                 for run in self.snapshot.runs.iter().chain(&self.history) {
@@ -6509,31 +6454,39 @@ impl eframe::App for MonitorApp {
         self.flush_archive();
         self.drain_archive();
         self.resync_terminals();
-        // Index retained run data independently of whether Triage is visible.
-        let triage_archive = self.trace_archive_directory();
-        let triage_pcap = triage_archive
-            .as_ref()
-            .and_then(|_| self.owned_triage_pcap());
-        let triage_run = self.selected_run.clone();
-        let triage_boot = triage_run
-            .as_ref()
+        // Triage belongs to one explicit program run, including its saved prefix.
+        let triage_run = self
+            .selected_run
+            .as_deref()
             .and_then(|id| self.run(id))
-            .map(|run| run.boot_id.clone());
-        self.triage.tick(
-            ctx,
-            crate::triage::TriageInput {
+            .cloned()
+            .filter(|run| {
+                self.selected.as_ref() == Some(&run.vm_id)
+                    && run.root_task_cookie != 0
+                    && self.selected_capture.is_none()
+            });
+        let triage_pcap = triage_run.as_ref().and_then(|_| self.owned_triage_pcap());
+        let input = triage_run
+            .as_ref()
+            .map(|run| crate::triage::TriageInput {
                 invocations: &[],
-                packets: &[],
-                frames: None,
-                vm_id: self.selected.as_deref(),
-                boot_id: triage_boot.as_deref(),
-                run_id: triage_run.as_deref(),
-                coverage: "retained recording index",
-                archive: triage_archive.as_deref(),
+                vm_id: Some(&run.vm_id),
+                boot_id: Some(&run.boot_id),
+                run_id: Some(&run.id),
+                archive: Some(&run.directory),
                 pcap: triage_pcap.as_ref().map(|owned| owned.0.as_path()),
                 pcap_open: triage_pcap.as_ref().is_some_and(|owned| owned.1),
-            },
-        );
+                clock_anchor: run.clock_anchor,
+                started_ms: run.started_ms,
+                root_cookie: run.root_task_cookie,
+                run_finished: !self.live_history_run(run),
+                #[cfg(test)]
+                packets: &[],
+                #[cfg(test)]
+                frames: None,
+            })
+            .unwrap_or_else(crate::triage::TriageInput::empty);
+        self.triage.tick(ctx, input);
         let close = ctx.input(|input| input.viewport().close_requested())
             || self
                 .smoke
@@ -7991,6 +7944,7 @@ pub(crate) mod tests {
             applied_filter: String::new(),
             trace_sort: None,
             selected_event: None,
+            trace_evidence: None,
             selected_run: None,
             selected_capture: None,
             selected_process: None,
@@ -8802,6 +8756,8 @@ pub(crate) mod tests {
 
     fn run(id: &str) -> RunSummary {
         RunSummary {
+            started_ms: None,
+            clock_anchor: None,
             id: id.into(),
             vm_id: "vm".into(),
             boot_id: "boot".into(),
@@ -8857,6 +8813,99 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn triage_selector_has_only_selected_vm_runs_in_newest_first_order() {
+        let mut app = app();
+        observer_fixture(&mut app);
+        let mut first = run("first");
+        first.started_ms = Some(10);
+        let mut latest = run("latest");
+        latest.started_ms = Some(20);
+        let mut wrong_vm = run("other");
+        wrong_vm.vm_id = "different".into();
+        let mut legacy = run("legacy");
+        legacy.root_task_cookie = 0;
+        app.history = vec![first.clone(), latest.clone(), wrong_vm, legacy];
+        app.snapshot.runs = vec![latest];
+        let shown = app.triage_runs();
+        assert_eq!(
+            shown.iter().map(|run| run.id.as_str()).collect::<Vec<_>>(),
+            ["latest", "first"]
+        );
+    }
+
+    #[test]
+    fn triage_jump_reloads_exact_archive_evidence_without_changing_category_preferences() {
+        let mut app = app();
+        observer_fixture(&mut app);
+        app.snapshot.runs.push(run("one"));
+        app.select_run(Some("one".into()));
+        app.settings.hidden_trace_categories = vec![SyscallGroup::File];
+        app.jump_triage_call((1, 7, 12));
+        assert_eq!(app.settings.hidden_trace_categories, [SyscallGroup::File]);
+        assert_eq!(app.selected_event, Some((1, 7, 12)));
+        assert_eq!(app.trace_evidence, Some((1, 7, 12)));
+        assert_eq!(app.focus_panel, Some(Panel::Trace));
+        match app.pending_archive.as_ref().unwrap() {
+            Request::Invocations {
+                query,
+                hidden_categories,
+                offset,
+                ..
+            } => {
+                assert_eq!(
+                    query,
+                    "stream.id == 1 && process.cookie == 7 && call.id == 12"
+                );
+                assert!(hidden_categories.is_empty());
+                assert_eq!(*offset, 0);
+            }
+            _ => panic!("exact retained invocation request expected"),
+        }
+        app.filter.clear();
+        app.commit_trace_filter();
+        assert!(app.trace_evidence.is_none());
+    }
+
+    #[test]
+    fn packet_evidence_opens_the_selected_run_capture_instead_of_the_previous_capture() {
+        let mut app = app();
+        observer_fixture(&mut app);
+        let directory = std::env::temp_dir().join(format!(
+            "ant-run-packet-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let pcap = directory.join("run.pcap");
+        std::fs::write(&pcap, [0xd4, 0xc3, 0xb2, 0xa1]).unwrap();
+        let mut selected = run("one");
+        selected.directory = directory.clone();
+        std::fs::write(
+            directory.join("artifacts.json"),
+            serde_json::to_vec(&antinomie_monitor_core::RunArtifacts {
+                run_id: selected.id.clone(),
+                vm_id: selected.vm_id.clone(),
+                boot_id: selected.boot_id.clone(),
+                network_captures: vec![pcap.clone()],
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        app.snapshot.runs.push(selected);
+        app.select_run(Some("one".into()));
+        app.network_view.open(Some(directory.join("other.pcap")));
+        app.jump_triage_packet(520).unwrap();
+        assert_eq!(app.network_view.loaded_path(), Some(pcap.as_path()));
+        assert_eq!(app.focus_panel, Some(Panel::Network));
+        app.selected_capture = Some("all".into());
+        assert!(app.jump_triage_packet(1).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn run_descendant_filter_applies_to_live_and_saved_trace_requests() {
         let mut app = app();
         observer_fixture(&mut app);
@@ -8880,6 +8929,7 @@ pub(crate) mod tests {
 
     fn observer(id: &str, state: CaptureState) -> CaptureSummary {
         CaptureSummary {
+            started_ms: None,
             id: id.into(),
             vm_id: "vm".into(),
             boot_id: "boot".into(),
@@ -12451,7 +12501,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn double_click_history_text_opens_archive_and_metadata_stays_in_panel() {
+    fn double_click_history_text_opens_triage_and_metadata_stays_in_panel() {
         let ctx = egui::Context::default();
         theme::install(&ctx);
         let mut app = app();
@@ -12506,7 +12556,8 @@ pub(crate) mod tests {
             );
             time += 0.05;
         }
-        assert!(app.archive_selected && app.selected_run.as_deref() == Some("saved"));
+        assert_eq!(app.selected_run.as_deref(), Some("saved"));
+        assert_eq!(app.focus_panel, Some(Panel::Triage));
         assert!(matches!(
             app.pending_archive,
             Some(Request::Invocations { .. })

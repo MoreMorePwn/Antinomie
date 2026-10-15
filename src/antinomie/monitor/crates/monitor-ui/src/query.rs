@@ -34,6 +34,7 @@ const KEYWORDS: &[(&str, &str, &str)] = &[
     ("syscall.success", "boolean", "Observed syscall result is not a Linux errno"),
     ("syscall.duration_ns", "integer", "Exit minus entry guest timestamp in ns"),
     ("process.cookie", "integer", "Recorded task cookie"),
+    ("stream.id", "integer", "Recorded telemetry stream identity"),
     ("process.pid", "integer", "Recorded process ID"),
     ("process.tgid", "integer", "Recorded process thread-group ID"),
     ("process.tid", "integer", "Recorded thread ID"),
@@ -929,6 +930,7 @@ fn known_field(name: &str) -> bool {
             | "call_id"
             | "event.id"
             | "event.sequence"
+            | "stream.id"
             | "event.time_ns"
             | "event.complete"
             | "event.gap"
@@ -1810,6 +1812,7 @@ fn field(invocation: &InvocationSummary, name: &str) -> Result<Resolved, String>
         return Ok(Resolved::Missing);
     };
     let number = match key.as_str() {
+        "stream.id" => Some(i128::from(invocation.stream_id)),
         "syscall.num" | "syscall.number" => Some(i128::from(event.syscall_nr)),
         "tid" | "process.tid" => Some(i128::from(event.tid)),
         "pid" | "process.pid" | "process.tgid" if event.pid != 0 => Some(i128::from(event.pid)),

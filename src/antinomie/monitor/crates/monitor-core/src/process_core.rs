@@ -781,6 +781,8 @@ mod tests {
     }
     fn run(directory: PathBuf) -> RunSummary {
         RunSummary {
+            started_ms: None,
+            clock_anchor: None,
             id: "run-one".into(),
             vm_id: "vm-one".into(),
             boot_id: "boot-one".into(),

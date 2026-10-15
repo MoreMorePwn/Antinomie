@@ -606,6 +606,12 @@ impl RunIn {
 /// Identity is persistent and boot-scoped; PID is descriptive, never an owner key.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RunSummary {
+    /// Host Unix milliseconds; absent in older run summaries.
+    #[serde(default)]
+    pub started_ms: Option<u64>,
+    /// First host receipt of a guest timestamp; includes transport latency.
+    #[serde(default)]
+    pub clock_anchor: Option<HostClockAnchor>,
     pub id: String,
     pub vm_id: String,
     pub boot_id: String,
@@ -621,6 +627,21 @@ pub struct RunSummary {
     pub execution: Option<RunExecution>,
     #[serde(default)]
     pub analysis: Option<crate::analysis::AnalysisReport>,
+}
+
+/// Maps one guest monotonic timeline to host wall time without changing the wire.
+/// Receipt time includes queue latency and is an estimate, not clock synchronization.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostClockAnchor {
+    pub guest_ns: u64,
+    pub host_us: u64,
+}
+
+impl HostClockAnchor {
+    pub fn host_us(self, guest_ns: u64) -> Option<u64> {
+        let delta = (i128::from(guest_ns) - i128::from(self.guest_ns)) / 1000;
+        u64::try_from(i128::from(self.host_us) + delta).ok()
+    }
 }
 
 /// Authoritative boot-scoped guest status, independent of archive/terminal state.

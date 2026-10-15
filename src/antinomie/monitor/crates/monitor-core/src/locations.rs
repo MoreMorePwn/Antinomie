@@ -409,6 +409,8 @@ mod tests {
             let directory = directory.join("runs").join(id);
             storage::private_dir(&directory).unwrap();
             let run = RunSummary {
+                started_ms: None,
+                clock_anchor: None,
                 id: id.into(),
                 vm_id: vm.id.clone(),
                 boot_id: boot.into(),
