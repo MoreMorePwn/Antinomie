@@ -145,7 +145,7 @@ pub(crate) struct ArchiveWorker {
 }
 
 impl ArchiveWorker {
-    pub(crate) fn new() -> Result<Self, String> {
+    pub(crate) fn new(wake: Option<eframe::egui::Context>) -> Result<Self, String> {
         let (sender, requests) = mpsc::sync_channel(1);
         let (answers, receiver) = mpsc::sync_channel(1);
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -369,6 +369,9 @@ impl ArchiveWorker {
                     if worker_cancelled.load(Ordering::Relaxed) || answers.send(answer).is_err() {
                         break;
                     }
+                    if let Some(ctx) = &wake {
+                        ctx.request_repaint_of(eframe::egui::ViewportId::ROOT);
+                    }
                 }
             })
             .map_err(|e| e.to_string())?;
@@ -541,7 +544,7 @@ mod tests {
     #[test]
     fn worker_searches_late_saved_calls_with_typed_query_process_and_category() {
         let fixture = fixture(350);
-        let worker = ArchiveWorker::new().unwrap();
+        let worker = ArchiveWorker::new(None).unwrap();
         let query = "call.id >= 150 && syscall.num == 9";
         worker
             .request(request(
@@ -617,7 +620,7 @@ mod tests {
     #[test]
     fn worker_rejects_invalid_query_and_precancelled_request() {
         let fixture = fixture(350);
-        let worker = ArchiveWorker::new().unwrap();
+        let worker = ArchiveWorker::new(None).unwrap();
         for (query, cancel) in [("syscall.num ==", false), ("", true)] {
             worker
                 .request(request(
@@ -644,7 +647,7 @@ mod tests {
     #[test]
     fn dropping_worker_cancels_an_active_archive_scan() {
         let fixture = fixture(15_000);
-        let worker = ArchiveWorker::new().unwrap();
+        let worker = ArchiveWorker::new(None).unwrap();
         let cancel = Arc::new(AtomicBool::new(false));
         worker
             .request(request(

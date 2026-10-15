@@ -18,6 +18,7 @@ pub(crate) const WINDOW_ID: &str = "app_dependencies";
 
 #[derive(Default)]
 pub(crate) struct DependenciesWindow {
+    wake: Option<egui::Context>,
     pub open: bool,
     report: Option<Report>,
     worker: Option<Worker>,
@@ -25,8 +26,14 @@ pub(crate) struct DependenciesWindow {
 }
 
 impl DependenciesWindow {
-    pub fn start(options: &BackendOptions) -> Self {
-        let mut window = Self::default();
+    pub fn start(options: &BackendOptions, ctx: &egui::Context) -> Self {
+        let mut window = Self {
+            wake: Some(ctx.clone()),
+            open: false,
+            report: None,
+            worker: None,
+            error: None,
+        };
         window.recheck(options);
         window
     }
@@ -38,12 +45,16 @@ impl DependenciesWindow {
         self.report = None;
         self.error = None;
         let options = options.clone();
+        let wake = self.wake.clone();
         let (sender, receiver) = mpsc::sync_channel(1);
         match thread::Builder::new()
             .name("antinomie-dependencies".into())
             .spawn(move || {
                 // The receiver can close normally when the app exits.
                 let _ = sender.send(dependencies::check(&options));
+                if let Some(ctx) = wake {
+                    ctx.request_repaint_of(eframe::egui::ViewportId::ROOT);
+                }
             }) {
             Ok(thread) => self.worker = Some((receiver, thread)),
             Err(error) => {
@@ -98,9 +109,9 @@ impl DependenciesWindow {
             .require(required)
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, options: &BackendOptions) {
+    pub fn show(&mut self, ctx: &egui::Context, options: &BackendOptions) -> bool {
         if !self.open {
-            return;
+            return false;
         }
         let mut recheck = false;
         egui::Window::new("App dependencies")
@@ -150,6 +161,7 @@ impl DependenciesWindow {
         if recheck {
             self.recheck(options);
         }
+        recheck
     }
 }
 
@@ -227,6 +239,7 @@ impl DependenciesWindow {
             open: false,
             worker: None,
             error: None,
+            wake: None,
         }
     }
 }
@@ -329,6 +342,7 @@ mod tests {
                 .unwrap();
         });
         let mut window = DependenciesWindow {
+            wake: None,
             worker: Some((receiver, worker)),
             open: false,
             report: None,

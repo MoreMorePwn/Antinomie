@@ -6,6 +6,15 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **UI performance.** File-chooser availability is checked asynchronously and
+  cached instead of scanning PATH during drawing. Explorer caches its expanded
+  tree and renders only visible rows. Quiet windows redraw less often; backend,
+  archive and chooser results wake the frontend, while active VM updates retain
+  their existing polling bound. App dependencies > Check again refreshes the
+  chooser cache. Tools > UI performance shows the actual renderer and bounded
+  UI CPU timings; `--graphics-driver d3d12` explicitly selects Mesa D3D12 for one
+  compatible WSLg launch. Default graphics selection is unchanged.
+
 - **Shared Details.** Selecting any triage row shows its information in the
   docked Details panel, including suspicious activity, process/file/network
   entries, changed-file diffs and BPF decoding/exports. Row information no longer

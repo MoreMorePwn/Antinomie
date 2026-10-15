@@ -52,7 +52,28 @@ pub struct Backend {
     latest_snapshot: Arc<Mutex<Option<Snapshot>>>,
 }
 impl Backend {
-    pub fn new(mut options: BackendOptions) -> Result<Self, String> {
+    pub fn new(options: BackendOptions) -> Result<Self, String> {
+        Self::start(options, None)
+    }
+
+    /// Create an owner that wakes its frontend after publishing results.
+    ///
+    /// | Argument | Meaning |
+    /// |---|---|
+    /// | `options` | Owned application/session configuration. |
+    /// | `wake` | Nonblocking notification callback; called without snapshot locks. |
+    /// | Return | Owner handle, or initialization error; no guest is started. |
+    pub fn new_with_wake(
+        options: BackendOptions,
+        wake: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<Self, String> {
+        Self::start(options, Some(wake))
+    }
+
+    fn start(
+        mut options: BackendOptions,
+        wake: Option<Arc<dyn Fn() + Send + Sync>>,
+    ) -> Result<Self, String> {
         storage::migrate_default_data(&options)?;
         storage::private_dir(&options.data_dir).map_err(|e| e.to_string())?;
         options.data_dir = fs::canonicalize(&options.data_dir).map_err(|e| e.to_string())?;
@@ -110,6 +131,7 @@ impl Backend {
                     latest_snapshot: worker_snapshot,
                     guest_epoch: worker_epoch,
                     reconnect: (0, None),
+                    wake,
                 }
                 .run();
             })
@@ -2068,6 +2090,7 @@ impl RequestError {
 }
 
 struct Worker {
+    wake: Option<Arc<dyn Fn() + Send + Sync>>,
     options: BackendOptions,
     snapshot: Snapshot,
     receiver: Receiver<(u64, u64, Command)>,
@@ -2300,6 +2323,9 @@ impl Worker {
         if self.sender.try_send(notification).is_err() {
             self.snapshot.health.ui_dropped += 1;
         }
+        if let Some(wake) = &self.wake {
+            wake();
+        }
     }
     fn publish(&mut self) {
         if let Some(session) = &self.session {
@@ -2321,6 +2347,9 @@ impl Worker {
             *latest = Some(self.snapshot.clone());
         }
         self.last_publish = Instant::now();
+        if let Some(wake) = &self.wake {
+            wake();
+        }
     }
     fn poll_tool(&mut self) {
         let Some(job) = self.tool.as_ref() else {
@@ -2371,6 +2400,7 @@ impl Worker {
                     self.refresh = None;
                     self.snapshot.remote_refreshing = false;
                     self.snapshot.remote_error = Some("catalog worker disconnected".into());
+                    self.publish();
                 }
             }
         }
@@ -2733,7 +2763,13 @@ impl Worker {
             self.check_manual_cores();
             self.check_memory_dump();
             self.check_run_artifacts();
-            if self.last_publish.elapsed() >= Duration::from_millis(250) {
+            if self.last_publish.elapsed() >= Duration::from_millis(250)
+                && (self.session.is_some()
+                    || self.refresh.is_some()
+                    || self.download.is_some()
+                    || self.build.is_some()
+                    || self.tool.is_some())
+            {
                 self.publish();
             }
         }
@@ -5445,7 +5481,30 @@ mod tests {
             latest_snapshot: Arc::new(Mutex::new(None)),
             guest_epoch: Arc::new(AtomicU64::new(0)),
             reconnect: (0, None),
+            wake: None,
         }
+    }
+
+    #[test]
+    fn frontend_is_woken_for_results_without_holding_the_snapshot_lock() {
+        let mut worker = download_worker(std::env::temp_dir());
+        let snapshot = Arc::clone(&worker.latest_snapshot);
+        let wakes = Arc::new(AtomicU64::new(0));
+        let observed = Arc::clone(&wakes);
+        worker.wake = Some(Arc::new(move || {
+            assert!(
+                snapshot.try_lock().is_ok(),
+                "callback must not run under the snapshot lock"
+            );
+            observed.fetch_add(1, Ordering::Relaxed);
+        }));
+        worker.publish();
+        worker.emit(Notification::CommandResult {
+            id: 1,
+            success: true,
+            message: "ready".into(),
+        });
+        assert_eq!(wakes.load(Ordering::Relaxed), 2);
     }
 
     fn attach_waiting_download(worker: &mut Worker) -> Arc<AtomicBool> {
@@ -5724,6 +5783,7 @@ mod tests {
             latest_snapshot: Arc::new(Mutex::new(None)),
             guest_epoch: Arc::new(AtomicU64::new(0)),
             reconnect: (0, None),
+            wake: None,
         };
         for command in [
             Command::Create(VmConfig {
@@ -5807,6 +5867,7 @@ mod tests {
             latest_snapshot: Arc::new(Mutex::new(None)),
             guest_epoch: Arc::new(AtomicU64::new(0)),
             reconnect: (0, None),
+            wake: None,
         };
         worker
             .command(Command::Create(VmConfig {
@@ -5901,6 +5962,7 @@ mod tests {
             latest_snapshot: Arc::new(Mutex::new(None)),
             guest_epoch: Arc::new(AtomicU64::new(0)),
             reconnect: (0, None),
+            wake: None,
         };
         for guest in [false, true] {
             let source = root.join(if guest { "debian" } else { "busybox" });
@@ -6045,6 +6107,7 @@ mod tests {
             latest_snapshot: Arc::new(Mutex::new(None)),
             guest_epoch: Arc::new(AtomicU64::new(0)),
             reconnect: (0, None),
+            wake: None,
         };
         assert!(
             worker

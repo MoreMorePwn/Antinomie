@@ -23,6 +23,7 @@ mod time_format;
 mod tools_window;
 mod trace;
 mod triage;
+mod ui_performance;
 mod values;
 mod workspace;
 
@@ -37,6 +38,9 @@ use std::{path::PathBuf, time::Duration};
     about = "Native Antinomie VM and syscall monitor"
 )]
 struct Arguments {
+    /// Explicit per-launch Mesa driver selection (D3D12 is intended for WSLg).
+    #[arg(long, value_enum, default_value = "system")]
+    graphics_driver: GraphicsDriver,
     #[arg(long)]
     bundle: Option<PathBuf>,
     #[arg(long)]
@@ -55,6 +59,33 @@ struct Arguments {
     install_base: Option<PathBuf>,
 }
 
+#[derive(Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
+enum GraphicsDriver {
+    System,
+    D3d12,
+}
+
+#[cfg(test)]
+mod graphics_option_tests {
+    use super::*;
+    #[test]
+    fn driver_selection_is_explicit_and_unknown_drivers_are_rejected() {
+        assert!(
+            Arguments::try_parse_from(["antinomie"])
+                .unwrap()
+                .graphics_driver
+                == GraphicsDriver::System
+        );
+        assert!(
+            Arguments::try_parse_from(["antinomie", "--graphics-driver", "d3d12"])
+                .unwrap()
+                .graphics_driver
+                == GraphicsDriver::D3d12
+        );
+        assert!(Arguments::try_parse_from(["antinomie", "--graphics-driver", "unknown"]).is_err());
+    }
+}
+
 fn hexadecimal(value: &str) -> Result<u64, String> {
     u64::from_str_radix(value.trim_start_matches("0x"), 16).map_err(|error| error.to_string())
 }
@@ -64,6 +95,10 @@ fn main() -> eframe::Result<()> {
         std::process::exit(code);
     }
     let args = Arguments::parse();
+    // Before eframe or background workers start; changes only this process.
+    if args.graphics_driver == GraphicsDriver::D3d12 {
+        std::env::set_var("GALLIUM_DRIVER", "d3d12");
+    }
     let restore_bundle = args.bundle.is_none();
     let mut options = BackendOptions::default();
     if let Some(bundle) = args.bundle {

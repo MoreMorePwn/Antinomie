@@ -3,6 +3,8 @@ use std::{
     io::Read,
     path::PathBuf,
     process::{Child, Command, Stdio},
+    sync::mpsc::{self, Receiver},
+    thread::{self, JoinHandle},
 };
 
 #[derive(Clone, Copy)]
@@ -23,6 +25,8 @@ pub(crate) struct Target {
 pub(crate) struct FolderPicker {
     child: Option<Child>,
     target: Option<Target>,
+    program: Option<PathBuf>,
+    probe: Option<(Receiver<Option<PathBuf>>, JoinHandle<()>)>,
 }
 
 impl FolderPicker {
@@ -30,17 +34,57 @@ impl FolderPicker {
         Self {
             child: None,
             target: None,
+            program: None,
+            probe: None,
         }
     }
 
     pub(crate) fn available(&self) -> bool {
-        self.child.is_none() && Self::installed()
+        self.child.is_none() && self.installed()
     }
 
-    pub(crate) fn installed() -> bool {
-        std::env::var_os("PATH").is_some_and(|paths| {
-            std::env::split_paths(&paths).any(|directory| directory.join("zenity").is_file())
-        })
+    pub(crate) fn installed(&self) -> bool {
+        self.program.is_some()
+    }
+
+    pub(crate) fn checking(&self) -> bool {
+        self.probe.is_some()
+    }
+
+    pub(crate) fn pending(&self) -> bool {
+        self.child.is_some() || self.checking()
+    }
+
+    /// Recheck explicitly; rendering only reads the cached result.
+    pub(crate) fn refresh(&mut self, ctx: &eframe::egui::Context) {
+        let paths = std::env::var_os("PATH");
+        self.start_probe(ctx.clone(), move || {
+            paths.and_then(|paths| {
+                std::env::split_paths(&paths)
+                    .map(|directory| directory.join("zenity"))
+                    .find(|path| path.is_file())
+            })
+        });
+    }
+
+    fn start_probe(
+        &mut self,
+        ctx: eframe::egui::Context,
+        find: impl FnOnce() -> Option<PathBuf> + Send + 'static,
+    ) {
+        if self.probe.is_some() {
+            return;
+        }
+        let (sender, receiver) = mpsc::sync_channel(1);
+        match thread::Builder::new()
+            .name("file-chooser-check".into())
+            .spawn(move || {
+                let _ = sender.send(find());
+                ctx.request_repaint_of(eframe::egui::ViewportId::ROOT);
+            }) {
+            Ok(thread) => self.probe = Some((receiver, thread)),
+            Err(error) => eprintln!("file chooser check: {error}"),
+        }
     }
 
     pub(crate) fn choose(&mut self, target: Target) -> Result<(), String> {
@@ -56,7 +100,8 @@ impl FolderPicker {
                 "--title=Choose host folder",
             ]
         };
-        let child = Command::new("zenity")
+        let program = self.program.as_ref().ok_or("File chooser unavailable; use Tools > App dependencies > Check again, or enter the path manually")?;
+        let child = Command::new(program)
             .args(arguments)
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -68,6 +113,19 @@ impl FolderPicker {
     }
 
     pub(crate) fn poll(&mut self) -> Option<(Target, Result<Option<PathBuf>, String>)> {
+        if let Some((receiver, _)) = &self.probe {
+            match receiver.try_recv() {
+                Ok(program) => {
+                    self.program = program;
+                    // The worker has sent its result; do not wait on a filesystem probe.
+                    self.probe.take();
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.probe.take();
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
         let child = self.child.as_mut()?;
         let status = match child.try_wait() {
             Ok(Some(status)) => Ok(status),
@@ -138,6 +196,37 @@ pub(crate) fn user_path(text: &str) -> PathBuf {
 
 #[cfg(test)]
 mod path_tests {
+    #[test]
+    fn availability_does_not_wait_for_a_slow_probe_and_can_be_refreshed() {
+        let ctx = eframe::egui::Context::default();
+        let mut picker = super::FolderPicker::new();
+        let (release, blocked) = std::sync::mpsc::channel();
+        picker.start_probe(ctx.clone(), move || {
+            blocked.recv().unwrap();
+            Some("/test/zenity".into())
+        });
+        for _ in 0..1000 {
+            assert!(!picker.available());
+            assert!(!picker.installed());
+            picker.poll();
+        }
+        assert!(picker.checking());
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while picker.checking() {
+            picker.poll();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert!(picker.available());
+        picker.start_probe(ctx, || None);
+        while picker.checking() {
+            picker.poll();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert!(!picker.available());
+    }
     #[test]
     fn typed_paths_expand_the_home_directory() {
         let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());

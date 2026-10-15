@@ -190,6 +190,7 @@ impl CredentialForm {
 }
 
 pub struct MonitorApp {
+    performance: crate::ui_performance::Performance,
     backend: Option<Backend>,
     snapshot: Snapshot,
     selected: Option<String>,
@@ -329,18 +330,25 @@ impl MonitorApp {
         options.bundle_dir = crate::folders::user_path(&settings.bundle);
         options.capture_quota_size = u64::from(settings.quota_gib) * 1024 * 1024 * 1024;
         options.shutdown_timeout = Duration::from_secs(settings.timeout);
-        let (backend, status) = match Backend::new(options.clone()) {
+        let (backend, status) = match Backend::new_with_wake(options.clone(), {
+            let ctx = cc.egui_ctx.clone();
+            std::sync::Arc::new(move || ctx.request_repaint_of(egui::ViewportId::ROOT))
+        }) {
             Ok(backend) => (Some(backend), String::new()),
             Err(error) => (None, error),
         };
         let exec = ExecRequest::default();
         let env = exec.env.join("\n");
-        let dependencies = crate::dependencies_window::DependenciesWindow::start(&options);
+        let dependencies =
+            crate::dependencies_window::DependenciesWindow::start(&options, &cc.egui_ctx);
+        let mut folder_picker = FolderPicker::new();
+        folder_picker.refresh(&cc.egui_ctx);
         let mut explorer_browser = upload_browser::Browser::default();
         if let Some(root) = settings.explorer_root.clone() {
             explorer_browser.reset(root);
         }
         let mut app = Self {
+            performance: crate::ui_performance::Performance::new(cc.gl.as_deref()),
             backend,
             snapshot: Snapshot::default(),
             selected: None,
@@ -354,7 +362,7 @@ impl MonitorApp {
             upload_open: false,
             draft: VmConfig::default(),
             draft_generation: 0,
-            folder_picker: FolderPicker::new(),
+            folder_picker,
             credentials: CredentialForm::default(),
             import_open: false,
             import_directory: String::new(),
@@ -450,7 +458,7 @@ impl MonitorApp {
             #[cfg(test)]
             launch_action_rects: None,
         };
-        match ArchiveWorker::new() {
+        match ArchiveWorker::new(Some(cc.egui_ctx.clone())) {
             Ok(worker) => {
                 app.archive = Some(worker);
                 app.refresh_history();
@@ -2672,7 +2680,12 @@ impl MonitorApp {
                             ui.close_menu();
                         }
                         if ui.button("App dependencies…").clicked() {
+                            self.folder_picker.refresh(ctx);
                             self.dependencies.open = true;
+                            ui.close_menu();
+                        }
+                        if ui.button("UI performance…").clicked() {
+                            self.performance.open = true;
                             ui.close_menu();
                         }
                         ui.separator();
@@ -5361,6 +5374,7 @@ impl MonitorApp {
             Dialog::Snapshots => self.vm_snapshots.open,
             Dialog::SnapshotDecision => self.vm_snapshots.decision_open(),
             Dialog::Dependencies => self.dependencies.open,
+            Dialog::Performance => self.performance.open,
             Dialog::About => self.about_open,
             Dialog::Build => self.build_open,
             Dialog::Attach => self.process_picker.open,
@@ -5387,6 +5401,7 @@ impl MonitorApp {
             Dialog::Samples => self.samples.open = false,
             Dialog::Snapshots | Dialog::SnapshotDecision => self.vm_snapshots.close(),
             Dialog::Dependencies => self.dependencies.open = false,
+            Dialog::Performance => self.performance.open = false,
             Dialog::About => self.about_open = false,
             Dialog::Build => self.build_open = false,
             Dialog::Attach => self.process_picker.open = false,
@@ -5430,8 +5445,11 @@ impl MonitorApp {
 
     fn draw(&mut self, ctx: &egui::Context) {
         self.escape(ctx);
+        self.performance.show(ctx, &self.options.data_dir);
         self.shortcuts(ctx);
-        self.dependencies.show(ctx, &self.options);
+        if self.dependencies.show(ctx, &self.options) {
+            self.folder_picker.refresh(ctx);
+        }
         self.menus(ctx);
         self.toolbar(ctx);
         self.health(ctx);
@@ -6448,6 +6466,7 @@ impl eframe::App for MonitorApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let frame_started = Instant::now();
         self.dependencies.poll();
         self.drain();
         self.cpu_history
@@ -6504,7 +6523,13 @@ impl eframe::App for MonitorApp {
             }
         }
         self.draw(ctx);
-        ctx.request_repaint_after(Duration::from_millis(50));
+        ctx.request_repaint_after(crate::ui_performance::repaint_delay(
+            self.snapshot.active_vm.is_some() || self.closing || self.folder_picker.pending(),
+        ));
+        if let Some(smoke) = self.smoke {
+            ctx.request_repaint_after(smoke.saturating_sub(self.started.elapsed()));
+        }
+        self.performance.record(frame_started.elapsed());
     }
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, "settings", &self.settings);
@@ -7349,13 +7374,14 @@ enum Dialog {
     Snapshots,
     SnapshotDecision,
     Dependencies,
+    Performance,
     About,
     Build,
     Attach,
 }
 
 impl Dialog {
-    const ALL: [Dialog; 17] = [
+    const ALL: [Dialog; 18] = [
         Dialog::Confirm,
         Dialog::Name,
         Dialog::Transport,
@@ -7370,6 +7396,7 @@ impl Dialog {
         Dialog::Snapshots,
         Dialog::SnapshotDecision,
         Dialog::Dependencies,
+        Dialog::Performance,
         Dialog::About,
         Dialog::Build,
         Dialog::Attach,
@@ -7392,6 +7419,7 @@ impl Dialog {
             Dialog::Snapshots => crate::snapshots::WINDOW_ID,
             Dialog::SnapshotDecision => "snapshot_decision",
             Dialog::Dependencies => crate::dependencies_window::WINDOW_ID,
+            Dialog::Performance => "ui-performance",
             Dialog::About => "about",
             Dialog::Build => "build_base",
             Dialog::Attach => "attach_process",
@@ -7906,12 +7934,88 @@ pub(crate) mod tests {
     }
     use antinomie_monitor_core::RunIn;
 
+    #[test]
+    #[ignore = "isolated native idle/performance probe; requires X11 and ANTINOMIE_PERF_QA_DIR"]
+    fn native_ui_performance_probe() {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        struct Probe {
+            app: MonitorApp,
+            started: Instant,
+            warmed: bool,
+            finished: bool,
+            previous_cadence: bool,
+            directory: PathBuf,
+        }
+        impl eframe::App for Probe {
+            fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+                if !self.warmed && self.started.elapsed() >= Duration::from_secs(1) {
+                    self.app.performance.reset_for_probe();
+                    self.warmed = true;
+                }
+                eframe::App::update(&mut self.app, ctx, frame);
+                if self.previous_cadence {
+                    ctx.request_repaint_after(Duration::from_millis(50));
+                }
+                ctx.request_repaint_after(
+                    Duration::from_secs(4).saturating_sub(self.started.elapsed()),
+                );
+                if self.started.elapsed() >= Duration::from_secs(4) && !self.finished {
+                    self.finished = true;
+                    std::fs::write(
+                        self.directory.join("report.json"),
+                        serde_json::to_vec_pretty(&self.app.performance.probe_report()).unwrap(),
+                    )
+                    .unwrap();
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        }
+        let directory = PathBuf::from(
+            std::env::var_os("ANTINOMIE_PERF_QA_DIR").expect("probe output directory"),
+        );
+        std::fs::create_dir_all(&directory).unwrap();
+        let previous_cadence = std::env::var_os("ANTINOMIE_PERF_QA_POLLING").is_some();
+        let diagnostic = std::env::var_os("ANTINOMIE_PERF_QA_DIAGNOSTIC").is_some();
+        let options = BackendOptions {
+            data_dir: directory.join("data"),
+            bundle_dir: directory.join("no-bundle"),
+            ..Default::default()
+        };
+        let storage = directory.join("ui.ron");
+        eframe::run_native(
+            "Antinomie UI Performance QA",
+            eframe::NativeOptions {
+                viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 820.0]),
+                persistence_path: Some(storage),
+                persist_window: false,
+                event_loop_builder: Some(Box::new(|builder| {
+                    builder.with_x11().with_any_thread(true);
+                })),
+                ..Default::default()
+            },
+            Box::new(move |cc| {
+                let mut app = MonitorApp::new(cc, options, None, false);
+                app.performance.open = diagnostic;
+                Ok(Box::new(Probe {
+                    app,
+                    started: Instant::now(),
+                    warmed: false,
+                    finished: false,
+                    previous_cadence,
+                    directory,
+                }))
+            }),
+        )
+        .expect("native UI performance probe");
+    }
+
     pub(crate) fn app() -> MonitorApp {
         let exec = ExecRequest::default();
         // Trace behavior fixtures explicitly open Trace; production opens Summary.
         let mut layout = WorkspaceLayout::default();
         layout.focus(Panel::Trace);
         MonitorApp {
+            performance: Default::default(),
             backend: None,
             snapshot: Snapshot::default(),
             selected: None,
@@ -10236,6 +10340,7 @@ pub(crate) mod tests {
                 Dialog::Tools => app.tools_open = true,
                 Dialog::Samples => app.samples.open = true,
                 Dialog::Dependencies => app.dependencies.open = true,
+                Dialog::Performance => app.performance.open = true,
                 Dialog::About => app.about_open = true,
                 Dialog::Build => app.build_open = true,
                 Dialog::Attach => app.process_picker.open = true,
@@ -11244,7 +11349,7 @@ pub(crate) mod tests {
         journal.extend(data);
         std::fs::write(fixture.0.join("terminal.journal"), journal).unwrap();
         assert!(!fixture.0.join("terminal-screen.ansi").exists());
-        let worker = ArchiveWorker::new().unwrap();
+        let worker = ArchiveWorker::new(None).unwrap();
         let mut app = app();
         let mut history = run("partial");
         history.state = RunState::Finalized;
@@ -11638,7 +11743,7 @@ pub(crate) mod tests {
                 let mut b = RunTerminal::new(second);
                 b.terminal.process(b"TERMINAL B RETAINED\r\n$ ");
                 app.terminals.insert(b.run.id.clone(), b);
-                app.archive = Some(ArchiveWorker::new().expect("archive worker"));
+                app.archive = Some(ArchiveWorker::new(None).expect("archive worker"));
                 Ok(Box::new(QaApp {
                     app,
                     deadline: Instant::now() + Duration::from_secs(120),
