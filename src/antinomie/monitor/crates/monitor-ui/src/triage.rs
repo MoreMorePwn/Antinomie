@@ -874,6 +874,12 @@ fn cell(text: impl Into<String>, color: egui::Color32, mono: bool) -> Cell {
     }
 }
 
+/// Keep the unresolved directory reason in Details while shortening table text.
+fn display_cell(text: &str) -> String {
+    text.replace("(relative, cwd not recorded)", "(relative)")
+        .replace("(relative, dirfd not recorded)", "(relative)")
+}
+
 #[cfg(test)]
 struct LimitedRows {
     rows: Vec<Vec<Cell>>,
@@ -1050,7 +1056,7 @@ fn table_rows(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[Vec<Cell>])
                 row.set_selected(selected.as_ref() == Some(&key));
                 for cell in cells {
                     row.col(|ui| {
-                        let mut text = RichText::new(&cell.text).color(cell.color);
+                        let mut text = RichText::new(display_cell(&cell.text)).color(cell.color);
                         if cell.mono {
                             text = text.monospace();
                         }
