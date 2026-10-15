@@ -6379,6 +6379,7 @@ impl MonitorApp {
                     self.memory_view.details(ui, self.settings.font_size)
                 }
                 crate::workspace::DetailsOf::History => self.history_detail(ui),
+                crate::workspace::DetailsOf::Triage => self.show_triage_details(ui),
                 crate::workspace::DetailsOf::Syscall => self.details(ui),
             },
             Panel::Activity => self.activity(ui),
@@ -14168,6 +14169,34 @@ pub(crate) mod tests {
         click_label(&mut app, &ctx, size, &start);
         assert!(app.submitted.is_empty());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn details_follow_the_triage_tab_and_return_to_the_trace() {
+        let mut app = app();
+        observer_fixture(&mut app);
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1700.0, 1000.0);
+        app.focus_panel = Some(Panel::Triage);
+        for _ in 0..3 {
+            render(&mut app, &ctx, size);
+        }
+        let output = render(&mut app, &ctx, size);
+        assert!(texts(&output)
+            .iter()
+            .any(|(text, _)| text == "Select an entry in Triage to inspect it here."));
+        assert!(!texts(&output)
+            .iter()
+            .any(|(text, _)| text == "Select a syscall in the trace to decode it here"));
+        app.focus_panel = Some(Panel::Trace);
+        for _ in 0..3 {
+            render(&mut app, &ctx, size);
+        }
+        let output = render(&mut app, &ctx, size);
+        assert!(texts(&output)
+            .iter()
+            .any(|(text, _)| text == "Select a syscall in the trace to decode it here"));
     }
 
     #[test]
