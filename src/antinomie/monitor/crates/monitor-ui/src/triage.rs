@@ -12,8 +12,13 @@ use crate::{
     query::{self, FieldSpec, RowValue},
     theme, trace,
 };
-use antinomie_monitor_core::{network::NetworkPacket, EventSummary, InvocationSummary};
+#[cfg(test)]
+use antinomie_monitor_core::network::NetworkPacket;
+use antinomie_monitor_core::{EventSummary, InvocationSummary};
 use eframe::egui::{self, RichText};
+mod file_content;
+mod files;
+mod network;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
@@ -32,11 +37,14 @@ enum ProcessTab {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FileTab {
     Opened,
+    Read,
     Changed,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum NetTab {
+    Ips,
+    Hosts,
     Http,
     Dns,
 }
@@ -48,7 +56,7 @@ pub(crate) struct TriageView {
     network: NetTab,
     /// Case-insensitive substring for rule, process, summary, or evidence.
     /// Invocation chosen from a Suspicious activity row.
-    selected_call_id: Option<u64>,
+    selected_call_id: Option<trace::InvocationKey>,
     /// Archive directory and owned pcap, so a different capture starts a new index.
     scan_key: Option<String>,
     scan_cancel: Option<Arc<AtomicBool>>,
@@ -66,7 +74,7 @@ pub(crate) struct TriageView {
     refresh_seconds: u64,
     bpf_export_status: String,
     scan_request: ScanRequest,
-    filter_drafts: [String; 5],
+    filter_drafts: [String; 8],
     packet_jump: Option<u64>,
     context_key: Option<String>,
 }
@@ -103,23 +111,46 @@ impl Default for TriageView {
 #[derive(Clone, Copy)]
 pub(crate) struct TriageInput<'a> {
     pub invocations: &'a [InvocationSummary],
+    #[cfg(test)]
     pub packets: &'a [NetworkPacket],
     /// Ethernet frames parallel to `packets`. Absent when the list has no payload.
+    #[cfg(test)]
     pub frames: Option<&'a [Vec<u8>]>,
     pub vm_id: Option<&'a str>,
     pub boot_id: Option<&'a str>,
     pub run_id: Option<&'a str>,
-    /// What this view actually covered. Never claim a whole run from one page.
-    pub coverage: &'a str,
     /// Saved recording directory. `None` for a live session or a single loaded page.
     pub archive: Option<&'a Path>,
     /// Pcap that belongs to this run. Absent means no packet index, not another capture.
     pub pcap: Option<&'a Path>,
     /// The pcap is still being written. The index reads the bytes present now.
     pub pcap_open: bool,
+    pub clock_anchor: Option<antinomie_monitor_core::HostClockAnchor>,
+    pub started_ms: Option<u64>,
+    pub root_cookie: u64,
+    pub run_finished: bool,
 }
 
 impl<'a> TriageInput<'a> {
+    pub(crate) fn empty() -> Self {
+        Self {
+            invocations: &[],
+            #[cfg(test)]
+            packets: &[],
+            #[cfg(test)]
+            frames: None,
+            vm_id: None,
+            boot_id: None,
+            run_id: None,
+            archive: None,
+            pcap: None,
+            pcap_open: false,
+            clock_anchor: None,
+            started_ms: None,
+            root_cookie: 0,
+            run_finished: false,
+        }
+    }
     #[cfg(test)]
     fn page(invocations: &'a [InvocationSummary], packets: &'a [NetworkPacket]) -> Self {
         Self {
@@ -129,10 +160,13 @@ impl<'a> TriageInput<'a> {
             vm_id: None,
             boot_id: None,
             run_id: None,
-            coverage: "this loaded page",
             archive: None,
             pcap: None,
             pcap_open: false,
+            clock_anchor: None,
+            started_ms: None,
+            root_cookie: 0,
+            run_finished: false,
         }
     }
 }
@@ -155,6 +189,15 @@ impl TriageView {
             self.stop_scan();
             self.context_key = Some(key);
         }
+        self.scan_request.clock_anchor = input.clock_anchor;
+        self.scan_request.started_ms = input.started_ms;
+        self.scan_request.root_cookie = input.root_cookie;
+        self.scan_request.run_finished = input.run_finished;
+        self.scan_request.identity = input
+            .vm_id
+            .zip(input.boot_id)
+            .zip(input.run_id)
+            .map(|((vm, boot), run)| (vm.into(), boot.into(), run.into()));
         if input.archive.is_some() {
             if self.next_refresh.is_some_and(|due| Instant::now() >= due) {
                 self.refresh_requested = true;
@@ -184,7 +227,16 @@ impl TriageView {
         }
     }
     /// `Some(call_id)` on the frame a Suspicious activity row is clicked.
-    pub(crate) fn show(&mut self, ui: &mut egui::Ui, input: TriageInput<'_>) -> Option<u64> {
+    pub(crate) fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        input: TriageInput<'_>,
+    ) -> Option<trace::InvocationKey> {
+        if input.run_id.is_none() {
+            self.tick(ui.ctx(), TriageInput::empty());
+            ui.weak("Select a program run to view triage.");
+            return None;
+        }
         ui.horizontal_wrapped(|ui| {
             for (section, label) in [
                 (Section::Process, "Process"),
@@ -227,20 +279,12 @@ impl TriageView {
                     Some(Instant::now() + Duration::from_secs(self.refresh_seconds));
             }
             ui.colored_label(theme::muted(), self.refresh_status(&input));
+            ui.weak("Host time").on_hover_text("Times use the host timezone. ~ marks a guest event time estimated from a host receipt/start anchor, including transport latency.");
         });
-        let coverage = self.coverage_text(&input);
-        egui::CollapsingHeader::new("Index details")
-            .default_open(false)
-            .show(ui, |ui| {
-                ui.add(egui::Label::new(coverage).wrap());
-                ui.label(
-                    "HTTP/1 and DNS over UDP or TCP can be indexed. HTTPS, HTTP/2, HTTP/3, and encrypted DNS are not.",
-                );
-            });
         let jump = match self.section {
             Section::Process => self.process(ui, &input),
             Section::Files => {
-                self.files(ui, input.invocations);
+                self.files(ui, &input);
                 None
             }
             Section::Network => {
@@ -248,7 +292,11 @@ impl TriageView {
                 None
             }
             Section::Bpf => {
-                bpf_view(ui, &input, &mut self.bpf_export_status);
+                let indexed = self.scan.as_ref().map(|scan| scan.bpf.as_slice());
+                if self.scan.as_ref().is_some_and(|scan| scan.bpf_omitted > 0) {
+                    ui.colored_label(theme::warn(), "Some BPF observations exceed the preview limit; original syscall evidence remains available.");
+                }
+                bpf_view(ui, &input, &mut self.bpf_export_status, indexed);
                 None
             }
         };
@@ -256,8 +304,9 @@ impl TriageView {
             .ctx()
             .data_mut(|data| data.remove_temp::<u64>(egui::Id::new("triage-packet-jump")));
         jump.or_else(|| {
-            ui.ctx()
-                .data_mut(|data| data.remove_temp::<u64>(egui::Id::new("triage-call-jump")))
+            ui.ctx().data_mut(|data| {
+                data.remove_temp::<trace::InvocationKey>(egui::Id::new("triage-call-jump"))
+            })
         })
     }
 
@@ -266,7 +315,11 @@ impl TriageView {
         self.packet_jump.take()
     }
 
-    fn process(&mut self, ui: &mut egui::Ui, input: &TriageInput<'_>) -> Option<u64> {
+    fn process(
+        &mut self,
+        ui: &mut egui::Ui,
+        input: &TriageInput<'_>,
+    ) -> Option<trace::InvocationKey> {
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.process, ProcessTab::Tree, "Process tree");
             ui.selectable_value(
@@ -278,9 +331,9 @@ impl TriageView {
         match self.process {
             ProcessTab::Tree => {
                 if let Some(scan) = &self.scan {
-                    process_tree_nodes(ui, &scan.process);
+                    process_tree_nodes(ui, &scan.process, scan.clock_anchor.or(input.clock_anchor));
                 } else {
-                    process_tree(ui, input.invocations);
+                    process_tree_nodes(ui, &process_nodes(input.invocations), input.clock_anchor);
                 }
                 None
             }
@@ -294,163 +347,171 @@ impl TriageView {
         }
     }
 
-    fn files(&mut self, ui: &mut egui::Ui, invocations: &[InvocationSummary]) {
-        ui.horizontal(|ui| {
+    fn files(&mut self, ui: &mut egui::Ui, input: &TriageInput<'_>) {
+        ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut self.files, FileTab::Opened, "Opened files");
+            ui.selectable_value(&mut self.files, FileTab::Read, "Read files");
             ui.selectable_value(&mut self.files, FileTab::Changed, "Changed files");
         });
-        let index = if self.files == FileTab::Opened { 1 } else { 2 };
+        let index = match self.files {
+            FileTab::Opened => 1,
+            FileTab::Read => 5,
+            FileTab::Changed => 2,
+        };
         let (retained, total) = self.scan.as_ref().map_or((0, 0), |scan| {
-            let (rows, omitted) = if index == 1 {
-                (&scan.opened, scan.opened_omitted)
-            } else {
-                (&scan.changed, scan.changed_omitted)
+            let (rows, omitted) = match self.files {
+                FileTab::Opened => (&scan.opened, scan.opened_omitted),
+                FileTab::Read => (&scan.read, scan.read_omitted),
+                FileTab::Changed => (&scan.changed, scan.changed_omitted),
             };
             (rows.len(), rows.len() as u64 + omitted)
         });
         self.query_controls(ui, index, FILE_FIELDS, retained, total);
-        ui.colored_label(
-            theme::muted(),
-            "Each row is one observed operation; repeated paths retain separate evidence.",
-        );
-        let wanted = match self.files {
-            FileTab::Opened => OPEN_NAMES,
-            FileTab::Changed => CHANGE_NAMES,
+        let Some(scan) = &self.scan else {
+            ui.weak("Indexing this run’s files…");
+            return;
         };
-        if let Some(scan) = &self.scan {
-            let (rows, omitted) = match self.files {
-                FileTab::Opened => (&scan.opened, scan.opened_omitted),
-                FileTab::Changed => (&scan.changed, scan.changed_omitted),
-            };
-            ui.colored_label(
-                theme::muted(),
-                format!(
-                    "{} rows on this saved-recording query page; {omitted} matches on other pages.",
-                    rows.len()
-                ),
-            );
-            table(
-                ui,
-                "triage-files",
-                &[
-                    "Path / provenance",
-                    "Process",
-                    "FD",
-                    "Operation",
-                    "Result",
-                    "Outcome",
-                    "Access",
-                    "First (ns)",
-                    "Written",
-                    "Requested",
-                    "Observed old → new",
-                    "Evidence",
-                    "Last (ns)",
-                    "Count",
-                ],
-                rows,
-            );
-        } else {
-            let mut rows = file_rows(invocations, wanted);
-            let compiled = query::compile_table(&self.scan_request.filters[index], FILE_FIELDS);
-            rows.rows.retain(|row| compiled.keep_table(&row[0].values));
-            limited_table(
-                ui,
-                "triage-files",
-                &[
-                    "Path / provenance",
-                    "Process",
-                    "FD",
-                    "Operation",
-                    "Result",
-                    "Outcome",
-                    "Access",
-                    "First (ns)",
-                    "Written",
-                    "Requested",
-                    "Observed old → new",
-                    "Evidence",
-                    "Last (ns)",
-                    "Count",
-                ],
-                &rows,
-            );
+        let clock = scan.clock_anchor.or(input.clock_anchor);
+        match self.files {
+            FileTab::Opened => {
+                let rows: Vec<_> = scan
+                    .opened
+                    .iter()
+                    .map(|row| files::opened_row(row, clock))
+                    .collect();
+                table(
+                    ui,
+                    "triage-opened",
+                    &["Time", "Path", "PID / TID", "Result", "Evidence"],
+                    &rows,
+                );
+            }
+            FileTab::Read => {
+                let mut rows = scan.read.clone();
+                for row in &mut rows {
+                    row[0].text = crate::time_format::guest_ns(
+                        clock,
+                        files::number(&row[0].values, "event.time_ns"),
+                    );
+                }
+                table(
+                    ui,
+                    "triage-read",
+                    &[
+                        "Time",
+                        "Path",
+                        "PID / TID",
+                        "Transferred / content",
+                        "Result",
+                        "Evidence",
+                    ],
+                    &rows,
+                );
+            }
+            FileTab::Changed => {
+                egui::ScrollArea::horizontal()
+                    .id_salt("changed-file-columns")
+                    .show(ui, |ui| {
+                        ui.set_min_width(930.0);
+                        table_rows(
+                            ui,
+                            "triage-changed",
+                            &["Time", "Path", "PID / TID", "Diff count", "Evidence"],
+                            &scan.changed,
+                        );
+                    });
+                let selected_id = egui::Id::new(("triage-selected-row", "triage-changed"));
+                let selected = ui.ctx().data(|data| data.get_temp::<String>(selected_id));
+                if let Some(change) = scan
+                    .file_changes
+                    .iter()
+                    .find(|change| Some(change.evidence_key()) == selected)
+                {
+                    change.show(ui, clock);
+                }
+            }
         }
     }
 
     fn network(&mut self, ui: &mut egui::Ui, input: &TriageInput<'_>) {
-        ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.network, NetTab::Http, "All HTTP requests");
-            ui.selectable_value(&mut self.network, NetTab::Dns, "All DNS requests");
+        ui.horizontal_wrapped(|ui| {
+            ui.selectable_value(&mut self.network, NetTab::Ips, "IPs");
+            ui.selectable_value(&mut self.network, NetTab::Hosts, "Hosts");
+            ui.selectable_value(&mut self.network, NetTab::Http, "HTTP");
+            ui.selectable_value(&mut self.network, NetTab::Dns, "DNS");
         });
-        let index = if self.network == NetTab::Http { 3 } else { 4 };
-        let (retained, total) = self.scan.as_ref().map_or((0, 0), |scan| {
-            let (rows, omitted) = if index == 3 {
-                (&scan.http, scan.http_omitted)
-            } else {
-                (&scan.dns, scan.dns_omitted)
-            };
-            (rows.len(), rows.len() as u64 + omitted)
-        });
-        self.query_controls(
-            ui,
-            index,
-            if index == 3 { HTTP_FIELDS } else { DNS_FIELDS },
-            retained,
-            total,
-        );
-        if input.archive.is_some() {
-            let Some(scan) = &self.scan else {
-                ui.colored_label(
-                    theme::muted(),
-                    "HTTP and DNS wait for the saved-capture index. The loaded packet preview is not shown here.",
-                );
-                return;
-            };
-            match self.network {
-                NetTab::Http => indexed_packet_table(
-                    ui,
-                    "triage-http",
-                    HTTP_HEADERS,
-                    &scan.http,
-                    scan.http_omitted,
-                ),
-                NetTab::Dns => {
-                    indexed_packet_table(ui, "triage-dns", DNS_HEADERS, &scan.dns, scan.dns_omitted)
-                }
-            }
+        let index = match self.network {
+            NetTab::Ips => 6,
+            NetTab::Hosts => 7,
+            NetTab::Http => 3,
+            NetTab::Dns => 4,
+        };
+        let fields = match self.network {
+            NetTab::Ips => network::IP_FIELDS,
+            NetTab::Hosts => network::HOST_FIELDS,
+            NetTab::Http => HTTP_FIELDS,
+            NetTab::Dns => DNS_FIELDS,
+        };
+        let (count, omitted) = self
+            .scan
+            .as_ref()
+            .map_or((0, 0), |scan| match self.network {
+                NetTab::Ips => (scan.ips.len(), scan.ips_omitted),
+                NetTab::Hosts => (scan.hosts.len(), scan.hosts_omitted),
+                NetTab::Http => (scan.http.len(), scan.http_omitted),
+                NetTab::Dns => (scan.dns.len(), scan.dns_omitted),
+            });
+        self.query_controls(ui, index, fields, count, count as u64 + omitted);
+        let Some(scan) = &self.scan else {
+            ui.weak("Indexing this run’s capture…");
             return;
+        };
+        if let Some(warning) = &scan.network_warning {
+            ui.colored_label(theme::warn(), warning);
         }
         match self.network {
-            NetTab::Http => {
-                limited_table(
+            NetTab::Ips => {
+                ui.weak("Country and organization use local TShark GeoIP data when configured.");
+                table(
                     ui,
-                    "triage-http",
-                    &["Frame", "Endpoints", "Request", "Response", "Process"],
-                    &http_rows(input),
+                    "triage-ips",
+                    &["IP", "Country", "Organization"],
+                    &scan.ips,
                 );
             }
-            NetTab::Dns => {
-                limited_table(
-                    ui,
-                    "triage-dns",
-                    &["Frame", "Endpoints", "Query", "Kind"],
-                    &dns_rows(input),
-                );
-            }
+            NetTab::Hosts => table(
+                ui,
+                "triage-hosts",
+                &[
+                    "Hostname",
+                    "Resolved / connected IPs",
+                    "First seen",
+                    "Last seen",
+                    "Requests",
+                    "Source",
+                ],
+                &scan.hosts,
+            ),
+            NetTab::Http => table(ui, "triage-http", HTTP_HEADERS, &scan.http),
+            NetTab::Dns => table(ui, "triage-dns", DNS_HEADERS, &scan.dns),
         }
+        let _ = input;
     }
 
-    fn suspicious(&mut self, ui: &mut egui::Ui, invocations: &[InvocationSummary]) -> Option<u64> {
+    fn suspicious(
+        &mut self,
+        ui: &mut egui::Ui,
+        invocations: &[InvocationSummary],
+    ) -> Option<trace::InvocationKey> {
         self.suspicious_findings(ui, suspicious_rows(invocations), 0)
     }
 
     fn suspicious_findings(
         &mut self,
         ui: &mut egui::Ui,
-        findings: Vec<Finding>,
+        mut findings: Vec<Finding>,
         omitted: u64,
-    ) -> Option<u64> {
+    ) -> Option<trace::InvocationKey> {
         ui.colored_label(
             theme::muted(),
             "A row is a rule match with its source. It is not a verdict that the sample is malicious.",
@@ -468,6 +529,17 @@ impl TriageView {
             findings.len(),
             findings.len() as u64 + omitted,
         );
+        let clock = self
+            .scan
+            .as_ref()
+            .and_then(|scan| scan.clock_anchor)
+            .or(self.scan_request.clock_anchor);
+        for finding in &mut findings {
+            finding.cells[5].text = crate::time_format::guest_ns(
+                clock,
+                files::number(&finding.values, "event.time_ns"),
+            );
+        }
         let rows = if self.scan.is_some() {
             findings
         } else {
@@ -496,7 +568,7 @@ impl TriageView {
         }
         if let Some(selected) = rows
             .iter()
-            .find(|row| Some(row.call_id) == self.selected_call_id)
+            .find(|row| Some(row.key) == self.selected_call_id)
         {
             ui.separator();
             for (name, value) in &selected.values {
@@ -506,7 +578,7 @@ impl TriageView {
                 .button(format!("Open original syscall {}", selected.call_id))
                 .clicked()
             {
-                return Some(selected.call_id);
+                return Some(selected.key);
             }
         }
         None
@@ -529,10 +601,13 @@ impl TriageView {
         }
         let table_id = [
             "triage-findings",
-            "triage-files",
-            "triage-files",
+            "triage-opened",
+            "triage-changed",
             "triage-http",
             "triage-dns",
+            "triage-read",
+            "triage-ips",
+            "triage-hosts",
         ][index];
         ui.ctx().data_mut(|data| {
             data.insert_temp(egui::Id::new(("triage-filter-target", table_id)), draft_id);
@@ -623,7 +698,7 @@ impl TriageView {
                 "Refreshed {} s ago{}",
                 when.elapsed().as_secs(),
                 if self.scan.as_ref().is_some_and(|scan| scan.partial) {
-                    "; partial evidence — see Index details"
+                    "; partial evidence"
                 } else {
                     ""
                 }
@@ -632,24 +707,7 @@ impl TriageView {
         if input.archive.is_some() {
             "Waiting to index the saved recording".into()
         } else {
-            "Live page. The whole recording is indexed after it is saved.".into()
-        }
-    }
-
-    fn coverage_text(&self, input: &TriageInput<'_>) -> String {
-        if let Some(scan) = &self.scan {
-            return scan.coverage.clone();
-        }
-        if let Some(error) = &self.scan_error {
-            return format!("saved-recording index failed: {error}. {}", input.coverage);
-        }
-        if input.archive.is_some() {
-            format!(
-                "Indexing the saved recording. Rows below stay on the last finished index. {}",
-                input.coverage
-            )
-        } else {
-            input.coverage.to_string()
+            "Waiting for recorded evidence".into()
         }
     }
 
@@ -739,10 +797,7 @@ impl TriageView {
                     match result {
                         Ok(scan) => {
                             if self.selected_call_id.is_some_and(|call_id| {
-                                !scan
-                                    .findings
-                                    .iter()
-                                    .any(|finding| finding.call_id == call_id)
+                                !scan.findings.iter().any(|finding| finding.key == call_id)
                             }) {
                                 self.selected_call_id = None;
                             }
@@ -792,7 +847,7 @@ impl TriageView {
         self.selected_call_id = None;
         self.bpf_export_status.clear();
         self.packet_jump = None;
-        self.scan_request.offsets = [0; 5];
+        self.scan_request.offsets = [0; 8];
     }
 }
 
@@ -821,85 +876,109 @@ fn cell(text: impl Into<String>, color: egui::Color32, mono: bool) -> Cell {
     }
 }
 
+#[cfg(test)]
 struct LimitedRows {
     rows: Vec<Vec<Cell>>,
     /// The loaded page is not truncated. Callers still observe this as false.
     stopped_early: bool,
 }
 
+#[cfg(test)]
 fn push_limited(limited: &mut LimitedRows, row: Vec<Cell>) -> bool {
     limited.rows.push(row);
     true
 }
 
-fn indexed_packet_table(
-    ui: &mut egui::Ui,
-    id: &str,
+fn column_widths<'a>(
+    ui: &egui::Ui,
     headers: &[&str],
-    rows: &[Vec<Cell>],
-    omitted: u64,
-) {
-    ui.colored_label(
-        theme::muted(),
-        format!(
-            "{count} rows on this saved-capture query page; {omitted} matches on other pages.",
-            count = rows.len()
-        ),
-    );
-    table(ui, id, headers, rows);
-}
-
-fn limited_table(ui: &mut egui::Ui, id: &str, headers: &[&str], limited: &LimitedRows) {
-    // Every row built from the loaded invocations and packets is shown.
-    // The count is the size of this page, not of the whole recording.
-    let _ = limited.stopped_early;
-    ui.colored_label(
-        theme::muted(),
-        format!("{} rows in this loaded page.", limited.rows.len()),
-    );
-    table(ui, id, headers, &limited.rows);
+    rows: impl Iterator<Item = &'a [Cell]> + Clone,
+) -> Vec<f32> {
+    headers
+        .iter()
+        .enumerate()
+        .map(|(index, header)| {
+            let (minimum, maximum) = match *header {
+                "Endpoint" | "Endpoints" => (360.0_f32, 900.0_f32),
+                "Path" | "URI" | "Hostname" | "Transferred / content" | "Argv" => (250.0, 650.0),
+                "Time" | "First seen" | "Last seen" => (230.0, 500.0),
+                "Host" => (160.0, 400.0),
+                "Summary" => (360.0, 800.0),
+                _ => (100.0, 320.0),
+            };
+            let heading = ui.fonts(|fonts| {
+                fonts
+                    .layout_no_wrap(
+                        (*header).to_owned(),
+                        egui::TextStyle::Body.resolve(ui.style()),
+                        theme::text(),
+                    )
+                    .size()
+                    .x
+            }) + 24.0;
+            let content = rows
+                .clone()
+                .take(128)
+                .filter_map(|row| row.get(index))
+                .max_by_key(|cell| cell.text.chars().count())
+                .map_or(0.0, |cell| {
+                    let font = if cell.mono {
+                        egui::TextStyle::Monospace.resolve(ui.style())
+                    } else {
+                        egui::TextStyle::Body.resolve(ui.style())
+                    };
+                    ui.fonts(|fonts| {
+                        fonts
+                            .layout_no_wrap(cell.text.chars().take(256).collect(), font, cell.color)
+                            .size()
+                            .x
+                    }) + 24.0
+                });
+            content.max(minimum).max(heading).min(maximum.max(heading))
+        })
+        .collect()
 }
 
 fn table(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[Vec<Cell>]) {
     egui::ScrollArea::horizontal()
         .id_salt((id, "columns"))
-        .show(ui, |ui| {
-            ui.set_min_width((headers.len() as f32 * 90.0).min(1600.0));
-            table_rows(ui, id, headers, rows);
-        });
+        .auto_shrink([false, true])
+        .show(ui, |ui| table_rows(ui, id, headers, rows));
     let selected_id = egui::Id::new(("triage-selected-row", id));
     let selected = ui.ctx().data(|data| data.get_temp::<String>(selected_id));
     if let Some(row) = rows.iter().find(|row| Some(evidence_key(row)) == selected) {
-        ui.separator();
-        ui.strong("Selected evidence");
-        for (title, value) in headers.iter().zip(row) {
-            ui.add(egui::Label::new(format!("{title}: {}", value.text)).wrap());
-        }
-        for (name, value) in row
-            .first()
-            .map(|cell| cell.values.as_slice())
-            .unwrap_or_default()
-        {
-            if let RowValue::Number(id) = value {
-                if *name == "event.id" && ui.button(format!("Open original syscall {id}")).clicked()
+        egui::ScrollArea::vertical()
+            .id_salt((id, "details"))
+            .max_height(ui.available_height().max(40.0))
+            .show(ui, |ui| {
+                ui.separator();
+                ui.strong("Selected evidence");
+                for (title, value) in headers.iter().zip(row) {
+                    ui.add(egui::Label::new(format!("{title}: {}", value.text)).wrap());
+                }
+                for (name, value) in row
+                    .first()
+                    .map(|cell| cell.values.as_slice())
+                    .unwrap_or_default()
                 {
-                    if let Ok(id) = u64::try_from(*id) {
-                        ui.ctx().data_mut(|data| {
-                            data.insert_temp(egui::Id::new("triage-call-jump"), id)
-                        });
+                    if let RowValue::Number(id) = value {
+                        if *name == "event.id"
+                            && ui.button(format!("Open original syscall {id}")).clicked()
+                        {
+                            request_evidence_jump(ui.ctx(), &row[0].values);
+                        }
+                        if *name == "frame.number"
+                            && ui.button(format!("Open original packet {id}")).clicked()
+                        {
+                            if let Ok(id) = u64::try_from(*id) {
+                                ui.ctx().data_mut(|data| {
+                                    data.insert_temp(egui::Id::new("triage-packet-jump"), id)
+                                });
+                            }
+                        }
                     }
                 }
-                if *name == "frame.number"
-                    && ui.button(format!("Open original packet {id}")).clicked()
-                {
-                    if let Ok(id) = u64::try_from(*id) {
-                        ui.ctx().data_mut(|data| {
-                            data.insert_temp(egui::Id::new("triage-packet-jump"), id)
-                        });
-                    }
-                }
-            }
-        }
+            });
     } else {
         ui.ctx().data_mut(|data| data.remove::<String>(selected_id));
     }
@@ -914,7 +993,12 @@ fn evidence_key(row: &[Cell]) -> String {
         .filter(|(name, _)| {
             matches!(
                 *name,
-                "event.id" | "frame.number" | "dns.name" | "http.uri" | "process.cookie"
+                "event.id"
+                    | "stream.id"
+                    | "frame.number"
+                    | "dns.name"
+                    | "http.uri"
+                    | "process.cookie"
             )
         })
         .map(|(name, value)| format!("{name}:{value:?}"))
@@ -930,36 +1014,69 @@ fn evidence_key(row: &[Cell]) -> String {
     }
 }
 
+fn request_evidence_jump(ctx: &egui::Context, values: &[(&str, RowValue)]) {
+    if let Some(key) = files::number(values, "stream.id")
+        .zip(files::number(values, "process.cookie"))
+        .zip(files::number(values, "event.id"))
+    {
+        let ((stream, task), call) = key;
+        ctx.data_mut(|data| {
+            data.insert_temp(egui::Id::new("triage-call-jump"), (stream, task, call))
+        });
+    } else if let Some(frame) = files::number(values, "frame.number") {
+        ctx.data_mut(|data| data.insert_temp(egui::Id::new("triage-packet-jump"), frame));
+    }
+}
+
 fn table_rows(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[Vec<Cell>]) {
     use egui_extras::{Column, TableBuilder};
     if rows.is_empty() {
         ui.colored_label(theme::muted(), "Nothing recorded for this view.");
         return;
     }
+    let widths = column_widths(ui, headers, rows.iter().map(Vec::as_slice));
+    ui.set_width(
+        (widths.iter().sum::<f32>()
+            + ui.spacing().item_spacing.x * headers.len().saturating_sub(1) as f32
+            + 16.0)
+            .max(ui.available_width()),
+    );
     let row_height = ui.text_style_height(&egui::TextStyle::Body).max(14.0) + 8.0;
     let selected_id = egui::Id::new(("triage-selected-row", id));
     let selected = ui.ctx().data(|data| data.get_temp::<String>(selected_id));
     let filter_id = ui
         .ctx()
         .data(|data| data.get_temp::<egui::Id>(egui::Id::new(("triage-filter-target", id))));
+    let max_height = if selected.is_some() {
+        (ui.available_height() * 0.55).max(60.0)
+    } else {
+        ui.available_height().max(60.0)
+    };
     let mut builder = TableBuilder::new(ui)
-        .id_salt(id)
+        .id_salt(("triage-062", id))
         .striped(true)
         .resizable(true)
         .vscroll(true)
+        .max_scroll_height(max_height)
+        .min_scrolled_height(0.0)
         .sense(egui::Sense::click());
-    for index in 0..headers.len() {
-        builder = if index + 1 == headers.len() {
-            builder.column(Column::remainder().at_least(140.0))
+    for (index, width) in widths.into_iter().enumerate() {
+        let minimum = if matches!(headers[index], "Time" | "Endpoint" | "Endpoints") {
+            width
         } else {
-            builder.column(Column::auto().at_least(64.0).resizable(true))
+            64.0
+        };
+        builder = if index + 1 == headers.len() {
+            builder.column(Column::remainder().at_least(width))
+        } else {
+            builder.column(Column::initial(width).at_least(minimum).resizable(true))
         };
     }
     builder
         .header(row_height, |mut header| {
             for title in headers {
                 header.col(|ui| {
-                    ui.strong(*title);
+                    ui.add(egui::Label::new(RichText::new(*title).strong()).truncate());
                 });
             }
         })
@@ -974,13 +1091,28 @@ fn table_rows(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[Vec<Cell>])
                         if cell.mono {
                             text = text.monospace();
                         }
-                        ui.add(egui::Label::new(text).truncate());
+                        ui.add(
+                            egui::Label::new(text)
+                                .truncate()
+                                .selectable(false)
+                                .sense(egui::Sense::hover()),
+                        )
+                        .on_hover_text(&cell.text);
                     });
                 }
                 if row.response().clicked() {
                     row.response()
                         .ctx
                         .data_mut(|data| data.insert_temp(selected_id, key));
+                }
+                if row.response().double_clicked() {
+                    request_evidence_jump(
+                        &row.response().ctx,
+                        cells
+                            .first()
+                            .map(|cell| cell.values.as_slice())
+                            .unwrap_or_default(),
+                    );
                 }
                 if let Some(filter_id) = filter_id {
                     row.response().context_menu(|ui| {
@@ -1000,6 +1132,7 @@ fn table_rows(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[Vec<Cell>])
 
 #[derive(Clone)]
 struct Finding {
+    key: trace::InvocationKey,
     cells: Vec<Cell>,
     call_id: u64,
     values: Vec<(&'static str, RowValue)>,
@@ -1011,54 +1144,87 @@ fn finding_table(
     id: &str,
     headers: &[&str],
     rows: &[Finding],
-    selected: Option<u64>,
-) -> Option<u64> {
+    selected: Option<trace::InvocationKey>,
+) -> Option<trace::InvocationKey> {
+    egui::ScrollArea::horizontal()
+        .id_salt((id, "columns"))
+        .auto_shrink([false, true])
+        .show(ui, |ui| finding_table_rows(ui, id, headers, rows, selected))
+        .inner
+}
+
+fn finding_table_rows(
+    ui: &mut egui::Ui,
+    id: &str,
+    headers: &[&str],
+    rows: &[Finding],
+    selected: Option<trace::InvocationKey>,
+) -> Option<trace::InvocationKey> {
     use egui_extras::{Column, TableBuilder};
     if rows.is_empty() {
         ui.colored_label(theme::muted(), "Nothing recorded for this view.");
         return None;
     }
+    let widths = column_widths(ui, headers, rows.iter().map(|row| row.cells.as_slice()));
+    ui.set_width(
+        (widths.iter().sum::<f32>()
+            + ui.spacing().item_spacing.x * headers.len().saturating_sub(1) as f32
+            + 16.0)
+            .max(ui.available_width()),
+    );
     let mut clicked = None;
     let filter_id = ui
         .ctx()
         .data(|data| data.get_temp::<egui::Id>(egui::Id::new(("triage-filter-target", id))));
     let row_height = ui.text_style_height(&egui::TextStyle::Body).max(14.0) + 8.0;
+    let max_height = (ui.available_height() * 0.65).max(60.0);
     let mut builder = TableBuilder::new(ui)
-        .id_salt(id)
+        .id_salt(("triage-062", id))
         .striped(true)
         .resizable(true)
         .vscroll(true)
+        .max_scroll_height(max_height)
+        .min_scrolled_height(0.0)
         .sense(egui::Sense::click());
-    for index in 0..headers.len() {
+    for (index, width) in widths.into_iter().enumerate() {
         builder = if index + 1 == headers.len() {
-            builder.column(Column::remainder().at_least(140.0))
+            builder.column(Column::remainder().at_least(width))
         } else {
-            builder.column(Column::auto().at_least(64.0).resizable(true))
+            builder.column(Column::initial(width).at_least(64.0).resizable(true))
         };
     }
     builder
         .header(row_height, |mut header| {
             for title in headers {
                 header.col(|ui| {
-                    ui.strong(*title);
+                    ui.add(egui::Label::new(RichText::new(*title).strong()).truncate());
                 });
             }
         })
         .body(|body| {
             body.rows(row_height, rows.len(), |mut row| {
                 let finding = &rows[row.index()];
-                row.set_selected(selected == Some(finding.call_id));
+                row.set_selected(selected == Some(finding.key));
                 for cell in &finding.cells {
                     row.col(|ui| {
                         let mut text = RichText::new(&cell.text).color(cell.color);
                         if cell.mono {
                             text = text.monospace();
                         }
-                        ui.add(egui::Label::new(text).truncate());
+                        ui.add(
+                            egui::Label::new(text)
+                                .truncate()
+                                .selectable(false)
+                                .sense(egui::Sense::hover()),
+                        )
+                        .on_hover_text(&cell.text);
                     });
                 }
                 if row.response().clicked() {
-                    clicked = Some(finding.call_id);
+                    clicked = Some(finding.key);
+                }
+                if row.response().double_clicked() {
+                    request_evidence_jump(&row.response().ctx, &finding.values);
                 }
                 if let Some(filter_id) = filter_id {
                     row.response()
@@ -1069,22 +1235,11 @@ fn finding_table(
     clicked
 }
 
-fn process_tree(ui: &mut egui::Ui, invocations: &[InvocationSummary]) {
-    process_tree_nodes(ui, &process_nodes(invocations));
-}
-
-fn process_tree_nodes(ui: &mut egui::Ui, nodes: &[ProcessNode]) {
-    let ended = nodes
-        .iter()
-        .filter(|node| node.state.starts_with("task exit"))
-        .count();
-    ui.colored_label(theme::muted(), format!(
-        "{} observed tasks; {ended} recorded task exits; {} without a recorded exit. A root exit does not imply tree completion.",
-        nodes.len(), nodes.len().saturating_sub(ended)));
-    ui.colored_label(
-        theme::muted(),
-        "Recorded task identity and fork edges. Launch-root cookies identify roots; other missing parents stay unknown. Parent exit keeps observed children.",
-    );
+fn process_tree_nodes(
+    ui: &mut egui::Ui,
+    nodes: &[ProcessNode],
+    clock: Option<antinomie_monitor_core::HostClockAnchor>,
+) {
     let rows = nodes
         .iter()
         .map(|node| {
@@ -1102,12 +1257,12 @@ fn process_tree_nodes(ui: &mut egui::Ui, nodes: &[ProcessNode]) {
                 cell(node.tid.to_string(), theme::text(), true),
                 cell(node.argv.join(" "), theme::text(), false),
                 cell(
-                    node.first_ns.map_or("—".into(), |time| time.to_string()),
+                    crate::time_format::guest_ns(clock, node.first_ns),
                     theme::text(),
                     true,
                 ),
                 cell(
-                    node.last_ns.map_or("—".into(), |time| time.to_string()),
+                    crate::time_format::guest_ns(clock, node.last_ns),
                     theme::text(),
                     true,
                 ),
@@ -1115,9 +1270,19 @@ fn process_tree_nodes(ui: &mut egui::Ui, nodes: &[ProcessNode]) {
                 cell(node.exec_history.join(" → "), theme::text(), false),
             ];
             row[0].values = vec![
+                (
+                    "event.id",
+                    node.call_id
+                        .map_or(RowValue::Missing, |id| RowValue::Number(i128::from(id.2))),
+                ),
                 ("process.pid", RowValue::Number(i128::from(node.pid))),
                 ("process.tid", RowValue::Number(i128::from(node.tid))),
                 ("process.cookie", RowValue::Number(i128::from(node.cookie))),
+                (
+                    "stream.id",
+                    node.call_id
+                        .map_or(RowValue::Missing, |key| RowValue::Number(i128::from(key.0))),
+                ),
                 (
                     "process.exe",
                     if node.comm == "?" {
@@ -1166,10 +1331,6 @@ fn process_tree_nodes(ui: &mut egui::Ui, nodes: &[ProcessNode]) {
         .into_iter()
         .filter(|row| compiled.keep_table(&row[0].values))
         .collect::<Vec<_>>();
-    ui.colored_label(
-        theme::muted(),
-        format!("{} / {} observed tasks", filtered.len(), nodes.len()),
-    );
     table(
         ui,
         "triage-process",
@@ -1178,8 +1339,8 @@ fn process_tree_nodes(ui: &mut egui::Ui, nodes: &[ProcessNode]) {
             "Executable",
             "TID",
             "Argv",
-            "First ns",
-            "Last ns",
+            "First seen",
+            "Last seen",
             "Task outcome",
             "Exec history",
         ],
@@ -1229,6 +1390,7 @@ struct TaskNode {
     provisional: bool,
     tid: u32,
     root: bool,
+    call_id: Option<trace::InvocationKey>,
     first_ns: Option<u64>,
     last_ns: Option<u64>,
     argv: Vec<String>,
@@ -1256,7 +1418,7 @@ fn observe_processes(
     for invocation in invocations {
         let entry = invocation.entry.as_ref();
         let exit = invocation.exit.as_ref();
-        let Some(event) = entry.or(exit) else {
+        let Some(event) = entry.or(exit).or(invocation.task_exit.as_ref()) else {
             continue;
         };
         if event.pid == 0 {
@@ -1265,6 +1427,9 @@ fn observe_processes(
         let key = adopt_task(nodes, event);
         if let Some(node) = nodes.get_mut(&key) {
             node.tid = event.tid;
+            if invocation.call_id != 0 {
+                node.call_id.get_or_insert(trace::key(invocation));
+            }
             node.root |= event.root_task_cookie != 0 && event.task_cookie == event.root_task_cookie;
             for observed in invocation
                 .entry
@@ -1367,6 +1532,7 @@ fn finish_processes(nodes: std::collections::BTreeMap<TaskKey, TaskNode>) -> Vec
             };
             found.push(ProcessNode {
                 depth,
+                call_id: node.call_id,
                 pid: key.pid,
                 cookie: key.cookie,
                 comm: node.comm.clone(),
@@ -1530,6 +1696,7 @@ fn program_name(entry: Option<&EventSummary>, exit: Option<&EventSummary>) -> Op
 }
 
 struct ProcessNode {
+    call_id: Option<trace::InvocationKey>,
     depth: usize,
     pid: u32,
     cookie: u64,
@@ -1605,6 +1772,7 @@ fn hit(
         event.timestamp_ns.to_string()
     };
     Finding {
+        key: trace::key(invocation),
         call_id: invocation.call_id,
         values: vec![
             ("finding.rule", RowValue::Text(rule.into())),
@@ -1642,6 +1810,10 @@ fn hit(
                     .map_or(RowValue::Missing, |ret| RowValue::Number(i128::from(ret))),
             ),
             ("event.id", RowValue::Number(i128::from(invocation.call_id))),
+            (
+                "stream.id",
+                RowValue::Number(i128::from(invocation.stream_id)),
+            ),
             (
                 "event.time_ns",
                 RowValue::Number(i128::from(event.timestamp_ns)),
@@ -1689,12 +1861,23 @@ const FINDING_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::number("process.tid", "Observed TID"),
     FieldSpec::number("process.cookie", "Stable task cookie"),
     FieldSpec::number("event.id", "Original invocation ID"),
+    FieldSpec::number("stream.id", "Recorded stream identity"),
     FieldSpec::number("syscall.ret", "Observed signed syscall return"),
     FieldSpec::number("event.time_ns", "Guest monotonic nanoseconds"),
     FieldSpec::tags("entry.tag", "Unavailable without a finding annotation"),
 ];
 
 const FILE_FIELDS: &[FieldSpec<'static>] = &[
+    FieldSpec::number(
+        "file.diff_count",
+        "Known differing bytes; gaps are separate",
+    ),
+    FieldSpec::boolean(
+        "file.complete",
+        "Original and final contents fully available",
+    ),
+    FieldSpec::number("file.read_size", "Successful read length"),
+    FieldSpec::text("file.content", "Captured transferred content preview"),
     FieldSpec::text(
         "file.path",
         "Path as displayed; inferred names label their uncertainty",
@@ -1725,6 +1908,7 @@ const FILE_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::number("process.tid", "Observed TID"),
     FieldSpec::number("process.cookie", "Stable task cookie"),
     FieldSpec::number("event.id", "Original invocation ID"),
+    FieldSpec::number("stream.id", "Recorded stream identity"),
     FieldSpec::number("event.time_ns", "Guest monotonic nanoseconds"),
     FieldSpec::number("syscall.ret", "Signed observed exit result"),
 ];
@@ -1763,8 +1947,14 @@ const DNS_FIELDS: &[FieldSpec<'static>] = &[
 
 #[derive(Clone, Default)]
 struct ScanRequest {
-    offsets: [usize; 5],
-    filters: [String; 5],
+    clock_anchor: Option<antinomie_monitor_core::HostClockAnchor>,
+    started_ms: Option<u64>,
+    ended_ms: Option<u64>,
+    root_cookie: u64,
+    run_finished: bool,
+    identity: Option<(String, String, String)>,
+    offsets: [usize; 8],
+    filters: [String; 8],
 }
 
 fn keep_page<T>(rows: &mut Vec<T>, skipped: &mut u64, index: &mut usize, offset: usize, row: T) {
@@ -2063,6 +2253,7 @@ fn suspicious_rows_state(
     rows
 }
 
+#[cfg(test)]
 fn file_rows(invocations: &[InvocationSummary], names: &[&str]) -> LimitedRows {
     let mut limited = LimitedRows {
         rows: Vec::new(),
@@ -2251,6 +2442,10 @@ fn file_event_row(
         ),
         ("event.id", RowValue::Number(i128::from(invocation.call_id))),
         (
+            "stream.id",
+            RowValue::Number(i128::from(invocation.stream_id)),
+        ),
+        (
             "event.time_ns",
             RowValue::Number(i128::from(event.timestamp_ns)),
         ),
@@ -2282,6 +2477,7 @@ fn file_event_row(
 
 fn open_flags(invocation: &InvocationSummary, event: &EventSummary) -> Option<u64> {
     match event.syscall_name.as_str() {
+        "creat" => Some(0x241),
         "open" => call_args(invocation).map(|args| args[1]),
         "openat" => call_args(invocation).map(|args| args[2]),
         "openat2" => invocation
@@ -2297,7 +2493,7 @@ fn open_flags(invocation: &InvocationSummary, event: &EventSummary) -> Option<u6
     }
 }
 
-const OPEN_NAMES: &[&str] = &["open", "openat", "openat2"];
+const OPEN_NAMES: &[&str] = &["open", "openat", "openat2", "creat", "memfd_create"];
 const CHANGE_NAMES: &[&str] = &[
     "write",
     "writev",
@@ -2321,6 +2517,30 @@ const CHANGE_NAMES: &[&str] = &[
     "fchown",
     "lchown",
     "fchownat",
+    "fchmodat2",
+    "mmap",
+    "mmap2",
+    "msync",
+    "link",
+    "linkat",
+    "symlink",
+    "symlinkat",
+    "setxattr",
+    "lsetxattr",
+    "fsetxattr",
+    "removexattr",
+    "lremovexattr",
+    "fremovexattr",
+    "utime",
+    "utimes",
+    "futimesat",
+    "utimensat",
+    "mknod",
+    "mknodat",
+    "fallocate",
+    "sendfile",
+    "copy_file_range",
+    "splice",
 ];
 const STORED_ROWS: usize = 2000;
 
@@ -2400,7 +2620,14 @@ impl Drop for FindingJournal {
 }
 
 struct ArchiveScan {
+    #[cfg(test)]
     coverage: String,
+    clock_anchor: Option<antinomie_monitor_core::HostClockAnchor>,
+    file_changes: Vec<files::Change>,
+    bpf: Vec<BpfNote>,
+    bpf_omitted: u64,
+    read: Vec<Vec<Cell>>,
+    read_omitted: u64,
     partial: bool,
     process: Vec<ProcessNode>,
     findings: Vec<Finding>,
@@ -2413,6 +2640,11 @@ struct ArchiveScan {
     http_omitted: u64,
     dns: Vec<Vec<Cell>>,
     dns_omitted: u64,
+    ips: Vec<Vec<Cell>>,
+    ips_omitted: u64,
+    hosts: Vec<Vec<Cell>>,
+    hosts_omitted: u64,
+    network_warning: Option<String>,
 }
 
 /// Walk every saved invocation page. Display tables keep at most [`STORED_ROWS`]
@@ -2456,6 +2688,23 @@ fn scan_archive_query(
         manifest: serde_json::Value::Null,
         events: Vec::new(),
     };
+    let facts = request
+        .identity
+        .as_ref()
+        .map(|(vm, boot, run)| {
+            antinomie_monitor_core::recording::run_filter_facts(&recording.directory, run, vm, boot)
+        })
+        .transpose()?;
+    let mut clock_anchor = request.clock_anchor;
+    let started_ms = request
+        .started_ms
+        .or_else(|| facts.as_ref().and_then(|facts| facts.started_ms));
+    let scoped = |call: &&InvocationSummary| {
+        request.root_cookie == 0
+            || trace::representative(call)
+                .or(call.task_exit.as_ref())
+                .is_some_and(|event| event.root_task_cookie == request.root_cookie)
+    };
     let total = recording.invocation_count_cancellable(None, cancel).ok();
     let mut cookie_sets = std::collections::BTreeMap::new();
     let mut nodes = std::collections::BTreeMap::new();
@@ -2464,8 +2713,24 @@ fn scan_archive_query(
     let finding_query = query::compile_table(&request.filters[0], FINDING_FIELDS);
     let mut finding_count = 0;
     let (seen, complete, issues) = walk_pages(&recording, cancel, |page| {
-        note_cookie_sets(&mut cookie_sets, page);
-        observe_processes(&mut nodes, page);
+        let page: Vec<_> = page.iter().filter(scoped).cloned().collect();
+        if clock_anchor.is_none() {
+            clock_anchor = started_ms
+                .zip(
+                    page.iter()
+                        .filter_map(trace::representative)
+                        .map(|event| event.timestamp_ns)
+                        .min(),
+                )
+                .and_then(|(host_ms, guest_ns)| {
+                    Some(antinomie_monitor_core::HostClockAnchor {
+                        guest_ns,
+                        host_us: host_ms.checked_mul(1000)?,
+                    })
+                });
+        }
+        note_cookie_sets(&mut cookie_sets, &page);
+        observe_processes(&mut nodes, &page);
         Ok(())
     })?;
     let cookies = resolve_cookies(&cookie_sets);
@@ -2476,16 +2741,40 @@ fn scan_archive_query(
     let mut files = FdState::default();
     let mut opened = Vec::new();
     let mut changed = Vec::new();
+    let mut file_index = files::FileIndex::default();
+    let mut bpf_calls = Vec::new();
+    let mut bpf_size = 0usize;
+    let mut bpf_omitted = 0;
+    let mut read = Vec::new();
+    let mut read_omitted = 0;
+    let mut read_count = 0;
+    let read_query = query::compile_table(&request.filters[5], FILE_FIELDS);
     let mut opened_omitted = 0u64;
     let mut changed_omitted = 0u64;
     let open_query = query::compile_table(&request.filters[1], FILE_FIELDS);
     let change_query = query::compile_table(&request.filters[2], FILE_FIELDS);
     let (mut open_count, mut change_count) = (0, 0);
     let (_, files_complete, _) = walk_pages(&recording, cancel, |page| {
-        for invocation in page {
+        for invocation in page.iter().filter(scoped) {
             let Some(event) = trace::representative(invocation) else {
                 continue;
             };
+            if call_args(invocation).is_some_and(|args| bpf_command(event, args).is_some()) {
+                let size = invocation
+                    .entry
+                    .iter()
+                    .chain(invocation.exit.iter())
+                    .flat_map(|event| &event.fields)
+                    .map(|field| field.preview.len() + field.key.len() + field.ranges.len() * 16)
+                    .sum::<usize>();
+                if bpf_calls.len() < STORED_ROWS && bpf_size.saturating_add(size) <= 8 * 1024 * 1024
+                {
+                    bpf_size += size;
+                    bpf_calls.push(invocation.clone());
+                } else {
+                    bpf_omitted += 1;
+                }
+            }
             for finding in suspicious_rows_state(std::slice::from_ref(invocation), Some(&files)) {
                 if let Some(writer) = &mut journal {
                     if let Err(error) = writer.push(&finding) {
@@ -2519,13 +2808,15 @@ fn scan_archive_query(
                     );
                 }
             }
-            if let Some(row) = file_event_row(&files, invocation, event, CHANGE_NAMES) {
-                if change_query.keep_table(&row[0].values) {
+            if let Some(row) =
+                file_index.observe(&files, invocation, event, Some(&recording.directory))
+            {
+                if read_query.keep_table(&row[0].values) {
                     keep_page(
-                        &mut changed,
-                        &mut changed_omitted,
-                        &mut change_count,
-                        request.offsets[2],
+                        &mut read,
+                        &mut read_omitted,
+                        &mut read_count,
+                        request.offsets[5],
                         row,
                     );
                 }
@@ -2533,6 +2824,30 @@ fn scan_archive_query(
         }
         Ok(())
     })?;
+    let bpf_identity = request.identity.as_ref();
+    let bpf = bpf_notes(&TriageInput {
+        invocations: &bpf_calls,
+        vm_id: bpf_identity.map(|id| id.0.as_str()),
+        boot_id: bpf_identity.map(|id| id.1.as_str()),
+        run_id: bpf_identity.map(|id| id.2.as_str()),
+        clock_anchor,
+        ..TriageInput::empty()
+    });
+    let omitted_files = file_index.omitted_files;
+    let file_changes: Vec<_> = file_index
+        .finish()
+        .into_iter()
+        .filter(|change| change_query.keep_table(&change.row(clock_anchor)[0].values))
+        .collect();
+    for change in &file_changes {
+        keep_page(
+            &mut changed,
+            &mut changed_omitted,
+            &mut change_count,
+            request.offsets[2],
+            change.row(clock_anchor),
+        );
+    }
     let complete = complete && files_complete;
     if complete && !cancel.load(Ordering::Relaxed) {
         if let Some(writer) = &mut journal {
@@ -2561,35 +2876,74 @@ fn scan_archive_query(
             "; finding journal persistence unavailable: {error}"
         ));
     }
-    let network = match pcap {
-        Some(path) => {
-            scan_pcap_query(path, pcap_open, cancel, request).unwrap_or_else(|error| PacketIndex {
-                coverage: format!("pcap index failed: {error}"),
+    let mut network_request = request.clone();
+    network_request.started_ms = started_ms;
+    network_request.ended_ms = facts.as_ref().and_then(|facts| facts.ended_ms);
+    let estimated_end = request.run_finished && network_request.ended_ms.is_none();
+    if estimated_end {
+        network_request.ended_ms = nodes
+            .values()
+            .filter_map(|node| node.last_ns)
+            .max()
+            .and_then(|ns| clock_anchor.and_then(|clock| clock.host_us(ns)))
+            .map(|us| us / 1000);
+    }
+    let mut network =
+        match pcap {
+            Some(path) => scan_pcap_query(path, pcap_open, cancel, &network_request)
+                .unwrap_or_else(|error| PacketIndex {
+                    coverage: format!("pcap index failed: {error}"),
+                    http: Vec::new(),
+                    http_omitted: 0,
+                    dns: Vec::new(),
+                    dns_omitted: 0,
+                    ips: Vec::new(),
+                    ips_omitted: 0,
+                    hosts: Vec::new(),
+                    hosts_omitted: 0,
+                    network_warning: Some(format!("Network index unavailable: {error}")),
+                }),
+            None => PacketIndex {
+                coverage:
+                    "no pcap is recorded for this run; the loaded packet preview was not used"
+                        .into(),
                 http: Vec::new(),
                 http_omitted: 0,
                 dns: Vec::new(),
                 dns_omitted: 0,
-            })
-        }
-        None => PacketIndex {
-            coverage: "no pcap is recorded for this run; the loaded packet preview was not used"
-                .into(),
-            http: Vec::new(),
-            http_omitted: 0,
-            dns: Vec::new(),
-            dns_omitted: 0,
-        },
-    };
+                ips: Vec::new(),
+                ips_omitted: 0,
+                hosts: Vec::new(),
+                hosts_omitted: 0,
+                network_warning: Some("No network capture is available for this run.".into()),
+            },
+        };
+    if estimated_end && network.network_warning.is_none() {
+        network.network_warning =
+            Some("Network end time is estimated from this run’s last retained syscall.".into());
+    }
     coverage.push_str(". ");
     coverage.push_str(&network.coverage);
     if cancel.load(Ordering::Relaxed) {
         return Err("cancelled".into());
     }
     Ok(ArchiveScan {
+        clock_anchor,
+        bpf,
+        bpf_omitted,
+        file_changes: file_changes
+            .into_iter()
+            .skip(request.offsets[2])
+            .take(STORED_ROWS)
+            .collect(),
+        read,
+        read_omitted,
         partial: !complete
+            || omitted_files > 0
             || !issues.is_empty()
             || network.coverage.contains("failed")
             || pcap_open,
+        #[cfg(test)]
         coverage,
         process: finish_processes(nodes),
         findings,
@@ -2602,6 +2956,11 @@ fn scan_archive_query(
         http_omitted: network.http_omitted,
         dns: network.dns,
         dns_omitted: network.dns_omitted,
+        ips: network.ips,
+        ips_omitted: network.ips_omitted,
+        hosts: network.hosts,
+        hosts_omitted: network.hosts_omitted,
+        network_warning: network.network_warning,
     })
 }
 
@@ -2637,33 +2996,30 @@ const TSHARK_FIELDS: &[&str] = &[
     "dns.response_in",
     "dns.response_to",
     "dns.retransmission",
+    "ip.geoip.dst_country",
+    "ipv6.geoip.dst_country",
+    "ip.geoip.dst_org",
+    "ipv6.geoip.dst_org",
+    "tls.handshake.extensions_server_name",
 ];
 const HTTP_HEADERS: &[&str] = &[
-    "Frame / stream",
-    "Time (µs)",
-    "Endpoints",
+    "Frame",
+    "Time",
+    "Endpoint",
     "Method",
     "Host",
     "URI",
-    "Version",
     "Response",
-    "Response frames",
-    "Attribution",
-    "Completeness",
+    "Response frame",
 ];
 const DNS_HEADERS: &[&str] = &[
     "Frame",
-    "Time (µs)",
-    "Endpoints",
-    "ID",
-    "Name",
-    "Type",
-    "Class",
-    "Protocol",
+    "Endpoint",
+    "Qname",
+    "Qtype",
     "Rcode",
     "Answers",
-    "Response frames",
-    "Retry",
+    "Response frame",
 ];
 
 struct PacketSpool {
@@ -2819,6 +3175,56 @@ fn spool_response(
     Ok(Vec::new())
 }
 
+fn spool_packet_fields(
+    identity: &antinomie_monitor_core::packet_filter::CaptureIdentity,
+    live: bool,
+    cancel: &Arc<AtomicBool>,
+    geoip: bool,
+) -> Result<
+    (
+        Arc<std::sync::Mutex<PacketSpool>>,
+        antinomie_monitor_core::packet_filter::StreamExtent,
+    ),
+    String,
+> {
+    let spool = Arc::new(std::sync::Mutex::new(PacketSpool::new()?));
+    let writer = Arc::clone(&spool);
+    let fields: Vec<_> = TSHARK_FIELDS
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| geoip || !(31..35).contains(at))
+        .map(|(_, field)| *field)
+        .collect();
+    let extent = antinomie_monitor_core::packet_filter::stream_fields(
+        identity,
+        "(ip || ipv6) && !tcp.analysis.retransmission",
+        &fields,
+        live,
+        Arc::clone(cancel),
+        move |line| {
+            let mut spool = writer.lock().map_err(|_| "metadata spool lock poisoned")?;
+            if geoip {
+                spool.push(line)
+            } else {
+                let mut fields = tsv_fields(line)?;
+                if fields.len() != TSHARK_FIELDS.len() - 4 {
+                    return Err("TShark returned a different field layout".into());
+                }
+                for _ in 0..4 {
+                    fields.insert(31, String::new());
+                }
+                let padded = fields
+                    .iter()
+                    .map(|field| format!("\"{}\"", field.replace('"', "\"\"")))
+                    .collect::<Vec<_>>()
+                    .join("\t");
+                spool.push(&padded)
+            }
+        },
+    )?;
+    Ok((spool, extent))
+}
+
 /// TShark reassembles the complete saved PCAP or an owned complete-record live
 /// prefix. Output is disk-backed; response lookups use a fixed-size binary
 /// index and memory holds only one query page. Source PCAP is unchanged.
@@ -2828,15 +3234,24 @@ fn scan_pcap_query(
     cancel: &Arc<AtomicBool>,
     request: &ScanRequest,
 ) -> Result<PacketIndex, String> {
+    if request.identity.is_some() && request.started_ms.is_none() {
+        return Err(
+            "host start time unavailable; network evidence cannot be scoped to this run".into(),
+        );
+    }
+    if request.identity.is_some() && request.run_finished && request.ended_ms.is_none() {
+        return Err(
+            "host end time unavailable; network evidence cannot be scoped to this run".into(),
+        );
+    }
     use std::io::{BufRead, BufReader};
     let identity = antinomie_monitor_core::packet_filter::CaptureIdentity::read(path)?;
-    let spool = Arc::new(std::sync::Mutex::new(PacketSpool::new()?));
-    let writer = Arc::clone(&spool);
-    let extent = antinomie_monitor_core::packet_filter::stream_fields(&identity,
-        "((http.request && !tcp.analysis.retransmission) || http.response || (dns && !tcp.analysis.retransmission))",
-        TSHARK_FIELDS, pcap_open, Arc::clone(cancel), move |line| {
-            writer.lock().map_err(|_| "metadata spool lock poisoned")?.push(line)
-        })?;
+    let (spool, extent) = match spool_packet_fields(&identity, pcap_open, cancel, true) {
+        Err(error) if error.contains("geoip") && !cancel.load(Ordering::Relaxed) => {
+            spool_packet_fields(&identity, pcap_open, cancel, false)?
+        }
+        result => result?,
+    };
     let state = spool.lock().map_err(|_| "metadata spool lock poisoned")?;
     let mut rows = BufReader::new(
         std::fs::File::open(state.directory.join("rows.tsv")).map_err(|error| error.to_string())?,
@@ -2852,7 +3267,13 @@ fn scan_pcap_query(
         http_omitted: 0,
         dns: Vec::new(),
         dns_omitted: 0,
+        ips: Vec::new(),
+        ips_omitted: 0,
+        hosts: Vec::new(),
+        hosts_omitted: 0,
+        network_warning: None,
     };
+    let mut inventory = network::Inventory::default();
     let (mut http_count, mut dns_count) = (0, 0);
     let http_query = query::compile_table(&request.filters[3], HTTP_FIELDS);
     let dns_query = query::compile_table(&request.filters[4], DNS_FIELDS);
@@ -2878,6 +3299,37 @@ fn scan_pcap_query(
             .parse::<u64>()
             .map_err(|_| "invalid TShark frame number")?;
         let time = epoch_us(field(1));
+        if request
+            .started_ms
+            .is_some_and(|start| time.is_none_or(|time| time / 1000 < start))
+            || request
+                .ended_ms
+                .is_some_and(|end| time.is_none_or(|time| time / 1000 > end))
+        {
+            continue;
+        }
+        let destination = if field(4).is_empty() {
+            field(5)
+        } else {
+            field(4)
+        };
+        inventory.destination(
+            destination,
+            frame,
+            if field(31).is_empty() {
+                field(32)
+            } else {
+                field(31)
+            },
+            if field(33).is_empty() {
+                field(34)
+            } else {
+                field(33)
+            },
+        );
+        for hostname in field(35).split('\u{1f}').filter(|name| !name.is_empty()) {
+            inventory.host(hostname, frame, time, &[destination.into()], "TLS SNI");
+        }
         let endpoints = format!(
             "{}:{} → {}:{}",
             if field(2).is_empty() {
@@ -2918,13 +3370,9 @@ fn scan_pcap_query(
                     .and_then(|value| value.split('\u{1f}').next())
                     .and_then(|value| value.parse::<u16>().ok());
                 let mut row = vec![
+                    cell(format!("#{frame}"), theme::text(), true),
                     cell(
-                        format!("#{frame} / stream {}", field(10)),
-                        theme::text(),
-                        true,
-                    ),
-                    cell(
-                        time.map_or("—".into(), |time| time.to_string()),
+                        time.map_or("Unavailable".into(), crate::time_format::short_time_us),
                         theme::text(),
                         true,
                     ),
@@ -2962,6 +3410,11 @@ fn scan_pcap_query(
                     ("entry.complete", RowValue::Missing),
                     ("network.attribution", RowValue::Text("unknown".into())),
                 ];
+                inventory.host(item(12), frame, time, &[destination.into()], "HTTP");
+                // Keep protocol/version metadata in typed filters, but only requested display columns.
+                row.remove(10);
+                row.remove(9);
+                row.remove(6);
                 if http_query.keep_table(&row[0].values) {
                     keep_page(
                         &mut index.http,
@@ -2997,14 +3450,14 @@ fn scan_pcap_query(
                 let mut row = vec![
                     cell(format!("#{frame}"), theme::text(), true),
                     cell(
-                        time.map_or("—".into(), |time| time.to_string()),
+                        time.map_or("Unavailable".into(), crate::time_format::short_time_us),
                         theme::text(),
                         true,
                     ),
                     cell(&endpoints, theme::text(), true),
                     cell(field(18), theme::text(), true),
                     cell(name, theme::text(), false),
-                    cell(item(20), theme::text(), false),
+                    cell(network::qtype(item(20)), theme::text(), false),
                     cell(item(21), theme::text(), false),
                     cell(protocol, theme::text(), false),
                     cell(
@@ -3033,7 +3486,7 @@ fn scan_pcap_query(
                     ("network.endpoints", RowValue::Text(endpoints.clone())),
                     ("dns.id", id.map_or(RowValue::Missing, RowValue::Number)),
                     ("dns.name", RowValue::Text(name.into())),
-                    ("dns.type", text_value(item(20))),
+                    ("dns.type", text_value(&network::qtype(item(20)))),
                     ("dns.class", text_value(item(21))),
                     ("dns.protocol", RowValue::Text(protocol.into())),
                     (
@@ -3043,6 +3496,15 @@ fn scan_pcap_query(
                     ("dns.answers", RowValue::List(answers.clone())),
                     ("dns.retry", retry.map_or(RowValue::Missing, RowValue::Bool)),
                 ];
+                let addresses: Vec<_> = answers
+                    .iter()
+                    .filter(|answer| answer.parse::<std::net::IpAddr>().is_ok())
+                    .cloned()
+                    .collect();
+                inventory.host(name, frame, time, &addresses, "DNS lookup");
+                for at in [11, 7, 6, 3, 1] {
+                    row.remove(at);
+                }
                 if dns_query.keep_table(&row[0].values) {
                     keep_page(
                         &mut index.dns,
@@ -3054,6 +3516,41 @@ fn scan_pcap_query(
                 }
             }
         }
+    }
+    let (ips, hosts) = inventory.rows();
+    for (slot, rows, fields) in [
+        (6, ips, network::IP_FIELDS),
+        (7, hosts, network::HOST_FIELDS),
+    ] {
+        let query = query::compile_table(&request.filters[slot], fields);
+        let mut count = 0;
+        for row in rows
+            .into_iter()
+            .filter(|row| query.keep_table(&row[0].values))
+        {
+            if slot == 6 {
+                keep_page(
+                    &mut index.ips,
+                    &mut index.ips_omitted,
+                    &mut count,
+                    request.offsets[slot],
+                    row,
+                );
+            } else {
+                keep_page(
+                    &mut index.hosts,
+                    &mut index.hosts_omitted,
+                    &mut count,
+                    request.offsets[slot],
+                    row,
+                );
+            }
+        }
+    }
+    if inventory.omitted > 0 {
+        index.network_warning = Some(
+            "Network inventory retention limit reached; packet evidence remains available.".into(),
+        );
     }
     index.coverage = format!("TShark HTTP/1 and DNS/UDP/TCP; {} capture frames; complete-record extent {}/{} octets; HTTP matches {http_count}, DNS matches {dns_count}; response correlation uses decoder frame links; attribution unknown. HTTPS, HTTP/2, HTTP/3 and encrypted DNS unavailable{}",
         extent.packet_count, extent.complete_extent, extent.file_size,
@@ -3104,6 +3601,11 @@ struct PacketIndex {
     http_omitted: u64,
     dns: Vec<Vec<Cell>>,
     dns_omitted: u64,
+    ips: Vec<Vec<Cell>>,
+    ips_omitted: u64,
+    hosts: Vec<Vec<Cell>>,
+    hosts_omitted: u64,
+    network_warning: Option<String>,
 }
 
 /// Read the owned pcap to the end, or to [`PACKET_BOUND`] frames. Reconstruction
@@ -3195,6 +3697,11 @@ fn scan_pcap(path: &Path, pcap_open: bool, cancel: &AtomicBool) -> Result<Packet
         http_omitted,
         dns,
         dns_omitted,
+        ips: Vec::new(),
+        ips_omitted: 0,
+        hosts: Vec::new(),
+        hosts_omitted: 0,
+        network_warning: None,
     })
 }
 
@@ -3341,7 +3848,7 @@ fn resolve_cookies(
 /// Successful `open`, `openat` and `openat2` return the new descriptor.
 /// Every other file operation uses the argument whose schema name is `fd`.
 fn file_fd(invocation: &InvocationSummary, event: &EventSummary) -> String {
-    if matches!(event.syscall_name.as_str(), "open" | "openat" | "openat2") {
+    if OPEN_NAMES.contains(&event.syscall_name.as_str()) {
         return invocation
             .exit
             .as_ref()
@@ -3365,6 +3872,12 @@ fn file_fd(invocation: &InvocationSummary, event: &EventSummary) -> String {
 /// still argument 4, the same slot `mmap` names `fd`.
 fn fd_argument(invocation: &InvocationSummary, event: &EventSummary) -> Option<u64> {
     let args = call_args(invocation)?;
+    if matches!(event.syscall_name.as_str(), "copy_file_range" | "splice") {
+        return Some(args[2]);
+    }
+    if event.syscall_name == "sendfile" {
+        return Some(args[0]);
+    }
     let index = (0..args.len())
         .find(|index| trace::argument_name(event.syscall_nr, *index) == "fd")
         .or_else(|| matches!(event.syscall_name.as_str(), "mmap" | "mmap2").then_some(4))?;
@@ -3440,7 +3953,7 @@ fn remember_open(files: &mut FdState, invocation: &InvocationSummary, event: &Ev
         }
         return;
     }
-    if !matches!(event.syscall_name.as_str(), "open" | "openat" | "openat2") {
+    if !OPEN_NAMES.contains(&event.syscall_name.as_str()) {
         return;
     }
     if !succeeded(invocation) {
@@ -3595,6 +4108,7 @@ enum DupKind {
 
 /// One cookie per pid when every event for that pid shares it. Two cookies
 /// for one pid are not a guess: the caller uses 0.
+#[cfg(test)]
 fn task_cookies(invocations: &[InvocationSummary]) -> std::collections::BTreeMap<u32, u64> {
     let mut sets: std::collections::BTreeMap<u32, std::collections::BTreeSet<u64>> =
         std::collections::BTreeMap::new();
@@ -3807,6 +4321,14 @@ fn displayed_path(invocation: &InvocationSummary, event: &EventSummary, files: &
             .unwrap_or_else(|| "—".into());
         return format!("{old} → {new}");
     }
+    if event.syscall_name == "memfd_create" {
+        return event
+            .fields
+            .iter()
+            .find_map(path_text)
+            .map(|name| format!("memfd:{name}"))
+            .unwrap_or_else(|| "memfd:unnamed".into());
+    }
     let own = path_list(invocation);
     if !own.is_empty() {
         return own
@@ -3844,25 +4366,10 @@ fn displayed_path(invocation: &InvocationSummary, event: &EventSummary, files: &
         }
         return "—".into();
     }
-    if matches!(
-        event.syscall_name.as_str(),
-        "read"
-            | "write"
-            | "readv"
-            | "writev"
-            | "pwrite64"
-            | "pwritev"
-            | "pwritev2"
-            | "ftruncate"
-            | "fchmod"
-            | "fchown"
-            | "fchdir"
-    ) {
-        if let Some(fd) = fd_argument(invocation, event) {
-            let (cookie, pid) = table_owner(files, invocation.task_cookie, event.tid);
-            if let Some(path) = files.opened.get(&(cookie, pid, fd)) {
-                return path.clone();
-            }
+    if let Some(fd) = fd_argument(invocation, event) {
+        let (cookie, pid) = table_owner(files, invocation.task_cookie, event.tid);
+        if let Some(path) = files.opened.get(&(cookie, pid, fd)) {
+            return path.clone();
         }
     }
     // Trace text is not a path. An uncaptured filename stays unknown.
@@ -3989,6 +4496,7 @@ fn path_list(invocation: &InvocationSummary) -> Vec<String> {
     paths
 }
 
+#[cfg(test)]
 fn flow(frame: impl Into<String>, ends: impl Into<String>, detail: impl Into<String>) -> Vec<Cell> {
     vec![
         cell(frame, theme::value(theme::ValueKind::Number), true),
@@ -3997,6 +4505,7 @@ fn flow(frame: impl Into<String>, ends: impl Into<String>, detail: impl Into<Str
     ]
 }
 
+#[cfg(test)]
 fn http_rows(input: &TriageInput<'_>) -> LimitedRows {
     let mut limited = LimitedRows {
         rows: Vec::new(),
@@ -4044,6 +4553,7 @@ fn http_rows(input: &TriageInput<'_>) -> LimitedRows {
     limited
 }
 
+#[cfg(test)]
 fn reconstruct_input(
     input: &TriageInput<'_>,
 ) -> Option<antinomie_monitor_core::network::Reconstruction> {
@@ -4069,6 +4579,7 @@ fn reconstruct_input(
 /// Process of a connect or sendto whose path or info text contains this
 /// packet's destination address and destination port. Port text alone is
 /// not enough. Anything else is an em dash.
+#[cfg(test)]
 fn http_process(packet: &NetworkPacket, invocations: &[InvocationSummary]) -> String {
     let Some(port) = packet.dst_port else {
         return "—".into();
@@ -4095,6 +4606,7 @@ fn http_process(packet: &NetworkPacket, invocations: &[InvocationSummary]) -> St
     "—".into()
 }
 
+#[cfg(test)]
 fn packet_address(packet: &NetworkPacket) -> String {
     if let Some(ip) = packet.dst_ip {
         return ip.to_string();
@@ -4116,11 +4628,13 @@ fn packet_address(packet: &NetworkPacket) -> String {
     destination.to_string()
 }
 
+#[cfg(test)]
 fn connects_or_sends(event: &EventSummary) -> bool {
     matches!(event.syscall_name.as_str(), "connect" | "sendto")
         || matches!(event.syscall_nr, 42 | 44)
 }
 
+#[cfg(test)]
 fn mentions_endpoint(invocation: &InvocationSummary, address: &str, port: &str) -> bool {
     let info = trace::info(invocation);
     path_list(invocation)
@@ -4129,10 +4643,12 @@ fn mentions_endpoint(invocation: &InvocationSummary, address: &str, port: &str) 
         || contains_address_and_port(&info, address, port)
 }
 
+#[cfg(test)]
 fn contains_address_and_port(text: &str, address: &str, port: &str) -> bool {
     text.contains(address) && text.contains(port)
 }
 
+#[cfg(test)]
 fn dns_rows(input: &TriageInput<'_>) -> LimitedRows {
     let mut limited = LimitedRows {
         rows: Vec::new(),
@@ -4234,6 +4750,7 @@ fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
                 command
             };
             let identity = bpf::BpfIdentity {
+                stream_id: invocation.stream_id,
                 vm_id: input.vm_id.map(str::to_owned),
                 boot_id: input.boot_id.map(str::to_owned),
                 run_id: input.run_id.map(str::to_owned),
@@ -4485,11 +5002,19 @@ fn isolated_instructions(field: &antinomie_monitor_core::FieldSummary) -> Option
     Some(bytes.to_vec())
 }
 
-fn bpf_view(ui: &mut egui::Ui, input: &TriageInput<'_>, status: &mut String) {
-    ui.label(
-        "BPF programs, classic socket filters and seccomp installs in this loaded page. The translation reads captured instruction bytes; it does not load or run them. VM, boot, or run is null in the export when this view does not have that id.",
-    );
-    let notes = bpf_notes(input);
+fn bpf_view(
+    ui: &mut egui::Ui,
+    input: &TriageInput<'_>,
+    status: &mut String,
+    indexed: Option<&[BpfNote]>,
+) {
+    let page_notes;
+    let notes = if let Some(notes) = indexed {
+        notes
+    } else {
+        page_notes = bpf_notes(input);
+        page_notes.as_slice()
+    };
     if !status.is_empty() {
         ui.label(status.as_str());
     }
@@ -4504,8 +5029,34 @@ fn bpf_view(ui: &mut egui::Ui, input: &TriageInput<'_>, status: &mut String) {
         .id_salt("triage-bpf")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            for note in &notes {
-                ui.strong(&note.heading);
+            for note in notes {
+                let response = ui.add(
+                    egui::Label::new(RichText::new(&note.heading).strong())
+                        .sense(egui::Sense::click()),
+                );
+                if response.double_clicked() {
+                    if let Some(id) = note.identity.event_id {
+                        request_evidence_jump(
+                            ui.ctx(),
+                            &[
+                                ("event.id", RowValue::Number(i128::from(id))),
+                                (
+                                    "process.cookie",
+                                    note.identity.cookie.map_or(RowValue::Missing, |cookie| {
+                                        RowValue::Number(i128::from(cookie))
+                                    }),
+                                ),
+                                (
+                                    "stream.id",
+                                    RowValue::Number(i128::from(note.identity.stream_id)),
+                                ),
+                            ],
+                        );
+                    }
+                }
+                if let Some(time) = note.identity.timestamp_ns {
+                    ui.weak(crate::time_format::guest_ns(input.clock_anchor, Some(time)));
+                }
                 if let Some(line) = &note.lifecycle {
                     ui.label(line);
                 }
@@ -4547,6 +5098,347 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "requires X11 native rendering; synthetic triage evidence fixture"]
+    fn native_triage_fixture() {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        struct Fixture {
+            view: TriageView,
+            deadline: Instant,
+        }
+        impl eframe::App for Fixture {
+            fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.heading("Run triage — synthetic fixture");
+                    let _ = self.view.show(
+                        ui,
+                        TriageInput {
+                            vm_id: Some("vm"),
+                            boot_id: Some("boot"),
+                            run_id: Some("run"),
+                            ..TriageInput::empty()
+                        },
+                    );
+                });
+                if Instant::now() >= self.deadline {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+        }
+        let temp = PacketSpool::new().unwrap();
+        let mut raw = Vec::new();
+        write_rwx_calls(&mut raw, 0..3);
+        std::fs::write(temp.directory.join("telemetry.raw"), raw).unwrap();
+        let scene = std::env::var("ANTINOMIE_TRIAGE_QA_SCENE").unwrap_or_else(|_| "changed".into());
+        let pcap = temp.directory.join("fixture.pcap");
+        std::fs::write(
+            &pcap,
+            if scene == "http" {
+                http_pcap()
+            } else {
+                dns_pcap()
+            },
+        )
+        .unwrap();
+        let mut scan =
+            scan_archive(&temp.directory, Some(&pcap), false, &AtomicBool::new(false)).unwrap();
+        let clock = Some(antinomie_monitor_core::HostClockAnchor {
+            guest_ns: 0,
+            host_us: 1_700_000_000_000_000,
+        });
+        scan.clock_anchor = clock;
+        let mut calls = [
+            path_call(1, 2, "open", 3, "/tmp/analysis-note.txt"),
+            call(1, 0, "read", 5),
+            call(1, 0, "read", 0),
+            call(1, 18, "pwrite64", 2),
+        ];
+        calls[0].entry.as_mut().unwrap().args = Some([0, 2, 0, 0, 0, 0]);
+        calls[1].entry.as_mut().unwrap().args = Some([3, 0, 5, 0, 0, 0]);
+        calls[1]
+            .exit
+            .as_mut()
+            .unwrap()
+            .fields
+            .push(captured("arg1.data", "", b"hello"));
+        calls[2].entry.as_mut().unwrap().args = Some([3, 0, 5, 0, 0, 0]);
+        calls[3].entry.as_mut().unwrap().args = Some([3, 0, 2, 1, 0, 0]);
+        calls[3]
+            .entry
+            .as_mut()
+            .unwrap()
+            .fields
+            .push(captured("arg1.data", "", b"XY"));
+        let mut state = FdState::default();
+        let mut index = files::FileIndex::default();
+        for (at, call) in calls.iter_mut().enumerate() {
+            call.call_id = at as u64 + 1;
+            for event in call.entry.iter_mut().chain(call.exit.iter_mut()) {
+                event.call_id = call.call_id;
+                event.timestamp_ns = at as u64 * 1_000_000_000;
+            }
+            let event = trace::representative(call).unwrap();
+            remember_open(&mut state, call, event);
+            if let Some(row) = file_event_row(&state, call, event, OPEN_NAMES) {
+                scan.opened.push(row);
+            }
+            if let Some(row) = index.observe(&state, call, event, None) {
+                scan.read.push(row);
+            }
+        }
+        scan.file_changes = index.finish();
+        scan.changed = scan
+            .file_changes
+            .iter()
+            .map(|change| change.row(clock))
+            .collect();
+        let selected = scan.changed.first().map(|row| evidence_key(row));
+        let mut view = TriageView::default();
+        view.scan = Some(scan);
+        view.last_refresh = Some(Instant::now());
+        view.context_key = Some("vm\nboot\nrun\n".into());
+        match scene.as_str() {
+            "read" => {
+                view.section = Section::Files;
+                view.files = FileTab::Read;
+            }
+            "changed" => {
+                view.section = Section::Files;
+                view.files = FileTab::Changed;
+            }
+            "http" => {
+                view.section = Section::Network;
+                view.network = NetTab::Http;
+            }
+            "dns" => {
+                view.section = Section::Network;
+                view.network = NetTab::Dns;
+            }
+            "hosts" => {
+                view.section = Section::Network;
+                view.network = NetTab::Hosts;
+            }
+            _ => {
+                view.section = Section::Process;
+            }
+        }
+        let width = std::env::var("ANTINOMIE_TRIAGE_QA_WIDTH")
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(1280)
+            .clamp(420, 1920);
+        let font = if width < 700 { 24.0 } else { 16.0 };
+        eframe::run_native(
+            "Antinomie Triage QA",
+            eframe::NativeOptions {
+                viewport: egui::ViewportBuilder::default()
+                    .with_inner_size([width as f32, 880.0])
+                    .with_position([16.0, 16.0]),
+                persist_window: false,
+                event_loop_builder: Some(Box::new(|builder| {
+                    builder.with_x11();
+                    builder.with_any_thread(true);
+                })),
+                ..Default::default()
+            },
+            Box::new(move |cc| {
+                theme::install(&cc.egui_ctx);
+                theme::text_size(&cc.egui_ctx, font);
+                if scene == "changed" {
+                    if let Some(selected) = selected {
+                        cc.egui_ctx.data_mut(|data| {
+                            data.insert_temp(
+                                egui::Id::new(("triage-selected-row", "triage-changed")),
+                                selected,
+                            )
+                        });
+                    }
+                }
+                Ok(Box::new(Fixture {
+                    view,
+                    deadline: Instant::now() + Duration::from_secs(10),
+                }))
+            }),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn evidence_navigation_uses_stream_task_and_call_identity() {
+        let context = egui::Context::default();
+        let values = [
+            ("stream.id", RowValue::Number(7)),
+            ("process.cookie", RowValue::Number(9)),
+            ("event.id", RowValue::Number(1)),
+        ];
+        request_evidence_jump(&context, &values);
+        assert_eq!(
+            context
+                .data_mut(|data| data
+                    .remove_temp::<trace::InvocationKey>(egui::Id::new("triage-call-jump"))),
+            Some((7, 9, 1))
+        );
+        let first = call(9, 0, "read", 1);
+        let other = call(10, 0, "read", 1);
+        let query = query::compile_note("stream.id == 1 && process.cookie == 9 && call.id == 1");
+        assert!(query.error.is_none());
+        assert!(query.keep(&first));
+        assert!(!query.keep(&other));
+        request_evidence_jump(&context, &[("frame.number", RowValue::Number(520))]);
+        assert_eq!(
+            context.data_mut(|data| data.remove_temp::<u64>(egui::Id::new("triage-packet-jump"))),
+            Some(520)
+        );
+    }
+
+    #[test]
+    fn double_click_table_text_requests_its_exact_evidence() {
+        for packet in [false, true] {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let mut c = cell("click this evidence", theme::text(), false);
+            c.values = if packet {
+                vec![("frame.number", RowValue::Number(520))]
+            } else {
+                vec![
+                    ("stream.id", RowValue::Number(7)),
+                    ("process.cookie", RowValue::Number(9)),
+                    ("event.id", RowValue::Number(1)),
+                ]
+            };
+            let rows = vec![vec![c]];
+            let draw = |events, time| {
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(900.0, 600.0),
+                        )),
+                        events,
+                        time: Some(time),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            table(ui, "pointer-evidence", &["Evidence"], &rows)
+                        });
+                    },
+                )
+            };
+            for n in 0..3 {
+                draw(vec![], f64::from(n) * 0.01);
+            }
+            let out = draw(vec![], 0.04);
+            let pos = crate::app::tests::texts(&out)
+                .into_iter()
+                .find(|(text, _)| text == "click this evidence")
+                .unwrap()
+                .1
+                .center();
+            for (index, pressed) in [true, false, true, false].into_iter().enumerate() {
+                draw(
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    0.1 + index as f64 * 0.05,
+                );
+            }
+            if packet {
+                assert_eq!(
+                    ctx.data(|data| data.get_temp::<u64>(egui::Id::new("triage-packet-jump"))),
+                    Some(520)
+                );
+            } else {
+                assert_eq!(
+                    ctx.data(|data| data
+                        .get_temp::<trace::InvocationKey>(egui::Id::new("triage-call-jump"))),
+                    Some((7, 9, 1))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn saved_run_scope_excludes_another_root_in_the_same_raw_archive() {
+        let temp = PacketSpool::new().unwrap();
+        let mut raw = Vec::new();
+        write_rwx_calls(&mut raw, 0..2);
+        // Rewrite only the second invocation's inherited root cookie.
+        let mut at = 0;
+        while at < raw.len() {
+            let size = u32::from_le_bytes(raw[at..at + 4].try_into().unwrap()) as usize;
+            if u64::from_le_bytes(raw[at + 4 + 40..at + 4 + 48].try_into().unwrap()) == 1 {
+                raw[at + 4 + 128..at + 4 + 136].copy_from_slice(&99u64.to_le_bytes());
+            }
+            at += 4 + size;
+        }
+        std::fs::write(temp.directory.join("telemetry.raw"), raw).unwrap();
+        let request = ScanRequest {
+            root_cookie: 55,
+            ..Default::default()
+        };
+        let scan = scan_archive_query(
+            &temp.directory,
+            None,
+            false,
+            &Arc::new(AtomicBool::new(false)),
+            &request,
+        )
+        .unwrap();
+        assert_eq!(scan.findings.len(), 1);
+        assert_eq!(scan.findings[0].key, (1, 55, 0));
+        assert_eq!(scan.process.len(), 1);
+    }
+
+    #[test]
+    fn network_rows_are_bounded_to_the_run_host_time_window() {
+        let temp = PacketSpool::new().unwrap();
+        let path = temp.directory.join("dns.pcap");
+        std::fs::write(&path, dns_pcap()).unwrap();
+        let request = ScanRequest {
+            started_ms: Some(u64::MAX / 1000),
+            ..Default::default()
+        };
+        let scan =
+            scan_pcap_query(&path, false, &Arc::new(AtomicBool::new(false)), &request).unwrap();
+        assert!(
+            scan.http.is_empty()
+                && scan.dns.is_empty()
+                && scan.ips.is_empty()
+                && scan.hosts.is_empty()
+        );
+    }
+
+    #[test]
+    fn network_field_stream_without_geoip_preserves_dns_and_original_frames() {
+        use std::io::{BufRead, BufReader};
+        let temp = PacketSpool::new().unwrap();
+        let path = temp.directory.join("dns.pcap");
+        std::fs::write(&path, dns_pcap()).unwrap();
+        let identity = antinomie_monitor_core::packet_filter::CaptureIdentity::read(&path).unwrap();
+        let (spool, _) =
+            spool_packet_fields(&identity, false, &Arc::new(AtomicBool::new(false)), false)
+                .unwrap();
+        let state = spool.lock().unwrap();
+        let file = std::fs::File::open(state.directory.join("rows.tsv")).unwrap();
+        let rows: Vec<_> = BufReader::new(file)
+            .lines()
+            .map(|line| tsv_fields(&line.unwrap()).unwrap())
+            .collect();
+        assert!(!rows.is_empty());
+        assert!(rows.iter().all(|row| row.len() == TSHARK_FIELDS.len()));
+        assert_eq!(rows[0][0], "1");
+        assert_eq!(rows[0][19], "example.com");
+        assert!(rows[0][31..35].iter().all(String::is_empty));
+    }
+
+    #[test]
     fn tshark_boolean_formats_preserve_missing_and_reject_malformed_or_mixed_values() {
         for text in ["False", "false", "FALSE", "0", "False\u{1f}0"] {
             assert_eq!(tshark_boolean(text), Some(false));
@@ -4585,12 +5477,14 @@ mod tests {
                     .collect::<Vec<_>>(),
                 ["#1", "#2", "#4"]
             );
-            assert!(index.dns.iter().all(|row| row[4].text == "example.com"));
-            assert_eq!(index.dns[0][10].text, "3");
-            assert_eq!(index.dns[2][10].text, "5");
-            assert!(index.dns[0][9].text.contains("93.184.216.34"));
-            assert!(index.dns[2][2].text.contains("::1"));
-            assert_eq!(index.dns[1][11].text, "retry");
+            assert!(index.dns.iter().all(|row| row[2].text == "example.com"));
+            assert_eq!(index.dns[0][6].text, "3");
+            assert_eq!(index.dns[2][6].text, "5");
+            assert!(index.dns[0][5].text.contains("93.184.216.34"));
+            assert!(index.dns[2][1].text.contains("::1"));
+            assert_eq!(index.dns[0][3].text, "A");
+            assert!(!index.ips.is_empty());
+            assert_eq!(index.hosts.len(), 1);
             assert!(
                 index.dns[1][0]
                     .values
@@ -4760,10 +5654,13 @@ mod tests {
                 vm_id: Some("vm"),
                 boot_id: Some("boot"),
                 run_id: Some(run),
-                coverage: "test retained archive",
                 archive: Some(archive),
                 pcap: None,
                 pcap_open: false,
+                clock_anchor: None,
+                started_ms: None,
+                root_cookie: 0,
+                run_finished: false,
             }
         }
         fn wait(
@@ -4803,13 +5700,13 @@ mod tests {
         view.refresh_seconds = 1;
         view.scan_request.filters[0] = "finding.rule == \"memory.rwx\"".into();
         wait(&mut view, &ctx, &first.directory, "first", 1);
-        view.selected_call_id = Some(0);
+        view.selected_call_id = Some((1, 55, 0));
         let first_refresh = view.last_refresh.unwrap();
         write_rwx_calls(&mut raw, 1..2);
         raw.sync_all().unwrap();
         wait(&mut view, &ctx, &first.directory, "first", 2);
         assert!(view.last_refresh.unwrap() > first_refresh);
-        assert_eq!(view.selected_call_id, Some(0));
+        assert_eq!(view.selected_call_id, Some((1, 55, 0)));
         assert_eq!(
             view.scan_request.filters[0],
             "finding.rule == \"memory.rwx\""
@@ -5125,7 +6022,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    fn call(pid: u32, nr: u64, name: &str, result: i64) -> InvocationSummary {
+    pub(super) fn call(pid: u32, nr: u64, name: &str, result: i64) -> InvocationSummary {
         InvocationSummary {
             stream_id: 1,
             task_cookie: u64::from(pid),
@@ -5173,7 +6070,7 @@ mod tests {
         }
     }
 
-    fn captured(key: &str, layout: &str, data: &[u8]) -> FieldSummary {
+    pub(super) fn captured(key: &str, layout: &str, data: &[u8]) -> FieldSummary {
         let len = data.len() as u64;
         FieldSummary {
             object_id: 1,
@@ -5573,7 +6470,13 @@ mod tests {
         assert!(!rows.rows[0][0].text.contains("/etc/passwd"));
     }
 
-    fn path_call(pid: u32, nr: u64, name: &str, result: i64, path: &str) -> InvocationSummary {
+    pub(super) fn path_call(
+        pid: u32,
+        nr: u64,
+        name: &str,
+        result: i64,
+        path: &str,
+    ) -> InvocationSummary {
         let mut row = call(pid, nr, name, result);
         let mut bytes = path.as_bytes().to_vec();
         bytes.push(0);

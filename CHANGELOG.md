@@ -4,6 +4,29 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
+## 0.6.2 — Unreleased
+
+- **Run triage.** An explicit run selector scopes process, suspicious activity,
+  file and network views. Selecting Run history opens that run's triage. Run and
+  Capture histories show the host start time first and sort newest first;
+  historical entries without a host timestamp remain marked unavailable.
+- **Evidence navigation.** Double-click a triage row to open its retained syscall
+  or original packet. Syscall jumps include stream, task cookie and call ID;
+  packet jumps open the run's owned PCAP and reveal frames hidden by old filters.
+- **Files.** Compact Opened files and Read files tables show outcomes and bounded
+  captured content. Changed files group original-to-final observed bytes with an
+  operation timeline and known byte-difference count. Missing originals, partial
+  transfers, unknown offsets, namespace changes and shared mappings retain gaps.
+- **Network.** IPs, Hosts, HTTP and DNS tables retain packet evidence links.
+  Country/organization use locally configured TShark GeoIP data; missing data
+  stays unavailable. Hostnames come from DNS questions, HTTP Host and TLS SNI.
+  Network evidence is VM-wide within the run's recorded host-time window.
+- **Presentation.** Removed indexing/count explanation blocks; warnings stay
+  below the run selector. Times use the host timezone with an explicit UTC offset;
+  guest event times mapped through host receipt anchors are marked estimated.
+
+Uses existing 0.6.0/0.6.1 guest bases; no kernel or image rebuild is required.
+
 ## 0.6.1 — 2026-10-15
 
 - **Aligned VM status cards.** Guest and host resource cards in the same row

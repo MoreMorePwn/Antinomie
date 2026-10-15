@@ -943,6 +943,12 @@ pub fn list_vm_runs(
                 continue;
             }
             run.directory = entry.path();
+            if run.started_ms.is_none() {
+                run.started_ms =
+                    run_filter_facts(&run.directory, &run.id, &run.vm_id, &run.boot_id)
+                        .ok()
+                        .and_then(|facts| facts.started_ms);
+            }
             reopen_analysis_sidecar(&root, &mut run)?;
             if matches!(run.state, RunState::Running | RunState::StopRequested) {
                 run.state = RunState::Unknown;
@@ -976,7 +982,11 @@ pub fn list_vm_runs(
             }
         }
     }
-    runs.sort_by(|a, b| a.id.cmp(&b.id));
+    runs.sort_by(|a, b| {
+        b.started_ms
+            .cmp(&a.started_ms)
+            .then_with(|| b.id.cmp(&a.id))
+    });
     Ok(runs)
 }
 
@@ -1009,6 +1019,12 @@ pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
                 })?;
             }
             run.directory = entry.path();
+            if run.started_ms.is_none() {
+                run.started_ms =
+                    run_filter_facts(&run.directory, &run.id, &run.vm_id, &run.boot_id)
+                        .ok()
+                        .and_then(|facts| facts.started_ms);
+            }
             reopen_analysis_sidecar(&data_root, &mut run)?;
             if matches!(run.state, RunState::Running | RunState::StopRequested) {
                 run.state = RunState::Unknown;
@@ -1039,6 +1055,8 @@ pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
             let manifest: serde_json::Value = serde_json::from_reader(file)?;
             let id = format!("legacy-{}", entry.file_name().to_string_lossy());
             runs.push(RunSummary {
+                started_ms: None,
+                clock_anchor: None,
                 id,
                 vm_id: manifest
                     .get("vm")
@@ -1071,7 +1089,11 @@ pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
             }
         }
     }
-    runs.sort_by(|a, b| a.id.cmp(&b.id));
+    runs.sort_by(|a, b| {
+        b.started_ms
+            .cmp(&a.started_ms)
+            .then_with(|| b.id.cmp(&a.id))
+    });
     Ok(runs)
 }
 fn reopen_analysis_sidecar(root: &Path, run: &mut RunSummary) -> Result<(), RecordingError> {
@@ -1178,6 +1200,8 @@ mod tests {
         report.state = AnalysisState::Partial;
         report.reason = Some("worker cleanup pending".into());
         let mut run = RunSummary {
+            started_ms: None,
+            clock_anchor: None,
             id: "run".into(),
             vm_id: "vm".into(),
             boot_id: "boot".into(),

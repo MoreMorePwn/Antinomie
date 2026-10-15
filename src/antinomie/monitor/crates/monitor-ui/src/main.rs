@@ -19,6 +19,7 @@ mod snapshots;
 mod summary;
 mod terminal;
 mod theme;
+mod time_format;
 mod tools_window;
 mod trace;
 mod triage;

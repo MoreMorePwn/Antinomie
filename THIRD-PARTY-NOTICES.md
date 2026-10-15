@@ -93,6 +93,11 @@ retained separately in
 the inventory's earlier snapshot remains intact. The new static resource
 collector's musl notices are listed below.
 
+The 0.6.2 UI directly uses the already locked `chrono 0.4.45` (MIT OR Apache-2.0)
+and its existing local timezone support for host-clock presentation. No new
+third-party package version is introduced by this dependency edge. The retained
+Cargo source/notice inventory includes these packages under their upstream terms.
+
 The `MoreMorePwn/antinomie-bases` Hugging Face bucket is reserved for the VM
 image catalog and required image files. Guest kernel source, exact
 bootstrap/desktop package sources and guest notices belong in a separate

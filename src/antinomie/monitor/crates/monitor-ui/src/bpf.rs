@@ -68,6 +68,7 @@ pub(crate) fn translate(bytes: &[u8]) -> String {
 /// Identity recorded on the invocation. Absent values stay absent.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct BpfIdentity {
+    pub stream_id: u64,
     pub vm_id: Option<String>,
     pub boot_id: Option<String>,
     pub run_id: Option<String>,
@@ -102,6 +103,7 @@ pub(crate) fn export_capture(bytes: &[u8], identity: &BpfIdentity) -> String {
         "boot_id": identity.boot_id,
         "run_id": identity.run_id,
         "cookie": identity.cookie,
+        "stream_id": identity.stream_id,
         "pid": identity.pid,
         "tid": identity.tid,
         "timestamp_ns": identity.timestamp_ns,
@@ -145,6 +147,7 @@ pub(crate) fn write_export(
         "boot_id": identity.boot_id,
         "run_id": identity.run_id,
         "cookie": identity.cookie,
+        "stream_id": identity.stream_id,
         "pid": identity.pid,
         "tid": identity.tid,
         "timestamp_ns": identity.timestamp_ns,

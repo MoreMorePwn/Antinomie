@@ -58,6 +58,9 @@ pub enum CaptureState {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CaptureSummary {
+    /// Host Unix milliseconds; absent for historical captures without a host clock.
+    #[serde(default)]
+    pub started_ms: Option<u64>,
     pub id: String,
     pub vm_id: String,
     pub boot_id: String,

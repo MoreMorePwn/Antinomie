@@ -21,7 +21,14 @@ pub(crate) struct CaptureSession {
 }
 
 impl CaptureSession {
-    pub fn new(summary: CaptureSummary, quota: u64) -> Result<Self, String> {
+    pub fn new(mut summary: CaptureSummary, quota: u64) -> Result<Self, String> {
+        summary.started_ms.get_or_insert_with(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| {
+                    u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+                })
+        });
         let capture = RawCapture::new(summary.directory.clone(), quota)?;
         let assembler = Assembler::new(summary.directory.join("objects"), quota)
             .map_err(|error| error.to_string())?;
@@ -182,7 +189,11 @@ fn list_vm_captures_inner(
             }
         }
     }
-    captures.sort_by(|a, b| a.id.cmp(&b.id));
+    captures.sort_by(|a, b| {
+        b.started_ms
+            .cmp(&a.started_ms)
+            .then_with(|| b.id.cmp(&a.id))
+    });
     Ok(captures)
 }
 
@@ -228,6 +239,7 @@ mod tests {
     use crate::observation::CaptureScope;
     fn summary(directory: std::path::PathBuf) -> CaptureSummary {
         CaptureSummary {
+            started_ms: None,
             id: "observer".into(),
             vm_id: "vm".into(),
             boot_id: "boot".into(),

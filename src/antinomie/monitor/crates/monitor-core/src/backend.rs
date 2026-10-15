@@ -914,6 +914,7 @@ impl Session {
         };
         let id = storage::unique_id();
         let summary = CaptureSummary {
+            started_ms: None,
             id: id.clone(), vm_id: self.vm.id.clone(), boot_id: self.boot_id.clone(),
             capture_cookie: 0, scope,
             directory: crate::locations::locations(options, &self.vm.id)?.recording_directory.join("captures").join(&id),
@@ -1310,6 +1311,9 @@ impl Session {
             let reserved = self.stored_len();
             let mut saved =
                 if let Some(run) = self.runs.get_mut(&root) {
+                    if let Some(header) = &header {
+                        run.observe_clock(header.timestamp_ns);
+                    }
                     let saved = run
                         .capture
                         .append_with_reserved(&packet, reserved.saturating_sub(run.capture.bytes));
@@ -4317,6 +4321,8 @@ impl Worker {
                     .join("runs")
                     .join(&run_id);
                 let summary = RunSummary {
+                    started_ms: None,
+                    clock_anchor: None,
                     id: run_id,
                     vm_id: session.vm.id.clone(),
                     boot_id: session.boot_id.clone(),
@@ -4449,6 +4455,9 @@ impl Worker {
                         .map(|(h, _)| h.root_task_cookie)
                         .unwrap_or(0);
                     if root == cookie {
+                        if let Ok((header, _)) = crate::parser::parse_packet(&packet) {
+                            run.observe_clock(header.timestamp_ns);
+                        }
                         session.pending_len -= packet.len();
                         let reserved = session.stored_len() + run.stored_len() - run.capture.bytes;
                         if !run.capture.append_with_reserved(&packet, reserved) {
@@ -5331,6 +5340,8 @@ mod tests {
 
     fn artifact_run(directory: PathBuf) -> RunSummary {
         RunSummary {
+            started_ms: None,
+            clock_anchor: None,
             id: "artifact-run".into(),
             vm_id: "vm".into(),
             boot_id: "boot".into(),
@@ -6106,6 +6117,8 @@ mod tests {
         let create = |cookie: u64| {
             ProgramRun::new(
                 RunSummary {
+                    started_ms: None,
+                    clock_anchor: None,
                     id: cookie.to_string(),
                     vm_id: "vm".into(),
                     boot_id: "boot".into(),
@@ -6169,6 +6182,8 @@ mod tests {
                 for cookie in 1..=2 {
                     let run = ProgramRun::new(
                         RunSummary {
+                            started_ms: None,
+                            clock_anchor: None,
                             id: cookie.to_string(),
                             vm_id: "vm".into(),
                             boot_id: "boot".into(),
@@ -6276,6 +6291,8 @@ mod tests {
         let create = |id: &str, cookie: u64| {
             ProgramRun::new(
                 RunSummary {
+                    started_ms: None,
+                    clock_anchor: None,
                     id: id.into(),
                     vm_id: "vm".into(),
                     boot_id: "boot".into(),

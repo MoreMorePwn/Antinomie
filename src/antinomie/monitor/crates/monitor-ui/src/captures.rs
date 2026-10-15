@@ -285,10 +285,15 @@ pub(super) fn history(
         .collect();
     let filter =
         crate::query::table_filter(ui, "capture-history", "Filter captures", &fields, &tags);
-    let shown: Vec<_> = captures
+    let mut shown: Vec<_> = captures
         .iter()
         .filter(|capture| filter.keep_table(&capture_row(ui, capture)))
         .collect();
+    shown.sort_by(|a, b| {
+        b.started_ms
+            .cmp(&a.started_ms)
+            .then_with(|| b.id.cmp(&a.id))
+    });
     ui.weak(format!("{} / {} captures", shown.len(), captures.len()));
     let focused = ui.memory(|memory| memory.focused());
     let navigation = if !shown.is_empty() && focused == Some(pane_id) {
@@ -323,6 +328,7 @@ pub(super) fn history(
             ui.set_min_width(400.0);
             let mut table = TableBuilder::new(ui)
                 .id_salt("capture_history")
+                .column(Column::initial(225.0).at_least(150.0).resizable(true))
                 .sense(egui::Sense::click())
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                 .column(Column::remainder().at_least(180.0))
@@ -335,7 +341,7 @@ pub(super) fn history(
             }
             table
                 .header(row_height + 4.0, |mut header| {
-                    for label in ["Capture", "State"] {
+                    for label in ["Start time", "Capture", "State"] {
                         header.col(|ui| {
                             theme::section(ui, label);
                         });
@@ -345,6 +351,14 @@ pub(super) fn history(
                     body.rows(row_height, shown.len(), |mut row| {
                         let capture = shown[row.index()];
                         row.set_selected(selected == Some(capture.id.as_str()));
+                        row.col(|ui| {
+                            ui.add(
+                                egui::Label::new(crate::time_format::unix_ms(capture.started_ms))
+                                    .truncate()
+                                    .selectable(false)
+                                    .sense(egui::Sense::hover()),
+                            );
+                        });
                         row.col(|ui| {
                             ui.add(
                                 egui::Label::new(crate::evidence::title(
@@ -882,6 +896,7 @@ mod tests {
         let captures: Vec<_> = ["first", "second"]
             .into_iter()
             .map(|id| CaptureSummary {
+                started_ms: Some(if id == "first" { 100 } else { 200 }),
                 id: id.into(),
                 vm_id: "vm".into(),
                 boot_id: "boot".into(),
@@ -905,10 +920,10 @@ mod tests {
             });
         });
         for (key, expected) in [
-            (egui::Key::End, "second"),
-            (egui::Key::ArrowUp, "first"),
-            (egui::Key::ArrowDown, "second"),
-            (egui::Key::Home, "first"),
+            (egui::Key::End, "first"),
+            (egui::Key::ArrowUp, "second"),
+            (egui::Key::ArrowDown, "first"),
+            (egui::Key::Home, "second"),
         ] {
             let input = egui::RawInput {
                 events: vec![egui::Event::Key {
@@ -963,6 +978,7 @@ mod tests {
     fn capture_selection_uses_last_valid_filter_and_available_identity_fields() {
         let ctx = egui::Context::default();
         let capture = CaptureSummary {
+            started_ms: None,
             id: "filter-capture".into(),
             vm_id: "vm-one".into(),
             boot_id: "boot-one".into(),

@@ -34,6 +34,41 @@ V7-only restriction; older requirements remain recorded for their releases.
 - V7 no snapshot/reconnect. No next transport version. Existing transport API
   is opaque; frontend/backend never manage CPU rings.
 
+## Accepted ANT-T0091 run triage (0.6.2)
+
+The user authorized all 20 triage/history issues from the Notion 0.6.2 list.
+Keep this host-only work on release-0.6.2. Triage requires one explicit program
+run; capture/all-traces selections must not populate it. Index the selected run's
+retained prefix off the UI thread and keep process descendants scoped to that
+root. History rows select the same run and open triage; both histories sort by
+host start time, newest first, with start time as the leftmost column.
+
+Double-clicks navigate to exact retained evidence. Syscall identity is the
+stream/task-cookie/call tuple, because call IDs are per task. Reveal the target
+despite existing category filters without overwriting saved preferences. Open
+the owned PCAP before selecting a packet's original frame and clear obstructing
+packet filters for this explicit navigation.
+
+Opened files: time, path, PID/TID, result, evidence. Read files adds transferred
+content with a bounded, ellipsized preview. Changed files groups original-to-final
+captured bytes per run and retains an operation timeline. List observed content,
+metadata and namespace operations, including failed attempts and shared mapping
+observations. Unknown originals, offsets, inode aliases and missing bytes stay
+explicit gaps. No host filesystem access is inferred from a guest path.
+
+Network has IPs, Hosts, HTTP and DNS tables with the requested compact columns.
+Use recorded packet frame links and TShark's existing decoder. Local GeoIP/ASN
+data may enrich destination rows; do not contact an external lookup service.
+PCAPs record VM traffic, so time-window correlation does not prove process
+ownership. Host-time anchors are receipt estimates with transport latency;
+historical start-anchored estimates and unavailable timestamps must be labeled.
+New summary timestamps are optional serde fields, preserving older archives.
+
+Remove the requested index/count/coverage essays. Show actionable missing-feature
+and incomplete-evidence warnings near the run selector. Preserve the current
+native palette, proportional navigation and monospace evidence values; use
+resizable columns, horizontal table scrolling and bounded lower detail panes.
+
 ## Accepted ANT-T0087 aligned VM status cards (0.6.1)
 
 The ANT-T0087 visual clarification requires equal-height VM Status resource

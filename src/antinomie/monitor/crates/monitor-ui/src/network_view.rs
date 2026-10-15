@@ -514,6 +514,14 @@ impl PacketList {
 }
 
 impl NetworkView {
+    /// An explicit evidence jump reveals the frame even when old filters hide it.
+    pub(crate) fn jump_to_evidence(&mut self, frame_number: u64) -> Result<(), String> {
+        self.filter.clear();
+        self.applied_filter.clear();
+        self.display_filter.clear();
+        self.reset_display_capture();
+        self.jump_to_frame(frame_number)
+    }
     pub(crate) fn open(&mut self, path: Option<PathBuf>) {
         if self.list.path != path {
             self.list = PacketList::new(path);
@@ -575,25 +583,9 @@ impl NetworkView {
         Ok(())
     }
 
-    pub(crate) fn loaded_packets(&self) -> &[antinomie_monitor_core::network::NetworkPacket] {
-        &self.list.packets
-    }
-
+    #[cfg(test)]
     pub(crate) fn loaded_path(&self) -> Option<&Path> {
         self.list.path.as_deref()
-    }
-
-    /// Frames aligned with the loaded packet list, up to 128 records.
-    /// `None` when there is no capture or a record could not be read.
-    pub(crate) fn captured_payloads(&mut self) -> (Option<Vec<Vec<u8>>>, Option<String>) {
-        self.refresh_payloads();
-        match &self.payloads {
-            Some(cache) if !cache.frames.is_empty() => {
-                (Some(cache.frames.clone()), cache.note.clone())
-            }
-            Some(cache) => (None, cache.note.clone()),
-            None => (None, None),
-        }
     }
 
     fn reconstruction(&self) -> Option<antinomie_monitor_core::network::Reconstruction> {
@@ -2457,6 +2449,22 @@ pub(crate) fn format_date(seconds: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn explicit_evidence_jump_reveals_a_frame_hidden_by_prior_filters() {
+        let mut view = super::NetworkView::default();
+        view.open(Some(std::path::PathBuf::from("/fixture/run.pcap")));
+        view.filter = "old quick search".into();
+        view.applied_filter = "old quick search".into();
+        view.display_filter = "dns".into();
+        view.jump_to_evidence(520).unwrap();
+        assert!(
+            view.filter.is_empty()
+                && view.applied_filter.is_empty()
+                && view.display_filter.is_empty()
+        );
+        assert_eq!(view.display_jump, Some(520));
+    }
+
     use super::*;
 
     #[test]
