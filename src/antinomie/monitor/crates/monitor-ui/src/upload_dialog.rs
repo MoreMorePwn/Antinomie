@@ -59,7 +59,9 @@ impl MonitorApp {
                     self.status = format!("Host file: {error}");
                 }
             }
-            if !FolderPicker::installed() {
+            if self.folder_picker.checking() {
+                ui.weak("Checking file chooser…");
+            } else if !self.folder_picker.installed() {
                 ui.colored_label(
                     theme::muted(),
                     "File selection requires Zenity; you can type a file path below.",

@@ -167,6 +167,12 @@ Panels can be dragged out into their own windows and docked back;
 **View → Reset layout** restores the default arrangement. Text size is under
 **Tools → Settings**.
 
+**Tools → UI performance** shows the graphics renderer and recent UI update
+CPU timings. If WSLg selects software rendering, a compatible GPU driver can
+be selected for one launch with `antinomie --graphics-driver d3d12`; the dialog
+can copy a command preserving the data directory. Close the app normally before
+using it. The default `--graphics-driver system` keeps the existing environment.
+
 ## Development
 
 Kernel changes, the patch workflow, building kernels and base images, and the

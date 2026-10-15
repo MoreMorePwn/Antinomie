@@ -7,6 +7,29 @@ V7-only restriction; older requirements remain recorded for their releases.
 
 ## Accepted requirements
 
+### Accepted ANT-T0097 host UI performance (0.6.2)
+
+Remove render-time filesystem checks for host chooser availability; resolve
+and cache its program asynchronously at startup and explicit capability refresh.
+Use the resolved path on invocation. Flatten Explorer's bounded cached tree
+only when its data/expansion changes and create widgets only for visible rows,
+preserving path identity, paging, file actions and selection.
+
+Backend, archive, chooser and dependency results wake the frontend. Suppress
+unchanged idle backend snapshots and replace unconditional 50 ms redraws with
+a quiet one-second fallback; active VM polling keeps its existing 50 ms bound.
+Individual pending analysis views retain their own timers and input/animation
+wakes remain native. Never invoke frontend wake callbacks under snapshot locks.
+
+Tools > UI performance reports actual context renderer/vendor/version and the
+last 240 UI update CPU samples, explicitly excluding GPU/presentation latency.
+Provide explicit per-launch `--graphics-driver system|d3d12` without changing
+global driver settings or forcing GPU selection by default. Measure native
+idle/update behavior and render-thread file calls with isolated data directories.
+No guest, image, shared-memory ABI, dependency or release-tag change is needed.
+
+### Historical initial requirements
+
 - Linux 6.12.94 existing baseline, BusyBox filesystem; Debian userspace later.
 - Native Rust desktop interface without HTML. Separate QEMU display window.
 - Initially empty VM list, create named VMs from one base image. Configurable

@@ -2,6 +2,8 @@
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Lazy, bounded host directory browsing off the native rendering thread.
 use crate::theme;
+#[path = "explorer_rows.rs"]
+mod rows;
 use eframe::egui;
 use std::{
     collections::BTreeMap,
@@ -51,6 +53,7 @@ struct Listing {
 }
 
 struct Request {
+    wake: egui::Context,
     generation: u64,
     path: PathBuf,
     offset: usize,
@@ -79,6 +82,7 @@ impl Worker {
             .name("upload-browser".into())
             .spawn(move || {
                 while let Ok(request) = requests.recv() {
+                    let wake = request.wake.clone();
                     let result = read_page(&request.path, request.offset, &request.cancel);
                     if answers
                         .send(Answer {
@@ -91,6 +95,7 @@ impl Worker {
                     {
                         break;
                     }
+                    wake.request_repaint_of(egui::ViewportId::ROOT);
                 }
             })
             .map_err(|error| format!("Host browser: {error}"))?;
@@ -158,6 +163,11 @@ pub(crate) struct Browser {
     listings: BTreeMap<PathBuf, Listing>,
     worker: Option<Worker>,
     error: Option<String>,
+    expanded: std::collections::BTreeSet<PathBuf>,
+    rows: Vec<rows::Row>,
+    rows_dirty: bool,
+    #[cfg(test)]
+    drawn_rows: usize,
 }
 
 impl Browser {
@@ -170,6 +180,9 @@ impl Browser {
     pub(crate) fn invalidate(&mut self) {
         self.generation = self.generation.wrapping_add(1);
         self.listings.clear();
+        self.expanded.clear();
+        self.rows.clear();
+        self.rows_dirty = true;
         self.error = None;
         if let Some(cancel) = self
             .worker
@@ -200,12 +213,13 @@ impl Browser {
             if let Some(listing) = self.listings.get_mut(&answer.path) {
                 if listing.offset == answer.offset {
                     listing.result = Some(answer.result);
+                    self.rows_dirty = true;
                 }
             }
         }
     }
 
-    fn request(&mut self, path: &Path) {
+    fn request(&mut self, path: &Path, ctx: &egui::Context) {
         if self.worker.is_none() {
             match Worker::new() {
                 Ok(worker) => self.worker = Some(worker),
@@ -234,6 +248,7 @@ impl Browser {
         }
         let cancel = Arc::new(AtomicBool::new(false));
         let request = Request {
+            wake: ctx.clone(),
             generation: self.generation,
             path: path.to_owned(),
             offset: listing.offset,
@@ -265,168 +280,7 @@ impl Browser {
     }
 
     fn show_view(&mut self, ui: &mut egui::Ui, view: View) -> Option<Action> {
-        self.poll();
-        let Some(root) = self.root.clone() else {
-            ui.colored_label(theme::muted(), "Choose a host folder to browse its files.");
-            return None;
-        };
-        if let Some(error) = &self.error {
-            ui.colored_label(theme::error(), error);
-        }
-        let mut selected = None;
-        egui::ScrollArea::both()
-            .id_salt(view.id)
-            .auto_shrink([false, false])
-            .max_height(view.height.max(24.0))
-            .min_scrolled_height(view.height.clamp(24.0, 100.0))
-            .show(ui, |ui| self.directory(ui, &root, 0, view, &mut selected));
-        if self
-            .worker
-            .as_ref()
-            .is_some_and(|worker| worker.pending.is_some())
-        {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(50));
-        }
-        if let Some(Action::Select(path) | Action::SendRun(path)) = &selected {
-            self.selected = Some(path.clone());
-        }
-        selected
-    }
-
-    fn directory(
-        &mut self,
-        ui: &mut egui::Ui,
-        path: &Path,
-        depth: usize,
-        view: View,
-        selected: &mut Option<Action>,
-    ) {
-        if depth >= DEPTH_LIMIT {
-            ui.colored_label(
-                theme::muted(),
-                "Choose this folder as the root to browse deeper.",
-            );
-            return;
-        }
-        self.request(path);
-        let Some(listing) = self.listings.get(path) else {
-            return;
-        };
-        let Some(result) = &listing.result else {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label("Reading folder…");
-            });
-            return;
-        };
-        let page = match result {
-            Ok(page) => page,
-            Err(error) => {
-                ui.colored_label(theme::error(), error);
-                return;
-            }
-        };
-        let entries = page.entries.clone();
-        let entry_count = entries.len();
-        let more = page.more;
-        let offset = listing.offset;
-        if entries.is_empty() {
-            ui.colored_label(theme::muted(), "No entries in this folder.");
-        }
-        for entry in entries {
-            let name = entry.path.file_name().unwrap_or_default().to_string_lossy();
-            if entry.directory {
-                let response = egui::CollapsingHeader::new(name.as_ref())
-                    .id_salt((view.id, &entry.path, self.generation))
-                    .show(ui, |ui| {
-                        self.directory(ui, &entry.path, depth + 1, view, selected)
-                    });
-                if view.actions {
-                    response.header_response.context_menu(|ui| {
-                        if ui.button("Open Directory").clicked() {
-                            *selected = Some(Action::OpenDirectory(entry.path.clone()));
-                            ui.close_menu();
-                        }
-                    });
-                }
-                if response.body_returned.is_none() {
-                    self.listings
-                        .retain(|path, _| !path.starts_with(&entry.path));
-                }
-            } else {
-                let available = entry.regular && entry.path.to_str().is_some();
-                let response = ui
-                    .add_enabled(
-                        available,
-                        egui::SelectableLabel::new(
-                            self.selected.as_ref() == Some(&entry.path), name.as_ref()),
-                    )
-                    .on_hover_text(if available {
-                        if view.actions {
-                            format!("{}\n{}", entry.path.display(), if view.can_send {
-                                "Double-click to Send and Run; right-click for actions"
-                            } else {
-                                "Start the selected VM and wait for any pending upload to Send and Run"
-                            })
-                        } else { entry.path.display().to_string() }
-                    } else {
-                        "Only regular files with UTF-8 paths can be selected; links and special files are not followed".into()
-                    });
-                if response.clicked() || response.secondary_clicked() {
-                    *selected = Some(Action::Select(entry.path.clone()));
-                }
-                if view.actions && available {
-                    if response.double_clicked() && view.can_send {
-                        *selected = Some(Action::SendRun(entry.path.clone()));
-                    }
-                    response.context_menu(|ui| {
-                        if ui
-                            .add_enabled(view.can_send, egui::Button::new("Send and Run"))
-                            .clicked()
-                        {
-                            *selected = Some(Action::SendRun(entry.path.clone()));
-                            ui.close_menu();
-                        }
-                        if ui.button("Open Directory").clicked() {
-                            if let Some(parent) = entry.path.parent() {
-                                *selected = Some(Action::OpenDirectory(parent.to_owned()));
-                            }
-                            ui.close_menu();
-                        }
-                    });
-                }
-            }
-        }
-        if offset > 0 || more {
-            let mut next = None;
-            ui.horizontal_wrapped(|ui| {
-                ui.label(format!("Entries {}–{}", offset + 1, offset + entry_count));
-                if ui
-                    .add_enabled(offset > 0, egui::Button::new("Previous entries"))
-                    .clicked()
-                {
-                    next = Some(offset.saturating_sub(PAGE_LEN));
-                }
-                if ui
-                    .add_enabled(more, egui::Button::new("Next entries"))
-                    .clicked()
-                {
-                    next = offset.checked_add(PAGE_LEN);
-                }
-            });
-            if let Some(offset) = next {
-                self.listings
-                    .retain(|key, _| key == path || !key.starts_with(path));
-                self.listings.insert(
-                    path.to_owned(),
-                    Listing {
-                        offset,
-                        result: None,
-                    },
-                );
-            }
-        }
+        rows::show(self, ui, view)
     }
 }
 
@@ -434,6 +288,87 @@ impl Browser {
 pub(crate) mod tests {
     use super::*;
     use std::sync::atomic::AtomicU64;
+
+    #[test]
+    fn expanded_tree_only_builds_viewport_widgets_and_reuses_cached_rows() {
+        let fixture = Fixture::new();
+        let mut browser = Browser::default();
+        browser.reset(fixture.0.clone());
+        let mut directories = Vec::new();
+        for folder in 0..16 {
+            let path = fixture.0.join(format!("folder-{folder:02}"));
+            directories.push(Entry {
+                path: path.clone(),
+                directory: true,
+                regular: false,
+            });
+            browser.expanded.insert(path.clone());
+            let entries = (0..PAGE_LEN)
+                .map(|index| Entry {
+                    path: path.join(format!("file-{folder:02}-{index:03}")),
+                    directory: false,
+                    regular: true,
+                })
+                .collect();
+            browser.listings.insert(
+                path,
+                Listing {
+                    offset: 0,
+                    result: Some(Ok(Page {
+                        entries,
+                        more: false,
+                    })),
+                },
+            );
+        }
+        browser.listings.insert(
+            fixture.0.clone(),
+            Listing {
+                offset: 0,
+                result: Some(Ok(Page {
+                    entries: directories,
+                    more: false,
+                })),
+            },
+        );
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        for pass in 0..4 {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600.0, 400.0),
+                    )),
+                    time: Some(pass as f64 * 0.1),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        browser.show_explorer(ui, 200.0, true);
+                    });
+                },
+            );
+            assert_eq!(browser.rows.len(), 16 * (PAGE_LEN + 1));
+            assert!(
+                browser.drawn_rows < 30,
+                "only visible rows render, not all {}",
+                browser.rows.len()
+            );
+            assert!(!browser.rows_dirty);
+        }
+        let allocation = browser.rows.as_ptr();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                browser.show_explorer(ui, 200.0, true);
+            });
+        });
+        assert_eq!(
+            allocation,
+            browser.rows.as_ptr(),
+            "unchanged frames reuse the flattened tree"
+        );
+    }
 
     pub(crate) struct Fixture(pub(crate) PathBuf);
 
@@ -618,7 +553,7 @@ pub(crate) mod tests {
         std::fs::write(second.0.join("new-file"), b"new").unwrap();
         let mut browser = Browser::default();
         browser.reset(first.0.clone());
-        browser.request(&first.0);
+        browser.request(&first.0, &egui::Context::default());
         browser.reset(second.0.clone());
         let answer = browser
             .worker
@@ -631,7 +566,7 @@ pub(crate) mod tests {
             .unwrap();
         browser.accept(answer);
         assert!(browser.listings.is_empty());
-        browser.request(&second.0);
+        browser.request(&second.0, &egui::Context::default());
         let answer = browser
             .worker
             .as_ref()
