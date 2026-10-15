@@ -328,6 +328,15 @@ with `scripts/build-release.sh` and publishes the GitHub release with the
 version's changelog section as notes. Bases are built and uploaded
 separately (see the base distribution notes).
 
+Upload only `antinomie-X.Y.Z-linux-x86_64.tar.gz` and `SHA256SUMS` to an
+application release. Required notices remain inside the application archive.
+Publish separate guest sources/notices and supporting provenance in the
+documentation repository's support downloads, with a verified link from the
+affected release notes. The HF bucket remains image/catalog only. Preserve
+supporting downloads before removing old release attachments; retain their
+original hashes and never replace application archives or immutable tags as
+part of release housekeeping.
+
 See [project layout](docs/project-layout.md) before retaining or cleaning build
 artifacts. Published tags remain immutable; housekeeping after publication does
 not replace the tag or imply that an existing release archive was rebuilt.
