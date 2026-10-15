@@ -50,13 +50,13 @@ impl Panel {
 }
 
 /// Which main tab the bottom Details panel follows: the syscall trace, the
-/// network panel or the memory panel. When only one of them is on screen it
+/// network, memory, history or triage panel. When only one is on screen it
 /// wins; when several are (split or detached), the one clicked last.
 #[derive(Default)]
 pub(crate) struct DetailsFollow {
     followed: usize,
     /// Pass of the main window in which each followed panel was last drawn.
-    drawn: [Option<u64>; 4],
+    drawn: [Option<u64>; 5],
 }
 
 /// What the Details panel shows.
@@ -66,14 +66,16 @@ pub(crate) enum DetailsOf {
     Packet,
     MemoryRow,
     History,
+    Triage,
 }
 
 impl DetailsFollow {
-    const SIDES: [DetailsOf; 4] = [
+    const SIDES: [DetailsOf; 5] = [
         DetailsOf::Syscall,
         DetailsOf::Packet,
         DetailsOf::MemoryRow,
         DetailsOf::History,
+        DetailsOf::Triage,
     ];
 
     fn side(panel: &Panel) -> Option<usize> {
@@ -82,6 +84,7 @@ impl DetailsFollow {
             Panel::Network => Some(1),
             Panel::Memory => Some(2),
             Panel::RunHistory => Some(3),
+            Panel::Triage => Some(4),
             _ => None,
         }
     }

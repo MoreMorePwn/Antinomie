@@ -16,6 +16,7 @@ use crate::{
 use antinomie_monitor_core::network::NetworkPacket;
 use antinomie_monitor_core::{EventSummary, InvocationSummary};
 use eframe::egui::{self, RichText};
+mod details;
 mod file_content;
 mod files;
 mod network;
@@ -77,6 +78,7 @@ pub(crate) struct TriageView {
     filter_drafts: [String; 8],
     packet_jump: Option<u64>,
     context_key: Option<String>,
+    details_directory: Option<std::path::PathBuf>,
 }
 
 impl Default for TriageView {
@@ -104,6 +106,7 @@ impl Default for TriageView {
             filter_drafts: Default::default(),
             packet_jump: None,
             context_key: None,
+            details_directory: None,
         }
     }
 }
@@ -187,8 +190,10 @@ impl TriageView {
         );
         if self.context_key.as_deref() != Some(&key) {
             self.stop_scan();
+            details::clear(ctx);
             self.context_key = Some(key);
         }
+        self.details_directory = input.archive.map(Path::to_path_buf);
         self.scan_request.clock_anchor = input.clock_anchor;
         self.scan_request.started_ms = input.started_ms;
         self.scan_request.root_cookie = input.root_cookie;
@@ -296,17 +301,28 @@ impl TriageView {
                 if self.scan.as_ref().is_some_and(|scan| scan.bpf_omitted > 0) {
                     ui.colored_label(theme::warn(), "Some BPF observations exceed the preview limit; original syscall evidence remains available.");
                 }
-                bpf_view(ui, &input, &mut self.bpf_export_status, indexed);
+                bpf_view(ui, &input, indexed);
                 None
             }
         };
-        self.packet_jump = ui
-            .ctx()
-            .data_mut(|data| data.remove_temp::<u64>(egui::Id::new("triage-packet-jump")));
-        jump.or_else(|| {
-            ui.ctx().data_mut(|data| {
-                data.remove_temp::<trace::InvocationKey>(egui::Id::new("triage-call-jump"))
-            })
+        jump.or_else(|| self.take_navigation(ui.ctx()))
+    }
+
+    pub(crate) fn details(&mut self, ui: &mut egui::Ui) -> Option<trace::InvocationKey> {
+        details::show(self, ui);
+        self.take_navigation(ui.ctx())
+    }
+
+    pub(crate) fn take_details_focus(&self, ctx: &egui::Context) -> bool {
+        ctx.data_mut(|data| data.remove_temp::<bool>(egui::Id::new("triage-details-focus")))
+            .unwrap_or(false)
+    }
+
+    fn take_navigation(&mut self, ctx: &egui::Context) -> Option<trace::InvocationKey> {
+        self.packet_jump =
+            ctx.data_mut(|data| data.remove_temp::<u64>(egui::Id::new("triage-packet-jump")));
+        ctx.data_mut(|data| {
+            data.remove_temp::<trace::InvocationKey>(egui::Id::new("triage-call-jump"))
         })
     }
 
@@ -420,15 +436,12 @@ impl TriageView {
                             &scan.changed,
                         );
                     });
-                let selected_id = egui::Id::new(("triage-selected-row", "triage-changed"));
-                let selected = ui.ctx().data(|data| data.get_temp::<String>(selected_id));
-                if let Some(change) = scan
-                    .file_changes
-                    .iter()
-                    .find(|change| Some(change.evidence_key()) == selected)
-                {
-                    change.show(ui, clock);
-                }
+                details::refresh(
+                    ui.ctx(),
+                    "triage-changed",
+                    &["Time", "Path", "PID / TID", "Diff count", "Evidence"],
+                    &scan.changed,
+                );
             }
         }
     }
@@ -565,21 +578,6 @@ impl TriageView {
         );
         if let Some(call_id) = clicked {
             self.selected_call_id = Some(call_id);
-        }
-        if let Some(selected) = rows
-            .iter()
-            .find(|row| Some(row.key) == self.selected_call_id)
-        {
-            ui.separator();
-            for (name, value) in &selected.values {
-                ui.label(format!("{name}: {value:?}"));
-            }
-            if ui
-                .button(format!("Open original syscall {}", selected.call_id))
-                .clicked()
-            {
-                return Some(selected.key);
-            }
         }
         None
     }
@@ -944,51 +942,27 @@ fn table(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[Vec<Cell>]) {
         .id_salt((id, "columns"))
         .auto_shrink([false, true])
         .show(ui, |ui| table_rows(ui, id, headers, rows));
-    let selected_id = egui::Id::new(("triage-selected-row", id));
-    let selected = ui.ctx().data(|data| data.get_temp::<String>(selected_id));
-    if let Some(row) = rows.iter().find(|row| Some(evidence_key(row)) == selected) {
-        egui::ScrollArea::vertical()
-            .id_salt((id, "details"))
-            .max_height(ui.available_height().max(40.0))
-            .show(ui, |ui| {
-                ui.separator();
-                ui.strong("Selected evidence");
-                for (title, value) in headers.iter().zip(row) {
-                    ui.add(egui::Label::new(format!("{title}: {}", value.text)).wrap());
-                }
-                for (name, value) in row
-                    .first()
-                    .map(|cell| cell.values.as_slice())
-                    .unwrap_or_default()
-                {
-                    if let RowValue::Number(id) = value {
-                        if *name == "event.id"
-                            && ui.button(format!("Open original syscall {id}")).clicked()
-                        {
-                            request_evidence_jump(ui.ctx(), &row[0].values);
-                        }
-                        if *name == "frame.number"
-                            && ui.button(format!("Open original packet {id}")).clicked()
-                        {
-                            if let Ok(id) = u64::try_from(*id) {
-                                ui.ctx().data_mut(|data| {
-                                    data.insert_temp(egui::Id::new("triage-packet-jump"), id)
-                                });
-                            }
-                        }
-                    }
-                }
-            });
-    } else {
-        ui.ctx().data_mut(|data| data.remove::<String>(selected_id));
-    }
+    details::refresh(ui.ctx(), id, headers, rows);
 }
 
 fn evidence_key(row: &[Cell]) -> String {
-    let identity = row
-        .first()
-        .map(|cell| cell.values.as_slice())
-        .unwrap_or_default()
+    let identity = evidence_values_key(
+        row.first()
+            .map(|cell| cell.values.as_slice())
+            .unwrap_or_default(),
+    );
+    if identity.is_empty() {
+        row.iter()
+            .map(|cell| cell.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        identity
+    }
+}
+
+fn evidence_values_key(values: &[(&str, RowValue)]) -> String {
+    values
         .iter()
         .filter(|(name, _)| {
             matches!(
@@ -999,19 +973,12 @@ fn evidence_key(row: &[Cell]) -> String {
                     | "dns.name"
                     | "http.uri"
                     | "process.cookie"
+                    | "finding.rule"
             )
         })
         .map(|(name, value)| format!("{name}:{value:?}"))
         .collect::<Vec<_>>()
-        .join("/");
-    if identity.is_empty() {
-        row.iter()
-            .map(|cell| cell.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
-    } else {
-        identity
-    }
+        .join("/")
 }
 
 fn request_evidence_jump(ctx: &egui::Context, values: &[(&str, RowValue)]) {
@@ -1047,11 +1014,7 @@ fn table_rows(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[Vec<Cell>])
     let filter_id = ui
         .ctx()
         .data(|data| data.get_temp::<egui::Id>(egui::Id::new(("triage-filter-target", id))));
-    let max_height = if selected.is_some() {
-        (ui.available_height() * 0.55).max(60.0)
-    } else {
-        ui.available_height().max(60.0)
-    };
+    let max_height = ui.available_height().max(60.0);
     let mut builder = TableBuilder::new(ui)
         .id_salt(("triage-062", id))
         .striped(true)
@@ -1096,11 +1059,12 @@ fn table_rows(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[Vec<Cell>])
                                 .truncate()
                                 .selectable(false)
                                 .sense(egui::Sense::hover()),
-                        )
-                        .on_hover_text(&cell.text);
+                        );
                     });
                 }
                 if row.response().clicked() {
+                    details::select(&row.response().ctx, id, headers, cells);
+                    details::clicked(&row.response().ctx, id);
                     row.response()
                         .ctx
                         .data_mut(|data| data.insert_temp(selected_id, key));
@@ -1146,11 +1110,13 @@ fn finding_table(
     rows: &[Finding],
     selected: Option<trace::InvocationKey>,
 ) -> Option<trace::InvocationKey> {
-    egui::ScrollArea::horizontal()
+    let clicked = egui::ScrollArea::horizontal()
         .id_salt((id, "columns"))
         .auto_shrink([false, true])
         .show(ui, |ui| finding_table_rows(ui, id, headers, rows, selected))
-        .inner
+        .inner;
+    details::refresh_findings(ui.ctx(), id, headers, rows);
+    clicked
 }
 
 fn finding_table_rows(
@@ -1177,7 +1143,7 @@ fn finding_table_rows(
         .ctx()
         .data(|data| data.get_temp::<egui::Id>(egui::Id::new(("triage-filter-target", id))));
     let row_height = ui.text_style_height(&egui::TextStyle::Body).max(14.0) + 8.0;
-    let max_height = (ui.available_height() * 0.65).max(60.0);
+    let max_height = ui.available_height().max(60.0);
     let mut builder = TableBuilder::new(ui)
         .id_salt(("triage-062", id))
         .striped(true)
@@ -1216,12 +1182,17 @@ fn finding_table_rows(
                                 .truncate()
                                 .selectable(false)
                                 .sense(egui::Sense::hover()),
-                        )
-                        .on_hover_text(&cell.text);
+                        );
                     });
                 }
                 if row.response().clicked() {
                     clicked = Some(finding.key);
+                    let mut cells = finding.cells.clone();
+                    if let Some(first) = cells.first_mut() {
+                        first.values.clone_from(&finding.values);
+                    }
+                    details::select(&row.response().ctx, id, headers, &cells);
+                    details::clicked(&row.response().ctx, id);
                 }
                 if row.response().double_clicked() {
                     request_evidence_jump(&row.response().ctx, &finding.values);
@@ -5002,12 +4973,7 @@ fn isolated_instructions(field: &antinomie_monitor_core::FieldSummary) -> Option
     Some(bytes.to_vec())
 }
 
-fn bpf_view(
-    ui: &mut egui::Ui,
-    input: &TriageInput<'_>,
-    status: &mut String,
-    indexed: Option<&[BpfNote]>,
-) {
+fn bpf_view(ui: &mut egui::Ui, input: &TriageInput<'_>, indexed: Option<&[BpfNote]>) {
     let page_notes;
     let notes = if let Some(notes) = indexed {
         notes
@@ -5015,9 +4981,6 @@ fn bpf_view(
         page_notes = bpf_notes(input);
         page_notes.as_slice()
     };
-    if !status.is_empty() {
-        ui.label(status.as_str());
-    }
     if notes.is_empty() {
         ui.colored_label(
             theme::muted(),
@@ -5025,72 +4988,82 @@ fn bpf_view(
         );
         return;
     }
-    egui::ScrollArea::vertical()
-        .id_salt("triage-bpf")
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            for note in notes {
-                let response = ui.add(
-                    egui::Label::new(RichText::new(&note.heading).strong())
-                        .sense(egui::Sense::click()),
-                );
-                if response.double_clicked() {
-                    if let Some(id) = note.identity.event_id {
-                        request_evidence_jump(
-                            ui.ctx(),
-                            &[
-                                ("event.id", RowValue::Number(i128::from(id))),
-                                (
-                                    "process.cookie",
-                                    note.identity.cookie.map_or(RowValue::Missing, |cookie| {
-                                        RowValue::Number(i128::from(cookie))
-                                    }),
-                                ),
-                                (
-                                    "stream.id",
-                                    RowValue::Number(i128::from(note.identity.stream_id)),
-                                ),
-                            ],
-                        );
-                    }
+    let rows: Vec<_> = notes
+        .iter()
+        .map(|note| bpf_row(note, input.clock_anchor))
+        .collect();
+    table(
+        ui,
+        "triage-bpf",
+        &["Time", "Observation", "Outcome", "Evidence"],
+        &rows,
+    );
+}
+
+fn bpf_row(note: &BpfNote, clock: Option<antinomie_monitor_core::HostClockAnchor>) -> Vec<Cell> {
+    let mut row = vec![
+        cell(
+            crate::time_format::guest_ns(clock, note.identity.timestamp_ns),
+            theme::text(),
+            true,
+        ),
+        cell(&note.heading, theme::text(), false),
+        cell(&note.outcome, theme::text(), false),
+        cell(
+            note.identity
+                .event_id
+                .map_or("Unavailable".into(), |id| format!("call {id}")),
+            theme::text(),
+            true,
+        ),
+    ];
+    row[0].values = vec![
+        (
+            "event.id",
+            note.identity
+                .event_id
+                .map_or(RowValue::Missing, |id| RowValue::Number(i128::from(id))),
+        ),
+        (
+            "process.cookie",
+            note.identity
+                .cookie
+                .map_or(RowValue::Missing, |id| RowValue::Number(i128::from(id))),
+        ),
+        (
+            "stream.id",
+            RowValue::Number(i128::from(note.identity.stream_id)),
+        ),
+    ];
+    row
+}
+
+fn bpf_detail(ui: &mut egui::Ui, note: &BpfNote, directory: Option<&Path>, status: &mut String) {
+    if !status.is_empty() {
+        ui.label(status.as_str());
+    }
+    if let Some(line) = &note.lifecycle {
+        ui.label(line);
+    }
+    if note.translation.is_none() && note.dump.is_none() {
+        ui.weak("The instruction image was not isolated.");
+    }
+    for text in [&note.translation, &note.dump, &note.export]
+        .into_iter()
+        .flatten()
+    {
+        ui.add(egui::Label::new(RichText::new(text).monospace()).wrap());
+    }
+    if let (Some(bytes), Some(directory)) = (&note.bytes, directory) {
+        if ui.button("Export binary and JSON").clicked() {
+            *status = match bpf::write_export(&directory.join("bpf"), bytes, &note.identity) {
+                Ok((binary, metadata)) => {
+                    format!("Wrote {} and {}", binary.display(), metadata.display())
                 }
-                if let Some(time) = note.identity.timestamp_ns {
-                    ui.weak(crate::time_format::guest_ns(input.clock_anchor, Some(time)));
-                }
-                if let Some(line) = &note.lifecycle {
-                    ui.label(line);
-                }
-                ui.label(&note.outcome);
-                if note.translation.is_none() && note.dump.is_none() {
-                    ui.colored_label(theme::muted(), "The instruction image was not isolated.");
-                } else {
-                    if let Some(text) = &note.translation {
-                        ui.add(egui::Label::new(RichText::new(text).monospace()).wrap());
-                    }
-                    if let Some(text) = &note.dump {
-                        ui.add(egui::Label::new(RichText::new(text).monospace()).wrap());
-                    }
-                    if let Some(text) = &note.export {
-                        ui.add(egui::Label::new(RichText::new(text).monospace()).wrap());
-                    }
-                    if let (Some(bytes), Some(directory)) = (&note.bytes, input.archive) {
-                        if ui.button("Export binary and JSON").clicked() {
-                            match bpf::write_export(&directory.join("bpf"), bytes, &note.identity) {
-                                Ok((binary, metadata)) => {
-                                    *status = format!(
-                                        "Wrote {} and {}",
-                                        binary.display(),
-                                        metadata.display()
-                                    );
-                                }
-                                Err(error) => *status = error,
-                            }
-                        }
-                    }
-                }
-                ui.separator();
-            }
-        });
+                Err(error) => error,
+            };
+        }
+    }
 }
 
 #[cfg(test)]
@@ -5104,9 +5077,16 @@ mod tests {
         struct Fixture {
             view: TriageView,
             deadline: Instant,
+            details_width: f32,
         }
         impl eframe::App for Fixture {
             fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+                egui::SidePanel::right("shared-details-fixture")
+                    .exact_width(self.details_width)
+                    .show(ctx, |ui| {
+                        ui.heading("Details");
+                        self.view.details(ui);
+                    });
                 egui::CentralPanel::default().show(ctx, |ui| {
                     ui.heading("Run triage — synthetic fixture");
                     let _ = self.view.show(
@@ -5192,12 +5172,15 @@ mod tests {
             .iter()
             .map(|change| change.row(clock))
             .collect();
-        let selected = scan.changed.first().map(|row| evidence_key(row));
         let mut view = TriageView::default();
         view.scan = Some(scan);
         view.last_refresh = Some(Instant::now());
         view.context_key = Some("vm\nboot\nrun\n".into());
         match scene.as_str() {
+            "findings" => {
+                view.section = Section::Process;
+                view.process = ProcessTab::Suspicious;
+            }
             "read" => {
                 view.section = Section::Files;
                 view.files = FileTab::Read;
@@ -5235,6 +5218,7 @@ mod tests {
                     .with_inner_size([width as f32, 880.0])
                     .with_position([16.0, 16.0]),
                 persist_window: false,
+                persistence_path: Some(temp.directory.join("native-ui.ron")),
                 event_loop_builder: Some(Box::new(|builder| {
                     builder.with_x11();
                     builder.with_any_thread(true);
@@ -5244,19 +5228,85 @@ mod tests {
             Box::new(move |cc| {
                 theme::install(&cc.egui_ctx);
                 theme::text_size(&cc.egui_ctx, font);
-                if scene == "changed" {
-                    if let Some(selected) = selected {
-                        cc.egui_ctx.data_mut(|data| {
-                            data.insert_temp(
-                                egui::Id::new(("triage-selected-row", "triage-changed")),
-                                selected,
-                            )
-                        });
-                    }
+                let initial = view.scan.as_ref().and_then(|scan| match scene.as_str() {
+                    "changed" => scan.changed.first().cloned().map(|row| {
+                        (
+                            "triage-changed",
+                            vec!["Time", "Path", "PID / TID", "Diff count", "Evidence"],
+                            row,
+                        )
+                    }),
+                    "read" => scan.read.first().cloned().map(|row| {
+                        (
+                            "triage-read",
+                            vec![
+                                "Time",
+                                "Path",
+                                "PID / TID",
+                                "Transferred / content",
+                                "Result",
+                                "Evidence",
+                            ],
+                            row,
+                        )
+                    }),
+                    "http" => scan
+                        .http
+                        .first()
+                        .cloned()
+                        .map(|row| ("triage-http", HTTP_HEADERS.to_vec(), row)),
+                    "dns" => scan
+                        .dns
+                        .first()
+                        .cloned()
+                        .map(|row| ("triage-dns", DNS_HEADERS.to_vec(), row)),
+                    "hosts" => scan.hosts.first().cloned().map(|row| {
+                        (
+                            "triage-hosts",
+                            vec![
+                                "Hostname",
+                                "Resolved / connected IPs",
+                                "First seen",
+                                "Last seen",
+                                "Requests",
+                                "Source",
+                            ],
+                            row,
+                        )
+                    }),
+                    "findings" => scan.findings.first().map(|finding| {
+                        let mut row = finding.cells.clone();
+                        row[0].values.clone_from(&finding.values);
+                        (
+                            "triage-findings",
+                            vec![
+                                "Rule",
+                                "Severity",
+                                "Process",
+                                "Summary",
+                                "Source",
+                                "Time",
+                                "Confidence",
+                                "Evidence",
+                                "Version",
+                                "Outcome",
+                            ],
+                            row,
+                        )
+                    }),
+                    _ => None,
+                });
+                if let Some((table_id, headers, row)) = initial {
+                    details::select(&cc.egui_ctx, table_id, &headers, &row);
+                    let selected = evidence_key(&row);
+                    cc.egui_ctx.data_mut(|data| {
+                        data.insert_temp(egui::Id::new(("triage-selected-row", table_id)), selected)
+                    });
                 }
                 Ok(Box::new(Fixture {
                     view,
                     deadline: Instant::now() + Duration::from_secs(10),
+                    details_width: (width as f32 * 0.38).min(420.0),
                 }))
             }),
         )

@@ -6,6 +6,11 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Shared Details.** Selecting any triage row shows its information in the
+  docked Details panel, including suspicious activity, process/file/network
+  entries, changed-file diffs and BPF decoding/exports. Row information no longer
+  opens hover popups or a second inline inspector. Double-clicks still open
+  original evidence.
 - **Run triage.** An explicit run selector scopes process, suspicious activity,
   file and network views. Selecting Run history opens that run's triage. Run and
   Capture histories show the host start time first and sort newest first;

@@ -69,6 +69,14 @@ and incomplete-evidence warnings near the run selector. Preserve the current
 native palette, proportional navigation and monospace evidence values; use
 resizable columns, horizontal table scrolling and bounded lower detail panes.
 
+ANT-T0093 supersedes the inline lower-pane presentation: every triage entry's
+single-click information belongs in the existing shared Details dock panel.
+Include suspicious activity, process tree, Opened/Read/Changed files, IPs/Hosts/
+HTTP/DNS and BPF decoding/export. Remove row-content hover popups and duplicate
+inline inspectors; preserve filter context menus and double-click exact evidence
+navigation. Details follows Triage using the existing active/split/detached
+panel rules. Changing run/VM clears selection and pending evidence jumps.
+
 ## Accepted ANT-T0087 aligned VM status cards (0.6.1)
 
 The ANT-T0087 visual clarification requires equal-height VM Status resource

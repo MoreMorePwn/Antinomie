@@ -96,7 +96,21 @@ impl MonitorApp {
             #[cfg(test)]
             frames: None,
         };
-        if let Some(call_id) = self.triage.show(ui, input) {
+        let jump = self.triage.show(ui, input);
+        if self.triage.take_details_focus(ui.ctx()) {
+            self.details_follow.chose(&Panel::Triage);
+            self.focus_panel = Some(Panel::Details);
+        }
+        self.apply_triage_navigation(jump);
+    }
+
+    pub(super) fn show_triage_details(&mut self, ui: &mut egui::Ui) {
+        let jump = self.triage.details(ui);
+        self.apply_triage_navigation(jump);
+    }
+
+    fn apply_triage_navigation(&mut self, jump: Option<trace::InvocationKey>) {
+        if let Some(call_id) = jump {
             self.jump_triage_call(call_id);
         }
         if let Some(frame_number) = self.triage.take_packet_jump() {
