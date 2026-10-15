@@ -6,7 +6,7 @@
 #
 #   usage: scripts/build-release.sh OUTPUT_DIR
 #
-# The executable names its sources by remapped paths (/antinomie, /cargo),
+# The executable names its sources by remapped paths (/antinomie, /cargo, /target),
 # never by this machine's home directory; the build fails if one remains.
 set -euo pipefail
 
@@ -25,7 +25,7 @@ fi
 # more specific locations below it.
 export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$HOME=/home/builder \
 --remap-path-prefix=$RUSTUP_DIR=/rustup --remap-path-prefix=$CARGO_DIR=/cargo \
---remap-path-prefix=$REPO=/antinomie"
+--remap-path-prefix=$REPO=/antinomie --remap-path-prefix=$TARGET_DIR=/target"
 # Standard modules ship generated sources; rebuilding must not mutate the cache.
 export YRX_REGENERATE_MODULES_RS="${YRX_REGENERATE_MODULES_RS:-false}"
 (cd "$MONITOR" && cargo build --release --locked)
@@ -40,10 +40,12 @@ cp "$TARGET_DIR/release/antinomie-monitor" "$package/"
 strip "$package/antinomie-monitor"
 # Read the entire stream: grep -q can hide a match behind strings' SIGPIPE
 # when pipefail is enabled.
-if strings "$package/antinomie-monitor" | grep -F "$HOME" >/dev/null; then
-    echo "build-release: the executable still names $HOME; refusing to package" >&2
-    exit 1
-fi
+for private_path in "$HOME" "$REPO" "$TARGET_DIR"; do
+    if strings "$package/antinomie-monitor" | grep -F "$private_path" >/dev/null; then
+        echo "build-release: the executable still names $private_path; refusing to package" >&2
+        exit 1
+    fi
+done
 cp "$REPO/install.sh" "$REPO/CHANGELOG.md" "$REPO/LICENSE" "$REPO/LICENSING.md" \
    "$REPO/THIRD-PARTY-NOTICES.md" "$package/"
 cp "$MONITOR/assets/antinomie.desktop" "$MONITOR/assets/antinomie.svg" "$package/"
