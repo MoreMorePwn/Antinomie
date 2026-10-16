@@ -105,6 +105,9 @@ pub struct Registry {
     /// Disabled ids that no longer name one rule after an index rebuild.
     #[serde(default)]
     pub obsolete_disabled: BTreeMap<String, Vec<String>>,
+    /// Why each obsolete id was dropped, by key and id.
+    #[serde(default)]
+    pub obsolete_reasons: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1834,6 +1837,21 @@ fn copy_tree_regular(source: &Path, dest: &Path) -> Result<(), String> {
 }
 
 fn index_tree(root: &Path, engine: &str) -> Result<(), String> {
+    write_index(&root.join("index.json"), &build_index(root, engine)?)
+}
+
+/// Index name a migration writes beside the current index before promoting it.
+const STAGED_INDEX: &str = "index.next.json";
+
+fn write_index(path: &Path, index: &IndexFile) -> Result<(), String> {
+    #[cfg(test)]
+    if take_fail("index-write") {
+        return Err("No space left on device".into());
+    }
+    crate::storage::atomic_json(path, index)
+}
+
+fn build_index(root: &Path, engine: &str) -> Result<IndexFile, String> {
     let mut files = Vec::new();
     collect_files(root, &mut files, 0)?;
     let mut rules = Vec::new();
@@ -1844,7 +1862,7 @@ fn index_tree(root: &Path, engine: &str) -> Result<(), String> {
             .unwrap_or(&path)
             .to_string_lossy()
             .replace('\\', "/");
-        if rel == "index.json" || rel == "manifest.json" {
+        if rel == "index.json" || rel == "manifest.json" || rel == STAGED_INDEX {
             continue;
         }
         let text = fs::read_to_string(&path).unwrap_or_default();
@@ -1895,15 +1913,10 @@ fn index_tree(root: &Path, engine: &str) -> Result<(), String> {
     if engine == "yara" {
         qualify_yara_namespaces(&mut rules);
     }
-    let index = IndexFile {
+    Ok(IndexFile {
         parser: INDEX_PARSER,
         rules,
-    };
-    #[cfg(test)]
-    if take_fail("index-write") {
-        return Err("No space left on device".into());
-    }
-    crate::storage::atomic_json(&root.join("index.json"), &index)
+    })
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1915,6 +1928,13 @@ pub struct IndexMigration {
 
 /// Rebuild indexes written by an older parser from the installed files.
 /// A second call does not rewrite a current index.
+///
+/// Every retained version is rebuilt, but disabled rules are reconciled only
+/// against the selected pack version or group revision: a historical index
+/// never drops a toggle for a rule that exists only in the selected one.
+/// Rebuilt indexes are staged beside the current file and promoted only after
+/// the registry is saved, so a failure leaves the previous index and toggles,
+/// and the next call finishes the staged work instead of starting over.
 pub fn migrate_indexes(data_dir: &Path) -> Result<IndexMigration, String> {
     let _lock = registry_lock();
     let mut registry = load_registry(data_dir)?;
@@ -1922,15 +1942,19 @@ pub fn migrate_indexes(data_dir: &Path) -> Result<IndexMigration, String> {
     let mut targets = Vec::new();
     for pack in &registry.packs {
         for version in &pack.versions {
-            targets.push((
-                format!("pack:{}", pack.id),
-                pack.engine.clone(),
-                rules_root(data_dir)
+            if path_component(version, "version").is_err() {
+                continue;
+            }
+            targets.push(Target {
+                key: format!("pack:{}", pack.id),
+                engine: pack.engine.clone(),
+                root: rules_root(data_dir)
                     .join("packs")
                     .join(&pack.engine)
                     .join(&pack.id)
                     .join(version),
-            ));
+                selected: *version == pack.version,
+            });
         }
     }
     for group in &registry.groups {
@@ -1940,17 +1964,18 @@ pub fn migrate_indexes(data_dir: &Path) -> Result<IndexMigration, String> {
         };
         for entry in entries.flatten() {
             if entry.path().is_dir() {
-                targets.push((
-                    format!("group:{}", group.id),
-                    group.engine.clone(),
-                    entry.path(),
-                ));
+                targets.push(Target {
+                    key: format!("group:{}", group.id),
+                    engine: group.engine.clone(),
+                    selected: entry.file_name() == group.revision.to_string().as_str(),
+                    root: entry.path(),
+                });
             }
         }
     }
     // Registries from before requirements were retained take them from each
     // selected version's own manifest, never from the live catalog.
-    let mut toggles_changed = false;
+    let mut registry_changed = false;
     for pack in registry
         .packs
         .iter_mut()
@@ -1961,51 +1986,111 @@ pub fn migrate_indexes(data_dir: &Path) -> Result<IndexMigration, String> {
         {
             pack.app = entry.app;
             pack.engine_requirement = entry.engine_requirement;
-            toggles_changed = true;
+            registry_changed = true;
         }
     }
-    for (key, engine, root) in targets {
-        let index_path = root.join("index.json");
-        if !index_path.is_file() {
-            continue;
-        }
-        let data = fs::read(&index_path).map_err(|error| error.to_string())?;
-        let parsed: IndexFile = serde_json::from_slice(&data)
-            .map_err(|error| format!("{}: {error}", index_path.display()))?;
-        let label = root
+    let mut staged = Vec::new();
+    for target in targets {
+        let label = target
+            .root
             .strip_prefix(rules_root(data_dir))
-            .unwrap_or(&root)
+            .unwrap_or(&target.root)
             .display()
             .to_string();
-        if parsed.parser >= INDEX_PARSER {
-            report.current.push(label);
-            continue;
-        }
-        index_tree(&root, &engine)?;
-        if let Some(disabled) = registry.disabled.get_mut(&key) {
-            let rules = read_index(&root)?;
+        let next = target.root.join(STAGED_INDEX);
+        let rules = if let Some(index) = read_staged(&next)? {
+            index.rules
+        } else {
+            let index_path = target.root.join("index.json");
+            if !index_path.is_file() {
+                continue;
+            }
+            let data = fs::read(&index_path).map_err(|error| error.to_string())?;
+            let parsed: IndexFile = serde_json::from_slice(&data)
+                .map_err(|error| format!("{}: {error}", index_path.display()))?;
+            if parsed.parser >= INDEX_PARSER {
+                report.current.push(label);
+                continue;
+            }
+            let index = build_index(&target.root, &target.engine)?;
+            write_index(&next, &index)?;
+            index.rules
+        };
+        if target.selected
+            && let Some(disabled) = registry.disabled.get_mut(&target.key)
+        {
             let obsolete = reconcile_disabled(disabled, &rules);
             if !obsolete.is_empty() {
-                toggles_changed = true;
-                report
-                    .obsolete
-                    .extend(obsolete.iter().map(|id| format!("{key} {id}")));
-                registry
+                registry_changed = true;
+                let reasons = registry
+                    .obsolete_reasons
+                    .entry(target.key.clone())
+                    .or_default();
+                for (id, reason) in &obsolete {
+                    report
+                        .obsolete
+                        .push(format!("{} {id}: {reason}", target.key));
+                    reasons.insert(id.clone(), format!("{label}: {reason}"));
+                }
+                let kept = registry
                     .obsolete_disabled
-                    .entry(key)
-                    .or_default()
-                    .extend(obsolete);
+                    .entry(target.key.clone())
+                    .or_default();
+                for (id, _) in obsolete {
+                    if !kept.contains(&id) {
+                        kept.push(id);
+                    }
+                }
             }
         }
-        report.rebuilt.push(label);
+        staged.push((next, target.root.join("index.json"), label));
     }
-    if toggles_changed {
+    if registry_changed {
         save_registry(data_dir, &registry)?;
+    }
+    for (next, current, label) in staged {
+        #[cfg(test)]
+        if take_fail("index-promote") {
+            return Err("interrupted".into());
+        }
+        fs::rename(&next, &current).map_err(|error| format!("{label}: {error}"))?;
+        report.rebuilt.push(label);
     }
     Ok(report)
 }
 
-fn reconcile_disabled(disabled: &mut BTreeSet<String>, rules: &[IndexedRule]) -> Vec<String> {
+struct Target {
+    /// Disabled-set key: `pack:<id>` or `group:<id>`.
+    key: String,
+    engine: String,
+    root: PathBuf,
+    /// The selected pack version or group revision.
+    selected: bool,
+}
+
+/// A staged index left by an interrupted migration. One from another parser
+/// is discarded and rebuilt.
+fn read_staged(path: &Path) -> Result<Option<IndexFile>, String> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let parsed = fs::read(path)
+        .ok()
+        .and_then(|data| serde_json::from_slice::<IndexFile>(&data).ok())
+        .filter(|index| index.parser == INDEX_PARSER);
+    if parsed.is_none() {
+        fs::remove_file(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    }
+    Ok(parsed)
+}
+
+/// Keep ids that name a rule in `rules` and remap a bare name that names
+/// exactly one. Returns the others with the reason they were dropped; they are
+/// never applied to a different rule.
+fn reconcile_disabled(
+    disabled: &mut BTreeSet<String>,
+    rules: &[IndexedRule],
+) -> Vec<(String, String)> {
     let ids: BTreeSet<_> = rules.iter().map(|rule| rule.id.as_str()).collect();
     let mut next = BTreeSet::new();
     let mut obsolete = Vec::new();
@@ -2019,10 +2104,15 @@ fn reconcile_disabled(disabled: &mut BTreeSet<String>, rules: &[IndexedRule]) ->
             .filter(|rule| rule.name == *id)
             .map(|rule| rule.id.clone())
             .collect();
-        if named.len() == 1 {
-            next.insert(named[0].clone());
-        } else {
-            obsolete.push(id.clone());
+        match named.len() {
+            1 => {
+                next.insert(named[0].clone());
+            }
+            0 => obsolete.push((id.clone(), "no rule has this id or name".into())),
+            count => obsolete.push((
+                id.clone(),
+                format!("the name matches {count} rules in different namespaces"),
+            )),
         }
     }
     *disabled = next;
@@ -4073,6 +4163,169 @@ rule Other { condition: true }\n";
         let next = snapshot(&dir, "yara", &ToolConfig::default()).unwrap();
         assert_ne!(next.digest, digest);
         assert_eq!(next.enabled_rules, 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Mark an installed index as written by the parser before `INDEX_PARSER`.
+    fn make_legacy(root: &Path) {
+        let path = root.join("index.json");
+        let mut index: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        index["parser"] = Value::from(0);
+        fs::write(&path, index.to_string()).unwrap();
+    }
+
+    fn parser_of(root: &Path) -> u64 {
+        let index: Value =
+            serde_json::from_slice(&fs::read(root.join("index.json")).unwrap()).unwrap();
+        index["parser"].as_u64().unwrap_or(0)
+    }
+
+    fn install_version(dir: &Path, version: &str, files: &[(&str, &str)]) {
+        let bytes = archive(files);
+        let mut listed = entry(&format!("{:x}", Sha256::digest(&bytes)), bytes.len() as u64);
+        listed.version = version.into();
+        install_archive(dir, &listed, &bytes).unwrap();
+    }
+
+    #[test]
+    fn migrating_an_older_version_keeps_a_toggle_of_the_selected_one() {
+        let dir = std::env::temp_dir().join(format!("ant-mig2-{}", crate::storage::unique_id()));
+        install_version(
+            &dir,
+            "1",
+            &[("old.yar", "rule OldOnly { condition: true }\n")],
+        );
+        install_version(
+            &dir,
+            "2",
+            &[(
+                "new.yar",
+                "rule NewOnly { condition: true }\nrule Kept { condition: true }\n",
+            )],
+        );
+        set_rule_enabled(&dir, "pack:sample", "NewOnly", false).unwrap();
+        let packs = dir.join("rules/packs/yara/sample");
+        make_legacy(&packs.join("1"));
+        make_legacy(&packs.join("2"));
+        let report = migrate_indexes(&dir).unwrap();
+        assert_eq!(report.rebuilt.len(), 2, "{report:?}");
+        assert!(report.obsolete.is_empty(), "{report:?}");
+        let registry = load_registry(&dir).unwrap();
+        assert!(registry.disabled["pack:sample"].contains("NewOnly"));
+        assert!(registry.obsolete_disabled.is_empty());
+        assert_eq!(
+            snapshot_from(&dir, "yara", &registry, &installed_engines(), None)
+                .unwrap()
+                .enabled_rules,
+            1
+        );
+        // Rolling back neither drops nor applies the toggle; reopening and
+        // returning to version 2 still has NewOnly disabled.
+        rollback(&dir, "sample", "1").unwrap();
+        assert!(migrate_indexes(&dir).unwrap().rebuilt.is_empty());
+        let reopened = load_registry(&dir).unwrap();
+        assert!(reopened.disabled["pack:sample"].contains("NewOnly"));
+        assert_eq!(
+            snapshot_from(&dir, "yara", &reopened, &installed_engines(), None)
+                .unwrap()
+                .enabled_rules,
+            1
+        );
+        rollback(&dir, "sample", "2").unwrap();
+        assert!(load_registry(&dir).unwrap().disabled["pack:sample"].contains("NewOnly"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_registry_write_or_promotion_is_finished_by_the_next_migration() {
+        let dir = std::env::temp_dir().join(format!("ant-mig3-{}", crate::storage::unique_id()));
+        // Two files define `Twin`, so its id is namespaced; `Solo` is a bare name.
+        install_version(
+            &dir,
+            "1",
+            &[
+                (
+                    "a.yar",
+                    "rule Twin { condition: true }\nrule Solo { condition: true }\n",
+                ),
+                ("b.yar", "rule Twin { condition: true }\n"),
+            ],
+        );
+        let root = dir.join("rules/packs/yara/sample/1");
+        for id in ["Solo", "Twin", "Gone"] {
+            set_rule_enabled(&dir, "pack:sample", id, false).unwrap();
+        }
+        make_legacy(&root);
+        let legacy = fs::read(root.join("index.json")).unwrap();
+        let toggles = load_registry(&dir).unwrap().disabled;
+        fail_once("registry-write");
+        assert!(migrate_indexes(&dir).unwrap_err().contains("No space"));
+        assert_eq!(fs::read(root.join("index.json")).unwrap(), legacy);
+        assert!(root.join(STAGED_INDEX).is_file());
+        assert_eq!(load_registry(&dir).unwrap().disabled, toggles);
+        // The registry commits, then promotion is interrupted.
+        fail_once("index-promote");
+        assert_eq!(migrate_indexes(&dir).unwrap_err(), "interrupted");
+        assert_eq!(parser_of(&root), 0);
+        let saved = load_registry(&dir).unwrap();
+        assert_eq!(
+            saved.disabled["pack:sample"]
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec!["Solo".to_owned()]
+        );
+        // A restart finishes the staged index without rebuilding or repeating.
+        let report = migrate_indexes(&dir).unwrap();
+        assert_eq!(report.rebuilt.len(), 1);
+        assert!(report.obsolete.is_empty(), "{report:?}");
+        assert_eq!(parser_of(&root), u64::from(INDEX_PARSER));
+        assert!(!root.join(STAGED_INDEX).exists());
+        let finished = load_registry(&dir).unwrap();
+        assert_eq!(
+            finished.obsolete_disabled["pack:sample"],
+            vec!["Gone".to_owned(), "Twin".to_owned()]
+        );
+        let reasons = &finished.obsolete_reasons["pack:sample"];
+        assert!(reasons["Twin"].contains("matches 2 rules"), "{reasons:?}");
+        assert!(reasons["Gone"].contains("no rule"), "{reasons:?}");
+        // The ambiguous name was not applied to either namespaced rule.
+        assert_eq!(
+            snapshot_from(&dir, "yara", &finished, &installed_engines(), None)
+                .unwrap()
+                .enabled_rules,
+            2
+        );
+        let again = migrate_indexes(&dir).unwrap();
+        assert!(again.rebuilt.is_empty() && again.current.len() == 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn group_migration_reconciles_only_the_selected_revision() {
+        let dir = std::env::temp_dir().join(format!("ant-mig4-{}", crate::storage::unique_id()));
+        let source = dir.join("source");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("one.yar"), "rule First { condition: true }\n").unwrap();
+        let id = import_group(&dir, "Local", "yara", &source).unwrap();
+        fs::write(
+            source.join("one.yar"),
+            "rule First { condition: true }\nrule Second { condition: true }\n",
+        )
+        .unwrap();
+        let revision = replace_group_revision(&dir, &id, &source).unwrap();
+        let key = format!("group:{id}");
+        set_rule_enabled(&dir, &key, "Second", false).unwrap();
+        let base = dir.join("rules/custom").join(&id);
+        for entry in fs::read_dir(&base).unwrap().flatten() {
+            make_legacy(&entry.path());
+        }
+        let report = migrate_indexes(&dir).unwrap();
+        assert!(report.rebuilt.len() >= 2, "{report:?}");
+        assert!(report.obsolete.is_empty(), "{report:?}");
+        let registry = load_registry(&dir).unwrap();
+        assert!(registry.disabled[&key].contains("Second"));
+        assert_eq!(registry.groups[0].revision, revision);
         let _ = fs::remove_dir_all(&dir);
     }
 }
