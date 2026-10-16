@@ -4,6 +4,38 @@ use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 const INVENTORY_LIMIT: usize = 16384;
 
+/// Only an identity-matching artifact manifest proves capture ownership.
+/// A currently open capture from the same boot alone is insufficient.
+pub(super) fn owned_capture(
+    directory: &Path,
+    identity: Option<&(String, String, String)>,
+    path: &Path,
+) -> Result<bool, String> {
+    let Some((vm, boot, run)) = identity else {
+        return Ok(false);
+    };
+    let Some(artifacts) = antinomie_monitor_core::RunArtifacts::load(directory)? else {
+        return Ok(false);
+    };
+    if artifacts.run_id != *run || artifacts.vm_id != *vm || artifacts.boot_id != *boot {
+        return Err("run artifact identity mismatch".into());
+    }
+    Ok(artifacts
+        .network_captures
+        .iter()
+        .any(|candidate| candidate == path))
+}
+
+pub(super) fn in_window(request: &ScanRequest, packet_us: Option<u64>) -> bool {
+    request.owned_pcap
+        || (!request
+            .started_ms
+            .is_some_and(|start| packet_us.is_none_or(|time| time / 1000 < start))
+            && !request
+                .ended_ms
+                .is_some_and(|end| packet_us.is_none_or(|time| time / 1000 > end)))
+}
+
 pub(super) const IP_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::text("network.ip", "Observed destination IP"),
     FieldSpec::text(
@@ -194,6 +226,57 @@ pub(super) fn qtype(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dedicated_capture_keeps_shifted_packets_without_loosening_shared_capture_scope() {
+        let mut request = ScanRequest {
+            started_ms: Some(1_792_069_584_210),
+            ended_ms: Some(1_792_070_879_490),
+            ..Default::default()
+        };
+        let shifted = Some(1_792_044_610_612_431);
+        assert!(!in_window(&request, shifted));
+        request.owned_pcap = true;
+        assert!(in_window(&request, shifted));
+        assert!(in_window(&request, None));
+        request.owned_pcap = false;
+        assert!(!in_window(&request, None));
+        assert!(in_window(&request, Some(1_792_069_600_000_000)));
+    }
+
+    #[test]
+    fn same_boot_is_not_capture_ownership_and_manifest_identity_is_required() {
+        let spool = PacketSpool::new().unwrap();
+        let pcap = spool.directory.join("run.pcap");
+        let identity = ("vm".into(), "boot".into(), "run".into());
+        let mut artifacts = antinomie_monitor_core::RunArtifacts {
+            vm_id: "vm".into(),
+            boot_id: "boot".into(),
+            run_id: "run".into(),
+            network_captures: vec![pcap.clone()],
+            ..Default::default()
+        };
+        let save = |artifacts: &antinomie_monitor_core::RunArtifacts| {
+            std::fs::write(
+                spool.directory.join("artifacts.json"),
+                serde_json::to_vec(artifacts).unwrap(),
+            )
+            .unwrap()
+        };
+        save(&artifacts);
+        assert!(owned_capture(&spool.directory, Some(&identity), &pcap).unwrap());
+        assert!(!owned_capture(
+            &spool.directory,
+            Some(&identity),
+            &spool.directory.join("other.pcap")
+        )
+        .unwrap());
+        assert!(!owned_capture(&spool.directory, None, &pcap).unwrap());
+        artifacts.run_id = "another".into();
+        save(&artifacts);
+        assert!(owned_capture(&spool.directory, Some(&identity), &pcap).is_err());
+    }
+
     #[test]
     fn inventory_deduplicates_and_keeps_packet_evidence_and_unknown_geoip() {
         let mut inventory = Inventory::default();

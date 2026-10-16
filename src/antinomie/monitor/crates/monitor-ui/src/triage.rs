@@ -294,7 +294,11 @@ impl TriageView {
                     Some(Instant::now() + Duration::from_secs(self.refresh_seconds));
             }
             ui.colored_label(theme::muted(), self.refresh_status(&input));
-            ui.weak("Host time").on_hover_text("Times use the host timezone. ~ marks a guest event time estimated from a host receipt/start anchor, including transport latency.");
+            if self.section == Section::Network {
+                ui.weak("PCAP time").on_hover_text("Packet timestamps use QEMU's capture clock, displayed in the host timezone. They may differ from the host run clock; capture ownership determines which run is indexed.");
+            } else {
+                ui.weak("Host time").on_hover_text("Times use the host timezone. ~ marks a guest event time estimated from a host receipt/start anchor, including transport latency.");
+            }
         });
         let jump = match self.section {
             Section::Process => self.process(ui, &input),
@@ -1935,6 +1939,7 @@ const DNS_FIELDS: &[FieldSpec<'static>] = &[
 #[derive(Clone, Default)]
 struct ScanRequest {
     file_visibility: file_visibility::FileVisibility,
+    owned_pcap: bool,
     clock_anchor: Option<antinomie_monitor_core::HostClockAnchor>,
     started_ms: Option<u64>,
     ended_ms: Option<u64>,
@@ -2874,9 +2879,14 @@ fn scan_archive_query(
         ));
     }
     let mut network_request = request.clone();
+    network_request.owned_pcap = pcap
+        .map(|path| network::owned_capture(&recording.directory, request.identity.as_ref(), path))
+        .transpose()?
+        .unwrap_or(false);
     network_request.started_ms = started_ms;
     network_request.ended_ms = facts.as_ref().and_then(|facts| facts.ended_ms);
-    let estimated_end = request.run_finished && network_request.ended_ms.is_none();
+    let estimated_end =
+        !network_request.owned_pcap && request.run_finished && network_request.ended_ms.is_none();
     if estimated_end {
         network_request.ended_ms = nodes
             .values()
@@ -3231,12 +3241,16 @@ fn scan_pcap_query(
     cancel: &Arc<AtomicBool>,
     request: &ScanRequest,
 ) -> Result<PacketIndex, String> {
-    if request.identity.is_some() && request.started_ms.is_none() {
+    if !request.owned_pcap && request.identity.is_some() && request.started_ms.is_none() {
         return Err(
             "host start time unavailable; network evidence cannot be scoped to this run".into(),
         );
     }
-    if request.identity.is_some() && request.run_finished && request.ended_ms.is_none() {
+    if !request.owned_pcap
+        && request.identity.is_some()
+        && request.run_finished
+        && request.ended_ms.is_none()
+    {
         return Err(
             "host end time unavailable; network evidence cannot be scoped to this run".into(),
         );
@@ -3296,13 +3310,7 @@ fn scan_pcap_query(
             .parse::<u64>()
             .map_err(|_| "invalid TShark frame number")?;
         let time = epoch_us(field(1));
-        if request
-            .started_ms
-            .is_some_and(|start| time.is_none_or(|time| time / 1000 < start))
-            || request
-                .ended_ms
-                .is_some_and(|end| time.is_none_or(|time| time / 1000 > end))
-        {
+        if !network::in_window(request, time) {
             continue;
         }
         let destination = if field(4).is_empty() {
