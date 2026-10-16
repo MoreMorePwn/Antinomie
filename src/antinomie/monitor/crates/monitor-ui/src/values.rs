@@ -392,6 +392,15 @@ fn meaning(nr: u64, index: usize) -> Meaning {
 
 /// Argument `index` of syscall `nr` by meaning. `args` gives the other
 /// arguments some values depend on (socket option names by level).
+pub(crate) fn standard_fd_name(fd: u64) -> Option<&'static str> {
+    match fd {
+        0 => Some("stdin"),
+        1 => Some("stdout"),
+        2 => Some("stderr"),
+        _ => None,
+    }
+}
+
 pub(crate) fn argument(nr: u64, index: usize, args: &[u64; 6]) -> Shown {
     let value = args[index];
     if let Some(name) = syscalls::selector_name(nr, index, args) {
@@ -408,6 +417,8 @@ pub(crate) fn argument(nr: u64, index: usize, args: &[u64; 6]) -> Shown {
             let fd = value as i32;
             if fd == -100 {
                 Shown::named("AT_FDCWD", ValueKind::Name, "-100")
+            } else if let Some(name) = standard_fd_name(value) {
+                Shown::named(name, ValueKind::Name, fd.to_string())
             } else {
                 Shown::new(fd.to_string(), ValueKind::Number)
             }
@@ -574,6 +585,14 @@ mod tests {
         // ioctl requests are bit fields.
         let args = [1, 0x5401, 0x7ffd_0000, 0, 0, 0];
         assert_eq!(argument(16, 1, &args).text, "0x5401");
+        // Only descriptor arguments are named; equal byte counts stay numeric.
+        for (fd, name) in [(0, "stdin"), (1, "stdout"), (2, "stderr")] {
+            let args = [fd, 0x1000, fd, 0, 0, 0];
+            let shown = argument(0, 0, &args);
+            assert_eq!(shown.text, name);
+            assert_eq!(shown.raw, Some(fd.to_string()));
+            assert_eq!(argument(0, 2, &args).text, fd.to_string());
+        }
     }
 
     #[test]

@@ -314,7 +314,9 @@ impl FileIndex {
         let path_known = path != "—";
         if path == "—" {
             path = format!(
-                "[path unavailable; task {} fd {}]",
+                "{}[path unavailable; task {} fd {}]",
+                fd.and_then(crate::values::standard_fd_name)
+                    .map_or(String::new(), |name| format!("{name} ")),
                 call.task_cookie,
                 fd.map_or("?".into(), |fd| fd.to_string())
             );
@@ -393,6 +395,10 @@ impl FileIndex {
                 cell(format!("call {}", call.call_id), theme::text(), true),
             ];
             row[0].values = vec![
+                (
+                    "file.fd",
+                    fd.map_or(RowValue::Missing, |fd| RowValue::Number(i128::from(fd))),
+                ),
                 (
                     "file.path",
                     if path_known {

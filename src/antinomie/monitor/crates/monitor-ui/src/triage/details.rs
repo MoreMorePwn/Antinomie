@@ -166,7 +166,10 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
                     ui.colored_label(theme::muted(), *name);
                     let text = match value {
                         RowValue::Text(value) => value.clone(),
-                        RowValue::Number(value) => value.to_string(),
+                        RowValue::Number(value) => u64::try_from(*value).ok()
+                            .filter(|_| *name == "file.fd")
+                            .and_then(crate::values::standard_fd_name)
+                            .map_or_else(|| value.to_string(), |role| format!("{value} ({role})")),
                         RowValue::Bool(value) => value.to_string(),
                         RowValue::List(values) => values.join(", "),
                         RowValue::Missing => "Unavailable".into(),
