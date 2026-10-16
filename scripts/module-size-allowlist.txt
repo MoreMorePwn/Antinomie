@@ -1,0 +1,12 @@
+# Files over the module size limit, with the most lines of non-test code
+# each may have. Split a file to remove it; never raise a number.
+src/antinomie/monitor/crates/monitor-core/src/analysis/jobs.rs 1561
+src/antinomie/monitor/crates/monitor-core/src/build_choices.rs 1205
+src/antinomie/monitor/crates/monitor-core/src/packet_filter.rs 1221
+src/antinomie/monitor/crates/monitor-core/src/storage.rs 1804
+src/antinomie/monitor/crates/monitor-core/src/syscalls.rs 1241
+src/antinomie/monitor/crates/monitor-ui/src/samples_view.rs 1629
+src/antinomie/monitor/crates/monitor-ui/src/summary.rs 1238
+src/antinomie/monitor/crates/monitor-ui/src/trace.rs 2033
+src/antinomie/monitor/crates/monitor-ui/src/triage.rs 1328
+src/antinomie/monitor/crates/monitor-ui/src/triage/detection.rs 1500
