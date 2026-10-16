@@ -2,7 +2,6 @@
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Lazy, bounded host directory browsing off the native rendering thread.
 use crate::theme;
-#[path = "explorer_rows.rs"]
 mod rows;
 use eframe::egui;
 use std::{
