@@ -33,7 +33,11 @@ it runs.
   their original source names. Automatic scanning is on by default and can be
   turned off in Settings. Catalog checks and downloads are explicit and stay
   behind the outbound-catalog setting. A scan does not download rules or
-  upload evidence.
+  upload evidence. Pack requirements are checked against the tools the scan
+  runs, including the configured Sigma interpreter, and each installed version
+  keeps the requirements it was installed with, so a missing or edited catalog
+  does not change them. Upgrading an old index keeps rule toggles of the
+  selected version.
 
 - **Detection.** On-demand YARA, IDS and Sigma tabs evaluate retained evidence
   offline, preserve coverage and source provenance, and open match details in
