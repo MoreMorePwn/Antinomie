@@ -4583,11 +4583,15 @@ impl MonitorApp {
         }
         if self.rules_open {
             let mut open = true;
+            let tools = antinomie_monitor_core::ruleset::ToolConfig::from_sigma_setting(
+                &self.triage.detection_settings().sigma_python,
+            );
             self.rules_ui.show(
                 ctx,
                 &mut open,
                 &self.options.data_dir,
                 self.settings.outbound_catalog,
+                &tools,
             );
             if self.rules_ui.changed() {
                 self.rules_generation = self.rules_generation.saturating_add(1);

@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(super) struct Run {
+pub(crate) struct Run {
     pub stdout: String,
     /// Diagnostics captured when the caller asked for them.
     pub stderr: String,
@@ -75,7 +75,7 @@ pub(super) fn run_with(
 }
 
 /// [`run_with`], stopping the tool when `cancel` is set.
-pub(super) fn run_cancellable(
+pub(crate) fn run_cancellable(
     path: &str,
     args: &[&str],
     env: &[(&str, &str)],

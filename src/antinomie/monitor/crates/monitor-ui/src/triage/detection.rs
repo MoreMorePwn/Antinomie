@@ -197,6 +197,8 @@ pub(super) struct View {
     digest_rx: Option<Receiver<(String, u64, u128, String)>>,
     digest_cache: [String; 3],
     digest_generation: u64,
+    /// Tool facts the cached digests were computed with.
+    digest_facts: Option<antinomie_monitor_core::ruleset::ToolFacts>,
     ready_key: [String; 3],
     pub(super) registry: Option<antinomie_monitor_core::ruleset::Registry>,
     pub(super) registry_for: u64,
@@ -711,15 +713,34 @@ impl View {
             self.request_registry(ctx);
             return "preparing".into();
         };
-        if self.digest_generation != self.rules_generation {
+        let tools = antinomie_monitor_core::ruleset::ToolConfig::from_sigma_setting(
+            &self.settings.sigma_python,
+        );
+        let repaint = ctx.clone();
+        let Some(facts) = antinomie_monitor_core::ruleset::try_tool_facts(&tools, move || {
+            repaint.request_repaint_of(egui::ViewportId::ROOT)
+        }) else {
+            return "preparing".into();
+        };
+        let tools_changed = self.digest_facts.as_ref().is_some_and(|old| *old != facts);
+        if self.digest_generation != self.rules_generation
+            || self.digest_facts.as_ref() != Some(&facts)
+        {
             for (slot, engine) in ENGINES.iter().enumerate() {
                 self.digest_cache[slot] = antinomie_monitor_core::ruleset::selection_digest_of(
                     Path::new(&self.settings.rules_root),
                     &registry,
                     engine_key(*engine),
+                    &facts,
                 );
             }
             self.digest_generation = self.rules_generation;
+            self.digest_facts = Some(facts);
+        }
+        if tools_changed {
+            // A tool appeared, changed or went away: the selection is different
+            // even though no rule changed.
+            self.auto_key = Default::default();
         }
         self.digest_cache[index].clone()
     }
@@ -819,6 +840,9 @@ impl View {
         let epoch = self.epoch;
         let generation = self.rules_generation;
         let root = request.settings.rules_root.clone();
+        let tools = antinomie_monitor_core::ruleset::ToolConfig::from_sigma_setting(
+            &request.settings.sigma_python,
+        );
         let engine_name = engine_key(request.engine).to_owned();
         match std::thread::Builder::new()
             .name("triage-detector".into())
@@ -835,10 +859,12 @@ impl View {
                         if worker_cancel.load(Ordering::Relaxed) {
                             return Err("cancelled".into());
                         }
+                        let facts = antinomie_monitor_core::ruleset::tool_facts(&tools);
                         let snap = antinomie_monitor_core::ruleset::snapshot_from(
                             data_dir,
                             &engine_name,
                             &registry,
+                            &facts,
                             Some(&worker_cancel),
                         )?;
                         request.frozen = Some(engine::FrozenSelection {

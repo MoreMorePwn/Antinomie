@@ -50,6 +50,8 @@ pub(crate) struct Model {
     import_path: String,
     tags_text: String,
     changed: bool,
+    /// Tools the triage scans run; a manifest export qualifies packs against them.
+    tools: ruleset::ToolConfig,
     #[cfg(test)]
     next_at: Option<egui::Pos2>,
 }
@@ -98,7 +100,11 @@ impl Model {
         open: &mut bool,
         data_dir: &Path,
         outbound: bool,
+        tools: &ruleset::ToolConfig,
     ) {
+        if self.tools != *tools {
+            self.tools = tools.clone();
+        }
         self.ensure(data_dir);
         self.poll();
         if self.job.is_some() {
@@ -325,8 +331,9 @@ impl Model {
                     let engine = pack.engine.clone();
                     let id = pack.id.clone();
                     let version = pack.version.clone();
+                    let tools = self.tools.clone();
                     self.spawn(move |_| {
-                        let snap = ruleset::snapshot(&dir, &engine)?;
+                        let snap = ruleset::snapshot(&dir, &engine, &tools)?;
                         let source = ruleset::rules_root(&dir)
                             .join("profiles")
                             .join(&engine)
@@ -1059,7 +1066,7 @@ with open(destination, "wb") as output:
                 ..Default::default()
             },
             |ctx| {
-                model.show(ctx, &mut open, dir, false);
+                model.show(ctx, &mut open, dir, false, &ruleset::ToolConfig::default());
             },
         )
     }
