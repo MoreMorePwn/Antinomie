@@ -3,6 +3,7 @@
 """Adapter tests use SQLite itself; pySigma conversion is an optional integration."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -67,6 +68,26 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(report["findings"][0]["count"], 2)
         self.assertEqual(report["findings"][0]["mitre"], ["T1059.004"])
         self.assertTrue(report["sources"][0]["sha256"])
+        self.assertIn("not full compatibility", report["warnings"][0])
+
+    @unittest.skipUnless(os.environ.get("ANTINOMIE_SIGMA_RULES"), "community Sigma tree not selected")
+    def test_community_candidates_reconcile_backend_conversion(self):
+        paths = sorted(Path(os.environ["ANTINOMIE_SIGMA_RULES"]).rglob("*.yml"))
+        counts, reasons = adapter.classify_rules(paths)
+        self.assertTrue(counts["reconciled"], (counts, reasons))
+        self.assertGreater(counts["files"], 0)
+        self.assertEqual(
+            counts["category_rejected"] + counts["category_accepted"],
+            counts["rules"],
+        )
+        self.assertEqual(
+            counts["backend_rejected"] + counts["backend_converted"],
+            counts["category_accepted"],
+        )
+        self.assertEqual(
+            counts["schema_rejected"] + counts["schema_accepted"],
+            counts["backend_converted"],
+        )
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ const FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::text("finding.severity", "Rule-supplied severity"),
     FieldSpec::text("finding.source", "Rule namespace or local source"),
     FieldSpec::text("finding.license", "Rule license metadata"),
+    FieldSpec::text("finding.author", "Authors supplied by the rule"),
     FieldSpec::tags("finding.mitre", "Rule-supplied ATT&CK references"),
     FieldSpec::number("finding.count", "Matched events or byte targets/blocks"),
     FieldSpec::text("finding.engine", "YARA, IDS or Sigma"),
@@ -36,6 +37,7 @@ const HEADERS: &[&str] = &[
     "MITRE",
     "Source",
     "License",
+    "Author",
 ];
 const ENGINES: [Engine; 3] = [Engine::Yara, Engine::Ids, Engine::Sigma];
 const TABLES: [&str; 3] = ["triage-yara", "triage-ids", "triage-sigma"];
@@ -46,6 +48,14 @@ pub(super) fn name(engine: Engine) -> &'static str {
         Engine::Sigma => "Sigma",
     }
 }
+fn attribution(author: &str) -> &str {
+    if author.is_empty() {
+        "unknown"
+    } else {
+        author
+    }
+}
+
 fn evidence_note(key: &str) -> String {
     match key {
         "wait:sample" => "Waiting for the verified sample.".into(),
@@ -107,6 +117,14 @@ fn state(state: &State) -> &'static str {
         State::Missing => "Evidence missing",
     }
 }
+
+fn engine_key(engine: Engine) -> &'static str {
+    match engine {
+        Engine::Yara => "yara",
+        Engine::Ids => "ids",
+        Engine::Sigma => "sigma",
+    }
+}
 type Loaded = [Option<Report>; 3];
 type BytePreview = Result<(Evidence, Vec<u8>), String>;
 pub(super) struct Counts {
@@ -115,8 +133,37 @@ pub(super) struct Counts {
     references: std::collections::BTreeSet<String>,
 }
 enum Reply {
-    Loaded(Box<Loaded>),
-    Scanned(usize, Box<Result<Report, String>>),
+    Loaded {
+        epoch: u64,
+        loaded: Box<Loaded>,
+    },
+    Scanned {
+        epoch: u64,
+        generation: u64,
+        index: usize,
+        result: Box<Result<Report, String>>,
+    },
+}
+
+struct RegistryMsg {
+    epoch: u64,
+    result: Result<antinomie_monitor_core::ruleset::Registry, String>,
+}
+
+struct PendingScan {
+    engine: Engine,
+    digest: Option<String>,
+    partial: bool,
+    evidence_key: String,
+    automatic: bool,
+    generation: u64,
+    epoch: u64,
+}
+
+enum Admit {
+    Started,
+    Preparing,
+    Failed,
 }
 
 #[derive(Default)]
@@ -151,6 +198,12 @@ pub(super) struct View {
     digest_cache: [String; 3],
     digest_generation: u64,
     ready_key: [String; 3],
+    pub(super) registry: Option<antinomie_monitor_core::ruleset::Registry>,
+    pub(super) registry_for: u64,
+    registry_rx: Option<Receiver<RegistryMsg>>,
+    pending: Option<PendingScan>,
+    epoch: u64,
+    phase: [String; 3],
 }
 
 impl View {
@@ -158,8 +211,11 @@ impl View {
         if let Some(cancel) = self.cancel.take() {
             cancel.store(true, Ordering::Relaxed);
         }
+        self.epoch = self.epoch.wrapping_add(1);
         self.rx = None;
         self.busy = None;
+        self.pending = None;
+        self.registry_rx = None;
         self.byte_rx = None;
         self.pending_byte = None;
         self.bytes = None;
@@ -173,6 +229,11 @@ impl View {
         self.notes = Default::default();
         self.budgets = Default::default();
         self.auto_started = Default::default();
+        for phase in &mut self.phase {
+            if !phase.is_empty() {
+                *phase = "canceled".into();
+            }
+        }
     }
     fn request(&self, engine: Engine, digest: Option<String>) -> Option<engine::Request> {
         self.identity
@@ -229,6 +290,7 @@ impl View {
                             cell(finding.mitre.join(", "), theme::text(), true),
                             cell(&finding.source, theme::text(), false),
                             cell(&finding.license, theme::muted(), false),
+                            cell(attribution(&finding.author), theme::text(), false),
                         ];
                         row[0].values = vec![
                             ("finding.rule", RowValue::Text(finding.rule_id.clone())),
@@ -236,6 +298,10 @@ impl View {
                             ("finding.severity", RowValue::Text(finding.severity.clone())),
                             ("finding.source", RowValue::Text(finding.source.clone())),
                             ("finding.license", RowValue::Text(finding.license.clone())),
+                            (
+                                "finding.author",
+                                RowValue::Text(attribution(&finding.author).to_owned()),
+                            ),
                             ("finding.count", RowValue::Number(i128::from(finding.count))),
                             ("finding.mitre", RowValue::List(finding.mitre.clone())),
                             ("finding.engine", RowValue::Text(name(report.engine).into())),
@@ -271,6 +337,7 @@ impl View {
             if let Some(request) = self.request(Engine::Yara, None) {
                 let (tx, rx) = mpsc::sync_channel(1);
                 let ctx = ctx.clone();
+                let epoch = self.epoch;
                 match std::thread::Builder::new()
                     .name("triage-detector-load".into())
                     .spawn(move || {
@@ -279,11 +346,84 @@ impl View {
                             request.engine = engine;
                             engine::load(&request).ok()
                         });
-                        let _ = tx.send(Reply::Loaded(Box::new(loaded)));
+                        let _ = tx.send(Reply::Loaded {
+                            epoch,
+                            loaded: Box::new(loaded),
+                        });
                         ctx.request_repaint_of(egui::ViewportId::ROOT);
                     }) {
                     Ok(_) => self.rx = Some(rx),
-                    Err(error) => self.results[0] = Some(Err(error.to_string())),
+                    Err(error) => {
+                        self.phase[0] = "failed".into();
+                        self.results[0] = Some(Err(error.to_string()));
+                    }
+                }
+            }
+        }
+        if let Some(rx) = &self.registry_rx {
+            match rx.try_recv() {
+                Ok(message) => {
+                    self.registry_rx = None;
+                    if message.epoch == self.epoch {
+                        match message.result {
+                            Ok(registry) => {
+                                self.profile =
+                                    antinomie_monitor_core::ruleset::profile_label_of(&registry);
+                                self.registry = Some(registry);
+                                self.registry_for = self.rules_generation;
+                                self.digest_generation = u64::MAX;
+                            }
+                            Err(error) => {
+                                self.phase = ["failed".into(), "failed".into(), "failed".into()];
+                                self.results[0] = Some(Err(error));
+                                self.pending = None;
+                            }
+                        }
+                    }
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.registry_rx = None;
+                    if self.pending.is_some() {
+                        self.phase = ["failed".into(), "failed".into(), "failed".into()];
+                        self.results[0] =
+                            Some(Err("Rules registry worker ended without a result".into()));
+                        self.pending = None;
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if self.rx.is_none() {
+            if let Some(pending) = self.pending.take() {
+                let current =
+                    pending.epoch == self.epoch && pending.generation == self.rules_generation;
+                let registry = if current {
+                    self.fresh_registry().cloned()
+                } else {
+                    None
+                };
+                if let Some(registry) = registry {
+                    let index = ENGINES
+                        .iter()
+                        .position(|candidate| *candidate == pending.engine)
+                        .unwrap_or(0);
+                    self.settings.partial = pending.partial;
+                    self.settings.evidence_key = pending.evidence_key.clone();
+                    if let Some(request) = self.request(pending.engine, pending.digest.clone()) {
+                        match self.launch(ctx, request, Some(registry), index, pending.automatic) {
+                            Admit::Started if pending.automatic => {
+                                self.auto_key[index] = pending.evidence_key;
+                                self.scanned_generation[index] = pending.generation;
+                                self.budgets[index].admit(std::time::Instant::now());
+                            }
+                            Admit::Failed if pending.automatic => {
+                                self.budgets[index].admit(std::time::Instant::now());
+                            }
+                            _ => {}
+                        }
+                    }
+                } else if current {
+                    self.pending = Some(pending);
                 }
             }
         }
@@ -297,27 +437,47 @@ impl View {
             };
             if let Some(reply) = reply {
                 match reply {
-                    Ok(Reply::Loaded(loaded)) => {
-                        self.results = (*loaded).map(|report| report.map(Ok));
-                        for index in 0..3 {
+                    Ok(Reply::Loaded { epoch, loaded }) => {
+                        if epoch == self.epoch {
+                            self.results = (*loaded).map(|report| report.map(Ok));
+                            for index in 0..3 {
+                                self.rows(index);
+                            }
+                        }
+                    }
+                    Ok(Reply::Scanned {
+                        epoch,
+                        generation,
+                        index,
+                        result,
+                    }) => {
+                        if epoch != self.epoch || generation != self.rules_generation {
+                            self.phase[index] = "canceled".into();
+                        } else {
+                            let automatic = self.auto_started[index];
+                            self.auto_started[index] = false;
+                            if result.is_ok() {
+                                if automatic {
+                                    self.budgets[index].automatic_success();
+                                }
+                                self.phase[index].clear();
+                            } else if matches!(result.as_ref(), Err(error) if error == "cancelled")
+                            {
+                                self.phase[index] = "canceled".into();
+                            } else {
+                                self.phase[index] = "failed".into();
+                                if automatic && self.budgets[index].attempts < 3 {
+                                    self.auto_key[index].clear();
+                                }
+                            }
+                            self.results[index] = Some(*result);
                             self.rows(index);
                         }
                     }
-                    Ok(Reply::Scanned(index, result)) => {
-                        let automatic = self.auto_started[index];
-                        self.auto_started[index] = false;
-                        if result.is_ok() {
-                            if automatic {
-                                self.budgets[index].automatic_success();
-                            }
-                        } else if automatic && self.budgets[index].attempts < 3 {
-                            self.auto_key[index].clear();
-                        }
-                        self.results[index] = Some(*result);
-                        self.rows(index);
-                    }
                     Err(error) => {
-                        self.results[self.busy.unwrap_or(0)] = Some(Err(error));
+                        let index = self.busy.unwrap_or(0);
+                        self.phase[index] = "failed".into();
+                        self.results[index] = Some(Err(error));
                     }
                 }
                 self.rx = None;
@@ -372,7 +532,12 @@ impl View {
             }
         }
         self.consider_auto(ctx, input);
-        if self.rx.is_some() || self.byte_rx.is_some() || self.digest_rx.is_some() {
+        if self.rx.is_some()
+            || self.byte_rx.is_some()
+            || self.digest_rx.is_some()
+            || self.registry_rx.is_some()
+            || self.pending.is_some()
+        {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
@@ -486,7 +651,11 @@ impl View {
             let key = self.evidence_identity(ctx, *engine, input);
             self.ready_key[index] = key.clone();
             self.notes[index] = evidence_note(&key);
-            let digest = self.current_digest(index);
+            let digest = self.current_digest(ctx, index);
+            if digest == "preparing" {
+                self.phase[index] = "preparing".into();
+                continue;
+            }
             if key.starts_with("ready:") {
                 self.budgets[index].observe(&format!("{key}|{digest}"));
             }
@@ -520,34 +689,67 @@ impl View {
             {
                 continue;
             }
-            if self.start_engine(ctx, *engine, None, false, &key, true) {
-                self.auto_key[index] = key;
-                self.scanned_generation[index] = self.rules_generation;
-                self.budgets[index].admit(now);
-            } else {
-                self.budgets[index].admit(now);
+            match self.start_engine(ctx, *engine, None, false, &key, true) {
+                Admit::Started => {
+                    self.auto_key[index] = key;
+                    self.scanned_generation[index] = self.rules_generation;
+                    self.budgets[index].admit(now);
+                }
+                Admit::Preparing => {}
+                Admit::Failed => {
+                    self.budgets[index].admit(now);
+                }
             }
             break;
         }
     }
-    fn current_digest(&mut self, index: usize) -> String {
+    fn current_digest(&mut self, ctx: &egui::Context, index: usize) -> String {
+        if self.settings.rules_root.is_empty() {
+            return String::new();
+        }
+        let Some(registry) = self.fresh_registry().cloned() else {
+            self.request_registry(ctx);
+            return "preparing".into();
+        };
         if self.digest_generation != self.rules_generation {
-            let root = Path::new(&self.settings.rules_root);
             for (slot, engine) in ENGINES.iter().enumerate() {
-                let name = match engine {
-                    Engine::Yara => "yara",
-                    Engine::Ids => "ids",
-                    Engine::Sigma => "sigma",
-                };
-                self.digest_cache[slot] = if self.settings.rules_root.is_empty() {
-                    String::new()
-                } else {
-                    antinomie_monitor_core::ruleset::selection_digest(root, name)
-                };
+                self.digest_cache[slot] = antinomie_monitor_core::ruleset::selection_digest_of(
+                    Path::new(&self.settings.rules_root),
+                    &registry,
+                    engine_key(*engine),
+                );
             }
             self.digest_generation = self.rules_generation;
         }
         self.digest_cache[index].clone()
+    }
+    fn fresh_registry(&self) -> Option<&antinomie_monitor_core::ruleset::Registry> {
+        self.registry
+            .as_ref()
+            .filter(|_| self.registry_for == self.rules_generation)
+    }
+    fn request_registry(&mut self, ctx: &egui::Context) {
+        if self.registry_rx.is_some() || self.settings.rules_root.is_empty() {
+            return;
+        }
+        let dir = PathBuf::from(&self.settings.rules_root);
+        let epoch = self.epoch;
+        let (tx, rx) = mpsc::sync_channel(1);
+        let ctx = ctx.clone();
+        match std::thread::Builder::new()
+            .name("triage-rules-registry".into())
+            .spawn(move || {
+                let result = antinomie_monitor_core::ruleset::migrate_indexes(&dir)
+                    .and_then(|_| antinomie_monitor_core::ruleset::load_registry(&dir));
+                let _ = tx.send(RegistryMsg { epoch, result });
+                ctx.request_repaint_of(egui::ViewportId::ROOT);
+            }) {
+            Ok(_) => self.registry_rx = Some(rx),
+            Err(error) => {
+                self.phase = ["failed".into(), "failed".into(), "failed".into()];
+                self.results[0] = Some(Err(error.to_string()));
+            }
+        }
     }
     fn start(&mut self, ctx: &egui::Context, digest: Option<String>, partial: bool) {
         let index = ENGINES
@@ -565,62 +767,109 @@ impl View {
         partial: bool,
         evidence_key: &str,
         automatic: bool,
-    ) -> bool {
-        self.settings.partial = partial;
-        self.settings.evidence_key = evidence_key.to_owned();
-        let Some(mut request) = self.request(engine, digest) else {
-            return false;
-        };
+    ) -> Admit {
         let index = ENGINES
             .iter()
             .position(|candidate| *candidate == engine)
             .unwrap_or(0);
-        if !request.settings.rules_root.is_empty() {
-            let name = match engine {
-                Engine::Yara => "yara",
-                Engine::Ids => "ids",
-                Engine::Sigma => "sigma",
-            };
-            match antinomie_monitor_core::ruleset::snapshot(
-                Path::new(&request.settings.rules_root),
-                name,
-            ) {
-                Ok(snap) => {
-                    request.frozen = Some(engine::FrozenSelection {
-                        digest: snap.digest,
-                        directory: snap.directory,
-                        enabled_rules: snap.enabled_rules,
-                        excluded_rules: snap.excluded_rules,
-                        warnings: snap.warnings,
-                    });
-                }
-                Err(error) => {
-                    self.results[index] = Some(Err(error));
-                    return false;
-                }
-            }
+        let pending = PendingScan {
+            engine,
+            digest: digest.clone(),
+            partial,
+            evidence_key: evidence_key.to_owned(),
+            automatic,
+            generation: self.rules_generation,
+            epoch: self.epoch,
+        };
+        if self.rx.is_some() {
+            self.pending = Some(pending);
+            self.phase[index] = "queued".into();
+            return Admit::Preparing;
         }
+        self.settings.partial = partial;
+        self.settings.evidence_key = evidence_key.to_owned();
+        let Some(request) = self.request(engine, digest) else {
+            self.phase[index] = "failed".into();
+            return Admit::Failed;
+        };
+        if request.settings.rules_root.is_empty() {
+            return self.launch(ctx, request, None, index, automatic);
+        }
+        let Some(registry) = self.fresh_registry().cloned() else {
+            self.pending = Some(pending);
+            self.phase[index] = "preparing".into();
+            self.request_registry(ctx);
+            return Admit::Preparing;
+        };
+        self.launch(ctx, request, Some(registry), index, automatic)
+    }
+    fn launch(
+        &mut self,
+        ctx: &egui::Context,
+        mut request: engine::Request,
+        registry: Option<antinomie_monitor_core::ruleset::Registry>,
+        index: usize,
+        automatic: bool,
+    ) -> Admit {
         self.auto_started[index] = automatic;
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = Arc::clone(&cancel);
         let (tx, rx) = mpsc::sync_channel(1);
         let ctx = ctx.clone();
+        let epoch = self.epoch;
+        let generation = self.rules_generation;
+        let root = request.settings.rules_root.clone();
+        let engine_name = engine_key(request.engine).to_owned();
         match std::thread::Builder::new()
             .name("triage-detector".into())
             .spawn(move || {
-                let result = engine::run(request, &worker_cancel);
-                let _ = tx.send(Reply::Scanned(index, Box::new(result)));
+                let result = (|| {
+                    if !root.is_empty() {
+                        let registry =
+                            registry.ok_or_else(|| "rules registry was not captured".to_owned())?;
+                        let data_dir = Path::new(&root);
+                        let _ = antinomie_monitor_core::ruleset::reap_staging(
+                            data_dir,
+                            Duration::from_secs(3600),
+                        );
+                        if worker_cancel.load(Ordering::Relaxed) {
+                            return Err("cancelled".into());
+                        }
+                        let snap = antinomie_monitor_core::ruleset::snapshot_from(
+                            data_dir,
+                            &engine_name,
+                            &registry,
+                            Some(&worker_cancel),
+                        )?;
+                        request.frozen = Some(engine::FrozenSelection {
+                            digest: snap.digest,
+                            directory: snap.directory,
+                            enabled_rules: snap.enabled_rules,
+                            excluded_rules: snap.excluded_rules,
+                            warnings: snap.warnings,
+                        });
+                    }
+                    engine::run(request, &worker_cancel)
+                })();
+                let _ = tx.send(Reply::Scanned {
+                    epoch,
+                    generation,
+                    index,
+                    result: Box::new(result),
+                });
                 ctx.request_repaint_of(egui::ViewportId::ROOT);
             }) {
             Ok(_) => {
                 self.rx = Some(rx);
                 self.cancel = Some(cancel);
                 self.busy = Some(index);
-                true
+                self.phase[index] = "running".into();
+                Admit::Started
             }
             Err(error) => {
+                self.phase[index] = "failed".into();
                 self.results[index] = Some(Err(error.to_string()));
-                false
+                Admit::Failed
             }
         }
     }
@@ -691,6 +940,9 @@ impl View {
                 self.open_manager = true;
             }
         });
+        if !self.phase[index].is_empty() {
+            ui.label(RichText::new(format!("Scan: {}", self.phase[index])).color(theme::muted()));
+        }
         if !self.notes[index].is_empty() {
             ui.colored_label(theme::warn(), &self.notes[index]);
         }
@@ -909,6 +1161,9 @@ impl View {
         else {
             return;
         };
+        ui.label(
+            RichText::new(format!("Author: {}", attribution(&finding.author))).color(theme::text()),
+        );
         ui.add(egui::Label::new(&finding.details).wrap());
         for reference in &finding.mitre {
             let url = format!(
@@ -1239,7 +1494,12 @@ mod tests {
         view.rx = Some(rx);
         view.tick(&ctx, &TriageInput::empty());
         assert!(cancel.load(Ordering::Relaxed));
-        assert!(tx.send(Reply::Loaded(Box::default())).is_err());
+        assert!(tx
+            .send(Reply::Loaded {
+                epoch: 0,
+                loaded: Box::default(),
+            })
+            .is_err());
         assert!(view.results.iter().all(Option::is_none));
     }
 
@@ -1251,6 +1511,7 @@ mod tests {
             severity: "indicator".into(),
             source: "local".into(),
             license: "MIT".into(),
+            author: String::new(),
             mitre: vec!["T1059.004".into()],
             count: 2,
             evidence: vec![
@@ -1324,6 +1585,143 @@ mod tests {
         let second = antinomie_monitor_core::storage::sha256_file_hex(&path).unwrap();
         assert_eq!(first.len(), 64);
         assert_ne!(first, second);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn snapshot_preparation_does_not_block_ui_frames() {
+        let dir = std::env::temp_dir().join(format!("ant-ui-prep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let yara = Path::new("/tmp/antinomie-rules-r3/packs/yara-forge-core-20261004.tar.gz");
+        let et = Path::new("/tmp/antinomie-rules-r3/packs/emerging-threats-open.tar.gz");
+        if !yara.is_file() || !et.is_file() {
+            eprintln!("prepared YARA and ET archives are absent; UI timing was not measured");
+            return;
+        }
+        let bytes = std::fs::read(yara).unwrap();
+        let sha = antinomie_monitor_core::storage::sha256_hex(&bytes);
+        let entry = antinomie_monitor_core::ruleset::PackEntry {
+            id: "yara-forge-core".into(),
+            engine: "yara".into(),
+            name: "YARA-Forge Core".into(),
+            version: "ui".into(),
+            upstream_revision: "20261004".into(),
+            upstream_url: "https://github.com/YARAHQ/yara-forge".into(),
+            download_url: "https://example.invalid/yara.tar.gz".into(),
+            sha256: sha,
+            size: bytes.len() as u64,
+            app: ">=0.6.2".into(),
+            engine_requirement: "YARA-X 1.21".into(),
+            rules: 2094,
+            helpers: 2,
+            license: "per-rule".into(),
+            evidence: vec!["sample".into()],
+            limits: Vec::new(),
+        };
+        antinomie_monitor_core::ruleset::install_archive(&dir, &entry, &bytes).unwrap();
+        let engine = if et.is_file() {
+            let bytes = std::fs::read(et).unwrap();
+            let sha = antinomie_monitor_core::storage::sha256_hex(&bytes);
+            let entry = antinomie_monitor_core::ruleset::PackEntry {
+                id: "emerging-threats-open".into(),
+                engine: "ids".into(),
+                name: "Emerging Threats Open".into(),
+                version: "ui".into(),
+                upstream_revision: "et".into(),
+                upstream_url: "https://rules.emergingthreats.net/".into(),
+                download_url: "https://example.invalid/et.tar.gz".into(),
+                sha256: sha,
+                size: bytes.len() as u64,
+                app: ">=0.6.2".into(),
+                engine_requirement: "Suricata 7".into(),
+                rules: 1,
+                helpers: 0,
+                license: "mixed".into(),
+                evidence: vec!["pcap".into()],
+                limits: Vec::new(),
+            };
+            antinomie_monitor_core::ruleset::install_archive(&dir, &entry, &bytes).unwrap();
+            Engine::Ids
+        } else {
+            Engine::Yara
+        };
+        let mut view = View::default();
+        view.settings.rules_root = dir.display().to_string();
+        view.rules_generation = 1;
+        view.identity = Some((
+            dir.clone(),
+            Identity {
+                vm_id: "vm".into(),
+                boot_id: "boot".into(),
+                run_id: "run".into(),
+                root_cookie: 1,
+            },
+        ));
+        let ctx = egui::Context::default();
+        let input = TriageInput {
+            vm_id: Some("vm"),
+            boot_id: Some("boot"),
+            run_id: Some("run"),
+            archive: Some(&dir),
+            root_cookie: 1,
+            run_finished: true,
+            ..TriageInput::empty()
+        };
+        let wait = std::time::Instant::now();
+        while view.registry.is_none() {
+            view.tick(&ctx, &input);
+            assert!(
+                wait.elapsed() < Duration::from_secs(120),
+                "{}",
+                view.phase[0]
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let admitted = std::time::Instant::now();
+        assert!(matches!(
+            view.start_engine(&ctx, engine, None, false, "ready:pack", false),
+            Admit::Started
+        ));
+        assert!(
+            admitted.elapsed() < Duration::from_millis(80),
+            "admitting the scan blocked the UI thread for {:?}",
+            admitted.elapsed()
+        );
+        view.rules_generation = view.rules_generation.saturating_add(1);
+        let mut frames = Vec::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(180);
+        while view.rx.is_some() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "preparation did not finish"
+            );
+            let frame = std::time::Instant::now();
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 480.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        view.show(ui, None);
+                    });
+                },
+            );
+            view.tick(&ctx, &input);
+            frames.push(frame.elapsed());
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let slowest = frames.iter().copied().max().unwrap_or_default();
+        assert!(
+            slowest < Duration::from_millis(150),
+            "slowest UI frame during preparation was {slowest:?} across {} frames",
+            frames.len()
+        );
+        assert!(view.results.iter().all(|result| result.is_none()));
+        assert!(!frames.is_empty(), "preparation produced no UI frames");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

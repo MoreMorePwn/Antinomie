@@ -106,6 +106,11 @@ fn alert(event: &serde_json::Value, capture: &Capture, report: &mut Report) {
                     .unwrap_or_else(|| "Unknown".into()),
                 source: "Suricata / selected local corpus".into(),
                 license: license.chars().take(1024).collect(),
+                author: metadata
+                    .get("signature_author")
+                    .or_else(|| metadata.get("author"))
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
                 mitre: mitre_references(&metadata_text),
                 count: 0,
                 evidence: vec![],
@@ -182,6 +187,20 @@ fn fallback_reference() -> &'static [u8] {
     b"config reference: url https://doc.emergingthreats.net/\n"
 }
 
+fn suricata_tool() -> Option<String> {
+    if let Ok(path) = std::env::var("ANTINOMIE_SURICATA")
+        && std::path::Path::new(&path).is_file()
+    {
+        return Some(path);
+    }
+    super::super::tools::find(&[
+        "/usr/bin/suricata",
+        "/usr/sbin/suricata",
+        "/usr/local/bin/suricata",
+    ])
+    .map(str::to_owned)
+}
+
 fn suricata_config(classification: &Path, reference: &Path, threshold: &Path) -> String {
     let class = serde_json::to_string(classification).unwrap_or_else(|_| "null".into());
     let reference = serde_json::to_string(reference).unwrap_or_else(|_| "null".into());
@@ -199,20 +218,35 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
         report.warnings.push("No rules enabled".into());
         return Ok(report);
     }
-    let Some(tool) = super::super::tools::find(&[
-        "/usr/bin/suricata",
-        "/usr/sbin/suricata",
-        "/usr/local/bin/suricata",
-    ]) else {
+    let Some(tool) = suricata_tool() else {
         return Ok(Report::unavailable(
             Engine::Ids,
             staged.request.identity.clone(),
             "Local Suricata is not installed. No packets were evaluated.",
         ));
     };
+    let libs = std::env::var("ANTINOMIE_SURICATA_LIBS").unwrap_or_default();
+    let pair = [("LD_LIBRARY_PATH", libs.as_str())];
+    let tool_env: &[(&str, &str)] = if libs.is_empty() { &[] } else { &pair };
     let mut report = Report::empty(Engine::Ids, staged.request.identity.clone());
     report.selection = staged.selection.clone();
-    let version = super::super::tools::version(tool, &["-V"]);
+    let version = super::super::tools::run_with(
+        tool.as_str(),
+        &["-V"],
+        tool_env,
+        Duration::from_secs(20),
+        4096,
+        true,
+    )
+    .map(|run| {
+        run.stderr
+            .lines()
+            .chain(run.stdout.lines())
+            .find(|line| !line.is_empty())
+            .unwrap_or("suricata")
+            .to_owned()
+    })
+    .unwrap_or_else(|_| "suricata".into());
     let mut rules = Vec::new();
     let mut seen_sids = std::collections::BTreeSet::new();
     let mut classification_bytes = None;
@@ -298,8 +332,9 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
             .into_iter()
             .collect::<Result<Vec<_>, _>>()?;
         let result = super::super::tools::run_with(
-            tool,
+            tool.as_str(),
             &[
+                "-v",
                 "-c",
                 strings[0],
                 "-r",
@@ -313,15 +348,31 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
                 "-k",
                 "none",
             ],
-            &[],
+            tool_env,
             remaining,
-            64 * 1024,
+            1024 * 1024,
             true,
         )?;
-        for line in result.stdout.lines().filter(|line| {
-            let lower = line.to_ascii_lowercase();
-            lower.contains("error") || lower.contains("unknown rule keyword")
-        }) {
+        if let Some(line) = result
+            .stderr
+            .lines()
+            .chain(result.stdout.lines())
+            .find(|line| line.contains("rules successfully loaded"))
+        {
+            report
+                .warnings
+                .push(format!("Suricata reported: {}", line.trim()));
+        }
+        for line in result
+            .stderr
+            .lines()
+            .chain(result.stdout.lines())
+            .filter(|line| {
+                let lower = line.to_ascii_lowercase();
+                (lower.contains("error") || lower.contains("unknown rule keyword"))
+                    && !lower.contains("rules successfully loaded")
+            })
+        {
             if report.skipped.len() < 200 {
                 report.skipped.push(line.chars().take(300).collect());
             }
@@ -371,7 +422,7 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
             State::Partial
         };
     }
-    report.warnings.push("IDS sees captured plaintext and metadata; encrypted application contents are unavailable. Stream reassembly is capped at 1 MiB. Loaded rule count is not reported by this adapter.".into());
+    report.warnings.push("IDS sees captured plaintext and metadata; encrypted application contents are unavailable. Stream reassembly is capped at 1 MiB. VM-wide PCAP is not process attribution.".into());
     Ok(report)
 }
 
@@ -605,6 +656,251 @@ mod tests {
             "pcap scan produced no EVE output:\n{scanned}"
         );
         let _ = fs::remove_dir_all(&work);
+    }
+
+    /// The production `scan` path, not a direct Suricata command. A missing
+    /// tool variable is not an engine result.
+    #[test]
+    fn production_scan_matches_et_sid_2010371_and_ignores_the_negative_pcap() {
+        let Ok(rules_root) = std::env::var("ANTINOMIE_ET_RULES") else {
+            eprintln!("production ET scan: ANTINOMIE_ET_RULES unset; not an engine result");
+            return;
+        };
+        if std::env::var_os("ANTINOMIE_SURICATA").is_none() {
+            eprintln!("production ET scan: ANTINOMIE_SURICATA unset; not an engine result");
+            return;
+        }
+        let work = std::env::temp_dir().join(format!("ant-ids-scan-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&work);
+        fs::create_dir_all(&work).unwrap();
+        let mut files = Vec::new();
+        collect_rule_files(Path::new(&rules_root), &mut files);
+        let sources = files
+            .iter()
+            .filter(|path| {
+                let name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("");
+                name.ends_with(".rules")
+                    || name == "classification.config"
+                    || name == "reference.config"
+            })
+            .map(|path| super::super::runner::RuleFile {
+                name: path.file_name().unwrap().to_string_lossy().into_owned(),
+                path: path.clone(),
+                sha256: "0".repeat(64),
+            })
+            .collect::<Vec<_>>();
+        assert!(sources.len() > 10, "ET pack did not yield rule files");
+        let positive = work.join("positive.pcap");
+        let negative = work.join("negative.pcap");
+        fs::write(&positive, service_scan_pcap()).unwrap();
+        fs::write(&negative, minimal_pcap()).unwrap();
+        let positive_report = scan_pcap(&work, &sources, &positive, 4);
+        let finding = positive_report
+            .findings
+            .iter()
+            .find(|finding| finding.rule_id == "1:2010371:2")
+            .unwrap_or_else(|| {
+                panic!(
+                    "SID 2010371 was not detected: state={:?} warnings={:?} findings={:?}",
+                    positive_report.state,
+                    positive_report.warnings,
+                    positive_report
+                        .findings
+                        .iter()
+                        .map(|finding| finding.rule_id.clone())
+                        .take(12)
+                        .collect::<Vec<_>>()
+                )
+            });
+        assert!(
+            matches!(finding.evidence.first(), Some(Evidence::Packet { frame, .. }) if *frame >= 1),
+            "positive alert has no source packet: {:?}",
+            finding.evidence
+        );
+        assert!(
+            positive_report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("rules successfully loaded")),
+            "loaded count was not recorded: {:?}",
+            positive_report.warnings
+        );
+        let negative_report = scan_pcap(&work, &sources, &negative, 1);
+        assert!(
+            negative_report
+                .findings
+                .iter()
+                .all(|finding| finding.rule_id != "1:2010371:2"),
+            "negative pcap matched the known SID"
+        );
+        eprintln!(
+            "production ids selected_files={} positive_findings={} loaded={:?} state={:?}",
+            sources.len(),
+            positive_report.findings.len(),
+            positive_report
+                .warnings
+                .iter()
+                .find(|warning| warning.contains("rules successfully loaded")),
+            positive_report.state
+        );
+        let _ = fs::remove_dir_all(&work);
+    }
+
+    fn scan_pcap(
+        work: &Path,
+        sources: &[super::super::runner::RuleFile],
+        pcap: &Path,
+        packets: u64,
+    ) -> Report {
+        let identity = Identity {
+            vm_id: "vm".into(),
+            boot_id: "boot".into(),
+            run_id: "run".into(),
+            root_cookie: 1,
+        };
+        let staged = super::super::runner::Staged {
+            request: Request {
+                engine: Engine::Ids,
+                identity: identity.clone(),
+                directory: work.to_path_buf(),
+                settings: Settings::default(),
+                source_digest: None,
+                frozen: None,
+            },
+            sigma_sources: vec![],
+            yara_sources: vec![],
+            ids_sources: sources.to_vec(),
+            captures: vec![super::super::runner::Capture {
+                path: pcap.to_path_buf(),
+                original: pcap.to_path_buf(),
+                complete: true,
+                packets,
+            }],
+            journal: None,
+            warnings: vec![],
+            selection: "et-test".into(),
+            no_rules: false,
+            include_dir: None,
+        };
+        let output = work.join(format!("out-{}", packets));
+        fs::create_dir_all(&output).unwrap();
+        scan(&staged, &output).unwrap()
+    }
+
+    fn service_scan_pcap() -> Vec<u8> {
+        let payload = b"service:thc://service:thc";
+        let packets = [
+            tcp_packet(Tcp {
+                src: [1, 2, 3, 4],
+                dst: [10, 0, 0, 8],
+                sport: 12345,
+                dport: 80,
+                seq: 1000,
+                ack: 0,
+                flags: 0x02,
+                payload: b"",
+            }),
+            tcp_packet(Tcp {
+                src: [10, 0, 0, 8],
+                dst: [1, 2, 3, 4],
+                sport: 80,
+                dport: 12345,
+                seq: 2000,
+                ack: 1001,
+                flags: 0x12,
+                payload: b"",
+            }),
+            tcp_packet(Tcp {
+                src: [1, 2, 3, 4],
+                dst: [10, 0, 0, 8],
+                sport: 12345,
+                dport: 80,
+                seq: 1001,
+                ack: 2001,
+                flags: 0x10,
+                payload: b"",
+            }),
+            tcp_packet(Tcp {
+                src: [1, 2, 3, 4],
+                dst: [10, 0, 0, 8],
+                sport: 12345,
+                dport: 80,
+                seq: 1001,
+                ack: 2001,
+                flags: 0x18,
+                payload,
+            }),
+        ];
+        let mut bytes = vec![
+            0xd4, 0xc3, 0xb2, 0xa1, 0x02, 0, 0x04, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 1,
+            0, 0, 0,
+        ];
+        for packet in packets {
+            let len = (packet.len() as u32).to_le_bytes();
+            bytes.extend([0, 0, 0, 0, 0, 0, 0, 0]);
+            bytes.extend(len);
+            bytes.extend(len);
+            bytes.extend(packet);
+        }
+        bytes
+    }
+
+    struct Tcp {
+        src: [u8; 4],
+        dst: [u8; 4],
+        sport: u16,
+        dport: u16,
+        seq: u32,
+        ack: u32,
+        flags: u8,
+        payload: &'static [u8],
+    }
+
+    fn tcp_packet(packet: Tcp) -> Vec<u8> {
+        let Tcp {
+            src,
+            dst,
+            sport,
+            dport,
+            seq,
+            ack,
+            flags,
+            payload,
+        } = packet;
+        let mut packet = vec![
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0x08, 0x00,
+        ];
+        let total = (20 + 20 + payload.len()) as u16;
+        let mut ip = vec![
+            0x45,
+            0,
+            (total >> 8) as u8,
+            total as u8,
+            0,
+            1,
+            0,
+            0,
+            64,
+            6,
+            0,
+            0,
+        ];
+        ip.extend(src);
+        ip.extend(dst);
+        let sum = ip_checksum(&ip);
+        ip[10] = (sum >> 8) as u8;
+        ip[11] = sum as u8;
+        packet.extend(ip);
+        packet.extend(sport.to_be_bytes());
+        packet.extend(dport.to_be_bytes());
+        packet.extend(seq.to_be_bytes());
+        packet.extend(ack.to_be_bytes());
+        packet.extend([0x50, flags, 0xff, 0xff, 0, 0, 0, 0]);
+        packet.extend(payload);
+        packet
     }
 
     fn collect_rule_files(dir: &Path, out: &mut Vec<PathBuf>) {

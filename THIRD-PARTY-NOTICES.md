@@ -14,10 +14,15 @@ These tools are not bundled. Rule packs are downloaded only from the public
 rules catalog when a person uses Rule manager, and they keep their upstream
 terms. The sigma_scan.py adapter is original project MIT material. The adapter
 uses the public pySigma API; no upstream implementation was copied. Production
-scans do not embed Antinomie-authored starter rules.
+scans do not embed Antinomie-authored starter collections. A published pack
+archive carries the upstream license texts and notices that apply to the
+rules inside it. Including those notices does not establish complete legal
+clearance for the application. Suricata and pySigma stay optional external
+tools and are not bundled.
 
-The static-analysis worker embeds two rule sets and links two analysis
-engines. The rule files keep every rule's author, license and source meta.
+The static-analysis worker can load an installed community pack. It does not
+embed those rules in the executable. The rule files keep every rule's author,
+license and source meta.
 
 | Component | Terms / retained notice |
 |---|---|

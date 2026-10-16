@@ -66,6 +66,16 @@ def load_events(connection, path, expected):
     return count, bool(footer.get("complete")) and footer.get("omitted", 0) == 0
 
 
+def supplied_authors(rule):
+    value = getattr(rule, "author", None)
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(item).strip() for item in value if str(item).strip())
+    text = str(value).strip()
+    return "" if text in {"", "None"} else text
+
+
 def select_query(connection, query):
     prefix = "SELECT * FROM logs WHERE "
     if not query.startswith(prefix) or len(query) > 1024 * 1024:
@@ -116,7 +126,7 @@ def attack_tags(tags):
 
 
 def scan(request, events_path):
-    report = {"engine": "sigma", "identity": request["identity"], "state": "complete", "sources": [], "findings": [], "scanned_rules": 0, "skipped_rules": 0, "skipped": [], "omitted_evidence": 0, "warnings": [], "source_digest": request.get("source_digest"), "category_accepted": 0, "backend_rejected": 0, "missing_field_events": 0, "category_rejected": 0}
+    report = {"engine": "sigma", "identity": request["identity"], "state": "complete", "sources": [], "findings": [], "scanned_rules": 0, "skipped_rules": 0, "skipped": [], "omitted_evidence": 0, "warnings": ["Category acceptance is not full compatibility. Syntax, backend conversion, logsource, and per-run evidence are counted separately."], "source_digest": request.get("source_digest"), "category_accepted": 0, "backend_rejected": 0, "missing_field_events": 0, "category_rejected": 0, "syntax_rejected": 0, "evidence_rejected": 0}
     try:
         from sigma.collection import SigmaCollection
         from sigma.backends.sqlite import sqliteBackend
@@ -153,9 +163,10 @@ def scan(request, events_path):
             try:
                 collection = SigmaCollection.from_yaml(data.decode("utf-8"))
             except Exception as error:
+                report["syntax_rejected"] += 1
                 report["skipped_rules"] += 1
                 if len(report["skipped"]) < 1000:
-                    report["skipped"].append(source["name"] + ": " + str(error)[:400])
+                    report["skipped"].append(source["name"] + ": syntax: " + str(error)[:400])
                 report["state"] = "partial"
                 continue
             for rule in collection.rules:
@@ -189,6 +200,7 @@ def scan(request, events_path):
                         if len(report["skipped"]) < 1000:
                             report["skipped"].append(str(rule.id or rule.title) + f": {missing} events lack fields used by this rule; missing values were not invented")
                     if not evaluated:
+                        report["evidence_rejected"] += 1
                         raise ValueError("no captured events with all required fields")
                     report["scanned_rules"] += 1
                     if total:
@@ -198,7 +210,12 @@ def scan(request, events_path):
                         if len(report["findings"]) >= MAX_FINDINGS:
                             raise ValueError("matched-rule preview limit reached")
                         level = getattr(rule.level, "name", "informational").lower()
-                        report["findings"].append({"rule_id": str(rule.id or (source["name"] + ":" + rule.title)), "title": rule.title, "severity": level, "source": source["name"] + " sha256:" + sha256, "license": str(getattr(rule, "license", None) or "Not supplied by rule"), "mitre": attack_tags(rule.tags or []), "count": total, "evidence": retained, "details": "Evaluated against normalized captured Linux events; joined argv is not original shell quoting."})
+                        refs = getattr(rule, "references", None) or []
+                        ref_text = "; ".join(str(item) for item in refs if str(item).strip())
+                        details = "Evaluated against normalized captured Linux events; joined argv is not original shell quoting."
+                        if ref_text:
+                            details += " References: " + ref_text
+                        report["findings"].append({"rule_id": str(rule.id or (source["name"] + ":" + rule.title)), "title": rule.title, "severity": level, "source": source["name"] + " sha256:" + sha256, "license": str(getattr(rule, "license", None) or "Not supplied by rule"), "author": supplied_authors(rule), "mitre": attack_tags(rule.tags or []), "count": total, "evidence": retained, "details": details})
                 except Exception as error:
                     if "no such column" in str(error):
                         report["backend_rejected"] += 1
@@ -218,6 +235,74 @@ def scan(request, events_path):
     finally:
         connection.close()
     return report
+
+
+def classify_rules(paths):
+    """Classify rule files with pySigma/SQLite. Category acceptance is not compatibility."""
+    from sigma.collection import SigmaCollection
+    from sigma.backends.sqlite import sqliteBackend
+    backend = sqliteBackend(collate_nocase=True)
+    counts = {"files": 0, "syntax_rejected": 0, "rules": 0, "category_rejected": 0, "category_accepted": 0, "backend_rejected": 0, "backend_converted": 0, "schema_rejected": 0, "schema_accepted": 0}
+    reasons = {key: [] for key in ("syntax", "logsource", "backend", "schema")}
+    connection = sqlite3.connect(":memory:")
+    columns = ",".join(quoted(name) + " COLLATE NOCASE" for name in sorted(SCHEMA))
+    connection.execute("CREATE TABLE logs(_event_id INTEGER PRIMARY KEY, _category TEXT NOT NULL, _evidence TEXT NOT NULL," + columns + ")")
+    try:
+        import re2
+        connection.create_function("regexp", 2, lambda pattern, value: value is not None and re2.search(pattern, str(value)) is not None)
+    except ImportError:
+        pass
+    for path in paths:
+        counts["files"] += 1
+        try:
+            collection = SigmaCollection.from_yaml(Path(path).read_text(encoding="utf-8", errors="replace"))
+        except Exception as error:
+            counts["syntax_rejected"] += 1
+            if len(reasons["syntax"]) < 30:
+                reasons["syntax"].append(Path(path).name + ": " + str(error)[:240])
+            continue
+        for rule in collection.rules:
+            counts["rules"] += 1
+            logsource = rule.logsource
+            category = (logsource.category or "").lower()
+            product = (logsource.product or "").lower()
+            service = (logsource.service or "").lower()
+            if product not in {"", "linux"} or service not in {"", "antinomie"} or category not in SUPPORTED_CATEGORIES:
+                counts["category_rejected"] += 1
+                if len(reasons["logsource"]) < 30:
+                    reasons["logsource"].append(str(rule.title) + ": " + str(logsource))
+                continue
+            counts["category_accepted"] += 1
+            try:
+                queries = backend.convert(SigmaCollection([rule]))
+            except Exception as error:
+                counts["backend_rejected"] += 1
+                if len(reasons["backend"]) < 30:
+                    reasons["backend"].append(str(rule.title) + ": " + str(error)[:240])
+                continue
+            if not queries:
+                counts["backend_rejected"] += 1
+                if len(reasons["backend"]) < 30:
+                    reasons["backend"].append(str(rule.title) + ": no supported query")
+                continue
+            counts["backend_converted"] += 1
+            try:
+                for query in queries:
+                    select_query(connection, query)
+            except (ValueError, sqlite3.Error) as error:
+                counts["schema_rejected"] += 1
+                if len(reasons["schema"]) < 30:
+                    reasons["schema"].append(str(rule.title) + ": " + str(error)[:240])
+                continue
+            counts["schema_accepted"] += 1
+    connection.close()
+    counts["reconciled"] = (
+        counts["category_rejected"] + counts["category_accepted"] == counts["rules"]
+        and counts["backend_rejected"] + counts["backend_converted"] == counts["category_accepted"]
+        and counts["schema_rejected"] + counts["schema_accepted"] == counts["backend_converted"]
+    )
+    counts["note"] = "schema_accepted means the SQLite backend query uses only adapter fields. It is not per-run evidence compatibility."
+    return counts, reasons
 
 
 def main():

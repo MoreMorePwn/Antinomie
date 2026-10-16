@@ -108,6 +108,7 @@ fn record(
                                 "Not declared by rule".into()
                             }
                         }),
+                    author: meta("author"),
                     mitre: mitre_references(&references),
                     count: 0,
                     evidence: vec![],

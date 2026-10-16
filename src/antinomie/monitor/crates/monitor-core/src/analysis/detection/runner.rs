@@ -13,6 +13,31 @@ use std::{
     time::Duration,
 };
 
+#[cfg(test)]
+thread_local! {
+    static PROVENANCE_FAIL: std::cell::RefCell<std::collections::BTreeSet<&'static str>> =
+        const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
+}
+
+#[cfg(test)]
+pub(crate) fn fail_provenance(op: &'static str) {
+    PROVENANCE_FAIL.with(|ops| {
+        ops.borrow_mut().insert(op);
+    });
+}
+
+fn provenance_failed(op: &str) -> bool {
+    #[cfg(test)]
+    {
+        PROVENANCE_FAIL.with(|ops| ops.borrow_mut().remove(op))
+    }
+    #[cfg(not(test))]
+    {
+        let _ = op;
+        false
+    }
+}
+
 /// Selection captured when a scan is admitted. The worker reads this copy and
 /// does not take another snapshot.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -592,44 +617,106 @@ fn run_program(
         (Err(error), Err(cleanup)) => Err(format!("{error}; detector cleanup: {cleanup}")),
         (result, Ok(())) => result,
     };
-    result.map(|mut report| {
-        if !request.settings.rules_root.is_empty() && !report.selection.is_empty() {
-            let engine = match request.engine {
-                Engine::Yara => "yara",
-                Engine::Ids => "ids",
-                Engine::Sigma => "sigma",
-            };
-            let source = Path::new(&request.settings.rules_root)
-                .join("rules/profiles")
-                .join(engine)
-                .join(&report.selection)
-                .join("manifest.json");
-            if source.is_file() {
-                let _ = crate::storage::private_dir(&directory);
-                if let Ok(data) = fs::read(&source)
-                    && let Ok(mut manifest) = serde_json::from_slice::<serde_json::Value>(&data)
-                {
+    result.map(|report| commit_provenance(&request, &directory, report))
+}
+
+fn commit_provenance(request: &Request, directory: &Path, mut report: Report) -> Report {
+    let needs_manifest = !request.settings.rules_root.is_empty() && !report.selection.is_empty();
+    let manifest_path = directory.join("selection-manifest.json");
+    let mut manifest_error = None;
+    if needs_manifest {
+        let engine = match request.engine {
+            Engine::Yara => "yara",
+            Engine::Ids => "ids",
+            Engine::Sigma => "sigma",
+        };
+        let source = Path::new(&request.settings.rules_root)
+            .join("rules/profiles")
+            .join(engine)
+            .join(&report.selection)
+            .join("manifest.json");
+        if provenance_failed("manifest-read") {
+            manifest_error =
+                Some("Could not read selection manifest: injected read failure".into());
+        } else if !source.is_file() {
+            manifest_error = Some(format!(
+                "Could not read selection manifest: {} is missing",
+                source.display()
+            ));
+        } else {
+            match fs::read(&source).and_then(|data| {
+                serde_json::from_slice::<serde_json::Value>(&data)
+                    .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+            }) {
+                Ok(mut manifest) => {
                     manifest["evidence_key"] =
                         serde_json::Value::String(report.evidence_key.clone());
                     manifest["report_engine"] =
                         serde_json::json!(format!("{:?}", request.engine).to_ascii_lowercase());
-                    let _ = crate::storage::atomic_json(
-                        &directory.join("selection-manifest.json"),
-                        &manifest,
-                    );
+                    manifest["run_id"] = serde_json::json!(request.identity.run_id);
+                    manifest["vm_id"] = serde_json::json!(request.identity.vm_id);
+                    manifest["boot_id"] = serde_json::json!(request.identity.boot_id);
+                    manifest["root_cookie"] = serde_json::json!(request.identity.root_cookie);
+                    if provenance_failed("manifest-write") {
+                        manifest_error = Some(
+                            "Could not save selection manifest: injected write failure".into(),
+                        );
+                    } else if let Err(error) = crate::storage::private_dir(directory)
+                        .map_err(|error| error.to_string())
+                        .and_then(|()| crate::storage::atomic_json(&manifest_path, &manifest))
+                    {
+                        manifest_error =
+                            Some(format!("Could not save selection manifest: {error}"));
+                    }
+                }
+                Err(error) => {
+                    manifest_error = Some(format!("Could not read selection manifest: {error}"));
                 }
             }
         }
-        if let Err(error) = crate::storage::private_dir(&directory)
+    }
+    if let Some(error) = manifest_error {
+        report.warnings.push(error);
+        report.provenance_saved = Some(false);
+        if report.state == State::Complete {
+            report.state = State::Partial;
+        }
+        return report;
+    }
+    report.provenance_saved = Some(true);
+    let previous_report = fs::read(directory.join("report.json")).ok();
+    let previous_manifest = fs::read(&manifest_path).ok();
+    let write_error = if provenance_failed("report-write") {
+        Some("injected write failure".to_owned())
+    } else {
+        crate::storage::private_dir(directory)
             .map_err(|error| error.to_string())
             .and_then(|()| crate::storage::atomic_json(&directory.join("report.json"), &report))
-        {
-            report
-                .warnings
-                .push(format!("Could not save detector result: {error}"));
-        }
+            .err()
+    };
+    if let Some(error) = write_error {
         report
-    })
+            .warnings
+            .push(format!("Could not save detector result: {error}"));
+        report.provenance_saved = Some(false);
+        if report.state == State::Complete {
+            report.state = State::Partial;
+        }
+        if needs_manifest {
+            match previous_manifest {
+                Some(bytes) => {
+                    let _ = fs::write(&manifest_path, bytes);
+                }
+                None => {
+                    let _ = fs::remove_file(&manifest_path);
+                }
+            }
+        }
+        if let Some(bytes) = previous_report {
+            let _ = fs::write(directory.join("report.json"), bytes);
+        }
+    }
+    report
 }
 
 /// Load a retained engine report after checking its run identity and bounds.
@@ -1081,5 +1168,90 @@ mod tests {
         assert!(work.join("selection/kept.yar").is_file());
         assert!(staged.warnings.iter().any(|warning| warning == "kept"));
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_manifest_write_failure_keeps_the_previous_report() {
+        let root = std::env::temp_dir().join(format!("ant-prov-{}", crate::storage::unique_id()));
+        let rules = root.join("rules");
+        let profile = rules.join("profiles/yara/digest-1");
+        fs::create_dir_all(&profile).unwrap();
+        fs::write(
+            profile.join("manifest.json"),
+            br#"{"schema":1,"digest":"digest-1"}"#,
+        )
+        .unwrap();
+        let directory = root.join("run");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("report.json"), b"{\"previous\":true}").unwrap();
+        let request = Request {
+            engine: Engine::Yara,
+            identity: Identity {
+                vm_id: "vm".into(),
+                boot_id: "boot".into(),
+                run_id: "run".into(),
+                root_cookie: 7,
+            },
+            directory: directory.clone(),
+            settings: Settings {
+                rules_root: root.display().to_string(),
+                evidence_key: "ready:test".into(),
+                ..Default::default()
+            },
+            source_digest: None,
+            frozen: None,
+        };
+        let mut report = Report::empty(Engine::Yara, request.identity.clone());
+        report.selection = "digest-1".into();
+        report.evidence_key = "ready:test".into();
+        fail_provenance("manifest-write");
+        let saved = commit_provenance(&request, &directory, report);
+        assert_eq!(saved.provenance_saved, Some(false));
+        assert_eq!(saved.state, State::Partial);
+        assert!(
+            saved
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("selection manifest")),
+            "{:?}",
+            saved.warnings
+        );
+        assert_eq!(
+            fs::read(directory.join("report.json")).unwrap(),
+            b"{\"previous\":true}"
+        );
+        assert!(!directory.join("selection-manifest.json").is_file());
+        let committed = commit_provenance(&request, &directory, {
+            let mut report = Report::empty(Engine::Yara, request.identity.clone());
+            report.selection = "digest-1".into();
+            report.evidence_key = "ready:test".into();
+            report
+        });
+        assert_eq!(committed.provenance_saved, Some(true));
+        assert_eq!(committed.state, State::Complete);
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(directory.join("selection-manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["run_id"], "run");
+        assert_eq!(manifest["evidence_key"], "ready:test");
+        let reopened =
+            serde_json::from_slice::<Report>(&fs::read(directory.join("report.json")).unwrap())
+                .unwrap();
+        assert_eq!(reopened.selection, "digest-1");
+        assert_eq!(reopened.provenance_saved, Some(true));
+        fail_provenance("report-write");
+        let interrupted = commit_provenance(&request, &directory, {
+            let mut report = Report::empty(Engine::Yara, request.identity.clone());
+            report.selection = "digest-1".into();
+            report
+        });
+        assert_eq!(interrupted.provenance_saved, Some(false));
+        assert_eq!(
+            reopened.selection,
+            serde_json::from_slice::<Report>(&fs::read(directory.join("report.json")).unwrap())
+                .unwrap()
+                .selection
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 }

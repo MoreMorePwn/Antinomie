@@ -21,6 +21,7 @@ enum Done {
     Message(String),
     Rules(Vec<IndexedRule>),
     Registry(Registry, String),
+    Opened(Registry, Option<Catalog>, String),
     Status(String),
 }
 
@@ -49,6 +50,8 @@ pub(crate) struct Model {
     import_path: String,
     tags_text: String,
     changed: bool,
+    #[cfg(test)]
+    next_at: Option<egui::Pos2>,
 }
 
 impl Model {
@@ -57,16 +60,36 @@ impl Model {
     }
 
     fn ensure(&mut self, data_dir: &Path) {
-        if self.loaded {
+        if self.loaded || self.job.is_some() {
             return;
         }
-        self.loaded = true;
         if self.engine.is_empty() {
             self.engine = "yara".into();
         }
-        self.registry = ruleset::load_registry(data_dir).unwrap_or_default();
-        self.catalog = ruleset::load_catalog(data_dir).ok().flatten();
-        self.status = "Catalog is local. Check for updates only when you want a download.".into();
+        let dir = data_dir.to_path_buf();
+        self.status = "Loading the local rules registry…".into();
+        self.spawn(move |_| {
+            let migration = ruleset::migrate_indexes(&dir)?;
+            let registry = ruleset::load_registry(&dir)?;
+            let catalog = ruleset::load_catalog(&dir).ok().flatten();
+            let note = if migration.rebuilt.is_empty() {
+                "Catalog is local. Check for updates only when you want a download.".into()
+            } else {
+                format!(
+                    "Rebuilt {} obsolete rule indexes from the installed files. Catalog is local.",
+                    migration.rebuilt.len()
+                )
+            };
+            Ok(Done::Opened(registry, catalog, note))
+        });
+    }
+
+    pub(crate) fn profile(&self) -> String {
+        if self.loaded {
+            ruleset::profile_label_of(&self.registry)
+        } else {
+            "Loading rules…".into()
+        }
     }
 
     pub(crate) fn show(
@@ -87,10 +110,18 @@ impl Model {
             .open(&mut window_open)
             .resizable(true)
             .default_width(720.0)
+            .default_height(ctx.screen_rect().height().max(240.0) * 0.92)
             .show(ctx, |ui| {
                 ui.set_min_width(0.0);
                 ui.set_width(ui.available_width());
-                self.contents(ui, data_dir, outbound);
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .animated(false)
+                    .drag_to_scroll(false)
+                    .id_salt("rule-manager-body")
+                    .show(ui, |ui| {
+                        self.contents(ui, data_dir, outbound);
+                    });
             });
         *open = window_open;
     }
@@ -124,6 +155,13 @@ impl Model {
                         self.status = note;
                         self.changed = true;
                     }
+                }
+                Ok(Done::Opened(registry, catalog, note)) => {
+                    self.registry = registry;
+                    self.catalog = catalog;
+                    self.loaded = true;
+                    self.status = note;
+                    self.changed = true;
                 }
                 Ok(Done::Status(text)) => self.status = text,
                 Err(error) => self.status = error,
@@ -526,10 +564,12 @@ impl Model {
             {
                 self.page -= 1;
             }
-            if ui
-                .add_enabled(self.page + 1 < pages, egui::Button::new("Next"))
-                .clicked()
+            let next = ui.add_enabled(self.page + 1 < pages, egui::Button::new("Next"));
+            #[cfg(test)]
             {
+                self.next_at = Some(next.rect.center());
+            }
+            if next.clicked() {
                 self.page += 1;
             }
         });
@@ -825,9 +865,33 @@ with open(destination, "wb") as output:
         for (light, font) in [(false, 22.0_f32), (true, 22.0_f32)] {
             crate::theme::apply(&ctx, light);
             crate::theme::text_size(&ctx, font);
+            let start = std::time::Instant::now();
             let mut output = render_manager(&ctx, &mut model, &dir, narrow, Vec::new());
-            for _ in 0..2 {
-                output = render_manager(&ctx, &mut model, &dir, narrow, Vec::new());
+            while !texts(&output)
+                .iter()
+                .any(|(text, _, _)| text.contains("YARA-Forge Core"))
+            {
+                assert!(
+                    start.elapsed() < Duration::from_secs(60),
+                    "registry did not load: status={} packs={}",
+                    model.status,
+                    model.registry.packs.len()
+                );
+                thread::sleep(Duration::from_millis(20));
+                output = render_manager(
+                    &ctx,
+                    &mut model,
+                    &dir,
+                    narrow,
+                    vec![
+                        egui::Event::PointerMoved(egui::pos2(160.0, 180.0)),
+                        egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0.0, -200.0),
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
             }
             let shown = texts(&output);
             assert!(
@@ -929,6 +993,51 @@ with open(destination, "wb") as output:
                 .filter(|text| text.contains("Showing"))
                 .collect::<Vec<_>>()
         );
+        for (width, height) in [(800.0_f32, 480.0_f32), (520.0, 640.0)] {
+            model.page = 0;
+            let size = egui::vec2(width, height);
+            ctx.memory_mut(|memory| {
+                memory.reset_areas();
+                memory.data.clear();
+            });
+            for light in [false, true] {
+                model.page = 0;
+                crate::theme::apply(&ctx, light);
+                crate::theme::text_size(&ctx, 22.0);
+                let next = visible_control(&ctx, &mut model, &dir, size, "Next");
+                click_manager(&ctx, &mut model, &dir, size, next);
+                let page = model.page;
+                let shown = texts(&render_manager(&ctx, &mut model, &dir, size, Vec::new()));
+                assert!(
+                    shown
+                        .iter()
+                        .any(|(text, _, _)| text.contains("Showing 81–")),
+                    "short {}x{} {} theme did not page: page={page} click={next:?} {:?}",
+                    width,
+                    height,
+                    if light { "light" } else { "dark" },
+                    shown
+                        .iter()
+                        .map(|(text, _, _)| text.as_str())
+                        .filter(|text| text.contains("Showing") || *text == "Next")
+                        .collect::<Vec<_>>()
+                );
+                let overflow: Vec<String> = shown
+                    .iter()
+                    .filter(|(_, rect, clip)| {
+                        let visible = rect.intersect(*clip);
+                        visible.right() > width + 1.0
+                            || visible.left() < -1.0
+                            || (rect.right() > width + 1.0 && clip.right() >= width - 1.0)
+                    })
+                    .map(|(text, rect, _)| format!("{rect:?} {text}"))
+                    .collect();
+                assert!(
+                    overflow.is_empty(),
+                    "text extends past {width}x{height}: {overflow:?}"
+                );
+            }
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -940,6 +1049,9 @@ with open(destination, "wb") as output:
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
         let mut open = true;
+        ctx.style_mut(|style| {
+            style.animation_time = 0.0;
+        });
         ctx.run(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
@@ -952,6 +1064,47 @@ with open(destination, "wb") as output:
         )
     }
 
+    fn visible_control(
+        ctx: &egui::Context,
+        model: &mut Model,
+        dir: &Path,
+        size: egui::Vec2,
+        label: &str,
+    ) -> egui::Pos2 {
+        let mut settled = None;
+        for _ in 0..30 {
+            let _ = render_manager(
+                ctx,
+                model,
+                dir,
+                size,
+                vec![egui::Event::PointerMoved(egui::pos2(
+                    size.x * 0.5,
+                    size.y * 0.5,
+                ))],
+            );
+            if let Some(pos) = model.next_at {
+                let on_screen = pos.x >= 0.0 && pos.y >= 0.0 && pos.x <= size.x && pos.y <= size.y;
+                if on_screen && settled == Some(pos) {
+                    return pos;
+                }
+                settled = Some(pos);
+            }
+            let _ = render_manager(
+                ctx,
+                model,
+                dir,
+                size,
+                vec![egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -160.0),
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+        panic!("{label} was not reachable in {size:?}");
+    }
+
     fn click_manager(
         ctx: &egui::Context,
         model: &mut Model,
@@ -959,21 +1112,28 @@ with open(destination, "wb") as output:
         size: egui::Vec2,
         pos: egui::Pos2,
     ) {
-        for events in [
+        let frames = [
             vec![egui::Event::PointerMoved(pos)],
-            vec![egui::Event::PointerButton {
-                pos,
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: egui::Modifiers::NONE,
-            }],
-            vec![egui::Event::PointerButton {
-                pos,
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: egui::Modifiers::NONE,
-            }],
-        ] {
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        ];
+        for events in frames {
             let _ = render_manager(ctx, model, dir, size, events);
         }
     }

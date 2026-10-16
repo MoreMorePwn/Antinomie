@@ -26,11 +26,27 @@ const MAX_EXPANDED_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_MEMBERS: usize = 8_000;
 
+/// Current derived-index parser. Indexes from the defective YARA lexer are 0.
+pub const INDEX_PARSER: u32 = 2;
+
 #[cfg(test)]
-static INJECT_NOSPC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+thread_local! {
+    static FAIL_ONCE: std::cell::RefCell<BTreeSet<&'static str>> =
+        const { std::cell::RefCell::new(BTreeSet::new()) };
+}
+
+/// Fail the next matching operation on this thread only.
 #[cfg(test)]
-static INJECT_REGISTRY_IO: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+pub(crate) fn fail_once(op: &'static str) {
+    FAIL_ONCE.with(|ops| {
+        ops.borrow_mut().insert(op);
+    });
+}
+
+#[cfg(test)]
+fn take_fail(op: &str) -> bool {
+    FAIL_ONCE.with(|ops| ops.borrow_mut().remove(op))
+}
 const SIGMA_CATEGORIES: [&str; 9] = [
     "process_creation",
     "file_event",
@@ -79,6 +95,9 @@ pub struct Registry {
     /// Increases on every successful registry write.
     #[serde(default)]
     pub generation: u64,
+    /// Disabled ids that no longer name one rule after an index rebuild.
+    #[serde(default)]
+    pub obsolete_disabled: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -135,6 +154,8 @@ pub struct IndexedRule {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct IndexFile {
+    #[serde(default)]
+    parser: u32,
     rules: Vec<IndexedRule>,
 }
 
@@ -292,7 +313,7 @@ pub fn load_registry(data_dir: &Path) -> Result<Registry, String> {
 
 fn save_registry(data_dir: &Path, registry: &Registry) -> Result<(), String> {
     #[cfg(test)]
-    if INJECT_REGISTRY_IO.swap(false, std::sync::atomic::Ordering::Relaxed) {
+    if take_fail("registry-write") {
         return Err("No space left on device".into());
     }
     let root = rules_root(data_dir);
@@ -325,6 +346,10 @@ pub fn profile_label(data_dir: &Path) -> String {
     let Ok(registry) = load_registry(data_dir) else {
         return "Rules registry is unreadable".into();
     };
+    profile_label_of(&registry)
+}
+
+pub fn profile_label_of(registry: &Registry) -> String {
     let mut parts = Vec::new();
     for pack in registry.packs.iter().filter(|pack| pack.enabled) {
         parts.push(format!("{} {}", pack.name, pack.version));
@@ -851,13 +876,31 @@ pub fn selection_digest(data_dir: &Path, engine: &str) -> String {
     let Ok(registry) = load_registry(data_dir) else {
         return "unreadable".into();
     };
-    digest_of(&registry, engine)
+    selection_digest_of(data_dir, &registry, engine)
+}
+
+pub fn selection_digest_of(data_dir: &Path, registry: &Registry, engine: &str) -> String {
+    digest_of(data_dir, registry, engine)
 }
 
 pub fn snapshot(data_dir: &Path, engine: &str) -> Result<Snapshot, String> {
-    let _lock = registry_lock();
     let registry = load_registry(data_dir)?;
-    let digest = digest_of(&registry, engine);
+    snapshot_from(data_dir, engine, &registry, None)
+}
+
+/// Build the profile for `registry`, which was captured when the scan was admitted.
+/// A later registry write is not read. `cancel` abandons the staging directory.
+pub fn snapshot_from(
+    data_dir: &Path,
+    engine: &str,
+    registry: &Registry,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<Snapshot, String> {
+    let _lock = registry_lock();
+    if cancelled(cancel) {
+        return Err("cancelled".into());
+    }
+    let digest = digest_of(data_dir, registry, engine);
     let directory = rules_root(data_dir)
         .join("profiles")
         .join(engine)
@@ -902,6 +945,17 @@ pub fn snapshot(data_dir: &Path, engine: &str) -> Result<Snapshot, String> {
             .iter()
             .filter(|pack| pack.enabled && pack.engine == engine)
         {
+            if let Some(status) = unmet_requirement(data_dir, pack) {
+                counts.warnings.push(format!(
+                    "{} {} was not evaluated: {status}",
+                    pack.id, pack.version
+                ));
+                counts.excluded += 1;
+                counts
+                    .excluded_ids
+                    .push(format!("pack:{}:{status}", pack.id));
+                continue;
+            }
             let root = rules_root(data_dir)
                 .join("packs")
                 .join(&pack.engine)
@@ -954,6 +1008,7 @@ pub fn snapshot(data_dir: &Path, engine: &str) -> Result<Snapshot, String> {
             "engine": engine,
             "engine_identity": engine_identity(engine),
             "engine_version": engine_identity(engine),
+            "app_version": crate::api::APP_VERSION,
             "digest": digest,
             "enabled_rules": counts.enabled,
             "excluded_rules": counts.excluded,
@@ -961,7 +1016,7 @@ pub fn snapshot(data_dir: &Path, engine: &str) -> Result<Snapshot, String> {
             "excluded_ids": counts.excluded_ids,
             "exclusion_reasons": counts.warnings,
             "warnings": counts.warnings,
-            "support_hashes": support_hashes(&staging),
+            "support_hashes": support_hashes(&staging)?,
             "sigma_counts": sigma_selection_counts(engine, &counts.warnings, counts.enabled),
             "packs": registry.packs.iter().filter(|pack| pack.engine == engine).map(|pack| serde_json::json!({
                 "id": pack.id,
@@ -979,6 +1034,9 @@ pub fn snapshot(data_dir: &Path, engine: &str) -> Result<Snapshot, String> {
         });
         crate::storage::atomic_json(&staging.join("manifest.json"), &manifest)?;
         fs::write(staging.join(".complete"), b"ok").map_err(|error| error.to_string())?;
+        if cancelled(cancel) {
+            return Err("cancelled".into());
+        }
         if let Some(parent) = directory.parent() {
             crate::storage::private_dir(parent).map_err(|error| error.to_string())?;
         }
@@ -1000,7 +1058,33 @@ pub fn snapshot(data_dir: &Path, engine: &str) -> Result<Snapshot, String> {
     built
 }
 
-/// Copy the enabled YARA snapshot into `dest` for the static-analysis sandbox.
+fn cancelled(cancel: Option<&std::sync::atomic::AtomicBool>) -> bool {
+    cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Remove staging directories left by a crashed or canceled preparation.
+pub fn reap_staging(data_dir: &Path, older_than: std::time::Duration) -> Result<u32, String> {
+    let staging = rules_root(data_dir).join("staging");
+    if !staging.is_dir() {
+        return Ok(0);
+    }
+    let now = std::time::SystemTime::now();
+    let mut removed = 0u32;
+    for entry in fs::read_dir(&staging).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let meta = entry.metadata().map_err(|error| error.to_string())?;
+        let old = meta
+            .modified()
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age >= older_than);
+        if old && meta.is_dir() {
+            fs::remove_dir_all(entry.path()).map_err(|error| error.to_string())?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
 pub fn publish_static(data_dir: &Path, dest: &Path) -> Result<(), String> {
     let snap = snapshot(data_dir, "yara")?;
     if dest.exists() {
@@ -1115,30 +1199,41 @@ pub struct PackDiff {
     pub conflicts: Vec<String>,
 }
 
-fn support_hashes(root: &Path) -> Vec<serde_json::Value> {
+fn support_hashes(root: &Path) -> Result<Vec<serde_json::Value>, String> {
     let mut files = Vec::new();
-    let _ = collect_files(root, &mut files, 0);
+    collect_files(root, &mut files, 0)?;
     let mut hashes = Vec::new();
     for path in files {
         let name = path
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("");
-        let support = name == "classification.config"
-            || name == "reference.config"
-            || name.ends_with(".txt")
-            || name.ends_with(".md");
-        if !support {
+        if !is_support_file(name) {
             continue;
         }
-        if let Ok(digest) = crate::storage::sha256_file_hex(&path) {
-            hashes.push(serde_json::json!({
-                "path": path.strip_prefix(root).unwrap_or(&path).to_string_lossy().replace('\\', "/"),
-                "sha256": digest,
-            }));
-        }
+        let digest = crate::storage::sha256_file_hex(&path).map_err(|error| {
+            format!(
+                "support file {}: {error}",
+                path.strip_prefix(root).unwrap_or(&path).display()
+            )
+        })?;
+        hashes.push(serde_json::json!({
+            "path": path.strip_prefix(root).unwrap_or(&path).to_string_lossy().replace('\\', "/"),
+            "sha256": digest,
+        }));
     }
-    hashes
+    Ok(hashes)
+}
+
+fn is_support_file(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower == "license"
+        || lower == "notice"
+        || lower == "copying"
+        || name == "classification.config"
+        || name == "reference.config"
+        || name.ends_with(".txt")
+        || name.ends_with(".md")
 }
 
 fn sigma_selection_counts(
@@ -1166,7 +1261,7 @@ fn sigma_selection_counts(
     }))
 }
 
-fn digest_of(registry: &Registry, engine: &str) -> String {
+fn digest_of(data_dir: &Path, registry: &Registry, engine: &str) -> String {
     let mut material = String::new();
     for pack in &registry.packs {
         if pack.engine == engine {
@@ -1196,6 +1291,26 @@ fn digest_of(registry: &Registry, engine: &str) -> String {
                 group.engine,
                 disabled
             ));
+        }
+    }
+    material.push_str(&format!("index-parser {INDEX_PARSER}\n"));
+    if let Ok(Some(catalog)) = load_catalog(data_dir) {
+        let facts = tool_facts();
+        for pack in registry
+            .packs
+            .iter()
+            .filter(|pack| pack.engine == engine && pack.enabled)
+        {
+            if let Some(entry) = catalog.packs.iter().find(|entry| {
+                entry.id == pack.id && entry.engine == pack.engine && entry.version == pack.version
+            }) {
+                let status =
+                    classify_requirement(&entry.app, &entry.engine_requirement, engine, &facts);
+                material.push_str(&format!(
+                    "requirement {} {} {} {status}\n",
+                    pack.id, entry.app, entry.engine_requirement
+                ));
+            }
         }
     }
     material.push_str(&engine_identity(engine));
@@ -1405,7 +1520,7 @@ fn engine_identity(engine: &str) -> String {
     match engine {
         "yara" => format!("yara-x {}", yara_x::VERSION),
         "ids" => suricata_identity(),
-        "sigma" => "pysigma-sqlite".into(),
+        "sigma" => sigma_identity(),
         other => other.to_owned(),
     }
 }
@@ -1414,15 +1529,20 @@ fn suricata_identity() -> String {
     static CACHED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     CACHED
         .get_or_init(|| {
-            for path in [
-                "/usr/bin/suricata",
-                "/usr/sbin/suricata",
-                "/usr/local/bin/suricata",
-            ] {
-                if !Path::new(path).is_file() {
+            let mut paths = Vec::new();
+            if let Some(path) = std::env::var_os("ANTINOMIE_SURICATA") {
+                paths.push(PathBuf::from(path));
+            }
+            paths.extend([
+                PathBuf::from("/usr/bin/suricata"),
+                PathBuf::from("/usr/sbin/suricata"),
+                PathBuf::from("/usr/local/bin/suricata"),
+            ]);
+            for path in paths {
+                if !path.is_file() {
                     continue;
                 }
-                if let Ok(output) = std::process::Command::new(path).arg("-V").output() {
+                if let Ok(output) = std::process::Command::new(&path).arg("-V").output() {
                     let text = String::from_utf8_lossy(&output.stdout);
                     let line = text.lines().next().unwrap_or("").trim();
                     if !line.is_empty() {
@@ -1431,6 +1551,31 @@ fn suricata_identity() -> String {
                 }
             }
             "suricata-absent".into()
+        })
+        .clone()
+}
+
+fn sigma_identity() -> String {
+    static CACHED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| {
+            let python = std::env::var("ANTINOMIE_SIGMA_PYTHON")
+                .unwrap_or_else(|_| "/usr/bin/python3".into());
+            let script = "import sigma, sigma.backends.sqlite as backend\nprint(getattr(sigma, '__version__', 'unknown'))\nprint(getattr(backend, '__version__', 'unknown'))\n";
+            let Ok(output) = std::process::Command::new(python).arg("-c").arg(script).output() else {
+                return "pysigma-sqlite unavailable".into();
+            };
+            if !output.status.success() {
+                return "pysigma-sqlite unavailable".into();
+            }
+            let text = String::from_utf8_lossy(&output.stdout);
+            let mut lines = text.lines();
+            let sigma = lines.next().unwrap_or("unknown").trim();
+            let backend = lines.next().unwrap_or("unknown").trim();
+            if sigma.is_empty() {
+                return "pysigma-sqlite unavailable".into();
+            }
+            format!("pysigma {sigma} / sqlite {backend}")
         })
         .clone()
 }
@@ -1593,7 +1738,7 @@ fn unpack_archive(bytes: &[u8], dest: &Path) -> Result<(), String> {
             crate::storage::private_dir(parent).map_err(|error| error.to_string())?;
         }
         #[cfg(test)]
-        if INJECT_NOSPC.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        if take_fail("unpack-write") {
             return Err(format!(
                 "write {}: {}",
                 rel.display(),
@@ -1779,8 +1924,301 @@ fn index_tree(root: &Path, engine: &str) -> Result<(), String> {
     if engine == "yara" {
         qualify_yara_namespaces(&mut rules);
     }
-    let index = IndexFile { rules };
+    let index = IndexFile {
+        parser: INDEX_PARSER,
+        rules,
+    };
+    #[cfg(test)]
+    if take_fail("index-write") {
+        return Err("No space left on device".into());
+    }
     crate::storage::atomic_json(&root.join("index.json"), &index)
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IndexMigration {
+    pub rebuilt: Vec<String>,
+    pub current: Vec<String>,
+    pub obsolete: Vec<String>,
+}
+
+/// Rebuild indexes written by an older parser from the installed files.
+/// A second call does not rewrite a current index.
+pub fn migrate_indexes(data_dir: &Path) -> Result<IndexMigration, String> {
+    let _lock = registry_lock();
+    let mut registry = load_registry(data_dir)?;
+    let mut report = IndexMigration::default();
+    let mut targets = Vec::new();
+    for pack in &registry.packs {
+        for version in &pack.versions {
+            targets.push((
+                format!("pack:{}", pack.id),
+                pack.engine.clone(),
+                rules_root(data_dir)
+                    .join("packs")
+                    .join(&pack.engine)
+                    .join(&pack.id)
+                    .join(version),
+            ));
+        }
+    }
+    for group in &registry.groups {
+        let base = rules_root(data_dir).join("custom").join(&group.id);
+        let Ok(entries) = fs::read_dir(&base) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                targets.push((
+                    format!("group:{}", group.id),
+                    group.engine.clone(),
+                    entry.path(),
+                ));
+            }
+        }
+    }
+    let mut toggles_changed = false;
+    for (key, engine, root) in targets {
+        let index_path = root.join("index.json");
+        if !index_path.is_file() {
+            continue;
+        }
+        let data = fs::read(&index_path).map_err(|error| error.to_string())?;
+        let parsed: IndexFile = serde_json::from_slice(&data)
+            .map_err(|error| format!("{}: {error}", index_path.display()))?;
+        let label = root
+            .strip_prefix(rules_root(data_dir))
+            .unwrap_or(&root)
+            .display()
+            .to_string();
+        if parsed.parser >= INDEX_PARSER {
+            report.current.push(label);
+            continue;
+        }
+        index_tree(&root, &engine)?;
+        if let Some(disabled) = registry.disabled.get_mut(&key) {
+            let rules = read_index(&root)?;
+            let obsolete = reconcile_disabled(disabled, &rules);
+            if !obsolete.is_empty() {
+                toggles_changed = true;
+                report
+                    .obsolete
+                    .extend(obsolete.iter().map(|id| format!("{key} {id}")));
+                registry
+                    .obsolete_disabled
+                    .entry(key)
+                    .or_default()
+                    .extend(obsolete);
+            }
+        }
+        report.rebuilt.push(label);
+    }
+    if toggles_changed {
+        save_registry(data_dir, &registry)?;
+    }
+    Ok(report)
+}
+
+fn reconcile_disabled(disabled: &mut BTreeSet<String>, rules: &[IndexedRule]) -> Vec<String> {
+    let ids: BTreeSet<_> = rules.iter().map(|rule| rule.id.as_str()).collect();
+    let mut next = BTreeSet::new();
+    let mut obsolete = Vec::new();
+    for id in disabled.iter() {
+        if ids.contains(id.as_str()) {
+            next.insert(id.clone());
+            continue;
+        }
+        let named: Vec<_> = rules
+            .iter()
+            .filter(|rule| rule.name == *id)
+            .map(|rule| rule.id.clone())
+            .collect();
+        if named.len() == 1 {
+            next.insert(named[0].clone());
+        } else {
+            obsolete.push(id.clone());
+        }
+    }
+    *disabled = next;
+    obsolete
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RequirementStatus {
+    Satisfied,
+    Incompatible(String),
+    Malformed(String),
+    Unknown(String),
+    Pending(String),
+}
+
+impl std::fmt::Display for RequirementStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Satisfied => formatter.write_str("satisfied"),
+            Self::Pending(text) => write!(formatter, "validation pending: {text}"),
+            Self::Incompatible(text) => write!(formatter, "incompatible: {text}"),
+            Self::Malformed(text) => write!(formatter, "malformed requirement: {text}"),
+            Self::Unknown(text) => write!(formatter, "unknown requirement: {text}"),
+        }
+    }
+}
+
+fn unmet_requirement(data_dir: &Path, pack: &InstalledPack) -> Option<RequirementStatus> {
+    let catalog = load_catalog(data_dir).ok().flatten()?;
+    let entry = catalog.packs.iter().find(|entry| {
+        entry.id == pack.id && entry.engine == pack.engine && entry.version == pack.version
+    })?;
+    let status = classify_requirement(
+        &entry.app,
+        &entry.engine_requirement,
+        &pack.engine,
+        &tool_facts(),
+    );
+    match status {
+        RequirementStatus::Satisfied => None,
+        other => Some(other),
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ToolFacts {
+    pub app: String,
+    pub yara: String,
+    pub suricata: Option<String>,
+    pub sigma: Option<String>,
+}
+
+pub fn tool_facts() -> ToolFacts {
+    let suricata = suricata_identity();
+    let sigma = sigma_identity();
+    ToolFacts {
+        app: crate::api::APP_VERSION.into(),
+        yara: yara_x::VERSION.into(),
+        suricata: (suricata != "suricata-absent").then_some(suricata),
+        sigma: (!sigma.contains("unavailable")).then_some(sigma),
+    }
+}
+
+/// `app_req` is `>=1.2.3` or empty. `engine_req` is `Name 1.2` or `Name 2.x`.
+/// A bare version is a minimum. `N.x` requires that major and does not accept another.
+pub fn classify_requirement(
+    app_req: &str,
+    engine_req: &str,
+    engine: &str,
+    facts: &ToolFacts,
+) -> RequirementStatus {
+    if let Err(error) = check_bound(app_req, &facts.app, true) {
+        return error;
+    }
+    let Some((name, spec)) = engine_req.split_once(' ') else {
+        return RequirementStatus::Malformed(format!(
+            "engine requirement {engine_req:?} has no version"
+        ));
+    };
+    let known = match engine {
+        "yara" => name == "YARA-X",
+        "ids" => name == "Suricata",
+        "sigma" => name == "pySigma",
+        _ => false,
+    };
+    if !known {
+        return RequirementStatus::Unknown(format!("unknown engine requirement {engine_req}"));
+    }
+    let installed = match engine {
+        "yara" => Some(facts.yara.as_str()),
+        "ids" => facts.suricata.as_deref(),
+        "sigma" => facts
+            .sigma
+            .as_deref()
+            .map(|text| text.split_whitespace().nth(1).unwrap_or(text)),
+        _ => None,
+    };
+    let Some(installed) = installed else {
+        return RequirementStatus::Pending(format!(
+            "{name} is not installed; the pack is not validated"
+        ));
+    };
+    let spec = spec.split_whitespace().next().unwrap_or(spec);
+    if spec.ends_with(".x") {
+        let major = spec.trim_end_matches(".x");
+        let have = installed.split([' ', '.']).next().unwrap_or(installed);
+        return if have == major {
+            RequirementStatus::Satisfied
+        } else {
+            RequirementStatus::Incompatible(format!("{name} {installed} is not major {major}"))
+        };
+    }
+    match check_bound(&format!(">={spec}"), installed, false) {
+        Ok(()) => RequirementStatus::Satisfied,
+        Err(status) => status,
+    }
+}
+
+fn check_bound(
+    requirement: &str,
+    installed: &str,
+    allow_empty: bool,
+) -> Result<(), RequirementStatus> {
+    let requirement = requirement.trim();
+    if requirement.is_empty() {
+        return if allow_empty {
+            Ok(())
+        } else {
+            Err(RequirementStatus::Malformed("empty requirement".into()))
+        };
+    }
+    let (op, raw) = if let Some(rest) = requirement.strip_prefix(">=") {
+        (">=", rest)
+    } else if let Some(rest) = requirement.strip_prefix("<=") {
+        ("<=", rest)
+    } else if let Some(rest) = requirement.strip_prefix('>') {
+        (">", rest)
+    } else if let Some(rest) = requirement.strip_prefix('<') {
+        ("<", rest)
+    } else if let Some(rest) = requirement.strip_prefix('=') {
+        ("=", rest)
+    } else {
+        (">=", requirement)
+    };
+    let Some(need) = parse_version(raw.trim()) else {
+        return Err(RequirementStatus::Malformed(format!(
+            "version {raw:?} is not numeric"
+        )));
+    };
+    let Some(have) = parse_version(installed) else {
+        return Err(RequirementStatus::Malformed(format!(
+            "installed version {installed:?} is not numeric"
+        )));
+    };
+    let ok = match op {
+        ">=" => have >= need,
+        ">" => have > need,
+        "<=" => have <= need,
+        "<" => have < need,
+        "=" => have == need,
+        _ => false,
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(RequirementStatus::Incompatible(format!(
+            "{installed} does not satisfy {requirement}"
+        )))
+    }
+}
+
+fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
+    let start = text.find(|ch: char| ch.is_ascii_digit())?;
+    let rest = &text[start..];
+    let end = rest
+        .find(|ch: char| !ch.is_ascii_digit() && ch != '.')
+        .unwrap_or(rest.len());
+    let mut numbers = rest[..end].split('.');
+    let major = numbers.next()?.parse().ok()?;
+    let minor = numbers.next().unwrap_or("0").parse().ok()?;
+    let patch = numbers.next().unwrap_or("0").parse().ok()?;
+    Some((major, minor, patch))
 }
 
 fn qualify_yara_namespaces(rules: &mut [IndexedRule]) {
@@ -3100,7 +3538,7 @@ rule Other { condition: true }\n";
         install_archive(&dir, &entry(&sha, good.len() as u64), &good).unwrap();
         let registry_path = rules_root(&dir).join("registry.json");
         let before = fs::read(&registry_path).unwrap();
-        INJECT_REGISTRY_IO.store(true, std::sync::atomic::Ordering::Relaxed);
+        fail_once("registry-write");
         let error = set_pack_enabled(&dir, "sample", false).unwrap_err();
         assert!(error.contains("No space"));
         assert_eq!(fs::read(&registry_path).unwrap(), before);
@@ -3117,7 +3555,7 @@ rule Other { condition: true }\n";
         let next = archive(&[("next.yar", "rule Next { condition: true }\n")]);
         let mut listed = entry(&format!("{:x}", Sha256::digest(&next)), next.len() as u64);
         listed.version = "2".into();
-        INJECT_NOSPC.store(true, std::sync::atomic::Ordering::Relaxed);
+        fail_once("unpack-write");
         let error = install_archive(&dir, &listed, &next).unwrap_err();
         assert!(error.contains("No space") || error.contains("space"));
         let registry = load_registry(&dir).unwrap();
@@ -3127,6 +3565,288 @@ rule Other { condition: true }\n";
             !dir.join("rules/packs/yara/sample/2/manifest.json")
                 .is_file()
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_disk_failure_on_one_thread_does_not_fail_another_install() {
+        let parent =
+            std::env::temp_dir().join(format!("ant-iso-p-{}", crate::storage::unique_id()));
+        let child_dir =
+            std::env::temp_dir().join(format!("ant-iso-c-{}", crate::storage::unique_id()));
+        let bytes = archive(&[("keep.yar", "rule Keep { condition: true }\n")]);
+        let sha = format!("{:x}", Sha256::digest(&bytes));
+        let child_bytes = bytes.clone();
+        let child_sha = sha.clone();
+        let child = std::thread::spawn(move || {
+            fail_once("unpack-write");
+            let listed = entry(&child_sha, child_bytes.len() as u64);
+            install_archive(&child_dir, &listed, &child_bytes).unwrap_err()
+        });
+        install_archive(&parent, &entry(&sha, bytes.len() as u64), &bytes).unwrap();
+        let error = child.join().unwrap();
+        assert!(
+            error.contains("No space") || error.contains("space"),
+            "{error}"
+        );
+        assert!(parent.join("rules/packs/yara/sample/1/keep.yar").is_file());
+        let _ = fs::remove_dir_all(&parent);
+        let _ = fs::remove_dir_all(std::env::temp_dir().join("unused"));
+    }
+
+    #[test]
+    fn requirements_reject_unknown_and_older_versions_without_string_order() {
+        let facts = ToolFacts {
+            app: "0.6.2".into(),
+            yara: "1.21.0".into(),
+            suricata: Some("This is Suricata version 7.0.10 RELEASE".into()),
+            sigma: Some("pysigma 2.0.1 / sqlite 2.1.0".into()),
+        };
+        assert_eq!(
+            classify_requirement(">=0.6.2", "YARA-X 1.21", "yara", &facts),
+            RequirementStatus::Satisfied
+        );
+        assert!(matches!(
+            classify_requirement(">=0.6.10", "YARA-X 1.21", "yara", &facts),
+            RequirementStatus::Incompatible(_)
+        ));
+        assert!(matches!(
+            classify_requirement("", "Mystery 1", "yara", &facts),
+            RequirementStatus::Unknown(_)
+        ));
+        assert!(matches!(
+            classify_requirement("", "YARA-X later", "yara", &facts),
+            RequirementStatus::Malformed(_)
+        ));
+        let pending = ToolFacts {
+            suricata: None,
+            ..facts.clone()
+        };
+        assert!(matches!(
+            classify_requirement("", "Suricata 7", "ids", &pending),
+            RequirementStatus::Pending(_)
+        ));
+        assert_eq!(
+            classify_requirement("", "Suricata 7", "ids", &facts),
+            RequirementStatus::Satisfied
+        );
+        assert_eq!(
+            classify_requirement("", "pySigma 2.x SQLite backend", "sigma", &facts),
+            RequirementStatus::Satisfied
+        );
+    }
+
+    #[test]
+    fn an_old_parser_index_keeps_real_toggles_and_a_failed_rewrite() {
+        let dir = std::env::temp_dir().join(format!("ant-mig-{}", crate::storage::unique_id()));
+        let root = dir.join("rules/packs/yara/sample/1");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("one.yar"), "rule Real { condition: true }\n").unwrap();
+        fs::write(
+            root.join("index.json"),
+            serde_json::json!({"rules": [
+                {"id": "keeps", "name": "keeps", "file": "one.yar", "helper": false, "tags": [], "severity": "", "license": "", "source_url": "", "condition": "", "references": [], "evidence": [], "compatible": true, "reason": "", "content_sha256": "", "depends_on": []},
+                {"id": "Real", "name": "Real", "file": "one.yar", "helper": false, "tags": [], "severity": "", "license": "", "source_url": "", "condition": "", "references": [], "evidence": [], "compatible": true, "reason": "", "content_sha256": "", "depends_on": []}
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        let registry = serde_json::json!({
+            "schema": 1,
+            "packs": [{
+                "id": "sample", "engine": "yara", "name": "Sample", "version": "1",
+                "enabled": true, "sha256": "ab".repeat(32), "upstream_revision": "1",
+                "upstream_url": "https://example.invalid", "license": "test",
+                "evidence": [], "limits": [], "versions": ["1"]
+            }],
+            "groups": [],
+            "disabled": {"pack:sample": ["keeps", "Real"]}
+        });
+        fs::write(dir.join("rules/registry.json"), registry.to_string()).unwrap();
+        let before = fs::read(root.join("index.json")).unwrap();
+        fail_once("index-write");
+        let error = migrate_indexes(&dir).unwrap_err();
+        assert!(error.contains("No space"));
+        assert_eq!(fs::read(root.join("index.json")).unwrap(), before);
+        let report = migrate_indexes(&dir).unwrap();
+        assert_eq!(report.rebuilt.len(), 1);
+        assert!(report.obsolete.iter().any(|item| item.contains("keeps")));
+        let index: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join("index.json")).unwrap()).unwrap();
+        assert_eq!(index["parser"], 2);
+        let names: Vec<_> = index["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|rule| rule["id"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(names, vec!["Real".to_owned()]);
+        let saved = load_registry(&dir).unwrap();
+        assert!(saved.disabled["pack:sample"].contains("Real"));
+        assert!(!saved.disabled["pack:sample"].contains("keeps"));
+        assert!(
+            saved.obsolete_disabled["pack:sample"]
+                .iter()
+                .any(|id| id == "keeps")
+        );
+        let again = migrate_indexes(&dir).unwrap();
+        assert!(again.rebuilt.is_empty());
+        assert_eq!(again.current.len(), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_saved_r2_index_migrates_to_the_yara_x_identity_set() {
+        let source = Path::new("/tmp/antinomie-4d2e369-review/upgrade");
+        if !source
+            .join("rules/packs/yara/yara-forge-core/20261004-r2/index.json")
+            .is_file()
+        {
+            eprintln!("pre-fix r2 index is absent; migration was not executed");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("ant-r2-{}", crate::storage::unique_id()));
+        copy_fixture(source, &dir);
+        let index_path = dir.join("rules/packs/yara/yara-forge-core/20261004-r2/index.json");
+        let old: serde_json::Value =
+            serde_json::from_slice(&fs::read(&index_path).unwrap()).unwrap();
+        let old_ids: BTreeSet<_> = old["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|rule| rule["id"].as_str().unwrap().to_owned())
+            .collect();
+        assert!(old_ids.contains("keeps"));
+        assert_eq!(old_ids.len(), 2093);
+        let mut registry = load_registry(&dir).unwrap();
+        registry.disabled.insert(
+            "pack:yara-forge-core".into(),
+            BTreeSet::from(["keeps".into()]),
+        );
+        let real = old_ids
+            .iter()
+            .find(|id| id.as_str() != "keeps")
+            .unwrap()
+            .clone();
+        registry
+            .disabled
+            .get_mut("pack:yara-forge-core")
+            .unwrap()
+            .insert(real.clone());
+        fs::write(
+            dir.join("rules/registry.json"),
+            serde_json::to_vec_pretty(&registry).unwrap(),
+        )
+        .unwrap();
+        let report = migrate_indexes(&dir).unwrap();
+        assert_eq!(report.rebuilt.len(), 1);
+        assert!(report.obsolete.iter().any(|item| item.contains("keeps")));
+        let index: serde_json::Value =
+            serde_json::from_slice(&fs::read(&index_path).unwrap()).unwrap();
+        let names: BTreeSet<_> = index["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|rule| rule["name"].as_str().unwrap().to_owned())
+            .collect();
+        assert!(!names.contains("keeps"));
+        for name in [
+            "ESET_Invisimole_Blob_PRIVATE",
+            "BLACKBERRY_Mal_Infostealer_Win32_Blackguard",
+            "SIGNATURE_BASE_WEBSHELL_PHP_Generic_Eval",
+            "SIGNATURE_BASE_WEBSHELL_JSP_Generic_Encoded_Shell",
+        ] {
+            assert!(names.contains(name), "{name} missing after migration");
+        }
+        let text = fs::read_to_string(
+            dir.join("rules/packs/yara/yara-forge-core/20261004-r2/yara-forge-core.yar"),
+        )
+        .unwrap();
+        let mut compiler = yara_x::Compiler::new();
+        compiler.relaxed_re_syntax(true);
+        compiler
+            .add_source(yara_x::SourceCode::from(text.as_str()).with_origin("yara-forge-core.yar"))
+            .unwrap();
+        let compiled: BTreeSet<_> = compiler
+            .build()
+            .iter()
+            .map(|rule| rule.identifier().to_owned())
+            .collect();
+        assert_eq!(names, compiled);
+        let saved = load_registry(&dir).unwrap();
+        assert!(saved.disabled["pack:yara-forge-core"].contains(&real));
+        assert!(!saved.disabled["pack:yara-forge-core"].contains("keeps"));
+        let bytes = fs::read(&index_path).unwrap();
+        let second = migrate_indexes(&dir).unwrap();
+        assert!(second.rebuilt.is_empty());
+        assert_eq!(fs::read(&index_path).unwrap(), bytes);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn copy_fixture(source: &Path, dest: &Path) {
+        for entry in walkdir_files(source) {
+            let rel = entry.strip_prefix(source).unwrap();
+            let target = dest.join(rel);
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            if entry.is_file() {
+                fs::copy(&entry, target).unwrap();
+            }
+        }
+    }
+
+    fn walkdir_files(root: &Path) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        let mut pending = vec![root.to_path_buf()];
+        while let Some(dir) = pending.pop() {
+            for entry in fs::read_dir(&dir).unwrap() {
+                let entry = entry.unwrap();
+                if entry.path().is_dir() {
+                    pending.push(entry.path());
+                } else {
+                    out.push(entry.path());
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn an_unmet_engine_requirement_is_not_evaluated_and_notice_is_hashed() {
+        let dir = std::env::temp_dir().join(format!("ant-req-{}", crate::storage::unique_id()));
+        let bytes = archive(&[("one.yar", "rule Real { condition: true }\n")]);
+        let sha = format!("{:x}", Sha256::digest(&bytes));
+        let mut listed = entry(&sha, bytes.len() as u64);
+        listed.engine_requirement = "YARA-X 99".into();
+        install_archive(&dir, &listed, &bytes).unwrap();
+        let pack = dir.join("rules/packs/yara/sample/1");
+        fs::write(pack.join("NOTICE"), "upstream notice\n").unwrap();
+        let mut catalog = Catalog {
+            schema: 1,
+            packs: vec![listed.clone()],
+        };
+        catalog.packs[0].version = "1".into();
+        store_catalog(&dir, &catalog).unwrap();
+        let snap = snapshot(&dir, "yara").unwrap();
+        assert_eq!(snap.enabled_rules, 0);
+        assert!(
+            snap.warnings
+                .iter()
+                .any(|warning| warning.contains("incompatible")),
+            "{:?}",
+            snap.warnings
+        );
+        listed.engine_requirement = "YARA-X 1.21".into();
+        catalog.packs[0].engine_requirement = "YARA-X 1.21".into();
+        store_catalog(&dir, &catalog).unwrap();
+        let snap = snapshot(&dir, "yara").unwrap();
+        assert_eq!(snap.enabled_rules, 1);
+        let manifest = fs::read_to_string(
+            dir.join(format!("rules/profiles/yara/{}/manifest.json", snap.digest)),
+        )
+        .unwrap();
+        assert!(manifest.contains("NOTICE"), "{manifest}");
         let _ = fs::remove_dir_all(&dir);
     }
 }
