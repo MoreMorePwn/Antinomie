@@ -28,6 +28,7 @@ pub(super) struct Change {
     pub path: String,
     path_known: bool,
     standard_io: bool,
+    process_image: Option<String>,
     pub call: u64,
     key: trace::InvocationKey,
     known_diff_count: Option<usize>,
@@ -88,7 +89,11 @@ impl Change {
                 true,
             ),
             cell(&self.path, theme::text(), true),
-            cell(format!("{} / {}", self.pid, self.tid), theme::text(), true),
+            cell(
+                process_identity(self.pid, self.tid, self.process_image.as_deref()),
+                theme::text(),
+                true,
+            ),
             cell(
                 self.count_label(),
                 if self.gaps.is_empty() {
@@ -101,6 +106,12 @@ impl Change {
             cell(format!("call {}", self.call), theme::text(), true),
         ];
         row[0].values = vec![
+            (
+                "process.exe",
+                self.process_image
+                    .as_ref()
+                    .map_or(RowValue::Missing, |image| RowValue::Text(image.clone())),
+            ),
             ("file.standard_io", RowValue::Bool(self.standard_io)),
             (
                 "file.path",
@@ -372,7 +383,7 @@ impl FileIndex {
                 cell(event.timestamp_ns.to_string(), theme::text(), true),
                 cell(&path, theme::text(), true),
                 cell(
-                    format!("{} / {}", event.pid, event.tid),
+                    process_identity(event.pid, event.tid, process_image(files, event)),
                     theme::text(),
                     true,
                 ),
@@ -397,6 +408,11 @@ impl FileIndex {
                 cell(format!("call {}", call.call_id), theme::text(), true),
             ];
             row[0].values = vec![
+                (
+                    "process.exe",
+                    process_image(files, event)
+                        .map_or(RowValue::Missing, |image| RowValue::Text(image.into())),
+                ),
                 (
                     "file.fd",
                     fd.map_or(RowValue::Missing, |fd| RowValue::Number(i128::from(fd))),
@@ -457,6 +473,7 @@ impl FileIndex {
             path: path.clone(),
             path_known,
             standard_io: true,
+            process_image: process_image(files, event).map(str::to_owned),
             call: call.call_id,
             key: trace::key(call),
             first_ns: event.timestamp_ns,

@@ -390,8 +390,7 @@ fn meaning(nr: u64, index: usize) -> Meaning {
     }
 }
 
-/// Argument `index` of syscall `nr` by meaning. `args` gives the other
-/// arguments some values depend on (socket option names by level).
+/// Conventional role of a standard descriptor; its target can be redirected.
 pub(crate) fn standard_fd_name(fd: u64) -> Option<&'static str> {
     match fd {
         0 => Some("stdin"),
@@ -401,6 +400,8 @@ pub(crate) fn standard_fd_name(fd: u64) -> Option<&'static str> {
     }
 }
 
+/// Argument `index` of syscall `nr` by meaning. `args` gives the other
+/// arguments some values depend on (socket option names by level).
 pub(crate) fn argument(nr: u64, index: usize, args: &[u64; 6]) -> Shown {
     let value = args[index];
     if let Some(name) = syscalls::selector_name(nr, index, args) {
