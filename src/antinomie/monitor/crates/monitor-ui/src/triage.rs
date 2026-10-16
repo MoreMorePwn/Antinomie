@@ -21,6 +21,7 @@ mod file_content;
 mod file_visibility;
 mod files;
 mod network;
+mod sorting;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
@@ -633,6 +634,11 @@ impl TriageView {
             "triage-ips",
             "triage-hosts",
         ][index];
+        if let Some(sort) = sorting::take_request(ui.ctx(), table_id) {
+            self.scan_request.sorts[index] = sort;
+            self.scan_request.offsets[index] = 0;
+            self.request_query_refresh();
+        }
         ui.ctx().data_mut(|data| {
             data.insert_temp(egui::Id::new(("triage-filter-target", table_id)), draft_id);
         });
@@ -1034,6 +1040,7 @@ fn table_rows(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[Vec<Cell>])
         return;
     }
     let widths = column_widths(ui, headers, rows.iter().map(Vec::as_slice));
+    let order = sorting::order(ui.ctx(), id, headers, rows.iter().map(Vec::as_slice));
     ui.set_width(
         (widths.iter().sum::<f32>()
             + ui.spacing().item_spacing.x * headers.len().saturating_sub(1) as f32
@@ -1069,15 +1076,17 @@ fn table_rows(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[Vec<Cell>])
     }
     builder
         .header(row_height, |mut header| {
-            for title in headers {
+            for (column, title) in headers.iter().enumerate() {
                 header.col(|ui| {
-                    ui.add(egui::Label::new(RichText::new(*title).strong()).truncate());
+                    sorting::header(ui, id, column, title);
                 });
             }
         })
         .body(|body| {
             body.rows(row_height, rows.len(), |mut row| {
-                let cells = &rows[row.index()];
+                let cells = &rows[order
+                    .as_ref()
+                    .map_or(row.index(), |order| order[row.index()])];
                 let key = evidence_key(cells);
                 row.set_selected(selected.as_ref() == Some(&key));
                 for cell in cells {
@@ -1164,6 +1173,12 @@ fn finding_table_rows(
         return None;
     }
     let widths = column_widths(ui, headers, rows.iter().map(|row| row.cells.as_slice()));
+    let order = sorting::order(
+        ui.ctx(),
+        id,
+        headers,
+        rows.iter().map(|row| row.cells.as_slice()),
+    );
     ui.set_width(
         (widths.iter().sum::<f32>()
             + ui.spacing().item_spacing.x * headers.len().saturating_sub(1) as f32
@@ -1193,15 +1208,17 @@ fn finding_table_rows(
     }
     builder
         .header(row_height, |mut header| {
-            for title in headers {
+            for (column, title) in headers.iter().enumerate() {
                 header.col(|ui| {
-                    ui.add(egui::Label::new(RichText::new(*title).strong()).truncate());
+                    sorting::header(ui, id, column, title);
                 });
             }
         })
         .body(|body| {
             body.rows(row_height, rows.len(), |mut row| {
-                let finding = &rows[row.index()];
+                let finding = &rows[order
+                    .as_ref()
+                    .map_or(row.index(), |order| order[row.index()])];
                 row.set_selected(selected == Some(finding.key));
                 for cell in &finding.cells {
                     row.col(|ui| {
@@ -1243,12 +1260,26 @@ fn process_tree_nodes(
     nodes: &[ProcessNode],
     clock: Option<antinomie_monitor_core::HostClockAnchor>,
 ) {
+    let sorted = ui
+        .ctx()
+        .data(|data| {
+            data.get_temp::<sorting::Spec>(egui::Id::new(("triage-sort", "triage-process")))
+        })
+        .is_some();
     let rows = nodes
         .iter()
         .map(|node| {
             let mut row = vec![
                 cell(
-                    format!("{}{}", "│ ".repeat(node.depth.min(16)), process_label(node)),
+                    format!(
+                        "{}{}",
+                        if sorted {
+                            String::new()
+                        } else {
+                            "│ ".repeat(node.depth.min(16))
+                        },
+                        process_label(node)
+                    ),
                     theme::value(theme::ValueKind::Pointer),
                     true,
                 ),
@@ -1281,6 +1312,21 @@ fn process_tree_nodes(
                 ("process.pid", RowValue::Number(i128::from(node.pid))),
                 ("process.tid", RowValue::Number(i128::from(node.tid))),
                 ("process.cookie", RowValue::Number(i128::from(node.cookie))),
+                ("process.depth", RowValue::Number(node.depth as i128)),
+                (
+                    "process.ppid",
+                    node.parent.map_or(RowValue::Missing, |parent| {
+                        RowValue::Number(i128::from(parent.pid))
+                    }),
+                ),
+                (
+                    "process.parent_cookie",
+                    node.parent
+                        .filter(|parent| parent.cookie != 0)
+                        .map_or(RowValue::Missing, |parent| {
+                            RowValue::Number(i128::from(parent.cookie))
+                        }),
+                ),
                 (
                     "stream.id",
                     node.call_id
@@ -1352,6 +1398,9 @@ fn process_tree_nodes(
 }
 
 const PROCESS_FIELDS: &[FieldSpec<'static>] = &[
+    FieldSpec::number("process.depth", "Observed tree depth"),
+    FieldSpec::number("process.ppid", "Observed parent process ID"),
+    FieldSpec::number("process.parent_cookie", "Observed stable parent identity"),
     FieldSpec::number("process.pid", "Observed TGID"),
     FieldSpec::number("process.tid", "Observed thread ID"),
     FieldSpec::number("process.cookie", "Stable task cookie"),
@@ -1541,6 +1590,7 @@ fn finish_processes(nodes: std::collections::BTreeMap<TaskKey, TaskNode>) -> Vec
                 continue;
             };
             found.push(ProcessNode {
+                parent: node.parent,
                 depth,
                 call_id: node.call_id,
                 pid: key.pid,
@@ -1757,6 +1807,7 @@ fn process_identity(pid: u32, tid: u32, image: Option<&str>) -> String {
 }
 
 struct ProcessNode {
+    parent: Option<TaskKey>,
     call_id: Option<trace::InvocationKey>,
     depth: usize,
     pid: u32,
@@ -2020,6 +2071,7 @@ const DNS_FIELDS: &[FieldSpec<'static>] = &[
 
 #[derive(Clone, Default)]
 struct ScanRequest {
+    sorts: [Option<sorting::Spec>; 8],
     file_visibility: file_visibility::FileVisibility,
     owned_pcap: bool,
     clock_anchor: Option<antinomie_monitor_core::HostClockAnchor>,
@@ -2030,16 +2082,6 @@ struct ScanRequest {
     identity: Option<(String, String, String)>,
     offsets: [usize; 8],
     filters: [String; 8],
-}
-
-fn keep_page<T>(rows: &mut Vec<T>, skipped: &mut u64, index: &mut usize, offset: usize, row: T) {
-    let at = *index;
-    *index += 1;
-    if at >= offset && rows.len() < STORED_ROWS {
-        rows.push(row);
-    } else {
-        *skipped += 1;
-    }
 }
 
 fn confidence(invocation: &InvocationSummary) -> &'static str {
@@ -2798,10 +2840,8 @@ fn scan_archive_query(
     let total = recording.invocation_count_cancellable(None, cancel).ok();
     let mut cookie_sets = std::collections::BTreeMap::new();
     let mut nodes = std::collections::BTreeMap::new();
-    let mut findings = Vec::new();
-    let mut findings_omitted = 0u64;
+    let mut finding_page = sorting::Page::new(request, 0, cancel);
     let finding_query = query::compile_table(&request.filters[0], FINDING_FIELDS);
-    let mut finding_count = 0;
     let (seen, complete, issues) = walk_pages(&recording, cancel, |page| {
         let page: Vec<_> = page.iter().filter(scoped).cloned().collect();
         if clock_anchor.is_none() {
@@ -2829,21 +2869,16 @@ fn scan_archive_query(
         Err(error) => (None, Some(error)),
     };
     let mut files = FdState::default();
-    let mut opened = Vec::new();
-    let mut changed = Vec::new();
+    let mut open_page = sorting::Page::new(request, 1, cancel);
+    let mut change_page = sorting::Page::new(request, 2, cancel);
     let mut file_index = files::FileIndex::default();
     let mut bpf_calls = Vec::new();
     let mut bpf_size = 0usize;
     let mut bpf_omitted = 0;
-    let mut read = Vec::new();
-    let mut read_omitted = 0;
-    let mut read_count = 0;
+    let mut read_page = sorting::Page::new(request, 5, cancel);
     let read_query = query::compile_table(&request.filters[5], FILE_FIELDS);
-    let mut opened_omitted = 0u64;
-    let mut changed_omitted = 0u64;
     let open_query = query::compile_table(&request.filters[1], FILE_FIELDS);
     let change_query = query::compile_table(&request.filters[2], FILE_FIELDS);
-    let (mut open_count, mut change_count) = (0, 0);
     let (_, files_complete, _) = walk_pages(&recording, cancel, |page| {
         for invocation in page.iter().filter(scoped) {
             observe_processes(&mut files.process_images, std::slice::from_ref(invocation));
@@ -2880,13 +2915,7 @@ fn scan_archive_query(
                     }
                 }
                 if finding_query.keep_table(&finding.values) {
-                    keep_page(
-                        &mut findings,
-                        &mut findings_omitted,
-                        &mut finding_count,
-                        request.offsets[0],
-                        finding,
-                    );
+                    finding_page.push(finding)?;
                 }
             }
             remember_cwd(&mut files, invocation, event);
@@ -2896,26 +2925,14 @@ fn scan_archive_query(
             inherit_open_fds(&mut files, invocation, event, &cookies);
             if let Some(row) = file_event_row(&files, invocation, event, OPEN_NAMES) {
                 if request.file_visibility.keeps(&row) && open_query.keep_table(&row[0].values) {
-                    keep_page(
-                        &mut opened,
-                        &mut opened_omitted,
-                        &mut open_count,
-                        request.offsets[1],
-                        row,
-                    );
+                    open_page.push(row)?;
                 }
             }
             if let Some(row) =
                 file_index.observe(&files, invocation, event, Some(&recording.directory))
             {
                 if request.file_visibility.keeps(&row) && read_query.keep_table(&row[0].values) {
-                    keep_page(
-                        &mut read,
-                        &mut read_omitted,
-                        &mut read_count,
-                        request.offsets[5],
-                        row,
-                    );
+                    read_page.push(row)?;
                 }
             }
         }
@@ -2940,14 +2957,12 @@ fn scan_archive_query(
         })
         .collect();
     for change in &file_changes {
-        keep_page(
-            &mut changed,
-            &mut changed_omitted,
-            &mut change_count,
-            request.offsets[2],
-            change.row(clock_anchor),
-        );
+        change_page.push(change.row(clock_anchor))?;
     }
+    let (findings, findings_omitted, _) = finding_page.finish()?;
+    let (opened, opened_omitted, _) = open_page.finish()?;
+    let (read, read_omitted, _) = read_page.finish()?;
+    let (changed, changed_omitted, _) = change_page.finish()?;
     let complete = complete && files_complete;
     if complete && !cancel.load(Ordering::Relaxed) {
         if let Some(writer) = &mut journal {
@@ -3383,7 +3398,8 @@ fn scan_pcap_query(
         network_warning: None,
     };
     let mut inventory = network::Inventory::default();
-    let (mut http_count, mut dns_count) = (0, 0);
+    let mut http_page = sorting::Page::new(request, 3, cancel);
+    let mut dns_page = sorting::Page::new(request, 4, cancel);
     let http_query = query::compile_table(&request.filters[3], HTTP_FIELDS);
     let dns_query = query::compile_table(&request.filters[4], DNS_FIELDS);
     let mut line = String::new();
@@ -3519,13 +3535,7 @@ fn scan_pcap_query(
                 row.remove(9);
                 row.remove(6);
                 if http_query.keep_table(&row[0].values) {
-                    keep_page(
-                        &mut index.http,
-                        &mut index.http_omitted,
-                        &mut http_count,
-                        request.offsets[3],
-                        row,
-                    );
+                    http_page.push(row)?;
                 }
             }
         }
@@ -3609,45 +3619,37 @@ fn scan_pcap_query(
                     row.remove(at);
                 }
                 if dns_query.keep_table(&row[0].values) {
-                    keep_page(
-                        &mut index.dns,
-                        &mut index.dns_omitted,
-                        &mut dns_count,
-                        request.offsets[4],
-                        row,
-                    );
+                    dns_page.push(row)?;
                 }
             }
         }
     }
     let (ips, hosts) = inventory.rows();
+    let (http, http_omitted, http_count) = http_page.finish()?;
+    let (dns, dns_omitted, dns_count) = dns_page.finish()?;
+    index.http = http;
+    index.http_omitted = http_omitted;
+    index.dns = dns;
+    index.dns_omitted = dns_omitted;
     for (slot, rows, fields) in [
         (6, ips, network::IP_FIELDS),
         (7, hosts, network::HOST_FIELDS),
     ] {
         let query = query::compile_table(&request.filters[slot], fields);
-        let mut count = 0;
+        let mut page = sorting::Page::new(request, slot, cancel);
         for row in rows
             .into_iter()
             .filter(|row| query.keep_table(&row[0].values))
         {
-            if slot == 6 {
-                keep_page(
-                    &mut index.ips,
-                    &mut index.ips_omitted,
-                    &mut count,
-                    request.offsets[slot],
-                    row,
-                );
-            } else {
-                keep_page(
-                    &mut index.hosts,
-                    &mut index.hosts_omitted,
-                    &mut count,
-                    request.offsets[slot],
-                    row,
-                );
-            }
+            page.push(row)?;
+        }
+        let (rows, omitted, _) = page.finish()?;
+        if slot == 6 {
+            index.ips = rows;
+            index.ips_omitted = omitted;
+        } else {
+            index.hosts = rows;
+            index.hosts_omitted = omitted;
         }
     }
     if inventory.omitted > 0 {

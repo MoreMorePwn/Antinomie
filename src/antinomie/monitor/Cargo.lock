@@ -210,6 +210,7 @@ dependencies = [
  "egui-phosphor",
  "egui_dock",
  "egui_extras",
+ "rusqlite",
  "serde",
  "serde_json",
  "vt100",
