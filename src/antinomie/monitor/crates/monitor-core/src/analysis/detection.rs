@@ -251,6 +251,18 @@ pub struct Report {
     /// Evidence generation this report was admitted against. Empty on older reports.
     #[serde(default)]
     pub evidence_key: String,
+    /// Sigma rules whose logsource category is accepted by this adapter.
+    #[serde(default)]
+    pub category_accepted: u64,
+    /// Sigma rules whose logsource category is outside the captured set.
+    #[serde(default)]
+    pub category_rejected: u64,
+    /// Sigma rules rejected by the backend or the captured field schema.
+    #[serde(default)]
+    pub backend_rejected: u64,
+    /// Events skipped because a field this rule uses was absent in this run.
+    #[serde(default)]
+    pub missing_field_events: u64,
 }
 
 impl Report {
@@ -270,6 +282,10 @@ impl Report {
             source_digest: None,
             selection: String::new(),
             evidence_key: String::new(),
+            category_accepted: 0,
+            category_rejected: 0,
+            backend_rejected: 0,
+            missing_field_events: 0,
         }
     }
     pub fn unavailable(engine: Engine, identity: Identity, reason: impl Into<String>) -> Self {
@@ -283,7 +299,9 @@ impl Report {
 mod ids;
 mod runner;
 mod yara;
-pub use runner::{Request, load, read_evidence, result_directory, run, worker_main_if_requested};
+pub use runner::{
+    FrozenSelection, Request, load, read_evidence, result_directory, run, worker_main_if_requested,
+};
 
 /// Parse rule-supplied ATT&CK identifiers without inventing technique mappings.
 pub fn mitre_references(text: &str) -> Vec<String> {

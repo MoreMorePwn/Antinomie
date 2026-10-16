@@ -12,6 +12,7 @@ Usage:
     --sigma DIR --sigma-commit COMMIT
 """
 import argparse
+import gzip
 import hashlib
 import io
 import json
@@ -43,7 +44,8 @@ def sha256(path):
 
 def write_tar(directory, destination):
     files = sorted(path for path in directory.rglob("*") if path.is_file() and not path.is_symlink())
-    with tarfile.open(destination, "w:gz") as archive:
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w", format=tarfile.GNU_FORMAT) as archive:
         for path in files:
             data = path.read_bytes()
             info = tarfile.TarInfo(str(path.relative_to(directory)).replace("\\", "/"))
@@ -54,6 +56,9 @@ def write_tar(directory, destination):
             info.mode = 0o644
             info.type = tarfile.REGTYPE
             archive.addfile(info, io.BytesIO(data))
+    with destination.open("wb") as output:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=output, mtime=0) as compressed:
+            compressed.write(raw.getvalue())
 
 
 def yara_counts(text):

@@ -13,6 +13,17 @@ use std::{
     time::Duration,
 };
 
+/// Selection captured when a scan is admitted. The worker reads this copy and
+/// does not take another snapshot.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct FrozenSelection {
+    pub digest: String,
+    pub directory: Option<PathBuf>,
+    pub enabled_rules: u64,
+    pub excluded_rules: u64,
+    pub warnings: Vec<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Request {
     pub engine: Engine,
@@ -20,6 +31,9 @@ pub struct Request {
     pub directory: PathBuf,
     pub settings: Settings,
     pub source_digest: Option<String>,
+    /// Set at admission. `None` means the worker may snapshot itself.
+    #[serde(default)]
+    pub frozen: Option<FrozenSelection>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -218,7 +232,18 @@ fn managed_sources(
         Engine::Ids => "ids",
         Engine::Sigma => "sigma",
     };
-    let snap = crate::ruleset::snapshot(&host_path(&request.settings.rules_root), engine)?;
+    let snap = if let Some(frozen) = &request.frozen {
+        frozen.clone()
+    } else {
+        let live = crate::ruleset::snapshot(&host_path(&request.settings.rules_root), engine)?;
+        FrozenSelection {
+            digest: live.digest,
+            directory: live.directory,
+            enabled_rules: live.enabled_rules,
+            excluded_rules: live.excluded_rules,
+            warnings: live.warnings,
+        }
+    };
     staged.selection = snap.digest;
     staged.warnings.extend(snap.warnings);
     staged.no_rules = snap.enabled_rules == 0 && snap.excluded_rules == 0;
@@ -249,7 +274,10 @@ fn managed_sources(
             .and_then(|extension| extension.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        if extensions.contains(&extension.as_str()) || path.ends_with("classification.config") {
+        if extensions.contains(&extension.as_str())
+            || path.ends_with("classification.config")
+            || path.ends_with("reference.config")
+        {
             let data = fs::read(&path).map_err(|error| error.to_string())?;
             files.push(RuleFile {
                 name: path
@@ -578,7 +606,18 @@ fn run_program(
                 .join("manifest.json");
             if source.is_file() {
                 let _ = crate::storage::private_dir(&directory);
-                let _ = fs::copy(&source, directory.join("selection-manifest.json"));
+                if let Ok(data) = fs::read(&source)
+                    && let Ok(mut manifest) = serde_json::from_slice::<serde_json::Value>(&data)
+                {
+                    manifest["evidence_key"] =
+                        serde_json::Value::String(report.evidence_key.clone());
+                    manifest["report_engine"] =
+                        serde_json::json!(format!("{:?}", request.engine).to_ascii_lowercase());
+                    let _ = crate::storage::atomic_json(
+                        &directory.join("selection-manifest.json"),
+                        &manifest,
+                    );
+                }
             }
         }
         if let Err(error) = crate::storage::private_dir(&directory)
@@ -881,6 +920,7 @@ mod tests {
                     ..Default::default()
                 },
                 source_digest: None,
+                frozen: None,
             };
             let report =
                 run_program(request.clone(), &Arc::new(AtomicBool::new(false)), &program).unwrap();
@@ -941,6 +981,7 @@ mod tests {
             directory: directory.clone(),
             settings: Settings::default(),
             source_digest: None,
+            frozen: None,
         };
         let evidence = Evidence::Bytes {
             path: path.clone(),
@@ -977,6 +1018,68 @@ mod tests {
                 .unwrap_err()
                 .contains("belong")
         );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn frozen_selection_is_copied_without_reading_the_live_registry() {
+        let directory =
+            std::env::temp_dir().join(format!("ant-frozen-{}", crate::storage::unique_id()));
+        let frozen_dir = directory.join("frozen");
+        crate::storage::private_dir(&frozen_dir).unwrap();
+        fs::write(
+            frozen_dir.join("kept.yar"),
+            "rule Kept { condition: true }\n",
+        )
+        .unwrap();
+        let work = directory.join("work");
+        crate::storage::private_dir(&work).unwrap();
+        let request = Request {
+            engine: Engine::Yara,
+            identity: Identity {
+                vm_id: "v".into(),
+                boot_id: "b".into(),
+                run_id: "r".into(),
+                root_cookie: 1,
+            },
+            directory: directory.clone(),
+            settings: Settings {
+                rules_root: directory.join("missing-registry").display().to_string(),
+                ..Default::default()
+            },
+            source_digest: None,
+            frozen: Some(FrozenSelection {
+                digest: "frozen-digest".into(),
+                directory: Some(frozen_dir),
+                enabled_rules: 1,
+                excluded_rules: 0,
+                warnings: vec!["kept".into()],
+            }),
+        };
+        let mut staged = Staged {
+            request: request.clone(),
+            sigma_sources: vec![],
+            yara_sources: vec![],
+            ids_sources: vec![],
+            captures: vec![],
+            journal: None,
+            warnings: vec![],
+            selection: String::new(),
+            no_rules: false,
+            include_dir: None,
+        };
+        let files = managed_sources(
+            &request,
+            &work,
+            &["yar", "yara"],
+            &AtomicBool::new(false),
+            &mut staged,
+        )
+        .unwrap();
+        assert_eq!(staged.selection, "frozen-digest");
+        assert_eq!(files.len(), 1);
+        assert!(work.join("selection/kept.yar").is_file());
+        assert!(staged.warnings.iter().any(|warning| warning == "kept"));
         fs::remove_dir_all(directory).unwrap();
     }
 }

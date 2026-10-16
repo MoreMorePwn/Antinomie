@@ -25,6 +25,12 @@ const MAX_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_EXPANDED_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_MEMBERS: usize = 8_000;
+
+#[cfg(test)]
+static INJECT_NOSPC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(test)]
+static INJECT_REGISTRY_IO: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 const SIGMA_CATEGORIES: [&str; 9] = [
     "process_creation",
     "file_event",
@@ -70,6 +76,9 @@ pub struct Registry {
     pub groups: Vec<CustomGroup>,
     /// Stable key (`pack:<id>` or `group:<id>`) to disabled rule ids.
     pub disabled: BTreeMap<String, BTreeSet<String>>,
+    /// Increases on every successful registry write.
+    #[serde(default)]
+    pub generation: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -282,9 +291,18 @@ pub fn load_registry(data_dir: &Path) -> Result<Registry, String> {
 }
 
 fn save_registry(data_dir: &Path, registry: &Registry) -> Result<(), String> {
+    #[cfg(test)]
+    if INJECT_REGISTRY_IO.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        return Err("No space left on device".into());
+    }
     let root = rules_root(data_dir);
     crate::storage::private_dir(&root).map_err(|error| error.to_string())?;
-    crate::storage::atomic_json(&root.join("registry.json"), registry)
+    let mut stored = registry.clone();
+    let previous = load_registry(data_dir)
+        .map(|current| current.generation)
+        .unwrap_or(0);
+    stored.generation = previous.max(stored.generation).saturating_add(1);
+    crate::storage::atomic_json(&root.join("registry.json"), &stored)
 }
 
 pub fn load_catalog(data_dir: &Path) -> Result<Option<Catalog>, String> {
@@ -624,6 +642,179 @@ pub fn import_group(
     result
 }
 
+/// Replace the rules of an existing group with a new managed revision.
+/// The previous revision directory stays on disk.
+pub fn replace_group_revision(data_dir: &Path, id: &str, source: &Path) -> Result<u64, String> {
+    let _lock = registry_lock();
+    let mut registry = load_registry(data_dir)?;
+    let group = registry
+        .groups
+        .iter()
+        .find(|group| group.id == id && !group.deleted)
+        .ok_or_else(|| format!("group {id} is not installed"))?
+        .clone();
+    let revision = group.revision.saturating_add(1);
+    let dest = rules_root(data_dir)
+        .join("custom")
+        .join(&group.id)
+        .join(revision.to_string());
+    if dest.exists() {
+        return Err("group revision already exists".into());
+    }
+    let staging = rules_root(data_dir)
+        .join("staging")
+        .join(crate::storage::unique_id());
+    let result = (|| {
+        crate::storage::private_dir(&staging).map_err(|error| error.to_string())?;
+        copy_import(source, &staging)?;
+        publish_group_revision(
+            data_dir,
+            &mut registry,
+            &group.id,
+            &group.engine,
+            revision,
+            &staging,
+            &dest,
+        )
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    result
+}
+
+/// Add files or remove rule ids by publishing a new revision.
+/// The previous revision directory is not modified.
+pub fn revise_group(
+    data_dir: &Path,
+    id: &str,
+    add: Option<&Path>,
+    remove_ids: &[String],
+) -> Result<u64, String> {
+    let _lock = registry_lock();
+    let mut registry = load_registry(data_dir)?;
+    let group = registry
+        .groups
+        .iter()
+        .find(|group| group.id == id && !group.deleted)
+        .ok_or_else(|| format!("group {id} is not installed"))?
+        .clone();
+    let current = rules_root(data_dir)
+        .join("custom")
+        .join(&group.id)
+        .join(group.revision.to_string());
+    if !current.is_dir() {
+        return Err("the current group revision is missing".into());
+    }
+    let revision = group.revision.saturating_add(1);
+    let dest = rules_root(data_dir)
+        .join("custom")
+        .join(&group.id)
+        .join(revision.to_string());
+    if dest.exists() {
+        return Err("group revision already exists".into());
+    }
+    let staging = rules_root(data_dir)
+        .join("staging")
+        .join(crate::storage::unique_id());
+    let result = (|| {
+        copy_tree_regular(&current, &staging)?;
+        if let Some(source) = add {
+            copy_import(source, &staging)?;
+        }
+        if !remove_ids.is_empty() {
+            remove_rules(&staging, &group.engine, remove_ids)?;
+        }
+        publish_group_revision(
+            data_dir,
+            &mut registry,
+            &group.id,
+            &group.engine,
+            revision,
+            &staging,
+            &dest,
+        )
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    result
+}
+
+fn publish_group_revision(
+    data_dir: &Path,
+    registry: &mut Registry,
+    id: &str,
+    engine: &str,
+    revision: u64,
+    staging: &Path,
+    dest: &Path,
+) -> Result<u64, String> {
+    let _ = fs::remove_file(staging.join("index.json"));
+    index_tree(staging, engine)?;
+    if engine == "yara" {
+        let mut sources = Vec::new();
+        collect_files(staging, &mut sources, 0)?;
+        if sources.iter().any(|path| {
+            path.extension()
+                .is_some_and(|ext| ext == "yar" || ext == "yara")
+        }) {
+            compile_yara_tree(staging)?;
+        }
+    }
+    if let Some(parent) = dest.parent() {
+        crate::storage::private_dir(parent).map_err(|error| error.to_string())?;
+    }
+    fs::rename(staging, dest).map_err(|error| error.to_string())?;
+    let group = registry
+        .groups
+        .iter_mut()
+        .find(|group| group.id == id)
+        .ok_or_else(|| format!("group {id} is not installed"))?;
+    group.revision = revision;
+    group.deleted = false;
+    save_registry(data_dir, registry)?;
+    Ok(revision)
+}
+
+fn remove_rules(root: &Path, engine: &str, ids: &[String]) -> Result<(), String> {
+    let drop_ids: BTreeSet<_> = ids.iter().cloned().collect();
+    let rules = read_index(root).unwrap_or_default();
+    let mut files: BTreeMap<String, Vec<&IndexedRule>> = BTreeMap::new();
+    for rule in &rules {
+        files.entry(rule.file.clone()).or_default().push(rule);
+    }
+    for (file, group) in files {
+        let removing: Vec<_> = group
+            .iter()
+            .filter(|rule| drop_ids.contains(&rule.id))
+            .copied()
+            .collect();
+        if removing.is_empty() {
+            continue;
+        }
+        let path = root.join(&file);
+        if removing.len() == group.len() {
+            fs::remove_file(&path).map_err(|error| error.to_string())?;
+            continue;
+        }
+        let text = fs::read_to_string(&path).map_err(|error| error.to_string())?;
+        let keep: Vec<&str> = group
+            .iter()
+            .filter(|rule| !drop_ids.contains(&rule.id))
+            .map(|rule| {
+                if engine == "yara" {
+                    rule.name.as_str()
+                } else {
+                    rule.id.as_str()
+                }
+            })
+            .collect();
+        fs::write(&path, filter_rules(engine, &text, &keep)).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 pub fn delete_group(data_dir: &Path, id: &str, remove_files: bool) -> Result<(), String> {
     let _lock = registry_lock();
     let mut registry = load_registry(data_dir)?;
@@ -671,7 +862,11 @@ pub fn snapshot(data_dir: &Path, engine: &str) -> Result<Snapshot, String> {
         .join("profiles")
         .join(engine)
         .join(&digest);
-    if directory.join(".complete").is_file() {
+    if directory.join(".complete").is_file()
+        && fs::read_to_string(directory.join("manifest.json"))
+            .unwrap_or_default()
+            .contains("\"enabled_ids\"")
+    {
         let note = fs::read_to_string(directory.join("warnings.txt")).unwrap_or_default();
         let counts = fs::read_to_string(directory.join("counts.txt")).unwrap_or_default();
         let mut parts = counts.split_whitespace();
@@ -699,6 +894,8 @@ pub fn snapshot(data_dir: &Path, engine: &str) -> Result<Snapshot, String> {
             warnings: Vec::new(),
             enabled: 0,
             excluded: 0,
+            enabled_ids: Vec::new(),
+            excluded_ids: Vec::new(),
         };
         for pack in registry
             .packs
@@ -756,12 +953,28 @@ pub fn snapshot(data_dir: &Path, engine: &str) -> Result<Snapshot, String> {
             "schema": 1,
             "engine": engine,
             "engine_identity": engine_identity(engine),
+            "engine_version": engine_identity(engine),
             "digest": digest,
             "enabled_rules": counts.enabled,
             "excluded_rules": counts.excluded,
+            "enabled_ids": counts.enabled_ids,
+            "excluded_ids": counts.excluded_ids,
+            "exclusion_reasons": counts.warnings,
             "warnings": counts.warnings,
-            "packs": registry.packs.iter().filter(|pack| pack.engine == engine).collect::<Vec<_>>(),
-            "groups": registry.groups.iter().filter(|group| group.engine == engine).collect::<Vec<_>>(),
+            "support_hashes": support_hashes(&staging),
+            "sigma_counts": sigma_selection_counts(engine, &counts.warnings, counts.enabled),
+            "packs": registry.packs.iter().filter(|pack| pack.engine == engine).map(|pack| serde_json::json!({
+                "id": pack.id,
+                "version": pack.version,
+                "upstream_revision": pack.upstream_revision,
+                "archive_sha256": pack.sha256,
+                "enabled": pack.enabled,
+            })).collect::<Vec<_>>(),
+            "groups": registry.groups.iter().filter(|group| group.engine == engine).map(|group| serde_json::json!({
+                "id": group.id,
+                "revision": group.revision,
+                "enabled": group.enabled && !group.deleted,
+            })).collect::<Vec<_>>(),
             "disabled": registry.disabled,
         });
         crate::storage::atomic_json(&staging.join("manifest.json"), &manifest)?;
@@ -902,6 +1115,57 @@ pub struct PackDiff {
     pub conflicts: Vec<String>,
 }
 
+fn support_hashes(root: &Path) -> Vec<serde_json::Value> {
+    let mut files = Vec::new();
+    let _ = collect_files(root, &mut files, 0);
+    let mut hashes = Vec::new();
+    for path in files {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        let support = name == "classification.config"
+            || name == "reference.config"
+            || name.ends_with(".txt")
+            || name.ends_with(".md");
+        if !support {
+            continue;
+        }
+        if let Ok(digest) = crate::storage::sha256_file_hex(&path) {
+            hashes.push(serde_json::json!({
+                "path": path.strip_prefix(root).unwrap_or(&path).to_string_lossy().replace('\\', "/"),
+                "sha256": digest,
+            }));
+        }
+    }
+    hashes
+}
+
+fn sigma_selection_counts(
+    engine: &str,
+    warnings: &[String],
+    accepted: u64,
+) -> Option<serde_json::Value> {
+    if engine != "sigma" {
+        return None;
+    }
+    let category_rejected = warnings
+        .iter()
+        .filter(|warning| warning.contains("not a captured"))
+        .count();
+    let backend_rejected = warnings
+        .iter()
+        .filter(|warning| {
+            warning.contains("outside the captured schema") || warning.contains("correlation")
+        })
+        .count();
+    Some(serde_json::json!({
+        "category_accepted": accepted,
+        "category_rejected": category_rejected,
+        "backend_rejected": backend_rejected,
+    }))
+}
+
 fn digest_of(registry: &Registry, engine: &str) -> String {
     let mut material = String::new();
     for pack in &registry.packs {
@@ -950,6 +1214,8 @@ struct SelectionCount {
     warnings: Vec<String>,
     enabled: u64,
     excluded: u64,
+    enabled_ids: Vec<String>,
+    excluded_ids: Vec<String>,
 }
 
 fn copy_selected(
@@ -967,6 +1233,7 @@ fn copy_selected(
     }
     copy_support(root, dest)?;
     let rules = read_index(root)?;
+    let blocked = dependency_closure(&rules, disabled);
     let mut by_file: BTreeMap<String, Vec<&IndexedRule>> = BTreeMap::new();
     for rule in &rules {
         by_file.entry(rule.file.clone()).or_default().push(rule);
@@ -976,6 +1243,9 @@ fn copy_selected(
         let text = fs::read_to_string(&source_path).unwrap_or_default();
         if text.trim().is_empty() {
             counts.excluded += group.len() as u64;
+            counts
+                .excluded_ids
+                .extend(group.iter().map(|rule| rule.id.clone()));
             counts.warnings.push(format!(
                 "{file}: source is empty; indexed rules were not emitted"
             ));
@@ -983,6 +1253,9 @@ fn copy_selected(
         }
         if engine == "yara" && !includes_are_safe(&text) {
             counts.excluded += group.len() as u64;
+            counts
+                .excluded_ids
+                .extend(group.iter().map(|rule| rule.id.clone()));
             counts.warnings.push(format!(
                 "{file}: an include path escapes the pack root or is not a relative file"
             ));
@@ -992,6 +1265,7 @@ fn copy_selected(
         for rule in group {
             if !rule.compatible {
                 counts.excluded += 1;
+                counts.excluded_ids.push(rule.id.clone());
                 counts
                     .warnings
                     .push(format!("{}: {}", rule.id, rule.reason));
@@ -999,6 +1273,7 @@ fn copy_selected(
             }
             if disabled.contains(&rule.id) {
                 counts.excluded += 1;
+                counts.excluded_ids.push(rule.id.clone());
                 if rule.helper {
                     counts
                         .warnings
@@ -1009,11 +1284,12 @@ fn copy_selected(
             let blocked: Vec<_> = rule
                 .depends_on
                 .iter()
-                .filter(|dependency| disabled.contains(*dependency))
+                .filter(|dependency| blocked.contains(*dependency))
                 .cloned()
                 .collect();
             if !blocked.is_empty() {
                 counts.excluded += 1;
+                counts.excluded_ids.push(rule.id.clone());
                 counts.warnings.push(format!(
                     "{}: depends on disabled rule {}",
                     rule.id,
@@ -1023,6 +1299,7 @@ fn copy_selected(
             }
             if !counts.seen.insert(rule.id.clone()) {
                 counts.excluded += 1;
+                counts.excluded_ids.push(rule.id.clone());
                 counts.warnings.push(format!(
                     "{}: duplicate rule id; the later copy was not evaluated",
                     rule.id
@@ -1041,17 +1318,33 @@ fn copy_selected(
             filter_rules(
                 engine,
                 &text,
-                &kept.iter().map(|rule| rule.id.as_str()).collect::<Vec<_>>(),
+                &kept
+                    .iter()
+                    .map(|rule| {
+                        if engine == "yara" {
+                            rule.name.as_str()
+                        } else {
+                            rule.id.as_str()
+                        }
+                    })
+                    .collect::<Vec<_>>(),
             )
         };
         let emitted = emitted_ids(engine, &body);
         let mut wrote = false;
         for rule in &kept {
-            if emitted.contains(&rule.id) {
+            let declared = if engine == "yara" {
+                rule.name.as_str()
+            } else {
+                rule.id.as_str()
+            };
+            if emitted.contains(declared) {
                 counts.enabled += 1;
+                counts.enabled_ids.push(rule.id.clone());
                 wrote = true;
             } else {
                 counts.excluded += 1;
+                counts.excluded_ids.push(rule.id.clone());
                 counts.warnings.push(format!(
                     "{}: selected but absent from the emitted {file}",
                     rule.id
@@ -1068,6 +1361,30 @@ fn copy_selected(
         fs::write(&target, body).map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+fn dependency_closure(rules: &[IndexedRule], disabled: &BTreeSet<String>) -> BTreeSet<String> {
+    let mut blocked = disabled.clone();
+    loop {
+        let mut grew = false;
+        for rule in rules {
+            if blocked.contains(&rule.id) {
+                continue;
+            }
+            if rule
+                .depends_on
+                .iter()
+                .any(|dependency| blocked.contains(dependency))
+            {
+                blocked.insert(rule.id.clone());
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    blocked
 }
 
 fn emitted_ids(engine: &str, text: &str) -> BTreeSet<String> {
@@ -1275,6 +1592,14 @@ fn unpack_archive(bytes: &[u8], dest: &Path) -> Result<(), String> {
         if let Some(parent) = target.parent() {
             crate::storage::private_dir(parent).map_err(|error| error.to_string())?;
         }
+        #[cfg(test)]
+        if INJECT_NOSPC.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            return Err(format!(
+                "write {}: {}",
+                rel.display(),
+                std::io::Error::from_raw_os_error(28)
+            ));
+        }
         let mut file = fs::File::create(&target)
             .map_err(|error| format!("write {}: {error}", rel.display()))?;
         std::io::copy(&mut entry, &mut file)
@@ -1444,15 +1769,44 @@ fn index_tree(root: &Path, engine: &str) -> Result<(), String> {
         }
         for mut rule in parsed {
             rule.file = rel.clone();
-            if !seen.insert(rule.id.clone()) {
+            if engine != "yara" && !seen.insert(rule.id.clone()) {
                 rule.compatible = false;
                 rule.reason = "duplicate rule id in this pack".into();
             }
             rules.push(rule);
         }
     }
+    if engine == "yara" {
+        qualify_yara_namespaces(&mut rules);
+    }
     let index = IndexFile { rules };
     crate::storage::atomic_json(&root.join("index.json"), &index)
+}
+
+fn qualify_yara_namespaces(rules: &mut [IndexedRule]) {
+    let mut files_of: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for rule in rules.iter().filter(|rule| rule.compatible) {
+        files_of
+            .entry(rule.name.clone())
+            .or_default()
+            .insert(rule.file.clone());
+    }
+    for rule in rules.iter_mut() {
+        let shared = files_of
+            .get(&rule.name)
+            .is_some_and(|files| files.len() > 1);
+        if shared {
+            rule.id = format!("{}/{}", rule.file, rule.name);
+        }
+        for dependency in &mut rule.depends_on {
+            if files_of
+                .get(dependency)
+                .is_some_and(|files| files.len() > 1)
+            {
+                *dependency = format!("{}/{dependency}", rule.file);
+            }
+        }
+    }
 }
 
 fn collect_files(dir: &Path, out: &mut Vec<PathBuf>, depth: u32) -> Result<(), String> {
@@ -1503,10 +1857,11 @@ fn compile_yara_tree(root: &Path) -> Result<(), String> {
             continue;
         }
         let name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("rules.yar")
-            .to_owned();
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        compiler.new_namespace(&name);
         let code = yara_x::SourceCode::from(text.as_str()).with_origin(&name);
         compiler
             .add_source(code)
@@ -1548,9 +1903,11 @@ fn yara_blocks(text: &str) -> Vec<(String, String, bool)> {
     let mut blocks = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
-        if let Some((name, helper, brace)) = yara_header(text, i)
-            && let Some(end) = yara_rule_end(bytes, brace)
-        {
+        if let Some(next) = skip_yara_gap(bytes, i) {
+            i = next;
+            continue;
+        }
+        if let Some((name, helper, end)) = yara_rule_at(text, i) {
             blocks.push((name, text[i..end].to_owned(), helper));
             i = end;
             continue;
@@ -1560,104 +1917,240 @@ fn yara_blocks(text: &str) -> Vec<(String, String, bool)> {
     blocks
 }
 
-fn yara_header(text: &str, index: usize) -> Option<(String, bool, usize)> {
-    let bytes = text.as_bytes();
-    if index > 0 {
-        let prev = bytes[index - 1];
-        if prev.is_ascii_alphanumeric() || prev == b'_' {
-            return None;
-        }
+/// Comments and quoted text are not code, so `rule` inside them is not a declaration.
+fn skip_yara_gap(bytes: &[u8], index: usize) -> Option<usize> {
+    let byte = *bytes.get(index)?;
+    if byte == b'/' && bytes.get(index + 1) == Some(&b'/') {
+        return Some(skip_line(bytes, index));
     }
-    let rest = &text[index..];
-    let helper = rest.starts_with("private ");
-    let mut rest = if helper {
-        &rest["private ".len()..]
-    } else {
-        rest
-    };
-    if rest.starts_with("global ") {
-        rest = &rest["global ".len()..];
+    if byte == b'/' && bytes.get(index + 1) == Some(&b'*') {
+        return Some(skip_block_comment(bytes, index));
     }
-    let rest = rest.strip_prefix("rule ")?;
-    let name: String = rest
-        .chars()
-        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-        .collect();
-    if name.is_empty() {
-        return None;
+    if byte == b'"' || byte == b'\'' {
+        return Some(skip_quoted(bytes, index));
     }
-    let name_at = text.len() - rest.len();
-    let brace = text[name_at + name.len()..].find('{')? + name_at + name.len();
-    Some((name, helper, brace))
+    None
 }
 
-/// End index after the rule's closing brace. Strings and comments do not
-/// affect the brace depth, so an indented `}` still closes the rule.
+fn yara_rule_at(text: &str, index: usize) -> Option<(String, bool, usize)> {
+    let bytes = text.as_bytes();
+    if index > 0 && is_yara_ident(bytes[index - 1]) {
+        return None;
+    }
+    let mut cursor = index;
+    let mut helper = false;
+    for _ in 0..2 {
+        if starts_with_word(bytes, cursor, b"private") {
+            helper = true;
+            cursor += "private".len();
+            cursor = skip_horizontal(bytes, cursor);
+        } else if starts_with_word(bytes, cursor, b"global") {
+            cursor += "global".len();
+            cursor = skip_horizontal(bytes, cursor);
+        }
+    }
+    if !starts_with_word(bytes, cursor, b"rule") {
+        return None;
+    }
+    cursor += "rule".len();
+    cursor = skip_horizontal(bytes, cursor);
+    let name_at = cursor;
+    while cursor < bytes.len() && is_yara_ident(bytes[cursor]) {
+        cursor += 1;
+    }
+    if name_at == cursor {
+        return None;
+    }
+    let name = text.get(name_at..cursor)?.to_owned();
+    let brace = find_rule_brace(bytes, cursor)?;
+    let end = yara_rule_end(bytes, brace)?;
+    Some((name, helper, end))
+}
+
+fn starts_with_word(bytes: &[u8], index: usize, word: &[u8]) -> bool {
+    let Some(rest) = bytes.get(index..) else {
+        return false;
+    };
+    rest.starts_with(word)
+        && rest
+            .get(word.len())
+            .is_none_or(|next| !is_yara_ident(*next))
+}
+
+fn is_yara_ident(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn skip_horizontal(bytes: &[u8], mut index: usize) -> usize {
+    while matches!(bytes.get(index), Some(b' ' | b'\t')) {
+        index += 1;
+    }
+    index
+}
+
+fn find_rule_brace(bytes: &[u8], mut index: usize) -> Option<usize> {
+    while index < bytes.len() {
+        if let Some(next) = skip_yara_gap(bytes, index) {
+            index = next;
+            continue;
+        }
+        if bytes[index] == b'{' {
+            return Some(index);
+        }
+        index += 1;
+    }
+    None
+}
+
+/// End index after the rule's closing brace. Comments, strings, regex literals
+/// and hex strings do not change the brace depth.
 fn yara_rule_end(bytes: &[u8], brace: usize) -> Option<usize> {
     let mut i = brace;
     let mut depth = 0i32;
-    let mut seen = false;
+    let mut last_code = 0u8;
     while i < bytes.len() {
+        if let Some(next) = skip_yara_gap(bytes, i) {
+            i = next;
+            continue;
+        }
         let byte = bytes[i];
-        if byte == b'/' && bytes.get(i + 1) == Some(&b'/') {
-            while i < bytes.len() && bytes[i] != b'\n' {
-                i += 1;
-            }
+        if byte == b'/' {
+            i = skip_regex(bytes, i);
+            last_code = b'/';
             continue;
         }
-        if byte == b'/' && bytes.get(i + 1) == Some(&b'*') {
-            i += 2;
-            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                i += 1;
-            }
-            i = (i + 2).min(bytes.len());
-            continue;
-        }
-        if byte == b'"' || byte == b'\'' {
-            let quote = byte;
-            i += 1;
-            while i < bytes.len() && bytes[i] != quote {
-                if bytes[i] == b'\\' {
-                    i += 1;
-                }
-                i += 1;
-            }
-            i = (i + 1).min(bytes.len());
+        if byte == b'{' && last_code == b'=' {
+            i = skip_hex_string(bytes, i)?;
+            last_code = b'}';
             continue;
         }
         if byte == b'{' {
             depth += 1;
-            seen = true;
         } else if byte == b'}' {
             depth -= 1;
-            if seen && depth == 0 {
+            if depth == 0 {
                 return Some(i + 1);
             }
+        }
+        if !byte.is_ascii_whitespace() {
+            last_code = byte;
         }
         i += 1;
     }
     None
 }
 
+fn skip_line(bytes: &[u8], mut index: usize) -> usize {
+    while index < bytes.len() && bytes[index] != b'\n' {
+        index += 1;
+    }
+    index
+}
+
+fn skip_block_comment(bytes: &[u8], mut index: usize) -> usize {
+    index += 2;
+    while index + 1 < bytes.len() && !(bytes[index] == b'*' && bytes[index + 1] == b'/') {
+        index += 1;
+    }
+    (index + 2).min(bytes.len())
+}
+
+fn skip_quoted(bytes: &[u8], mut index: usize) -> usize {
+    let quote = bytes[index];
+    index += 1;
+    while index < bytes.len() && bytes[index] != quote {
+        if bytes[index] == b'\\' {
+            index += 1;
+        }
+        index += 1;
+    }
+    (index + 1).min(bytes.len())
+}
+
+fn skip_regex(bytes: &[u8], mut index: usize) -> usize {
+    index += 1;
+    let mut class = false;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b'\\' {
+            index += 2;
+            continue;
+        }
+        if byte == b'[' && !class {
+            class = true;
+        } else if byte == b']' && class {
+            class = false;
+        } else if byte == b'/' && !class {
+            return index + 1;
+        } else if byte == b'\n' {
+            return index;
+        }
+        index += 1;
+    }
+    index
+}
+
+fn skip_hex_string(bytes: &[u8], mut index: usize) -> Option<usize> {
+    let mut depth = 0i32;
+    while index < bytes.len() {
+        if bytes[index] == b'{' {
+            depth += 1;
+        } else if bytes[index] == b'}' {
+            depth -= 1;
+            if depth == 0 {
+                return Some(index + 1);
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
 fn yara_dependencies(body: &str) -> Vec<String> {
+    let bytes = body.as_bytes();
     let Some(pos) = body.find("condition:") else {
         return Vec::new();
     };
-    let mut condition = body[pos + "condition:".len()..].to_owned();
-    if let Some(end) = condition.rfind('}') {
-        condition.truncate(end);
-    }
+    let mut i = pos + "condition:".len();
+    let mut depth = 0i32;
     let mut names = Vec::new();
-    let mut current = String::new();
-    for byte in condition.bytes() {
-        if byte.is_ascii_alphanumeric() || byte == b'_' {
-            current.push(byte as char);
+    while i < bytes.len() {
+        if let Some(next) = skip_yara_gap(bytes, i) {
+            i = next;
             continue;
         }
-        push_dependency(&mut names, &current);
-        current.clear();
+        let byte = bytes[i];
+        if byte == b'{' {
+            depth += 1;
+            i += 1;
+            continue;
+        }
+        if byte == b'}' {
+            if depth == 0 {
+                break;
+            }
+            depth -= 1;
+            i += 1;
+            continue;
+        }
+        if matches!(byte, b'$' | b'#' | b'@' | b'!') {
+            i += 1;
+            while i < bytes.len() && is_yara_ident(bytes[i]) {
+                i += 1;
+            }
+            continue;
+        }
+        if byte.is_ascii_alphabetic() || byte == b'_' {
+            let start = i;
+            i += 1;
+            while i < bytes.len() && is_yara_ident(bytes[i]) {
+                i += 1;
+            }
+            push_dependency(&mut names, &body[start..i]);
+            continue;
+        }
+        i += 1;
     }
-    push_dependency(&mut names, &current);
     names.sort();
     names.dedup();
     names
@@ -2365,6 +2858,275 @@ mod tests {
         assert!(body.contains("sid:1"));
         assert!(!body.contains("sid:2"));
         assert_eq!(snap.enabled_rules, 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn group_revisions_keep_the_previous_directory() {
+        let dir = std::env::temp_dir().join(format!("ant-rules-{}", crate::storage::unique_id()));
+        let source = dir.join("src");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(
+            source.join("a.yar"),
+            "rule One { condition: true }\nrule Two { condition: true }\n",
+        )
+        .unwrap();
+        let id = import_group(&dir, "custom", "yara", &source).unwrap();
+        let root = rules_root(&dir).join("custom").join(&id);
+        let original = fs::read_to_string(root.join("1/a.yar")).unwrap();
+        let replacement = dir.join("next");
+        fs::create_dir_all(&replacement).unwrap();
+        fs::write(
+            replacement.join("b.yar"),
+            "rule Three { condition: true }\n",
+        )
+        .unwrap();
+        assert_eq!(replace_group_revision(&dir, &id, &replacement).unwrap(), 2);
+        assert_eq!(fs::read_to_string(root.join("1/a.yar")).unwrap(), original);
+        assert!(root.join("2/b.yar").is_file());
+        assert_eq!(
+            revise_group(&dir, &id, None, &["Three".to_string()]).unwrap(),
+            3
+        );
+        assert!(
+            fs::read_to_string(root.join("2/b.yar"))
+                .unwrap()
+                .contains("Three")
+        );
+        let removed = fs::read_to_string(root.join("3/b.yar")).unwrap_or_default();
+        assert!(!removed.contains("rule Three"));
+        let registry = load_registry(&dir).unwrap();
+        assert!(registry.generation >= 3);
+        assert_eq!(
+            registry
+                .groups
+                .iter()
+                .find(|group| group.id == id)
+                .unwrap()
+                .revision,
+            3
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn yara_lexer_ignores_false_headers_and_keeps_indented_rules() {
+        let text = "/*\nEach rule keeps its author\n*/\nrule \"not a name\"\n// rule Commented\nrule Real {\n    strings:\n        $a = \"rule Hidden\"\n        $b = { 90 90 }\n    condition:\n        $a\n    }\n";
+        let names: Vec<_> = yara_blocks(text)
+            .into_iter()
+            .map(|(name, _, _)| name)
+            .collect();
+        assert_eq!(names, vec!["Real".to_string()]);
+        let indented = yara_blocks("rule ValidIndented {\n    condition: true\n    }\n");
+        assert_eq!(indented.len(), 1);
+        assert_eq!(indented[0].0, "ValidIndented");
+    }
+
+    #[test]
+    fn helper_dependencies_are_transitive_and_namespaces_stay_distinct() {
+        let dir = std::env::temp_dir().join(format!("ant-rules-{}", crate::storage::unique_id()));
+        let source = "\
+private rule Helper { condition: true }\n\
+private rule Middle { condition: Helper }\n\
+rule Uses { condition: Middle }\n\
+rule Other { condition: true }\n";
+        let bytes = archive(&[("pack.yar", source)]);
+        let sha = format!("{:x}", Sha256::digest(&bytes));
+        install_archive(&dir, &entry(&sha, bytes.len() as u64), &bytes).unwrap();
+        set_rule_enabled(&dir, "pack:sample", "Helper", false).unwrap();
+        let snap = snapshot(&dir, "yara").unwrap();
+        let emitted =
+            fs::read_to_string(snap.directory.unwrap().join("pack/sample/pack.yar")).unwrap();
+        assert!(emitted.contains("rule Other"));
+        assert!(!emitted.contains("rule Uses"));
+        assert!(!emitted.contains("rule Middle"));
+        assert!(!emitted.contains("rule Helper"));
+        assert_eq!(snap.enabled_rules, 1);
+        assert!(
+            snap.warnings
+                .iter()
+                .any(|warning| warning.contains("Helper"))
+        );
+
+        let first = dir.join("a.yar");
+        let second = dir.join("b.yar");
+        fs::write(&first, "rule Same { condition: true }\n").unwrap();
+        fs::write(&second, "rule Same { condition: false }\n").unwrap();
+        fs::create_dir_all(dir.join("pair")).unwrap();
+        fs::copy(&first, dir.join("pair/a.yar")).unwrap();
+        fs::copy(&second, dir.join("pair/b.yar")).unwrap();
+        let id = import_group(&dir, "pair", "yara", &dir.join("pair")).unwrap();
+        let indexed = group_index(&dir, &id).unwrap();
+        let ids: BTreeSet<_> = indexed.iter().map(|rule| rule.id.clone()).collect();
+        assert_eq!(
+            ids,
+            BTreeSet::from(["a.yar/Same".to_string(), "b.yar/Same".to_string()])
+        );
+        assert!(indexed.iter().all(|rule| rule.compatible));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_relative_include_compiles_and_an_escaping_include_does_not() {
+        let dir = std::env::temp_dir().join(format!("ant-rules-{}", crate::storage::unique_id()));
+        let bytes = archive(&[
+            ("included.yar", "rule Included { condition: true }\n"),
+            (
+                "main.yar",
+                "include \"included.yar\"\nrule Main { condition: Included and not \"rule Fake\" }\n",
+            ),
+        ]);
+        let sha = format!("{:x}", Sha256::digest(&bytes));
+        install_archive(&dir, &entry(&sha, bytes.len() as u64), &bytes).unwrap();
+        let indexed = read_index(&dir.join("rules/packs/yara/sample/1")).unwrap();
+        let names: BTreeSet<_> = indexed.iter().map(|rule| rule.name.clone()).collect();
+        assert_eq!(
+            names,
+            BTreeSet::from(["Included".to_string(), "Main".to_string()])
+        );
+        assert_eq!(
+            indexed
+                .iter()
+                .find(|rule| rule.name == "Main")
+                .unwrap()
+                .depends_on,
+            vec!["Included".to_string()]
+        );
+        let escaped = archive(&[(
+            "bad.yar",
+            "include \"../outside.yar\"\nrule Bad { condition: true }\n",
+        )]);
+        let sha = format!("{:x}", Sha256::digest(&escaped));
+        let mut escaped_entry = entry(&sha, escaped.len() as u64);
+        escaped_entry.id = "escaped".into();
+        escaped_entry.version = "2".into();
+        let error = install_archive(&dir, &escaped_entry, &escaped).unwrap_err();
+        assert!(error.contains("include") || error.contains("YARA-X") || error.contains("escapes"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn yara_forge_index_matches_yara_x_identities() {
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/rules/yara-forge-core.yar");
+        let text = fs::read_to_string(&path).unwrap();
+        let blocks = yara_blocks(&text);
+        let indexed: BTreeSet<_> = blocks.iter().map(|(name, _, _)| name.clone()).collect();
+        assert!(
+            !indexed.contains("keeps"),
+            "comment text was indexed as a rule"
+        );
+        for name in [
+            "ESET_Invisimole_Blob_PRIVATE",
+            "BLACKBERRY_Mal_Infostealer_Win32_Blackguard",
+            "SIGNATURE_BASE_WEBSHELL_PHP_Generic_Eval",
+            "SIGNATURE_BASE_WEBSHELL_JSP_Generic_Encoded_Shell",
+        ] {
+            assert!(indexed.contains(name), "{name} was not indexed");
+        }
+        let helpers = blocks.iter().filter(|(_, _, helper)| *helper).count();
+        assert_eq!(helpers, 2);
+        assert_eq!(blocks.len() - helpers, 2094);
+        let mut compiler = yara_x::Compiler::new();
+        compiler.relaxed_re_syntax(true);
+        let code = yara_x::SourceCode::from(text.as_str()).with_origin("yara-forge-core.yar");
+        compiler
+            .add_source(code)
+            .expect("YARA-X rejected the forge collection");
+        let rules = compiler.build();
+        let compiled: BTreeSet<_> = rules
+            .iter()
+            .map(|rule| rule.identifier().to_owned())
+            .collect();
+        assert_eq!(indexed, compiled);
+        let namespaces: BTreeSet<_> = rules
+            .iter()
+            .map(|rule| rule.namespace().to_owned())
+            .collect();
+        assert_eq!(namespaces, BTreeSet::from(["default".to_string()]));
+    }
+
+    #[test]
+    fn same_version_with_a_different_checksum_keeps_the_installed_bytes() {
+        let dir = std::env::temp_dir().join(format!("ant-rules-{}", crate::storage::unique_id()));
+        let good = archive(&[("keep.yar", "rule Keep { condition: true }\n")]);
+        let sha = format!("{:x}", Sha256::digest(&good));
+        install_archive(&dir, &entry(&sha, good.len() as u64), &good).unwrap();
+        let other = archive(&[("keep.yar", "rule Other { condition: false }\n")]);
+        let mut collision = entry(&format!("{:x}", Sha256::digest(&other)), other.len() as u64);
+        collision.version = "1".into();
+        let error = install_archive(&dir, &collision, &other).unwrap_err();
+        assert!(error.contains("immutable"));
+        let text = fs::read_to_string(dir.join("rules/packs/yara/sample/1/keep.yar")).unwrap();
+        assert!(text.contains("rule Keep"));
+        assert!(!text.contains("rule Other"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn too_many_archive_members_are_rejected() {
+        let mut raw = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut raw);
+            for index in 0..=MAX_MEMBERS {
+                let name = format!("f{index}.yar");
+                let data = b"rule R { condition: true }\n";
+                let mut header = tar::Header::new_gnu();
+                header.set_size(data.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                builder.append_data(&mut header, &name, &data[..]).unwrap();
+            }
+            builder.finish().unwrap();
+        }
+        let mut encoded = Vec::new();
+        {
+            let mut gzip = flate2::write::GzEncoder::new(&mut encoded, flate2::Compression::fast());
+            gzip.write_all(&raw).unwrap();
+            gzip.finish().unwrap();
+        }
+        let dir = std::env::temp_dir().join(format!("ant-rules-{}", crate::storage::unique_id()));
+        fs::create_dir_all(&dir).unwrap();
+        let error = unpack_archive(&encoded, &dir).unwrap_err();
+        assert!(error.contains("too many members"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_registry_write_keeps_the_previous_selection() {
+        let dir = std::env::temp_dir().join(format!("ant-rules-{}", crate::storage::unique_id()));
+        let good = archive(&[("keep.yar", "rule Keep { condition: true }\n")]);
+        let sha = format!("{:x}", Sha256::digest(&good));
+        install_archive(&dir, &entry(&sha, good.len() as u64), &good).unwrap();
+        let registry_path = rules_root(&dir).join("registry.json");
+        let before = fs::read(&registry_path).unwrap();
+        INJECT_REGISTRY_IO.store(true, std::sync::atomic::Ordering::Relaxed);
+        let error = set_pack_enabled(&dir, "sample", false).unwrap_err();
+        assert!(error.contains("No space"));
+        assert_eq!(fs::read(&registry_path).unwrap(), before);
+        assert!(load_registry(&dir).unwrap().packs[0].enabled);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_full_disk_during_install_keeps_the_previous_version() {
+        let dir = std::env::temp_dir().join(format!("ant-rules-{}", crate::storage::unique_id()));
+        let good = archive(&[("keep.yar", "rule Keep { condition: true }\n")]);
+        let sha = format!("{:x}", Sha256::digest(&good));
+        install_archive(&dir, &entry(&sha, good.len() as u64), &good).unwrap();
+        let next = archive(&[("next.yar", "rule Next { condition: true }\n")]);
+        let mut listed = entry(&format!("{:x}", Sha256::digest(&next)), next.len() as u64);
+        listed.version = "2".into();
+        INJECT_NOSPC.store(true, std::sync::atomic::Ordering::Relaxed);
+        let error = install_archive(&dir, &listed, &next).unwrap_err();
+        assert!(error.contains("No space") || error.contains("space"));
+        let registry = load_registry(&dir).unwrap();
+        assert_eq!(registry.packs[0].version, "1");
+        assert!(dir.join("rules/packs/yara/sample/1/keep.yar").is_file());
+        assert!(
+            !dir.join("rules/packs/yara/sample/2/manifest.json")
+                .is_file()
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 }

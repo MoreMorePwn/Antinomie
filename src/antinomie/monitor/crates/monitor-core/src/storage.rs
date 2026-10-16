@@ -59,6 +59,15 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
+/// SHA-256 of a file's bytes. Two files of the same length differ when their
+/// contents differ.
+pub fn sha256_file_hex(path: &Path) -> Result<String, String> {
+    Ok(sha256_file(path)?
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
 fn sha256_file(path: &Path) -> Result<[u8; 32], String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
     sha256_uncached(file)
