@@ -114,6 +114,7 @@ def main():
     parser.add_argument("--ids-url", required=True)
     parser.add_argument("--sigma", required=True)
     parser.add_argument("--sigma-commit", required=True)
+    parser.add_argument("--pack-revision", default="", help="Suffix for a rebuilt archive that must not reuse an older version id")
     args = parser.parse_args()
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
@@ -159,6 +160,10 @@ def main():
     sigma_archive = packs / f"sigmahq-linux-{args.sigma_commit[:12]}.tar.gz"
     write_tar(sigma_dir, sigma_archive)
 
+    def version_of(upstream):
+        revision = args.pack_revision.strip()
+        return f"{upstream}-{revision}" if revision else upstream
+
     def entry(archive, **fields):
         return {
             "id": fields["id"],
@@ -187,7 +192,7 @@ def main():
                 id="yara-forge-core",
                 engine="yara",
                 name="YARA-Forge Core",
-                version=args.yara_release,
+                version=version_of(args.yara_release),
                 upstream_revision=args.yara_release,
                 upstream_url="https://github.com/YARAHQ/yara-forge",
                 engine_requirement="YARA-X 1.21",
@@ -202,7 +207,7 @@ def main():
                 id="emerging-threats-open",
                 engine="ids",
                 name="Emerging Threats Open",
-                version=sha256(Path(args.ids))[:12],
+                version=version_of(sha256(Path(args.ids))[:12]),
                 upstream_revision=sha256(Path(args.ids)),
                 upstream_url=args.ids_url,
                 engine_requirement="Suricata 7",
@@ -221,7 +226,7 @@ def main():
                 id="sigmahq-linux",
                 engine="sigma",
                 name="SigmaHQ Linux",
-                version=args.sigma_commit[:12],
+                version=version_of(args.sigma_commit[:12]),
                 upstream_revision=args.sigma_commit,
                 upstream_url="https://github.com/SigmaHQ/sigma",
                 engine_requirement="pySigma 2.x SQLite backend",
