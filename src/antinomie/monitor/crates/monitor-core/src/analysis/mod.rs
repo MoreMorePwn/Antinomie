@@ -15,7 +15,7 @@ mod listing;
 pub mod properties;
 mod rules;
 mod specimen;
-mod tools;
+pub(crate) mod tools;
 mod worker;
 pub use decompile::{decompile_captured_core, sparse_core_plan, synthetic_captured_elf};
 pub use listing::{LISTING_PAGE_MAX_ROWS, read_listing_page, read_listing_page_with};

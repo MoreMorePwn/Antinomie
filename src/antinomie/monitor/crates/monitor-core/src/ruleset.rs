@@ -15,6 +15,13 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+mod engines;
+
+pub use engines::{
+    DEFAULT_SIGMA_PYTHON, ToolConfig, ToolFacts, ToolProbe, refresh_tool_facts, sigma_interpreter,
+    tool_facts, try_tool_facts,
+};
+
 pub const CATALOG_SCHEMA: u32 = 1;
 /// Public rules bucket. This is not the dataset repository of the same name.
 pub const CATALOG_URL: &str =
@@ -872,35 +879,37 @@ pub fn set_group_tags(data_dir: &Path, id: &str, tags: Vec<String>) -> Result<()
     save_registry(data_dir, &registry)
 }
 
-pub fn selection_digest(data_dir: &Path, engine: &str) -> String {
-    let Ok(registry) = load_registry(data_dir) else {
-        return "unreadable".into();
-    };
-    selection_digest_of(data_dir, &registry, engine)
+/// Digest of the profile [`snapshot_from`] builds for the same inputs.
+pub fn selection_digest_of(
+    data_dir: &Path,
+    registry: &Registry,
+    engine: &str,
+    facts: &ToolFacts,
+) -> String {
+    digest_of(data_dir, registry, engine, facts)
 }
 
-pub fn selection_digest_of(data_dir: &Path, registry: &Registry, engine: &str) -> String {
-    digest_of(data_dir, registry, engine)
-}
-
-pub fn snapshot(data_dir: &Path, engine: &str) -> Result<Snapshot, String> {
+/// Build the profile for the current registry, probing the tools in `tools`.
+pub fn snapshot(data_dir: &Path, engine: &str, tools: &ToolConfig) -> Result<Snapshot, String> {
     let registry = load_registry(data_dir)?;
-    snapshot_from(data_dir, engine, &registry, None)
+    snapshot_from(data_dir, engine, &registry, &tool_facts(tools), None)
 }
 
 /// Build the profile for `registry`, which was captured when the scan was admitted.
-/// A later registry write is not read. `cancel` abandons the staging directory.
+/// A later registry write is not read. `facts` describe the tools the scan runs.
+/// `cancel` abandons the staging directory.
 pub fn snapshot_from(
     data_dir: &Path,
     engine: &str,
     registry: &Registry,
+    facts: &ToolFacts,
     cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<Snapshot, String> {
     let _lock = registry_lock();
     if cancelled(cancel) {
         return Err("cancelled".into());
     }
-    let digest = digest_of(data_dir, registry, engine);
+    let digest = digest_of(data_dir, registry, engine, facts);
     let directory = rules_root(data_dir)
         .join("profiles")
         .join(engine)
@@ -945,7 +954,7 @@ pub fn snapshot_from(
             .iter()
             .filter(|pack| pack.enabled && pack.engine == engine)
         {
-            if let Some(status) = unmet_requirement(data_dir, pack) {
+            if let Some(status) = unmet_requirement(data_dir, pack, facts) {
                 counts.warnings.push(format!(
                     "{} {} was not evaluated: {status}",
                     pack.id, pack.version
@@ -1006,8 +1015,9 @@ pub fn snapshot_from(
         let manifest = serde_json::json!({
             "schema": 1,
             "engine": engine,
-            "engine_identity": engine_identity(engine),
-            "engine_version": engine_identity(engine),
+            "engine_identity": facts.identity(engine),
+            "engine_version": facts.identity(engine),
+            "sigma_python": (engine == "sigma").then(|| facts.sigma_python.display().to_string()),
             "app_version": crate::api::APP_VERSION,
             "digest": digest,
             "enabled_rules": counts.enabled,
@@ -1086,7 +1096,7 @@ pub fn reap_staging(data_dir: &Path, older_than: std::time::Duration) -> Result<
     Ok(removed)
 }
 pub fn publish_static(data_dir: &Path, dest: &Path) -> Result<(), String> {
-    let snap = snapshot(data_dir, "yara")?;
+    let snap = snapshot(data_dir, "yara", &ToolConfig::default())?;
     if dest.exists() {
         fs::remove_dir_all(dest).map_err(|error| error.to_string())?;
     }
@@ -1261,7 +1271,7 @@ fn sigma_selection_counts(
     }))
 }
 
-fn digest_of(data_dir: &Path, registry: &Registry, engine: &str) -> String {
+fn digest_of(data_dir: &Path, registry: &Registry, engine: &str, facts: &ToolFacts) -> String {
     let mut material = String::new();
     for pack in &registry.packs {
         if pack.engine == engine {
@@ -1295,7 +1305,6 @@ fn digest_of(data_dir: &Path, registry: &Registry, engine: &str) -> String {
     }
     material.push_str(&format!("index-parser {INDEX_PARSER}\n"));
     if let Ok(Some(catalog)) = load_catalog(data_dir) {
-        let facts = tool_facts();
         for pack in registry
             .packs
             .iter()
@@ -1305,7 +1314,7 @@ fn digest_of(data_dir: &Path, registry: &Registry, engine: &str) -> String {
                 entry.id == pack.id && entry.engine == pack.engine && entry.version == pack.version
             }) {
                 let status =
-                    classify_requirement(&entry.app, &entry.engine_requirement, engine, &facts);
+                    classify_requirement(&entry.app, &entry.engine_requirement, engine, facts);
                 material.push_str(&format!(
                     "requirement {} {} {} {status}\n",
                     pack.id, entry.app, entry.engine_requirement
@@ -1313,7 +1322,7 @@ fn digest_of(data_dir: &Path, registry: &Registry, engine: &str) -> String {
             }
         }
     }
-    material.push_str(&engine_identity(engine));
+    material.push_str(&facts.identity(engine));
     material.push('\n');
     format!("{:x}", Sha256::digest(material.as_bytes()))
 }
@@ -1514,70 +1523,6 @@ fn emitted_ids(engine: &str, text: &str) -> BTreeSet<String> {
             .collect(),
         _ => ids_blocks(text).into_iter().map(|(sid, _)| sid).collect(),
     }
-}
-
-fn engine_identity(engine: &str) -> String {
-    match engine {
-        "yara" => format!("yara-x {}", yara_x::VERSION),
-        "ids" => suricata_identity(),
-        "sigma" => sigma_identity(),
-        other => other.to_owned(),
-    }
-}
-
-fn suricata_identity() -> String {
-    static CACHED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    CACHED
-        .get_or_init(|| {
-            let mut paths = Vec::new();
-            if let Some(path) = std::env::var_os("ANTINOMIE_SURICATA") {
-                paths.push(PathBuf::from(path));
-            }
-            paths.extend([
-                PathBuf::from("/usr/bin/suricata"),
-                PathBuf::from("/usr/sbin/suricata"),
-                PathBuf::from("/usr/local/bin/suricata"),
-            ]);
-            for path in paths {
-                if !path.is_file() {
-                    continue;
-                }
-                if let Ok(output) = std::process::Command::new(&path).arg("-V").output() {
-                    let text = String::from_utf8_lossy(&output.stdout);
-                    let line = text.lines().next().unwrap_or("").trim();
-                    if !line.is_empty() {
-                        return line.to_owned();
-                    }
-                }
-            }
-            "suricata-absent".into()
-        })
-        .clone()
-}
-
-fn sigma_identity() -> String {
-    static CACHED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    CACHED
-        .get_or_init(|| {
-            let python = std::env::var("ANTINOMIE_SIGMA_PYTHON")
-                .unwrap_or_else(|_| "/usr/bin/python3".into());
-            let script = "import sigma, sigma.backends.sqlite as backend\nprint(getattr(sigma, '__version__', 'unknown'))\nprint(getattr(backend, '__version__', 'unknown'))\n";
-            let Ok(output) = std::process::Command::new(python).arg("-c").arg(script).output() else {
-                return "pysigma-sqlite unavailable".into();
-            };
-            if !output.status.success() {
-                return "pysigma-sqlite unavailable".into();
-            }
-            let text = String::from_utf8_lossy(&output.stdout);
-            let mut lines = text.lines();
-            let sigma = lines.next().unwrap_or("unknown").trim();
-            let backend = lines.next().unwrap_or("unknown").trim();
-            if sigma.is_empty() {
-                return "pysigma-sqlite unavailable".into();
-            }
-            format!("pysigma {sigma} / sqlite {backend}")
-        })
-        .clone()
 }
 
 fn copy_support(root: &Path, dest: &Path) -> Result<(), String> {
@@ -2064,39 +2009,19 @@ impl std::fmt::Display for RequirementStatus {
     }
 }
 
-fn unmet_requirement(data_dir: &Path, pack: &InstalledPack) -> Option<RequirementStatus> {
+fn unmet_requirement(
+    data_dir: &Path,
+    pack: &InstalledPack,
+    facts: &ToolFacts,
+) -> Option<RequirementStatus> {
     let catalog = load_catalog(data_dir).ok().flatten()?;
     let entry = catalog.packs.iter().find(|entry| {
         entry.id == pack.id && entry.engine == pack.engine && entry.version == pack.version
     })?;
-    let status = classify_requirement(
-        &entry.app,
-        &entry.engine_requirement,
-        &pack.engine,
-        &tool_facts(),
-    );
+    let status = classify_requirement(&entry.app, &entry.engine_requirement, &pack.engine, facts);
     match status {
         RequirementStatus::Satisfied => None,
         other => Some(other),
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ToolFacts {
-    pub app: String,
-    pub yara: String,
-    pub suricata: Option<String>,
-    pub sigma: Option<String>,
-}
-
-pub fn tool_facts() -> ToolFacts {
-    let suricata = suricata_identity();
-    let sigma = sigma_identity();
-    ToolFacts {
-        app: crate::api::APP_VERSION.into(),
-        yara: yara_x::VERSION.into(),
-        suricata: (suricata != "suricata-absent").then_some(suricata),
-        sigma: (!sigma.contains("unavailable")).then_some(sigma),
     }
 }
 
@@ -2125,24 +2050,35 @@ pub fn classify_requirement(
     if !known {
         return RequirementStatus::Unknown(format!("unknown engine requirement {engine_req}"));
     }
-    let installed = match engine {
-        "yara" => Some(facts.yara.as_str()),
-        "ids" => facts.suricata.as_deref(),
-        "sigma" => facts
-            .sigma
-            .as_deref()
-            .map(|text| text.split_whitespace().nth(1).unwrap_or(text)),
-        _ => None,
+    let probe = match engine {
+        "yara" => None,
+        "ids" => Some(&facts.suricata),
+        "sigma" => Some(&facts.sigma),
+        _ => return RequirementStatus::Unknown(format!("unknown engine {engine}")),
     };
-    let Some(installed) = installed else {
-        return RequirementStatus::Pending(format!(
-            "{name} is not installed; the pack is not validated"
-        ));
+    let installed = match probe {
+        None => facts.yara.as_str(),
+        Some(ToolProbe::Found { version, .. }) => version.as_str(),
+        Some(ToolProbe::Absent(reason)) => {
+            return RequirementStatus::Pending(format!("{reason}; the pack is not validated"));
+        }
+        Some(ToolProbe::Broken(reason)) => {
+            return RequirementStatus::Incompatible(format!("{name} is unusable: {reason}"));
+        }
+        Some(ToolProbe::Unknown(reason)) => {
+            return RequirementStatus::Unknown(format!("{name} version: {reason}"));
+        }
     };
     let spec = spec.split_whitespace().next().unwrap_or(spec);
-    if spec.ends_with(".x") {
-        let major = spec.trim_end_matches(".x");
-        let have = installed.split([' ', '.']).next().unwrap_or(installed);
+    if let Some(major) = spec.strip_suffix(".x") {
+        let Ok(major) = major.parse::<u64>() else {
+            return RequirementStatus::Malformed(format!("{spec:?} is not a major version"));
+        };
+        let Some((have, _, _)) = parse_version(installed) else {
+            return RequirementStatus::Malformed(format!(
+                "installed version {installed:?} is not numeric"
+            ));
+        };
         return if have == major {
             RequirementStatus::Satisfied
         } else {
@@ -3098,7 +3034,7 @@ mod tests {
         let listed = entry(&sha, bytes.len() as u64);
         install_archive(&dir, &listed, &bytes).unwrap();
         set_rule_enabled(&dir, "pack:sample", "Helper", false).unwrap();
-        let snap = snapshot(&dir, "yara").unwrap();
+        let snap = snapshot(&dir, "yara", &ToolConfig::default()).unwrap();
         assert_eq!(snap.enabled_rules, 1);
         let emitted =
             fs::read_to_string(snap.directory.unwrap().join("pack/sample/pack.yar")).unwrap();
@@ -3153,7 +3089,7 @@ mod tests {
                 .iter()
                 .any(|rule| !rule.compatible && rule.reason.contains("duplicate"))
         );
-        let snap = snapshot(&dir, "ids").unwrap();
+        let snap = snapshot(&dir, "ids", &ToolConfig::default()).unwrap();
         assert_eq!(snap.enabled_rules, 1);
         assert!(
             snap.warnings
@@ -3186,7 +3122,7 @@ mod tests {
                 })
                 .expect("pack archive");
             install_archive(&dir, entry, &bytes).unwrap();
-            let snap = snapshot(&dir, &entry.engine).unwrap();
+            let snap = snapshot(&dir, &entry.engine, &ToolConfig::default()).unwrap();
             assert!(snap.enabled_rules > 0, "{}", entry.id);
             if entry.engine == "ids" {
                 let root = snap.directory.as_ref().unwrap();
@@ -3217,10 +3153,10 @@ mod tests {
                 );
             }
         }
-        let yara = snapshot(&dir, "yara").unwrap();
+        let yara = snapshot(&dir, "yara", &ToolConfig::default()).unwrap();
         assert!(yara.enabled_rules > 1_000);
         set_pack_enabled(&dir, "yara-forge-core", false).unwrap();
-        let after = snapshot(&dir, "yara").unwrap();
+        let after = snapshot(&dir, "yara", &ToolConfig::default()).unwrap();
         assert_eq!(after.enabled_rules, 0);
         assert!(after.directory.is_none());
         let _ = fs::remove_dir_all(&dir);
@@ -3284,7 +3220,7 @@ mod tests {
         .unwrap();
         let group = import_group(&dir, "custom", "ids", &ids).unwrap();
         set_rule_enabled(&dir, &format!("group:{group}"), "2", false).unwrap();
-        let snap = snapshot(&dir, "ids").unwrap();
+        let snap = snapshot(&dir, "ids", &ToolConfig::default()).unwrap();
         let body = fs::read_to_string(
             snap.directory
                 .unwrap()
@@ -3372,7 +3308,7 @@ rule Other { condition: true }\n";
         let sha = format!("{:x}", Sha256::digest(&bytes));
         install_archive(&dir, &entry(&sha, bytes.len() as u64), &bytes).unwrap();
         set_rule_enabled(&dir, "pack:sample", "Helper", false).unwrap();
-        let snap = snapshot(&dir, "yara").unwrap();
+        let snap = snapshot(&dir, "yara", &ToolConfig::default()).unwrap();
         let emitted =
             fs::read_to_string(snap.directory.unwrap().join("pack/sample/pack.yar")).unwrap();
         assert!(emitted.contains("rule Other"));
@@ -3599,8 +3535,15 @@ rule Other { condition: true }\n";
         let facts = ToolFacts {
             app: "0.6.2".into(),
             yara: "1.21.0".into(),
-            suricata: Some("This is Suricata version 7.0.10 RELEASE".into()),
-            sigma: Some("pysigma 2.0.1 / sqlite 2.1.0".into()),
+            suricata: ToolProbe::Found {
+                identity: "This is Suricata version 7.0.10 RELEASE".into(),
+                version: "This is Suricata version 7.0.10 RELEASE".into(),
+            },
+            sigma: ToolProbe::Found {
+                identity: "pysigma 2.0.1 / sqlite 2.1.0".into(),
+                version: "2.0.1".into(),
+            },
+            sigma_python: DEFAULT_SIGMA_PYTHON.into(),
         };
         assert_eq!(
             classify_requirement(">=0.6.2", "YARA-X 1.21", "yara", &facts),
@@ -3619,7 +3562,7 @@ rule Other { condition: true }\n";
             RequirementStatus::Malformed(_)
         ));
         let pending = ToolFacts {
-            suricata: None,
+            suricata: ToolProbe::Absent("Suricata is not installed".into()),
             ..facts.clone()
         };
         assert!(matches!(
@@ -3828,7 +3771,7 @@ rule Other { condition: true }\n";
         };
         catalog.packs[0].version = "1".into();
         store_catalog(&dir, &catalog).unwrap();
-        let snap = snapshot(&dir, "yara").unwrap();
+        let snap = snapshot(&dir, "yara", &ToolConfig::default()).unwrap();
         assert_eq!(snap.enabled_rules, 0);
         assert!(
             snap.warnings
@@ -3840,13 +3783,93 @@ rule Other { condition: true }\n";
         listed.engine_requirement = "YARA-X 1.21".into();
         catalog.packs[0].engine_requirement = "YARA-X 1.21".into();
         store_catalog(&dir, &catalog).unwrap();
-        let snap = snapshot(&dir, "yara").unwrap();
+        let snap = snapshot(&dir, "yara", &ToolConfig::default()).unwrap();
         assert_eq!(snap.enabled_rules, 1);
         let manifest = fs::read_to_string(
             dir.join(format!("rules/profiles/yara/{}/manifest.json", snap.digest)),
         )
         .unwrap();
         assert!(manifest.contains("NOTICE"), "{manifest}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The published SigmaHQ pack against a real pySigma venv. Set
+    /// `ANTINOMIE_RULES_PUBLISHED` to a directory holding the public
+    /// `catalog.json` and `packs/<sha256>.tar.gz`, and
+    /// `ANTINOMIE_TEST_SIGMA_PYTHON` to an interpreter with pySigma 2.
+    #[test]
+    #[ignore = "needs the published packs and a pySigma venv"]
+    fn the_published_sigma_pack_qualifies_with_the_configured_interpreter() {
+        let published = PathBuf::from(
+            std::env::var("ANTINOMIE_RULES_PUBLISHED")
+                .unwrap_or_else(|_| "/tmp/antinomie-rules-r4".into()),
+        );
+        let python = std::env::var("ANTINOMIE_TEST_SIGMA_PYTHON")
+            .unwrap_or_else(|_| "/tmp/antinomie-sigma-venv/bin/python".into());
+        let catalog: Value =
+            serde_json::from_slice(&fs::read(published.join("catalog.json")).unwrap()).unwrap();
+        let catalog = validate_catalog(&catalog).unwrap();
+        let entry = catalog
+            .packs
+            .iter()
+            .find(|pack| pack.engine == "sigma")
+            .unwrap()
+            .clone();
+        let bytes = fs::read(
+            published
+                .join("packs")
+                .join(format!("{}.tar.gz", entry.sha256)),
+        )
+        .unwrap();
+        let dir =
+            std::env::temp_dir().join(format!("ant-sigma-real-{}", crate::storage::unique_id()));
+        store_catalog(&dir, &catalog).unwrap();
+        install_archive(&dir, &entry, &bytes).unwrap();
+        let tools = ToolConfig::from_sigma_setting(&python);
+        let facts = tool_facts(&tools);
+        assert!(
+            matches!(&facts.sigma, ToolProbe::Found { version, .. } if version.starts_with("2.")),
+            "{facts:?}"
+        );
+        assert_eq!(
+            classify_requirement(&entry.app, &entry.engine_requirement, "sigma", &facts),
+            RequirementStatus::Satisfied
+        );
+        let snap = snapshot(&dir, "sigma", &tools).unwrap();
+        assert_eq!(
+            (snap.enabled_rules, snap.excluded_rules),
+            (117, 93),
+            "{:?}",
+            snap.warnings
+        );
+        let manifest: Value = serde_json::from_slice(
+            &fs::read(dir.join(format!(
+                "rules/profiles/sigma/{}/manifest.json",
+                snap.digest
+            )))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["sigma_python"], Value::String(python.clone()));
+        assert!(
+            manifest["engine_identity"]
+                .as_str()
+                .unwrap()
+                .contains("pysigma 2.")
+        );
+        // A Python without pySigma leaves the pack pending, not satisfied.
+        let missing = ToolConfig::from_sigma_setting(dir.join("no-python").to_str().unwrap());
+        let other = snapshot(&dir, "sigma", &missing).unwrap();
+        assert_ne!(other.digest, snap.digest);
+        assert_eq!(other.enabled_rules, 0);
+        assert!(
+            other
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("validation pending")),
+            "{:?}",
+            other.warnings
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 }

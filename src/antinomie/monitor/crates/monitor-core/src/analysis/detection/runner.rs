@@ -260,7 +260,11 @@ fn managed_sources(
     let snap = if let Some(frozen) = &request.frozen {
         frozen.clone()
     } else {
-        let live = crate::ruleset::snapshot(&host_path(&request.settings.rules_root), engine)?;
+        let live = crate::ruleset::snapshot(
+            &host_path(&request.settings.rules_root),
+            engine,
+            &crate::ruleset::ToolConfig::from_sigma_setting(&request.settings.sigma_python),
+        )?;
         FrozenSelection {
             digest: live.digest,
             directory: live.directory,
@@ -856,13 +860,10 @@ fn sigma(staged: &Staged, work: &Path) -> Result<Report, String> {
     let input = work.join("sigma-request.json");
     crate::storage::atomic_json(&input, staged)?;
     let output = work.join("sigma-report.json");
-    let python = if staged.request.settings.sigma_python.is_empty() {
-        "/usr/bin/python3"
-    } else {
-        &staged.request.settings.sigma_python
-    };
+    let python = crate::ruleset::sigma_interpreter(&staged.request.settings.sigma_python);
+    let python = text(&python)?;
     let result = super::super::tools::run_with(
-        python,
+        &python,
         &[
             "-I",
             &text(&script)?,
