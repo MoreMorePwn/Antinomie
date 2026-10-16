@@ -11,6 +11,7 @@ mod decompile;
 mod disasm;
 mod ident;
 mod listing;
+pub mod properties;
 mod rules;
 mod specimen;
 mod tools;

@@ -374,6 +374,18 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
         AnalysisKind::Metadata => {
             entry(
                 section,
+                "MD5",
+                format!("{:x}", md5::Md5::digest(specimen)),
+                None,
+            );
+            entry(
+                section,
+                "SHA-1",
+                format!("{:x}", sha1::Sha1::digest(specimen)),
+                None,
+            );
+            entry(
+                section,
                 "SHA-256",
                 format!("{:x}", Sha256::digest(specimen)),
                 None,

@@ -21,10 +21,12 @@ mod file_content;
 mod file_visibility;
 mod files;
 mod network;
+mod properties;
 mod sorting;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
+    Properties,
     Process,
     Files,
     Network,
@@ -53,6 +55,7 @@ enum NetTab {
 }
 
 pub(crate) struct TriageView {
+    properties: properties::View,
     section: Section,
     process: ProcessTab,
     files: FileTab,
@@ -86,6 +89,7 @@ pub(crate) struct TriageView {
 impl Default for TriageView {
     fn default() -> Self {
         Self {
+            properties: properties::View::default(),
             section: Section::Process,
             process: ProcessTab::Tree,
             files: FileTab::Opened,
@@ -115,6 +119,7 @@ impl Default for TriageView {
 
 #[derive(Clone, Copy)]
 pub(crate) struct TriageInput<'a> {
+    pub analysis: Option<&'a antinomie_monitor_core::AnalysisReport>,
     pub invocations: &'a [InvocationSummary],
     #[cfg(test)]
     pub packets: &'a [NetworkPacket],
@@ -139,6 +144,7 @@ pub(crate) struct TriageInput<'a> {
 impl<'a> TriageInput<'a> {
     pub(crate) fn empty() -> Self {
         Self {
+            analysis: None,
             invocations: &[],
             #[cfg(test)]
             packets: &[],
@@ -159,6 +165,7 @@ impl<'a> TriageInput<'a> {
     #[cfg(test)]
     fn page(invocations: &'a [InvocationSummary], packets: &'a [NetworkPacket]) -> Self {
         Self {
+            analysis: None,
             invocations,
             packets,
             frames: None,
@@ -196,6 +203,7 @@ impl TriageView {
             self.context_key = Some(key);
         }
         self.details_directory = input.archive.map(Path::to_path_buf);
+        self.properties.tick(ctx, &input);
         self.scan_request.clock_anchor = input.clock_anchor;
         self.scan_request.started_ms = input.started_ms;
         self.scan_request.root_cookie = input.root_cookie;
@@ -246,6 +254,7 @@ impl TriageView {
         }
         ui.horizontal_wrapped(|ui| {
             for (section, label) in [
+                (Section::Properties, "Properties"),
                 (Section::Process, "Process"),
                 (Section::Files, "Files"),
                 (Section::Network, "Network activity"),
@@ -256,6 +265,10 @@ impl TriageView {
         });
         ui.separator();
         self.tick(ui.ctx(), input);
+        if self.section == Section::Properties {
+            self.properties.show(ui, &input);
+            return self.take_navigation(ui.ctx());
+        }
         ui.horizontal_wrapped(|ui| {
             if self.section == Section::Files {
                 let visibility = &mut self.scan_request.file_visibility;
@@ -302,6 +315,7 @@ impl TriageView {
             }
         });
         let jump = match self.section {
+            Section::Properties => None, // Its independent controls are rendered above.
             Section::Process => self.process(ui, &input),
             Section::Files => {
                 self.files(ui, &input);
@@ -5834,6 +5848,7 @@ mod tests {
     fn hidden_tick_refreshes_growing_archive_preserves_selection_and_rejects_prior_run() {
         fn input<'a>(archive: &'a Path, run: &'a str) -> TriageInput<'a> {
             TriageInput {
+                analysis: None,
                 invocations: &[],
                 packets: &[],
                 frames: None,

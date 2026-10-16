@@ -6496,6 +6496,7 @@ impl eframe::App for MonitorApp {
         let input = triage_run
             .as_ref()
             .map(|run| crate::triage::TriageInput {
+                analysis: run.analysis.as_ref(),
                 invocations: &[],
                 vm_id: Some(&run.vm_id),
                 boot_id: Some(&run.boot_id),
