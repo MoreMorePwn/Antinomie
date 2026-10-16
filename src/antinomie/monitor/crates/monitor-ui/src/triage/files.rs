@@ -27,6 +27,7 @@ pub(super) struct Operation {
 pub(super) struct Change {
     pub path: String,
     path_known: bool,
+    standard_io: bool,
     pub call: u64,
     key: trace::InvocationKey,
     known_diff_count: Option<usize>,
@@ -100,6 +101,7 @@ impl Change {
             cell(format!("call {}", self.call), theme::text(), true),
         ];
         row[0].values = vec![
+            ("file.standard_io", RowValue::Bool(self.standard_io)),
             (
                 "file.path",
                 if self.path_known {
@@ -454,6 +456,7 @@ impl FileIndex {
         let change = self.changes.entry(path.clone()).or_insert_with(|| Change {
             path: path.clone(),
             path_known,
+            standard_io: true,
             call: call.call_id,
             key: trace::key(call),
             first_ns: event.timestamp_ns,
@@ -461,6 +464,13 @@ impl FileIndex {
             tid: event.tid,
             ..Change::default()
         });
+        // Hide a group only when every observed operation uses fd 0/1/2.
+        // A metadata/namespace operation or another descriptor keeps it visible.
+        change.standard_io &= file_fd(call, event)
+            .parse::<u64>()
+            .ok()
+            .and_then(crate::values::standard_fd_name)
+            .is_some();
         if !path_known {
             change.gaps.insert(
                 "File path unavailable; these operations cannot be assigned to a named file.",

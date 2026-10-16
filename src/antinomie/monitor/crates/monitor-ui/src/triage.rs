@@ -18,6 +18,7 @@ use antinomie_monitor_core::{EventSummary, InvocationSummary};
 use eframe::egui::{self, RichText};
 mod details;
 mod file_content;
+mod file_visibility;
 mod files;
 mod network;
 
@@ -255,6 +256,15 @@ impl TriageView {
         ui.separator();
         self.tick(ui.ctx(), input);
         ui.horizontal_wrapped(|ui| {
+            if self.section == Section::Files {
+                let visibility = &mut self.scan_request.file_visibility;
+                let changed = ui.checkbox(&mut visibility.hide_standard_io, "Hide stdin, stdout, stderr").changed()
+                    | ui.checkbox(&mut visibility.hide_libraries, "Hide library").changed();
+                if changed {
+                    for index in [1, 2, 5] { self.scan_request.offsets[index] = 0; }
+                    self.request_query_refresh();
+                }
+            }
             if ui
                 .add_enabled(input.archive.is_some(), egui::Button::new("Refresh"))
                 .on_disabled_hover_text("A whole-run index starts after the recording is saved")
@@ -1924,6 +1934,7 @@ const DNS_FIELDS: &[FieldSpec<'static>] = &[
 
 #[derive(Clone, Default)]
 struct ScanRequest {
+    file_visibility: file_visibility::FileVisibility,
     clock_anchor: Option<antinomie_monitor_core::HostClockAnchor>,
     started_ms: Option<u64>,
     ended_ms: Option<u64>,
@@ -2781,7 +2792,7 @@ fn scan_archive_query(
             forget_closed(&mut files, invocation, event);
             inherit_open_fds(&mut files, invocation, event, &cookies);
             if let Some(row) = file_event_row(&files, invocation, event, OPEN_NAMES) {
-                if open_query.keep_table(&row[0].values) {
+                if request.file_visibility.keeps(&row) && open_query.keep_table(&row[0].values) {
                     keep_page(
                         &mut opened,
                         &mut opened_omitted,
@@ -2794,7 +2805,7 @@ fn scan_archive_query(
             if let Some(row) =
                 file_index.observe(&files, invocation, event, Some(&recording.directory))
             {
-                if read_query.keep_table(&row[0].values) {
+                if request.file_visibility.keeps(&row) && read_query.keep_table(&row[0].values) {
                     keep_page(
                         &mut read,
                         &mut read_omitted,
@@ -2820,7 +2831,10 @@ fn scan_archive_query(
     let file_changes: Vec<_> = file_index
         .finish()
         .into_iter()
-        .filter(|change| change_query.keep_table(&change.row(clock_anchor)[0].values))
+        .filter(|change| {
+            let row = change.row(clock_anchor);
+            request.file_visibility.keeps(&row) && change_query.keep_table(&row[0].values)
+        })
         .collect();
     for change in &file_changes {
         keep_page(
