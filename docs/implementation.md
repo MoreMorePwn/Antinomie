@@ -59,6 +59,26 @@ No guest, image, shared-memory ABI, dependency or release-tag change is needed.
 
 ## Accepted ANT-T0091 run triage (0.6.2)
 
+ANT-T0099 extends these host-only views with exact operation-time executable
+labels, standard-stream/library visibility controls and stable column sorting
+before archive pagination. Sorted process lists retain parent/depth fields in
+Details; recorded order restores tree indentation. A temporary SQLite spool
+bounds sorted query data and retains original evidence identities.
+
+The Properties tab analyzes the selected run's digest-verified retained specimen.
+MD5/SHA-1/SHA-256 use the locked local libraries; optional ssdeep, TLSH, file,
+TrID and Magika executables run in the existing mandatory offline sandbox.
+Missing tools, absent models/definitions and provider-only vhash computation
+are explicit unavailable states. No sample/hash lookup, model download or guest
+change is introduced. properties.json remains beside the saved specimen for
+export. Saved metadata stays readable and is labeled not reverified when needed.
+
+Dedicated PCAPs are selected by identity-matching run artifact ownership, rather
+than host-time comparisons against QEMU's potentially shifted capture clock.
+Shared captures retain the existing time-window restriction; packet timestamps
+are labeled as capture-clock values. A dedicated capture takes priority over a
+simultaneous manual capture from the same boot.
+
 The user authorized all 20 triage/history issues from the Notion 0.6.2 list.
 Keep this host-only work on release-0.6.2. Triage requires one explicit program
 run; capture/all-traces selections must not populate it. Index the selected run's

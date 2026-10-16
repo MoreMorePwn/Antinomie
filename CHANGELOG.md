@@ -6,6 +6,20 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Triage tables.** Click column titles to sort; archive tables sort the whole
+  matched query before paging. Missing values stay last, ties preserve recorded
+  order, and right-clicking a title restores recorded order. File triage has
+  default-on standard-stream and library-path visibility controls.
+- **Executable identity.** Process names include committed exec events without
+  syscall exits and recorded fork inheritance. File rows retain operation-time
+  executable names and PID/TID. Standard descriptor roles retain their numbers;
+  relative paths have a compact label while Details retains the missing context.
+- **Properties.** Triage displays hashes, file identification and size for the
+  selected run's retained executable. Reverification and optional local tools run
+  off the UI thread in mandatory offline isolation. Results are saved as JSON;
+  missing tools/provider-only fields remain explicitly unavailable. Known saved
+  properties stay readable when reverification is unavailable.
+
 - **UI performance.** File-chooser availability is checked asynchronously and
   cached instead of scanning PATH during drawing. Explorer caches its expanded
   tree and renders only visible rows. Quiet windows redraw less often; backend,
@@ -34,7 +48,10 @@ it runs.
 - **Network.** IPs, Hosts, HTTP and DNS tables retain packet evidence links.
   Country/organization use locally configured TShark GeoIP data; missing data
   stays unavailable. Hostnames come from DNS questions, HTTP Host and TLS SNI.
-  Network evidence is VM-wide within the run's recorded host-time window.
+  Dedicated capture ownership comes from the run's artifact manifest, so QEMU
+  capture-clock offsets cannot discard every packet. Shared captures retain
+  their run-time bounds. PCAP timestamps are identified separately from the
+  host clock, and a run-owned capture takes priority over another manual capture.
 - **Presentation.** Removed indexing/count explanation blocks; warnings stay
   below the run selector. Times use the host timezone with an explicit UTC offset;
   guest event times mapped through host receipt anchors are marked estimated.

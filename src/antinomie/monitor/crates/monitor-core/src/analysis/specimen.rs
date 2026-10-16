@@ -29,6 +29,42 @@ pub fn read_specimen_range(
     if !(1..=ANALYSIS_PREVIEW_MAX_SIZE).contains(&data_len) {
         return Err("specimen preview length must be 1..4096 octets".into());
     }
+    read_verified_range(directory, report_id, offset, data_len)
+}
+
+/// Read a complete retained specimen for an isolated, bounded analysis worker.
+pub(super) fn read_all(
+    directory: &Path,
+    report_id: &str,
+) -> Result<(AnalysisReport, Vec<u8>), String> {
+    let before = super::jobs::open_report(directory)?;
+    if before.id != report_id {
+        return Err("saved analysis report identity mismatch".into());
+    }
+    let len = before
+        .specimen_len
+        .ok_or("complete specimen length unavailable")?;
+    if len > u64::from(crate::control::SPECIMEN_MAX_SIZE) {
+        return Err("saved specimen exceeds 64 MiB bound".into());
+    }
+    let page = read_verified_range(directory, report_id, 0, len as usize)?;
+    let after = super::jobs::open_report(directory)?;
+    if before.id != after.id
+        || before.specimen_sha256 != after.specimen_sha256
+        || before.specimen_len != after.specimen_len
+        || before.source_path != after.source_path
+    {
+        return Err("saved specimen identity changed during analysis".into());
+    }
+    Ok((before, page.data))
+}
+
+fn read_verified_range(
+    directory: &Path,
+    report_id: &str,
+    offset: u64,
+    data_len: usize,
+) -> Result<AnalysisSpecimenPage, String> {
     let end = offset
         .checked_add(data_len as u64)
         .ok_or("specimen preview range overflow")?;

@@ -976,7 +976,7 @@ pub(crate) fn run_sandboxed(
                 return Err("cancelled".into());
             }
             if Instant::now() >= deadline {
-                return Err("Ghidra decompilation timed out inside the sandbox.".into());
+                return Err("Isolated analysis timed out.".into());
             }
             match child
                 .poll_status()
