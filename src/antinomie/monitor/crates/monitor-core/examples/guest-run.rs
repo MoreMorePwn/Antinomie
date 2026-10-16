@@ -27,6 +27,8 @@
 //!
 //! A run may set `"core_dump_on_exit"`, `"memory_dump_on_exit"`, and
 //! `"capture_network"` (each boolean).
+//! `"analysis": {"enabled": true, "checks": ["metadata", "strings"]}`
+//! retains the exact executable specimen and runs the selected static checks.
 //!
 //! `"capture_all": true` starts Capture All once the guest is up, before the
 //! runs, and stops it after them; the report then includes its summary.
@@ -36,8 +38,8 @@
 //! `"screenshot_after"` seconds (default 10) after its `done` marker, and
 //! `"stop": true` to stop its process tree after that.
 use antinomie_monitor_core::{
-    Backend, BackendOptions, Command, ExecRequest, GuestCredentials, Notification, RunIn, Snapshot,
-    VmConfig, VmState,
+    Backend, BackendOptions, Command, ExecRequest, GuestCredentials, Notification,
+    RunArtifactState, RunArtifacts, RunIn, Snapshot, VmConfig, VmState,
 };
 use serde_json::{Value, json};
 use std::{
@@ -54,6 +56,46 @@ struct Session {
 }
 
 impl Session {
+    fn finish_run_evidence(&mut self, run_id: &str) -> Result<Option<RunArtifacts>, String> {
+        use antinomie_monitor_core::analysis::AnalysisState;
+        let deadline = Instant::now() + Duration::from_secs(300);
+        loop {
+            self.pump();
+            let run = self
+                .snapshot
+                .runs
+                .iter()
+                .find(|run| run.id == run_id)
+                .ok_or("run disappeared before evidence completion")?;
+            let artifacts = RunArtifacts::load(&run.directory)?;
+            let analysis_pending = run.request.analysis.enabled
+                && run.analysis.as_ref().is_none_or(|report| {
+                    matches!(
+                        report.state,
+                        AnalysisState::Acquiring | AnalysisState::Queued | AnalysisState::Running
+                    )
+                });
+            let artifacts_pending = artifacts.as_ref().is_none_or(|artifacts| {
+                [
+                    artifacts.network_state,
+                    artifacts.memory_state,
+                    artifacts.core_state,
+                ]
+                .into_iter()
+                .any(artifact_pending)
+            });
+            if !analysis_pending && !artifacts_pending {
+                return Ok(artifacts);
+            }
+            if Instant::now() > deadline {
+                return Err(format!(
+                    "run {run_id} evidence completion deadline; analysis pending={analysis_pending}, artifacts={artifacts:?}"
+                ));
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+
     fn pump(&mut self) -> Option<(u64, bool, String)> {
         let mut result = None;
         while let Some(notification) = self.backend.try_recv() {
@@ -180,6 +222,17 @@ fn text(value: &Value, key: &str) -> Option<String> {
 
 fn number(value: &Value, key: &str, default: u64) -> u64 {
     value.get(key).and_then(Value::as_u64).unwrap_or(default)
+}
+
+fn artifact_pending(state: RunArtifactState) -> bool {
+    matches!(
+        state,
+        RunArtifactState::WaitingForTreeExit
+            | RunArtifactState::WaitingForRootExit
+            | RunArtifactState::Recording
+            | RunArtifactState::Queued
+            | RunArtifactState::InProgress
+    )
 }
 
 fn run() -> Result<Value, String> {
@@ -358,6 +411,13 @@ fn run() -> Result<Value, String> {
         let known: Vec<_> = session.snapshot.runs.iter().map(|r| r.id.clone()).collect();
         let request = ExecRequest {
             path: text(&spec, "path").ok_or("run.path")?,
+            analysis: spec
+                .get("analysis")
+                .cloned()
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|e| format!("run.analysis: {e}"))?
+                .unwrap_or_default(),
             args: spec
                 .get("args")
                 .and_then(Value::as_array)
@@ -446,6 +506,7 @@ fn run() -> Result<Value, String> {
             },
             30,
         )?;
+        let artifacts = session.finish_run_evidence(&run_id)?;
         let summary = session
             .snapshot
             .runs
@@ -456,6 +517,8 @@ fn run() -> Result<Value, String> {
             "run_id": run_id,
             "directory": summary.as_ref().map(|r| r.directory.clone()),
             "execution": summary.as_ref().and_then(|r| r.execution.clone()),
+            "artifacts": artifacts,
+            "analysis": summary.as_ref().and_then(|r| r.analysis.clone()),
             "seconds": elapsed,
             "marker_seen": marker_seen,
             "screenshot": run_screenshot,
@@ -608,6 +671,10 @@ fn screendump(snapshot: &Snapshot, path: &str) -> Result<String, String> {
 }
 
 fn main() {
+    // Static analysis invokes this same executable inside its isolated worker.
+    if let Some(code) = antinomie_monitor_core::analysis::worker_main_if_requested() {
+        std::process::exit(code);
+    }
     match run() {
         Ok(report) => println!("{report}"),
         Err(error) => {
@@ -620,6 +687,27 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn evidence_wait_includes_queued_transfers_and_accepts_explicit_partial_results() {
+        for state in [
+            RunArtifactState::WaitingForRootExit,
+            RunArtifactState::WaitingForTreeExit,
+            RunArtifactState::Recording,
+            RunArtifactState::Queued,
+            RunArtifactState::InProgress,
+        ] {
+            assert!(artifact_pending(state));
+        }
+        for state in [
+            RunArtifactState::Disabled,
+            RunArtifactState::Complete,
+            RunArtifactState::Partial,
+            RunArtifactState::Failed,
+            RunArtifactState::Interrupted,
+        ] {
+            assert!(!artifact_pending(state));
+        }
+    }
     #[test]
     fn screenshot_uses_exact_owned_qmp_options_including_escaped_commas() {
         assert_eq!(

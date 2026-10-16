@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 MikiMiku (MoreMorePwn)
+# Deliberate benign fixture match, not a malicious-traffic classification.
+alert tcp any any -> any 8080 (msg:"Antinomie benign triage sample HTTP marker"; flow:to_server,established; content:"ANTINOMIE_TRIAGE_FIXTURE_v1"; sid:9900621; rev:1; metadata:license MIT;)

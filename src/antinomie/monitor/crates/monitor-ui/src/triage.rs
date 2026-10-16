@@ -6283,6 +6283,75 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires an actual recorded sample run in ANTINOMIE_TRIAGE_SAMPLE"]
+    fn recorded_triage_sample_populates_every_evidence_table() {
+        let directory = std::path::PathBuf::from(
+            std::env::var_os("ANTINOMIE_TRIAGE_SAMPLE").expect("set recorded sample run directory"),
+        );
+        let run: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(directory.join("run.json")).unwrap()).unwrap();
+        let identity = (
+            run["vm_id"].as_str().unwrap().to_owned(),
+            run["boot_id"].as_str().unwrap().to_owned(),
+            run["id"].as_str().unwrap().to_owned(),
+        );
+        let request = ScanRequest {
+            root_cookie: run["root_task_cookie"].as_u64().unwrap(),
+            identity: Some(identity),
+            run_finished: true,
+            ..Default::default()
+        };
+        let artifacts = antinomie_monitor_core::RunArtifacts::load(&directory)
+            .unwrap()
+            .expect("sample artifacts");
+        let scan = scan_archive_query(
+            &directory,
+            artifacts
+                .network_captures
+                .first()
+                .map(|path| path.as_path()),
+            false,
+            &Arc::new(AtomicBool::new(false)),
+            &request,
+        )
+        .unwrap();
+        assert!(scan.event_error.is_none(), "{:?}", scan.event_error);
+        assert!(scan.event_journal.is_some());
+        let rows = |table: &[Vec<Cell>]| {
+            table
+                .iter()
+                .map(|row| row.iter().map(|cell| cell.text.clone()).collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        };
+        let value = serde_json::json!({
+            "coverage": scan.coverage, "partial": scan.partial,
+            "calls": scan.counts.calls, "tasks": scan.process.len(),
+            "findings": scan.findings.iter().map(|finding| finding.cells.iter()
+                .map(|cell| cell.text.clone()).collect::<Vec<_>>()).collect::<Vec<_>>(),
+            "opened": rows(&scan.opened), "read": rows(&scan.read), "changed": rows(&scan.changed),
+            "http": rows(&scan.http), "dns": rows(&scan.dns),
+            "ips": rows(&scan.ips), "hosts": rows(&scan.hosts),
+            "bpf_observations": scan.bpf.len(), "network_warning": scan.network_warning,
+            "journal": scan.event_journal,
+        });
+        std::fs::write(
+            directory.join("sample-triage.json"),
+            serde_json::to_vec_pretty(&value).unwrap(),
+        )
+        .unwrap();
+        assert!(scan.process.len() >= 4, "{value}");
+        for key in [
+            "findings", "opened", "read", "changed", "http", "dns", "ips", "hosts",
+        ] {
+            assert!(
+                !value[key].as_array().unwrap().is_empty(),
+                "empty {key}: {value}"
+            );
+        }
+        assert!(!scan.bpf.is_empty(), "{value}");
+    }
+
+    #[test]
     fn saved_recording_from_env_is_indexed_when_present() {
         let Ok(dir) = std::env::var("ANTINOMIE_RECORDING") else {
             return;
