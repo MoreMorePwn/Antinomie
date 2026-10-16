@@ -8,6 +8,7 @@ pub use export::{
 pub use types::*;
 mod capa;
 mod decompile;
+pub mod detection;
 mod disasm;
 mod ident;
 mod listing;

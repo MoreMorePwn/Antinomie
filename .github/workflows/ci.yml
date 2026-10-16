@@ -75,6 +75,7 @@ jobs:
           python3 tests/monitor/test-build-base.py
           python3 tests/monitor/test-debian-image.py
           python3 tests/monitor/test-native-coverage.py
+          python3 tests/monitor/test-sigma-adapter.py
           python3 scripts/test-refresh-monitor-bundle.py
       - name: Shell scripts
         run: |

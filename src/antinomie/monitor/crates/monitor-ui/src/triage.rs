@@ -17,16 +17,20 @@ use antinomie_monitor_core::network::NetworkPacket;
 use antinomie_monitor_core::{EventSummary, InvocationSummary};
 use eframe::egui::{self, RichText};
 mod details;
+mod detection;
 mod file_content;
 mod file_visibility;
 mod files;
 mod network;
+mod network_index;
+mod normalized;
 mod properties;
 mod sorting;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
     Properties,
+    Detection,
     Process,
     Files,
     Network,
@@ -56,6 +60,7 @@ enum NetTab {
 
 pub(crate) struct TriageView {
     properties: properties::View,
+    detection: detection::View,
     section: Section,
     process: ProcessTab,
     files: FileTab,
@@ -82,6 +87,7 @@ pub(crate) struct TriageView {
     scan_request: ScanRequest,
     filter_drafts: [String; 8],
     packet_jump: Option<u64>,
+    packet_capture: Option<std::path::PathBuf>,
     context_key: Option<String>,
     details_directory: Option<std::path::PathBuf>,
 }
@@ -90,6 +96,7 @@ impl Default for TriageView {
     fn default() -> Self {
         Self {
             properties: properties::View::default(),
+            detection: detection::View::default(),
             section: Section::Process,
             process: ProcessTab::Tree,
             files: FileTab::Opened,
@@ -111,6 +118,7 @@ impl Default for TriageView {
             scan_request: ScanRequest::default(),
             filter_drafts: Default::default(),
             packet_jump: None,
+            packet_capture: None,
             context_key: None,
             details_directory: None,
         }
@@ -204,6 +212,7 @@ impl TriageView {
         }
         self.details_directory = input.archive.map(Path::to_path_buf);
         self.properties.tick(ctx, &input);
+        self.detection.tick(ctx, &input);
         self.scan_request.clock_anchor = input.clock_anchor;
         self.scan_request.started_ms = input.started_ms;
         self.scan_request.root_cookie = input.root_cookie;
@@ -255,6 +264,7 @@ impl TriageView {
         ui.horizontal_wrapped(|ui| {
             for (section, label) in [
                 (Section::Properties, "Properties"),
+                (Section::Detection, "Detection"),
                 (Section::Process, "Process"),
                 (Section::Files, "Files"),
                 (Section::Network, "Network activity"),
@@ -267,6 +277,10 @@ impl TriageView {
         self.tick(ui.ctx(), input);
         if self.section == Section::Properties {
             self.properties.show(ui, &input);
+            return self.take_navigation(ui.ctx());
+        }
+        if self.section == Section::Detection {
+            self.detection.show(ui, self.scan.as_ref());
             return self.take_navigation(ui.ctx());
         }
         ui.horizontal_wrapped(|ui| {
@@ -315,7 +329,7 @@ impl TriageView {
             }
         });
         let jump = match self.section {
-            Section::Properties => None, // Its independent controls are rendered above.
+            Section::Properties | Section::Detection => None,
             Section::Process => self.process(ui, &input),
             Section::Files => {
                 self.files(ui, &input);
@@ -350,6 +364,9 @@ impl TriageView {
     fn take_navigation(&mut self, ctx: &egui::Context) -> Option<trace::InvocationKey> {
         self.packet_jump =
             ctx.data_mut(|data| data.remove_temp::<u64>(egui::Id::new("triage-packet-jump")));
+        self.packet_capture = ctx.data_mut(|data| {
+            data.remove_temp::<std::path::PathBuf>(egui::Id::new("triage-packet-capture"))
+        });
         ctx.data_mut(|data| {
             data.remove_temp::<trace::InvocationKey>(egui::Id::new("triage-call-jump"))
         })
@@ -358,6 +375,14 @@ impl TriageView {
     /// Original PCAP frame requested from a selected HTTP/DNS evidence row.
     pub(crate) fn take_packet_jump(&mut self) -> Option<u64> {
         self.packet_jump.take()
+    }
+    pub(crate) fn take_packet_capture(&mut self) -> Option<std::path::PathBuf> {
+        self.packet_capture.take()
+    }
+    pub(crate) fn detection_settings(
+        &mut self,
+    ) -> &mut antinomie_monitor_core::analysis::detection::Settings {
+        &mut self.detection.settings
     }
 
     fn process(
@@ -891,6 +916,7 @@ impl TriageView {
         self.selected_call_id = None;
         self.bpf_export_status.clear();
         self.packet_jump = None;
+        self.packet_capture = None;
         self.scan_request.offsets = [0; 8];
     }
 }
@@ -1026,6 +1052,8 @@ fn evidence_values_key(values: &[(&str, RowValue)]) -> String {
                     | "http.uri"
                     | "process.cookie"
                     | "finding.rule"
+                    | "finding.engine"
+                    | "capture.path"
             )
         })
         .map(|(name, value)| format!("{name}:{value:?}"))
@@ -1044,6 +1072,35 @@ fn request_evidence_jump(ctx: &egui::Context, values: &[(&str, RowValue)]) {
         });
     } else if let Some(frame) = files::number(values, "frame.number") {
         ctx.data_mut(|data| data.insert_temp(egui::Id::new("triage-packet-jump"), frame));
+        if let Some(path) = values.iter().find_map(|(key, value)| match (*key, value) {
+            ("capture.path", RowValue::Text(path)) => Some(std::path::PathBuf::from(path)),
+            _ => None,
+        }) {
+            ctx.data_mut(|data| data.insert_temp(egui::Id::new("triage-packet-capture"), path));
+        }
+    } else if let Some(path) = values.iter().find_map(|(key, value)| match (*key, value) {
+        ("evidence.path", RowValue::Text(path)) => Some(std::path::PathBuf::from(path)),
+        _ => None,
+    }) {
+        use antinomie_monitor_core::analysis::detection::Evidence;
+        let report_id = values.iter().find_map(|(key, value)| match (*key, value) {
+            ("evidence.report", RowValue::Text(id)) => Some(id.clone()),
+            _ => None,
+        });
+        let evidence = Evidence::Bytes {
+            path,
+            offset: files::number(values, "evidence.offset"),
+            address: files::number(values, "evidence.address"),
+            report_id,
+            block: values.iter().find_map(|(key, value)| match (*key, value) {
+                ("evidence.block", RowValue::Text(value)) => serde_json::from_str(value).ok(),
+                _ => None,
+            }),
+        };
+        ctx.data_mut(|data| {
+            data.insert_temp(egui::Id::new("triage-byte-jump"), evidence);
+            data.insert_temp(egui::Id::new("triage-details-focus"), true);
+        });
     }
 }
 
@@ -2766,6 +2823,10 @@ impl Drop for FindingJournal {
 }
 
 struct ArchiveScan {
+    counts: normalized::Counts,
+    network_counts: Option<(u64, u64, u64)>,
+    event_journal: Option<antinomie_monitor_core::analysis::detection::JournalSummary>,
+    event_error: Option<String>,
     #[cfg(test)]
     coverage: String,
     clock_anchor: Option<antinomie_monitor_core::HostClockAnchor>,
@@ -2856,8 +2917,10 @@ fn scan_archive_query(
     let mut nodes = std::collections::BTreeMap::new();
     let mut finding_page = sorting::Page::new(request, 0, cancel);
     let finding_query = query::compile_table(&request.filters[0], FINDING_FIELDS);
+    let mut scoped_count = 0;
     let (seen, complete, issues) = walk_pages(&recording, cancel, |page| {
         let page: Vec<_> = page.iter().filter(scoped).cloned().collect();
+        scoped_count += page.len() as u64;
         if clock_anchor.is_none() {
             clock_anchor = started_ms
                 .zip(
@@ -2878,6 +2941,33 @@ fn scan_archive_query(
         Ok(())
     })?;
     let cookies = resolve_cookies(&cookie_sets);
+    let mut counts = normalized::Counts {
+        calls: scoped_count,
+        ..Default::default()
+    };
+    let mut event_error = None;
+    let mut event_journal = request
+        .identity
+        .as_ref()
+        .filter(|_| request.root_cookie != 0)
+        .and_then(|(vm, boot, run)| {
+            let identity = antinomie_monitor_core::analysis::detection::Identity {
+                vm_id: vm.clone(),
+                boot_id: boot.clone(),
+                run_id: run.clone(),
+                root_cookie: request.root_cookie,
+            };
+            match antinomie_monitor_core::analysis::detection::EventJournal::new(
+                &recording.directory,
+                &identity,
+            ) {
+                Ok(journal) => Some(journal),
+                Err(error) => {
+                    event_error = Some(error);
+                    None
+                }
+            }
+        });
     let (mut journal, mut journal_error) = match FindingJournal::new(&recording.directory) {
         Ok(journal) => (Some(journal), None),
         Err(error) => (None, Some(error)),
@@ -2917,6 +3007,7 @@ fn scan_archive_query(
             }
             for mut finding in suspicious_rows_state(std::slice::from_ref(invocation), Some(&files))
             {
+                counts.findings += 1;
                 finding.values.push((
                     "process.exe",
                     process_image(&files, event)
@@ -2937,7 +3028,14 @@ fn scan_archive_query(
             apply_dup(&mut files, invocation, event);
             forget_closed(&mut files, invocation, event);
             inherit_open_fds(&mut files, invocation, event, &cookies);
+            if let Some(writer) = &mut event_journal {
+                if let Err(error) = normalized::call(writer, &files, invocation, event) {
+                    event_error = Some(error);
+                    event_journal = None;
+                }
+            }
             if let Some(row) = file_event_row(&files, invocation, event, OPEN_NAMES) {
+                counts.opened += 1;
                 if request.file_visibility.keeps(&row) && open_query.keep_table(&row[0].values) {
                     open_page.push(row)?;
                 }
@@ -2945,6 +3043,7 @@ fn scan_archive_query(
             if let Some(row) =
                 file_index.observe(&files, invocation, event, Some(&recording.directory))
             {
+                counts.reads += 1;
                 if request.file_visibility.keeps(&row) && read_query.keep_table(&row[0].values) {
                     read_page.push(row)?;
                 }
@@ -2962,8 +3061,9 @@ fn scan_archive_query(
         ..TriageInput::empty()
     });
     let omitted_files = file_index.omitted_files;
-    let file_changes: Vec<_> = file_index
-        .finish()
+    let all_changes = file_index.finish();
+    counts.changed = all_changes.len() as u64;
+    let file_changes: Vec<_> = all_changes
         .into_iter()
         .filter(|change| {
             let row = change.row(clock_anchor);
@@ -3022,36 +3122,58 @@ fn scan_archive_query(
             .and_then(|ns| clock_anchor.and_then(|clock| clock.host_us(ns)))
             .map(|us| us / 1000);
     }
-    let mut network =
-        match pcap {
-            Some(path) => scan_pcap_query(path, pcap_open, cancel, &network_request)
-                .unwrap_or_else(|error| PacketIndex {
-                    coverage: format!("pcap index failed: {error}"),
-                    http: Vec::new(),
-                    http_omitted: 0,
-                    dns: Vec::new(),
-                    dns_omitted: 0,
-                    ips: Vec::new(),
-                    ips_omitted: 0,
-                    hosts: Vec::new(),
-                    hosts_omitted: 0,
-                    network_warning: Some(format!("Network index unavailable: {error}")),
-                }),
-            None => PacketIndex {
-                coverage:
-                    "no pcap is recorded for this run; the loaded packet preview was not used"
-                        .into(),
-                http: Vec::new(),
-                http_omitted: 0,
-                dns: Vec::new(),
-                dns_omitted: 0,
-                ips: Vec::new(),
-                ips_omitted: 0,
-                hosts: Vec::new(),
-                hosts_omitted: 0,
-                network_warning: Some("No network capture is available for this run.".into()),
+    let mut network = match pcap {
+        Some(path) => network_index::collect(
+            &recording.directory,
+            path,
+            pcap_open,
+            cancel,
+            &network_request,
+            &mut |path, http, row, destination, port| {
+                if http {
+                    counts.http += 1;
+                } else {
+                    counts.dns += 1;
+                }
+                if let Some(writer) = &mut event_journal {
+                    if let Err(error) =
+                        normalized::packet(writer, path, row, http, destination, port)
+                    {
+                        event_error = Some(error);
+                        event_journal = None;
+                    }
+                }
+                Ok(())
             },
-        };
+        )
+        .unwrap_or_else(|error| PacketIndex {
+            counts: None,
+            coverage: format!("pcap index failed: {error}"),
+            http: Vec::new(),
+            http_omitted: 0,
+            dns: Vec::new(),
+            dns_omitted: 0,
+            ips: Vec::new(),
+            ips_omitted: 0,
+            hosts: Vec::new(),
+            hosts_omitted: 0,
+            network_warning: Some(format!("Network index unavailable: {error}")),
+        }),
+        None => PacketIndex {
+            counts: None,
+            coverage: "no pcap is recorded for this run; the loaded packet preview was not used"
+                .into(),
+            http: Vec::new(),
+            http_omitted: 0,
+            dns: Vec::new(),
+            dns_omitted: 0,
+            ips: Vec::new(),
+            ips_omitted: 0,
+            hosts: Vec::new(),
+            hosts_omitted: 0,
+            network_warning: Some("No network capture is available for this run.".into()),
+        },
+    };
     if estimated_end && network.network_warning.is_none() {
         network.network_warning =
             Some("Network end time is estimated from this run’s last retained syscall.".into());
@@ -3061,7 +3183,26 @@ fn scan_archive_query(
     if cancel.load(Ordering::Relaxed) {
         return Err("cancelled".into());
     }
+    let event_journal = event_journal.and_then(|journal| {
+        match journal.finish(
+            complete
+                && issues.is_empty()
+                && request.run_finished
+                && !pcap_open
+                && network.network_warning.is_none(),
+        ) {
+            Ok(summary) => Some(summary),
+            Err(error) => {
+                event_error = Some(error);
+                None
+            }
+        }
+    });
     Ok(ArchiveScan {
+        counts,
+        network_counts: network.counts,
+        event_journal,
+        event_error,
         clock_anchor,
         bpf,
         bpf_omitted,
@@ -3362,11 +3503,30 @@ fn spool_packet_fields(
 /// TShark reassembles the complete saved PCAP or an owned complete-record live
 /// prefix. Output is disk-backed; response lookups use a fixed-size binary
 /// index and memory holds only one query page. Source PCAP is unchanged.
+#[cfg(test)]
 fn scan_pcap_query(
     path: &Path,
     pcap_open: bool,
     cancel: &Arc<AtomicBool>,
     request: &ScanRequest,
+) -> Result<PacketIndex, String> {
+    scan_pcap_query_observed(
+        path,
+        pcap_open,
+        cancel,
+        request,
+        &mut network::Inventory::default(),
+        &mut |_, _, _, _| Ok(()),
+    )
+}
+
+fn scan_pcap_query_observed(
+    path: &Path,
+    pcap_open: bool,
+    cancel: &Arc<AtomicBool>,
+    request: &ScanRequest,
+    inventory: &mut network::Inventory,
+    observe: &mut impl FnMut(bool, &[Cell], &str, &str) -> Result<(), String>,
 ) -> Result<PacketIndex, String> {
     if !request.owned_pcap && request.identity.is_some() && request.started_ms.is_none() {
         return Err(
@@ -3400,6 +3560,7 @@ fn scan_pcap_query(
     let mut offsets = std::fs::File::open(state.directory.join("frames.idx"))
         .map_err(|error| error.to_string())?;
     let mut index = PacketIndex {
+        counts: None,
         coverage: String::new(),
         http: Vec::new(),
         http_omitted: 0,
@@ -3411,7 +3572,7 @@ fn scan_pcap_query(
         hosts_omitted: 0,
         network_warning: None,
     };
-    let mut inventory = network::Inventory::default();
+    inventory.capture = path.display().to_string();
     let mut http_page = sorting::Page::new(request, 3, cancel);
     let mut dns_page = sorting::Page::new(request, 4, cancel);
     let http_query = query::compile_table(&request.filters[3], HTTP_FIELDS);
@@ -3524,6 +3685,7 @@ fn scan_pcap_query(
                     cell("decoded; capture gaps unknown", theme::text(), false),
                 ];
                 row[0].values = vec![
+                    ("capture.path", RowValue::Text(path.display().to_string())),
                     ("frame.number", RowValue::Number(i128::from(frame))),
                     (
                         "frame.time_us",
@@ -3548,6 +3710,16 @@ fn scan_pcap_query(
                 row.remove(10);
                 row.remove(9);
                 row.remove(6);
+                observe(
+                    true,
+                    &row,
+                    destination,
+                    if field(7).is_empty() {
+                        field(9)
+                    } else {
+                        field(7)
+                    },
+                )?;
                 if http_query.keep_table(&row[0].values) {
                     http_page.push(row)?;
                 }
@@ -3605,6 +3777,7 @@ fn scan_pcap_query(
                     ),
                 ];
                 row[0].values = vec![
+                    ("capture.path", RowValue::Text(path.display().to_string())),
                     ("frame.number", RowValue::Number(i128::from(frame))),
                     (
                         "frame.time_us",
@@ -3632,6 +3805,16 @@ fn scan_pcap_query(
                 for at in [11, 7, 6, 3, 1] {
                     row.remove(at);
                 }
+                observe(
+                    false,
+                    &row,
+                    destination,
+                    if field(7).is_empty() {
+                        field(9)
+                    } else {
+                        field(7)
+                    },
+                )?;
                 if dns_query.keep_table(&row[0].values) {
                     dns_page.push(row)?;
                 }
@@ -3639,6 +3822,7 @@ fn scan_pcap_query(
         }
     }
     let (ips, hosts) = inventory.rows();
+    index.counts = Some((extent.packet_count, ips.len() as u64, hosts.len() as u64));
     let (http, http_omitted, http_count) = http_page.finish()?;
     let (dns, dns_omitted, dns_count) = dns_page.finish()?;
     index.http = http;
@@ -3715,6 +3899,8 @@ fn parse_integer(text: &str) -> Option<i128> {
 const PACKET_BOUND: usize = 4096;
 
 struct PacketIndex {
+    /// Frame, destination IP and hostname counts before UI queries.
+    counts: Option<(u64, u64, u64)>,
     coverage: String,
     http: Vec<Vec<Cell>>,
     http_omitted: u64,
@@ -3811,6 +3997,7 @@ fn scan_pcap(path: &Path, pcap_open: bool, cancel: &AtomicBool) -> Result<Packet
         );
     }
     Ok(PacketIndex {
+        counts: None,
         coverage,
         http,
         http_omitted,
@@ -4585,14 +4772,15 @@ fn named_path(
 }
 
 fn path_text(field: &antinomie_monitor_core::FieldSummary) -> Option<String> {
+    if field.capture_error != 0 {
+        return None;
+    }
     let bytes = trace::covered_preview(field);
-    let end = bytes.iter().rposition(|byte| *byte != 0)?;
-    let text = std::str::from_utf8(&bytes[..=end]).ok()?.trim();
-    if text.is_empty()
-        || text.chars().any(char::is_control)
-        || text.contains('=')
-        || text.contains("uncaptured")
-    {
+    // A preview prefix is not a complete path. Preserve legitimate spaces and
+    // '=' characters instead of rejecting names based on their appearance.
+    let end = bytes.iter().position(|byte| *byte == 0)?;
+    let text = std::str::from_utf8(&bytes[..end]).ok()?;
+    if text.is_empty() || text.chars().any(char::is_control) {
         return None;
     }
     Some(text.to_string())
@@ -5885,8 +6073,12 @@ mod tests {
                 }
                 assert!(
                     Instant::now() < deadline,
-                    "hidden index stalled: {:?}",
-                    view.scan_error
+                    "hidden index stalled: expected {count}; error {:?}; findings {:?}; calls {:?}; pending {}; generation {}",
+                    view.scan_error,
+                    view.scan.as_ref().map(|scan| scan.findings.len()),
+                    view.scan.as_ref().map(|scan| scan.counts.calls),
+                    view.scan_rx.is_some(),
+                    view.scan_generation
                 );
                 std::thread::sleep(Duration::from_millis(5));
             }

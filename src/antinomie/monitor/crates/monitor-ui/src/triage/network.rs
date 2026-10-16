@@ -66,6 +66,7 @@ pub(super) const HOST_FIELDS: &[FieldSpec<'static>] = &[
 
 #[derive(Default)]
 struct Host {
+    capture: String,
     frame: u64,
     first: Option<u64>,
     last: Option<u64>,
@@ -76,8 +77,9 @@ struct Host {
 
 #[derive(Default)]
 pub(super) struct Inventory {
-    ips: BTreeMap<String, (u64, String, String)>,
+    ips: BTreeMap<String, (u64, String, String, String)>,
     hosts: BTreeMap<String, Host>,
+    pub capture: String,
     pub omitted: u64,
 }
 
@@ -90,9 +92,14 @@ impl Inventory {
             self.omitted += 1;
             return;
         }
-        self.ips
-            .entry(ip.into())
-            .or_insert_with(|| (frame, country.into(), organization.into()));
+        self.ips.entry(ip.into()).or_insert_with(|| {
+            (
+                frame,
+                country.into(),
+                organization.into(),
+                self.capture.clone(),
+            )
+        });
     }
     pub fn host(
         &mut self,
@@ -111,6 +118,7 @@ impl Inventory {
             return;
         }
         let host = self.hosts.entry(name).or_insert_with(|| Host {
+            capture: self.capture.clone(),
             frame,
             first: time,
             ..Host::default()
@@ -130,13 +138,14 @@ impl Inventory {
         let ips = self
             .ips
             .iter()
-            .map(|(ip, (frame, country, organization))| {
+            .map(|(ip, (frame, country, organization, capture))| {
                 let mut row = vec![
                     cell(ip, theme::text(), true),
                     cell(available(country), theme::text(), false),
                     cell(available(organization), theme::text(), false),
                 ];
                 row[0].values = vec![
+                    ("capture.path", text_value(capture)),
                     ("network.ip", text_value(ip)),
                     ("network.country", text_value(country)),
                     ("network.organization", text_value(organization)),
@@ -180,6 +189,7 @@ impl Inventory {
                     ),
                 ];
                 row[0].values = vec![
+                    ("capture.path", text_value(&host.capture)),
                     ("network.hostname", RowValue::Text(name.clone())),
                     (
                         "network.addresses",

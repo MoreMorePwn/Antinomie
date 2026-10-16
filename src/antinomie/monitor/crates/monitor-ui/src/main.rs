@@ -91,6 +91,9 @@ fn hexadecimal(value: &str) -> Result<u64, String> {
 }
 
 fn main() -> eframe::Result<()> {
+    if let Some(code) = antinomie_monitor_core::analysis::detection::worker_main_if_requested() {
+        std::process::exit(code);
+    }
     if let Some(code) = antinomie_monitor_core::analysis::properties::worker_main_if_requested() {
         std::process::exit(code);
     }

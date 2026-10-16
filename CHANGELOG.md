@@ -6,6 +6,14 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Detection.** On-demand YARA, IDS and Sigma tabs evaluate retained evidence
+  offline, preserve coverage and source provenance, and open match details in
+  the shared Details pane. Local rule folders are optional; Suricata and pySigma
+  remain optional host tools. Missing fields/tools are explicit unavailable
+  states. Byte previews verify scanned digests; packet evidence includes the
+  owning capture segment. Network triage aggregates all run-owned segments
+  before queries and pagination.
+
 - **Triage tables.** Click column titles to sort; archive tables sort the whole
   matched query before paging. Missing values stay last, ties preserve recorded
   order, and right-clicking a title restores recorded order. File triage has

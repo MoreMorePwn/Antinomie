@@ -73,6 +73,31 @@ are explicit unavailable states. No sample/hash lookup, model download or guest
 change is introduced. properties.json remains beside the saved specimen for
 export. Saved metadata stays readable and is labeled not reverified when needed.
 
+Detection has independent on-demand YARA, IDS and Sigma jobs. It reuses the
+bundled licensed YARA corpus and accepts additional local rule files/folders.
+Suricata and pySigma 2.x with its SQLite backend are optional local executables;
+no tool, model or ruleset is automatically downloaded. All execution stays in
+the existing mandatory offline sandbox. Results retain sources, versions,
+licenses, corpus hashes, coverage, rule-supplied ATT&CK references and original
+syscall/packet/byte identities under triage-detection/{yara,ids,sigma}/report.json.
+Shared Details owns match inspection; byte previews verify the scanned block's
+digest, and packet jumps validate the owning run and capture segment.
+
+YARA scans the exact retained specimen; optional targets are declared captured
+ELF core/RAM extents and recovered files. Memory blocks are at most 64 MiB,
+with 512 MiB total input, explicit gaps and no cross-block completeness claim.
+IDS evaluates frozen run-owned PCAP segments independently with bounded
+reassembly; encrypted contents, missing segments and cross-segment flow state
+are unavailable. General network triage aggregates all owned segments before
+filters/sorting/pagination and keeps the capture path with every frame identity.
+Sigma uses upstream pySigma conversion, not a second expression implementation.
+Its derived JSONL event journal precedes visibility filters and pagination;
+unsupported logsources/conditions and missing fields remain explicit. Bounded
+argv previews do not supply a complete CommandLine. Rules needing that field
+cannot produce positive or negative conclusions from this recording. Windows
+event-log rules are incompatible with Linux telemetry; HTTP/DNS is VM-wide.
+Complete, partial, unavailable and not-scanned states remain distinct.
+
 Dedicated PCAPs are selected by identity-matching run artifact ownership, rather
 than host-time comparisons against QEMU's potentially shifted capture clock.
 Shared captures retain the existing time-window restriction; packet timestamps

@@ -25,6 +25,9 @@ const TABLES: &[&str] = &[
     "triage-http",
     "triage-dns",
     "triage-bpf",
+    "triage-yara",
+    "triage-ids",
+    "triage-sigma",
     "file-operation-timeline",
 ];
 
@@ -36,6 +39,10 @@ pub(super) fn clear(ctx: &egui::Context) {
         }
         data.remove::<trace::InvocationKey>(egui::Id::new("triage-call-jump"));
         data.remove::<u64>(egui::Id::new("triage-packet-jump"));
+        data.remove::<std::path::PathBuf>(egui::Id::new("triage-packet-capture"));
+        data.remove::<antinomie_monitor_core::analysis::detection::Evidence>(egui::Id::new(
+            "triage-byte-jump",
+        ));
         data.remove::<bool>(egui::Id::new("triage-details-focus"));
     });
 }
@@ -147,6 +154,7 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
             ui.add(egui::Label::new(if cell.mono { text.monospace() } else { text }).wrap());
         }
         let values = selected.cells.first().map(|cell| cell.values.as_slice()).unwrap_or_default();
+        if matches!(selected.table.as_str(), "triage-yara" | "triage-ids" | "triage-sigma") { view.detection.details(ui, values); }
         if selected.table == "triage-changed" {
             if let Some(change) = view.scan.as_ref().and_then(|scan| scan.file_changes.iter().find(|change| change.evidence_key() == selected.key)) {
                 change.show(ui, view.scan.as_ref().and_then(|scan| scan.clock_anchor));
@@ -183,9 +191,9 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
             && files::number(values, "process.cookie").is_some()
             && ui.button("Open original syscall").clicked()
         { request_evidence_jump(ui.ctx(), values); }
-        if let Some(frame) = files::number(values, "frame.number") {
+        if files::number(values, "frame.number").is_some() {
             if ui.button("Open original packet").clicked() {
-                ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("triage-packet-jump"), frame));
+                request_evidence_jump(ui.ctx(), values);
             }
         }
         for frame in selected.headers.iter().zip(&selected.cells)
@@ -193,7 +201,8 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
             .flat_map(|(_, cell)| cell.text.split(','))
             .filter_map(|frame| frame.trim().parse::<u64>().ok()).filter(|frame| *frame > 0).take(32) {
             if ui.button(format!("Open response packet #{frame}")).clicked() {
-                ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("triage-packet-jump"), frame));
+                let mut response_values = values.to_vec(); response_values.retain(|(name, _)| *name != "frame.number"); response_values.push(("frame.number", RowValue::Number(i128::from(frame))));
+                request_evidence_jump(ui.ctx(), &response_values);
             }
         }
     });
