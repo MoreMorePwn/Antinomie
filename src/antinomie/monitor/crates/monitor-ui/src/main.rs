@@ -12,6 +12,7 @@ mod folders;
 mod memory_view;
 mod network_view;
 mod query;
+mod rules_window;
 mod run_filter;
 mod runs;
 mod samples_view;

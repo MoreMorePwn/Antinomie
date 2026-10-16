@@ -10,18 +10,18 @@ The triage Detection adapter also invokes optional, separately installed
 [Suricata](https://github.com/OISF/suricata),
 [pySigma](https://github.com/SigmaHQ/pySigma) and its
 [SQLite backend](https://github.com/SigmaHQ/pySigma-backend-sqlite).
-These tools and user-selected rule packs are not bundled or downloaded by this
-feature; they retain their upstream terms. The embedded antinomie-ids.rules,
-antinomie-sigma.yml and sigma_scan.py adapter are original project MIT material.
-The adapter uses the public pySigma API; no upstream implementation was copied.
+These tools are not bundled. Rule packs are downloaded only from the public
+rules catalog when a person uses Rule manager, and they keep their upstream
+terms. The sigma_scan.py adapter is original project MIT material. The adapter
+uses the public pySigma API; no upstream implementation was copied. Production
+scans do not embed Antinomie-authored starter rules.
 
 The static-analysis worker embeds two rule sets and links two analysis
 engines. The rule files keep every rule's author, license and source meta.
 
 | Component | Terms / retained notice |
 |---|---|
-| Antinomie rules, `crates/monitor-core/assets/rules/antinomie.yar` | MIT (this project) |
-| Community rules from YARA-Forge release 20261004 (core package), `crates/monitor-core/assets/rules/yara-forge-core.yar`, reduced by `scripts/refresh-yara-rules.py` to the 2096 rules whose license meta allows redistribution | Per rule, as its `license` or `malpedia_license` meta states: CC BY-SA 4.0 ([CC-BY-SA-4.0.txt](LICENSES/third-party/rules/CC-BY-SA-4.0.txt); Malpedia rules), Detection Rule License 1.1 ([DRL-1.1.md](LICENSES/third-party/rules/DRL-1.1.md)), BSD 2-Clause ([BSD-2-Clause.txt](LICENSES/third-party/rules/BSD-2-Clause.txt)), Apache License 2.0 ([Apache-2.0.txt](LICENSES/third-party/rules/Apache-2.0.txt)), CC BY 4.0 ([CC-BY-4.0.txt](LICENSES/third-party/rules/CC-BY-4.0.txt)), MIT ([MIT.txt](LICENSES/third-party/rules/MIT.txt)). Rules without a redistributable license are not included |
+| Community rules from YARA-Forge release 20261004 (core package), `crates/monitor-core/assets/rules/yara-forge-core.yar`, reduced by `scripts/refresh-yara-rules.py` to the rules whose license meta allows redistribution. This file is the prepared pack source. Production scans do not load it unless the rule manager has installed that pack. | Per rule, as its `license` or `malpedia_license` meta states: CC BY-SA 4.0 ([CC-BY-SA-4.0.txt](LICENSES/third-party/rules/CC-BY-SA-4.0.txt); Malpedia rules), Detection Rule License 1.1 ([DRL-1.1.md](LICENSES/third-party/rules/DRL-1.1.md)), BSD 2-Clause ([BSD-2-Clause.txt](LICENSES/third-party/rules/BSD-2-Clause.txt)), Apache License 2.0 ([Apache-2.0.txt](LICENSES/third-party/rules/Apache-2.0.txt)), CC BY 4.0 ([CC-BY-4.0.txt](LICENSES/third-party/rules/CC-BY-4.0.txt)), MIT ([MIT.txt](LICENSES/third-party/rules/MIT.txt)). Rules without a redistributable license are not included |
 | capa-rules v9.4.0 (Mandiant), `crates/monitor-core/assets/rules/capa-rules-v9.4.0.tar.gz` | Apache License 2.0 in [capa-rules-Apache-2.0.txt](LICENSES/third-party/rules/capa-rules-Apache-2.0.txt) |
 | `yara-x 1.21` (VirusTotal) and its dependencies | BSD-3-Clause (yara-x); dependencies under their own licenses |
 | `iced-x86 1.21` | MIT |

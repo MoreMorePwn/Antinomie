@@ -97,8 +97,18 @@ impl MonitorApp {
         };
         self.triage.set_address_lookup(self.settings.address_lookup);
         *self.triage.detection_settings() = self.settings.triage_detection.clone();
+        self.triage.set_rules(
+            &self.options.data_dir,
+            self.settings.automatic_detection,
+            &self.rules_summary,
+            self.rules_generation,
+        );
+        if self.triage.take_rule_manager() {
+            self.rules_open = true;
+        }
         let jump = self.triage.show(ui, input);
         self.settings.triage_detection = self.triage.detection_settings().clone();
+        self.settings.triage_detection.rules_root.clear();
         if self.triage.take_details_focus(ui.ctx()) {
             self.details_follow.chose(&Panel::Triage);
             self.focus_panel = Some(Panel::Details);

@@ -60,6 +60,10 @@ struct Settings {
     memory_online_symbols: bool,
     /// Public destination country and organization. Local addresses are never queried.
     address_lookup: crate::triage::AddressLookup,
+    /// Scan retained evidence when it becomes ready. Manual Scan still works.
+    automatic_detection: bool,
+    /// Allow the explicit catalog check and rule-pack download buttons.
+    outbound_catalog: bool,
     /// Sidebar sections folded away.
     vms_collapsed: bool,
     bases_collapsed: bool,
@@ -94,6 +98,8 @@ impl Default for Settings {
             compact: true,
             memory_online_symbols: true,
             address_lookup: crate::triage::AddressLookup::Tshark,
+            automatic_detection: true,
+            outbound_catalog: false,
             vms_collapsed: false,
             bases_collapsed: false,
             explorer_collapsed: false,
@@ -218,6 +224,10 @@ pub struct MonitorApp {
     build_open: bool,
     about_open: bool,
     tools_open: bool,
+    rules_open: bool,
+    rules_ui: crate::rules_window::Model,
+    rules_summary: String,
+    rules_generation: u64,
     vm_snapshots: crate::snapshots::SnapshotManager,
     samples: crate::samples_view::SamplesView,
     dependencies: crate::dependencies_window::DependenciesWindow,
@@ -375,6 +385,10 @@ impl MonitorApp {
             build_open: false,
             about_open: false,
             tools_open: false,
+            rules_open: false,
+            rules_ui: crate::rules_window::Model::default(),
+            rules_summary: String::new(),
+            rules_generation: 0,
             vm_snapshots: crate::snapshots::SnapshotManager::default(),
             samples: crate::samples_view::SamplesView::default(),
             dependencies,
@@ -2675,6 +2689,10 @@ impl MonitorApp {
                             self.tools_open = true;
                             ui.close_menu();
                         }
+                        if ui.button("Rule manager…").clicked() {
+                            self.rules_open = true;
+                            ui.close_menu();
+                        }
                         if ui
                             .button(format!(
                                 "{} Malware samples…",
@@ -4560,6 +4578,25 @@ impl MonitorApp {
             }
             self.tools_open = open;
         }
+        if self.rules_summary.is_empty() {
+            self.rules_summary =
+                antinomie_monitor_core::ruleset::profile_label(&self.options.data_dir);
+        }
+        if self.rules_open {
+            let mut open = true;
+            self.rules_ui.show(
+                ctx,
+                &mut open,
+                &self.options.data_dir,
+                self.settings.outbound_catalog,
+            );
+            if self.rules_ui.changed() {
+                self.rules_generation = self.rules_generation.saturating_add(1);
+                self.rules_summary =
+                    antinomie_monitor_core::ruleset::profile_label(&self.options.data_dir);
+            }
+            self.rules_open = open;
+        }
         if self.samples.open {
             let vm = self.selected_vm().cloned();
             let action = self.samples.show(
@@ -5315,6 +5352,21 @@ impl MonitorApp {
                         crate::triage::AddressLookup::TsharkThenWhois,
                         "TShark GeoIP, then dig and whois when unavailable",
                     );
+                    dialog_section(ui, "Detection");
+                    ui.checkbox(
+                        &mut self.settings.automatic_detection,
+                        "Scan retained evidence when it is ready",
+                    )
+                    .on_hover_text(
+                        "Runs each engine once per ready input and rule selection. Scan still works when this is off.",
+                    );
+                    ui.checkbox(
+                        &mut self.settings.outbound_catalog,
+                        "Allow outbound catalog and rule downloads",
+                    )
+                    .on_hover_text(
+                        "Only the Rule manager Check and Download buttons use the network. Scans stay offline.",
+                    );
                     dialog_section(ui, "Recording");
                     ui.add_enabled_ui(self.snapshot.active_vm.is_none(), |ui| {
                         form_grid("settings_recording", ui).show(ui, |ui| {
@@ -5398,6 +5450,7 @@ impl MonitorApp {
             Dialog::Import => self.import_open,
             Dialog::Download => self.download_open,
             Dialog::Tools => self.tools_open,
+            Dialog::Rules => self.rules_open,
             Dialog::Samples => self.samples.open,
             Dialog::Snapshots => self.vm_snapshots.open,
             Dialog::SnapshotDecision => self.vm_snapshots.decision_open(),
@@ -5426,6 +5479,7 @@ impl MonitorApp {
             Dialog::Import => self.import_open = false,
             Dialog::Download => self.download_open = false,
             Dialog::Tools => self.tools_open = false,
+            Dialog::Rules => self.rules_open = false,
             Dialog::Samples => self.samples.open = false,
             Dialog::Snapshots | Dialog::SnapshotDecision => self.vm_snapshots.close(),
             Dialog::Dependencies => self.dependencies.open = false,
@@ -7412,6 +7466,7 @@ enum Dialog {
     Import,
     Download,
     Tools,
+    Rules,
     Samples,
     Snapshots,
     SnapshotDecision,
@@ -7423,7 +7478,7 @@ enum Dialog {
 }
 
 impl Dialog {
-    const ALL: [Dialog; 18] = [
+    const ALL: [Dialog; 19] = [
         Dialog::Confirm,
         Dialog::Name,
         Dialog::Transport,
@@ -7434,6 +7489,7 @@ impl Dialog {
         Dialog::Import,
         Dialog::Download,
         Dialog::Tools,
+        Dialog::Rules,
         Dialog::Samples,
         Dialog::Snapshots,
         Dialog::SnapshotDecision,
@@ -7457,6 +7513,7 @@ impl Dialog {
             Dialog::Import => "import_base",
             Dialog::Download => "download_base",
             Dialog::Tools => crate::tools_window::WINDOW_ID,
+            Dialog::Rules => crate::rules_window::WINDOW_ID,
             Dialog::Samples => crate::samples_view::WINDOW_ID,
             Dialog::Snapshots => crate::snapshots::WINDOW_ID,
             Dialog::SnapshotDecision => "snapshot_decision",
@@ -8081,6 +8138,10 @@ pub(crate) mod tests {
             build_open: false,
             about_open: false,
             tools_open: false,
+            rules_open: false,
+            rules_ui: crate::rules_window::Model::default(),
+            rules_summary: String::new(),
+            rules_generation: 0,
             vm_snapshots: crate::snapshots::SnapshotManager::default(),
             samples: crate::samples_view::SamplesView::default(),
             dependencies: crate::dependencies_window::DependenciesWindow::ready_for_test(),
@@ -10387,6 +10448,7 @@ pub(crate) mod tests {
                 Dialog::Import => app.import_open = true,
                 Dialog::Download => app.download_open = true,
                 Dialog::Tools => app.tools_open = true,
+                Dialog::Rules => app.rules_open = true,
                 Dialog::Samples => app.samples.open = true,
                 Dialog::Dependencies => app.dependencies.open = true,
                 Dialog::Performance => app.performance.open = true,

@@ -8,6 +8,53 @@ use std::{
     time::{Duration, Instant},
 };
 
+fn select_ids_rules(
+    text: &str,
+    seen: &mut std::collections::BTreeSet<String>,
+) -> (String, Vec<String>) {
+    let mut kept = String::new();
+    let mut skipped = Vec::new();
+    let mut current = String::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if current.is_empty() && !trimmed.starts_with("alert") && !trimmed.starts_with("drop") {
+            continue;
+        }
+        current.push_str(line);
+        current.push('\n');
+        if !trimmed.ends_with(')') {
+            continue;
+        }
+        let sid = current
+            .split("sid:")
+            .nth(1)
+            .and_then(|rest| rest.split([';', ',']).next())
+            .map(str::trim)
+            .unwrap_or("");
+        if current.contains("dataset:") {
+            skipped.push(format!("sid {sid}: requires an external dataset"));
+        } else if current.contains("ja3.") || current.contains("ja3s.") || current.contains("ja4.")
+        {
+            skipped.push(format!(
+                "sid {sid}: requires a TLS fingerprint keyword that this configuration does not enable"
+            ));
+        } else if sid.is_empty() {
+            skipped.push("a rule has no SID and was not loaded".into());
+        } else if !seen.insert(sid.to_owned()) {
+            skipped.push(format!(
+                "sid {sid}: duplicate SID; the later copy was not loaded"
+            ));
+        } else {
+            kept.push_str(&current);
+        }
+        current.clear();
+    }
+    (kept, skipped)
+}
+
 fn value(value: &serde_json::Value, key: &str) -> String {
     value
         .get(key)
@@ -130,7 +177,22 @@ fn read_eve(path: &Path, capture: &Capture, report: &mut Report) -> Result<(), S
     Err("EVE output exceeds one million records".into())
 }
 
+fn suricata_config(classification: &Path, reference: &Path) -> String {
+    let class = serde_json::to_string(classification).unwrap_or_else(|_| "null".into());
+    let reference = serde_json::to_string(reference).unwrap_or_else(|_| "null".into());
+    format!(
+        "%YAML 1.1\n---\nvars:\n  address-groups:\n    HOME_NET: \"[10.0.0.0/8,192.168.0.0/16,172.16.0.0/12]\"\n    EXTERNAL_NET: \"!$HOME_NET\"\n    HTTP_SERVERS: \"$HOME_NET\"\n    SMTP_SERVERS: \"$HOME_NET\"\n    SQL_SERVERS: \"$HOME_NET\"\n    DNS_SERVERS: \"$HOME_NET\"\n    TELNET_SERVERS: \"$HOME_NET\"\n    AIM_SERVERS: \"$HOME_NET\"\n  port-groups:\n    HTTP_PORTS: \"80\"\n    SHELLCODE_PORTS: \"!80\"\n    ORACLE_PORTS: 1521\n    SSH_PORTS: 22\n    DNP3_PORTS: 20000\n    MODBUS_PORTS: 502\n    FILE_DATA_PORTS: \"$HTTP_PORTS,110,143\"\n    FTP_PORTS: 21\n    SIP_PORTS: \"5060,5061\"\nclassification-file: {class}\nreference-config-file: {reference}\ndefault-rule-path: .\noutputs:\n  - eve-log:\n      enabled: yes\n      filetype: regular\n      filename: eve.json\n      types:\n        - alert:\n            metadata: yes\n  - stats:\n      enabled: no\nlogging:\n  default-log-level: warning\n  outputs:\n    - console:\n        enabled: yes\nflow:\n  memcap: 64mb\nstream:\n  memcap: 64mb\n  checksum-validation: no\n  reassembly:\n    memcap: 128mb\n    depth: 1mb\napp-layer:\n  protocols:\n    http:\n      enabled: yes\nunix-command:\n  enabled: no\n"
+    )
+}
+
 pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
+    if staged.no_rules || staged.ids_sources.is_empty() && staged.warnings.is_empty() {
+        let mut report = Report::empty(Engine::Ids, staged.request.identity.clone());
+        report.state = State::NoRules;
+        report.selection = staged.selection.clone();
+        report.warnings.push("No rules enabled".into());
+        return Ok(report);
+    }
     let Some(tool) = super::super::tools::find(&[
         "/usr/bin/suricata",
         "/usr/sbin/suricata",
@@ -143,27 +205,39 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
         ));
     };
     let mut report = Report::empty(Engine::Ids, staged.request.identity.clone());
+    report.selection = staged.selection.clone();
     let version = super::super::tools::version(tool, &["-V"]);
     let mut rules = Vec::new();
+    let mut seen_sids = std::collections::BTreeSet::new();
+    let mut classification_bytes = None;
     for source in &staged.ids_sources {
         let data = fs::read(&source.path).map_err(|error| error.to_string())?;
-        if data.len() > 1024 * 1024 {
-            return Err("IDS source exceeds 1 MiB".into());
+        if data.len() > 32 * 1024 * 1024 {
+            return Err("IDS source exceeds 32 MiB".into());
         }
-        rules.extend_from_slice(&data);
-        rules.push(b'\n');
+        if source.name.ends_with("classification.config") {
+            classification_bytes = Some(data);
+            continue;
+        }
+        let text = String::from_utf8_lossy(&data);
+        let (kept, skipped) = select_ids_rules(&text, &mut seen_sids);
+        report.skipped.extend(skipped);
+        rules.extend_from_slice(kept.as_bytes());
         report.sources.push(Source {
             name: source.name.clone(),
             version: version.clone(),
-            license: if source.name.starts_with("Antinomie IDS ") {
-                "MIT"
-            } else {
-                "User-selected; per-rule/source terms"
-            }
-            .into(),
+            license: "User-selected; per-rule and pack terms. Historical Antinomie IDS sources stay labeled as recorded.".into(),
             sha256: source.sha256.clone(),
-            data: "VM-wide owned PCAP segments; packet evidence is not process attribution".into(),
+            data: "VM-wide owned PCAP segments. Suricata decodes the capture; the HTTP/DNS table is not the input. Packet evidence is not process attribution.".into(),
         });
+    }
+    report.skipped_rules = report.skipped.len() as u64;
+    if rules.is_empty() {
+        report.state = State::Unavailable;
+        report
+            .warnings
+            .push("No compatible IDS rules were evaluated.".into());
+        return Ok(report);
     }
     report.source_digest = Some(crate::storage::sha256_hex(&rules));
     let rule_path = work.join("combined.rules");
@@ -171,20 +245,29 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
     let classification = work.join("classification.config");
     fs::write(
         &classification,
-        "config classification: misc-activity,Misc activity,3\n",
+        classification_bytes
+            .unwrap_or_else(|| b"config classification: misc-activity,Misc activity,3\n".to_vec()),
     )
     .map_err(|error| error.to_string())?;
+    let reference = work.join("reference.config");
+    if !reference.is_file() {
+        fs::write(
+            &reference,
+            b"config reference: url,https://doc.emergingthreats.net/\n",
+        )
+        .map_err(|error| error.to_string())?;
+    }
     let config = work.join("suricata.yaml");
-    let config_text = format!(
-        "%YAML 1.1\n---\nvars:\n  address-groups:\n    HOME_NET: any\n    EXTERNAL_NET: any\n  port-groups:\n    HTTP_PORTS: \"80,8080\"\nclassification-file: {}\noutputs:\n  - eve-log:\n      enabled: yes\n      filetype: regular\n      filename: eve.json\n      types:\n        - alert:\n            metadata: yes\n  - stats:\n      enabled: no\nlogging:\n  default-log-level: warning\n  outputs:\n    - console:\n        enabled: yes\nflow:\n  memcap: 64mb\nstream:\n  memcap: 64mb\n  checksum-validation: no\n  reassembly:\n    memcap: 128mb\n    depth: 1mb\napp-layer:\n  protocols:\n    http:\n      enabled: yes\nunix-command:\n  enabled: no\n",
-        serde_json::to_string(&classification).map_err(|error| error.to_string())?
+    let config_text = suricata_config(&classification, &reference);
+    report.warnings.push(
+        "HOME_NET is the private address ranges because this scan has no recorded guest address set. Rules that negate those groups can load; matches are limited to that assumption. VM-wide PCAP is not process attribution.".into(),
     );
     fs::write(&config, config_text).map_err(|error| error.to_string())?;
     if staged.captures.is_empty() {
-        report.state = State::Unavailable;
-        report
-            .warnings
-            .push("No readable run-owned network capture is recorded".into());
+        report.state = State::Missing;
+        report.warnings.push(
+            "Evidence missing: no saved run-owned PCAP segment. This is not a clean result.".into(),
+        );
         return Ok(report);
     }
     let deadline = Instant::now() + Duration::from_secs(100);
@@ -216,7 +299,6 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
                 strings[3],
                 "--runmode",
                 "single",
-                "--init-errors-fatal",
                 "-k",
                 "none",
             ],
@@ -225,6 +307,14 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
             64 * 1024,
             true,
         )?;
+        for line in result.stdout.lines().filter(|line| {
+            let lower = line.to_ascii_lowercase();
+            lower.contains("error") || lower.contains("unknown rule keyword")
+        }) {
+            if report.skipped.len() < 200 {
+                report.skipped.push(line.chars().take(300).collect());
+            }
+        }
         if !result.success || result.timed_out {
             report.state = State::Partial;
             report.warnings.push(format!(
@@ -310,5 +400,17 @@ mod tests {
         assert_eq!(report.findings[0].count, 3);
         assert_eq!(report.findings[0].evidence.len(), 2);
         assert_eq!(report.omitted_evidence, 1);
+    }
+
+    #[test]
+    fn home_net_is_a_private_range_not_any() {
+        let text = suricata_config(
+            Path::new("classification.config"),
+            Path::new("reference.config"),
+        );
+        assert!(text.contains("HOME_NET: \"[10.0.0.0/8,192.168.0.0/16,172.16.0.0/12]\""));
+        assert!(text.contains("EXTERNAL_NET: \"!$HOME_NET\""));
+        assert!(!text.contains("HOME_NET: any"));
+        assert!(!text.contains("EXTERNAL_NET: any"));
     }
 }

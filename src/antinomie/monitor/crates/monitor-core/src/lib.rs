@@ -30,6 +30,7 @@ pub mod packet_filter;
 pub mod parser;
 pub mod recording;
 mod resources;
+pub mod ruleset;
 mod run;
 pub mod samples;
 mod sandbox_process;

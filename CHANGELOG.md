@@ -25,6 +25,16 @@ it runs.
   counts. Counts precede table filters and pagination; missing captures or scans
   remain unavailable. Select a count to open its corresponding evidence view.
 
+- **Rules.** Tools → Rule manager installs pinned community packs from the
+  public rules bucket at `https://huggingface.co/buckets/MoreMorePwn/antinomie-rules/resolve/catalog.json`.
+  Production YARA, IDS and Sigma scans use the enabled packs and custom groups.
+  The previous Antinomie-authored starter collections are not loaded. Saved
+  results keep
+  their original source names. Automatic scanning is on by default and can be
+  turned off in Settings. Catalog checks and downloads are explicit and stay
+  behind the outbound-catalog setting. A scan does not download rules or
+  upload evidence.
+
 - **Detection.** On-demand YARA, IDS and Sigma tabs evaluate retained evidence
   offline, preserve coverage and source provenance, and open match details in
   the shared Details pane. Local rule folders are optional; Suricata and pySigma

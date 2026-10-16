@@ -46,6 +46,12 @@ pub(super) struct Staged {
     pub captures: Vec<Capture>,
     pub journal: Option<PathBuf>,
     pub warnings: Vec<String>,
+    #[serde(default)]
+    pub selection: String,
+    #[serde(default)]
+    pub no_rules: bool,
+    #[serde(default)]
+    pub include_dir: Option<PathBuf>,
 }
 
 fn text(path: &Path) -> Result<String, String> {
@@ -162,10 +168,10 @@ fn stage_rules(
     let mut total = 0;
     let mut staged = Vec::new();
     for (index, source) in files.into_iter().enumerate() {
-        let data = read_bounded(&anchor, &source, 1024 * 1024)?;
+        let data = read_bounded(&anchor, &source, 32 * 1024 * 1024)?;
         total += data.len();
-        if total > 32 * 1024 * 1024 {
-            return Err("local rule source exceeds 32 MiB".into());
+        if total > 200 * 1024 * 1024 {
+            return Err("local rule source exceeds 200 MiB".into());
         }
         let target = work.join(format!("rules-{index}.{}", extensions[0]));
         fs::write(&target, &data).map_err(|error| error.to_string())?;
@@ -197,14 +203,85 @@ pub(super) fn owned_artifacts(request: &Request) -> Result<Option<RunArtifacts>,
     Ok(artifacts)
 }
 
-fn builtin(work: &Path, file: &str, data: &[u8], name: &str) -> Result<RuleFile, String> {
-    let path = work.join(file);
-    fs::write(&path, data).map_err(|error| error.to_string())?;
-    Ok(RuleFile {
-        path,
-        name: name.into(),
-        sha256: crate::storage::sha256_hex(data),
-    })
+fn managed_sources(
+    request: &Request,
+    work: &Path,
+    extensions: &[&str],
+    cancel: &AtomicBool,
+    staged: &mut Staged,
+) -> Result<Vec<RuleFile>, String> {
+    if request.settings.rules_root.is_empty() {
+        return Ok(vec![]);
+    }
+    let engine = match request.engine {
+        Engine::Yara => "yara",
+        Engine::Ids => "ids",
+        Engine::Sigma => "sigma",
+    };
+    let snap = crate::ruleset::snapshot(&host_path(&request.settings.rules_root), engine)?;
+    staged.selection = snap.digest;
+    staged.warnings.extend(snap.warnings);
+    staged.no_rules = snap.enabled_rules == 0 && snap.excluded_rules == 0;
+    let Some(directory) = snap.directory else {
+        return Ok(vec![]);
+    };
+    let dest = work.join("selection");
+    copy_regular(&directory, &dest)?;
+    staged.include_dir = Some(dest.clone());
+    let mut pending = vec![dest];
+    let mut files = Vec::new();
+    while let Some(path) = pending.pop() {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".into());
+        }
+        let meta = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+        if meta.file_type().is_symlink() {
+            return Err("managed rules contain a link".into());
+        }
+        if meta.is_dir() {
+            for entry in fs::read_dir(&path).map_err(|error| error.to_string())? {
+                pending.push(entry.map_err(|error| error.to_string())?.path());
+            }
+            continue;
+        }
+        let extension = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if extensions.contains(&extension.as_str()) || path.ends_with("classification.config") {
+            let data = fs::read(&path).map_err(|error| error.to_string())?;
+            files.push(RuleFile {
+                name: path
+                    .strip_prefix(work)
+                    .unwrap_or(&path)
+                    .display()
+                    .to_string(),
+                sha256: crate::storage::sha256_hex(&data),
+                path,
+            });
+        }
+    }
+    files.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(files)
+}
+
+fn copy_regular(source: &Path, dest: &Path) -> Result<(), String> {
+    crate::storage::private_dir(dest).map_err(|error| error.to_string())?;
+    for entry in fs::read_dir(source).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let meta = fs::symlink_metadata(entry.path()).map_err(|error| error.to_string())?;
+        if meta.file_type().is_symlink() {
+            return Err("managed rules contain a link".into());
+        }
+        let target = dest.join(entry.file_name());
+        if meta.is_dir() {
+            copy_regular(&entry.path(), &target)?;
+        } else if meta.is_file() {
+            fs::copy(entry.path(), target).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 fn stage(
@@ -220,6 +297,9 @@ fn stage(
         captures: vec![],
         journal: None,
         warnings: vec![],
+        selection: String::new(),
+        no_rules: false,
+        include_dir: None,
     };
     let (configured, extensions) = match request.engine {
         Engine::Yara => (&request.settings.yara_rules, &["yar", "yara"][..]),
@@ -233,11 +313,13 @@ fn stage(
             vec![]
         }
     };
+    let managed = managed_sources(&request, work, extensions, cancel, &mut staged)?;
     let mut snapshots = Vec::new();
     let mut read_only = vec![request.directory.clone()];
     match request.engine {
         Engine::Yara => {
-            staged.yara_sources = extra;
+            staged.yara_sources = managed;
+            staged.yara_sources.extend(extra);
             if let Some(artifacts) = owned_artifacts(&request)?
                 && (request.settings.scan_memory || request.settings.scan_recovered)
             {
@@ -250,12 +332,7 @@ fn stage(
             }
         }
         Engine::Ids => {
-            staged.ids_sources.push(builtin(
-                work,
-                "antinomie.rules",
-                include_bytes!("../../../assets/rules/antinomie-ids.rules"),
-                "Antinomie IDS 0.6.2 / MIT",
-            )?);
+            staged.ids_sources = managed;
             staged.ids_sources.extend(extra);
             let artifacts = owned_artifacts(&request)?;
             let mut total = 0u64;
@@ -292,12 +369,7 @@ fn stage(
             }
         }
         Engine::Sigma => {
-            staged.sigma_sources.push(builtin(
-                work,
-                "antinomie-sigma.yml",
-                include_bytes!("../../../assets/rules/antinomie-sigma.yml"),
-                "Antinomie Sigma 0.6.2 / MIT",
-            )?);
+            staged.sigma_sources = managed;
             staged.sigma_sources.extend(extra);
             let data = read_bounded(
                 &request.directory,
@@ -326,6 +398,16 @@ fn stage(
                 request.settings.sigma_python = text(&python)?;
             }
         }
+    }
+    let selected = match request.engine {
+        Engine::Yara => staged.yara_sources.len(),
+        Engine::Ids => staged.ids_sources.len(),
+        Engine::Sigma => staged.sigma_sources.len(),
+    };
+    if selected > 0 {
+        staged.no_rules = false;
+    } else if request.settings.rules_root.is_empty() && configured.is_empty() {
+        staged.no_rules = true;
     }
     staged.request = request;
     Ok((staged, snapshots, read_only))
@@ -483,6 +565,22 @@ fn run_program(
         (result, Ok(())) => result,
     };
     result.map(|mut report| {
+        if !request.settings.rules_root.is_empty() && !report.selection.is_empty() {
+            let engine = match request.engine {
+                Engine::Yara => "yara",
+                Engine::Ids => "ids",
+                Engine::Sigma => "sigma",
+            };
+            let source = Path::new(&request.settings.rules_root)
+                .join("rules/profiles")
+                .join(engine)
+                .join(&report.selection)
+                .join("manifest.json");
+            if source.is_file() {
+                let _ = crate::storage::private_dir(&directory);
+                let _ = fs::copy(&source, directory.join("selection-manifest.json"));
+            }
+        }
         if let Err(error) = crate::storage::private_dir(&directory)
             .map_err(|error| error.to_string())
             .and_then(|()| crate::storage::atomic_json(&directory.join("report.json"), &report))
@@ -596,12 +694,35 @@ pub fn result_directory(run: &Path, engine: Engine) -> PathBuf {
 }
 
 fn sigma(staged: &Staged, work: &Path) -> Result<Report, String> {
-    let Some(journal) = &staged.journal else {
-        return Ok(Report::unavailable(
+    if staged.no_rules || staged.sigma_sources.is_empty() && staged.warnings.is_empty() {
+        let mut report = Report::empty(Engine::Sigma, staged.request.identity.clone());
+        report.state = State::NoRules;
+        report.warnings.push("No rules enabled".into());
+        report.selection = staged.selection.clone();
+        return Ok(report);
+    }
+    if staged.sigma_sources.is_empty() {
+        let mut report = Report::unavailable(
             Engine::Sigma,
             staged.request.identity.clone(),
-            "Refresh triage to produce a captured-event index.",
-        ));
+            "No compatible Sigma rules were evaluated.",
+        );
+        report.selection = staged.selection.clone();
+        return Ok(report);
+    }
+    let Some(journal) = &staged.journal else {
+        let mut report = Report::empty(Engine::Sigma, staged.request.identity.clone());
+        report.state = State::Missing;
+        report
+            .warnings
+            .push("Evidence missing: the captured event journal is not ready.".into());
+        if staged.request.settings.partial {
+            report.state = State::Partial;
+            report
+                .warnings
+                .push("Partial: this scan used an incomplete event prefix.".into());
+        }
+        return Ok(report);
     };
     let script = work.join("sigma_scan.py");
     fs::write(&script, include_bytes!("../../../assets/sigma_scan.py"))
@@ -667,11 +788,28 @@ pub fn worker_main_if_requested() -> Option<i32> {
         let work = input.parent().ok_or("detector input has no parent")?;
         let data = read_bounded(work, &input, REPORT_LIMIT)?;
         let staged: Staged = serde_json::from_slice(&data).map_err(|error| error.to_string())?;
-        let report = match staged.request.engine {
+        let mut report = match staged.request.engine {
             Engine::Yara => super::yara::scan(&staged, work)?,
             Engine::Ids => super::ids::scan(&staged, work)?,
             Engine::Sigma => sigma(&staged, work)?,
         };
+        if report.selection.is_empty() {
+            report.selection = staged.selection.clone();
+        }
+        if report.evidence_key.is_empty() {
+            report.evidence_key = staged.request.settings.evidence_key.clone();
+        }
+        if staged.request.settings.partial && report.state == State::Complete {
+            report.state = State::Partial;
+            report
+                .warnings
+                .push("Partial: this scan used evidence that was still being captured.".into());
+        }
+        for warning in &staged.warnings {
+            if !report.warnings.contains(warning) {
+                report.warnings.push(warning.clone());
+            }
+        }
         validate_report(&report, &staged.request)?;
         let data = serde_json::to_vec(&report).map_err(|error| error.to_string())?;
         if data.len() > REPORT_LIMIT {

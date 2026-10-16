@@ -89,13 +89,20 @@ are explicit unavailable states. No sample/hash lookup, model download or guest
 change is introduced. properties.json remains beside the saved specimen for
 export. Saved metadata stays readable and is labeled not reverified when needed.
 
-Detection has independent on-demand YARA, IDS and Sigma jobs. It reuses the
-bundled licensed YARA corpus and accepts additional local rule files/folders.
-Suricata and pySigma 2.x with its SQLite backend are optional local executables;
-no tool, model or ruleset is automatically downloaded. All execution stays in
-the existing mandatory offline sandbox. Results retain sources, versions,
-licenses, corpus hashes, coverage, rule-supplied ATT&CK references and original
-syscall/packet/byte identities under triage-detection/{yara,ids,sigma}/report.json.
+Detection has independent YARA, IDS and Sigma jobs. Production rules come from
+the rule manager under `<data-dir>/rules/`: installed community packs, custom
+group revisions and the enabled-rule selection. The manager reads
+`https://huggingface.co/buckets/MoreMorePwn/antinomie-rules/resolve/catalog.json`
+only when Check or Download is used, and only if
+Settings allows outbound catalog access. Scans do not contact the network.
+Suricata and pySigma 2.x with its SQLite backend are optional local executables.
+A downloaded pack does not install its engine. All execution stays in the
+existing mandatory offline sandbox. Results retain sources, versions, the
+selection digest, licenses, corpus hashes, coverage, rule-supplied ATT&CK
+references and original syscall/packet/byte identities under
+triage-detection/{yara,ids,sigma}/report.json. Automatic scanning runs once per
+ready input and selection. Missing evidence, a missing engine and “No rules
+enabled” stay distinct from a complete scan with zero matches.
 Shared Details owns match inspection; byte previews verify the scanned block's
 digest, and packet jumps validate the owning run and capture segment.
 
