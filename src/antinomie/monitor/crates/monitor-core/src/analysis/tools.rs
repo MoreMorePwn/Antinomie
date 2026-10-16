@@ -12,6 +12,8 @@ use std::{
 
 pub(super) struct Run {
     pub stdout: String,
+    /// Diagnostics captured when the caller asked for them.
+    pub stderr: String,
     /// Output reached `max_output` and was cut.
     pub truncated: bool,
     /// The tool ran out of time and was stopped.
@@ -97,7 +99,7 @@ pub(super) fn run_cancellable(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(if log_stderr {
-            Stdio::inherit()
+            Stdio::piped()
         } else {
             Stdio::null()
         });
@@ -106,6 +108,7 @@ pub(super) fn run_cancellable(
     }
     let mut child = command.spawn().map_err(|e| format!("{path}: {e}"))?;
     let mut stdout = child.stdout.take().ok_or("tool stdout unavailable")?;
+    let stderr = child.stderr.take();
     let reader = thread::spawn(move || {
         let mut output = Vec::new();
         let _ = (&mut stdout)
@@ -114,6 +117,16 @@ pub(super) fn run_cancellable(
         // Drain the rest so the tool never blocks on a full pipe.
         let _ = std::io::copy(&mut stdout, &mut std::io::sink());
         output
+    });
+    let error_reader = stderr.map(|mut stderr| {
+        thread::spawn(move || {
+            let mut output = Vec::new();
+            let _ = (&mut stderr)
+                .take(max_output as u64 + 1)
+                .read_to_end(&mut output);
+            let _ = std::io::copy(&mut stderr, &mut std::io::sink());
+            output
+        })
     });
     let deadline = Instant::now() + timeout;
     let mut timed_out = false;
@@ -134,10 +147,18 @@ pub(super) fn run_cancellable(
         }
     };
     let mut output = reader.join().map_err(|_| "tool reader failed")?;
-    let truncated = output.len() > max_output;
+    let stderr = match error_reader {
+        Some(reader) => reader
+            .join()
+            .map_err(|_| "tool diagnostics failed".to_owned())?,
+        None => Vec::new(),
+    };
+    let truncated = output.len() > max_output || stderr.len() > max_output;
     output.truncate(max_output);
+    let stderr = String::from_utf8_lossy(&stderr[..stderr.len().min(max_output)]).into_owned();
     Ok(Run {
         stdout: String::from_utf8_lossy(&output).into_owned(),
+        stderr,
         truncated,
         timed_out,
         success: status.success(),

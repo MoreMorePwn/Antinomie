@@ -413,7 +413,9 @@ impl TriageView {
     ) {
         self.detection.settings.rules_root = data_dir.display().to_string();
         self.detection.automatic = automatic;
-        self.detection.profile = profile.to_owned();
+        if self.detection.registry_for != generation || self.detection.registry.is_none() {
+            self.detection.profile = profile.to_owned();
+        }
         self.detection.rules_generation = generation;
     }
 

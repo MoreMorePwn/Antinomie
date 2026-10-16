@@ -224,6 +224,9 @@ pub struct Finding {
     pub severity: String,
     pub source: String,
     pub license: String,
+    /// Supplied authors, unchanged. Empty means the rule did not provide one.
+    #[serde(default)]
+    pub author: String,
     pub mitre: Vec<String>,
     pub count: u64,
     pub evidence: Vec<Evidence>,
@@ -251,6 +254,10 @@ pub struct Report {
     /// Evidence generation this report was admitted against. Empty on older reports.
     #[serde(default)]
     pub evidence_key: String,
+    /// True when this run committed both its report and, when rules are managed,
+    /// the selection manifest. Older reports leave this unset.
+    #[serde(default)]
+    pub provenance_saved: Option<bool>,
     /// Sigma rules whose logsource category is accepted by this adapter.
     #[serde(default)]
     pub category_accepted: u64,
@@ -282,6 +289,7 @@ impl Report {
             source_digest: None,
             selection: String::new(),
             evidence_key: String::new(),
+            provenance_saved: None,
             category_accepted: 0,
             category_rejected: 0,
             backend_rejected: 0,
@@ -382,5 +390,18 @@ mod tests {
             mitre_references("attack.t1059.004 [T1105] T1105 task 123 T99999"),
             vec!["T1059.004", "T1105"]
         );
+    }
+    #[test]
+    fn a_saved_finding_without_an_author_stays_unknown() {
+        let saved = r#"{"rule_id":"old","title":"Old","severity":"low","source":"legacy","license":"","mitre":[],"count":1,"evidence":[],"details":""}"#;
+        let finding: Finding = serde_json::from_str(saved).unwrap();
+        assert!(finding.author.is_empty());
+        let authored = Finding {
+            author: "One Author, Second Author".into(),
+            ..finding.clone()
+        };
+        let encoded = serde_json::to_string(&authored).unwrap();
+        let reopened: Finding = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(reopened.author, "One Author, Second Author");
     }
 }

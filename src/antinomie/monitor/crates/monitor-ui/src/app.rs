@@ -4579,8 +4579,7 @@ impl MonitorApp {
             self.tools_open = open;
         }
         if self.rules_summary.is_empty() {
-            self.rules_summary =
-                antinomie_monitor_core::ruleset::profile_label(&self.options.data_dir);
+            self.rules_summary = "Loading rules…".into();
         }
         if self.rules_open {
             let mut open = true;
@@ -4592,8 +4591,7 @@ impl MonitorApp {
             );
             if self.rules_ui.changed() {
                 self.rules_generation = self.rules_generation.saturating_add(1);
-                self.rules_summary =
-                    antinomie_monitor_core::ruleset::profile_label(&self.options.data_dir);
+                self.rules_summary = self.rules_ui.profile();
             }
             self.rules_open = open;
         }

@@ -82,6 +82,26 @@ def field(text, key):
     return ""
 
 
+def copy_rule_licenses(dest, override):
+    names = [
+        "Apache-2.0.txt",
+        "BSD-2-Clause.txt",
+        "CC-BY-4.0.txt",
+        "CC-BY-SA-4.0.txt",
+        "DRL-1.1.md",
+        "MIT.txt",
+    ]
+    root = override or (Path(__file__).resolve().parents[2] / "LICENSES" / "third-party" / "rules")
+    target = dest / "LICENSES" / "third-party" / "rules"
+    target.mkdir(parents=True)
+    for name in names:
+        source = root / name
+        data = source.read_bytes() if source.is_file() else b""
+        if len(data) < 400 or data.strip() in {b"MIT", b"BSD"}:
+            raise SystemExit(f"required upstream license text is missing or placeholder: {source}")
+        (target / name).write_bytes(data)
+
+
 def prepare_sigma(source, dest):
     kept = excluded = 0
     reasons = []
@@ -105,8 +125,14 @@ def prepare_sigma(source, dest):
         target.write_text(text)
     (dest / "excluded.txt").write_text("\n".join(reasons) + ("\n" if reasons else ""))
     license_path = source.parents[1] / "LICENSE"
-    if license_path.is_file():
-        (dest / "LICENSE").write_text(license_path.read_text())
+    if not license_path.is_file():
+        raise SystemExit(f"SigmaHQ LICENSE is missing: {license_path}")
+    (dest / "LICENSE").write_text(license_path.read_text())
+    drl = Path(__file__).resolve().parents[2] / "LICENSES" / "third-party" / "rules" / "DRL-1.1.md"
+    if not drl.is_file():
+        raise SystemExit(f"DRL text is missing: {drl}")
+    (dest / "LICENSES").mkdir()
+    (dest / "LICENSES" / "DRL-1.1.md").write_bytes(drl.read_bytes())
     return kept, excluded
 
 
@@ -120,7 +146,10 @@ def main():
     parser.add_argument("--sigma", required=True)
     parser.add_argument("--sigma-commit", required=True)
     parser.add_argument("--pack-revision", default="", help="Suffix for a rebuilt archive that must not reuse an older version id")
+    parser.add_argument("--bucket", default=BUCKET)
+    parser.add_argument("--licenses", default="")
     args = parser.parse_args()
+    bucket = args.bucket.rstrip("/")
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
     packs = output / "packs"
@@ -134,11 +163,16 @@ def main():
     yara_dir.mkdir()
     text = yara_src.read_text()
     (yara_dir / "yara-forge-core.yar").write_text(text)
+    copy_rule_licenses(yara_dir, Path(args.licenses) if args.licenses else None)
     (yara_dir / "NOTICE").write_text(
         "Redistributable subset of YARA-Forge core "
-        f"{args.yara_release}. Each rule keeps its author, license and source_url. "
-        "Rules whose license does not allow redistribution, and rules that do not "
-        "compile with YARA-X 1.21, are absent. This file is not MIT.\n"
+        f"{args.yara_release}, modified by Antinomie to remove rules whose "
+        "license does not allow redistribution and rules that do not compile "
+        "with YARA-X 1.21. Each rule keeps its author, license and source_url. "
+        "The license texts named by this collection are in "
+        "LICENSES/third-party/rules/. They are the upstream texts, not a "
+        "generic MIT or BSD substitute. This file is not MIT. Packaging these "
+        "notices does not establish complete legal clearance for the application.\n"
     )
     normal, helpers = yara_counts(text)
     yara_archive = packs / f"yara-forge-core-{args.yara_release}.tar.gz"
@@ -151,6 +185,8 @@ def main():
     ids_dir.mkdir()
     with tarfile.open(args.ids, "r:gz") as archive:
         archive.extractall(ids_dir, filter="data")
+    if not any(path.is_file() and "license" in path.name.lower() for path in ids_dir.rglob("*")):
+        raise SystemExit("Emerging Threats archive is missing its supplied license file")
     ids_rules = 0
     for path in ids_dir.rglob("*.rules"):
         ids_rules += sum(1 for line in path.read_text(errors="replace").splitlines() if "sid:" in line and not line.lstrip().startswith("#"))
@@ -177,7 +213,7 @@ def main():
             "version": fields["version"],
             "upstream_revision": fields["upstream_revision"],
             "upstream_url": fields["upstream_url"],
-            "download_url": f"{BUCKET}/packs/{fields['engine']}/{fields['id']}/{fields['version']}/{sha256(archive)}.tar.gz",
+            "download_url": f"{bucket}/packs/{fields['engine']}/{fields['id']}/{fields['version']}/{sha256(archive)}.tar.gz",
             "sha256": sha256(archive),
             "size": archive.stat().st_size,
             "app": ">=0.6.2",

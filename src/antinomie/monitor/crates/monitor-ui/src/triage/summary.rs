@@ -239,6 +239,7 @@ mod tests {
                 severity: "informational".into(),
                 source: "Synthetic fixture".into(),
                 license: "MIT".into(),
+                author: "Synthetic author".into(),
                 mitre: vec!["T1059.004".into()],
                 count: 2,
                 evidence: vec![Evidence::Call {
