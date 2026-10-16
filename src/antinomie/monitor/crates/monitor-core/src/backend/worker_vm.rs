@@ -1,0 +1,328 @@
+// SPDX-License-Identifier: MIT
+//! Starting and stopping the VM, and host resource checks.
+use super::*;
+
+impl Worker {
+    pub(super) fn start(&mut self, id: &str) -> Result<String, String> {
+        if self.session.is_some() {
+            return Err("only one VM may run at a time".into());
+        }
+        let vm = self
+            .snapshot
+            .vms
+            .iter()
+            .find(|v| v.id == id)
+            .ok_or("unknown VM")?
+            .clone();
+        storage::validate_vm(&vm)?;
+        vm.launch.validate_for(&self.options)?;
+        let bundle = crate::locations::boot_bundle(&self.options, vm.base_identity.as_deref())?;
+        storage::validate_boot_display(&vm, &bundle)?;
+        let dir = storage::vm_dir(&self.options, id)?;
+        let disk_bundle: Bundle = storage::read_json(&dir.join("bundle.json"))?;
+        disk_bundle.verify_installed()?;
+        crate::snapshots::recover_pending(&self.options, &vm)?;
+        crate::snapshots::validate_active(&self.options, &vm, &disk_bundle.base_disk)?;
+        storage::validate_guest_transition(&disk_bundle, &bundle)?;
+        storage::validate_vm_bundle(&self.options, &vm, &disk_bundle)?;
+        storage::validate_vm_bundle(&self.options, &vm, &bundle)?;
+        if disk_bundle
+            .guest
+            .as_ref()
+            .is_some_and(|guest| guest.requires_credentials)
+        {
+            crate::guest_account::GuestAccount::load(&dir)?;
+        }
+        if !bundle.kernel_version.is_empty() && !bundle.kernel_version.starts_with("6.12.94") {
+            return Err("boot bundle must use the approved Linux 6.12.94 baseline".into());
+        }
+        require_supported(bundle.antinomie_revision, bundle.min_app_version.as_deref())?;
+        self.snapshot.state = VmState::Starting;
+        self.snapshot.active_vm = Some(id.into());
+        self.snapshot.health = Health::default();
+        self.snapshot.guest_kernel = None;
+        self.snapshot.events.clear();
+        self.snapshot.captures.clear();
+        self.snapshot.capture_events.clear();
+        self.snapshot.process_page = None;
+        self.snapshot.process_cores.clear();
+        self.snapshot.boot_id = None;
+        self.snapshot.network_capture = None;
+        self.publish();
+        self.stopping.store(false, Ordering::Relaxed);
+        let result = (|| -> Result<Session, String> {
+            let boot_id = storage::unique_id();
+            let boot_dir = crate::locations::locations(&self.options, id)?
+                .recording_directory
+                .join("boots")
+                .join(&boot_id);
+            let process = VmProcess::launch(&self.options, &vm, &bundle)?;
+            self.snapshot.serial_log = Some(process.runtime_dir.join("serial.log"));
+            self.snapshot.boot_id = Some(boot_id.clone());
+            let capture_dir = boot_dir.join("unassigned");
+            let mut capture =
+                RawCapture::new(capture_dir.clone(), self.options.capture_quota_size)?;
+            capture.manifest(&vm, &bundle, &disk_bundle, "starting")?;
+            self.snapshot.capture_dir = Some(capture_dir.clone());
+            let mut assembler =
+                Assembler::new(capture_dir.join("objects"), self.options.capture_quota_size)
+                    .map_err(|e| e.to_string())?;
+            assembler.set_event_table(vm.transport.event_table as usize);
+            if let Err(e) = process.verify_ram_layout() {
+                capture.manifest(&vm, &bundle, &disk_bundle, "start-failed")?;
+                return Err(e);
+            }
+            let mut transport =
+                match Transport::open(&process.ram_path, process.ram_size, process.bootstrap) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        capture.manifest(&vm, &bundle, &disk_bundle, "start-failed")?;
+                        return Err(e);
+                    }
+                };
+            // Bases before 0.3.0 cannot wait for room; they keep dropping.
+            if let Err(error) = transport.set_send_wait(vm.transport.send_wait_us()) {
+                self.snapshot.last_error = Some(format!(
+                    "never-drop mode needs a base for Antinomie 0.3.0 or newer ({error})"
+                ));
+            } else if vm.transport.lossless {
+                // The transport thread can pause for seconds while the disk
+                // catches up; the guest must keep waiting through that
+                // instead of taking the host for gone and dropping.
+                let _ = transport.set_host_timeout(LOSSLESS_HOST_TIMEOUT_MS);
+            }
+            capture.manifest(&vm, &bundle, &disk_bundle, "running")?;
+            Ok(Session {
+                resources: crate::resources::ResourceSampler::default(),
+                guest_resources: crate::guest_resources::Collector::default(),
+                last_resource_check: None,
+                analysis: crate::analysis::jobs::Jobs::with_tools(
+                    crate::analysis_tools::tools_dir(&self.options.data_dir),
+                ),
+                transport,
+                process,
+                capture,
+                assembler,
+                vm,
+                bundle,
+                disk_bundle,
+                runs: BTreeMap::new(),
+                run_artifacts: BTreeMap::new(),
+                core_stored_len: 0,
+                core_reserved_len: 0,
+                manual_cores: BTreeMap::new(),
+                manual_record_count: 0,
+                captures: BTreeMap::new(),
+                pending_capture_id: None,
+                boot_id,
+                pending: VecDeque::new(),
+                pending_len: 0,
+                pending_overflow: false,
+                terminal_cursor: 0,
+                late_reads: BTreeMap::new(),
+                run_status_poll: RunStatusPoll::default(),
+                telemetry_busy: false,
+                shed: Shed::default(),
+                last_process_save: Instant::now(),
+                network_bytes_done: 0,
+                network_bytes: 0,
+                last_network_check: Instant::now(),
+                last_memory_check: Instant::now(),
+                status_cursor: 0,
+                last_status_query: Instant::now(),
+                persisted_packets: 0,
+                kernel_probe: KernelProbe::Due(Instant::now()),
+            })
+        })();
+        match result {
+            Ok(session) => {
+                self.session = Some(session);
+                self.snapshot.state = VmState::Running;
+                self.refresh_vm_snapshots(id)?;
+                Ok("VM running; transport attached".into())
+            }
+            Err(e) => {
+                self.snapshot.active_vm = None;
+                self.snapshot.state = VmState::Failed;
+                Err(e)
+            }
+        }
+    }
+    pub(super) fn check_resources(&mut self) {
+        let Some(session) = self.session.as_mut() else {
+            self.snapshot.vm_resources = None;
+            return;
+        };
+        if session
+            .last_resource_check
+            .is_some_and(|last| last.elapsed() < Duration::from_secs(1))
+        {
+            return;
+        }
+        session.last_resource_check = Some(Instant::now());
+        let mut sample = session.resources.sample(
+            session.process.child.id(),
+            &session.vm.id,
+            &self.options.data_dir,
+        );
+        sample.guest = Some(session.guest_resources.sample(
+            &session.boot_id,
+            self.reconnect.1.is_some()
+                || self.snapshot.memory_dump.is_some()
+                || self.snapshot.state != VmState::Running,
+        ));
+        self.snapshot.vm_resources = Some(sample);
+        self.publish();
+    }
+    pub(super) fn stop(&mut self) -> Result<(), String> {
+        let Some(mut session) = self.session.take() else {
+            self.snapshot.active_vm = None;
+            self.snapshot.state = VmState::Stopped;
+            return Ok(());
+        };
+        self.snapshot.state = VmState::Stopping;
+        self.publish();
+        // Never-drop mode ends with the run: a guest shutting down must not
+        // wait on a host that is busy finalizing its recordings.
+        let _ = session.transport.set_send_wait(0);
+        let _ = session.transport.set_host_timeout(0);
+        let deadline = Instant::now() + self.options.shutdown_timeout;
+        let mut issues = Vec::new();
+        let terminal_ids: Vec<_> = session
+            .runs
+            .values()
+            .filter(|run| !run.summary.terminal_eof)
+            .map(|run| run.summary.id.clone())
+            .collect();
+        for run_id in &terminal_ids {
+            let budget = remaining_request_budget(deadline, Duration::from_millis(100));
+            if budget.is_zero() {
+                break;
+            }
+            if let Err(error) =
+                session.read_terminal(run_id, &mut self.snapshot, &self.sender, budget)
+            {
+                issues.push(format!("final terminal drain: {error}"));
+            }
+        }
+        match session.request(
+            control::STATS,
+            &control::header(0),
+            &mut self.snapshot,
+            &self.sender,
+            remaining_request_budget(deadline, Duration::from_secs(4)) / 4,
+        ) {
+            Ok(reply) => {
+                if let Ok(counters) = decode_stats(&reply) {
+                    self.snapshot.health.recorder_stats = Some(counters);
+                }
+            }
+            Err(e) => issues.push(format!("final recorder stats unavailable: {e}")),
+        }
+        let shutdown_ack = match session.request(
+            control::SHUTDOWN,
+            &control::header(0),
+            &mut self.snapshot,
+            &self.sender,
+            remaining_request_budget(deadline, Duration::from_secs(2)),
+        ) {
+            Ok(reply) => {
+                if reply.is_empty() {
+                    true
+                } else {
+                    issues.push("invalid shutdown acknowledgement".into());
+                    false
+                }
+            }
+            Err(e) => {
+                issues.push(e);
+                false
+            }
+        };
+        let mut forced = false;
+        let mut exit_success = false;
+        loop {
+            match session.process.child.try_wait() {
+                Ok(Some(status)) => {
+                    exit_success = status.success();
+                    if !exit_success {
+                        issues.push(format!("QEMU exited with {status}"));
+                    }
+                    break;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    issues.push(e.to_string());
+                    forced = true;
+                    break;
+                }
+            }
+            if let Err(e) = session.pump(&mut self.snapshot, &self.sender)
+                && issues.last() != Some(&e)
+            {
+                issues.push(e);
+            }
+            if !terminal_ids.is_empty() {
+                let run_id = &terminal_ids[session.terminal_cursor % terminal_ids.len()];
+                session.terminal_cursor = session.terminal_cursor.wrapping_add(1);
+                let budget = remaining_request_budget(deadline, Duration::from_millis(50));
+                if !budget.is_zero()
+                    && let Err(error) =
+                        session.read_terminal(run_id, &mut self.snapshot, &self.sender, budget)
+                    && issues.last() != Some(&error)
+                {
+                    issues.push(error);
+                }
+            }
+            if self.last_publish.elapsed() >= Duration::from_millis(250) {
+                self.snapshot.events = session.history();
+                self.publish();
+            }
+            if Instant::now() >= deadline {
+                forced = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        if forced && let Err(e) = session.process.force_stop() {
+            issues.push(e);
+        }
+        if let Err(e) = session.pump(&mut self.snapshot, &self.sender)
+            && issues.last() != Some(&e)
+        {
+            issues.push(format!("final bounded drain unavailable: {e}"));
+        }
+        let final_state = if forced {
+            "forced"
+        } else if shutdown_ack && exit_success {
+            "clean"
+        } else {
+            "unexpected-exit"
+        };
+        if let Err(e) = session.finalize(final_state, &mut self.snapshot) {
+            issues.push(e);
+        }
+        if let Err(e) = end_network_capture(&mut self.snapshot) {
+            issues.push(e);
+        }
+        abandon_memory_dump(&mut self.snapshot);
+        self.snapshot.active_vm = None;
+        self.snapshot.state = VmState::Stopped;
+        self.stopping.store(false, Ordering::Relaxed);
+        if forced {
+            self.snapshot.last_error =
+                Some("VM forced off after shutdown timeout; capture marked forced".into());
+        }
+        if !issues.is_empty() {
+            self.snapshot.last_error = Some(issues.join("; "));
+        }
+        self.publish();
+        Ok(())
+    }
+}
+
+pub(super) fn qmp_outcome_unknown(error: &str) -> bool {
+    // QMP protocol errors prove command rejection. Transport/read failures
+    // may happen after the command executed and cannot authorize deletion.
+    !error.starts_with("QMP error:")
+}
