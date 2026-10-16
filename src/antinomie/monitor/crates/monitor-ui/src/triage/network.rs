@@ -46,6 +46,14 @@ pub(super) const IP_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::number("frame.number", "First observed destination packet"),
 ];
 pub(super) const HOST_FIELDS: &[FieldSpec<'static>] = &[
+    FieldSpec::number(
+        "network.first_us",
+        "First observed packet time in the capture clock",
+    ),
+    FieldSpec::number(
+        "network.last_us",
+        "Last observed packet time in the capture clock",
+    ),
     FieldSpec::text("network.hostname", "DNS question, HTTP Host or TLS SNI"),
     FieldSpec::tags(
         "network.addresses",
@@ -178,6 +186,16 @@ impl Inventory {
                         RowValue::List(host.addresses.iter().cloned().collect()),
                     ),
                     ("network.count", RowValue::Number(i128::from(host.count))),
+                    (
+                        "network.first_us",
+                        host.first
+                            .map_or(RowValue::Missing, |time| RowValue::Number(i128::from(time))),
+                    ),
+                    (
+                        "network.last_us",
+                        host.last
+                            .map_or(RowValue::Missing, |time| RowValue::Number(i128::from(time))),
+                    ),
                     (
                         "network.sources",
                         RowValue::List(host.sources.iter().cloned().collect()),

@@ -403,7 +403,7 @@ impl<'a> FieldSpec<'a> {
 }
 
 /// Owned row values; an unavailable cell must use Missing, never a display placeholder.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum RowValue {
     Number(i128),
     Text(String),
