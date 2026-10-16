@@ -131,3 +131,75 @@ pub(super) fn collect(
         network_warning: (!warnings.is_empty()).then(|| warnings.join("; ")),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn owned_segments_keep_duplicate_frame_numbers_distinct_and_page_after_global_filtering() {
+        if !Path::new("/usr/bin/tshark").is_file() {
+            return;
+        }
+        let files = PacketSpool::new().unwrap();
+        let first = files.directory.join("first.pcap");
+        let second = files.directory.join("second.pcap");
+        std::fs::write(&first, super::super::tests::http_pcap()).unwrap();
+        std::fs::write(&second, super::super::tests::http_pcap()).unwrap();
+        let artifacts = serde_json::json!({"run_id":"r","vm_id":"v","boot_id":"b","network_captures":[first,second],"network_state":"complete","memory_dump":null,"memory_state":"disabled","core_dump":null,"core_state":"disabled","issues":[]});
+        std::fs::write(
+            files.directory.join("artifacts.json"),
+            serde_json::to_vec(&artifacts).unwrap(),
+        )
+        .unwrap();
+        let mut request = ScanRequest {
+            owned_pcap: true,
+            identity: Some(("v".into(), "b".into(), "r".into())),
+            ..Default::default()
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let all = collect(
+            &files.directory,
+            &first,
+            false,
+            &cancel,
+            &request,
+            &mut |_, _, _, _, _| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(all.http.len(), 2);
+        assert_ne!(evidence_key(&all.http[0]), evidence_key(&all.http[1]));
+        assert_eq!(
+            files::number(&all.http[0][0].values, "frame.number"),
+            files::number(&all.http[1][0].values, "frame.number")
+        );
+        request.offsets[3] = 1;
+        let page = collect(
+            &files.directory,
+            &first,
+            false,
+            &cancel,
+            &request,
+            &mut |_, _, _, _, _| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(page.http.len(), 1);
+        assert_eq!(page.http_omitted, 1);
+        assert_eq!(evidence_key(&page.http[0]), evidence_key(&all.http[1]));
+        request.offsets[3] = 0;
+        request.filters[3] = format!(
+            "capture.path == {}",
+            serde_json::to_string(second.to_str().unwrap()).unwrap()
+        );
+        let filtered = collect(
+            &files.directory,
+            &first,
+            false,
+            &cancel,
+            &request,
+            &mut |_, _, _, _, _| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(filtered.http.len(), 1);
+        assert_eq!(evidence_key(&filtered.http[0]), evidence_key(&all.http[1]));
+    }
+}
