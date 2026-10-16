@@ -348,26 +348,25 @@ pub(super) fn scan(staged: &Staged, _work: &Path) -> Result<Report, String> {
     if request.settings.scan_memory || request.settings.scan_recovered {
         if let Some(artifacts) = super::runner::owned_artifacts(request)? {
             if request.settings.scan_memory {
-                if let Some(path) = artifacts.core_dump.as_deref() {
-                    if let Err(error) =
+                if let Some(path) = artifacts.core_dump.as_deref()
+                    && let Err(error) =
                         scan_core(&mut scanner, path, true, &mut report, &mut total, deadline)
-                    {
-                        report.warnings.push(format!("Core: {error}"));
-                        report.state = State::Partial;
-                    }
+                {
+                    report.warnings.push(format!("Core: {error}"));
+                    report.state = State::Partial;
                 }
-                if let Some(directory) = artifacts.memory_dump.as_deref() {
-                    if let Err(error) = scan_core(
+                if let Some(directory) = artifacts.memory_dump.as_deref()
+                    && let Err(error) = scan_core(
                         &mut scanner,
                         &directory.join("memory.elf"),
                         false,
                         &mut report,
                         &mut total,
                         deadline,
-                    ) {
-                        report.warnings.push(format!("RAM: {error}"));
-                        report.state = State::Partial;
-                    }
+                    )
+                {
+                    report.warnings.push(format!("RAM: {error}"));
+                    report.state = State::Partial;
                 }
                 report.warnings.push("Memory rules run on captured contiguous blocks up to 64 MiB. Missing pages are excluded; matches spanning blocks and whole-file conditions are not complete memory coverage.".into());
                 report.state = State::Partial;
@@ -408,13 +407,13 @@ pub(super) fn scan(staged: &Staged, _work: &Path) -> Result<Report, String> {
                             let selected = in_files || entry.file_name() == "files";
                             pending.push((entry.path(), selected, depth + 1));
                         }
-                    } else if metadata.is_file() && in_files {
-                        if let Err(error) = scan_file(&mut scanner, &path, &mut report, &mut total)
-                        {
-                            report.state = State::Partial;
-                            if report.warnings.len() < 64 {
-                                report.warnings.push(format!("{}: {error}", path.display()));
-                            }
+                    } else if metadata.is_file()
+                        && in_files
+                        && let Err(error) = scan_file(&mut scanner, &path, &mut report, &mut total)
+                    {
+                        report.state = State::Partial;
+                        if report.warnings.len() < 64 {
+                            report.warnings.push(format!("{}: {error}", path.display()));
                         }
                     }
                 }

@@ -191,10 +191,9 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
             && files::number(values, "process.cookie").is_some()
             && ui.button("Open original syscall").clicked()
         { request_evidence_jump(ui.ctx(), values); }
-        if files::number(values, "frame.number").is_some() {
-            if ui.button("Open original packet").clicked() {
+        if files::number(values, "frame.number").is_some()
+            && ui.button("Open original packet").clicked() {
                 request_evidence_jump(ui.ctx(), values);
-            }
         }
         for frame in selected.headers.iter().zip(&selected.cells)
             .filter(|(header, _)| header.as_str() == "Response frame")

@@ -98,6 +98,14 @@ cannot produce positive or negative conclusions from this recording. Windows
 event-log rules are incompatible with Linux telemetry; HTTP/DNS is VM-wide.
 Complete, partial, unavailable and not-scanned states remain distinct.
 
+Summary is the first/default tab, followed by Properties and Detection. Activity,
+file and decoded network counts are collected before visibility filters, queries
+and pagination; absent network input is unavailable, not zero. Task identities
+include threads and are not labeled as a process count. Rule totals/occurrences
+and unique rule-supplied ATT&CK references are cached when reports change. Count
+buttons navigate to their corresponding evidence tabs. No vendor consensus,
+malware verdict or invented threat score is derived from these counts.
+
 Dedicated PCAPs are selected by identity-matching run artifact ownership, rather
 than host-time comparisons against QEMU's potentially shifted capture clock.
 Shared captures retain the existing time-window restriction; packet timestamps

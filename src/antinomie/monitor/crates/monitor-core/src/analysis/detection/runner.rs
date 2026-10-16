@@ -238,14 +238,14 @@ fn stage(
     match request.engine {
         Engine::Yara => {
             staged.yara_sources = extra;
-            if let Some(artifacts) = owned_artifacts(&request)? {
-                if request.settings.scan_memory || request.settings.scan_recovered {
-                    if let Some(directory) = artifacts.memory_dump {
-                        read_only.push(directory);
-                    }
-                    if let Some(core) = artifacts.core_dump {
-                        read_only.push(core);
-                    }
+            if let Some(artifacts) = owned_artifacts(&request)?
+                && (request.settings.scan_memory || request.settings.scan_recovered)
+            {
+                if let Some(directory) = artifacts.memory_dump {
+                    read_only.push(directory);
+                }
+                if let Some(core) = artifacts.core_dump {
+                    read_only.push(core);
                 }
             }
         }
@@ -382,7 +382,16 @@ fn validate_report(report: &Report, request: &Request) -> Result<(), String> {
 /// |---|---|
 /// | `request` | Run identity, retained directory, local rules and chosen engine. |
 /// | `cancel` | Shared cancellation; sandbox descendants are reaped before return. |
-pub fn run(mut request: Request, cancel: &Arc<AtomicBool>) -> Result<Report, String> {
+pub fn run(request: Request, cancel: &Arc<AtomicBool>) -> Result<Report, String> {
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    run_program(request, cancel, &executable)
+}
+
+fn run_program(
+    mut request: Request,
+    cancel: &Arc<AtomicBool>,
+    executable: &Path,
+) -> Result<Report, String> {
     if cancel.load(Ordering::Relaxed) {
         return Err("cancelled".into());
     }
@@ -393,15 +402,16 @@ pub fn run(mut request: Request, cancel: &Arc<AtomicBool>) -> Result<Report, Str
     validate_run(&request)?;
     let work = std::env::temp_dir().join(format!("ant-detection-{}", crate::storage::unique_id()));
     crate::storage::private_dir(&work).map_err(|error| error.to_string())?;
+    let mut attempted = false;
     let result = (|| {
         let (staged, _snapshots, mut read_only) = stage(request.clone(), &work, cancel)?;
-        let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-        read_only.push(executable.clone());
+        read_only.push(executable.to_path_buf());
         let input = work.join("request.json");
         crate::storage::atomic_json(&input, &staged)?;
         let output = work.join("report.json");
+        attempted = true;
         super::super::jobs::run_sandboxed(
-            &executable,
+            executable,
             &[
                 "--antinomie-detection-worker".into(),
                 text(&input)?,
@@ -421,26 +431,33 @@ pub fn run(mut request: Request, cancel: &Arc<AtomicBool>) -> Result<Report, Str
             report.state = State::Partial;
         }
         report.warnings.extend(staged.warnings);
-        let directory = result_directory(&request.directory, request.engine);
-        match crate::storage::private_dir(&directory)
-            .map_err(|error| error.to_string())
-            .and_then(|()| {
-                crate::storage::atomic_json(&directory.join("report.json"), &report)
-                    .map_err(|error| error.to_string())
-            }) {
-            Ok(()) => {}
-            Err(error) => report
-                .warnings
-                .push(format!("Could not save detector result: {error}")),
-        }
         Ok(report)
     })();
     let directory = result_directory(&request.directory, request.engine);
-    let diagnostics =
-        read_bounded(&work, Path::new("worker.log"), 2 * 1024 * 1024).and_then(|data| {
-            crate::storage::private_dir(&directory).map_err(|error| error.to_string())?;
-            fs::write(directory.join("worker.log"), data).map_err(|error| error.to_string())
-        });
+    let diagnostics = if attempted {
+        fs::read_dir(&work)
+            .map_err(|error| error.to_string())
+            .and_then(|entries| {
+                let entries = entries
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|error| error.to_string())?;
+                let log = entries
+                    .into_iter()
+                    .find(|entry| {
+                        entry.file_name().to_str().is_some_and(|name| {
+                            name.starts_with("ghidra-") && name.ends_with(".log")
+                        })
+                    })
+                    .ok_or("Sandbox diagnostics log is unavailable")?;
+                read_bounded(&work, &log.path(), 2 * 1024 * 1024)
+            })
+            .and_then(|data| {
+                crate::storage::private_dir(&directory).map_err(|error| error.to_string())?;
+                fs::write(directory.join("worker.log"), data).map_err(|error| error.to_string())
+            })
+    } else {
+        Ok(())
+    };
     let result = match (result, diagnostics) {
         (Ok(mut report), Err(error)) => {
             report
@@ -449,9 +466,13 @@ pub fn run(mut request: Request, cancel: &Arc<AtomicBool>) -> Result<Report, Str
             Ok(report)
         }
         (Err(error), Err(log)) => Err(format!("{error}; detector diagnostics unavailable: {log}")),
+        (Err(error), Ok(())) if attempted => Err(format!(
+            "{error}; retained detector log: {}",
+            directory.join("worker.log").display()
+        )),
         (result, Ok(())) => result,
     };
-    match (result, fs::remove_dir_all(&work)) {
+    let result = match (result, fs::remove_dir_all(&work)) {
         (Ok(mut report), Err(error)) => {
             report
                 .warnings
@@ -460,7 +481,18 @@ pub fn run(mut request: Request, cancel: &Arc<AtomicBool>) -> Result<Report, Str
         }
         (Err(error), Err(cleanup)) => Err(format!("{error}; detector cleanup: {cleanup}")),
         (result, Ok(())) => result,
-    }
+    };
+    result.map(|mut report| {
+        if let Err(error) = crate::storage::private_dir(&directory)
+            .map_err(|error| error.to_string())
+            .and_then(|()| crate::storage::atomic_json(&directory.join("report.json"), &report))
+        {
+            report
+                .warnings
+                .push(format!("Could not save detector result: {error}"));
+        }
+        report
+    })
 }
 
 /// Load a retained engine report after checking its run identity and bounds.
@@ -651,4 +683,162 @@ pub fn worker_main_if_requested() -> Option<i32> {
         eprintln!("detector worker: {error}");
     }
     Some(i32::from(result.is_err()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    #[ignore = "requires explicit built monitor executable and optional QA Python venv"]
+    fn complete_job_driver_retains_reports_and_bounded_diagnostics() {
+        let program = PathBuf::from(
+            std::env::var_os("ANTINOMIE_DETECTION_QA_BINARY").expect("set the built monitor path"),
+        );
+        let python =
+            std::env::var("ANTINOMIE_DETECTION_QA_PYTHON").expect("set QA venv/bin/python");
+        let directory =
+            std::env::temp_dir().join(format!("ant-detector-job-{}", crate::storage::unique_id()));
+        crate::storage::private_dir(&directory.join("analysis")).unwrap();
+        let identity = Identity {
+            vm_id: "v".into(),
+            boot_id: "b".into(),
+            run_id: "r".into(),
+            root_cookie: 1,
+        };
+        crate::storage::atomic_json(
+            &directory.join("run.json"),
+            &serde_json::json!({"id":"r","vm_id":"v","boot_id":"b","root_task_cookie":1}),
+        )
+        .unwrap();
+        let specimen = b"xxxFIXTURE_MARKER";
+        fs::write(directory.join("analysis/specimen"), specimen).unwrap();
+        crate::storage::atomic_json(&directory.join("analysis/report.json"), &serde_json::json!({"id":"fixture-artifact","state":"complete","source_path":"/fixture/sample","specimen_sha256":crate::storage::sha256_hex(specimen),"specimen_len":specimen.len(),"reason":null,"sections":[]})).unwrap();
+        let rules = directory.join("fixture.yar");
+        fs::write(
+            &rules,
+            "rule fixture { strings: $a = \"FIXTURE_MARKER\" condition: $a }",
+        )
+        .unwrap();
+        let mut journal = EventJournal::new(&directory, &identity).unwrap();
+        journal
+            .push(Event {
+                category: "process_creation".into(),
+                fields: BTreeMap::from([("Image".into(), "/bin/sh".into())]),
+                evidence: Evidence::Call {
+                    stream: 1,
+                    cookie: 1,
+                    call: 1,
+                },
+            })
+            .unwrap();
+        journal.finish(true).unwrap();
+        for engine in [Engine::Yara, Engine::Ids, Engine::Sigma] {
+            let request = Request {
+                engine,
+                identity: identity.clone(),
+                directory: directory.clone(),
+                settings: Settings {
+                    yara_rules: rules.display().to_string(),
+                    sigma_python: python.clone(),
+                    ..Default::default()
+                },
+                source_digest: None,
+            };
+            let report =
+                run_program(request.clone(), &Arc::new(AtomicBool::new(false)), &program).unwrap();
+            assert!(
+                report
+                    .warnings
+                    .iter()
+                    .all(|warning| !warning.contains("diagnostics unavailable")),
+                "{:?}",
+                report.warnings
+            );
+            assert!(
+                result_directory(&directory, engine)
+                    .join("worker.log")
+                    .metadata()
+                    .unwrap()
+                    .len()
+                    <= 2 * 1024 * 1024
+            );
+            assert_eq!(load(&request).unwrap().identity, identity);
+            if engine != Engine::Ids {
+                assert!(!report.findings.is_empty(), "{:?}", report);
+            }
+            eprintln!(
+                "{engine:?}: {:?}; {} matched rules; saved report and diagnostics",
+                report.state,
+                report.findings.len()
+            );
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn byte_preview_rejects_changed_bytes_wrong_run_and_unowned_paths() {
+        let directory = std::env::temp_dir().join(format!(
+            "ant-detector-preview-{}",
+            crate::storage::unique_id()
+        ));
+        let memory = directory.join("memory");
+        crate::storage::private_dir(&memory.join("files")).unwrap();
+        let path = memory.join("files/recovered");
+        let data = b"0123456789";
+        fs::write(&path, data).unwrap();
+        let identity = Identity {
+            vm_id: "v".into(),
+            boot_id: "b".into(),
+            run_id: "r".into(),
+            root_cookie: 1,
+        };
+        crate::storage::atomic_json(
+            &directory.join("run.json"),
+            &serde_json::json!({"id":"r","vm_id":"v","boot_id":"b","root_task_cookie":1}),
+        )
+        .unwrap();
+        crate::storage::atomic_json(&directory.join("artifacts.json"), &serde_json::json!({"run_id":"r","vm_id":"v","boot_id":"b","network_captures":[],"network_state":"complete","memory_dump":memory,"memory_state":"complete","core_dump":null,"core_state":"complete","issues":[]})).unwrap();
+        let mut request = Request {
+            engine: Engine::Yara,
+            identity,
+            directory: directory.clone(),
+            settings: Settings::default(),
+            source_digest: None,
+        };
+        let evidence = Evidence::Bytes {
+            path: path.clone(),
+            offset: Some(3),
+            address: None,
+            report_id: None,
+            block: Some(ByteSource {
+                offset: 0,
+                size: data.len() as u64,
+                sha256: crate::storage::sha256_hex(data),
+            }),
+        };
+        assert_eq!(read_evidence(&request, &evidence).unwrap(), b"3456789");
+        fs::write(&path, b"changed!!!").unwrap();
+        assert!(
+            read_evidence(&request, &evidence)
+                .unwrap_err()
+                .contains("changed")
+        );
+        request.identity.run_id = "other".into();
+        assert!(
+            read_evidence(&request, &evidence)
+                .unwrap_err()
+                .contains("identity")
+        );
+        request.identity.run_id = "r".into();
+        let mut outside = evidence;
+        if let Evidence::Bytes { path, .. } = &mut outside {
+            *path = directory.join("unowned");
+        }
+        fs::write(directory.join("unowned"), data).unwrap();
+        assert!(
+            read_evidence(&request, &outside)
+                .unwrap_err()
+                .contains("belong")
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
 }
