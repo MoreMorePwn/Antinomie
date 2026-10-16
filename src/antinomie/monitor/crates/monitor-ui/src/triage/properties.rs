@@ -184,10 +184,7 @@ impl View {
         if ready && self.result.is_none() && self.rx.is_none() {
             self.start(ui.ctx());
         }
-        if let Some(report) = input.analysis {
-            ui.add(egui::Label::new(RichText::new(&report.source_path).monospace()).wrap());
-            ui.weak(format!("Artifact {}", report.id));
-        } else {
+        if input.analysis.is_none() {
             ui.colored_label(theme::warn(), "This run has no retained executable. Enable static analysis before starting a new run.");
         }
         match &self.result {
@@ -210,69 +207,98 @@ impl View {
             .as_ref()
             .and_then(|result| result.as_ref().ok())
             .or(saved.as_ref());
-        let width = (ui.available_width() - 130.0).max(100.0);
         egui::ScrollArea::vertical()
             .id_salt("triage-properties")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                egui::Grid::new("triage-property-fields")
-                    .num_columns(2)
-                    .striped(true)
-                    .spacing(egui::vec2(12.0, 8.0))
-                    .max_col_width(width)
-                    .show(ui, |ui| {
-                        for label in engine::LABELS {
-                            let field = result.and_then(|result| {
-                                result.fields.iter().find(|field| field.label == *label)
-                            });
-                            ui.strong(*label);
-                            ui.vertical(|ui| {
-                                let value =
-                                    field.map_or("Unavailable", |field| field.value.as_str());
-                                let available = field.is_some_and(|field| field.available);
-                                let response = ui.add(
-                                    egui::Label::new(RichText::new(value).monospace().color(
-                                        if available {
+                for (title, subtitle, labels) in [
+                    (
+                        "File identification",
+                        "Format and size of the retained executable",
+                        &["File type", "Magic", "File size"][..],
+                    ),
+                    (
+                        "Exact hashes",
+                        "Identity of the captured specimen",
+                        &["SHA-256", "SHA-1", "MD5"][..],
+                    ),
+                    (
+                        "Similarity & classifiers",
+                        "Optional local tools and provider-specific properties",
+                        &["vhash", "ssdeep", "TLSH", "TrID", "Magika"][..],
+                    ),
+                ] {
+                    presentation::frame().show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        presentation::heading(ui, title, subtitle);
+                        let width = (ui.available_width() - 125.0).max(80.0);
+                        egui::Grid::new(("triage-property-fields", title))
+                            .num_columns(2)
+                            .striped(true)
+                            .spacing(egui::vec2(12.0, 8.0))
+                            .max_col_width(width)
+                            .show(ui, |ui| {
+                                for label in labels {
+                                    let field = result.and_then(|result| {
+                                        result.fields.iter().find(|field| field.label == *label)
+                                    });
+                                    ui.label(RichText::new(*label).strong().color(theme::text()));
+                                    ui.vertical(|ui| {
+                                        ui.set_max_width(width);
+                                        let value = field
+                                            .map_or("Unavailable", |field| field.value.as_str());
+                                        let available = field.is_some_and(|field| field.available);
+                                        let display = if available || value == "Not computed" {
+                                            value
+                                        } else {
+                                            "Unavailable"
+                                        };
+                                        let text = RichText::new(display).color(if available {
                                             theme::text()
                                         } else {
                                             theme::muted()
-                                        },
-                                    ))
-                                    .wrap(),
-                                );
-                                if let Some(field) = field {
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(&field.source)
-                                                .small()
-                                                .color(theme::muted()),
-                                        )
-                                        .wrap(),
-                                    );
-                                }
-                                response.context_menu(|ui| {
-                                    if ui.button("Copy value").clicked() {
-                                        ui.ctx().copy_text(value.into());
-                                        ui.close_menu();
-                                    }
-                                    if let Some(result) = result {
-                                        if ui.button("Copy properties as JSON").clicked() {
-                                            if let Ok(json) = serde_json::to_string_pretty(result) {
-                                                ui.ctx().copy_text(json);
-                                            }
-                                            ui.close_menu();
+                                        });
+                                        let text = if title == "Exact hashes" {
+                                            text.monospace()
+                                        } else {
+                                            text
+                                        };
+                                        let response = ui.add(egui::Label::new(text).wrap());
+                                        if let Some(field) = field {
+                                            response.clone().on_hover_text(format!(
+                                                "{value}\n{}",
+                                                field.source
+                                            ));
                                         }
-                                    }
-                                    if let Some(directory) =
-                                        input.archive.map(|directory| directory.join("analysis"))
-                                    {
-                                        crate::evidence::menu(ui, &directory);
-                                    }
-                                });
+                                        response.context_menu(|ui| {
+                                            if ui.button("Copy value").clicked() {
+                                                ui.ctx().copy_text(value.into());
+                                                ui.close_menu();
+                                            }
+                                            if let Some(result) = result {
+                                                if ui.button("Copy properties as JSON").clicked() {
+                                                    if let Ok(json) =
+                                                        serde_json::to_string_pretty(result)
+                                                    {
+                                                        ui.ctx().copy_text(json);
+                                                    }
+                                                    ui.close_menu();
+                                                }
+                                            }
+                                            if let Some(directory) = input
+                                                .archive
+                                                .map(|directory| directory.join("analysis"))
+                                            {
+                                                crate::evidence::menu(ui, &directory);
+                                            }
+                                        });
+                                    });
+                                    ui.end_row();
+                                }
                             });
-                            ui.end_row();
-                        }
                     });
+                    ui.add_space(10.0);
+                }
             });
     }
 }
@@ -382,10 +408,10 @@ mod tests {
         impl eframe::App for Fixture {
             fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.heading("Properties — synthetic fixture");
                     let input = TriageInput {
                         analysis: Some(&self.report),
                         archive: Some(Path::new("/fixture/run")),
+                        run_finished: true,
                         ..TriageInput::empty()
                     };
                     self.view.tick(ctx, &input);
@@ -437,6 +463,10 @@ mod tests {
             },
             Box::new(move |cc| {
                 theme::install(&cc.egui_ctx);
+                theme::apply(
+                    &cc.egui_ctx,
+                    std::env::var_os("ANTINOMIE_TRIAGE_QA_LIGHT").is_some(),
+                );
                 theme::text_size(&cc.egui_ctx, if width < 700.0 { 24.0 } else { 16.0 });
                 Ok(Box::new(Fixture {
                     view: View::default(),

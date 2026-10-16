@@ -1,7 +1,23 @@
 // SPDX-License-Identifier: MIT
-//! Summaries of destinations and observed hostnames, without remote enrichment.
+//! Summaries of destinations and observed hostnames.
+//! Public-address enrichment runs in the index worker, never while drawing.
 use super::*;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+
+/// How a public destination receives a country and organization.
+/// Local addresses are never queried.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AddressLookup {
+    /// Installed TShark GeoIP fields only.
+    #[default]
+    Tshark,
+    /// `dig` and `whois` on this machine. TShark GeoIP fields are not requested.
+    Whois,
+    /// TShark GeoIP first. `dig` and `whois` fill a missing country or organization.
+    TsharkThenWhois,
+}
 const INVENTORY_LIMIT: usize = 16384;
 
 /// Only an identity-matching artifact manifest proves capture ownership.
@@ -90,6 +106,11 @@ impl Inventory {
         if ip.parse::<std::net::IpAddr>().is_err() {
             return;
         }
+        let (country, organization) = if local_address(ip) {
+            ("-", "local network")
+        } else {
+            (country, organization)
+        };
         if self.ips.len() >= INVENTORY_LIMIT && !self.ips.contains_key(ip) {
             self.omitted += 1;
             return;
@@ -135,6 +156,28 @@ impl Inventory {
             }
         }
         host.sources.insert(source.into());
+    }
+    fn incomplete(&self) -> Vec<String> {
+        self.ips
+            .iter()
+            .filter_map(|(ip, (_, country, organization, _))| {
+                if local_address(ip) || (!country.is_empty() && !organization.is_empty()) {
+                    None
+                } else {
+                    Some(ip.clone())
+                }
+            })
+            .collect()
+    }
+    fn fill_missing(&mut self, ip: &str, country: &str, organization: &str) {
+        if let Some((_, stored_country, stored_organization, _)) = self.ips.get_mut(ip) {
+            if stored_country.is_empty() && !country.is_empty() {
+                *stored_country = country.to_owned();
+            }
+            if stored_organization.is_empty() && !organization.is_empty() {
+                *stored_organization = organization.to_owned();
+            }
+        }
     }
     pub fn rows(&self) -> (Vec<Vec<Cell>>, Vec<Vec<Cell>>) {
         let ips = self
@@ -220,11 +263,139 @@ impl Inventory {
         (ips, hosts)
     }
 }
+pub(super) fn enrich_public(
+    inventory: &mut Inventory,
+    cancel: &std::sync::atomic::AtomicBool,
+    warning: &mut Option<String>,
+) -> Result<(), String> {
+    let mut pending = inventory.incomplete();
+    if pending.len() > 24 {
+        *warning = Some(format!(
+            "Address lookup limited to 24 public destinations; {} more were not queried.",
+            pending.len() - 24
+        ));
+        pending.truncate(24);
+    }
+    let mut noted = warning.is_some();
+    for ip in pending {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err("cancelled".into());
+        }
+        match lookup_public(&ip) {
+            Ok((country, organization)) => inventory.fill_missing(&ip, &country, &organization),
+            Err(error) if !noted => {
+                *warning = Some(error);
+                noted = true;
+            }
+            Err(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn lookup_public(ip: &str) -> Result<(String, String), String> {
+    let address = ip
+        .parse::<std::net::IpAddr>()
+        .map_err(|_| "address lookup is only for an IP address".to_owned())?;
+    if local_address(ip) {
+        return Err("local addresses are not queried".into());
+    }
+    let canonical = address.to_string();
+    let whois = command_text("whois", &[&canonical]);
+    let (country, mut organization) = whois.as_deref().map(parse_whois).unwrap_or_default();
+    if organization.is_empty() {
+        if let Ok(answer) =
+            command_text("dig", &["+short", "+time=1", "+tries=1", "-x", &canonical])
+        {
+            if let Some(name) = ptr_name(&answer) {
+                organization = name;
+            }
+        }
+    }
+    if country.is_empty() && organization.is_empty() {
+        return Err(whois.unwrap_or_else(|error| error));
+    }
+    Ok((country, organization))
+}
+
+fn command_text(program: &str, args: &[&str]) -> Result<String, String> {
+    let output = std::process::Command::new("timeout")
+        .args(["4", program])
+        .args(args)
+        .output()
+        .map_err(|error| format!("{program} could not be started: {error}"))?;
+    if output.stdout.is_empty() && !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        let detail = detail.trim();
+        return Err(if detail.is_empty() {
+            format!("{program} failed")
+        } else {
+            format!("{program} failed: {detail}")
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+pub(super) fn parse_whois(text: &str) -> (String, String) {
+    let country = whois_field(text, &["country"])
+        .unwrap_or_default()
+        .to_owned();
+    let organization = whois_field(text, &["org-name", "orgname", "organization", "org"])
+        .or_else(|| whois_field(text, &["netname"]))
+        .unwrap_or_default()
+        .to_owned();
+    (country, organization)
+}
+
+fn whois_field<'a>(text: &'a str, keys: &[&str]) -> Option<&'a str> {
+    text.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        let value = value.trim();
+        if value.is_empty() {
+            return None;
+        }
+        keys.iter()
+            .any(|candidate| key.trim().eq_ignore_ascii_case(candidate))
+            .then_some(value)
+    })
+}
+
+fn ptr_name(text: &str) -> Option<String> {
+    text.lines().map(str::trim).find_map(|line| {
+        if line.is_empty() || line.starts_with(';') {
+            None
+        } else {
+            Some(line.trim_end_matches('.').to_owned())
+        }
+    })
+}
+
 fn available(value: &str) -> &str {
     if value.is_empty() {
         "Unavailable"
     } else {
         value
+    }
+}
+
+/// Loopback, link-local, and private ranges are local to the guest or host.
+/// Carrier-grade NAT and public addresses keep their recorded lookup result.
+fn local_address(ip: &str) -> bool {
+    match ip.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(address)) => {
+            address.is_private()
+                || address.is_loopback()
+                || address.is_link_local()
+                || address.is_unspecified()
+                || address.is_broadcast()
+        }
+        Ok(std::net::IpAddr::V6(address)) => {
+            address.is_loopback()
+                || address.is_unspecified()
+                || address.is_unicast_link_local()
+                || address.is_unique_local()
+        }
+        Err(_) => false,
     }
 }
 
@@ -308,6 +479,15 @@ mod tests {
     }
 
     #[test]
+    fn whois_prefers_organization_and_ignores_blank_lines() {
+        let (country, organization) =
+            parse_whois("netname: EXAMPLE-NET\nOrgName: Example Org\nCountry: US\ncountry: \n");
+        assert_eq!(country, "US");
+        assert_eq!(organization, "Example Org");
+        assert_eq!(ptr_name("example.net.\n"), Some("example.net".into()));
+    }
+
+    #[test]
     fn inventory_deduplicates_and_keeps_packet_evidence_and_unknown_geoip() {
         let mut inventory = Inventory::default();
         inventory.destination("1.2.3.4", 9, "", "");
@@ -323,6 +503,15 @@ mod tests {
         let (ips, hosts) = inventory.rows();
         assert_eq!(ips.len(), 1);
         assert_eq!(ips[0][1].text, "Unavailable");
+        inventory.destination("10.0.2.15", 11, "US", "Example Org");
+        inventory.destination("fe80::1", 12, "", "");
+        let (ips, _) = inventory.rows();
+        let local = ips.iter().find(|row| row[0].text == "10.0.2.15").unwrap();
+        assert_eq!(local[1].text, "-");
+        assert_eq!(local[2].text, "local network");
+        let link_local = ips.iter().find(|row| row[0].text == "fe80::1").unwrap();
+        assert_eq!(link_local[1].text, "-");
+        assert_eq!(link_local[2].text, "local network");
         assert_eq!(files::number(&ips[0][0].values, "frame.number"), Some(9));
         assert_eq!(hosts.len(), 1);
         assert_eq!(hosts[0][0].text, "example.test");

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use antinomie_monitor_core::analysis::detection::{
-    self as engine, Engine, Evidence, Identity, Report, State,
+    self as engine, Engine, Evidence, Finding, Identity, Report, State,
 };
 use std::path::PathBuf;
 
@@ -150,7 +150,7 @@ impl View {
                         let mut row = vec![
                             cell(&finding.rule_id, theme::text(), true),
                             cell(&finding.title, theme::text(), false),
-                            cell(&finding.severity, theme::warn(), false),
+                            cell(&finding.severity, severity_color(&finding.severity), false),
                             cell(finding.count.to_string(), theme::text(), true),
                             cell(finding.mitre.join(", "), theme::text(), true),
                             cell(&finding.source, theme::text(), false),
@@ -326,9 +326,29 @@ impl View {
         }
     }
     pub fn show(&mut self, ui: &mut egui::Ui, scan: Option<&ArchiveScan>) {
+        presentation::heading(
+            ui,
+            "Detection",
+            "Evaluate retained evidence with local rules",
+        );
         ui.horizontal_wrapped(|ui| {
             for engine in ENGINES {
-                ui.selectable_value(&mut self.selected, engine, name(engine));
+                let selected = self.selected == engine;
+                let label = if selected {
+                    theme::palette().primary_text
+                } else {
+                    theme::text()
+                };
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new(name(engine)).strong().color(label))
+                            .selected(selected)
+                            .min_size(egui::vec2(80.0, 32.0)),
+                    )
+                    .clicked()
+                {
+                    self.selected = engine;
+                }
             }
         });
         let index = ENGINES
@@ -425,15 +445,37 @@ impl View {
                 "Recorded events changed after this result. Scan again to update it.",
             );
         }
-        ui.label(format!(
-            "{} · {} matched rules · {} objects evaluated · {} rules evaluated",
-            state(&report.state),
-            report.findings.len(),
-            report.scanned_objects,
-            report
-                .scanned_rules
-                .map_or("Unknown".into(), |count| count.to_string())
-        ));
+        ui.add_space(8.0);
+        presentation::frame().fill(theme::panel()).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(report.findings.len().to_string())
+                        .strong()
+                        .color(theme::text())
+                        .size(25.0),
+                );
+                ui.label("matched rules");
+                let tone = match report.state {
+                    State::Complete => theme::blue(),
+                    State::Partial => theme::warn(),
+                    State::Unavailable => theme::muted(),
+                };
+                presentation::badge(ui, state(&report.state), tone);
+            });
+            ui.label(
+                RichText::new(format!(
+                    "{} objects evaluated · {} rules evaluated",
+                    report.scanned_objects,
+                    report
+                        .scanned_rules
+                        .map_or("Unknown".into(), |count| count.to_string())
+                ))
+                .small()
+                .color(theme::muted()),
+            );
+        });
+        ui.add_space(8.0);
         if report.omitted_evidence > 0 {
             ui.weak(format!(
                 "{} evidence locations exceed the preview or have no recorded position",
@@ -492,6 +534,7 @@ impl View {
                 .collect();
             self.applied[index] = Some(draft);
         }
+        match_cards(ui, report, TABLES[index], &self.filtered[index]);
         table(ui, TABLES[index], HEADERS, &self.filtered[index]);
     }
     pub fn details(&mut self, ui: &mut egui::Ui, values: &[(&str, RowValue)]) {
@@ -621,6 +664,162 @@ impl View {
         }
     }
 }
+/// Filtered matches stay in a bounded list. A click opens Details; a double
+/// click opens the same exact evidence as the table row.
+fn match_cards(ui: &mut egui::Ui, report: &Report, table_id: &str, rows: &[Vec<Cell>]) {
+    if report.findings.is_empty() {
+        return;
+    }
+    presentation::heading(ui, "Matches", "What each rule matched in this run");
+    if rows.is_empty() {
+        ui.weak("No matches for this filter.");
+        return;
+    }
+    egui::ScrollArea::vertical()
+        .id_salt("detection-matches")
+        .max_height(280.0)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            for (index, row) in rows.iter().enumerate() {
+                let Some(finding) = finding_for(report, row) else {
+                    continue;
+                };
+                let response = presentation::frame().fill(theme::panel()).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal_wrapped(|ui| {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&finding.title).strong().color(theme::text()),
+                            )
+                            .wrap(),
+                        );
+                        if !finding.severity.is_empty() {
+                            presentation::badge(
+                                ui,
+                                &finding.severity,
+                                severity_color(&finding.severity),
+                            );
+                        }
+                    });
+                    ui.add(
+                        egui::Label::new(if finding.details.is_empty() {
+                            "The rule matched, but it did not record an explanation.".into()
+                        } else {
+                            finding.details.clone()
+                        })
+                        .wrap(),
+                    );
+                    ui.label(
+                        RichText::new(&finding.rule_id)
+                            .small()
+                            .color(theme::muted()),
+                    );
+                    if !finding.mitre.is_empty() {
+                        ui.horizontal_wrapped(|ui| {
+                            for reference in finding.mitre.iter().take(8) {
+                                presentation::badge(ui, reference, theme::blue());
+                            }
+                        });
+                    }
+                    ui.label(
+                        RichText::new(match_location(finding))
+                            .small()
+                            .color(theme::muted()),
+                    );
+                });
+                let clicked = ui.interact(
+                    response.response.rect,
+                    ui.id().with(("detection-match", index, &finding.rule_id)),
+                    egui::Sense::click(),
+                );
+                if clicked.hovered() {
+                    ui.painter().rect_stroke(
+                        response.response.rect,
+                        6.0,
+                        egui::Stroke::new(1.0_f32, theme::blue()),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+                if clicked.double_clicked() {
+                    request_evidence_jump(
+                        ui.ctx(),
+                        row.first()
+                            .map(|cell| cell.values.as_slice())
+                            .unwrap_or_default(),
+                    );
+                } else if clicked.clicked() {
+                    details::select(ui.ctx(), table_id, HEADERS, row);
+                    details::clicked(ui.ctx(), table_id);
+                }
+                ui.add_space(6.0);
+            }
+        });
+}
+
+fn finding_for<'a>(report: &'a Report, row: &[Cell]) -> Option<&'a Finding> {
+    let rule = row_text(row, "finding.rule")?;
+    let title = row_text(row, "finding.title");
+    report
+        .findings
+        .iter()
+        .find(|finding| finding.rule_id == rule && title.is_none_or(|title| title == finding.title))
+}
+
+fn row_text<'a>(row: &'a [Cell], key: &str) -> Option<&'a str> {
+    row.first()?.values.iter().find_map(|(name, value)| {
+        if *name == key {
+            if let RowValue::Text(text) = value {
+                Some(text.as_str())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    })
+}
+
+fn severity_color(severity: &str) -> egui::Color32 {
+    match severity.trim().to_ascii_lowercase().as_str() {
+        "1" | "critical" | "high" => theme::error(),
+        "2" | "medium" | "indicator" => theme::warn(),
+        "3" | "4" | "low" | "informational" | "info" => theme::blue(),
+        _ => theme::muted(),
+    }
+}
+
+fn match_location(finding: &Finding) -> String {
+    let Some(evidence) = finding.evidence.first() else {
+        return format!(
+            "{} occurrence{}; no recorded location",
+            finding.count,
+            if finding.count == 1 { "" } else { "s" }
+        );
+    };
+    let first = match evidence {
+        Evidence::Call { call, .. } => format!("syscall {call}"),
+        Evidence::Packet { frame, .. } => format!("packet #{frame}"),
+        Evidence::Bytes { path, offset, .. } => {
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "bytes".into());
+            offset.map_or_else(
+                || format!("file {name}"),
+                |offset| format!("{name} at 0x{offset:x}"),
+            )
+        }
+    };
+    if finding.evidence.len() == 1 {
+        format!("Matched {first}")
+    } else {
+        format!(
+            "Matched {first} and {} more locations",
+            finding.evidence.len() - 1
+        )
+    }
+}
+
 impl Drop for View {
     fn drop(&mut self) {
         self.reset();
@@ -700,5 +899,51 @@ mod tests {
         assert!(cancel.load(Ordering::Relaxed));
         assert!(tx.send(Reply::Loaded(Box::default())).is_err());
         assert!(view.results.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn match_location_names_the_recorded_byte_and_counts_the_rest() {
+        let finding = Finding {
+            rule_id: "sample".into(),
+            title: "Sample".into(),
+            severity: "indicator".into(),
+            source: "local".into(),
+            license: "MIT".into(),
+            mitre: vec!["T1059.004".into()],
+            count: 2,
+            evidence: vec![
+                Evidence::Bytes {
+                    path: PathBuf::from("/tmp/specimen"),
+                    offset: Some(0x10),
+                    address: None,
+                    report_id: None,
+                    block: None,
+                },
+                Evidence::Bytes {
+                    path: PathBuf::from("/tmp/specimen"),
+                    offset: Some(0x20),
+                    address: None,
+                    report_id: None,
+                    block: None,
+                },
+            ],
+            details: "marker".into(),
+        };
+        assert_eq!(
+            match_location(&finding),
+            "Matched specimen at 0x10 and 1 more locations"
+        );
+    }
+
+    #[test]
+    fn numeric_and_named_severities_share_one_scale() {
+        assert_eq!(severity_color("1"), theme::error());
+        assert_eq!(severity_color("high"), theme::error());
+        assert_eq!(severity_color("2"), theme::warn());
+        assert_eq!(severity_color("medium"), theme::warn());
+        assert_eq!(severity_color("3"), theme::blue());
+        assert_eq!(severity_color("4"), theme::blue());
+        assert_eq!(severity_color("informational"), theme::blue());
+        assert_eq!(severity_color("unspecified"), theme::muted());
     }
 }

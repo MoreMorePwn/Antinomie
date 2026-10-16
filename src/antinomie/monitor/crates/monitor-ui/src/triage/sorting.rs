@@ -98,8 +98,14 @@ pub(super) fn header(ui: &mut egui::Ui, table: &str, column: usize, title: &str)
     let arrow = current
         .filter(|sort| sort.column == column)
         .map_or("", |sort| if sort.descending { " ▼" } else { " ▲" });
-    let response =
-        ui.add(egui::Button::new(RichText::new(format!("{title}{arrow}")).strong()).frame(false));
+    let response = ui.add(
+        egui::Button::new(
+            RichText::new(format!("{title}{arrow}"))
+                .strong()
+                .color(theme::text()),
+        )
+        .frame(false),
+    );
     if response.clicked() {
         let next = Spec {
             column,

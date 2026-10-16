@@ -1536,17 +1536,20 @@ impl NetworkView {
     fn capture_menu(&mut self, ui: &mut egui::Ui, capture: &NetworkCapture, live: bool) {
         let directory = capture.file.with_extension("metadata");
         crate::evidence::menu(ui, &directory);
+        let annotation = crate::evidence::annotation(ui, &directory);
+        let values = capture_row_values(capture, annotation.as_ref(), live);
+        ui.menu_button("Filter by field", |ui| {
+            for (field, value) in &values {
+                ui.menu_button(*field, |ui| {
+                    crate::query::value_menu(ui, field, value, &mut self.record_filter);
+                });
+            }
+        });
         if ui.button("Open PCAP directory").clicked() {
             if let Some(parent) = capture.file.parent() {
                 crate::evidence::reveal(ui.ctx(), parent);
             }
             ui.close_menu();
-        }
-        let annotation = crate::evidence::annotation(ui, &directory);
-        for (field, value) in capture_row_values(capture, annotation.as_ref(), live) {
-            ui.menu_button(field, |ui| {
-                crate::query::value_menu(ui, field, &value, &mut self.record_filter);
-            });
         }
     }
 
@@ -1567,7 +1570,11 @@ impl NetworkView {
         }
         self.refresh_payloads();
         if let Some(rebuilt) = self.reconstruction() {
-            for note in &rebuilt.notes {
+            for note in rebuilt
+                .notes
+                .iter()
+                .filter(|note| !note.starts_with("Supported:"))
+            {
                 ui.colored_label(theme::muted(), note);
             }
             ui.colored_label(

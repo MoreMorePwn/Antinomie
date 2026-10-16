@@ -315,39 +315,71 @@ pub(crate) fn show(
                 ..Default::default()
             };
             let values = resources.unwrap_or(&empty);
-            let columns = if width >= ui.text_style_height(&egui::TextStyle::Body) * 48.0 {
-                3
-            } else if width >= ui.text_style_height(&egui::TextStyle::Body) * 32.0 {
-                2
-            } else {
-                1
-            };
-            guest_panels(
-                ui,
-                values.guest.as_ref().filter(|guest| {
-                    !active
-                        || snapshot
-                            .boot_id
-                            .as_ref()
-                            .is_none_or(|boot| guest.boot_id == *boot)
-                }),
-                active,
-                width,
-            );
-            ui.add_space(10.0);
+            let guest = values.guest.as_ref().filter(|guest| {
+                !active
+                    || snapshot
+                        .boot_id
+                        .as_ref()
+                        .is_none_or(|boot| guest.boot_id == *boot)
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.strong("Guest resources");
+                let stale = !active || guest.is_none_or(|guest| guest.stale);
+                ui.colored_label(
+                    if stale { theme::muted() } else { theme::good() },
+                    if stale {
+                        "Stale / unavailable"
+                    } else {
+                        "Live · 2 s sampling"
+                    },
+                );
+                if let Some(age) = guest.and_then(|guest| guest.age_ms) {
+                    ui.label(format!("Last reading {:.1} s ago", age as f64 / 1000.0));
+                }
+            });
+            let stacked = width < ui.text_style_height(&egui::TextStyle::Body) * 32.0;
             let gap = 10.0;
-            let panel_width = ((width - gap * (columns - 1) as f32) / columns as f32).max(80.0);
-            resource_cards(
-                ui,
-                "summary-resources",
-                3,
-                columns,
-                panel_width,
-                12,
-                |ui, kind| {
-                    resource_contents(ui, kind, values, vm, series);
-                },
-            );
+            let panel_width = if stacked {
+                width.max(80.0)
+            } else {
+                ((width - gap * 2.0) / 3.0).max(80.0)
+            };
+            if stacked {
+                resource_cards(
+                    ui,
+                    "summary-resources",
+                    5,
+                    1,
+                    panel_width,
+                    12,
+                    |ui, slot| {
+                        summary_resource(ui, slot, guest, values, vm, series);
+                    },
+                );
+            } else {
+                resource_cards(
+                    ui,
+                    "summary-resources-top",
+                    3,
+                    3,
+                    panel_width,
+                    12,
+                    |ui, slot| summary_resource(ui, slot, guest, values, vm, series),
+                );
+                ui.add_space(10.0);
+                resource_cards(
+                    ui,
+                    "summary-resources-bottom",
+                    2,
+                    2,
+                    panel_width,
+                    12,
+                    |ui, slot| summary_resource(ui, slot + 3, guest, values, vm, series),
+                );
+            }
+            if let Some(error) = guest.and_then(|guest| guest.error.as_ref()) {
+                ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
+            }
             ui.add_space(10.0);
             egui::Frame::new()
                 .fill(theme::bg())
@@ -428,100 +460,84 @@ pub(crate) fn show(
             }
         });
 }
-/// Guest scope stays separate from QEMU/host gauges, including retained data.
-fn guest_panels(
+fn summary_resource(
     ui: &mut egui::Ui,
+    slot: usize,
     guest: Option<&antinomie_monitor_core::GuestResources>,
-    active: bool,
-    width: f32,
+    sample: &VmResources,
+    vm: &VmConfig,
+    history: Option<&VmHistory>,
 ) {
-    ui.horizontal_wrapped(|ui| {
-        ui.strong("Guest resources");
-        let stale = !active || guest.is_none_or(|guest| guest.stale);
-        ui.colored_label(
-            if stale { theme::muted() } else { theme::good() },
-            if stale {
-                "Stale / unavailable"
-            } else {
-                "Live · 2 s sampling"
-            },
-        );
-        if let Some(age) = guest.and_then(|guest| guest.age_ms) {
-            ui.label(format!("Last reading {:.1} s ago", age as f64 / 1000.0));
-        }
-    });
-    let columns = if width >= ui.text_style_height(&egui::TextStyle::Body) * 32.0 {
-        2
+    match slot {
+        0 => resource_contents(ui, 0, sample, vm, history),
+        1 => guest_card(ui, 0, guest),
+        2 => guest_card(ui, 1, guest),
+        3 => resource_contents(ui, 1, sample, vm, history),
+        _ => resource_contents(ui, 2, sample, vm, history),
+    }
+}
+
+fn guest_card(
+    ui: &mut egui::Ui,
+    kind: usize,
+    guest: Option<&antinomie_monitor_core::GuestResources>,
+) {
+    ui.strong(if kind == 0 {
+        "Guest RAM"
     } else {
-        1
-    };
-    let panel_width = ((width - 10.0 * (columns - 1) as f32) / columns as f32).max(80.0);
-    resource_cards(
-        ui,
-        "guest-resource-panels",
-        2,
-        columns,
-        panel_width,
-        10,
-        |ui, kind| {
-            ui.strong(if kind == 0 {
-                "Guest RAM"
+        "Guest root filesystem /"
+    });
+    let (used, total, available, free) = guest
+        .map(|g| {
+            if kind == 0 {
+                (
+                    g.memory_used_size,
+                    g.memory_total_size,
+                    g.memory_available_size,
+                    None,
+                )
             } else {
-                "Guest root filesystem /"
-            });
-            let (used, total, available, free) = guest
-                .map(|g| {
-                    if kind == 0 {
-                        (
-                            g.memory_used_size,
-                            g.memory_total_size,
-                            g.memory_available_size,
-                            None,
-                        )
-                    } else {
-                        (
-                            g.root_used_size,
-                            g.root_total_size,
-                            g.root_available_size,
-                            g.root_free_size,
-                        )
-                    }
-                })
-                .unwrap_or((None, None, None, None));
-            ui.add(
-                egui::Label::new(format!(
-                    "{} used / {}",
-                    optional_size(used),
-                    optional_size(total)
-                ))
-                .wrap(),
-            );
-            meter(
-                ui,
-                fraction(used, total),
-                accent(kind + 1),
-                "Guest measurement unavailable",
-            );
-            ui.add(egui::Label::new(format!("Available: {}", optional_size(available))).wrap()).on_hover_text(
-                    if kind == 0 { "Guest /proc/meminfo: used = MemTotal − MemAvailable. Reclaimable cache is included in available memory." }
-                    else { "Guest statvfs(/): available = f_bavail × f_frsize; used = (f_blocks − f_bfree) × f_frsize. Other mounts are outside this meter." });
-            if let Some(free) = free {
-                ui.add(egui::Label::new(format!("Free including reserved: {}", size(free))).wrap());
+                (
+                    g.root_used_size,
+                    g.root_total_size,
+                    g.root_available_size,
+                    g.root_free_size,
+                )
             }
-            if used.is_none() {
-                ui.add(
-                    egui::Label::new(if kind == 0 {
-                        "Guest RAM utilization unavailable"
-                    } else {
-                        "Guest root filesystem unavailable"
-                    })
-                    .wrap(),
-                );
-            }
-        },
+        })
+        .unwrap_or((None, None, None, None));
+    ui.add(
+        egui::Label::new(format!(
+            "{} used / {}",
+            optional_size(used),
+            optional_size(total)
+        ))
+        .wrap(),
     );
-    if let Some(error) = guest.and_then(|guest| guest.error.as_ref()) {
-        ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
+    meter(
+        ui,
+        fraction(used, total),
+        accent(kind + 1),
+        "Guest measurement unavailable",
+    );
+    ui.add(egui::Label::new(format!("Available: {}", optional_size(available))).wrap())
+        .on_hover_text(if kind == 0 {
+            "Guest /proc/meminfo: used = MemTotal − MemAvailable. Reclaimable cache is included in available memory."
+        } else {
+            "Guest statvfs(/): available = f_bavail × f_frsize; used = (f_blocks − f_bfree) × f_frsize. Other mounts are outside this meter."
+        });
+    if let Some(free) = free {
+        ui.add(egui::Label::new(format!("Free including reserved: {}", size(free))).wrap());
+    }
+    if used.is_none() {
+        ui.add(
+            egui::Label::new(if kind == 0 {
+                "Guest RAM utilization unavailable"
+            } else {
+                "Guest root filesystem unavailable"
+            })
+            .wrap(),
+        );
     }
 }
 /// Render contents once, reserve each natural extent, then paint row backgrounds
