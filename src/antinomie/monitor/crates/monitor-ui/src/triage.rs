@@ -412,7 +412,7 @@ impl TriageView {
                 table(
                     ui,
                     "triage-opened",
-                    &["Time", "Path", "PID / TID", "Result", "Evidence"],
+                    &["Time", "Path", "Process (PID / TID)", "Result", "Evidence"],
                     &rows,
                 );
             }
@@ -430,7 +430,7 @@ impl TriageView {
                     &[
                         "Time",
                         "Path",
-                        "PID / TID",
+                        "Process (PID / TID)",
                         "Transferred / content",
                         "Result",
                         "Evidence",
@@ -446,14 +446,26 @@ impl TriageView {
                         table_rows(
                             ui,
                             "triage-changed",
-                            &["Time", "Path", "PID / TID", "Diff count", "Evidence"],
+                            &[
+                                "Time",
+                                "Path",
+                                "Process (PID / TID)",
+                                "Diff count",
+                                "Evidence",
+                            ],
                             &scan.changed,
                         );
                     });
                 details::refresh(
                     ui.ctx(),
                     "triage-changed",
-                    &["Time", "Path", "PID / TID", "Diff count", "Evidence"],
+                    &[
+                        "Time",
+                        "Path",
+                        "Process (PID / TID)",
+                        "Diff count",
+                        "Evidence",
+                    ],
                     &scan.changed,
                 );
             }
@@ -1409,7 +1421,11 @@ fn observe_processes(
     for invocation in invocations {
         let entry = invocation.entry.as_ref();
         let exit = invocation.exit.as_ref();
-        let Some(event) = entry.or(exit).or(invocation.task_exit.as_ref()) else {
+        let Some(event) = entry
+            .or(exit)
+            .or(invocation.async_events.first())
+            .or(invocation.task_exit.as_ref())
+        else {
             continue;
         };
         if event.pid == 0 {
@@ -1426,6 +1442,7 @@ fn observe_processes(
                 .entry
                 .iter()
                 .chain(invocation.exit.iter())
+                .chain(invocation.async_events.iter())
                 .chain(invocation.task_exit.iter())
             {
                 node.first_ns = Some(node.first_ns.map_or(observed.timestamp_ns, |time| {
@@ -1441,12 +1458,13 @@ fn observe_processes(
                 node.state = "exit not recorded".into();
             }
         }
-        if matches!(event.syscall_name.as_str(), "execve" | "execveat")
-            && exit
-                .and_then(|exit| exit.result)
-                .is_some_and(|result| result >= 0)
-        {
-            if let Some(comm) = program_name(entry, exit) {
+        if committed_exec(invocation) {
+            if let Some(comm) = program_name(entry, exit).or_else(|| {
+                invocation
+                    .async_events
+                    .iter()
+                    .find_map(|event| program_name(Some(event), None))
+            }) {
                 let node = nodes.get_mut(&key).unwrap();
                 node.comm = comm.clone();
                 if node.exec_history.last() != Some(&comm) {
@@ -1464,6 +1482,7 @@ fn observe_processes(
                 node.argv = entry
                     .into_iter()
                     .chain(exit)
+                    .chain(invocation.async_events.iter())
                     .flat_map(|event| &event.fields)
                     .filter(|field| field.key.contains("argv"))
                     .filter_map(path_text)
@@ -1602,6 +1621,10 @@ fn link_child(
     if child_pid == 0 || child_pid == parent.pid {
         return;
     }
+    let inherited = nodes
+        .get(&parent)
+        .filter(|node| node.comm != "?")
+        .map(|node| (node.comm.clone(), node.argv.clone()));
     let candidates: Vec<TaskKey> = nodes
         .iter()
         .filter(|(key, node)| key.pid == child_pid && **key != parent && node.parent.is_none())
@@ -1612,6 +1635,12 @@ fn link_child(
             if let Some(node) = nodes.get_mut(child) {
                 node.parent = Some(parent);
                 node.provisional = false;
+                if node.comm == "?" {
+                    if let Some((comm, argv)) = &inherited {
+                        node.comm.clone_from(comm);
+                        node.argv.clone_from(argv);
+                    }
+                }
             }
         }
         [] => {
@@ -1627,7 +1656,12 @@ fn link_child(
                         child,
                         TaskNode {
                             parent: Some(parent),
-                            comm: "?".into(),
+                            comm: inherited
+                                .as_ref()
+                                .map_or_else(|| "?".into(), |image| image.0.clone()),
+                            argv: inherited
+                                .as_ref()
+                                .map_or_else(Vec::new, |image| image.1.clone()),
                             provisional: true,
                             ..TaskNode::default()
                         },
@@ -1684,6 +1718,42 @@ fn program_name(entry: Option<&EventSummary>, exit: Option<&EventSummary>) -> Op
             .filter(|field| path_key(&field.key))
             .find_map(path_text)
     })
+}
+
+fn committed_exec(invocation: &InvocationSummary) -> bool {
+    invocation
+        .entry
+        .iter()
+        .chain(invocation.exit.iter())
+        .chain(&invocation.async_events)
+        .any(|event| {
+            event.fields.iter().any(|field| {
+                field.key == "lifecycle.exec_commit"
+                    && field.complete
+                    && trace::covered_preview(field).len() >= 8
+            })
+        })
+        || trace::representative(invocation)
+            .is_some_and(|event| matches!(event.syscall_nr, 59 | 322))
+            && succeeded(invocation)
+}
+
+fn process_image<'a>(files: &'a FdState, event: &EventSummary) -> Option<&'a str> {
+    files
+        .process_images
+        .get(&TaskKey {
+            pid: event.pid,
+            cookie: event.task_cookie,
+        })
+        .map(|node| node.comm.as_str())
+        .filter(|image| !image.is_empty() && *image != "?")
+}
+
+fn process_identity(pid: u32, tid: u32, image: Option<&str>) -> String {
+    let name = image
+        .and_then(|image| image.rsplit('/').find(|part| !part.is_empty()))
+        .unwrap_or("Unknown");
+    format!("{name} ({pid} / {tid})")
 }
 
 struct ProcessNode {
@@ -1849,6 +1919,10 @@ const FINDING_FIELDS: &[FieldSpec<'static>] = &[
         "Observed nonnegative syscall exit; missing without exit",
     ),
     FieldSpec::number("process.pid", "Observed PID"),
+    FieldSpec::text(
+        "process.exe",
+        "Captured executable active at this observation",
+    ),
     FieldSpec::number("process.tid", "Observed TID"),
     FieldSpec::number("process.cookie", "Stable task cookie"),
     FieldSpec::number("event.id", "Original invocation ID"),
@@ -1859,6 +1933,14 @@ const FINDING_FIELDS: &[FieldSpec<'static>] = &[
 ];
 
 const FILE_FIELDS: &[FieldSpec<'static>] = &[
+    FieldSpec::text(
+        "process.exe",
+        "Captured executable active at this file operation",
+    ),
+    FieldSpec::boolean(
+        "file.standard_io",
+        "Changed-file group contains only operations on stdin/stdout/stderr",
+    ),
     FieldSpec::number(
         "file.diff_count",
         "Known differing bytes; gaps are separate",
@@ -2020,7 +2102,11 @@ fn suspicious_rows_state(
             continue;
         };
         let args = event.args.or(call_args(invocation)).unwrap_or([0; 6]);
-        let process = format!("pid {} tid {}", event.pid, event.tid);
+        let process = process_identity(
+            event.pid,
+            event.tid,
+            files.and_then(|files| process_image(files, event)),
+        );
         let outcome = outcome(invocation);
         if matches!(event.syscall_nr, 9 | 10) && args.get(2).is_some_and(|prot| prot & 7 == 7) {
             rows.push(hit(
@@ -2316,7 +2402,7 @@ fn file_event_row(
             true,
         ),
         cell(
-            format!("pid {} tid {}", event.pid, event.tid),
+            process_identity(event.pid, event.tid, process_image(files, event)),
             theme::text(),
             true,
         ),
@@ -2363,6 +2449,11 @@ fn file_event_row(
         })
         .unwrap_or_else(|| "—".into());
     row[0].values = vec![
+        (
+            "process.exe",
+            process_image(files, event)
+                .map_or(RowValue::Missing, |image| RowValue::Text(image.into())),
+        ),
         (
             "file.path",
             paths
@@ -2755,6 +2846,7 @@ fn scan_archive_query(
     let (mut open_count, mut change_count) = (0, 0);
     let (_, files_complete, _) = walk_pages(&recording, cancel, |page| {
         for invocation in page.iter().filter(scoped) {
+            observe_processes(&mut files.process_images, std::slice::from_ref(invocation));
             let Some(event) = trace::representative(invocation) else {
                 continue;
             };
@@ -2774,7 +2866,13 @@ fn scan_archive_query(
                     bpf_omitted += 1;
                 }
             }
-            for finding in suspicious_rows_state(std::slice::from_ref(invocation), Some(&files)) {
+            for mut finding in suspicious_rows_state(std::slice::from_ref(invocation), Some(&files))
+            {
+                finding.values.push((
+                    "process.exe",
+                    process_image(&files, event)
+                        .map_or(RowValue::Missing, |image| RowValue::Text(image.into())),
+                ));
                 if let Some(writer) = &mut journal {
                     if let Err(error) = writer.push(&finding) {
                         journal_error = Some(error);
@@ -3891,6 +3989,8 @@ fn fd_argument(invocation: &InvocationSummary, event: &EventSummary) -> Option<u
 
 #[derive(Default)]
 struct FdState {
+    /// Images tracked in observation order, keyed by stable task identity.
+    process_images: std::collections::BTreeMap<TaskKey, TaskNode>,
     /// `(owner cookie, owner pid, fd)` → path text captured for that descriptor.
     opened: std::collections::BTreeMap<(u64, u32, u64), String>,
     /// Child task → the task whose descriptor table it shares (`CLONE_FILES`).
@@ -6279,6 +6379,68 @@ mod tests {
             lines.iter().all(|line| !line.contains("/bin/rejected")),
             "{lines:?}"
         );
+    }
+
+    #[test]
+    fn exec_commit_without_syscall_exit_names_image_and_fork_inherits_it() {
+        let mut exec = call(3, 59, "execve", 0);
+        exec.entry
+            .as_mut()
+            .unwrap()
+            .fields
+            .push(captured("arg0.pathname", "", b"/bin/old\0"));
+        let mut commit = exec.exit.take().unwrap();
+        commit.phase = 3;
+        commit
+            .fields
+            .push(captured("lifecycle.exec_commit", "", &[0; 8]));
+        exec.async_events.push(commit);
+        let fork = call(3, FORK, "fork", 42);
+        let child = call(42, 0, "read", 0);
+        let nodes = process_nodes(&[exec.clone(), fork, child]);
+        assert_eq!(
+            nodes.iter().find(|node| node.pid == 3).unwrap().comm,
+            "/bin/old"
+        );
+        assert_eq!(
+            nodes.iter().find(|node| node.pid == 42).unwrap().comm,
+            "/bin/old"
+        );
+        exec.async_events[0].fields[0].complete = false;
+        assert_eq!(process_nodes(&[exec])[0].comm, "?");
+    }
+
+    #[test]
+    fn file_process_labels_follow_exec_time_without_guessing_unknown_or_reused_pid() {
+        let mut files = FdState::default();
+        let mut first = call(3, 59, "execve", 0);
+        first
+            .entry
+            .as_mut()
+            .unwrap()
+            .fields
+            .push(captured("arg0.pathname", "", b"/bin/old\0"));
+        observe_processes(&mut files.process_images, &[first]);
+        let read = call(3, 0, "read", 0);
+        let event = trace::representative(&read).unwrap();
+        assert_eq!(
+            process_identity(event.pid, event.tid, process_image(&files, event)),
+            "old (3 / 3)"
+        );
+        let mut next = call(3, 59, "execve", 0);
+        next.entry
+            .as_mut()
+            .unwrap()
+            .fields
+            .push(captured("arg0.pathname", "", b"/bin/new\0"));
+        observe_processes(&mut files.process_images, &[next]);
+        assert_eq!(
+            process_identity(event.pid, event.tid, process_image(&files, event)),
+            "new (3 / 3)"
+        );
+        let mut reused = event.clone();
+        reused.task_cookie += 100;
+        assert!(process_image(&files, &reused).is_none());
     }
 
     #[test]
