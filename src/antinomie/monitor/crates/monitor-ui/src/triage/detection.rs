@@ -46,82 +46,56 @@ pub(super) fn name(engine: Engine) -> &'static str {
         Engine::Sigma => "Sigma",
     }
 }
-fn evidence_key(engine: Engine, input: &TriageInput<'_>, settings: &engine::Settings) -> String {
-    match engine {
-        Engine::Yara => {
-            let Some(analysis) = input.analysis else {
-                return "wait:sample".into();
-            };
-            format!(
-                "ready:yara:{}:{}:{}:{}:mem={}:recovered={}",
-                analysis.id,
-                analysis.specimen_sha256.as_deref().unwrap_or(""),
-                analysis.specimen_len.unwrap_or(0),
-                artifact_stamp(input.archive),
-                settings.scan_memory,
-                settings.scan_recovered
-            )
-        }
-        Engine::Ids => match (input.pcap, input.pcap_open) {
-            (None, _) => "missing:pcap".into(),
-            (Some(_), true) => "wait:pcap".into(),
-            (Some(path), false) => format!(
-                "ready:pcap:{}:{}:{}",
-                path.display(),
-                file_stamp(path),
-                input.run_id.unwrap_or("")
-            ),
-        },
-        Engine::Sigma => {
-            if !input.run_finished {
-                return "wait:journal".into();
-            }
-            let journal = input
-                .archive
-                .map(|archive| archive.join(engine::JOURNAL_FILE))
-                .map(|path| file_stamp(&path))
-                .unwrap_or_else(|| "no-archive".into());
-            format!("ready:journal:{}:{journal}", input.run_id.unwrap_or(""))
-        }
-    }
-}
-
-fn file_stamp(path: &Path) -> String {
-    match std::fs::metadata(path) {
-        Ok(meta) => {
-            let modified = meta
-                .modified()
-                .ok()
-                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|time| time.as_secs())
-                .unwrap_or(0);
-            format!("{}:{modified}", meta.len())
-        }
-        Err(_) => "missing".into(),
-    }
-}
-
-fn artifact_stamp(archive: Option<&Path>) -> String {
-    let Some(archive) = archive else {
-        return "no-archive".into();
-    };
-    format!(
-        "artifacts={};journal={}",
-        file_stamp(&archive.join("artifacts.json")),
-        file_stamp(&archive.join(engine::JOURNAL_FILE))
-    )
-}
-
 fn evidence_note(key: &str) -> String {
     match key {
         "wait:sample" => "Waiting for the verified sample.".into(),
         "wait:pcap" => "Waiting for the PCAP segment to finish.".into(),
         "wait:journal" => "Waiting for the run to finish its event journal.".into(),
+        "wait:digest" => "Hashing retained evidence before the scan.".into(),
         "missing:pcap" => {
             "Collection disabled or no PCAP was saved. This is not a clean result.".into()
         }
         _ => String::new(),
     }
+}
+
+#[derive(Clone, Default)]
+struct AttemptBudget {
+    attempts: u8,
+    key: String,
+    ready_at: Option<std::time::Instant>,
+}
+
+impl AttemptBudget {
+    fn observe(&mut self, key: &str) {
+        if self.key != key {
+            self.key = key.to_owned();
+            self.attempts = 0;
+            self.ready_at = None;
+        }
+    }
+
+    fn allow(&self, now: std::time::Instant) -> bool {
+        self.attempts < 3 && self.ready_at.is_none_or(|at| now >= at)
+    }
+
+    /// Counts this admission. A later failure does not add another count.
+    fn admit(&mut self, now: std::time::Instant) {
+        self.attempts = self.attempts.saturating_add(1);
+        let pause = Duration::from_millis(400 * u64::from(self.attempts));
+        self.ready_at = Some(now + pause);
+    }
+
+    fn automatic_success(&mut self) {
+        self.attempts = 0;
+        self.ready_at = None;
+    }
+}
+
+struct FileDigest {
+    len: u64,
+    modified: u128,
+    digest: String,
 }
 
 fn state(state: &State) -> &'static str {
@@ -170,7 +144,10 @@ pub(super) struct View {
     auto_key: [String; 3],
     scanned_generation: [u64; 3],
     notes: [String; 3],
-    attempts: [u8; 3],
+    budgets: [AttemptBudget; 3],
+    auto_started: [bool; 3],
+    digests: std::collections::BTreeMap<String, FileDigest>,
+    digest_rx: Option<Receiver<(String, u64, u128, String)>>,
     digest_cache: [String; 3],
     digest_generation: u64,
     ready_key: [String; 3],
@@ -194,6 +171,8 @@ impl View {
         self.applied = Default::default();
         self.auto_key = Default::default();
         self.notes = Default::default();
+        self.budgets = Default::default();
+        self.auto_started = Default::default();
     }
     fn request(&self, engine: Engine, digest: Option<String>) -> Option<engine::Request> {
         self.identity
@@ -204,6 +183,7 @@ impl View {
                 directory: directory.clone(),
                 settings: self.settings.clone(),
                 source_digest: digest,
+                frozen: None,
             })
     }
     pub(super) fn rows(&mut self, index: usize) {
@@ -324,11 +304,14 @@ impl View {
                         }
                     }
                     Ok(Reply::Scanned(index, result)) => {
-                        if result.is_err() {
-                            self.attempts[index] = self.attempts[index].saturating_add(1);
-                            if self.attempts[index] < 3 {
-                                self.auto_key[index].clear();
+                        let automatic = self.auto_started[index];
+                        self.auto_started[index] = false;
+                        if result.is_ok() {
+                            if automatic {
+                                self.budgets[index].automatic_success();
                             }
+                        } else if automatic && self.budgets[index].attempts < 3 {
+                            self.auto_key[index].clear();
                         }
                         self.results[index] = Some(*result);
                         self.rows(index);
@@ -371,9 +354,127 @@ impl View {
         if let Some(evidence) = pending {
             self.read_bytes(ctx, evidence);
         }
+        if let Some(rx) = &self.digest_rx {
+            match rx.try_recv() {
+                Ok((id, len, modified, digest)) => {
+                    self.digests.insert(
+                        id,
+                        FileDigest {
+                            len,
+                            modified,
+                            digest,
+                        },
+                    );
+                    self.digest_rx = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => self.digest_rx = None,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
         self.consider_auto(ctx, input);
-        if self.rx.is_some() || self.byte_rx.is_some() {
+        if self.rx.is_some() || self.byte_rx.is_some() || self.digest_rx.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));
+        }
+    }
+    fn cached_file_digest(&mut self, ctx: &egui::Context, path: &Path) -> Option<String> {
+        let id = path.display().to_string();
+        let Ok(meta) = std::fs::metadata(path) else {
+            return Some("missing".into());
+        };
+        if !meta.is_file() {
+            return Some("missing".into());
+        }
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|time| time.as_nanos())
+            .unwrap_or(0);
+        if let Some(cached) = self.digests.get(&id) {
+            if cached.len == meta.len() && cached.modified == modified {
+                return Some(cached.digest.clone());
+            }
+        }
+        if self.digest_rx.is_none() {
+            let path = path.to_path_buf();
+            let len = meta.len();
+            let (tx, rx) = mpsc::sync_channel(1);
+            let ctx = ctx.clone();
+            if std::thread::Builder::new()
+                .name("triage-evidence-hash".into())
+                .spawn(move || {
+                    let digest = antinomie_monitor_core::storage::sha256_file_hex(&path)
+                        .unwrap_or_else(|_| "unreadable".into());
+                    let _ = tx.send((id, len, modified, digest));
+                    ctx.request_repaint_of(egui::ViewportId::ROOT);
+                })
+                .is_ok()
+            {
+                self.digest_rx = Some(rx);
+            }
+        }
+        None
+    }
+    fn evidence_identity(
+        &mut self,
+        ctx: &egui::Context,
+        engine: Engine,
+        input: &TriageInput<'_>,
+    ) -> String {
+        match engine {
+            Engine::Yara => {
+                let Some(analysis) = input.analysis else {
+                    return "wait:sample".into();
+                };
+                let archive = match input.archive {
+                    Some(archive) => {
+                        let artifacts =
+                            self.cached_file_digest(ctx, &archive.join("artifacts.json"));
+                        let journal =
+                            self.cached_file_digest(ctx, &archive.join(engine::JOURNAL_FILE));
+                        match (artifacts, journal) {
+                            (Some(artifacts), Some(journal)) => format!("{artifacts}:{journal}"),
+                            _ => return "wait:digest".into(),
+                        }
+                    }
+                    None => "no-archive".into(),
+                };
+                format!(
+                    "ready:yara:{}:{}:{archive}:mem={}:recovered={}",
+                    analysis.id,
+                    analysis.specimen_sha256.as_deref().unwrap_or(""),
+                    self.settings.scan_memory,
+                    self.settings.scan_recovered
+                )
+            }
+            Engine::Ids => match (input.pcap, input.pcap_open) {
+                (None, _) => "missing:pcap".into(),
+                (Some(_), true) => "wait:pcap".into(),
+                (Some(path), false) => {
+                    let Some(digest) = self.cached_file_digest(ctx, path) else {
+                        return "wait:digest".into();
+                    };
+                    format!(
+                        "ready:pcap:{}:{digest}:{}",
+                        path.display(),
+                        input.run_id.unwrap_or("")
+                    )
+                }
+            },
+            Engine::Sigma => {
+                if !input.run_finished {
+                    return "wait:journal".into();
+                }
+                let Some(archive) = input.archive else {
+                    return format!("ready:journal:{}:no-archive", input.run_id.unwrap_or(""));
+                };
+                let Some(digest) =
+                    self.cached_file_digest(ctx, &archive.join(engine::JOURNAL_FILE))
+                else {
+                    return "wait:digest".into();
+                };
+                format!("ready:journal:{}:{digest}", input.run_id.unwrap_or(""))
+            }
         }
     }
     fn consider_auto(&mut self, ctx: &egui::Context, input: &TriageInput<'_>) {
@@ -382,10 +483,13 @@ impl View {
             self.digest_generation = u64::MAX;
         }
         for (index, engine) in ENGINES.iter().enumerate() {
-            let key = evidence_key(*engine, input, &self.settings);
+            let key = self.evidence_identity(ctx, *engine, input);
             self.ready_key[index] = key.clone();
             self.notes[index] = evidence_note(&key);
             let digest = self.current_digest(index);
+            if key.starts_with("ready:") {
+                self.budgets[index].observe(&format!("{key}|{digest}"));
+            }
             let saved_matches = match &self.results[index] {
                 Some(Ok(report)) => {
                     !report.selection.is_empty()
@@ -402,7 +506,13 @@ impl View {
             if !self.automatic || self.rx.is_some() || !key.starts_with("ready:") {
                 continue;
             }
-            if self.attempts[index] >= 3 {
+            let now = std::time::Instant::now();
+            if !self.budgets[index].allow(now) {
+                if let Some(at) = self.budgets[index].ready_at {
+                    if let Some(wait) = at.checked_duration_since(now) {
+                        ctx.request_repaint_after(wait);
+                    }
+                }
                 continue;
             }
             if self.auto_key[index] == key
@@ -410,12 +520,12 @@ impl View {
             {
                 continue;
             }
-            if self.start_engine(ctx, *engine, None, false, &key) {
+            if self.start_engine(ctx, *engine, None, false, &key, true) {
                 self.auto_key[index] = key;
                 self.scanned_generation[index] = self.rules_generation;
-                self.attempts[index] = 0;
+                self.budgets[index].admit(now);
             } else {
-                self.attempts[index] = self.attempts[index].saturating_add(1);
+                self.budgets[index].admit(now);
             }
             break;
         }
@@ -445,7 +555,7 @@ impl View {
             .position(|candidate| *candidate == self.selected)
             .unwrap_or(0);
         let key = self.ready_key[index].clone();
-        let _ = self.start_engine(ctx, self.selected, digest, partial, &key);
+        let _ = self.start_engine(ctx, self.selected, digest, partial, &key, false);
     }
     fn start_engine(
         &mut self,
@@ -454,16 +564,43 @@ impl View {
         digest: Option<String>,
         partial: bool,
         evidence_key: &str,
+        automatic: bool,
     ) -> bool {
         self.settings.partial = partial;
         self.settings.evidence_key = evidence_key.to_owned();
-        let Some(request) = self.request(engine, digest) else {
+        let Some(mut request) = self.request(engine, digest) else {
             return false;
         };
         let index = ENGINES
             .iter()
             .position(|candidate| *candidate == engine)
             .unwrap_or(0);
+        if !request.settings.rules_root.is_empty() {
+            let name = match engine {
+                Engine::Yara => "yara",
+                Engine::Ids => "ids",
+                Engine::Sigma => "sigma",
+            };
+            match antinomie_monitor_core::ruleset::snapshot(
+                Path::new(&request.settings.rules_root),
+                name,
+            ) {
+                Ok(snap) => {
+                    request.frozen = Some(engine::FrozenSelection {
+                        digest: snap.digest,
+                        directory: snap.directory,
+                        enabled_rules: snap.enabled_rules,
+                        excluded_rules: snap.excluded_rules,
+                        warnings: snap.warnings,
+                    });
+                }
+                Err(error) => {
+                    self.results[index] = Some(Err(error));
+                    return false;
+                }
+            }
+        }
+        self.auto_started[index] = automatic;
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = Arc::clone(&cancel);
         let (tx, rx) = mpsc::sync_channel(1);
@@ -1150,5 +1287,43 @@ mod tests {
         assert_eq!(severity_color("4"), theme::blue());
         assert_eq!(severity_color("informational"), theme::blue());
         assert_eq!(severity_color("unspecified"), theme::muted());
+    }
+
+    #[test]
+    fn automatic_attempts_stop_at_three_and_a_manual_scan_does_not_refill_them() {
+        let mut budget = AttemptBudget::default();
+        let start = std::time::Instant::now();
+        budget.observe("ready:one");
+        assert!(budget.allow(start));
+        budget.admit(start);
+        assert_eq!(budget.attempts, 1);
+        assert!(!budget.allow(start));
+        budget.admit(start + Duration::from_millis(500));
+        budget.admit(start + Duration::from_secs(2));
+        assert_eq!(budget.attempts, 3);
+        assert!(!budget.allow(start + Duration::from_secs(30)));
+        // A manual result does not call automatic_success or admit.
+        assert_eq!(budget.attempts, 3);
+        budget.automatic_success();
+        assert_eq!(budget.attempts, 0);
+        budget.admit(start);
+        budget.observe("ready:two");
+        assert_eq!(budget.attempts, 0);
+        assert!(budget.allow(start));
+    }
+
+    #[test]
+    fn same_size_rewrite_changes_the_evidence_digest() {
+        let dir = std::env::temp_dir().join(format!("ant-digest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("evidence.bin");
+        std::fs::write(&path, b"aaaa").unwrap();
+        let first = antinomie_monitor_core::storage::sha256_file_hex(&path).unwrap();
+        std::fs::write(&path, b"bbbb").unwrap();
+        let second = antinomie_monitor_core::storage::sha256_file_hex(&path).unwrap();
+        assert_eq!(first.len(), 64);
+        assert_ne!(first, second);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

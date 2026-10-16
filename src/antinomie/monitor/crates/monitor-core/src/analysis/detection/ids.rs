@@ -177,11 +177,17 @@ fn read_eve(path: &Path, capture: &Capture, report: &mut Report) -> Result<(), S
     Err("EVE output exceeds one million records".into())
 }
 
-fn suricata_config(classification: &Path, reference: &Path) -> String {
+/// Suricata's reference file is `config reference: <name> <url>` with whitespace.
+fn fallback_reference() -> &'static [u8] {
+    b"config reference: url https://doc.emergingthreats.net/\n"
+}
+
+fn suricata_config(classification: &Path, reference: &Path, threshold: &Path) -> String {
     let class = serde_json::to_string(classification).unwrap_or_else(|_| "null".into());
     let reference = serde_json::to_string(reference).unwrap_or_else(|_| "null".into());
+    let threshold = serde_json::to_string(threshold).unwrap_or_else(|_| "null".into());
     format!(
-        "%YAML 1.1\n---\nvars:\n  address-groups:\n    HOME_NET: \"[10.0.0.0/8,192.168.0.0/16,172.16.0.0/12]\"\n    EXTERNAL_NET: \"!$HOME_NET\"\n    HTTP_SERVERS: \"$HOME_NET\"\n    SMTP_SERVERS: \"$HOME_NET\"\n    SQL_SERVERS: \"$HOME_NET\"\n    DNS_SERVERS: \"$HOME_NET\"\n    TELNET_SERVERS: \"$HOME_NET\"\n    AIM_SERVERS: \"$HOME_NET\"\n  port-groups:\n    HTTP_PORTS: \"80\"\n    SHELLCODE_PORTS: \"!80\"\n    ORACLE_PORTS: 1521\n    SSH_PORTS: 22\n    DNP3_PORTS: 20000\n    MODBUS_PORTS: 502\n    FILE_DATA_PORTS: \"$HTTP_PORTS,110,143\"\n    FTP_PORTS: 21\n    SIP_PORTS: \"5060,5061\"\nclassification-file: {class}\nreference-config-file: {reference}\ndefault-rule-path: .\noutputs:\n  - eve-log:\n      enabled: yes\n      filetype: regular\n      filename: eve.json\n      types:\n        - alert:\n            metadata: yes\n  - stats:\n      enabled: no\nlogging:\n  default-log-level: warning\n  outputs:\n    - console:\n        enabled: yes\nflow:\n  memcap: 64mb\nstream:\n  memcap: 64mb\n  checksum-validation: no\n  reassembly:\n    memcap: 128mb\n    depth: 1mb\napp-layer:\n  protocols:\n    http:\n      enabled: yes\nunix-command:\n  enabled: no\n"
+        "%YAML 1.1\n---\nvars:\n  address-groups:\n    HOME_NET: \"[10.0.0.0/8,192.168.0.0/16,172.16.0.0/12]\"\n    EXTERNAL_NET: \"!$HOME_NET\"\n    HTTP_SERVERS: \"$HOME_NET\"\n    SMTP_SERVERS: \"$HOME_NET\"\n    SQL_SERVERS: \"$HOME_NET\"\n    DNS_SERVERS: \"$HOME_NET\"\n    TELNET_SERVERS: \"$HOME_NET\"\n    AIM_SERVERS: \"$HOME_NET\"\n  port-groups:\n    HTTP_PORTS: \"80\"\n    SHELLCODE_PORTS: \"!80\"\n    ORACLE_PORTS: 1521\n    SSH_PORTS: 22\n    DNP3_PORTS: 20000\n    MODBUS_PORTS: 502\n    FILE_DATA_PORTS: \"$HTTP_PORTS,110,143\"\n    FTP_PORTS: 21\n    SIP_PORTS: \"5060,5061\"\nthreshold-file: {threshold}\nclassification-file: {class}\nreference-config-file: {reference}\ndefault-rule-path: .\noutputs:\n  - eve-log:\n      enabled: yes\n      filetype: regular\n      filename: eve.json\n      types:\n        - alert:\n            metadata: yes\n  - stats:\n      enabled: no\nlogging:\n  default-log-level: warning\n  outputs:\n    - console:\n        enabled: yes\nflow:\n  memcap: 64mb\nstream:\n  memcap: 64mb\n  checksum-validation: no\n  reassembly:\n    memcap: 128mb\n    depth: 1mb\napp-layer:\n  protocols:\n    http:\n      enabled: yes\nunix-command:\n  enabled: no\n"
     )
 }
 
@@ -210,6 +216,7 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
     let mut rules = Vec::new();
     let mut seen_sids = std::collections::BTreeSet::new();
     let mut classification_bytes = None;
+    let mut reference_bytes = None;
     for source in &staged.ids_sources {
         let data = fs::read(&source.path).map_err(|error| error.to_string())?;
         if data.len() > 32 * 1024 * 1024 {
@@ -217,6 +224,10 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
         }
         if source.name.ends_with("classification.config") {
             classification_bytes = Some(data);
+            continue;
+        }
+        if source.name.ends_with("reference.config") {
+            reference_bytes = Some(data);
             continue;
         }
         let text = String::from_utf8_lossy(&data);
@@ -250,15 +261,15 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
     )
     .map_err(|error| error.to_string())?;
     let reference = work.join("reference.config");
-    if !reference.is_file() {
-        fs::write(
-            &reference,
-            b"config reference: url,https://doc.emergingthreats.net/\n",
-        )
-        .map_err(|error| error.to_string())?;
-    }
+    fs::write(
+        &reference,
+        reference_bytes.unwrap_or_else(|| fallback_reference().to_vec()),
+    )
+    .map_err(|error| error.to_string())?;
+    let threshold = work.join("threshold.config");
+    fs::write(&threshold, b"# no local thresholds\n").map_err(|error| error.to_string())?;
     let config = work.join("suricata.yaml");
-    let config_text = suricata_config(&classification, &reference);
+    let config_text = suricata_config(&classification, &reference, &threshold);
     report.warnings.push(
         "HOME_NET is the private address ranges because this scan has no recorded guest address set. Rules that negate those groups can load; matches are limited to that assumption. VM-wide PCAP is not process attribution.".into(),
     );
@@ -407,10 +418,259 @@ mod tests {
         let text = suricata_config(
             Path::new("classification.config"),
             Path::new("reference.config"),
+            Path::new("threshold.config"),
         );
+        assert!(text.contains("threshold-file:"));
+        assert!(!text.contains("/etc/suricata"));
         assert!(text.contains("HOME_NET: \"[10.0.0.0/8,192.168.0.0/16,172.16.0.0/12]\""));
         assert!(text.contains("EXTERNAL_NET: \"!$HOME_NET\""));
         assert!(!text.contains("HOME_NET: any"));
         assert!(!text.contains("EXTERNAL_NET: any"));
+    }
+
+    #[test]
+    fn reference_fallback_separates_the_name_and_url() {
+        let text = std::str::from_utf8(fallback_reference()).unwrap();
+        assert!(text.starts_with("config reference: "));
+        assert!(!text.contains(','));
+        let mut parts = text.split_whitespace();
+        assert_eq!(parts.next(), Some("config"));
+        assert_eq!(parts.next(), Some("reference:"));
+        let name = parts.next().unwrap();
+        let url = parts.next().unwrap();
+        assert!(!name.is_empty() && !url.is_empty());
+        assert!(url.starts_with("https://"));
+        assert_eq!(parts.next(), None);
+    }
+
+    /// Loads the selected Emerging Threats tree with the Suricata named by
+    /// `ANTINOMIE_SURICATA`. A missing variable is not an engine result.
+    #[test]
+    fn emerging_threats_pack_loads_and_reads_a_pcap() {
+        let Ok(tool) = std::env::var("ANTINOMIE_SURICATA") else {
+            eprintln!("emerging_threats_pack_loads_and_reads_a_pcap: ANTINOMIE_SURICATA unset");
+            return;
+        };
+        let Ok(rules_root) = std::env::var("ANTINOMIE_ET_RULES") else {
+            eprintln!("emerging_threats_pack_loads_and_reads_a_pcap: ANTINOMIE_ET_RULES unset");
+            return;
+        };
+        let libs = std::env::var("ANTINOMIE_SURICATA_LIBS").unwrap_or_default();
+        let root = PathBuf::from(rules_root);
+        let mut seen = std::collections::BTreeSet::new();
+        let mut rules = Vec::new();
+        let mut skipped = Vec::new();
+        let mut classification = None;
+        let mut reference = None;
+        let mut files = Vec::new();
+        collect_rule_files(&root, &mut files);
+        for path in files {
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("");
+            let data = fs::read(&path).unwrap();
+            if name == "classification.config" {
+                classification = Some(data);
+                continue;
+            }
+            if name == "reference.config" {
+                reference = Some(data);
+                continue;
+            }
+            if !name.ends_with(".rules") {
+                continue;
+            }
+            let text = String::from_utf8_lossy(&data);
+            let (kept, rejected) = select_ids_rules(&text, &mut seen);
+            skipped.extend(rejected);
+            rules.extend_from_slice(kept.as_bytes());
+        }
+        let dataset = skipped
+            .iter()
+            .filter(|line| line.contains("dataset"))
+            .count();
+        let fingerprints = skipped
+            .iter()
+            .filter(|line| line.contains("fingerprint"))
+            .count();
+        let duplicates = skipped
+            .iter()
+            .filter(|line| line.contains("duplicate"))
+            .count();
+        assert!(!rules.is_empty(), "the pack emitted no rules");
+        let work = std::env::temp_dir().join(format!("ant-ids-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&work);
+        fs::create_dir_all(&work).unwrap();
+        fs::write(work.join("combined.rules"), &rules).unwrap();
+        fs::write(
+            work.join("classification.config"),
+            classification.unwrap_or_else(|| {
+                b"config classification: misc-activity,Misc activity,3\n".to_vec()
+            }),
+        )
+        .unwrap();
+        let reference_path = work.join("reference.config");
+        fs::write(
+            &reference_path,
+            reference.unwrap_or_else(|| fallback_reference().to_vec()),
+        )
+        .unwrap();
+        let written = fs::read_to_string(&reference_path).unwrap();
+        assert!(
+            !written.contains("url,"),
+            "reference file still uses a comma"
+        );
+        let threshold = work.join("threshold.config");
+        fs::write(&threshold, b"# no local thresholds\n").unwrap();
+        let config = work.join("suricata.yaml");
+        fs::write(
+            &config,
+            suricata_config(
+                &work.join("classification.config"),
+                &reference_path,
+                &threshold,
+            ),
+        )
+        .unwrap();
+        let log = work.join("test");
+        fs::create_dir_all(&log).unwrap();
+        let loaded = suricata_text(
+            &tool,
+            &libs,
+            &[
+                "-v",
+                "-T",
+                "-c",
+                config.to_str().unwrap(),
+                "-S",
+                work.join("combined.rules").to_str().unwrap(),
+                "-l",
+                log.to_str().unwrap(),
+                "-k",
+                "none",
+            ],
+        );
+        let summary = loaded
+            .lines()
+            .find(|line| line.contains("rules successfully loaded"))
+            .unwrap_or("no load summary")
+            .to_owned();
+        eprintln!(
+            "selected_sids={} emitted_bytes={} rejected={} dataset={} ja3_ja4={} duplicates={} engine={}",
+            seen.len(),
+            rules.len(),
+            skipped.len(),
+            dataset,
+            fingerprints,
+            duplicates,
+            summary.trim()
+        );
+        assert!(
+            loaded.contains("rules successfully loaded"),
+            "Suricata did not load the pack:\n{loaded}"
+        );
+        assert!(
+            !loaded.contains("Invalid Reference Config"),
+            "reference file was rejected:\n{loaded}"
+        );
+        let pcap = work.join("one.pcap");
+        fs::write(&pcap, minimal_pcap()).unwrap();
+        let scan_log = work.join("scan");
+        fs::create_dir_all(&scan_log).unwrap();
+        let scanned = suricata_text(
+            &tool,
+            &libs,
+            &[
+                "-c",
+                config.to_str().unwrap(),
+                "-r",
+                pcap.to_str().unwrap(),
+                "-S",
+                work.join("combined.rules").to_str().unwrap(),
+                "-l",
+                scan_log.to_str().unwrap(),
+                "--runmode",
+                "single",
+                "-k",
+                "none",
+            ],
+        );
+        assert!(
+            !scanned.contains("Invalid Reference Config"),
+            "pcap scan rejected the reference file:\n{scanned}"
+        );
+        assert!(
+            scan_log.join("eve.json").is_file(),
+            "pcap scan produced no EVE output:\n{scanned}"
+        );
+        let _ = fs::remove_dir_all(&work);
+    }
+
+    fn collect_rule_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_rule_files(&path, out);
+            } else if path.is_file() {
+                out.push(path);
+            }
+        }
+    }
+
+    fn suricata_text(tool: &str, libs: &str, args: &[&str]) -> String {
+        let mut command = std::process::Command::new(tool);
+        command.args(args).env("LC_ALL", "C");
+        if !libs.is_empty() {
+            command.env("LD_LIBRARY_PATH", libs);
+        }
+        let output = command.output().expect("suricata did not start");
+        let mut text = String::from_utf8_lossy(&output.stderr).into_owned();
+        text.push_str(&String::from_utf8_lossy(&output.stdout));
+        if !output.status.success() {
+            text.push_str(&format!("\nexit: {}", output.status));
+        }
+        text
+    }
+
+    fn minimal_pcap() -> Vec<u8> {
+        let mut packet = vec![
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0x08, 0x00,
+        ];
+        let mut ip = vec![
+            0x45, 0, 0, 40, 0, 1, 0, 0, 64, 6, 0, 0, 10, 0, 0, 1, 10, 0, 0, 2,
+        ];
+        let sum = ip_checksum(&ip);
+        ip[10] = (sum >> 8) as u8;
+        ip[11] = sum as u8;
+        packet.extend(ip);
+        packet.extend([
+            0x04, 0xd2, 0x00, 0x50, 0, 0, 0, 1, 0, 0, 0, 0, 0x50, 0x02, 0xff, 0xff, 0, 0, 0, 0,
+        ]);
+        let mut bytes = vec![
+            0xd4, 0xc3, 0xb2, 0xa1, 0x02, 0, 0x04, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 1,
+            0, 0, 0,
+        ];
+        let len = (packet.len() as u32).to_le_bytes();
+        bytes.extend([0, 0, 0, 0, 0, 0, 0, 0]);
+        bytes.extend(len);
+        bytes.extend(len);
+        bytes.extend(packet);
+        bytes
+    }
+
+    fn ip_checksum(header: &[u8]) -> u16 {
+        let mut sum = 0u32;
+        for pair in header.chunks(2) {
+            let word = u16::from_be_bytes([pair[0], pair[1]]);
+            sum += u32::from(word);
+        }
+        while sum > 0xffff {
+            sum = (sum & 0xffff) + (sum >> 16);
+        }
+        !(sum as u16)
     }
 }

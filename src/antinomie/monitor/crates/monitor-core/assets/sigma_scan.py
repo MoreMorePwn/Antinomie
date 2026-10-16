@@ -116,7 +116,7 @@ def attack_tags(tags):
 
 
 def scan(request, events_path):
-    report = {"engine": "sigma", "identity": request["identity"], "state": "complete", "sources": [], "findings": [], "scanned_rules": 0, "skipped_rules": 0, "skipped": [], "omitted_evidence": 0, "warnings": [], "source_digest": request.get("source_digest")}
+    report = {"engine": "sigma", "identity": request["identity"], "state": "complete", "sources": [], "findings": [], "scanned_rules": 0, "skipped_rules": 0, "skipped": [], "omitted_evidence": 0, "warnings": [], "source_digest": request.get("source_digest"), "category_accepted": 0, "backend_rejected": 0, "missing_field_events": 0, "category_rejected": 0}
     try:
         from sigma.collection import SigmaCollection
         from sigma.backends.sqlite import sqliteBackend
@@ -171,15 +171,23 @@ def scan(request, events_path):
                     product = (logsource.product or "").lower()
                     service = (logsource.service or "").lower()
                     if product not in {"", "linux"} or service not in {"", "antinomie"} or category not in SUPPORTED_CATEGORIES:
+                        report["category_rejected"] += 1
                         raise ValueError("unsupported logsource: " + str(logsource))
-                    queries = backend.convert(SigmaCollection([rule]))
+                    report["category_accepted"] += 1
+                    try:
+                        queries = backend.convert(SigmaCollection([rule]))
+                    except Exception as error:
+                        report["backend_rejected"] += 1
+                        raise ValueError("backend rejected the rule: " + str(error)[:300]) from error
                     if not queries:
+                        report["backend_rejected"] += 1
                         raise ValueError("rule produced no supported query")
                     total, evidence, evaluated, missing = matching_rows(connection, queries, category)
                     if missing:
+                        report["missing_field_events"] += int(missing)
                         report["state"] = "partial"
                         if len(report["skipped"]) < 1000:
-                            report["skipped"].append(str(rule.id or rule.title) + f": {missing} events lack fields used by this rule")
+                            report["skipped"].append(str(rule.id or rule.title) + f": {missing} events lack fields used by this rule; missing values were not invented")
                     if not evaluated:
                         raise ValueError("no captured events with all required fields")
                     report["scanned_rules"] += 1
@@ -192,6 +200,8 @@ def scan(request, events_path):
                         level = getattr(rule.level, "name", "informational").lower()
                         report["findings"].append({"rule_id": str(rule.id or (source["name"] + ":" + rule.title)), "title": rule.title, "severity": level, "source": source["name"] + " sha256:" + sha256, "license": str(getattr(rule, "license", None) or "Not supplied by rule"), "mitre": attack_tags(rule.tags or []), "count": total, "evidence": retained, "details": "Evaluated against normalized captured Linux events; joined argv is not original shell quoting."})
                 except Exception as error:
+                    if "no such column" in str(error):
+                        report["backend_rejected"] += 1
                     report["skipped_rules"] += 1
                     report["state"] = "partial"
                     if len(report["skipped"]) < 1000:
