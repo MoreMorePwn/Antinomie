@@ -460,6 +460,7 @@ impl MonitorApp {
             #[cfg(test)]
             launch_action_rects: None,
         };
+        *app.triage.detection_settings() = app.settings.triage_detection.clone();
         match ArchiveWorker::new(Some(cc.egui_ctx.clone())) {
             Ok(worker) => {
                 app.archive = Some(worker);

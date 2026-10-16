@@ -6,6 +6,10 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Summary.** Triage opens with whole-run activity, file, network and detection
+  counts. Counts precede table filters and pagination; missing captures or scans
+  remain unavailable. Select a count to open its corresponding evidence view.
+
 - **Detection.** On-demand YARA, IDS and Sigma tabs evaluate retained evidence
   offline, preserve coverage and source provenance, and open match details in
   the shared Details pane. Local rule folders are optional; Suricata and pySigma

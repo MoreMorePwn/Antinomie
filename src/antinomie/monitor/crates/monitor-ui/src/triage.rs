@@ -26,9 +26,11 @@ mod network_index;
 mod normalized;
 mod properties;
 mod sorting;
+mod summary;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
+    Summary,
     Properties,
     Detection,
     Process,
@@ -97,7 +99,7 @@ impl Default for TriageView {
         Self {
             properties: properties::View::default(),
             detection: detection::View::default(),
-            section: Section::Process,
+            section: Section::Summary,
             process: ProcessTab::Tree,
             files: FileTab::Opened,
             network: NetTab::Http,
@@ -263,6 +265,7 @@ impl TriageView {
         }
         ui.horizontal_wrapped(|ui| {
             for (section, label) in [
+                (Section::Summary, "Summary"),
                 (Section::Properties, "Properties"),
                 (Section::Detection, "Detection"),
                 (Section::Process, "Process"),
@@ -275,6 +278,10 @@ impl TriageView {
         });
         ui.separator();
         self.tick(ui.ctx(), input);
+        if self.section == Section::Summary {
+            summary::show(self, ui, &input);
+            return self.take_navigation(ui.ctx());
+        }
         if self.section == Section::Properties {
             self.properties.show(ui, &input);
             return self.take_navigation(ui.ctx());
@@ -329,7 +336,7 @@ impl TriageView {
             }
         });
         let jump = match self.section {
-            Section::Properties | Section::Detection => None,
+            Section::Summary | Section::Properties | Section::Detection => None,
             Section::Process => self.process(ui, &input),
             Section::Files => {
                 self.files(ui, &input);
@@ -826,7 +833,8 @@ impl TriageView {
         let directory = path.to_path_buf();
         let pcap = pcap.map(Path::to_path_buf);
         let cancel_thread = Arc::clone(&cancel);
-        let request = self.scan_request.clone();
+        let mut request = self.scan_request.clone();
+        request.event_cache = self.scan.as_ref().and_then(|scan| scan.event_cache.clone());
         self.scan_generation = self.scan_generation.saturating_add(1);
         let generation = self.scan_generation;
         if std::thread::Builder::new()
@@ -2142,6 +2150,7 @@ const DNS_FIELDS: &[FieldSpec<'static>] = &[
 
 #[derive(Clone, Default)]
 struct ScanRequest {
+    event_cache: Option<normalized::Cache>,
     sorts: [Option<sorting::Spec>; 8],
     file_visibility: file_visibility::FileVisibility,
     owned_pcap: bool,
@@ -2823,6 +2832,7 @@ impl Drop for FindingJournal {
 }
 
 struct ArchiveScan {
+    event_cache: Option<normalized::Cache>,
     counts: normalized::Counts,
     network_counts: Option<(u64, u64, u64)>,
     event_journal: Option<antinomie_monitor_core::analysis::detection::JournalSummary>,
@@ -2946,10 +2956,16 @@ fn scan_archive_query(
         ..Default::default()
     };
     let mut event_error = None;
+    let source_key = normalized::source_key(&recording.directory, pcap, pcap_open, request);
+    let cached_events = normalized::reuse(
+        request.event_cache.as_ref(),
+        source_key.as_ref(),
+        &recording.directory,
+    );
     let mut event_journal = request
         .identity
         .as_ref()
-        .filter(|_| request.root_cookie != 0)
+        .filter(|_| request.root_cookie != 0 && cached_events.is_none())
         .and_then(|(vm, boot, run)| {
             let identity = antinomie_monitor_core::analysis::detection::Identity {
                 vm_id: vm.clone(),
@@ -3183,22 +3199,36 @@ fn scan_archive_query(
     if cancel.load(Ordering::Relaxed) {
         return Err("cancelled".into());
     }
-    let event_journal = event_journal.and_then(|journal| {
-        match journal.finish(
-            complete
-                && issues.is_empty()
-                && request.run_finished
-                && !pcap_open
-                && network.network_warning.is_none(),
-        ) {
-            Ok(summary) => Some(summary),
-            Err(error) => {
-                event_error = Some(error);
-                None
+    let stable_source =
+        source_key == normalized::source_key(&recording.directory, pcap, pcap_open, request);
+    let event_journal = event_journal
+        .and_then(|journal| {
+            match journal.finish(
+                complete
+                    && stable_source
+                    && issues.is_empty()
+                    && facts
+                        .as_ref()
+                        .is_some_and(|facts| facts.complete == Some(true))
+                    && request.run_finished
+                    && !pcap_open
+                    && network.network_warning.is_none(),
+            ) {
+                Ok(summary) => Some(summary),
+                Err(error) => {
+                    event_error = Some(error);
+                    None
+                }
             }
-        }
-    });
+        })
+        .or(cached_events);
+    let event_cache = if stable_source {
+        normalized::cache(source_key, event_journal.as_ref(), &recording.directory)
+    } else {
+        None
+    };
     Ok(ArchiveScan {
+        event_cache,
         counts,
         network_counts: network.counts,
         event_journal,
@@ -3216,7 +3246,11 @@ fn scan_archive_query(
         partial: !complete
             || omitted_files > 0
             || !issues.is_empty()
+            || facts
+                .as_ref()
+                .is_some_and(|facts| facts.complete != Some(true))
             || network.coverage.contains("failed")
+            || network.network_warning.is_some()
             || pcap_open,
         #[cfg(test)]
         coverage,
@@ -5987,7 +6021,7 @@ mod tests {
         assert_eq!(epoch_us("1.bad"), None);
     }
 
-    fn write_rwx_calls(raw: &mut dyn std::io::Write, calls: std::ops::Range<u64>) {
+    pub(super) fn write_rwx_calls(raw: &mut dyn std::io::Write, calls: std::ops::Range<u64>) {
         for call in calls {
             for phase in [1u8, 2] {
                 for fragment in [1u8, 5] {

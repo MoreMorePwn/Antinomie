@@ -14,6 +14,19 @@ const FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::tags("finding.mitre", "Rule-supplied ATT&CK references"),
     FieldSpec::number("finding.count", "Matched events or byte targets/blocks"),
     FieldSpec::text("finding.engine", "YARA, IDS or Sigma"),
+    FieldSpec::number("stream.id", "Original syscall stream"),
+    FieldSpec::number("process.cookie", "Original stable task identity"),
+    FieldSpec::number("event.id", "Original syscall invocation"),
+    FieldSpec::number("frame.number", "Original packet frame"),
+    FieldSpec::text("capture.path", "Owning capture segment"),
+    FieldSpec::text("evidence.path", "Retained byte source"),
+    FieldSpec::number(
+        "evidence.offset",
+        "Matched file offset; missing for file-level conditions",
+    ),
+    FieldSpec::number("evidence.address", "Known process virtual address"),
+    FieldSpec::text("evidence.report", "Retained specimen report identity"),
+    FieldSpec::text("evidence.block", "Verified scanned block digest and extent"),
 ];
 const HEADERS: &[&str] = &[
     "Rule",
@@ -41,9 +54,15 @@ fn state(state: &State) -> &'static str {
     }
 }
 type Loaded = [Option<Report>; 3];
+type BytePreview = Result<(Evidence, Vec<u8>), String>;
+pub(super) struct Counts {
+    pub rules: u64,
+    pub occurrences: u128,
+    references: std::collections::BTreeSet<String>,
+}
 enum Reply {
     Loaded(Box<Loaded>),
-    Scanned(usize, Result<Report, String>),
+    Scanned(usize, Box<Result<Report, String>>),
 }
 
 #[derive(Default)]
@@ -52,14 +71,17 @@ pub(super) struct View {
     pub selected: Engine,
     identity: Option<(PathBuf, Identity)>,
     pub results: [Option<Result<Report, String>>; 3],
+    pub counts: [Option<Counts>; 3],
+    pub references: std::collections::BTreeSet<String>,
     rows: [Vec<Vec<Cell>>; 3],
     filtered: [Vec<Vec<Cell>>; 3],
     applied: [Option<String>; 3],
     rx: Option<Receiver<Reply>>,
     cancel: Option<Arc<AtomicBool>>,
     busy: Option<usize>,
-    byte_rx: Option<Receiver<Result<(Evidence, Vec<u8>), String>>>,
-    bytes: Option<Result<(Evidence, Vec<u8>), String>>,
+    byte_rx: Option<Receiver<BytePreview>>,
+    bytes: Option<BytePreview>,
+    pending_byte: Option<Evidence>,
 }
 
 impl View {
@@ -70,8 +92,11 @@ impl View {
         self.rx = None;
         self.busy = None;
         self.byte_rx = None;
+        self.pending_byte = None;
         self.bytes = None;
         self.results = Default::default();
+        self.counts = Default::default();
+        self.references.clear();
         self.rows = Default::default();
         self.filtered = Default::default();
         self.applied = Default::default();
@@ -87,7 +112,32 @@ impl View {
                 source_digest: digest,
             })
     }
-    fn rows(&mut self, index: usize) {
+    pub(super) fn rows(&mut self, index: usize) {
+        self.counts[index] = self.results[index]
+            .as_ref()
+            .and_then(|result| result.as_ref().ok())
+            .filter(|report| report.state != State::Unavailable || !report.findings.is_empty())
+            .map(|report| Counts {
+                rules: report.findings.len() as u64,
+                occurrences: report
+                    .findings
+                    .iter()
+                    .map(|finding| u128::from(finding.count))
+                    .sum(),
+                references: report
+                    .findings
+                    .iter()
+                    .flat_map(|finding| &finding.mitre)
+                    .cloned()
+                    .collect(),
+            });
+        self.references = self
+            .counts
+            .iter()
+            .flatten()
+            .flat_map(|counts| &counts.references)
+            .cloned()
+            .collect();
         self.applied[index] = None;
         self.rows[index] = self.results[index]
             .as_ref()
@@ -180,7 +230,7 @@ impl View {
                         }
                     }
                     Ok(Reply::Scanned(index, result)) => {
-                        self.results[index] = Some(result);
+                        self.results[index] = Some(*result);
                         self.rows(index);
                     }
                     Err(error) => {
@@ -213,6 +263,14 @@ impl View {
                 Err(mpsc::TryRecvError::Empty) => {}
             }
         }
+        let pending = self
+            .byte_rx
+            .is_none()
+            .then(|| self.pending_byte.take())
+            .flatten();
+        if let Some(evidence) = pending {
+            self.read_bytes(ctx, evidence);
+        }
         if self.rx.is_some() || self.byte_rx.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
@@ -233,7 +291,7 @@ impl View {
             .name("triage-detector".into())
             .spawn(move || {
                 let result = engine::run(request, &worker_cancel);
-                let _ = tx.send(Reply::Scanned(index, result));
+                let _ = tx.send(Reply::Scanned(index, Box::new(result)));
                 ctx.request_repaint_of(egui::ViewportId::ROOT);
             }) {
             Ok(_) => {
@@ -245,6 +303,10 @@ impl View {
         }
     }
     fn read_bytes(&mut self, ctx: &egui::Context, evidence: Evidence) {
+        if self.byte_rx.is_some() {
+            self.pending_byte = Some(evidence);
+            return;
+        }
         let Some(request) = self.request(Engine::Yara, None) else {
             return;
         };
@@ -274,6 +336,7 @@ impl View {
             .position(|engine| *engine == self.selected)
             .unwrap_or(0);
         egui::CollapsingHeader::new("Local rules and data sources").show(ui, |ui| {
+            egui::ScrollArea::vertical().id_salt(("detector-settings", index)).max_height((ui.available_height() * 0.4).min(260.0)).show(ui, |ui| {
             ui.add(egui::Label::new(match self.selected {
                 Engine::Yara => "Bundled Antinomie and YARA-Forge rules scan the verified executable. Optional targets: captured core/RAM blocks and Volatility recovered files.",
                 Engine::Ids => "Local Suricata scans all retained run-owned PCAP segments. Packets cover VM traffic; encrypted contents and process attribution are unavailable.",
@@ -290,6 +353,13 @@ impl View {
                 ui.add(egui::TextEdit::singleline(&mut self.settings.sigma_python).desired_width(ui.available_width()).hint_text("/usr/bin/python3 or a local venv/bin/python"));
             }
             ui.weak("Local analysis only. No automatic downloads or online lookups.");
+            let (label, url) = match self.selected {
+                Engine::Yara => ("YARA-Forge sources", "https://github.com/YARAHQ/yara-forge"),
+                Engine::Ids => ("Emerging Threats Open sources", "https://rules.emergingthreats.net/"),
+                Engine::Sigma => ("SigmaHQ Linux rule sources", "https://github.com/SigmaHQ/sigma/tree/master/rules/linux"),
+            };
+            if ui.add(egui::Button::new(format!("Copy {label} URL")).wrap()).clicked() { ui.ctx().copy_text(url.into()); }
+            });
         });
         ui.horizontal_wrapped(|ui| {
             let ready = self.rx.is_none()
@@ -343,6 +413,18 @@ impl View {
                 return;
             }
         };
+        if self.selected == Engine::Sigma
+            && report
+                .source_digest
+                .as_ref()
+                .zip(scan.and_then(|scan| scan.event_journal.as_ref()))
+                .is_some_and(|(digest, journal)| *digest != journal.sha256)
+        {
+            ui.colored_label(
+                theme::warn(),
+                "Recorded events changed after this result. Scan again to update it.",
+            );
+        }
         ui.label(format!(
             "{} · {} matched rules · {} objects evaluated · {} rules evaluated",
             state(&report.state),
@@ -498,6 +580,18 @@ impl View {
         if let Some(result) = &self.bytes {
             match result {
                 Ok((evidence, data)) => {
+                    if !self.results[index]
+                        .as_ref()
+                        .and_then(|result| result.as_ref().ok())
+                        .and_then(|report| {
+                            report.findings.iter().find(|finding| {
+                                Some(finding.rule_id.as_str()) == text("finding.rule")
+                            })
+                        })
+                        .is_some_and(|finding| finding.evidence.contains(evidence))
+                    {
+                        return;
+                    }
                     ui.add(egui::Label::new(format!("{evidence:?}")).wrap());
                     for (index, chunk) in data.chunks(16).enumerate() {
                         let offset = match evidence {

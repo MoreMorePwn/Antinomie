@@ -1,8 +1,89 @@
 // SPDX-License-Identifier: MIT
 //! Normalize facts already reconstructed by triage; do not infer missing fields.
 use super::*;
+use antinomie_monitor_core::analysis::detection::JournalSummary;
 use antinomie_monitor_core::analysis::detection::{Event, EventJournal, Evidence};
 use std::collections::BTreeMap;
+
+type Stamp = (u64, u64, u64, i64, i64, i64, i64);
+fn stamp(path: &Path) -> Option<Stamp> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((
+        metadata.dev(),
+        metadata.ino(),
+        metadata.len(),
+        metadata.mtime(),
+        metadata.mtime_nsec(),
+        metadata.ctime(),
+        metadata.ctime_nsec(),
+    ))
+}
+#[derive(Clone)]
+pub(super) struct Cache {
+    key: String,
+    stamp: Stamp,
+    pub summary: JournalSummary,
+}
+
+pub(super) fn source_key(
+    directory: &Path,
+    pcap: Option<&Path>,
+    open: bool,
+    request: &ScanRequest,
+) -> Option<String> {
+    let identity = request
+        .identity
+        .as_ref()
+        .filter(|_| request.root_cookie != 0)?;
+    let artifacts = antinomie_monitor_core::RunArtifacts::load(directory).ok()?;
+    let paths = artifacts.map_or_else(
+        || pcap.into_iter().map(Path::to_path_buf).collect(),
+        |artifacts| artifacts.network_captures,
+    );
+    let captures: Vec<_> = paths
+        .iter()
+        .map(|path| (path.display().to_string(), stamp(path)))
+        .collect();
+    let encoded = serde_json::to_vec(&(
+        identity,
+        request.root_cookie,
+        request.run_finished,
+        request.started_ms,
+        request.ended_ms,
+        open,
+        stamp(&directory.join("telemetry.raw"))?,
+        stamp(&directory.join("run.json")),
+        stamp(&directory.join("manifest.json")),
+        stamp(&directory.join("artifacts.json")),
+        captures,
+    ))
+    .ok()?;
+    Some(antinomie_monitor_core::storage::sha256_hex(&encoded))
+}
+pub(super) fn reuse(
+    cache: Option<&Cache>,
+    key: Option<&String>,
+    directory: &Path,
+) -> Option<JournalSummary> {
+    let cache = cache.filter(|cache| {
+        Some(&cache.key) == key
+            && Some(cache.stamp)
+                == stamp(&directory.join(antinomie_monitor_core::analysis::detection::JOURNAL_FILE))
+    })?;
+    Some(cache.summary.clone())
+}
+pub(super) fn cache(
+    key: Option<String>,
+    summary: Option<&JournalSummary>,
+    directory: &Path,
+) -> Option<Cache> {
+    Some(Cache {
+        key: key?,
+        stamp: stamp(&directory.join(antinomie_monitor_core::analysis::detection::JOURNAL_FILE))?,
+        summary: summary?.clone(),
+    })
+}
 
 #[derive(Default)]
 pub(super) struct Counts {
@@ -68,12 +149,15 @@ pub(super) fn call(
         emit("antinomie_bpf", fields)?;
     }
     let operation = event.syscall_name.as_str();
-    let file_operation = OPEN_NAMES.contains(&operation)
-        || CHANGE_NAMES.contains(&operation)
-        || matches!(
-            operation,
-            "read" | "pread64" | "readv" | "preadv" | "preadv2"
-        );
+    let anonymous_mapping = matches!(operation, "mmap" | "mmap2")
+        && call_args(call).is_none_or(|args| args[3] & MAP_ANONYMOUS != 0);
+    let file_operation = !anonymous_mapping
+        && (OPEN_NAMES.contains(&operation)
+            || CHANGE_NAMES.contains(&operation)
+            || matches!(
+                operation,
+                "read" | "pread64" | "readv" | "preadv" | "preadv2"
+            ));
     if file_operation {
         let path = displayed_path(call, event, files);
         text(&mut fields, "TargetFilename", Some(&path));
@@ -197,6 +281,44 @@ pub(super) fn packet(
 mod tests {
     use super::*;
     use antinomie_monitor_core::analysis::detection::Identity;
+    #[test]
+    fn unchanged_event_index_is_reused_across_filters_and_growth_rebuilds_it() {
+        let temp = PacketSpool::new().unwrap();
+        let mut raw = std::fs::File::create(temp.directory.join("telemetry.raw")).unwrap();
+        super::super::tests::write_rwx_calls(&mut raw, 0..3);
+        raw.sync_all().unwrap();
+        let mut request = ScanRequest {
+            identity: Some(("v".into(), "b".into(), "r".into())),
+            root_cookie: 55,
+            ..Default::default()
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let first = scan_archive_query(&temp.directory, None, false, &cancel, &request).unwrap();
+        let path = temp.directory.join(engine_file());
+        let original = stamp(&path).unwrap();
+        assert!(first.event_cache.is_some());
+        assert_eq!(
+            first.event_journal.as_ref().unwrap().events,
+            0,
+            "anonymous mappings are not file-access observations"
+        );
+        request.event_cache = first.event_cache;
+        request.filters[0] = "finding.rule == \"never\"".into();
+        let second = scan_archive_query(&temp.directory, None, false, &cancel, &request).unwrap();
+        assert!(second.findings.is_empty());
+        assert_eq!(stamp(&path).unwrap(), original);
+        request.event_cache = second.event_cache;
+        super::super::tests::write_rwx_calls(&mut raw, 3..4);
+        raw.sync_all().unwrap();
+        let third = scan_archive_query(&temp.directory, None, false, &cancel, &request).unwrap();
+        assert_eq!(third.counts.calls, 4);
+        assert_ne!(stamp(&path).unwrap(), original);
+        request.event_cache = third.event_cache;
+        std::fs::write(&path, b"invalid journal").unwrap();
+        let repaired = scan_archive_query(&temp.directory, None, false, &cancel, &request).unwrap();
+        assert!(repaired.event_error.is_none());
+        assert!(std::fs::read_to_string(path).unwrap().starts_with('{'));
+    }
     #[test]
     fn normalized_exec_requires_commit_and_never_treats_partial_argv_as_a_command_line() {
         let temp = PacketSpool::new().unwrap();
