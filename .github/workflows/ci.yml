@@ -60,6 +60,8 @@ jobs:
           workspaces: src/antinomie/monitor
       - name: No machine-specific paths
         run: scripts/check-privacy.sh
+      - name: Module sizes
+        run: python3 -I scripts/check-module-size.py
       - name: Formatting
         working-directory: src/antinomie/monitor
         run: cargo fmt --all -- --check

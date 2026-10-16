@@ -255,6 +255,33 @@ Adding an adapter must not modify `src/antinomie/core/`.
 - Keep upstream, Debian, and Antinomie commits distinguishable.
 - Every commit maps to a backlog item.
 
+### 10.1 Host code layout
+
+The monitor crates follow the Rust book's layout: a module is a file named
+for it, and its children live in a directory of the same name (`app.rs` with
+`app/vm.rs`). New code does not use `mod.rs` files or `#[path]` attributes.
+
+- **One responsibility per file.** Name a file for what it does (`saving.rs`,
+  `pcap_scan.rs`), not for a kind of item (`types.rs`, `helpers.rs`).
+- **Large types stay one type.** The parent file keeps the struct, its
+  constructor and the code that ties the areas together; each area of
+  behaviour adds its own `impl` block in a child file. Children can read the
+  parent's private fields, so splitting does not widen the type's API.
+- **Narrowest visibility.** Private first, then `pub(super)` for the parent
+  and its other children, then `pub(crate)`. Re-export with `pub use` only to
+  keep an existing path working.
+- **Tests sit with their module** in `<module>/tests.rs`; group a large test
+  module by the same areas under `<module>/tests/`.
+- **Size.** A file holds at most 1,200 lines of non-test code.
+  `scripts/check-module-size.py` enforces this in CI. Files that were already
+  larger are listed in `scripts/module-size-allowlist.txt` and may shrink but
+  not grow; run the script with `--update` after splitting one. A single
+  function that runs to hundreds of lines is a sign the same split is due at
+  function level.
+- **Moves are separate commits.** A split moves code without changing it, in
+  a commit of its own, and is checked by unchanged test results, so review
+  can tell a relocation from a behaviour change.
+
 ---
 
 ## 11. Release record
@@ -342,6 +369,6 @@ artifacts. Published tags remain immutable; housekeeping after publication does
 not replace the tag or imply that an existing release archive was rebuilt.
 
 Every push runs `.github/workflows/ci.yml` (`scripts/check-privacy.sh`,
-`cargo fmt --check`, strict Clippy, the release-mode tests, the build-script
+`scripts/check-module-size.py`, `cargo fmt --check`, strict Clippy, the release-mode tests, the build-script
 tests and shellcheck); `.github/workflows/nightly.yml` boots the current
 BusyBox base under KVM every night (`tests/ci/nightly-vm.py`).
