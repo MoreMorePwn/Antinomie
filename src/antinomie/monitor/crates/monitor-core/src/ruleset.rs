@@ -122,6 +122,13 @@ pub struct InstalledPack {
     pub limits: Vec<String>,
     /// Versions retained on disk, newest selection is `version`.
     pub versions: Vec<String>,
+    /// Application requirement recorded for `version` when it was installed.
+    #[serde(default)]
+    pub app: String,
+    /// Engine requirement recorded for `version` when it was installed. Empty
+    /// in registries written before requirements were retained.
+    #[serde(default)]
+    pub engine_requirement: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -487,6 +494,8 @@ fn switch_version(data_dir: &Path, entry: &PackEntry) -> Result<(), String> {
         installed.evidence = entry.evidence.clone();
         installed.limits = entry.limits.clone();
         installed.upstream_url = entry.upstream_url.clone();
+        installed.app = entry.app.clone();
+        installed.engine_requirement = entry.engine_requirement.clone();
     } else {
         registry.packs.push(InstalledPack {
             id: entry.id.clone(),
@@ -501,6 +510,8 @@ fn switch_version(data_dir: &Path, entry: &PackEntry) -> Result<(), String> {
             evidence: entry.evidence.clone(),
             limits: entry.limits.clone(),
             versions: vec![entry.version.clone()],
+            app: entry.app.clone(),
+            engine_requirement: entry.engine_requirement.clone(),
         });
     }
     save_registry(data_dir, &registry)
@@ -524,9 +535,24 @@ pub fn rollback(data_dir: &Path, id: &str, version: &str) -> Result<(), String> 
     if !known {
         return Err(format!("version {version} is not retained"));
     }
+    let stored = retained_entry(data_dir, &engine, id, version)?;
+    switch_version(data_dir, &stored)
+}
+
+/// The catalog entry recorded with an installed version. It does not change
+/// when the live catalog does.
+fn retained_entry(
+    data_dir: &Path,
+    engine: &str,
+    id: &str,
+    version: &str,
+) -> Result<PackEntry, String> {
+    path_component(engine, "engine")?;
+    path_component(id, "id")?;
+    path_component(version, "version")?;
     let dir = rules_root(data_dir)
         .join("packs")
-        .join(&engine)
+        .join(engine)
         .join(id)
         .join(version);
     let data = fs::read(dir.join("manifest.json"))
@@ -539,10 +565,10 @@ pub fn rollback(data_dir: &Path, id: &str, version: &str) -> Result<(), String> 
             .ok_or("retained manifest has no pack provenance")?,
     )
     .map_err(|error| error.to_string())?;
-    if stored.version != version || stored.id != id {
+    if stored.version != version || stored.id != id || stored.engine != engine {
         return Err("retained manifest does not match the requested version".into());
     }
-    switch_version(data_dir, &stored)
+    Ok(stored)
 }
 
 pub fn set_pack_enabled(data_dir: &Path, id: &str, enabled: bool) -> Result<(), String> {
@@ -954,7 +980,8 @@ pub fn snapshot_from(
             .iter()
             .filter(|pack| pack.enabled && pack.engine == engine)
         {
-            if let Some(status) = unmet_requirement(data_dir, pack, facts) {
+            let (_, _, status) = requirement_of(data_dir, pack, facts);
+            if status != RequirementStatus::Satisfied {
                 counts.warnings.push(format!(
                     "{} {} was not evaluated: {status}",
                     pack.id, pack.version
@@ -1028,13 +1055,19 @@ pub fn snapshot_from(
             "warnings": counts.warnings,
             "support_hashes": support_hashes(&staging)?,
             "sigma_counts": sigma_selection_counts(engine, &counts.warnings, counts.enabled),
-            "packs": registry.packs.iter().filter(|pack| pack.engine == engine).map(|pack| serde_json::json!({
-                "id": pack.id,
-                "version": pack.version,
-                "upstream_revision": pack.upstream_revision,
-                "archive_sha256": pack.sha256,
-                "enabled": pack.enabled,
-            })).collect::<Vec<_>>(),
+            "packs": registry.packs.iter().filter(|pack| pack.engine == engine).map(|pack| {
+                let (app, requirement, status) = requirement_of(data_dir, pack, facts);
+                serde_json::json!({
+                    "id": pack.id,
+                    "version": pack.version,
+                    "upstream_revision": pack.upstream_revision,
+                    "archive_sha256": pack.sha256,
+                    "enabled": pack.enabled,
+                    "app_requirement": app,
+                    "engine_requirement": requirement,
+                    "requirement_status": status.to_string(),
+                })
+            }).collect::<Vec<_>>(),
             "groups": registry.groups.iter().filter(|group| group.engine == engine).map(|group| serde_json::json!({
                 "id": group.id,
                 "revision": group.revision,
@@ -1304,23 +1337,16 @@ fn digest_of(data_dir: &Path, registry: &Registry, engine: &str, facts: &ToolFac
         }
     }
     material.push_str(&format!("index-parser {INDEX_PARSER}\n"));
-    if let Ok(Some(catalog)) = load_catalog(data_dir) {
-        for pack in registry
-            .packs
-            .iter()
-            .filter(|pack| pack.engine == engine && pack.enabled)
-        {
-            if let Some(entry) = catalog.packs.iter().find(|entry| {
-                entry.id == pack.id && entry.engine == pack.engine && entry.version == pack.version
-            }) {
-                let status =
-                    classify_requirement(&entry.app, &entry.engine_requirement, engine, facts);
-                material.push_str(&format!(
-                    "requirement {} {} {} {status}\n",
-                    pack.id, entry.app, entry.engine_requirement
-                ));
-            }
-        }
+    for pack in registry
+        .packs
+        .iter()
+        .filter(|pack| pack.engine == engine && pack.enabled)
+    {
+        let (app, requirement, status) = requirement_of(data_dir, pack, facts);
+        material.push_str(&format!(
+            "requirement {} {} {app} {requirement} {status}\n",
+            pack.id, pack.version
+        ));
     }
     material.push_str(&facts.identity(engine));
     material.push('\n');
@@ -1922,7 +1948,22 @@ pub fn migrate_indexes(data_dir: &Path) -> Result<IndexMigration, String> {
             }
         }
     }
+    // Registries from before requirements were retained take them from each
+    // selected version's own manifest, never from the live catalog.
     let mut toggles_changed = false;
+    for pack in registry
+        .packs
+        .iter_mut()
+        .filter(|pack| pack.engine_requirement.is_empty())
+    {
+        if let Ok(entry) = retained_entry(data_dir, &pack.engine, &pack.id, &pack.version)
+            && !entry.engine_requirement.is_empty()
+        {
+            pack.app = entry.app;
+            pack.engine_requirement = entry.engine_requirement;
+            toggles_changed = true;
+        }
+    }
     for (key, engine, root) in targets {
         let index_path = root.join("index.json");
         if !index_path.is_file() {
@@ -2009,20 +2050,37 @@ impl std::fmt::Display for RequirementStatus {
     }
 }
 
-fn unmet_requirement(
+/// The selected version's retained requirements and their status on this
+/// host. The registry copy is used, else the version's own manifest; the live
+/// catalog is never consulted, so editing or losing it changes nothing here.
+/// Without a retained requirement the status is unknown and the pack is not
+/// evaluated.
+fn requirement_of(
     data_dir: &Path,
     pack: &InstalledPack,
     facts: &ToolFacts,
-) -> Option<RequirementStatus> {
-    let catalog = load_catalog(data_dir).ok().flatten()?;
-    let entry = catalog.packs.iter().find(|entry| {
-        entry.id == pack.id && entry.engine == pack.engine && entry.version == pack.version
-    })?;
-    let status = classify_requirement(&entry.app, &entry.engine_requirement, &pack.engine, facts);
-    match status {
-        RequirementStatus::Satisfied => None,
-        other => Some(other),
-    }
+) -> (String, String, RequirementStatus) {
+    let (app, requirement) = if pack.engine_requirement.is_empty() {
+        match retained_entry(data_dir, &pack.engine, &pack.id, &pack.version) {
+            Ok(entry) if !entry.engine_requirement.is_empty() => {
+                (entry.app, entry.engine_requirement)
+            }
+            _ => {
+                return (
+                    String::new(),
+                    String::new(),
+                    RequirementStatus::Unknown(format!(
+                        "no requirement was retained for {} {}",
+                        pack.id, pack.version
+                    )),
+                );
+            }
+        }
+    } else {
+        (pack.app.clone(), pack.engine_requirement.clone())
+    };
+    let status = classify_requirement(&app, &requirement, &pack.engine, facts);
+    (app, requirement, status)
 }
 
 /// `app_req` is `>=1.2.3` or empty. `engine_req` is `Name 1.2` or `Name 2.x`.
@@ -2906,6 +2964,24 @@ mod tests {
         }
     }
 
+    /// Facts for a host with every engine installed, for tests whose subject
+    /// is not the requirement check.
+    fn installed_engines() -> ToolFacts {
+        ToolFacts {
+            app: crate::api::APP_VERSION.into(),
+            yara: yara_x::VERSION.into(),
+            suricata: ToolProbe::Found {
+                identity: "This is Suricata version 7.0.10 RELEASE".into(),
+                version: "7.0.10".into(),
+            },
+            sigma: ToolProbe::Found {
+                identity: "pysigma 2.0.1 / sqlite 2.1.0".into(),
+                version: "2.0.1".into(),
+            },
+            sigma_python: DEFAULT_SIGMA_PYTHON.into(),
+        }
+    }
+
     fn archive(files: &[(&str, &str)]) -> Vec<u8> {
         let mut raw = Vec::new();
         {
@@ -3082,6 +3158,7 @@ mod tests {
         let mut listed = entry(&format!("{:x}", Sha256::digest(&bytes)), bytes.len() as u64);
         listed.engine = "ids".into();
         listed.id = "et".into();
+        listed.engine_requirement = "Suricata 7".into();
         install_archive(&dir, &listed, &bytes).unwrap();
         let index = pack_index(&dir, "ids", "et").unwrap();
         assert!(
@@ -3089,7 +3166,14 @@ mod tests {
                 .iter()
                 .any(|rule| !rule.compatible && rule.reason.contains("duplicate"))
         );
-        let snap = snapshot(&dir, "ids", &ToolConfig::default()).unwrap();
+        let snap = snapshot_from(
+            &dir,
+            "ids",
+            &load_registry(&dir).unwrap(),
+            &installed_engines(),
+            None,
+        )
+        .unwrap();
         assert_eq!(snap.enabled_rules, 1);
         assert!(
             snap.warnings
@@ -3780,9 +3864,21 @@ rule Other { condition: true }\n";
             "{:?}",
             snap.warnings
         );
-        listed.engine_requirement = "YARA-X 1.21".into();
+        // A catalog that later advertises a compatible requirement for the
+        // same version does not change what was installed.
         catalog.packs[0].engine_requirement = "YARA-X 1.21".into();
         store_catalog(&dir, &catalog).unwrap();
+        let still = snapshot(&dir, "yara", &ToolConfig::default()).unwrap();
+        assert_eq!(still.enabled_rules, 0, "{:?}", still.warnings);
+        let bytes = archive(&[("one.yar", "rule Real { condition: true }\n")]);
+        let mut newer = entry(&format!("{:x}", Sha256::digest(&bytes)), bytes.len() as u64);
+        newer.version = "2".into();
+        install_archive(&dir, &newer, &bytes).unwrap();
+        fs::write(
+            dir.join("rules/packs/yara/sample/2/NOTICE"),
+            "upstream notice\n",
+        )
+        .unwrap();
         let snap = snapshot(&dir, "yara", &ToolConfig::default()).unwrap();
         assert_eq!(snap.enabled_rules, 1);
         let manifest = fs::read_to_string(
@@ -3870,6 +3966,113 @@ rule Other { condition: true }\n";
             "{:?}",
             other.warnings
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn installed_requirements_survive_catalog_loss_corruption_and_replacement() {
+        let dir =
+            std::env::temp_dir().join(format!("ant-retained-{}", crate::storage::unique_id()));
+        let tools = ToolConfig::default();
+        let bytes = archive(&[("one.yar", "rule Real { condition: true }\n")]);
+        let sha = format!("{:x}", Sha256::digest(&bytes));
+        let mut old = entry(&sha, bytes.len() as u64);
+        old.engine_requirement = "YARA-X 99".into();
+        install_archive(&dir, &old, &bytes).unwrap();
+        let mut good = entry(&sha, bytes.len() as u64);
+        good.version = "2".into();
+        install_archive(&dir, &good, &bytes).unwrap();
+        let catalog = Catalog {
+            schema: 1,
+            packs: vec![good.clone()],
+        };
+        store_catalog(&dir, &catalog).unwrap();
+        let enabled = |dir: &Path| snapshot(dir, "yara", &tools).unwrap();
+        let compatible = enabled(&dir);
+        assert_eq!(compatible.enabled_rules, 1);
+        let catalog_path = dir.join("rules/catalog.json");
+        // Missing, corrupt and replaced catalogs leave the compatible version usable.
+        fs::remove_file(&catalog_path).unwrap();
+        assert_eq!(enabled(&dir).digest, compatible.digest);
+        fs::write(&catalog_path, b"{not json").unwrap();
+        assert_eq!(enabled(&dir).digest, compatible.digest);
+        let mut replaced = catalog.clone();
+        replaced.packs[0].engine_requirement = "YARA-X 99".into();
+        store_catalog(&dir, &replaced).unwrap();
+        assert_eq!(enabled(&dir).enabled_rules, 1);
+        // The older version keeps its own incompatible requirement offline.
+        fs::remove_file(&catalog_path).unwrap();
+        rollback(&dir, "sample", "1").unwrap();
+        let older = enabled(&dir);
+        assert_eq!(older.enabled_rules, 0);
+        assert!(
+            older.warnings.iter().any(|w| w.contains("incompatible")),
+            "{:?}",
+            older.warnings
+        );
+        // A registry from before requirements were retained reads the version's
+        // own manifest, not a catalog row for another version.
+        let mut registry = load_registry(&dir).unwrap();
+        registry.packs[0].app.clear();
+        registry.packs[0].engine_requirement.clear();
+        store_catalog(&dir, &catalog).unwrap();
+        save_registry(&dir, &registry).unwrap();
+        assert_eq!(enabled(&dir).enabled_rules, 0);
+        migrate_indexes(&dir).unwrap();
+        assert_eq!(
+            load_registry(&dir).unwrap().packs[0].engine_requirement,
+            "YARA-X 99"
+        );
+        // With neither, the requirement is unknown and the pack is not evaluated.
+        let mut registry = load_registry(&dir).unwrap();
+        registry.packs[0].engine_requirement.clear();
+        save_registry(&dir, &registry).unwrap();
+        fs::remove_file(dir.join("rules/packs/yara/sample/1/manifest.json")).unwrap();
+        let unknown = enabled(&dir);
+        assert_eq!(unknown.enabled_rules, 0);
+        assert!(
+            unknown
+                .warnings
+                .iter()
+                .any(|w| w.contains("unknown requirement")),
+            "{:?}",
+            unknown.warnings
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_admitted_registry_is_not_changed_by_a_later_catalog_or_rollback() {
+        let dir =
+            std::env::temp_dir().join(format!("ant-admitted-{}", crate::storage::unique_id()));
+        let facts = tool_facts(&ToolConfig::default());
+        let bytes = archive(&[("one.yar", "rule Real { condition: true }\n")]);
+        let sha = format!("{:x}", Sha256::digest(&bytes));
+        let mut old = entry(&sha, bytes.len() as u64);
+        old.engine_requirement = "YARA-X 99".into();
+        install_archive(&dir, &old, &bytes).unwrap();
+        let mut good = entry(&sha, bytes.len() as u64);
+        good.version = "2".into();
+        install_archive(&dir, &good, &bytes).unwrap();
+        let admitted = load_registry(&dir).unwrap();
+        let digest = selection_digest_of(&dir, &admitted, "yara", &facts);
+        store_catalog(
+            &dir,
+            &Catalog {
+                schema: 1,
+                packs: vec![old.clone()],
+            },
+        )
+        .unwrap();
+        rollback(&dir, "sample", "1").unwrap();
+        let snap = snapshot_from(&dir, "yara", &admitted, &facts, None).unwrap();
+        assert_eq!(
+            (snap.digest.as_str(), snap.enabled_rules),
+            (digest.as_str(), 1)
+        );
+        let next = snapshot(&dir, "yara", &ToolConfig::default()).unwrap();
+        assert_ne!(next.digest, digest);
+        assert_eq!(next.enabled_rules, 0);
         let _ = fs::remove_dir_all(&dir);
     }
 }
