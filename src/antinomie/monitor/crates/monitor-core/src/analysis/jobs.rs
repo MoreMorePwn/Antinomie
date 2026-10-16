@@ -647,6 +647,20 @@ fn directory_len(path: &Path) -> Result<u64, String> {
     }
     Ok(total)
 }
+fn stage_static_rules(job_dir: &Path) -> Result<(), String> {
+    let mut cursor = Some(job_dir.to_path_buf());
+    for _ in 0..8 {
+        let Some(dir) = cursor else {
+            return Ok(());
+        };
+        if dir.join("rules/registry.json").is_file() {
+            return crate::ruleset::publish_static(&dir, &job_dir.join("rules"));
+        }
+        cursor = dir.parent().map(Path::to_path_buf);
+    }
+    Ok(())
+}
+
 fn spawn_worker(job: &Job, tools: Option<&Path>) -> Result<SandboxProcess, String> {
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
     spawn_worker_binary(job, &executable, tools)
@@ -786,19 +800,24 @@ fn spawn_worker_binary(
     .arg("/worker")
     .arg("--ro-bind")
     .arg(job.directory.join("specimen"))
-    .arg("/input/specimen")
-    .arg("--ro-bind")
-    .arg(job.directory.join("request.json"))
-    .arg("/input/request.json")
-    .arg("--bind")
-    .arg(output.join("report.json"))
-    .arg("/output/report.json")
-    .arg("--bind")
-    .arg(&listings)
-    .arg("/output/listings")
-    .arg("--bind")
-    .arg(&artifacts)
-    .arg("/output/artifacts");
+    .arg("/input/specimen");
+    stage_static_rules(&job.directory)?;
+    let rules = job.directory.join("rules");
+    if rules.is_dir() {
+        cmd.arg("--ro-bind").arg(&rules).arg("/input/rules");
+    }
+    cmd.arg("--ro-bind")
+        .arg(job.directory.join("request.json"))
+        .arg("/input/request.json")
+        .arg("--bind")
+        .arg(output.join("report.json"))
+        .arg("/output/report.json")
+        .arg("--bind")
+        .arg(&listings)
+        .arg("/output/listings")
+        .arg("--bind")
+        .arg(&artifacts)
+        .arg("/output/artifacts");
     // Analysis tools Antinomie installed, read-only.
     if let Some(tools) = tools.filter(|tools| tools.is_dir()) {
         cmd.arg("--ro-bind")

@@ -21,6 +21,8 @@ fn detector(
                     State::Complete => ("Complete", theme::blue()),
                     State::Partial => ("Partial", theme::warn()),
                     State::Unavailable => ("Unavailable", theme::muted()),
+                    State::NoRules => ("No rules enabled", theme::warn()),
+                    State::Missing => ("Evidence missing", theme::warn()),
                 },
             };
             if compact {

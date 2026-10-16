@@ -1,50 +1,29 @@
 // SPDX-License-Identifier: MIT
-//! Rule matching with the built-in YARA-X engine and the bundled rule sets.
+//! Rule matching with YARA-X and the rules selected in the rule manager.
 use super::*;
-use std::time::Duration;
+use std::{fs, path::Path, time::Duration};
 
-const ANTINOMIE: &str = include_str!("../../assets/rules/antinomie.yar");
-const COMMUNITY: &str = include_str!("../../assets/rules/yara-forge-core.yar");
-pub(super) const COMMUNITY_RELEASE: &str = "YARA-Forge core 20261004";
 const ENGINE: &str = "YARA-X 1.21";
 
-fn count_rules(source: &str) -> usize {
-    source
-        .lines()
-        .filter(|line| {
-            let line = line
-                .trim_start_matches("private ")
-                .trim_start_matches("global ");
-            line.starts_with("rule ")
-        })
-        .count()
-}
-
-pub(super) fn bundled_sources() -> [(&'static str, &'static str); 2] {
-    [("Antinomie", ANTINOMIE), (COMMUNITY_RELEASE, COMMUNITY)]
-}
-
-/// Compile the bundled rule sets; each lives in its own namespace.
-pub(super) fn compile() -> Result<yara_x::Rules, String> {
-    compile_extra(&[])
-}
-
-pub(super) fn compile_extra(extra: &[(String, String)]) -> Result<yara_x::Rules, String> {
+/// Compile selected sources. An empty selection is not a successful scan.
+pub(super) fn compile_sources(
+    sources: &[(String, String)],
+    include: Option<&Path>,
+) -> Result<yara_x::Rules, String> {
+    if sources.is_empty() {
+        return Err("No rules enabled".into());
+    }
     let mut compiler = yara_x::Compiler::new();
     compiler.relaxed_re_syntax(true);
-    compiler.new_namespace("antinomie");
-    compiler
-        .add_source(ANTINOMIE)
-        .map_err(|e| format!("Antinomie rules: {e}"))?;
-    compiler.new_namespace("community");
-    compiler
-        .add_source(COMMUNITY)
-        .map_err(|e| format!("community rules: {e}"))?;
-    for (index, (_, source)) in extra.iter().enumerate() {
-        compiler.new_namespace(&format!("local_{index}"));
+    if let Some(directory) = include {
+        compiler.add_include_dir(directory);
+    }
+    for (index, (name, source)) in sources.iter().enumerate() {
+        compiler.new_namespace(&format!("s{index}"));
+        let code = yara_x::SourceCode::from(source.as_str()).with_origin(name);
         compiler
-            .add_source(source.as_str())
-            .map_err(|error| format!("local rules {index}: {error}"))?;
+            .add_source(code)
+            .map_err(|error| format!("{name}: {error}"))?;
     }
     Ok(compiler.build())
 }
@@ -72,19 +51,24 @@ fn matched_text(data: &[u8]) -> String {
 
 pub(super) fn scan(section: &mut AnalysisSection, specimen: &[u8]) {
     section.state = AnalysisSectionState::Complete;
-    let rules = match compile() {
+    let sources = selected_sources(Path::new("/input/rules"));
+    if sources.is_empty() {
+        section.state = AnalysisSectionState::Unavailable;
+        section.summary = "No rules enabled".into();
+        section.tools = vec![ENGINE.into()];
+        return;
+    }
+    let rules = match compile_sources(&sources, Some(Path::new("/input/rules"))) {
         Ok(rules) => rules,
         Err(error) => {
             section.state = AnalysisSectionState::Unavailable;
-            section.summary = format!("bundled rules failed to compile: {error}");
+            section.summary = format!("selected rules failed to compile: {error}");
             return;
         }
     };
-    let (own, community) = (count_rules(ANTINOMIE), count_rules(COMMUNITY));
     section.tools = vec![
         ENGINE.into(),
-        format!("Antinomie rules ({own})"),
-        format!("{COMMUNITY_RELEASE} ({community} redistributable rules)"),
+        format!("{} selected rule files", sources.len()),
     ];
     let mut scanner = yara_x::Scanner::new(&rules);
     scanner.set_timeout(Duration::from_secs(60));
@@ -134,15 +118,11 @@ pub(super) fn scan(section: &mut AnalysisSection, specimen: &[u8]) {
             format!("{description} — {}", evidence.join("; "))
         };
         let namespace = rule.namespace().to_owned();
-        let ruleset = if namespace == "antinomie" {
-            "Antinomie".to_owned()
-        } else {
-            let author = meta("author").unwrap_or_else(|| "unknown author".into());
-            let license = meta("license")
-                .or_else(|| meta("malpedia_license"))
-                .unwrap_or_default();
-            format!("{COMMUNITY_RELEASE}; {author}; {license}")
-        };
+        let author = meta("author").unwrap_or_else(|| "unknown author".into());
+        let license = meta("license")
+            .or_else(|| meta("malpedia_license"))
+            .unwrap_or_default();
+        let ruleset = format!("{author}; {license}");
         let mut tags: Vec<String> = rule.tags().map(|t| t.identifier().to_owned()).collect();
         if let Some(category) = meta("category") {
             tags.insert(0, category);
@@ -167,16 +147,56 @@ pub(super) fn scan(section: &mut AnalysisSection, specimen: &[u8]) {
             },
         );
     }
-    section.summary = format!(
-        "{matched} of {} rules matched; a match is an indicator, not a verdict",
-        own + community
-    );
+    section.summary = format!("{matched} rules matched; a match is an indicator, not a verdict");
+}
+
+fn selected_sources(directory: &Path) -> Vec<(String, String)> {
+    let mut files = Vec::new();
+    let _ = collect_sources(directory, &mut files);
+    files.sort();
+    let mut sources = Vec::new();
+    for path in files {
+        if let Ok(text) = fs::read_to_string(&path) {
+            sources.push((path.display().to_string(), text));
+        }
+    }
+    sources
+}
+
+fn collect_sources(directory: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<(), String> {
+    if !directory.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(directory).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let meta = fs::symlink_metadata(entry.path()).map_err(|error| error.to_string())?;
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        if meta.is_dir() {
+            collect_sources(&entry.path(), out)?;
+        } else if meta.is_file()
+            && entry
+                .path()
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext == "yar" || ext == "yara")
+        {
+            out.push(entry.path());
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn bundled_rule_sets_compile_with_yara_x() {
-        super::compile().unwrap();
+    fn selected_community_core_compiles_with_yara_x() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/rules/yara-forge-core.yar"
+        );
+        let source = std::fs::read_to_string(path).unwrap();
+        super::compile_sources(&[("yara-forge-core.yar".into(), source)], None).unwrap();
     }
 }

@@ -283,34 +283,33 @@ fn scan_core(
 pub(super) fn scan(staged: &Staged, _work: &Path) -> Result<Report, String> {
     let request = &staged.request;
     let mut report = Report::empty(Engine::Yara, request.identity.clone());
-    for (name, source) in super::super::rules::bundled_sources() {
-        report.sources.push(Source {
-            name: name.into(),
-            version: "YARA-X 1.21 / bundled 0.6.2".into(),
-            license: if name == "Antinomie" {
-                "MIT"
-            } else {
-                "Per-rule licenses; see THIRD-PARTY-NOTICES.md"
-            }
-            .into(),
-            sha256: crate::storage::sha256_hex(source.as_bytes()),
-            data: "Verified executable; optional captured ELF core/RAM extents and recovered files"
-                .into(),
-        });
+    report.selection = staged.selection.clone();
+    if staged.no_rules || staged.yara_sources.is_empty() && staged.warnings.is_empty() {
+        report.state = State::NoRules;
+        report.warnings.push("No rules enabled".into());
+        return Ok(report);
+    }
+    if staged.yara_sources.is_empty() {
+        report.state = State::Unavailable;
+        report
+            .warnings
+            .push("No compatible YARA rules were evaluated.".into());
+        return Ok(report);
     }
     let mut extra = Vec::new();
     for source in &staged.yara_sources {
         let data = fs::read_to_string(&source.path).map_err(|error| error.to_string())?;
         report.sources.push(Source {
             name: source.name.clone(),
-            version: "Local rule file".into(),
+            version: staged.selection.clone(),
             license: "Per-rule metadata; user-selected source".into(),
             sha256: source.sha256.clone(),
-            data: "Byte targets".into(),
+            data: "Verified sample bytes; optional captured core, guest memory and recovered files"
+                .into(),
         });
         extra.push((source.name.clone(), data));
     }
-    let rules = match super::super::rules::compile_extra(&extra) {
+    let rules = match super::super::rules::compile_sources(&extra, staged.include_dir.as_deref()) {
         Ok(rules) => rules,
         Err(error) => {
             report.state = State::Unavailable;

@@ -32,6 +32,13 @@ pub struct Settings {
     pub sigma_python: String,
     pub scan_memory: bool,
     pub scan_recovered: bool,
+    /// Data directory whose `rules/` tree is the managed selection.
+    /// Empty means no managed packs are included.
+    pub rules_root: String,
+    /// Manual scan of evidence that is still being captured.
+    pub partial: bool,
+    /// Identity of the evidence generation this request is allowed to scan.
+    pub evidence_key: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,6 +202,10 @@ pub enum State {
     Complete,
     Partial,
     Unavailable,
+    /// The selection contains no enabled rules. This is not a zero-match scan.
+    NoRules,
+    /// The engine was ready but the evidence it needs is absent or still open.
+    Missing,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -234,6 +245,12 @@ pub struct Report {
     pub omitted_evidence: u64,
     pub warnings: Vec<String>,
     pub source_digest: Option<String>,
+    /// Digest of the enabled packs, groups and disabled rule ids.
+    #[serde(default)]
+    pub selection: String,
+    /// Evidence generation this report was admitted against. Empty on older reports.
+    #[serde(default)]
+    pub evidence_key: String,
 }
 
 impl Report {
@@ -251,6 +268,8 @@ impl Report {
             omitted_evidence: 0,
             warnings: vec![],
             source_digest: None,
+            selection: String::new(),
+            evidence_key: String::new(),
         }
     }
     pub fn unavailable(engine: Engine, identity: Identity, reason: impl Into<String>) -> Self {

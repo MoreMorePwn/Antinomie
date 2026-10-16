@@ -404,6 +404,23 @@ impl TriageView {
     pub(crate) fn take_packet_capture(&mut self) -> Option<std::path::PathBuf> {
         self.packet_capture.take()
     }
+    pub(crate) fn set_rules(
+        &mut self,
+        data_dir: &std::path::Path,
+        automatic: bool,
+        profile: &str,
+        generation: u64,
+    ) {
+        self.detection.settings.rules_root = data_dir.display().to_string();
+        self.detection.automatic = automatic;
+        self.detection.profile = profile.to_owned();
+        self.detection.rules_generation = generation;
+    }
+
+    pub(crate) fn take_rule_manager(&mut self) -> bool {
+        std::mem::take(&mut self.detection.open_manager)
+    }
+
     pub(crate) fn detection_settings(
         &mut self,
     ) -> &mut antinomie_monitor_core::analysis::detection::Settings {

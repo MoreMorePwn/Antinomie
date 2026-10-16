@@ -58,7 +58,7 @@ class AdapterTests(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec("sigma"), "optional local pySigma integration")
     def test_real_pysigma_conversion_scans_compatible_rules_and_reports_missing_sources(self):
         _, path, identity = self.fixture()
-        rules = ROOT / "src/antinomie/monitor/crates/monitor-core/assets/rules/antinomie-sigma.yml"
+        rules = ROOT / "tests/monitor/fixtures/sigma-sample.yml"
         report = adapter.scan({"identity": identity, "sigma_sources": [{"path": str(rules), "name": "Antinomie Sigma / MIT"}]}, path)
         self.assertEqual(report["state"], "partial", report)
         self.assertEqual(report["scanned_rules"], 1, report)

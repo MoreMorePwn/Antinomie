@@ -3,7 +3,7 @@ use super::*;
 use antinomie_monitor_core::analysis::detection::{
     self as engine, Engine, Evidence, Finding, Identity, Report, State,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::text("finding.rule", "Engine rule identifier"),
@@ -46,11 +46,91 @@ pub(super) fn name(engine: Engine) -> &'static str {
         Engine::Sigma => "Sigma",
     }
 }
+fn evidence_key(engine: Engine, input: &TriageInput<'_>, settings: &engine::Settings) -> String {
+    match engine {
+        Engine::Yara => {
+            let Some(analysis) = input.analysis else {
+                return "wait:sample".into();
+            };
+            format!(
+                "ready:yara:{}:{}:{}:{}:mem={}:recovered={}",
+                analysis.id,
+                analysis.specimen_sha256.as_deref().unwrap_or(""),
+                analysis.specimen_len.unwrap_or(0),
+                artifact_stamp(input.archive),
+                settings.scan_memory,
+                settings.scan_recovered
+            )
+        }
+        Engine::Ids => match (input.pcap, input.pcap_open) {
+            (None, _) => "missing:pcap".into(),
+            (Some(_), true) => "wait:pcap".into(),
+            (Some(path), false) => format!(
+                "ready:pcap:{}:{}:{}",
+                path.display(),
+                file_stamp(path),
+                input.run_id.unwrap_or("")
+            ),
+        },
+        Engine::Sigma => {
+            if !input.run_finished {
+                return "wait:journal".into();
+            }
+            let journal = input
+                .archive
+                .map(|archive| archive.join(engine::JOURNAL_FILE))
+                .map(|path| file_stamp(&path))
+                .unwrap_or_else(|| "no-archive".into());
+            format!("ready:journal:{}:{journal}", input.run_id.unwrap_or(""))
+        }
+    }
+}
+
+fn file_stamp(path: &Path) -> String {
+    match std::fs::metadata(path) {
+        Ok(meta) => {
+            let modified = meta
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|time| time.as_secs())
+                .unwrap_or(0);
+            format!("{}:{modified}", meta.len())
+        }
+        Err(_) => "missing".into(),
+    }
+}
+
+fn artifact_stamp(archive: Option<&Path>) -> String {
+    let Some(archive) = archive else {
+        return "no-archive".into();
+    };
+    format!(
+        "artifacts={};journal={}",
+        file_stamp(&archive.join("artifacts.json")),
+        file_stamp(&archive.join(engine::JOURNAL_FILE))
+    )
+}
+
+fn evidence_note(key: &str) -> String {
+    match key {
+        "wait:sample" => "Waiting for the verified sample.".into(),
+        "wait:pcap" => "Waiting for the PCAP segment to finish.".into(),
+        "wait:journal" => "Waiting for the run to finish its event journal.".into(),
+        "missing:pcap" => {
+            "Collection disabled or no PCAP was saved. This is not a clean result.".into()
+        }
+        _ => String::new(),
+    }
+}
+
 fn state(state: &State) -> &'static str {
     match state {
         State::Complete => "Complete",
         State::Partial => "Partial",
         State::Unavailable => "Unavailable",
+        State::NoRules => "No rules enabled",
+        State::Missing => "Evidence missing",
     }
 }
 type Loaded = [Option<Report>; 3];
@@ -82,6 +162,18 @@ pub(super) struct View {
     byte_rx: Option<Receiver<BytePreview>>,
     bytes: Option<BytePreview>,
     pending_byte: Option<Evidence>,
+    pub automatic: bool,
+    pub profile: String,
+    pub open_manager: bool,
+    pub rules_generation: u64,
+    seen_generation: u64,
+    auto_key: [String; 3],
+    scanned_generation: [u64; 3],
+    notes: [String; 3],
+    attempts: [u8; 3],
+    digest_cache: [String; 3],
+    digest_generation: u64,
+    ready_key: [String; 3],
 }
 
 impl View {
@@ -100,6 +192,8 @@ impl View {
         self.rows = Default::default();
         self.filtered = Default::default();
         self.applied = Default::default();
+        self.auto_key = Default::default();
+        self.notes = Default::default();
     }
     fn request(&self, engine: Engine, digest: Option<String>) -> Option<engine::Request> {
         self.identity
@@ -230,6 +324,12 @@ impl View {
                         }
                     }
                     Ok(Reply::Scanned(index, result)) => {
+                        if result.is_err() {
+                            self.attempts[index] = self.attempts[index].saturating_add(1);
+                            if self.attempts[index] < 3 {
+                                self.auto_key[index].clear();
+                            }
+                        }
                         self.results[index] = Some(*result);
                         self.rows(index);
                     }
@@ -271,17 +371,98 @@ impl View {
         if let Some(evidence) = pending {
             self.read_bytes(ctx, evidence);
         }
+        self.consider_auto(ctx, input);
         if self.rx.is_some() || self.byte_rx.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
-    fn start(&mut self, ctx: &egui::Context, digest: Option<String>) {
-        let Some(request) = self.request(self.selected, digest) else {
-            return;
+    fn consider_auto(&mut self, ctx: &egui::Context, input: &TriageInput<'_>) {
+        if self.seen_generation != self.rules_generation {
+            self.seen_generation = self.rules_generation;
+            self.digest_generation = u64::MAX;
+        }
+        for (index, engine) in ENGINES.iter().enumerate() {
+            let key = evidence_key(*engine, input, &self.settings);
+            self.ready_key[index] = key.clone();
+            self.notes[index] = evidence_note(&key);
+            let digest = self.current_digest(index);
+            let saved_matches = match &self.results[index] {
+                Some(Ok(report)) => {
+                    !report.selection.is_empty()
+                        && report.selection == digest
+                        && report.evidence_key == key
+                }
+                _ => false,
+            };
+            if saved_matches && self.auto_key[index].is_empty() {
+                self.auto_key[index] = key;
+                self.scanned_generation[index] = self.rules_generation;
+                continue;
+            }
+            if !self.automatic || self.rx.is_some() || !key.starts_with("ready:") {
+                continue;
+            }
+            if self.attempts[index] >= 3 {
+                continue;
+            }
+            if self.auto_key[index] == key
+                && self.scanned_generation[index] == self.rules_generation
+            {
+                continue;
+            }
+            if self.start_engine(ctx, *engine, None, false, &key) {
+                self.auto_key[index] = key;
+                self.scanned_generation[index] = self.rules_generation;
+                self.attempts[index] = 0;
+            } else {
+                self.attempts[index] = self.attempts[index].saturating_add(1);
+            }
+            break;
+        }
+    }
+    fn current_digest(&mut self, index: usize) -> String {
+        if self.digest_generation != self.rules_generation {
+            let root = Path::new(&self.settings.rules_root);
+            for (slot, engine) in ENGINES.iter().enumerate() {
+                let name = match engine {
+                    Engine::Yara => "yara",
+                    Engine::Ids => "ids",
+                    Engine::Sigma => "sigma",
+                };
+                self.digest_cache[slot] = if self.settings.rules_root.is_empty() {
+                    String::new()
+                } else {
+                    antinomie_monitor_core::ruleset::selection_digest(root, name)
+                };
+            }
+            self.digest_generation = self.rules_generation;
+        }
+        self.digest_cache[index].clone()
+    }
+    fn start(&mut self, ctx: &egui::Context, digest: Option<String>, partial: bool) {
+        let index = ENGINES
+            .iter()
+            .position(|candidate| *candidate == self.selected)
+            .unwrap_or(0);
+        let key = self.ready_key[index].clone();
+        let _ = self.start_engine(ctx, self.selected, digest, partial, &key);
+    }
+    fn start_engine(
+        &mut self,
+        ctx: &egui::Context,
+        engine: Engine,
+        digest: Option<String>,
+        partial: bool,
+        evidence_key: &str,
+    ) -> bool {
+        self.settings.partial = partial;
+        self.settings.evidence_key = evidence_key.to_owned();
+        let Some(request) = self.request(engine, digest) else {
+            return false;
         };
         let index = ENGINES
             .iter()
-            .position(|engine| *engine == self.selected)
+            .position(|candidate| *candidate == engine)
             .unwrap_or(0);
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = Arc::clone(&cancel);
@@ -298,8 +479,12 @@ impl View {
                 self.rx = Some(rx);
                 self.cancel = Some(cancel);
                 self.busy = Some(index);
+                true
             }
-            Err(error) => self.results[index] = Some(Err(error.to_string())),
+            Err(error) => {
+                self.results[index] = Some(Err(error.to_string()));
+                false
+            }
         }
     }
     fn read_bytes(&mut self, ctx: &egui::Context, evidence: Evidence) {
@@ -355,12 +540,29 @@ impl View {
             .iter()
             .position(|engine| *engine == self.selected)
             .unwrap_or(0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Profile").color(theme::muted()));
+            ui.label(
+                RichText::new(if self.profile.is_empty() {
+                    "No rules enabled"
+                } else {
+                    self.profile.as_str()
+                })
+                .color(theme::text()),
+            );
+            if ui.button("Rule manager…").clicked() {
+                self.open_manager = true;
+            }
+        });
+        if !self.notes[index].is_empty() {
+            ui.colored_label(theme::warn(), &self.notes[index]);
+        }
         egui::CollapsingHeader::new("Local rules and data sources").show(ui, |ui| {
             egui::ScrollArea::vertical().id_salt(("detector-settings", index)).max_height((ui.available_height() * 0.4).min(260.0)).show(ui, |ui| {
             ui.add(egui::Label::new(match self.selected {
-                Engine::Yara => "Bundled Antinomie and YARA-Forge rules scan the verified executable. Optional targets: captured core/RAM blocks and Volatility recovered files.",
-                Engine::Ids => "Local Suricata scans all retained run-owned PCAP segments. Packets cover VM traffic; encrypted contents and process attribution are unavailable.",
-                Engine::Sigma => "Local pySigma 2.x and SQLite backend evaluate recorded Linux exec/file operations, BPF loads, HTTP/1 and DNS. Missing fields, unsupported logsources and conditions are reported. Complete command lines are not available from bounded argv previews.",
+                Engine::Yara => "Enabled YARA packs scan the verified executable. Optional targets: captured core/RAM blocks and recovered files. Gaps in a capture are preserved.",
+                Engine::Ids => "Enabled Suricata rules scan saved run-owned PCAP segments. The HTTP/DNS table is not the input. Encrypted contents and process attribution are unavailable.",
+                Engine::Sigma => "Enabled Sigma rules use the retained event journal. Missing fields stay missing. Unsupported rules stay unevaluated. Command lines are not invented from truncated previews.",
             }).wrap());
             let rules = match self.selected { Engine::Yara => &mut self.settings.yara_rules, Engine::Ids => &mut self.settings.ids_rules, Engine::Sigma => &mut self.settings.sigma_rules };
             ui.label("Additional local rule file or folder");
@@ -372,7 +574,7 @@ impl View {
                 ui.label("Python with pySigma and its SQLite backend");
                 ui.add(egui::TextEdit::singleline(&mut self.settings.sigma_python).desired_width(ui.available_width()).hint_text("/usr/bin/python3 or a local venv/bin/python"));
             }
-            ui.weak("Local analysis only. No automatic downloads or online lookups.");
+            ui.weak("Scans stay offline. Checking the catalog or installing a pack is a separate action in Rule manager.");
             let (label, url) = match self.selected {
                 Engine::Yara => ("YARA-Forge sources", "https://github.com/YARAHQ/yara-forge"),
                 Engine::Ids => ("Emerging Threats Open sources", "https://rules.emergingthreats.net/"),
@@ -382,15 +584,15 @@ impl View {
             });
         });
         ui.horizontal_wrapped(|ui| {
-            let ready = self.rx.is_none()
-                && self.identity.is_some()
-                && (self.selected != Engine::Sigma
-                    || scan.is_some_and(|scan| scan.event_journal.is_some()));
+            let ready = self.rx.is_none() && self.identity.is_some();
             if ui.add_enabled(ready, egui::Button::new("Scan")).clicked() {
+                let partial = !self.notes[index].is_empty();
+                self.auto_key[index].clear();
                 self.start(
                     ui.ctx(),
                     scan.and_then(|scan| scan.event_journal.as_ref())
                         .map(|summary| summary.sha256.clone()),
+                    partial,
                 );
             }
             if self.rx.is_some() {
@@ -460,6 +662,8 @@ impl View {
                     State::Complete => theme::blue(),
                     State::Partial => theme::warn(),
                     State::Unavailable => theme::muted(),
+                    State::NoRules => theme::warn(),
+                    State::Missing => theme::warn(),
                 };
                 presentation::badge(ui, state(&report.state), tone);
             });
@@ -509,10 +713,11 @@ impl View {
                 });
         });
         if report.findings.is_empty() {
-            ui.weak(if report.state == State::Complete {
-                "No rule matched the evaluated data."
-            } else {
-                "No retained matches. Coverage is incomplete or unavailable."
+            ui.weak(match report.state {
+                State::Complete => "No rule matched the evaluated data.",
+                State::NoRules => "No rules enabled. This is not a clean scan.",
+                State::Missing => "Evidence missing. This is not a clean scan.",
+                _ => "No retained matches. Coverage is incomplete or unavailable.",
             });
         }
         let filter = query::table_filter(ui, TABLES[index], "Filter rule matches", FIELDS, &[]);
