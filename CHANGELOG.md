@@ -6,6 +6,21 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Triage layout.** Section navigation and
+  grouped report surfaces distinguish detection results, behavior, files and
+  network evidence. Wide behavior/network sections share their height; narrow
+  panes stack them. Summary observations open shared Details and exact evidence.
+  Properties groups identification, hashes and optional classifiers; detection
+  status and evidence details have clearer hierarchy in both themes. Emphasis
+  uses the palette text and heading colors, so it stays readable on light
+  backgrounds. The specimen name, path and hash header is not shown. Detection
+  lists each match with the rule’s recorded explanation and location. Match
+  cards follow the rule filter, stay in a bounded list, and open the same
+  evidence as the table. Local destination addresses show “-” and “local
+  network”. Public addresses can use TShark GeoIP, dig/whois, or GeoIP with
+  that fallback. A file change is an observed write or metadata change;
+  a mapping alone is not.
+
 - **Summary.** Triage opens with whole-run activity, file, network and detection
   counts. Counts precede table filters and pagination; missing captures or scans
   remain unavailable. Select a count to open its corresponding evidence view.

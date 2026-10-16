@@ -58,6 +58,8 @@ struct Settings {
     compact: bool,
     /// Memory tab: look up symbol tables online for dumps without one.
     memory_online_symbols: bool,
+    /// Public destination country and organization. Local addresses are never queried.
+    address_lookup: crate::triage::AddressLookup,
     /// Sidebar sections folded away.
     vms_collapsed: bool,
     bases_collapsed: bool,
@@ -91,6 +93,7 @@ impl Default for Settings {
             light_theme: false,
             compact: true,
             memory_online_symbols: true,
+            address_lookup: crate::triage::AddressLookup::Tshark,
             vms_collapsed: false,
             bases_collapsed: false,
             explorer_collapsed: false,
@@ -5289,6 +5292,28 @@ impl MonitorApp {
                         RichText::new("Appearance changes apply at once.")
                             .small()
                             .color(theme::muted()),
+                    );
+                    dialog_section(ui, "Address lookup");
+                    ui.add(
+                        egui::Label::new(
+                            "How public destination addresses get a country and organization. Local addresses stay “-” and “local network” and are never queried.",
+                        )
+                        .wrap(),
+                    );
+                    ui.radio_value(
+                        &mut self.settings.address_lookup,
+                        crate::triage::AddressLookup::Tshark,
+                        "TShark GeoIP only",
+                    );
+                    ui.radio_value(
+                        &mut self.settings.address_lookup,
+                        crate::triage::AddressLookup::Whois,
+                        "dig and whois only",
+                    );
+                    ui.radio_value(
+                        &mut self.settings.address_lookup,
+                        crate::triage::AddressLookup::TsharkThenWhois,
+                        "TShark GeoIP, then dig and whois when unavailable",
                     );
                     dialog_section(ui, "Recording");
                     ui.add_enabled_ui(self.snapshot.active_vm.is_none(), |ui| {

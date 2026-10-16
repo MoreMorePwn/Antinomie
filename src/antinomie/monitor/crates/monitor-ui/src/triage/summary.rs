@@ -2,6 +2,7 @@
 //! Whole-run counts, independent of table visibility, filters and query pages.
 use super::*;
 use antinomie_monitor_core::analysis::detection::{Engine, State};
+mod report;
 
 #[derive(Clone, Copy)]
 enum Destination {
@@ -25,7 +26,12 @@ fn metric(ui: &mut egui::Ui, title: &str, value: Option<u64>) -> bool {
             value.is_some(),
             egui::Button::new(
                 RichText::new(value.map_or("Unavailable".into(), |value| value.to_string()))
-                    .strong(),
+                    .strong()
+                    .color(if value.is_some() {
+                        theme::text()
+                    } else {
+                        theme::muted()
+                    }),
             )
             .frame(false),
         )
@@ -35,168 +41,7 @@ fn metric(ui: &mut egui::Ui, title: &str, value: Option<u64>) -> bool {
 }
 
 pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui, input: &TriageInput<'_>) {
-    let mut destination = None;
-    ui.horizontal(|ui| {
-        if ui
-            .add_enabled(input.archive.is_some(), egui::Button::new("Refresh"))
-            .clicked()
-        {
-            view.refresh_requested = true;
-        }
-        if view.scan_rx.is_some() {
-            ui.spinner();
-        }
-    });
-    egui::ScrollArea::vertical()
-        .id_salt("triage-summary")
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            if let Some(report) = input.analysis {
-                ui.weak("Submitted executable");
-                ui.add(egui::Label::new(RichText::new(&report.source_path).strong()).wrap());
-                if let Some(sha256) = &report.specimen_sha256 {
-                    ui.add(egui::Label::new(RichText::new(sha256).monospace()).wrap());
-                }
-            } else {
-                ui.weak("No executable properties were retained for this run.");
-            }
-            if ui.button("Open properties").clicked() {
-                destination = Some(Destination::Properties);
-            }
-            ui.separator();
-            let Some(scan) = &view.scan else {
-                ui.weak("Whole-run counts are not available yet.");
-                if let Some(error) = &view.scan_error {
-                    ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
-                }
-                return;
-            };
-            if scan.partial || !input.run_finished {
-                ui.colored_label(
-                    theme::warn(),
-                    "Retained prefix · counts may be lower bounds",
-                );
-            }
-            if let Some(error) = &scan.event_error {
-                ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
-            }
-            let counts = &scan.counts;
-            ui.strong("Activity");
-            egui::Grid::new("triage-summary-activity")
-                .num_columns(2)
-                .max_col_width(ui.available_width() * 0.6)
-                .spacing(egui::vec2(16.0, 5.0))
-                .show(ui, |ui| {
-                    for (title, value, target) in [
-                        ("Syscalls", counts.calls, Destination::Tasks),
-                        (
-                            "Observed task identities",
-                            scan.process.len() as u64,
-                            Destination::Tasks,
-                        ),
-                        (
-                            "Suspicious activity observations",
-                            counts.findings,
-                            Destination::Findings,
-                        ),
-                        ("Opened-file operations", counts.opened, Destination::Opened),
-                        ("Read-file operations", counts.reads, Destination::Reads),
-                        ("Changed-file groups", counts.changed, Destination::Changed),
-                    ] {
-                        if metric(ui, title, Some(value)) {
-                            destination = Some(target);
-                        }
-                    }
-                });
-            ui.separator();
-            ui.strong("Network");
-            if let Some(warning) = &scan.network_warning {
-                ui.add(egui::Label::new(RichText::new(warning).color(theme::warn())).wrap());
-            }
-            egui::Grid::new("triage-summary-network")
-                .num_columns(2)
-                .max_col_width(ui.available_width() * 0.6)
-                .spacing(egui::vec2(16.0, 5.0))
-                .show(ui, |ui| {
-                    for (title, value, target) in [
-                        (
-                            "Capture frames",
-                            scan.network_counts.map(|counts| counts.0),
-                            Destination::Http,
-                        ),
-                        (
-                            "Destination IPs",
-                            scan.network_counts.map(|counts| counts.1),
-                            Destination::Ips,
-                        ),
-                        (
-                            "Observed hostnames",
-                            scan.network_counts.map(|counts| counts.2),
-                            Destination::Hosts,
-                        ),
-                        (
-                            "HTTP/1 requests",
-                            scan.network_counts.map(|_| counts.http),
-                            Destination::Http,
-                        ),
-                        (
-                            "DNS questions",
-                            scan.network_counts.map(|_| counts.dns),
-                            Destination::Dns,
-                        ),
-                    ] {
-                        if metric(ui, title, value) {
-                            destination = Some(target);
-                        }
-                    }
-                });
-            ui.weak("VM traffic · encrypted requests unavailable");
-            ui.separator();
-            ui.strong("Detection");
-            egui::Grid::new("triage-summary-detection")
-                .num_columns(2)
-                .max_col_width(ui.available_width() * 0.6)
-                .spacing(egui::vec2(16.0, 5.0))
-                .show(ui, |ui| {
-                    for (index, engine) in [Engine::Yara, Engine::Ids, Engine::Sigma]
-                        .into_iter()
-                        .enumerate()
-                    {
-                        ui.label(detection::name(engine));
-                        let label = match &view.detection.results[index] {
-                            None => "Not scanned".into(),
-                            Some(Err(_)) => "Failed".into(),
-                            Some(Ok(report)) => {
-                                let state = match report.state {
-                                    State::Complete => "Complete",
-                                    State::Partial => "Partial",
-                                    State::Unavailable => "Unavailable",
-                                };
-                                view.detection.counts[index].as_ref().map_or_else(
-                                    || state.into(),
-                                    |counts| {
-                                        format!(
-                                            "{} rules · {} occurrences · {state}",
-                                            counts.rules, counts.occurrences
-                                        )
-                                    },
-                                )
-                            }
-                        };
-                        if ui
-                            .add(egui::Button::new(label).wrap().frame(false))
-                            .clicked()
-                        {
-                            destination = Some(Destination::Detection(engine));
-                        }
-                        ui.end_row();
-                    }
-                });
-            ui.label(format!(
-                "{} rule-supplied ATT&CK references",
-                view.detection.references.len()
-            ));
-        });
+    let destination = report::content(view, ui, input);
     if let Some(destination) = destination {
         match destination {
             Destination::Properties => view.section = Section::Properties,
@@ -248,11 +93,75 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui, input: &TriageInput
 mod tests {
     use super::*;
     #[test]
+    fn summary_observation_opens_shared_details_and_exact_syscall_evidence() {
+        let files = PacketSpool::new().unwrap();
+        let mut raw = std::fs::File::create(files.directory.join("telemetry.raw")).unwrap();
+        super::super::tests::write_rwx_calls(&mut raw, 0..1);
+        raw.sync_all().unwrap();
+        let scan = scan_archive(&files.directory, None, false, &AtomicBool::new(false)).unwrap();
+        let expected = scan.findings[0].key;
+        let mut view = TriageView::default();
+        view.scan = Some(scan);
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut draw = |events, time| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1100.0, 1600.0),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        show(&mut view, ui, &TriageInput::empty());
+                    });
+                },
+            )
+        };
+        draw(vec![], 0.0);
+        let output = draw(vec![], 0.01);
+        let position = crate::app::tests::texts(&output)
+            .into_iter()
+            .find(|(text, _)| text == "memory.rwx")
+            .expect("visible observation")
+            .1
+            .center();
+        for (index, pressed) in [true, false, true, false].into_iter().enumerate() {
+            draw(
+                vec![
+                    egui::Event::PointerMoved(position),
+                    egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                0.1 + index as f64 * 0.05,
+            );
+        }
+        assert!(ctx
+            .data(|data| data.get_temp::<bool>(egui::Id::new("triage-details-focus")))
+            .unwrap_or(false));
+        assert_eq!(
+            ctx.data(
+                |data| data.get_temp::<trace::InvocationKey>(egui::Id::new("triage-call-jump"))
+            ),
+            Some(expected)
+        );
+    }
+
+    #[test]
     #[ignore = "requires owned isolated X11; synthetic Summary / Detection fixture"]
     fn native_summary_and_detection_fixture() {
         use winit::platform::x11::EventLoopBuilderExtX11;
         struct Fixture {
             view: TriageView,
+            analysis: antinomie_monitor_core::AnalysisReport,
             deadline: Instant,
             detection: bool,
             _files: PacketSpool,
@@ -260,15 +169,16 @@ mod tests {
         impl eframe::App for Fixture {
             fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.heading(if self.detection {
-                        "Detection — synthetic fixture"
-                    } else {
-                        "Summary — synthetic fixture"
-                    });
+                    let input = TriageInput {
+                        analysis: Some(&self.analysis),
+                        run_finished: true,
+                        ..TriageInput::empty()
+                    };
+                    presentation::navigation(&mut self.view, ui);
                     if self.detection {
                         self.view.detection.show(ui, self.view.scan.as_ref());
                     } else {
-                        show(&mut self.view, ui, &TriageInput::empty());
+                        show(&mut self.view, ui, &input);
                     }
                 });
                 if Instant::now() > self.deadline {
@@ -295,6 +205,20 @@ mod tests {
         scan.counts.dns = 8;
         let mut view = TriageView::default();
         view.scan = Some(scan);
+        view.section = if detection {
+            Section::Detection
+        } else {
+            Section::Summary
+        };
+        let mut analysis = antinomie_monitor_core::AnalysisReport {
+            id: "synthetic-artifact".into(),
+            state: antinomie_monitor_core::AnalysisState::Complete,
+            source_path: "/tmp/triage-sample".into(),
+            specimen_sha256: Some("abcdef0123456789".repeat(4)),
+            specimen_len: Some(85904),
+            reason: None,
+            sections: vec![],
+        };
         use antinomie_monitor_core::analysis::detection::{Evidence, Finding, Identity, Report};
         let identity = Identity {
             vm_id: "synthetic".into(),
@@ -327,6 +251,54 @@ mod tests {
             view.detection.results[index] = Some(Ok(report));
             view.detection.rows(index);
         }
+        if let Some(path) = std::env::var_os("ANTINOMIE_TRIAGE_SAMPLE") {
+            let path = std::path::PathBuf::from(path);
+            let run: antinomie_monitor_core::RunSummary =
+                serde_json::from_slice(&std::fs::read(path.join("run.json")).unwrap()).unwrap();
+            analysis =
+                antinomie_monitor_core::analysis::open_report(&path.join("analysis")).unwrap();
+            let artifacts = antinomie_monitor_core::RunArtifacts::load(&path)
+                .unwrap()
+                .unwrap();
+            let request = ScanRequest {
+                root_cookie: run.root_task_cookie,
+                clock_anchor: run.clock_anchor,
+                started_ms: run.started_ms,
+                run_finished: true,
+                identity: Some((run.vm_id, run.boot_id, run.id)),
+                ..Default::default()
+            };
+            view.scan = Some(
+                scan_archive_query(
+                    &path,
+                    artifacts
+                        .network_captures
+                        .first()
+                        .map(|path| path.as_path()),
+                    false,
+                    &Arc::new(AtomicBool::new(false)),
+                    &request,
+                )
+                .unwrap(),
+            );
+            for (index, engine) in [Engine::Yara, Engine::Ids, Engine::Sigma]
+                .into_iter()
+                .enumerate()
+            {
+                let report: Report = serde_json::from_slice(
+                    &std::fs::read(
+                        antinomie_monitor_core::analysis::detection::result_directory(
+                            &path, engine,
+                        )
+                        .join("report.json"),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+                view.detection.results[index] = Some(Ok(report));
+                view.detection.rows(index);
+            }
+        }
         eframe::run_native(
             "Antinomie triage QA",
             eframe::NativeOptions {
@@ -342,9 +314,14 @@ mod tests {
             },
             Box::new(move |cc| {
                 theme::install(&cc.egui_ctx);
+                theme::apply(
+                    &cc.egui_ctx,
+                    std::env::var_os("ANTINOMIE_TRIAGE_QA_LIGHT").is_some(),
+                );
                 theme::text_size(&cc.egui_ctx, if width < 700.0 { 24.0 } else { 16.0 });
                 Ok(Box::new(Fixture {
                     view,
+                    analysis,
                     deadline: Instant::now() + Duration::from_secs(4),
                     detection,
                     _files: files,

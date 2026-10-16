@@ -15,11 +15,10 @@ const TOTAL_OPERATIONS: usize = 32768;
 #[derive(Clone)]
 pub(super) struct Operation {
     time: u64,
-    pid: u32,
-    tid: u32,
     call: u64,
     key: trace::InvocationKey,
     name: String,
+    process: String,
     result: String,
 }
 
@@ -153,7 +152,11 @@ impl Change {
     pub fn show(&self, ui: &mut egui::Ui, clock: Option<antinomie_monitor_core::HostClockAnchor>) {
         egui::ScrollArea::vertical().id_salt(("file-change-details", self.key)).max_height(ui.available_height().max(40.0)).show(ui, |ui| {
         ui.separator();
-        ui.strong(format!("Original → final: {}", self.path));
+        ui.label(
+            RichText::new(format!("Original → final: {}", self.path))
+                .strong()
+                .color(theme::text()),
+        );
         if self.deleted {
             ui.colored_label(
                 theme::warn(),
@@ -181,19 +184,19 @@ impl Change {
             }
             if shown == 0 { ui.weak("No differing byte pairs available in captured ranges."); }
             ui.weak("?? = unavailable; ∅ = outside a known file extent.");
-            ui.strong("Operation timeline");
+            ui.label(RichText::new("Operation timeline").strong().color(theme::heading()));
             let rows: Vec<_> = self.operations.iter().map(|op| {
                 let mut row = vec![
                     cell(crate::time_format::guest_ns(clock, Some(op.time)), theme::text(), true),
                     cell(&op.name, theme::text(), false),
-                    cell(format!("{} / {}", op.pid, op.tid), theme::text(), true),
+                    cell(&op.process, theme::text(), true),
                     cell(&op.result, theme::text(), false),
                     cell(format!("call {}", op.call), theme::text(), true),
                 ];
                 row[0].values = vec![("event.id", RowValue::Number(i128::from(op.call))), ("stream.id", RowValue::Number(i128::from(op.key.0))), ("process.cookie", RowValue::Number(i128::from(op.key.1)))]; row
             }).collect();
             egui::ScrollArea::horizontal().id_salt("file-operation-timeline-columns").auto_shrink([false,true]).show(ui,|ui| {
-                table_rows(ui, "file-operation-timeline", &["Time", "Operation", "PID / TID", "Result", "Evidence"], &rows);
+                table_rows(ui, "file-operation-timeline", &["Time", "Operation", "Process (PID / TID)", "Result", "Evidence"], &rows);
             });
         });
     }
@@ -323,17 +326,23 @@ impl FileIndex {
         if !reading && !changed {
             return None;
         }
-        let mut path = displayed_path(call, event, files);
-        let path_known = path != "—";
-        if path == "—" {
-            path = format!(
-                "{}[path unavailable; task {} fd {}]",
-                fd.and_then(crate::values::standard_fd_name)
-                    .map_or(String::new(), |name| format!("{name} ")),
+        let observed = displayed_path(call, event, files);
+        let path_known = observed != "—";
+        // The map key stays unique per task and descriptor. The visible label does not.
+        let group = if path_known {
+            observed.clone()
+        } else {
+            format!(
+                "\u{0}{}:{}",
                 call.task_cookie,
-                fd.map_or("?".into(), |fd| fd.to_string())
-            );
-        }
+                fd.map(|fd| fd.to_string()).unwrap_or_else(|| "?".into())
+            )
+        };
+        let path = if path_known {
+            observed
+        } else {
+            unavailable_descriptor(fd)
+        };
         let mut explicit = matches!(
             name,
             "pread64" | "pwrite64" | "preadv" | "pwritev" | "preadv2" | "pwritev2"
@@ -465,11 +474,11 @@ impl FileIndex {
             ];
             row
         });
-        if !self.changes.contains_key(&path) && self.changes.len() >= TRACKED_FILES {
+        if !self.changes.contains_key(&group) && self.changes.len() >= TRACKED_FILES {
             self.omitted_files += 1;
             return read_row;
         }
-        let change = self.changes.entry(path.clone()).or_insert_with(|| Change {
+        let change = self.changes.entry(group).or_insert_with(|| Change {
             path: path.clone(),
             path_known,
             standard_io: true,
@@ -496,11 +505,10 @@ impl FileIndex {
         if change.operations.len() < TIMELINE_ROWS && self.operation_count < TOTAL_OPERATIONS {
             change.operations.push(Operation {
                 time: event.timestamp_ns,
-                pid: event.pid,
-                tid: event.tid,
                 call: call.call_id,
                 key: trace::key(call),
                 name: name.into(),
+                process: process_identity(event.pid, event.tid, process_image(files, event)),
                 result: result_label(ret),
             });
             self.operation_count += 1;
@@ -600,7 +608,7 @@ impl FileIndex {
                         "Unlink observed; link count and final inode lifetime are unavailable.",
                     );
                 }
-                "mmap" | "mmap2" | "msync" => {
+                "msync" => {
                     change.modified = true;
                     change.final_data.clear();
                     change.gaps.insert("Shared writable mapping observed; actual mapped writes and final bytes are unavailable.");
@@ -654,6 +662,13 @@ impl FileIndex {
     }
 }
 
+fn unavailable_descriptor(fd: Option<u64>) -> String {
+    fd.and_then(crate::values::standard_fd_name)
+        .map(str::to_owned)
+        .or_else(|| fd.map(|fd| format!("fd {fd}")))
+        .unwrap_or_else(|| "fd unavailable".into())
+}
+
 pub(super) fn result_label(ret: Option<i64>) -> String {
     match ret {
         Some(ret) if ret >= 0 => format!("Success ({ret})"),
@@ -664,11 +679,7 @@ pub(super) fn result_label(ret: Option<i64>) -> String {
 
 pub(super) fn change_operation(call: &InvocationSummary, event: &EventSummary) -> bool {
     let name = event.syscall_name.as_str();
-    if matches!(name, "mmap" | "mmap2") {
-        return call_args(call).is_some_and(|args| {
-            args[2] & 2 != 0 && args[3] & MAP_PRIVATE == 0 && args[3] & MAP_ANONYMOUS == 0
-        });
-    }
+    // mmap records a mapping, not a write. msync is the observed write-back.
     CHANGE_NAMES.contains(&name)
         || (OPEN_NAMES.contains(&name)
             && open_flags(call, event).is_some_and(|flags| flags & (0x40 | 0x200) != 0))
@@ -858,21 +869,41 @@ mod tests {
     }
 
     #[test]
-    fn private_mapping_is_excluded_shared_writes_and_metadata_keep_gap_notes() {
+    fn shared_mapping_without_writeback_is_not_a_file_change() {
         let calls = [
             open(2),
             operation(2, 9, "mmap", 4096, [0, 4096, 2, MAP_PRIVATE, 3, 0], b""),
             operation(3, 9, "mmap", 8192, [0, 4096, 2, 1, 3, 0], b""),
-            operation(4, 91, "fchmod", 0, [3, 0o600, 0, 0, 0, 0], b""),
+            operation(4, 26, "msync", 0, [8192, 4096, 4, 0, 0, 0], b""),
+            operation(5, 91, "fchmod", 0, [3, 0o600, 0, 0, 0, 0], b""),
         ];
         let (index, _) = build(&calls);
         let changes = index.finish();
-        assert_eq!(changes.len(), 1);
-        assert_eq!(changes[0].operations.len(), 2);
-        assert!(changes[0]
-            .gaps
+        assert_eq!(changes.len(), 2);
+        let file = changes
             .iter()
-            .any(|gap| gap.contains("mapped writes")));
+            .find(|change| change.path == "/tmp/file")
+            .unwrap();
+        assert_eq!(file.operations.len(), 1);
+        assert_eq!(file.operations[0].name, "fchmod");
+        assert_eq!(file.operations[0].process, "Unknown (1 / 1)");
+        assert!(file.gaps.iter().all(|gap| !gap.contains("mapped writes")));
+        let synced = changes
+            .iter()
+            .find(|change| change.operations.iter().any(|op| op.name == "msync"))
+            .unwrap();
+        assert_eq!(synced.path, "fd unavailable");
+        assert!(synced.gaps.iter().any(|gap| gap.contains("mapped writes")));
+    }
+
+    #[test]
+    fn unknown_descriptor_uses_a_short_label_and_stays_missing() {
+        let (_, reads) = build(&[operation(2, 0, "read", 2, [1, 0, 2, 0, 0, 0], b"hi")]);
+        assert_eq!(reads[0][1].text, "stdout");
+        assert!(reads[0][0]
+            .values
+            .iter()
+            .any(|(name, value)| { *name == "file.path" && matches!(value, RowValue::Missing) }));
     }
 
     #[test]

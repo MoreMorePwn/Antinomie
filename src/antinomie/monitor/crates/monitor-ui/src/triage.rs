@@ -24,9 +24,11 @@ mod files;
 mod network;
 mod network_index;
 mod normalized;
+mod presentation;
 mod properties;
 mod sorting;
 mod summary;
+pub(crate) use network::AddressLookup;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
@@ -196,6 +198,13 @@ impl<'a> TriageInput<'a> {
 impl TriageView {
     /// Maintain the selected run's index even when the Triage pane is hidden.
     /// Identity changes cancel old jobs; refreshes coalesce into one next scan.
+    pub(crate) fn set_address_lookup(&mut self, mode: AddressLookup) {
+        if self.scan_request.address_lookup != mode {
+            self.scan_request.address_lookup = mode;
+            self.refresh_requested = true;
+        }
+    }
+
     pub(crate) fn tick(&mut self, ctx: &egui::Context, input: TriageInput<'_>) {
         let key = format!(
             "{}\n{}\n{}\n{}",
@@ -263,20 +272,7 @@ impl TriageView {
             ui.weak("Select a program run to view triage.");
             return None;
         }
-        ui.horizontal_wrapped(|ui| {
-            for (section, label) in [
-                (Section::Summary, "Summary"),
-                (Section::Properties, "Properties"),
-                (Section::Detection, "Detection"),
-                (Section::Process, "Process"),
-                (Section::Files, "Files"),
-                (Section::Network, "Network activity"),
-                (Section::Bpf, "eBPF"),
-            ] {
-                ui.selectable_value(&mut self.section, section, label);
-            }
-        });
-        ui.separator();
+        presentation::navigation(self, ui);
         self.tick(ui.ctx(), input);
         if self.section == Section::Summary {
             summary::show(self, ui, &input);
@@ -337,16 +333,38 @@ impl TriageView {
         });
         let jump = match self.section {
             Section::Summary | Section::Properties | Section::Detection => None,
-            Section::Process => self.process(ui, &input),
+            Section::Process => {
+                presentation::heading(
+                    ui,
+                    "Process activity",
+                    "Process relationships and observed behavior",
+                );
+                self.process(ui, &input)
+            }
             Section::Files => {
+                presentation::heading(
+                    ui,
+                    "File activity",
+                    "Observed access, captured reads and file changes",
+                );
                 self.files(ui, &input);
                 None
             }
             Section::Network => {
+                presentation::heading(
+                    ui,
+                    "Network activity",
+                    "Destinations, hosts and recorded requests",
+                );
                 self.network(ui, &input);
                 None
             }
             Section::Bpf => {
+                presentation::heading(
+                    ui,
+                    "eBPF & seccomp",
+                    "Captured programs, filters and their syscall evidence",
+                );
                 let indexed = self.scan.as_ref().map(|scan| scan.bpf.as_slice());
                 if self.scan.as_ref().is_some_and(|scan| scan.bpf_omitted > 0) {
                     ui.colored_label(theme::warn(), "Some BPF observations exceed the preview limit; original syscall evidence remains available.");
@@ -557,7 +575,11 @@ impl TriageView {
         }
         match self.network {
             NetTab::Ips => {
-                ui.weak("Country and organization use local TShark GeoIP data when configured.");
+                ui.weak(match self.scan_request.address_lookup {
+                    AddressLookup::Tshark => "Local addresses show “-” and “local network”. Other rows use local TShark GeoIP data when it is configured.",
+                    AddressLookup::Whois => "Local addresses show “-” and “local network”. Public addresses use dig and whois on this machine.",
+                    AddressLookup::TsharkThenWhois => "Local addresses show “-” and “local network”. Public addresses use local TShark GeoIP, then dig and whois when country or organization is missing.",
+                });
                 table(
                     ui,
                     "triage-ips",
@@ -1929,6 +1951,13 @@ fn process_tree_lines(invocations: &[InvocationSummary]) -> Vec<String> {
         .collect()
 }
 
+fn unix_shell(path: &str) -> bool {
+    matches!(
+        path.rsplit(['/', '\\']).next().unwrap_or(path),
+        "sh" | "bash" | "dash" | "zsh" | "ksh" | "csh" | "tcsh" | "fish" | "ash"
+    )
+}
+
 fn preview_line(event: &EventSummary) -> String {
     event
         .fields
@@ -2160,6 +2189,7 @@ struct ScanRequest {
     started_ms: Option<u64>,
     ended_ms: Option<u64>,
     root_cookie: u64,
+    address_lookup: AddressLookup,
     run_finished: bool,
     identity: Option<(String, String, String)>,
     offsets: [usize; 8],
@@ -2248,16 +2278,21 @@ fn suspicious_rows_state(
             ));
         }
         if matches!(event.syscall_nr, 59 | 322) {
+            let paths = path_list(invocation);
+            // T1059.004 is Unix Shell. A normal program execution is not that technique.
+            let reference = paths
+                .first()
+                .filter(|path| unix_shell(path))
+                .map_or("Observed process execution", |_| "MITRE ATT&CK T1059.004");
             rows.push(hit(
                 "process.exec",
                 "medium",
                 process.clone(),
                 format!("{} {outcome}", preview_line(event)),
-                "MITRE ATT&CK T1059.004",
+                reference,
                 event,
                 invocation,
             ));
-            let paths = path_list(invocation);
             if paths.first().is_some_and(|path| {
                 matches!(
                     path.rsplit('/').next().unwrap_or(""),
@@ -2348,9 +2383,11 @@ fn suspicious_rows_state(
                 invocation,
             ));
         }
+        // x86-64: setuid, setgid, setreuid, setregid, setresuid, setresgid,
+        // setfsuid, setfsgid, capset. 130 is rt_sigsuspend, not a credential change.
         if matches!(
             event.syscall_nr,
-            105 | 106 | 113 | 114 | 117 | 119 | 122 | 123 | 126 | 130
+            105 | 106 | 113 | 114 | 117 | 119 | 122 | 123 | 126
         ) {
             rows.push(hit(
                 "privilege.change",
@@ -2732,8 +2769,6 @@ const CHANGE_NAMES: &[&str] = &[
     "lchown",
     "fchownat",
     "fchmodat2",
-    "mmap",
-    "mmap2",
     "msync",
     "link",
     "linkat",
@@ -3580,8 +3615,9 @@ fn scan_pcap_query_observed(
     }
     use std::io::{BufRead, BufReader};
     let identity = antinomie_monitor_core::packet_filter::CaptureIdentity::read(path)?;
-    let (spool, extent) = match spool_packet_fields(&identity, pcap_open, cancel, true) {
-        Err(error) if error.contains("geoip") && !cancel.load(Ordering::Relaxed) => {
+    let use_geoip = request.address_lookup != AddressLookup::Whois;
+    let (spool, extent) = match spool_packet_fields(&identity, pcap_open, cancel, use_geoip) {
+        Err(error) if use_geoip && error.contains("geoip") && !cancel.load(Ordering::Relaxed) => {
             spool_packet_fields(&identity, pcap_open, cancel, false)?
         }
         result => result?,
@@ -3857,6 +3893,9 @@ fn scan_pcap_query_observed(
             }
         }
     }
+    if request.address_lookup != AddressLookup::Tshark {
+        network::enrich_public(inventory, cancel, &mut index.network_warning)?;
+    }
     let (ips, hosts) = inventory.rows();
     index.counts = Some((extent.packet_count, ips.len() as u64, hosts.len() as u64));
     let (http, http_omitted, http_count) = http_page.finish()?;
@@ -3887,9 +3926,12 @@ fn scan_pcap_query_observed(
         }
     }
     if inventory.omitted > 0 {
-        index.network_warning = Some(
-            "Network inventory retention limit reached; packet evidence remains available.".into(),
-        );
+        let retention =
+            "Network inventory retention limit reached; packet evidence remains available.";
+        index.network_warning = Some(match index.network_warning.take() {
+            Some(existing) => format!("{retention} {existing}"),
+            None => retention.into(),
+        });
     }
     index.coverage = format!("TShark HTTP/1 and DNS/UDP/TCP; {} capture frames; complete-record extent {}/{} octets; HTTP matches {http_count}, DNS matches {dns_count}; response correlation uses decoder frame links; attribution unknown. HTTPS, HTTP/2, HTTP/3 and encrypted DNS unavailable{}",
         extent.packet_count, extent.complete_extent, extent.file_size,
@@ -7046,6 +7088,49 @@ mod tests {
             .fields
             .push(captured("arg0.pathname", "", &bytes));
         row
+    }
+
+    #[test]
+    fn ordinary_exec_is_not_a_unix_shell_and_sigsuspend_is_not_privilege() {
+        let rows = suspicious_rows(&[
+            path_call(1, 59, "execve", 0, "/bin/ls"),
+            path_call(1, 59, "execve", 0, "/bin/sh"),
+            call(1, 130, "rt_sigsuspend", 0),
+            call(1, 105, "setuid", 0),
+        ]);
+        let text = |row: &Finding, key: &str| -> String {
+            row.values
+                .iter()
+                .find_map(|(name, value)| match (*name, value) {
+                    (name, RowValue::Text(text)) if name == key => Some(text.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+        let exec = |needle: &str| {
+            rows.iter()
+                .find(|row| {
+                    text(row, "finding.rule") == "process.exec"
+                        && text(row, "finding.summary").contains(needle)
+                })
+                .unwrap()
+        };
+        assert_eq!(
+            text(exec("/bin/ls"), "finding.source"),
+            "Observed process execution"
+        );
+        assert_eq!(
+            text(exec("/bin/sh"), "finding.source"),
+            "MITRE ATT&CK T1059.004"
+        );
+        assert!(rows.iter().all(|row| {
+            text(row, "finding.rule") != "privilege.change"
+                || !text(row, "finding.summary").contains("rt_sigsuspend")
+        }));
+        assert!(rows.iter().any(|row| {
+            text(row, "finding.rule") == "privilege.change"
+                && text(row, "finding.summary").contains("setuid")
+        }));
     }
 
     #[test]

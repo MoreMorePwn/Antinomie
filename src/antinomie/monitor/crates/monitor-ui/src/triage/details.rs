@@ -147,12 +147,20 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
     };
     egui::ScrollArea::vertical().id_salt("triage-shared-details")
         .auto_shrink([false, false]).show(ui, |ui| {
-        ui.strong(title(&selected.table));
+        presentation::heading(ui, title(&selected.table), "Selected evidence");
+        presentation::frame().show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        egui::Grid::new("triage-detail-values").num_columns(2).spacing(egui::vec2(14.0, 9.0))
+            .max_col_width((ui.available_width() * 0.7).max(80.0)).show(ui, |ui| {
         for (header, cell) in selected.headers.iter().zip(&selected.cells) {
-            ui.colored_label(theme::muted(), header);
+            ui.label(RichText::new(header).small().color(theme::muted()));
             let text = RichText::new(&cell.text).color(cell.color);
             ui.add(egui::Label::new(if cell.mono { text.monospace() } else { text }).wrap());
+            ui.end_row();
         }
+        });
+        });
+        ui.add_space(10.0);
         let values = selected.cells.first().map(|cell| cell.values.as_slice()).unwrap_or_default();
         if matches!(selected.table.as_str(), "triage-yara" | "triage-ids" | "triage-sigma") { view.detection.details(ui, values); }
         if selected.table == "triage-changed" {

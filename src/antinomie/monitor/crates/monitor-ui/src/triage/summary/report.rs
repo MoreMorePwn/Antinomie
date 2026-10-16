@@ -1,0 +1,423 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 MikiMiku (MoreMorePwn)
+//! Report overview composed from cached run evidence, never from render-time I/O.
+use super::*;
+
+fn detector(
+    ui: &mut egui::Ui,
+    view: &TriageView,
+    index: usize,
+    engine: Engine,
+    compact: bool,
+) -> bool {
+    presentation::frame()
+        .fill(theme::panel())
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let (status, color) = match &view.detection.results[index] {
+                None => ("Not scanned", theme::muted()),
+                Some(Err(_)) => ("Failed", theme::error()),
+                Some(Ok(report)) => match report.state {
+                    State::Complete => ("Complete", theme::blue()),
+                    State::Partial => ("Partial", theme::warn()),
+                    State::Unavailable => ("Unavailable", theme::muted()),
+                },
+            };
+            if compact {
+                return ui
+                    .horizontal_wrapped(|ui| {
+                        ui.label(
+                            RichText::new(detection::name(engine))
+                                .strong()
+                                .color(theme::heading()),
+                        );
+                        ui.label(
+                            RichText::new(
+                                view.detection.counts[index]
+                                    .as_ref()
+                                    .map_or("—".into(), |counts| {
+                                        format!("{} matches", counts.rules)
+                                    }),
+                            )
+                            .strong()
+                            .color(theme::text()),
+                        );
+                        presentation::badge(ui, status, color);
+                        ui.button("Open results").clicked()
+                    })
+                    .inner;
+            }
+            ui.set_min_height(ui.text_style_height(&egui::TextStyle::Body) * 5.4);
+            ui.label(
+                RichText::new(detection::name(engine))
+                    .strong()
+                    .color(theme::heading()),
+            );
+            if let Some(counts) = &view.detection.counts[index] {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        RichText::new(counts.rules.to_string())
+                            .size(27.0)
+                            .strong()
+                            .color(theme::text()),
+                    );
+                    ui.label(if counts.rules == 1 {
+                        "rule matched"
+                    } else {
+                        "rules matched"
+                    });
+                });
+                ui.label(
+                    RichText::new(format!(
+                        "{} {}",
+                        counts.occurrences,
+                        if counts.occurrences == 1 {
+                            "occurrence"
+                        } else {
+                            "occurrences"
+                        }
+                    ))
+                    .small()
+                    .color(theme::muted()),
+                );
+            } else {
+                ui.label(RichText::new("—").size(27.0).color(theme::muted()));
+                ui.label(
+                    RichText::new("No evaluated result")
+                        .small()
+                        .color(theme::muted()),
+                );
+            }
+            ui.horizontal_wrapped(|ui| {
+                presentation::badge(ui, status, color);
+                ui.button("Open results").clicked()
+            })
+            .inner
+        })
+        .inner
+}
+
+fn activity(ui: &mut egui::Ui, scan: &ArchiveScan) -> Option<Destination> {
+    presentation::heading(
+        ui,
+        "Behavior & files",
+        "Observed operations across the selected run",
+    );
+    let mut target = None;
+    egui::Grid::new("triage-summary-activity")
+        .num_columns(2)
+        .max_col_width(ui.available_width() * 0.66)
+        .spacing(egui::vec2(16.0, 9.0))
+        .show(ui, |ui| {
+            for (title, count, destination) in [
+                ("Syscalls", scan.counts.calls, Destination::Tasks),
+                (
+                    "Observed task identities",
+                    scan.process.len() as u64,
+                    Destination::Tasks,
+                ),
+                (
+                    "Suspicious observations",
+                    scan.counts.findings,
+                    Destination::Findings,
+                ),
+                (
+                    "Opened-file operations",
+                    scan.counts.opened,
+                    Destination::Opened,
+                ),
+                (
+                    "Read-file operations",
+                    scan.counts.reads,
+                    Destination::Reads,
+                ),
+                (
+                    "Changed-file groups",
+                    scan.counts.changed,
+                    Destination::Changed,
+                ),
+            ] {
+                if metric(ui, title, Some(count)) {
+                    target = Some(destination);
+                }
+            }
+        });
+    target
+}
+
+fn network(ui: &mut egui::Ui, scan: &ArchiveScan) -> Option<Destination> {
+    presentation::heading(
+        ui,
+        "Network evidence",
+        "Captured VM traffic during this run",
+    );
+    let mut target = None;
+    egui::Grid::new("triage-summary-network")
+        .num_columns(2)
+        .max_col_width(ui.available_width() * 0.66)
+        .spacing(egui::vec2(16.0, 9.0))
+        .show(ui, |ui| {
+            for (title, count, destination) in [
+                (
+                    "Capture frames",
+                    scan.network_counts.map(|count| count.0),
+                    Destination::Http,
+                ),
+                (
+                    "Destination IPs",
+                    scan.network_counts.map(|count| count.1),
+                    Destination::Ips,
+                ),
+                (
+                    "Observed hostnames",
+                    scan.network_counts.map(|count| count.2),
+                    Destination::Hosts,
+                ),
+                (
+                    "HTTP/1 requests",
+                    scan.network_counts.map(|_| scan.counts.http),
+                    Destination::Http,
+                ),
+                (
+                    "DNS questions",
+                    scan.network_counts.map(|_| scan.counts.dns),
+                    Destination::Dns,
+                ),
+            ] {
+                if metric(ui, title, count) {
+                    target = Some(destination);
+                }
+            }
+        });
+    ui.add_space(5.0);
+    ui.add(
+        egui::Label::new(
+            RichText::new("Encrypted request contents are unavailable.")
+                .small()
+                .color(theme::muted()),
+        )
+        .wrap(),
+    );
+    target
+}
+
+fn observations(ui: &mut egui::Ui, scan: &ArchiveScan) -> bool {
+    presentation::frame()
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            presentation::heading(
+                ui,
+                "Observed activity",
+                "Select an observation for Details; double-click for its evidence.",
+            );
+            for (index, finding) in scan.findings.iter().take(4).enumerate() {
+                let severity = finding
+                    .cells
+                    .get(1)
+                    .map_or("Observed", |cell| cell.text.as_str());
+                let color = match severity {
+                    "high" => theme::error(),
+                    "medium" => theme::warn(),
+                    _ => theme::blue(),
+                };
+                // One syscall can produce several observations, so the click
+                // target needs the rule as well as the invocation.
+                let rule = finding
+                    .cells
+                    .first()
+                    .map(|cell| cell.text.as_str())
+                    .unwrap_or("");
+                let response = egui::Frame::new()
+                    .fill(theme::panel())
+                    .corner_radius(4)
+                    .inner_margin(8)
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal_wrapped(|ui| {
+                            presentation::badge(ui, severity, color);
+                            if !rule.is_empty() {
+                                ui.label(RichText::new(rule).strong().color(theme::text()));
+                            }
+                            if let Some(process) = finding.cells.get(2) {
+                                ui.label(
+                                    RichText::new(&process.text).small().color(theme::muted()),
+                                );
+                            }
+                        });
+                        if let Some(summary) = finding.cells.get(3) {
+                            ui.add(egui::Label::new(&summary.text).truncate());
+                        }
+                    })
+                    .response;
+                let clicked = ui.interact(
+                    response.rect,
+                    ui.id()
+                        .with(("summary-observation", index, finding.key, rule)),
+                    egui::Sense::click(),
+                );
+                if clicked.clicked() {
+                    let mut cells = finding.cells.clone();
+                    if let Some(first) = cells.first_mut() {
+                        first.values.clone_from(&finding.values);
+                    }
+                    details::select(
+                        ui.ctx(),
+                        "triage-findings",
+                        &[
+                            "Rule",
+                            "Severity",
+                            "Process",
+                            "Summary",
+                            "Source",
+                            "Time",
+                            "Confidence",
+                            "Evidence",
+                            "Version",
+                            "Outcome",
+                        ],
+                        &cells,
+                    );
+                    details::clicked(ui.ctx(), "triage-findings");
+                }
+                if clicked.double_clicked() {
+                    request_evidence_jump(ui.ctx(), &finding.values);
+                }
+                ui.add_space(5.0);
+            }
+            if scan.findings.is_empty() {
+                ui.weak("Open suspicious activity to inspect the run's indexed observations.");
+            }
+            ui.button("Open suspicious activity").clicked()
+        })
+        .inner
+}
+
+pub(super) fn content(
+    view: &mut TriageView,
+    ui: &mut egui::Ui,
+    input: &TriageInput<'_>,
+) -> Option<Destination> {
+    let mut destination = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            RichText::new("Run overview")
+                .strong()
+                .color(theme::heading())
+                .size(18.0),
+        );
+        if view
+            .scan
+            .as_ref()
+            .is_some_and(|scan| scan.network_counts.is_none())
+        {
+            ui.label(RichText::new("Network").small().color(theme::muted()));
+            presentation::badge(ui, "Unavailable", theme::muted());
+        }
+        if ui
+            .add_enabled(input.archive.is_some(), egui::Button::new("Refresh"))
+            .clicked()
+        {
+            view.refresh_requested = true;
+        }
+        if view.scan_rx.is_some() {
+            ui.spinner();
+        }
+        if ui.button("Open properties").clicked() {
+            destination = Some(Destination::Properties);
+        }
+    });
+    ui.add_space(8.0);
+    egui::ScrollArea::vertical()
+        .id_salt("triage-summary")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            if let Some(error) = &view.scan_error {
+                ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
+            }
+            let Some(scan) = &view.scan else {
+                presentation::frame().show(ui, |ui| {
+                    presentation::heading(
+                        ui,
+                        "Preparing run evidence",
+                        "Whole-run counts appear after the recording is indexed.",
+                    );
+                });
+                return;
+            };
+            if scan.partial || !input.run_finished {
+                presentation::badge(
+                    ui,
+                    "Retained prefix · counts may be lower bounds",
+                    theme::warn(),
+                );
+                ui.add_space(8.0);
+            }
+            if let Some(error) = &scan.event_error {
+                ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
+            }
+            presentation::heading(
+                ui,
+                "Detection evidence",
+                "Rule matches from the selected run's retained evidence",
+            );
+            if ui.available_width() >= 620.0 {
+                ui.columns(3, |columns| {
+                    for (index, engine) in [Engine::Yara, Engine::Ids, Engine::Sigma]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        if detector(&mut columns[index], view, index, engine, false) {
+                            destination = Some(Destination::Detection(engine));
+                        }
+                    }
+                });
+            } else {
+                for (index, engine) in [Engine::Yara, Engine::Ids, Engine::Sigma]
+                    .into_iter()
+                    .enumerate()
+                {
+                    if detector(ui, view, index, engine, true) {
+                        destination = Some(Destination::Detection(engine));
+                    }
+                    ui.add_space(6.0);
+                }
+            }
+            ui.add_space(8.0);
+            if view.detection.references.is_empty() {
+                ui.label(
+                    RichText::new("No rule-supplied ATT&CK references in the loaded results.")
+                        .small()
+                        .color(theme::muted()),
+                );
+            } else {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("MITRE ATT&CK").small().color(theme::muted()));
+                    for reference in view.detection.references.iter().take(16) {
+                        presentation::badge(ui, reference, theme::blue());
+                    }
+                    if view.detection.references.len() > 16 {
+                        ui.label(format!(
+                            "+{} in Detection",
+                            view.detection.references.len() - 16
+                        ));
+                    }
+                });
+            }
+            ui.add_space(14.0);
+            let (mut left, mut right) = (None, None);
+            presentation::pair(
+                ui,
+                |ui| left = activity(ui, scan),
+                |ui| right = network(ui, scan),
+            );
+            destination = left.or(right).or(destination);
+            if let Some(warning) = &scan.network_warning {
+                ui.add(egui::Label::new(RichText::new(warning).color(theme::warn())).wrap());
+            }
+            ui.add_space(14.0);
+            if observations(ui, scan) {
+                destination = Some(Destination::Findings);
+            }
+        });
+    destination
+}

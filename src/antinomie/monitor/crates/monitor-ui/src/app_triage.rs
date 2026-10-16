@@ -34,7 +34,7 @@ impl MonitorApp {
                 for run in &runs {
                     ui.selectable_value(&mut selected, Some(run.id.clone()), triage_run_label(run));
                 }
-            });
+            }).response.on_hover_text("Network evidence is captured VM traffic during the selected run, without proven process ownership.");
         if selected != self.selected_run {
             self.select_run(selected);
             self.capture_tab = false;
@@ -60,8 +60,6 @@ impl MonitorApp {
                 theme::warn(),
                 "No network capture is available for this run.",
             );
-        } else {
-            ui.weak("Network evidence covers VM traffic during this run; another process may share the same endpoints.");
         }
         if let Some(error) = &run.recording_error {
             ui.colored_label(theme::warn(), format!("Recording incomplete: {error}"));
@@ -97,6 +95,7 @@ impl MonitorApp {
             #[cfg(test)]
             frames: None,
         };
+        self.triage.set_address_lookup(self.settings.address_lookup);
         *self.triage.detection_settings() = self.settings.triage_detection.clone();
         let jump = self.triage.show(ui, input);
         self.settings.triage_detection = self.triage.detection_settings().clone();

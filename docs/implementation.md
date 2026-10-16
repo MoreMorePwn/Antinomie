@@ -59,6 +59,22 @@ No guest, image, shared-memory ABI, dependency or release-tag change is needed.
 
 ## Accepted ANT-T0091 run triage (0.6.2)
 
+ANT-T0101 reorganizes triage presentation around section navigation,
+detector comparison and complementary behavior/network sections. The specimen
+name, path and hash are not repeated above the tabs. Detection shows each
+rule’s recorded explanation and match location. Local destination addresses
+are labeled without a country or organization lookup. Wide peer sections align to the taller content; narrow panes stack.
+Properties groups identification, exact hashes and optional classifiers; the
+shared Details pane uses aligned field/value rows. Summary observation previews
+retain existing exact evidence and shared Details navigation. Missing or partial
+coverage stays explicit; count and detection semantics do not change. Use the
+existing light/dark palettes and bundled fonts. Emphasized labels set those
+palette colors explicitly, because egui's strong style follows the active
+widget color. No new dependency or external asset. Address enrichment stays
+off the render path: the default is local TShark GeoIP, and dig/whois runs
+only in the index worker when that setting is selected. Local addresses are
+never queried.
+
 ANT-T0099 extends these host-only views with exact operation-time executable
 labels, standard-stream/library visibility controls and stable column sorting
 before archive pagination. Sorted process lists retain parent/depth fields in
