@@ -2117,6 +2117,7 @@ const FILE_FIELDS: &[FieldSpec<'static>] = &[
 ];
 
 const HTTP_FIELDS: &[FieldSpec<'static>] = &[
+    FieldSpec::text("capture.path", "Owning capture segment"),
     FieldSpec::number("frame.number", "Original request frame"),
     FieldSpec::number("frame.time_us", "Captured Unix microseconds"),
     FieldSpec::text("network.endpoints", "Recorded source and destination"),
@@ -2135,6 +2136,7 @@ const HTTP_FIELDS: &[FieldSpec<'static>] = &[
     ),
 ];
 const DNS_FIELDS: &[FieldSpec<'static>] = &[
+    FieldSpec::text("capture.path", "Owning capture segment"),
     FieldSpec::number("frame.number", "Original query frame"),
     FieldSpec::number("frame.time_us", "Captured Unix microseconds"),
     FieldSpec::text("network.endpoints", "Recorded source and destination"),
@@ -6402,7 +6404,7 @@ mod tests {
         let _ = std::fs::write("/tmp/antinomie-pcap-coverage.txt", &index.coverage);
     }
 
-    fn http_pcap() -> Vec<u8> {
+    pub(super) fn http_pcap() -> Vec<u8> {
         let payload = b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n";
         let mut tcp = Vec::new();
         tcp.extend(40000u16.to_be_bytes());

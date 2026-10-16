@@ -37,6 +37,7 @@ pub(super) fn in_window(request: &ScanRequest, packet_us: Option<u64>) -> bool {
 }
 
 pub(super) const IP_FIELDS: &[FieldSpec<'static>] = &[
+    FieldSpec::text("capture.path", "Capture segment of the evidence packet"),
     FieldSpec::text("network.ip", "Observed destination IP"),
     FieldSpec::text(
         "network.country",
@@ -46,6 +47,7 @@ pub(super) const IP_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::number("frame.number", "First observed destination packet"),
 ];
 pub(super) const HOST_FIELDS: &[FieldSpec<'static>] = &[
+    FieldSpec::text("capture.path", "Capture segment of the evidence packet"),
     FieldSpec::number(
         "network.first_us",
         "First observed packet time in the capture clock",
