@@ -2305,7 +2305,13 @@ fn file_event_row(
             true,
         ),
         cell(
-            file_fd(invocation, event),
+            {
+                let fd = file_fd(invocation, event);
+                fd.parse()
+                    .ok()
+                    .and_then(crate::values::standard_fd_name)
+                    .map_or_else(|| fd.clone(), |name| format!("{fd} ({name})"))
+            },
             theme::value(theme::ValueKind::Number),
             true,
         ),
