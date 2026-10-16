@@ -6053,26 +6053,33 @@ impl MonitorApp {
         }
         let id = self.selected_run.clone()?;
         let run = self.run(&id)?.clone();
-        if let Some(capture) = &self.snapshot.network_capture {
-            if capture.boot_id == run.boot_id && capture.file.is_file() && pcap_magic(&capture.file)
+        if let Some(artifacts) = antinomie_monitor_core::RunArtifacts::load(&run.directory)
+            .ok()
+            .flatten()
+        {
+            if artifacts.run_id != run.id
+                || artifacts.vm_id != run.vm_id
+                || artifacts.boot_id != run.boot_id
             {
-                return Some((capture.file.clone(), capture.stopped_ms.is_none()));
+                return None;
+            }
+            if let Some(file) = artifacts
+                .network_captures
+                .into_iter()
+                .find(|file| file.is_file() && pcap_magic(file))
+            {
+                return Some((file, self.live_history_run(&run)));
             }
         }
-        let artifacts = antinomie_monitor_core::RunArtifacts::load(&run.directory)
-            .ok()
-            .flatten()?;
-        if artifacts.run_id != run.id
-            || artifacts.vm_id != run.vm_id
-            || artifacts.boot_id != run.boot_id
-        {
-            return None;
-        }
-        artifacts
-            .network_captures
-            .into_iter()
-            .find(|file| file.is_file() && pcap_magic(file))
-            .map(|file| (file, false))
+        self.snapshot
+            .network_capture
+            .as_ref()
+            .filter(|capture| {
+                capture.boot_id == run.boot_id
+                    && capture.file.is_file()
+                    && pcap_magic(&capture.file)
+            })
+            .map(|capture| (capture.file.clone(), capture.stopped_ms.is_none()))
     }
 
     #[cfg(test)]
@@ -8999,6 +9006,13 @@ pub(crate) mod tests {
             .unwrap(),
         )
         .unwrap();
+        let manual = directory.join("manual.pcap");
+        std::fs::write(&manual, [0xd4, 0xc3, 0xb2, 0xa1]).unwrap();
+        app.snapshot.network_capture = Some(antinomie_monitor_core::network::NetworkCapture {
+            boot_id: selected.boot_id.clone(),
+            file: manual,
+            ..Default::default()
+        });
         app.snapshot.runs.push(selected);
         app.select_run(Some("one".into()));
         app.network_view.open(Some(directory.join("other.pcap")));
