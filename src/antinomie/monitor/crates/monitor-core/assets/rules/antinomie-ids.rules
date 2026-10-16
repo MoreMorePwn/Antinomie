@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 MikiMiku (MoreMorePwn)
+# Observations for triage, not malware verdicts. External rule packs are local options.
+alert http any any -> any any (msg:"Antinomie HTTP POST observed"; flow:established,to_server; http.method; content:"POST"; classtype:misc-activity; sid:9900001; rev:1; metadata:mitre_technique_id T1071.001;)
+alert http any any -> any any (msg:"Antinomie ELF object transferred over HTTP"; flow:established,to_client; file.data; content:"|7f 45 4c 46|"; startswith; classtype:misc-activity; sid:9900002; rev:1; metadata:mitre_technique_id T1105;)

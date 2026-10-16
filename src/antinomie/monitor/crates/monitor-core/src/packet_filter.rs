@@ -528,6 +528,40 @@ pub struct StreamExtent {
     pub file_size: u64,
 }
 
+/// Owned immutable, complete-record PCAP prefix for an offline analysis engine.
+pub struct AnalysisSnapshot {
+    inner: Snapshot,
+}
+impl AnalysisSnapshot {
+    pub fn path(&self) -> &Path {
+        &self.inner.capture_path
+    }
+    pub fn packet_count(&self) -> u64 {
+        self.inner.packet_count
+    }
+    pub fn complete_extent(&self) -> u64 {
+        self.inner.complete_extent
+    }
+}
+
+/// Freeze the same validated prefix used by packet filtering; no decoder runs.
+pub fn snapshot_for_analysis(
+    identity: &CaptureIdentity,
+    live: bool,
+    cancel: Arc<AtomicBool>,
+) -> Result<AnalysisSnapshot, String> {
+    let shared = Shared {
+        pending: Mutex::new(None),
+        wake: Condvar::new(),
+        generation: AtomicU64::new(0),
+        stop: cancel,
+        result: Mutex::new(None),
+        fields: Mutex::new(FieldRegistry::Loading),
+        cleanup_error: Mutex::new(None),
+    };
+    make_snapshot(identity, &shared, 0, live).map(|inner| AnalysisSnapshot { inner })
+}
+
 /// Stream installed TShark's decoded fields with the same cancellation,
 /// complete-prefix, disk-budget, two-pass, and capture-identity protections as
 /// the packet view. The caller runs this blocking operation on its own worker.

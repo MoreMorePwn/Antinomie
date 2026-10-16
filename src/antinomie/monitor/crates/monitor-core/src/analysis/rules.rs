@@ -20,8 +20,16 @@ fn count_rules(source: &str) -> usize {
         .count()
 }
 
+pub(super) fn bundled_sources() -> [(&'static str, &'static str); 2] {
+    [("Antinomie", ANTINOMIE), (COMMUNITY_RELEASE, COMMUNITY)]
+}
+
 /// Compile the bundled rule sets; each lives in its own namespace.
 pub(super) fn compile() -> Result<yara_x::Rules, String> {
+    compile_extra(&[])
+}
+
+pub(super) fn compile_extra(extra: &[(String, String)]) -> Result<yara_x::Rules, String> {
     let mut compiler = yara_x::Compiler::new();
     compiler.relaxed_re_syntax(true);
     compiler.new_namespace("antinomie");
@@ -32,6 +40,12 @@ pub(super) fn compile() -> Result<yara_x::Rules, String> {
     compiler
         .add_source(COMMUNITY)
         .map_err(|e| format!("community rules: {e}"))?;
+    for (index, (_, source)) in extra.iter().enumerate() {
+        compiler.new_namespace(&format!("local_{index}"));
+        compiler
+            .add_source(source.as_str())
+            .map_err(|error| format!("local rules {index}: {error}"))?;
+    }
     Ok(compiler.build())
 }
 
@@ -57,6 +71,7 @@ fn matched_text(data: &[u8]) -> String {
 }
 
 pub(super) fn scan(section: &mut AnalysisSection, specimen: &[u8]) {
+    section.state = AnalysisSectionState::Complete;
     let rules = match compile() {
         Ok(rules) => rules,
         Err(error) => {
@@ -152,7 +167,6 @@ pub(super) fn scan(section: &mut AnalysisSection, specimen: &[u8]) {
             },
         );
     }
-    section.state = AnalysisSectionState::Complete;
     section.summary = format!(
         "{matched} of {} rules matched; a match is an indicator, not a verdict",
         own + community

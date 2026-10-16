@@ -97,7 +97,9 @@ impl MonitorApp {
             #[cfg(test)]
             frames: None,
         };
+        *self.triage.detection_settings() = self.settings.triage_detection.clone();
         let jump = self.triage.show(ui, input);
+        self.settings.triage_detection = self.triage.detection_settings().clone();
         if self.triage.take_details_focus(ui.ctx()) {
             self.details_follow.chose(&Panel::Triage);
             self.focus_panel = Some(Panel::Details);
@@ -115,14 +117,24 @@ impl MonitorApp {
             self.jump_triage_call(call_id);
         }
         if let Some(frame_number) = self.triage.take_packet_jump() {
-            if let Err(error) = self.jump_triage_packet(frame_number) {
+            let capture = self.triage.take_packet_capture();
+            if let Err(error) = self.jump_triage_packet_capture(frame_number, capture) {
                 self.status = error.clone();
                 self.log("ERROR", error);
             }
         }
     }
 
+    #[cfg(test)]
     pub(super) fn jump_triage_packet(&mut self, frame: u64) -> Result<(), String> {
+        self.jump_triage_packet_capture(frame, None)
+    }
+
+    fn jump_triage_packet_capture(
+        &mut self,
+        frame: u64,
+        capture: Option<PathBuf>,
+    ) -> Result<(), String> {
         let run = self
             .selected_run
             .as_deref()
@@ -134,9 +146,27 @@ impl MonitorApp {
         {
             return Err("Packet evidence requires one selected program run".into());
         }
-        let (path, _) = self
-            .owned_triage_pcap()
-            .ok_or("This run has no packet capture for the selected evidence")?;
+        let path = if let Some(path) = capture {
+            let owned = antinomie_monitor_core::RunArtifacts::load(&run.directory)?.is_some_and(
+                |artifacts| {
+                    artifacts.run_id == run.id
+                        && artifacts.vm_id == run.vm_id
+                        && artifacts.boot_id == run.boot_id
+                        && artifacts.network_captures.contains(&path)
+                },
+            );
+            let shared = self
+                .owned_triage_pcap()
+                .is_some_and(|capture| capture.0 == path);
+            if !owned && !shared {
+                return Err("The evidence packet is not owned by this run".into());
+            }
+            path
+        } else {
+            self.owned_triage_pcap()
+                .ok_or("This run has no packet capture for the selected evidence")?
+                .0
+        };
         self.network_view.open(Some(path));
         self.network_view.jump_to_evidence(frame)?;
         self.focus_panel = Some(Panel::Network);

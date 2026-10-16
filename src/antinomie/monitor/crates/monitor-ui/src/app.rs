@@ -43,6 +43,7 @@ use std::{
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 struct Settings {
+    triage_detection: antinomie_monitor_core::analysis::detection::Settings,
     bundle: String,
     quota_gib: u32,
     timeout: u64,
@@ -80,6 +81,7 @@ struct LastRun {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            triage_detection: Default::default(),
             bundle: String::new(),
             quota_gib: 4,
             timeout: 10,
@@ -6068,7 +6070,12 @@ impl MonitorApp {
                 .into_iter()
                 .find(|file| file.is_file() && pcap_magic(file))
             {
-                return Some((file, self.live_history_run(&run)));
+                return Some((
+                    file,
+                    self.live_history_run(&run)
+                        || artifacts.network_state
+                            != antinomie_monitor_core::RunArtifactState::Complete,
+                ));
             }
         }
         self.snapshot
@@ -6540,6 +6547,7 @@ impl eframe::App for MonitorApp {
         self.performance.record(frame_started.elapsed());
     }
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.settings.triage_detection = self.triage.detection_settings().clone();
         eframe::set_value(storage, "settings", &self.settings);
         eframe::set_value(storage, "workspace_layout", &self.layout);
     }

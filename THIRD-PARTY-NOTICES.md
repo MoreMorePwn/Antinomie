@@ -6,6 +6,15 @@ complete transitive-dependency or binary-release compliance audit.
 
 ## Embedded analysis rules and engines
 
+The triage Detection adapter also invokes optional, separately installed
+[Suricata](https://github.com/OISF/suricata),
+[pySigma](https://github.com/SigmaHQ/pySigma) and its
+[SQLite backend](https://github.com/SigmaHQ/pySigma-backend-sqlite).
+These tools and user-selected rule packs are not bundled or downloaded by this
+feature; they retain their upstream terms. The embedded antinomie-ids.rules,
+antinomie-sigma.yml and sigma_scan.py adapter are original project MIT material.
+The adapter uses the public pySigma API; no upstream implementation was copied.
+
 The static-analysis worker embeds two rule sets and links two analysis
 engines. The rule files keep every rule's author, license and source meta.
 

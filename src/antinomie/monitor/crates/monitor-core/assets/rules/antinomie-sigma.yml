@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 MikiMiku (MoreMorePwn)
+title: Shell Execution Observed
+id: 7aa16aca-50d9-4df0-8a1f-c7a9358e0860
+status: experimental
+description: A captured successful exec of a shell; legitimate use is common.
+license: MIT
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection:
+    Image|endswith:
+      - /sh
+      - /bash
+      - /dash
+      - /zsh
+  condition: selection
+level: informational
+tags:
+  - attack.t1059.004
+---
+title: Setuid Permission Change Observed
+id: 4cf7bce2-449b-4f87-9c40-aa702dcb14da
+status: experimental
+description: A successful captured chmod-family operation requested the setuid bit. Legitimate administration also uses this permission.
+license: MIT
+logsource:
+  category: antinomie_file_metadata
+  product: linux
+  service: antinomie
+detection:
+  selection:
+    Setuid: true
+  condition: selection
+level: medium
+tags:
+  - attack.t1548.001
+---
+title: Kernel BPF Program Load Observed
+id: 606634bb-0844-4a16-9577-ab875a48089f
+status: experimental
+description: A successful BPF program load in the selected run; this also occurs in legitimate software.
+license: MIT
+logsource:
+  category: antinomie_bpf
+  product: linux
+  service: antinomie
+detection:
+  selection:
+    BpfCommand: BPF_PROG_LOAD
+  condition: selection
+level: informational
