@@ -93,7 +93,8 @@ it runs.
   capture-clock offsets cannot discard every packet. Shared captures retain
   their run-time bounds. PCAP timestamps are identified separately from the
   host clock, and a run-owned capture takes priority over another manual capture. The capture
-  list's right-click menu no longer offers Filter by field.
+  list's right-click menu no longer offers Filter by field, and the panel no
+  longer lists protocol coverage or reconstruction counts above the packets.
 - **Presentation.** Removed indexing/count explanation blocks; warnings stay
   below the run selector. Times use the host timezone with an explicit UTC offset;
   guest event times mapped through host receipt anchors are marked estimated.
