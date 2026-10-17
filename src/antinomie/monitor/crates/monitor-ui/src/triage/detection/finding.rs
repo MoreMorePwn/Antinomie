@@ -79,14 +79,25 @@ fn sigma_details(details: &str) -> Parsed {
         None => (details, ""),
     };
     let mut rows = Vec::new();
+    // The rule's own description comes first; results saved before it was
+    // kept start with the evaluation note.
+    let (summary, evaluation) = match note.find(SIGMA_EVALUATION) {
+        Some(at) if at > 0 => (note[..at].trim(), note[at..].trim()),
+        _ => (note.trim(), ""),
+    };
+    if !evaluation.is_empty() {
+        rows.push(("Evaluation".to_owned(), evaluation.to_owned()));
+    }
     if !references.is_empty() {
         rows.push(("References".to_owned(), references.replace("; ", "\n")));
     }
     Parsed {
-        summary: note.trim().to_owned(),
+        summary: summary.to_owned(),
         rows,
     }
 }
+
+const SIGMA_EVALUATION: &str = "Evaluated against normalized captured Linux events";
 
 /// Unknown shapes: `key=value` and `key: value` segments become rows and the
 /// remaining text is the summary.
@@ -540,6 +551,21 @@ mod tests {
         assert_eq!(generic.rows.len(), 2);
         assert_eq!(generic.rows[0], ("Owner".to_owned(), "ops".to_owned()));
         assert_eq!(parse_details(Engine::Ids, "marker").summary, "marker");
+    }
+
+    #[test]
+    fn sigma_description_is_the_summary_and_the_evaluation_note_a_row() {
+        let parsed = parse_details(
+            Engine::Sigma,
+            "Detects curl piped to a shell. Evaluated against normalized captured Linux events; joined argv is not original shell quoting. References: https://a",
+        );
+        assert_eq!(parsed.summary, "Detects curl piped to a shell.");
+        assert_eq!(parsed.rows[0].0, "Evaluation");
+        assert!(parsed.rows[0].1.starts_with("Evaluated against"));
+        assert_eq!(
+            parsed.rows[1],
+            ("References".to_owned(), "https://a".to_owned())
+        );
     }
 
     #[test]
