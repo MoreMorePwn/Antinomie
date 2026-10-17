@@ -149,7 +149,7 @@ pub(crate) fn validate(
         if entry.label.len() > 4096 || entry.value.len() > 4096 {
             return Err("listing row exceeds text bound".into());
         }
-        super::jobs::validate_record(kind, &entry, record, total_len)?;
+        super::validation::validate_record(kind, &entry, record, total_len)?;
     }
     if rows != expected.rows {
         return Err("listing row count disagrees with its report".into());
@@ -234,7 +234,7 @@ pub fn read_listing_page_with(
         if record.revision != 1 || record.id != seen {
             return Err("listing row id out of sequence".into());
         }
-        super::jobs::validate_record(kind, &entry, record, report.specimen_len)?;
+        super::validation::validate_record(kind, &entry, record, report.specimen_len)?;
         if keep(&entry) {
             if total >= start && rows.len() < count {
                 rows.push((index as u64, entry));

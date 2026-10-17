@@ -935,7 +935,7 @@ pub fn list_vm_runs(
             }
             let mut run: RunSummary = serde_json::from_reader(file)?;
             if let Some(report) = &run.analysis {
-                crate::analysis::jobs::validate_report(report).map_err(|_| {
+                crate::analysis::validation::validate_report(report).map_err(|_| {
                     RecordingError::Limit("archived analysis report violates bounds")
                 })?;
             }
@@ -1014,7 +1014,7 @@ pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
             }
             let mut run: RunSummary = serde_json::from_reader(file)?;
             if let Some(report) = &run.analysis {
-                crate::analysis::jobs::validate_report(report).map_err(|_| {
+                crate::analysis::validation::validate_report(report).map_err(|_| {
                     RecordingError::Limit("archived analysis report violates bounds")
                 })?;
             }
@@ -1110,7 +1110,7 @@ fn reopen_analysis_sidecar(root: &Path, run: &mut RunSummary) -> Result<(), Reco
         return Err(RecordingError::Limit("analysis sidecar exceeds bound"));
     }
     let report: crate::analysis::AnalysisReport = serde_json::from_reader(file)?;
-    crate::analysis::jobs::validate_report(&report)
+    crate::analysis::validation::validate_report(&report)
         .map_err(|_| RecordingError::Limit("analysis sidecar violates bounds"))?;
     if report.id != embedded.id
         || report.source_path != embedded.source_path
