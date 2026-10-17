@@ -97,6 +97,14 @@ it runs.
 - **Presentation.** Removed indexing/count explanation blocks; warnings stay
   below the run selector. Times use the host timezone with an explicit UTC offset;
   guest event times mapped through host receipt anchors are marked estimated.
+- **Static analysis window.** A tab strip across the top replaces the left
+  category list: File Info (name, size, hashes, format, headers, sections,
+  segments, hardening, identification and entropy), Content (the retained
+  file paged as a hex dump, text, C array, Python bytes, Base64 or a hex
+  string), Strings, Binwalk, YARA, Capa Matrix (capabilities by ATT&CK tactic
+  or MBC objective, or as a table), Disassembly, Decompilation and Symbols
+  (symbols, imports and exports). A selected row with a file offset opens at
+  that offset in Content.
 - **Embedded content and segments.** Static analysis runs binwalk's signature
   scan as its own category; it records each signature's file offset and
   extracts nothing. Structures records every ELF program header (not only
