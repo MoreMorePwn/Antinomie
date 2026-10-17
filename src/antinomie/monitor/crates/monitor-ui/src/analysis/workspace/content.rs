@@ -40,6 +40,10 @@ impl Format {
     }
 }
 
+/// Smallest and largest Content text size, in points.
+const MIN_TEXT_PX: f32 = 8.0;
+const MAX_TEXT_PX: f32 = 32.0;
+
 #[derive(Default)]
 pub(in crate::analysis) struct ContentState {
     offset: u64,
@@ -47,6 +51,8 @@ pub(in crate::analysis) struct ContentState {
     /// The page last asked for while this tab was shown.
     requested: Option<(u64, usize)>,
     go_to: String,
+    /// Content text size in points. None follows the interface monospace size.
+    text_px: Option<f32>,
 }
 
 impl ContentState {
@@ -135,6 +141,7 @@ pub(super) fn show(
                     ui.selectable_value(&mut state.format, format, format.label());
                 }
             });
+        zoom_buttons(ui, state);
     });
     let data_len = usize::try_from((total - state.offset).min(page)).unwrap_or(0);
     let mut action = None;
@@ -171,10 +178,12 @@ pub(super) fn show(
                 .id_salt("analysis-content")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
+                    let size = zoomed_text_px(ui, state);
                     let wrap = !matches!(state.format, Format::Hex);
                     ui.add(
                         egui::TextEdit::multiline(&mut text.as_str())
                             .code_editor()
+                            .font(egui::FontId::monospace(size))
                             .desired_width(if wrap {
                                 ui.available_width()
                             } else {
@@ -195,6 +204,56 @@ pub(super) fn show(
         }
     }
     action
+}
+
+fn resolved_text_px(ui: &egui::Ui, state: &ContentState) -> f32 {
+    match state.text_px {
+        Some(size) => size.clamp(MIN_TEXT_PX, MAX_TEXT_PX),
+        None => egui::TextStyle::Monospace.resolve(ui.style()).size,
+    }
+}
+
+fn zoom_buttons(ui: &mut egui::Ui, state: &mut ContentState) {
+    let size = resolved_text_px(ui, state);
+    if ui
+        .add_enabled(
+            size.round() > MIN_TEXT_PX,
+            egui::Button::new(egui_phosphor::regular::MAGNIFYING_GLASS_MINUS),
+        )
+        .on_hover_text("Smaller content text")
+        .clicked()
+    {
+        state.text_px = Some((size.round() - 1.0).max(MIN_TEXT_PX));
+    }
+    let size = resolved_text_px(ui, state);
+    if ui
+        .add_enabled(
+            size.round() < MAX_TEXT_PX,
+            egui::Button::new(egui_phosphor::regular::MAGNIFYING_GLASS_PLUS),
+        )
+        .on_hover_text("Larger content text")
+        .clicked()
+    {
+        state.text_px = Some((size.round() + 1.0).min(MAX_TEXT_PX));
+    }
+    let shown = resolved_text_px(ui, state).round();
+    ui.weak(format!("{shown:.0} px"))
+        .on_hover_text("Content text size. Ctrl+wheel over the content zooms too.");
+}
+
+/// Ctrl+wheel (egui's zoom gesture) over the page changes its text size.
+fn zoomed_text_px(ui: &mut egui::Ui, state: &mut ContentState) -> f32 {
+    let size = resolved_text_px(ui, state);
+    if !ui.rect_contains_pointer(ui.clip_rect()) {
+        return size;
+    }
+    let zoom = ui.input(|input| input.zoom_delta());
+    if (zoom - 1.0).abs() <= f32::EPSILON {
+        return size;
+    }
+    let size = (size * zoom).clamp(MIN_TEXT_PX, MAX_TEXT_PX);
+    state.text_px = Some(size);
+    size
 }
 
 /// A hexadecimal (`0x…`) or decimal offset.
@@ -379,6 +438,270 @@ mod tests {
                 offset: 9000,
                 data_len: 1000
             })
+        );
+    }
+
+    fn sample_page() -> (AnalysisReport, Result<AnalysisSpecimenPage, String>) {
+        let data = b"Hello, content zoom!\n".to_vec();
+        let report = AnalysisReport {
+            id: "report".into(),
+            state: AnalysisState::Complete,
+            source_path: "/tmp/sample".into(),
+            specimen_sha256: None,
+            specimen_len: Some(data.len() as u64),
+            reason: None,
+            sections: Vec::new(),
+        };
+        let preview = Ok(AnalysisSpecimenPage {
+            report_id: report.id.clone(),
+            offset: 0,
+            total_len: data.len() as u64,
+            data,
+        });
+        (report, preview)
+    }
+
+    fn paint(
+        ctx: &egui::Context,
+        report: &AnalysisReport,
+        state: &mut ContentState,
+        preview: &Result<AnalysisSpecimenPage, String>,
+        time: f64,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1100.0, 800.0),
+                )),
+                time: Some(time),
+                predicted_dt: 1.0 / 60.0,
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let _ = show(ui, report, state, Some(preview));
+                });
+            },
+        )
+    }
+
+    fn shapes(output: &egui::FullOutput) -> Vec<(String, egui::Rect, f32)> {
+        fn walk(shape: &egui::epaint::Shape, out: &mut Vec<(String, egui::Rect, f32)>) {
+            match shape {
+                egui::epaint::Shape::Text(text) => {
+                    let size = text
+                        .galley
+                        .job
+                        .sections
+                        .first()
+                        .map(|section| section.format.font_id.size)
+                        .unwrap_or(0.0);
+                    out.push((
+                        text.galley.text().to_owned(),
+                        egui::Rect::from_min_size(text.pos, text.galley.size()),
+                        size,
+                    ));
+                }
+                egui::epaint::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        for clipped in &output.shapes {
+            walk(&clipped.shape, &mut found);
+        }
+        found
+    }
+
+    fn content_font(output: &egui::FullOutput) -> f32 {
+        shapes(output)
+            .into_iter()
+            .find(|(text, _, _)| text.starts_with("00000000"))
+            .map(|(_, _, size)| size)
+            .expect("hex dump")
+    }
+
+    fn glyph(output: &egui::FullOutput, text: &str) -> egui::Pos2 {
+        shapes(output)
+            .into_iter()
+            .find(|(found, _, _)| found == text)
+            .map(|(_, rect, _)| rect.center())
+            .unwrap_or_else(|| panic!("missing {text}"))
+    }
+
+    fn hex_point(output: &egui::FullOutput) -> egui::Pos2 {
+        let (_, rect, _) = shapes(output)
+            .into_iter()
+            .find(|(text, _, _)| text.starts_with("00000000"))
+            .expect("hex dump");
+        egui::pos2(rect.left() + 8.0, rect.top() + 4.0)
+    }
+
+    fn click(
+        ctx: &egui::Context,
+        report: &AnalysisReport,
+        state: &mut ContentState,
+        preview: &Result<AnalysisSpecimenPage, String>,
+        mut time: f64,
+        pos: egui::Pos2,
+    ) -> (f64, egui::FullOutput) {
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut output = egui::FullOutput::default();
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![button(true)],
+            vec![button(false)],
+            Vec::new(),
+        ] {
+            output = paint(ctx, report, state, preview, time, events);
+            time += 1.0 / 60.0;
+        }
+        (time, output)
+    }
+
+    fn wheel(dy: f32, ctrl: bool) -> egui::Event {
+        egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, dy),
+            modifiers: egui::Modifiers {
+                ctrl,
+                ..Default::default()
+            },
+        }
+    }
+
+    fn settle(
+        ctx: &egui::Context,
+        report: &AnalysisReport,
+        state: &mut ContentState,
+        preview: &Result<AnalysisSpecimenPage, String>,
+        mut time: f64,
+        pos: egui::Pos2,
+        first: Vec<egui::Event>,
+    ) -> (f64, egui::FullOutput) {
+        let mut output = egui::FullOutput::default();
+        for frame in 0..45 {
+            let mut events = vec![egui::Event::PointerMoved(pos)];
+            if frame == 0 {
+                events.extend(first.clone());
+            }
+            output = paint(ctx, report, state, preview, time, events);
+            time += 1.0 / 60.0;
+        }
+        (time, output)
+    }
+
+    #[test]
+    fn content_text_size_follows_buttons_and_ctrl_wheel() {
+        let (report, preview) = sample_page();
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut state = ContentState::default();
+        let mut time = 0.0;
+        let mut output = egui::FullOutput::default();
+        for _ in 0..2 {
+            output = paint(&ctx, &report, &mut state, &preview, time, Vec::new());
+            time += 1.0 / 60.0;
+        }
+        let initial = content_font(&output);
+        let plus = glyph(&output, egui_phosphor::regular::MAGNIFYING_GLASS_PLUS);
+        let clicked = click(&ctx, &report, &mut state, &preview, time, plus);
+        time = clicked.0;
+        output = clicked.1;
+        let larger = content_font(&output);
+        assert!(
+            (larger - (initial + 1.0)).abs() < 0.01,
+            "plus button {initial} -> {larger}"
+        );
+        let minus = glyph(&output, egui_phosphor::regular::MAGNIFYING_GLASS_MINUS);
+        let clicked = click(&ctx, &report, &mut state, &preview, time, minus);
+        time = clicked.0;
+        output = clicked.1;
+        let restored = content_font(&output);
+        assert!(
+            (restored - initial).abs() < 0.01,
+            "minus button {larger} -> {restored}, expected {initial}"
+        );
+
+        state.text_px = Some(MAX_TEXT_PX);
+        output = paint(&ctx, &report, &mut state, &preview, time, Vec::new());
+        time += 1.0 / 60.0;
+        let plus = glyph(&output, egui_phosphor::regular::MAGNIFYING_GLASS_PLUS);
+        let clicked = click(&ctx, &report, &mut state, &preview, time, plus);
+        time = clicked.0;
+        output = clicked.1;
+        assert!((content_font(&output) - MAX_TEXT_PX).abs() < 0.01);
+        state.text_px = Some(MIN_TEXT_PX);
+        output = paint(&ctx, &report, &mut state, &preview, time, Vec::new());
+        time += 1.0 / 60.0;
+        let minus = glyph(&output, egui_phosphor::regular::MAGNIFYING_GLASS_MINUS);
+        let clicked = click(&ctx, &report, &mut state, &preview, time, minus);
+        time = clicked.0;
+        output = clicked.1;
+        assert!((content_font(&output) - MIN_TEXT_PX).abs() < 0.01);
+
+        state.text_px = None;
+        output = paint(&ctx, &report, &mut state, &preview, time, Vec::new());
+        time += 1.0 / 60.0;
+        let base = content_font(&output);
+        let pos = hex_point(&output);
+        let settled = settle(
+            &ctx,
+            &report,
+            &mut state,
+            &preview,
+            time,
+            pos,
+            vec![wheel(80.0, true)],
+        );
+        time = settled.0;
+        output = settled.1;
+        let zoomed = content_font(&output);
+        assert!(zoomed > base + 1.0, "ctrl+wheel in {base} -> {zoomed}");
+        let pos = hex_point(&output);
+        let settled = settle(
+            &ctx,
+            &report,
+            &mut state,
+            &preview,
+            time,
+            pos,
+            vec![wheel(80.0, false)],
+        );
+        time = settled.0;
+        output = settled.1;
+        let scrolled = content_font(&output);
+        assert!(
+            (scrolled - zoomed).abs() < 0.05,
+            "wheel without ctrl {zoomed} -> {scrolled}"
+        );
+        let pos = hex_point(&output);
+        output = settle(
+            &ctx,
+            &report,
+            &mut state,
+            &preview,
+            time,
+            pos,
+            vec![wheel(-80.0, true)],
+        )
+        .1;
+        let smaller = content_font(&output);
+        assert!(
+            smaller < zoomed - 0.5,
+            "ctrl+wheel out {zoomed} -> {smaller}"
         );
     }
 }

@@ -1073,3 +1073,330 @@ fn unfinished_analysis_shows_progress_until_it_completes() {
         .any(|text| text.starts_with("Analysis in progress")));
     assert!(!shown.iter().any(|text| text.starts_with("Running…")));
 }
+
+fn text_color(output: &egui::FullOutput, wanted: &str) -> Option<egui::Color32> {
+    fn walk(shape: &egui::epaint::Shape, wanted: &str) -> Option<egui::Color32> {
+        match shape {
+            egui::epaint::Shape::Text(text) if text.galley.text() == wanted => text
+                .galley
+                .job
+                .sections
+                .first()
+                .map(|section| section.format.color),
+            egui::epaint::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    if let Some(color) = walk(shape, wanted) {
+                        return Some(color);
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+    for clipped in &output.shapes {
+        if let Some(color) = walk(&clipped.shape, wanted) {
+            return Some(color);
+        }
+    }
+    None
+}
+
+fn expect_color(output: &egui::FullOutput, text: &str, color: egui::Color32) {
+    assert_eq!(
+        text_color(output, text),
+        Some(color),
+        "{text} among {:?}",
+        texts(output)
+            .iter()
+            .map(|(text, _)| text.as_str())
+            .filter(|text| text.len() < 48)
+            .collect::<Vec<_>>()
+    );
+}
+
+fn paint_rows(
+    ctx: &egui::Context,
+    report: &AnalysisReport,
+    kind: AnalysisKind,
+    listing: Option<&Listing>,
+) -> egui::FullOutput {
+    let mut state = WorkspaceState::default();
+    let size = egui::vec2(1280.0, 820.0);
+    let pages = (None, listing);
+    let mut output = frame(ctx, report, &mut state, Some(kind), size, Vec::new(), pages).0;
+    for _ in 0..2 {
+        output = frame(ctx, report, &mut state, Some(kind), size, Vec::new(), pages).0;
+    }
+    output
+}
+
+fn meaning_report() -> AnalysisReport {
+    let record = |id, data| AnalysisRecord {
+        revision: 1,
+        id,
+        location: None,
+        data,
+    };
+    let mut report = AnalysisReport {
+        id: "meaning".into(),
+        state: AnalysisState::Complete,
+        source_path: "/fixture/meaning".into(),
+        specimen_sha256: None,
+        specimen_len: Some(4096),
+        reason: None,
+        sections: Vec::new(),
+    };
+    report.sections.push(AnalysisSection {
+        kind: AnalysisKind::Strings,
+        state: AnalysisSectionState::Complete,
+        summary: "two strings".into(),
+        tools: Vec::new(),
+        listing: None,
+        entries: vec![
+            AnalysisEntry {
+                label: "ASCII".into(),
+                value: "plain".into(),
+                offset: Some(0),
+                record: Some(record(
+                    1,
+                    AnalysisData::String {
+                        encoding: "ASCII".into(),
+                        byte_len: 5,
+                        retained_len: 5,
+                    },
+                )),
+            },
+            AnalysisEntry {
+                label: "UTF-16LE".into(),
+                value: "wide".into(),
+                offset: Some(32),
+                record: Some(record(
+                    2,
+                    AnalysisData::String {
+                        encoding: "UTF-16LE".into(),
+                        byte_len: 8,
+                        retained_len: 4,
+                    },
+                )),
+            },
+        ],
+    });
+    report.sections.push(AnalysisSection {
+        kind: AnalysisKind::Rules,
+        state: AnalysisSectionState::Complete,
+        summary: "two matches".into(),
+        tools: Vec::new(),
+        listing: None,
+        entries: vec![
+            AnalysisEntry {
+                label: "PackedDropper".into(),
+                value: "matched bytes".into(),
+                offset: None,
+                record: Some(record(
+                    3,
+                    AnalysisData::RuleMatch {
+                        rule: "PackedDropper".into(),
+                        namespace: "ns".into(),
+                        tags: vec!["high".into()],
+                        ruleset: "core".into(),
+                    },
+                )),
+            },
+            AnalysisEntry {
+                label: "Note".into(),
+                value: "a note".into(),
+                offset: None,
+                record: Some(record(
+                    4,
+                    AnalysisData::RuleMatch {
+                        rule: "Note".into(),
+                        namespace: "ns".into(),
+                        tags: vec!["FILE".into()],
+                        ruleset: "core".into(),
+                    },
+                )),
+            },
+        ],
+    });
+    report.sections.push(AnalysisSection {
+        kind: AnalysisKind::Hardening,
+        state: AnalysisSectionState::Complete,
+        summary: "two checks".into(),
+        tools: Vec::new(),
+        listing: None,
+        entries: vec![
+            AnalysisEntry {
+                label: "NX compatible".into(),
+                value: "declared".into(),
+                offset: None,
+                record: Some(record(
+                    5,
+                    AnalysisData::Property {
+                        scope: "Static file metadata".into(),
+                        observed: "declared".into(),
+                        evidence: "NX compatible".into(),
+                    },
+                )),
+            },
+            AnalysisEntry {
+                label: "ASLR dynamic base".into(),
+                value: "not declared".into(),
+                offset: None,
+                record: Some(record(
+                    6,
+                    AnalysisData::Property {
+                        scope: "Static file metadata".into(),
+                        observed: "not declared".into(),
+                        evidence: "ASLR dynamic base".into(),
+                    },
+                )),
+            },
+        ],
+    });
+    report.sections.push(AnalysisSection {
+        kind: AnalysisKind::Structures,
+        state: AnalysisSectionState::Complete,
+        summary: "mixed structures".into(),
+        tools: Vec::new(),
+        listing: None,
+        entries: vec![
+            AnalysisEntry {
+                label: "EI_CLASS".into(),
+                value: "ELF64".into(),
+                offset: None,
+                record: Some(record(
+                    7,
+                    AnalysisData::Field {
+                        group: "Headers".into(),
+                    },
+                )),
+            },
+            AnalysisEntry {
+                label: "Section".into(),
+                value: "code".into(),
+                offset: Some(0),
+                record: Some(record(
+                    8,
+                    AnalysisData::Section {
+                        name: ".text".into(),
+                        address: 0x1000,
+                        virtual_size: 32,
+                        file_size: Some(32),
+                        raw_flags: "0x6".into(),
+                        flags: vec!["EXECINSTR".into()],
+                    },
+                )),
+            },
+            AnalysisEntry {
+                label: "Segment".into(),
+                value: "data".into(),
+                offset: Some(64),
+                record: Some(record(
+                    9,
+                    AnalysisData::Section {
+                        name: ".data".into(),
+                        address: 0x2000,
+                        virtual_size: 16,
+                        file_size: Some(16),
+                        raw_flags: "0x6".into(),
+                        flags: vec!["WRITE".into()],
+                    },
+                )),
+            },
+            AnalysisEntry {
+                label: "Import".into(),
+                value: "libc".into(),
+                offset: None,
+                record: Some(record(
+                    10,
+                    AnalysisData::Import {
+                        name: Some("puts".into()),
+                        library: Some("libc".into()),
+                        ordinal: None,
+                    },
+                )),
+            },
+        ],
+    });
+    report.sections.push(AnalysisSection {
+        kind: AnalysisKind::Entropy,
+        state: AnalysisSectionState::Complete,
+        summary: "chart".into(),
+        tools: Vec::new(),
+        listing: None,
+        entries: vec![AnalysisEntry {
+            label: "block".into(),
+            value: "4.000".into(),
+            offset: Some(0),
+            record: Some(record(
+                11,
+                AnalysisData::Entropy {
+                    range: AnalysisRange { offset: 0, len: 16 },
+                    milli_bits: 4000,
+                },
+            )),
+        }],
+    });
+    report
+}
+
+#[test]
+fn lists_are_colored_by_meaning_and_entropy_stays_a_chart() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let report = meaning_report();
+    let strings = paint_rows(&ctx, &report, AnalysisKind::Strings, None);
+    expect_color(&strings, "ASCII", crate::theme::palette().string);
+    expect_color(&strings, "UTF-16LE", crate::theme::info());
+    expect_color(&strings, "plain", crate::theme::text());
+    let rules = paint_rows(&ctx, &report, AnalysisKind::Rules, None);
+    expect_color(&rules, "PackedDropper", crate::theme::error());
+    expect_color(&rules, "Note", crate::theme::warn());
+    let hardening = paint_rows(&ctx, &report, AnalysisKind::Hardening, None);
+    expect_color(&hardening, "declared", crate::theme::good());
+    expect_color(&hardening, "not declared", crate::theme::error());
+    let structures = paint_rows(&ctx, &report, AnalysisKind::Structures, None);
+    expect_color(&structures, "EI_CLASS", crate::theme::muted());
+    expect_color(&structures, ".text", crate::theme::blue());
+    expect_color(&structures, ".data", crate::theme::info());
+    expect_color(&structures, "puts", crate::theme::warn());
+
+    let mut listed = meaning_report();
+    for kind in [AnalysisKind::Strings, AnalysisKind::Structures] {
+        let section = listed
+            .sections
+            .iter_mut()
+            .find(|section| section.kind == kind)
+            .unwrap();
+        section.listing = Some(AnalysisListing {
+            rows: section.entries.len() as u64,
+            bytes: 0,
+            truncated: false,
+        });
+        let page = listing_page(&listed, kind);
+        let output = paint_rows(&ctx, &listed, kind, Some(&page));
+        if kind == AnalysisKind::Strings {
+            expect_color(&output, "ASCII", crate::theme::palette().string);
+            expect_color(&output, "UTF-16LE", crate::theme::info());
+        } else {
+            expect_color(&output, ".text", crate::theme::blue());
+            expect_color(&output, ".data", crate::theme::info());
+            expect_color(&output, "puts", crate::theme::warn());
+        }
+    }
+
+    let entropy = paint_rows(&ctx, &report, AnalysisKind::Entropy, None);
+    let shown = texts(&entropy);
+    assert!(
+        shown
+            .iter()
+            .any(|(text, _)| text == "Measured regions / bits per octet (0..8)"),
+        "entropy keeps its chart: {:?}",
+        shown
+            .iter()
+            .map(|(text, _)| text.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(text_color(&entropy, "4.000"), Some(crate::theme::text()));
+}

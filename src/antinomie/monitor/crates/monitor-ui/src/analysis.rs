@@ -6,6 +6,7 @@ use antinomie_monitor_core::{
 use eframe::egui;
 mod entropy;
 mod listing_view;
+mod meaning;
 mod records;
 mod row_menu;
 mod workspace;

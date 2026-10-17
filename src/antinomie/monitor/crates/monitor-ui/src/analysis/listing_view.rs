@@ -943,8 +943,16 @@ fn cells(
         for column in records::columns(kind, scope, false) {
             let text = column.text(entry);
             row.col(|ui| {
-                ui.add(egui::Label::new(text.as_str()).truncate())
-                    .on_hover_text(&text);
+                ui.add(
+                    egui::Label::new(super::meaning::meaning_text(
+                        kind,
+                        *column,
+                        entry,
+                        text.clone(),
+                    ))
+                    .truncate(),
+                )
+                .on_hover_text(&text);
             });
         }
         return;
@@ -1031,7 +1039,12 @@ fn cells(
                 ui.label(mono_text(format!("{offset:x}"), mono, theme::muted()));
             });
             row.col(|ui| {
-                ui.label(encoding.as_str());
+                ui.label(super::meaning::meaning_text(
+                    kind,
+                    records::Column::Encoding,
+                    entry,
+                    encoding.clone(),
+                ));
             });
             row.col(|ui| {
                 ui.label(byte_len.to_string());
@@ -1046,11 +1059,27 @@ fn cells(
         }
         _ => {
             row.col(|ui| {
-                ui.add(egui::Label::new(entry.label.as_str()).truncate());
+                ui.add(
+                    egui::Label::new(super::meaning::meaning_text(
+                        kind,
+                        records::Column::Name,
+                        entry,
+                        entry.label.clone(),
+                    ))
+                    .truncate(),
+                );
             });
             row.col(|ui| {
-                ui.add(egui::Label::new(entry.value.as_str()).truncate())
-                    .on_hover_text(&entry.value);
+                ui.add(
+                    egui::Label::new(super::meaning::meaning_text(
+                        kind,
+                        records::Column::Value,
+                        entry,
+                        entry.value.clone(),
+                    ))
+                    .truncate(),
+                )
+                .on_hover_text(&entry.value);
             });
         }
     }
@@ -1184,5 +1213,28 @@ mod tests {
         assert_eq!(first[1].address, 4096);
         assert!(exported.contains("FUN_fffd6240"));
         assert!(exported.contains("FUN_00001000"));
+    }
+
+    #[test]
+    fn decompiled_lines_keep_keyword_string_and_comment_colors() {
+        let font = FontId::monospace(14.0);
+        let color = |line: &str, token: &str| {
+            let job = highlight(line, &font);
+            job.sections.iter().find_map(|section| {
+                let text = &job.text[section.byte_range.clone()];
+                if text == token {
+                    Some(section.format.color)
+                } else {
+                    None
+                }
+            })
+        };
+        assert_eq!(color("    return 1;", "return"), Some(theme::error()));
+        assert_eq!(color("    return 1;", "1"), Some(theme::warn()));
+        assert_eq!(color("    int value;", "int"), Some(theme::blue()));
+        assert_eq!(color("    call(\"hi\");", "\"hi\""), Some(theme::good()));
+        let comment = highlight("    // stay", &font);
+        assert_eq!(comment.sections.len(), 1);
+        assert_eq!(comment.sections[0].format.color, theme::muted());
     }
 }
