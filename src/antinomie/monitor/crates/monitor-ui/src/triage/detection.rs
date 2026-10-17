@@ -5,6 +5,13 @@ use antinomie_monitor_core::analysis::detection::{
 };
 use std::path::{Path, PathBuf};
 
+mod cards;
+mod finding;
+mod header;
+
+use cards::{card_summary, match_cards, severity_color};
+use finding::{byte_preview, evidence_list, evidence_values, WindowKey};
+
 const FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::text("finding.rule", "Engine rule identifier"),
     FieldSpec::text("finding.title", "Rule title"),
@@ -108,70 +115,6 @@ struct FileDigest {
     digest: String,
 }
 
-fn rule_set_title(sets: &[antinomie_monitor_core::ruleset::EngineSet]) -> String {
-    let enabled = sets.iter().filter(|set| set.enabled).count();
-    let rules: u64 = sets
-        .iter()
-        .filter(|set| set.enabled)
-        .map(|set| set.rules)
-        .sum();
-    format!(
-        "Rule sets: {enabled} enabled · {} {}",
-        engine::group_digits(rules),
-        if rules == 1 { "rule" } else { "rules" }
-    )
-}
-
-fn limitation_line(state: &State) -> Option<&'static str> {
-    match state {
-        State::Complete => None,
-        State::Partial => Some("Limited: coverage is incomplete."),
-        State::Unavailable => Some("Limited: this scan could not evaluate the evidence."),
-        State::NoRules => Some("Limited: no rules are enabled."),
-        State::Missing => Some("Limited: the evidence for this engine is missing."),
-    }
-}
-
-fn card_summary(finding: &Finding) -> String {
-    if finding.details.is_empty() {
-        "The rule matched, but it did not record an explanation.".into()
-    } else {
-        finding.details.clone()
-    }
-}
-
-fn evidence_label(evidence: &Evidence) -> String {
-    match evidence {
-        Evidence::Call {
-            stream,
-            cookie,
-            call,
-        } => format!("Open syscall {stream}/{cookie}/{call}"),
-        Evidence::Packet { capture, frame } => format!(
-            "Open packet #{} — {}",
-            frame,
-            capture.file_name().unwrap_or_default().to_string_lossy()
-        ),
-        Evidence::Bytes { path, offset, .. } => format!(
-            "{} — {}",
-            path.file_name().unwrap_or_default().to_string_lossy(),
-            offset.map_or("file-level match; no byte position".into(), |offset| {
-                format!("open bytes at 0x{offset:x}")
-            })
-        ),
-    }
-}
-
-fn state(state: &State) -> &'static str {
-    match state {
-        State::Complete => "Complete",
-        State::Partial => "Partial",
-        State::Unavailable => "Unavailable",
-        State::NoRules => "No rules enabled",
-        State::Missing => "Evidence missing",
-    }
-}
-
 fn engine_key(engine: Engine) -> &'static str {
     match engine {
         Engine::Yara => "yara",
@@ -268,6 +211,8 @@ pub(super) struct View {
     progress: [Option<engine::ScanProgress>; 3],
     progress_rx: Option<Receiver<engine::ScanProgress>>,
     sets: [Vec<antinomie_monitor_core::ruleset::EngineSet>; 3],
+    /// Findings whose Details window is open.
+    windows: Vec<WindowKey>,
 }
 
 impl View {
@@ -283,6 +228,7 @@ impl View {
         self.byte_rx = None;
         self.pending_byte = None;
         self.bytes = None;
+        self.windows.clear();
         self.results = Default::default();
         self.counts = Default::default();
         self.references.clear();
@@ -1033,164 +979,16 @@ impl View {
         if self.fresh_registry().is_none() {
             self.request_registry(ui.ctx());
         }
-        ui.horizontal_wrapped(|ui| {
-            for engine in ENGINES {
-                let selected = self.selected == engine;
-                let label = if selected {
-                    theme::palette().primary_text
-                } else {
-                    theme::text()
-                };
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new(name(engine)).strong().color(label))
-                            .selected(selected)
-                            .min_size(egui::vec2(80.0, 32.0)),
-                    )
-                    .clicked()
-                {
-                    self.selected = engine;
-                }
-            }
-        });
+        self.engine_tabs(ui);
         let index = ENGINES
             .iter()
             .position(|engine| *engine == self.selected)
             .unwrap_or(0);
-        let loading = self.registry_rx.is_some() && self.sets[index].is_empty();
-        let title = if loading {
-            "Rule sets: loading…".to_owned()
-        } else {
-            rule_set_title(&self.sets[index])
-        };
-        egui::CollapsingHeader::new(RichText::new(title).color(theme::text()))
-            .id_salt(("detector-rule-sets", index))
-            .default_open(false)
-            .show(ui, |ui| {
-                if self.sets[index].is_empty() {
-                    ui.weak(if loading {
-                        "Reading installed packs…"
-                    } else {
-                        "No packs or custom groups for this engine."
-                    });
-                }
-                for set in &self.sets[index] {
-                    ui.horizontal_wrapped(|ui| {
-                        let rules = if set.rules == 1 { "rule" } else { "rules" };
-                        ui.label(
-                            RichText::new(format!(
-                                "{} {} · {} {rules}",
-                                set.name,
-                                set.revision,
-                                engine::group_digits(set.rules)
-                            ))
-                            .color(theme::text()),
-                        );
-                        if !set.enabled {
-                            ui.label(RichText::new("disabled").small().color(theme::muted()));
-                        }
-                    });
-                }
-            });
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("Rule manager…").clicked() {
-                self.open_manager = true;
-            }
-        });
-        if !self.notes[index].is_empty() {
-            ui.colored_label(theme::warn(), &self.notes[index]);
-        }
-        ui.horizontal_wrapped(|ui| {
-            let ready = self.rx.is_none() && self.identity.is_some();
-            if ui.add_enabled(ready, egui::Button::new("Scan")).clicked() {
-                let partial = !self.notes[index].is_empty();
-                self.auto_key[index].clear();
-                self.start(
-                    ui.ctx(),
-                    scan.and_then(|scan| scan.event_journal.as_ref())
-                        .map(|summary| summary.sha256.clone()),
-                    partial,
-                );
-            }
-            if self.rx.is_some() {
-                ui.spinner();
-                if let Some(cancel) = &self.cancel {
-                    if ui.button("Cancel").clicked() {
-                        cancel.store(true, Ordering::Relaxed);
-                    }
-                }
-            }
-            if let Some((directory, _)) = &self.identity {
-                let directory = engine::result_directory(directory, self.selected);
-                ui.menu_button("Result", |ui| {
-                    crate::evidence::menu(ui, &directory);
-                    if let Some(Ok(report)) = &self.results[index] {
-                        if ui.button("Copy result as JSON").clicked() {
-                            match serde_json::to_string_pretty(report) {
-                                Ok(json) => ui.ctx().copy_text(json),
-                                Err(error) => self.bytes = Some(Err(error.to_string())),
-                            }
-                            ui.close_menu();
-                        }
-                    }
-                });
-            }
-        });
-        let scanning = self.busy == Some(index)
-            || matches!(
-                self.phase[index].as_str(),
-                "queued" | "preparing" | "running"
-            );
-        if scanning {
-            let fraction = self.progress[index]
-                .as_ref()
-                .and_then(engine::progress_fraction);
-            let label = match self.progress[index].as_ref() {
-                Some(progress) => engine::progress_text(progress),
-                None if self.phase[index].is_empty() => "running".to_owned(),
-                None => self.phase[index].clone(),
-            };
-            ui.add(
-                egui::ProgressBar::new(fraction.unwrap_or(0.0))
-                    .animate(fraction.is_none())
-                    .text(label)
-                    .desired_width(ui.available_width()),
-            );
-        }
-        let status = match self.progress[index].as_ref() {
-            Some(progress) => engine::progress_text(progress),
-            None => self.phase[index].clone(),
-        };
-        let matched = self.results[index]
-            .as_ref()
-            .and_then(|result| result.as_ref().ok())
-            .map(|report| (report.findings.len(), report.state.clone()));
-        if !status.is_empty() || matched.is_some() {
-            ui.horizontal_wrapped(|ui| {
-                if !status.is_empty() {
-                    ui.label(RichText::new(format!("Scan: {status}")).color(theme::muted()));
-                }
-                if let Some((count, state_value)) = &matched {
-                    let label = if *count == 1 {
-                        "matched rule"
-                    } else {
-                        "matched rules"
-                    };
-                    ui.label(RichText::new(format!("{count} {label}")).color(theme::text()));
-                    let tone = match state_value {
-                        State::Complete => theme::blue(),
-                        State::Partial => theme::warn(),
-                        State::Unavailable => theme::muted(),
-                        State::NoRules => theme::warn(),
-                        State::Missing => theme::warn(),
-                    };
-                    presentation::badge(ui, state(state_value), tone);
-                    if let Some(line) = limitation_line(state_value) {
-                        ui.label(RichText::new(line).small().color(theme::warn()));
-                    }
-                }
-            });
-        }
+        self.rule_sets(ui, index);
+        self.scan_controls(ui, index, scan);
+        let scanning = self.is_scanning(index);
+        self.scan_status(ui, index, scanning);
+
         if self.selected == Engine::Sigma {
             if let Some(error) = scan.and_then(|scan| scan.event_error.as_ref()) {
                 ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
@@ -1270,8 +1068,11 @@ impl View {
                 .collect();
             self.applied[index] = Some(draft);
         }
-        match_cards(ui, report, TABLES[index], &self.filtered[index]);
+        let opened = match_cards(ui, report, TABLES[index], &self.filtered[index]);
         table(ui, TABLES[index], HEADERS, &self.filtered[index]);
+        if let Some(key) = opened {
+            self.open_window(key);
+        }
     }
     pub fn details(&mut self, ui: &mut egui::Ui, values: &[(&str, RowValue)]) {
         let text = |name: &str| {
@@ -1303,29 +1104,13 @@ impl View {
         else {
             return;
         };
-        ui.label(
-            RichText::new(format!("Author: {}", attribution(&finding.author))).color(theme::text()),
-        );
-        ui.add(egui::Label::new(card_summary(finding)).wrap());
-        ui.add_space(6.0);
-        ui.label(RichText::new("Rule").strong().color(theme::heading()));
-        if finding.rule_text.is_empty() {
-            ui.weak("The original rule text is not in this result.");
-        } else {
-            egui::ScrollArea::vertical()
-                .id_salt("detection-rule-text")
-                .max_height(220.0)
-                .show(ui, |ui| {
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(&finding.rule_text)
-                                .monospace()
-                                .color(theme::text()),
-                        )
-                        .wrap(),
-                    );
-                });
-        }
+        // The rule text, metadata and every location live in the Details window.
+        ui.add(egui::Label::new(card_summary(report.engine, finding)).wrap());
+        let window = ui.button("Details…").clicked().then(|| WindowKey {
+            engine: index,
+            rule_id: finding.rule_id.clone(),
+            title: finding.title.clone(),
+        });
         for reference in &finding.mitre {
             let url = format!(
                 "https://attack.mitre.org/techniques/{}/",
@@ -1340,224 +1125,15 @@ impl View {
         egui::CollapsingHeader::new(format!("Evidence locations ({})", finding.evidence.len()))
             .default_open(true)
             .show(ui, |ui| {
-                egui::ScrollArea::vertical()
-                    .id_salt("detection-evidence-hits")
-                    .max_height(240.0)
-                    .show(ui, |ui| {
-                        for evidence in &finding.evidence {
-                            let label = evidence_label(evidence);
-                            if ui.add(egui::Button::new(label).wrap()).clicked() {
-                                selected = Some(evidence.clone());
-                            }
-                        }
-                    });
-                if (finding.count as usize) > finding.evidence.len() {
-                    ui.weak(format!(
-                        "{} hits are counted; {} locations are listed.",
-                        finding.count,
-                        finding.evidence.len()
-                    ));
-                }
+                selected = evidence_list(ui, finding, "detection-evidence-hits", 240.0);
             });
+        byte_preview(ui, self.bytes.as_ref(), self.byte_rx.is_some(), finding);
+        if let Some(key) = window {
+            self.open_window(key);
+        }
         if let Some(evidence) = selected {
-            match evidence {
-                Evidence::Bytes { .. } => self.read_bytes(ui.ctx(), evidence),
-                _ => request_evidence_jump(ui.ctx(), &evidence_values(&evidence)),
-            }
+            self.open_evidence(ui.ctx(), evidence);
         }
-        if self.byte_rx.is_some() {
-            ui.spinner();
-        }
-        if let Some(result) = &self.bytes {
-            match result {
-                Ok((evidence, data)) => {
-                    if !self.results[index]
-                        .as_ref()
-                        .and_then(|result| result.as_ref().ok())
-                        .and_then(|report| {
-                            report.findings.iter().find(|finding| {
-                                Some(finding.rule_id.as_str()) == text("finding.rule")
-                            })
-                        })
-                        .is_some_and(|finding| finding.evidence.contains(evidence))
-                    {
-                        return;
-                    }
-                    ui.add(egui::Label::new(format!("{evidence:?}")).wrap());
-                    for (index, chunk) in data.chunks(16).enumerate() {
-                        let offset = match evidence {
-                            Evidence::Bytes {
-                                offset: Some(offset),
-                                ..
-                            } => offset + (index * 16) as u64,
-                            _ => (index * 16) as u64,
-                        };
-                        let hex = chunk
-                            .iter()
-                            .map(|byte| format!("{byte:02x}"))
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(format!("{offset:016x}  {hex}")).monospace(),
-                            )
-                            .wrap(),
-                        );
-                    }
-                }
-                Err(error) => {
-                    ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
-                }
-            }
-        }
-    }
-}
-/// Filtered matches stay in a bounded list. A click opens Details; a double
-/// click opens the same exact evidence as the table row.
-fn match_cards(ui: &mut egui::Ui, report: &Report, table_id: &str, rows: &[Vec<Cell>]) {
-    if report.findings.is_empty() {
-        return;
-    }
-    presentation::heading(ui, "Matches", "What each rule matched in this run");
-    if rows.is_empty() {
-        ui.weak("No matches for this filter.");
-        return;
-    }
-    egui::ScrollArea::vertical()
-        .id_salt("detection-matches")
-        .max_height(280.0)
-        .auto_shrink([false, true])
-        .show(ui, |ui| {
-            for (index, row) in rows.iter().enumerate() {
-                let Some(finding) = finding_for(report, row) else {
-                    continue;
-                };
-                let response = presentation::frame().fill(theme::panel()).show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal_wrapped(|ui| {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(&finding.title).strong().color(theme::text()),
-                            )
-                            .wrap(),
-                        );
-                        if !finding.severity.is_empty() {
-                            presentation::badge(
-                                ui,
-                                &finding.severity,
-                                severity_color(&finding.severity),
-                            );
-                        }
-                    });
-                    ui.add(egui::Label::new(card_summary(finding)).wrap());
-                    ui.label(
-                        RichText::new(&finding.rule_id)
-                            .small()
-                            .color(theme::muted()),
-                    );
-                    if !finding.mitre.is_empty() {
-                        ui.horizontal_wrapped(|ui| {
-                            for reference in finding.mitre.iter().take(8) {
-                                presentation::badge(ui, reference, theme::blue());
-                            }
-                        });
-                    }
-                    ui.label(
-                        RichText::new(match_location(finding))
-                            .small()
-                            .color(theme::muted()),
-                    );
-                });
-                let clicked = ui.interact(
-                    response.response.rect,
-                    ui.id().with(("detection-match", index, &finding.rule_id)),
-                    egui::Sense::click(),
-                );
-                if clicked.hovered() {
-                    ui.painter().rect_stroke(
-                        response.response.rect,
-                        6.0,
-                        egui::Stroke::new(1.0_f32, theme::blue()),
-                        egui::StrokeKind::Inside,
-                    );
-                }
-                if clicked.double_clicked() {
-                    request_evidence_jump(
-                        ui.ctx(),
-                        row.first()
-                            .map(|cell| cell.values.as_slice())
-                            .unwrap_or_default(),
-                    );
-                } else if clicked.clicked() {
-                    details::select(ui.ctx(), table_id, HEADERS, row);
-                    details::clicked(ui.ctx(), table_id);
-                }
-                ui.add_space(6.0);
-            }
-        });
-}
-
-fn finding_for<'a>(report: &'a Report, row: &[Cell]) -> Option<&'a Finding> {
-    let rule = row_text(row, "finding.rule")?;
-    let title = row_text(row, "finding.title");
-    report
-        .findings
-        .iter()
-        .find(|finding| finding.rule_id == rule && title.is_none_or(|title| title == finding.title))
-}
-
-fn row_text<'a>(row: &'a [Cell], key: &str) -> Option<&'a str> {
-    row.first()?.values.iter().find_map(|(name, value)| {
-        if *name == key {
-            if let RowValue::Text(text) = value {
-                Some(text.as_str())
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    })
-}
-
-fn severity_color(severity: &str) -> egui::Color32 {
-    match severity.trim().to_ascii_lowercase().as_str() {
-        "1" | "critical" | "high" => theme::error(),
-        "2" | "medium" | "indicator" => theme::warn(),
-        "3" | "4" | "low" | "informational" | "info" => theme::blue(),
-        _ => theme::muted(),
-    }
-}
-
-fn match_location(finding: &Finding) -> String {
-    let Some(evidence) = finding.evidence.first() else {
-        return format!(
-            "{} occurrence{}; no recorded location",
-            finding.count,
-            if finding.count == 1 { "" } else { "s" }
-        );
-    };
-    let first = match evidence {
-        Evidence::Call { call, .. } => format!("syscall {call}"),
-        Evidence::Packet { frame, .. } => format!("packet #{frame}"),
-        Evidence::Bytes { path, offset, .. } => {
-            let name = path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "bytes".into());
-            offset.map_or_else(
-                || format!("file {name}"),
-                |offset| format!("{name} at 0x{offset:x}"),
-            )
-        }
-    };
-    if finding.evidence.len() == 1 {
-        format!("Matched {first}")
-    } else {
-        format!(
-            "Matched {first} and {} more locations",
-            finding.evidence.len() - 1
-        )
     }
 }
 
@@ -1567,58 +1143,88 @@ impl Drop for View {
     }
 }
 
-fn evidence_values(evidence: &Evidence) -> Vec<(&'static str, RowValue)> {
-    let number = |value: u64| RowValue::Number(i128::from(value));
-    match evidence {
-        Evidence::Call {
-            stream,
-            cookie,
-            call,
-        } => vec![
-            ("stream.id", number(*stream)),
-            ("process.cookie", number(*cookie)),
-            ("event.id", number(*call)),
-        ],
-        Evidence::Packet { capture, frame } => vec![
-            (
-                "capture.path",
-                RowValue::Text(capture.display().to_string()),
-            ),
-            ("frame.number", number(*frame)),
-        ],
-        Evidence::Bytes {
-            path,
-            offset,
-            address,
-            report_id,
-            block,
-        } => vec![
-            (
-                "evidence.block",
-                block
-                    .as_ref()
-                    .and_then(|block| serde_json::to_string(block).ok())
-                    .map_or(RowValue::Missing, RowValue::Text),
-            ),
-            ("evidence.path", RowValue::Text(path.display().to_string())),
-            ("evidence.offset", offset.map_or(RowValue::Missing, number)),
-            (
-                "evidence.address",
-                address.map_or(RowValue::Missing, number),
-            ),
-            (
-                "evidence.report",
-                report_id
-                    .as_ref()
-                    .map_or(RowValue::Missing, |value| RowValue::Text(value.clone())),
-            ),
-        ],
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    pub(super) fn finding(rule: &str, title: &str, evidence: Vec<Evidence>) -> Finding {
+        Finding {
+            rule_id: rule.into(),
+            title: title.into(),
+            severity: "high".into(),
+            source: "s0".into(),
+            license: "MIT".into(),
+            author: "A".into(),
+            mitre: vec![],
+            count: evidence.len() as u64,
+            evidence,
+            details: "readable summary".into(),
+            rule_text: String::new(),
+        }
+    }
+
+    pub(super) fn report(findings: Vec<Finding>) -> Report {
+        let mut report = Report::empty(
+            Engine::Yara,
+            Identity {
+                vm_id: "v".into(),
+                boot_id: "b".into(),
+                run_id: "r".into(),
+                root_cookie: 1,
+            },
+        );
+        report.findings = findings;
+        report
+    }
+
+    /// Run `frames` UI frames and return the last one's shapes, so windows
+    /// and their sizing pass have been painted.
+    pub(super) fn frames(
+        ctx: &egui::Context,
+        frames: usize,
+        mut run: impl FnMut(&egui::Context),
+    ) -> Vec<egui::epaint::ClippedShape> {
+        let mut shapes = Vec::new();
+        for _ in 0..frames {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000.0, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                &mut run,
+            );
+            shapes = output.shapes;
+        }
+        shapes
+    }
+
+    pub(super) fn each_galley(
+        shape: &egui::epaint::Shape,
+        visit: &mut impl FnMut(&egui::epaint::Galley),
+    ) {
+        match shape {
+            egui::epaint::Shape::Text(text) => visit(&text.galley),
+            egui::epaint::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    each_galley(shape, visit);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn rendered_text(shapes: &[egui::epaint::ClippedShape]) -> String {
+        let mut texts = Vec::new();
+        for shape in shapes {
+            each_galley(&shape.shape, &mut |galley| {
+                texts.push(galley.text().to_owned())
+            });
+        }
+        texts.join("\n")
+    }
     #[test]
     fn run_change_cancels_detector_and_discards_stale_results() {
         let mut view = View::default();
@@ -1645,175 +1251,6 @@ mod tests {
             })
             .is_err());
         assert!(view.results.iter().all(Option::is_none));
-    }
-
-    #[test]
-    fn match_location_names_the_recorded_byte_and_counts_the_rest() {
-        let finding = Finding {
-            rule_id: "sample".into(),
-            title: "Sample".into(),
-            severity: "indicator".into(),
-            source: "local".into(),
-            license: "MIT".into(),
-            author: String::new(),
-            mitre: vec!["T1059.004".into()],
-            count: 2,
-            evidence: vec![
-                Evidence::Bytes {
-                    path: PathBuf::from("/tmp/specimen"),
-                    offset: Some(0x10),
-                    address: None,
-                    report_id: None,
-                    block: None,
-                },
-                Evidence::Bytes {
-                    path: PathBuf::from("/tmp/specimen"),
-                    offset: Some(0x20),
-                    address: None,
-                    report_id: None,
-                    block: None,
-                },
-            ],
-            details: "marker".into(),
-            rule_text: "rule sample { condition: true }".into(),
-        };
-        assert_eq!(card_summary(&finding), "marker");
-        assert!(finding.rule_text.contains("rule sample"));
-        assert_eq!(
-            evidence_label(&finding.evidence[0]),
-            "specimen — open bytes at 0x10"
-        );
-        assert_eq!(
-            match_location(&finding),
-            "Matched specimen at 0x10 and 1 more locations"
-        );
-    }
-
-    #[test]
-    fn numeric_and_named_severities_share_one_scale() {
-        assert_eq!(severity_color("1"), theme::error());
-        assert_eq!(severity_color("high"), theme::error());
-        assert_eq!(severity_color("2"), theme::warn());
-        assert_eq!(severity_color("medium"), theme::warn());
-        assert_eq!(severity_color("3"), theme::blue());
-        assert_eq!(severity_color("4"), theme::blue());
-        assert_eq!(severity_color("informational"), theme::blue());
-        assert_eq!(severity_color("unspecified"), theme::muted());
-    }
-
-    #[test]
-    fn rule_set_title_counts_only_enabled_sets() {
-        use antinomie_monitor_core::ruleset::EngineSet;
-        let sets = vec![
-            EngineSet {
-                name: "Core".into(),
-                revision: "20261004".into(),
-                enabled: true,
-                rules: 2094,
-            },
-            EngineSet {
-                name: "Extra".into(),
-                revision: "r2".into(),
-                enabled: false,
-                rules: 4,
-            },
-            EngineSet {
-                name: "Local".into(),
-                revision: "r1".into(),
-                enabled: true,
-                rules: 1,
-            },
-        ];
-        assert_eq!(rule_set_title(&sets), "Rule sets: 2 enabled · 2,095 rules");
-        assert_eq!(limitation_line(&State::Complete), None);
-        assert_eq!(
-            limitation_line(&State::Partial),
-            Some("Limited: coverage is incomplete.")
-        );
-        assert!(limitation_line(&State::Missing)
-            .unwrap()
-            .starts_with("Limited:"));
-    }
-
-    #[test]
-    fn detection_panel_drops_the_old_sections_and_keeps_rule_sets() {
-        let mut view = View::default();
-        view.sets[0] = vec![antinomie_monitor_core::ruleset::EngineSet {
-            name: "YARA-Forge Core".into(),
-            revision: "20261004".into(),
-            enabled: true,
-            rules: 2094,
-        }];
-        let mut report = Report::empty(
-            Engine::Yara,
-            Identity {
-                vm_id: "v".into(),
-                boot_id: "b".into(),
-                run_id: "r".into(),
-                root_cookie: 1,
-            },
-        );
-        report.state = State::Partial;
-        report.scanned_objects = 1;
-        report.scanned_rules = Some(2094);
-        report.findings.push(Finding {
-            rule_id: "sample".into(),
-            title: "Sample".into(),
-            severity: "high".into(),
-            source: "s0".into(),
-            license: "MIT".into(),
-            author: "A".into(),
-            mitre: vec![],
-            count: 1,
-            evidence: vec![Evidence::Bytes {
-                path: PathBuf::from("/tmp/specimen"),
-                offset: Some(1),
-                address: None,
-                report_id: None,
-                block: None,
-            }],
-            details: "readable summary".into(),
-            rule_text: "rule sample { condition: true }".into(),
-        });
-        view.results[0] = Some(Ok(report));
-        view.rows(0);
-        view.phase[0] = "running".into();
-        let ctx = egui::Context::default();
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                view.show(ui, None);
-            });
-        });
-        let mut texts = Vec::new();
-        fn collect(shape: &egui::epaint::Shape, out: &mut Vec<String>) {
-            match shape {
-                egui::epaint::Shape::Text(text) => out.push(text.galley.text().to_owned()),
-                egui::epaint::Shape::Vec(shapes) => {
-                    for shape in shapes {
-                        collect(shape, out);
-                    }
-                }
-                _ => {}
-            }
-        }
-        for shape in &output.shapes {
-            collect(&shape.shape, &mut texts);
-        }
-        let joined = texts.join("\n");
-        assert!(
-            joined.contains("Rule sets: 1 enabled · 2,094 rules"),
-            "{joined}"
-        );
-        assert!(joined.contains("1 matched rule"), "{joined}");
-        assert!(
-            joined.contains("Limited: coverage is incomplete."),
-            "{joined}"
-        );
-        assert!(joined.contains("Scan: running"), "{joined}");
-        assert!(!joined.contains("Local rules and data sources"), "{joined}");
-        assert!(!joined.contains("Coverage and provenance"), "{joined}");
-        assert!(!joined.contains("Copy YARA-Forge"), "{joined}");
-        assert!(!joined.contains("rule sample"), "{joined}");
     }
 
     #[test]
