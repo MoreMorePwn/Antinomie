@@ -211,6 +211,8 @@ pub(super) struct View {
     progress: [Option<engine::ScanProgress>; 3],
     progress_rx: Option<Receiver<engine::ScanProgress>>,
     sets: [Vec<antinomie_monitor_core::ruleset::EngineSet>; 3],
+    /// Whether each engine's rule-set list is expanded.
+    sets_open: [bool; 3],
     /// Findings whose Details window is open.
     windows: Vec<WindowKey>,
 }
@@ -975,7 +977,6 @@ impl View {
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, scan: Option<&ArchiveScan>) {
-        presentation::heading(ui, "Detection", "");
         if self.fresh_registry().is_none() {
             self.request_registry(ui.ctx());
         }
@@ -985,9 +986,12 @@ impl View {
             .position(|engine| *engine == self.selected)
             .unwrap_or(0);
         self.rule_sets(ui, index);
-        self.scan_controls(ui, index, scan);
         let scanning = self.is_scanning(index);
-        self.scan_status(ui, index, scanning);
+        self.scan_controls(ui, index, scan, scanning);
+        if scanning {
+            self.scan_progress(ui, index);
+        }
+        self.notes_line(ui, index);
 
         if self.selected == Engine::Sigma {
             if let Some(error) = scan.and_then(|scan| scan.event_error.as_ref()) {
@@ -1018,28 +1022,6 @@ impl View {
                 theme::warn(),
                 "Recorded events changed after this result. Scan again to update it.",
             );
-        }
-        ui.add_space(8.0);
-        presentation::frame().fill(theme::panel()).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(
-                RichText::new(format!(
-                    "{} objects evaluated · {} rules evaluated",
-                    report.scanned_objects,
-                    report
-                        .scanned_rules
-                        .map_or("Unknown".into(), |count| count.to_string())
-                ))
-                .small()
-                .color(theme::muted()),
-            );
-        });
-        ui.add_space(8.0);
-        if report.omitted_evidence > 0 {
-            ui.weak(format!(
-                "{} evidence locations exceed the preview or have no recorded position",
-                report.omitted_evidence
-            ));
         }
         if report.findings.is_empty() {
             ui.weak(match report.state {
@@ -1210,6 +1192,18 @@ mod tests {
             egui::epaint::Shape::Vec(shapes) => {
                 for shape in shapes {
                     each_galley(shape, visit);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn each_galley_rect(shape: &egui::Shape, found: &mut impl FnMut(&str, egui::Rect)) {
+        match shape {
+            egui::Shape::Text(text) => found(text.galley.text(), text.visual_bounding_rect()),
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    each_galley_rect(shape, found);
                 }
             }
             _ => {}

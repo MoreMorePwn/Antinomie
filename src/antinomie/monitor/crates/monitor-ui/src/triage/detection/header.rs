@@ -77,7 +77,8 @@ impl View {
         });
     }
 
-    /// The collapsible list of installed packs and the Rule manager button.
+    /// The collapsible list of installed packs; the Rule manager button sits
+    /// on the same row as its title.
     pub(super) fn rule_sets(&mut self, ui: &mut egui::Ui, index: usize) {
         let loading = self.registry_rx.is_some() && self.sets[index].is_empty();
         let title = if loading {
@@ -85,10 +86,37 @@ impl View {
         } else {
             rule_set_title(&self.sets[index])
         };
-        egui::CollapsingHeader::new(RichText::new(title).color(theme::text()))
-            .id_salt(("detector-rule-sets", index))
-            .default_open(false)
-            .show(ui, |ui| {
+        let open = self.sets_open[index];
+        let caret = if open {
+            egui_phosphor::regular::CARET_DOWN
+        } else {
+            egui_phosphor::regular::CARET_RIGHT
+        };
+        let mut manager = false;
+        let mut toggle = false;
+        egui::Sides::new().show(
+            ui,
+            |ui| {
+                ui.set_max_width((ui.available_width() - 140.0).max(80.0));
+                toggle = ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new(format!("{caret} {title}")).color(theme::text()),
+                        )
+                        .frame(false)
+                        .truncate(),
+                    )
+                    .on_hover_text("Show or hide the installed rule sets")
+                    .clicked();
+            },
+            |ui| manager = ui.button("Rule manager…").clicked(),
+        );
+        self.open_manager |= manager;
+        if toggle {
+            self.sets_open[index] = !open;
+        }
+        if open {
+            ui.indent(("detector-rule-sets", index), |ui| {
                 if self.sets[index].is_empty() {
                     ui.weak(if loading {
                         "Reading installed packs…"
@@ -114,59 +142,76 @@ impl View {
                     });
                 }
             });
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("Rule manager…").clicked() {
-                self.open_manager = true;
-            }
-        });
-        if !self.notes[index].is_empty() {
-            ui.colored_label(theme::warn(), &self.notes[index]);
         }
     }
 
-    /// Scan, Cancel and the Result menu.
+    /// The Scan row: Scan, Cancel and the Result menu on the left, and on the
+    /// right the scan status, matched-rule count, state and evaluated counts.
+    /// A narrow pane lets the status wrap below the buttons.
     pub(super) fn scan_controls(
         &mut self,
         ui: &mut egui::Ui,
         index: usize,
         scan: Option<&ArchiveScan>,
+        scanning: bool,
     ) {
-        ui.horizontal_wrapped(|ui| {
-            let ready = self.rx.is_none() && self.identity.is_some();
-            if ui.add_enabled(ready, egui::Button::new("Scan")).clicked() {
-                let partial = !self.notes[index].is_empty();
-                self.auto_key[index].clear();
-                self.start(
-                    ui.ctx(),
-                    scan.and_then(|scan| scan.event_journal.as_ref())
-                        .map(|summary| summary.sha256.clone()),
-                    partial,
-                );
-            }
-            if self.rx.is_some() {
-                ui.spinner();
-                if let Some(cancel) = &self.cancel {
-                    if ui.button("Cancel").clicked() {
-                        cancel.store(true, Ordering::Relaxed);
+        let parts = self.status_parts(index, scanning);
+        if ui.available_width() < SIDE_BY_SIDE_WIDTH {
+            ui.horizontal_wrapped(|ui| {
+                self.scan_buttons(ui, index, scan);
+                for part in &parts {
+                    part.show(ui);
+                }
+            });
+        } else {
+            egui::Sides::new().show(
+                ui,
+                |ui| self.scan_buttons(ui, index, scan),
+                |ui| {
+                    // Right-to-left: the first item added is the rightmost.
+                    for part in parts.iter().rev() {
+                        part.show(ui);
                     }
+                },
+            );
+        }
+    }
+
+    fn scan_buttons(&mut self, ui: &mut egui::Ui, index: usize, scan: Option<&ArchiveScan>) {
+        let ready = self.rx.is_none() && self.identity.is_some();
+        if ui.add_enabled(ready, egui::Button::new("Scan")).clicked() {
+            let partial = !self.notes[index].is_empty();
+            self.auto_key[index].clear();
+            self.start(
+                ui.ctx(),
+                scan.and_then(|scan| scan.event_journal.as_ref())
+                    .map(|summary| summary.sha256.clone()),
+                partial,
+            );
+        }
+        if self.rx.is_some() {
+            ui.spinner();
+            if let Some(cancel) = &self.cancel {
+                if ui.button("Cancel").clicked() {
+                    cancel.store(true, Ordering::Relaxed);
                 }
             }
-            if let Some((directory, _)) = &self.identity {
-                let directory = engine::result_directory(directory, self.selected);
-                ui.menu_button("Result", |ui| {
-                    crate::evidence::menu(ui, &directory);
-                    if let Some(Ok(report)) = &self.results[index] {
-                        if ui.button("Copy result as JSON").clicked() {
-                            match serde_json::to_string_pretty(report) {
-                                Ok(json) => ui.ctx().copy_text(json),
-                                Err(error) => self.bytes = Some(Err(error.to_string())),
-                            }
-                            ui.close_menu();
+        }
+        if let Some((directory, _)) = &self.identity {
+            let directory = engine::result_directory(directory, self.selected);
+            ui.menu_button("Result", |ui| {
+                crate::evidence::menu(ui, &directory);
+                if let Some(Ok(report)) = &self.results[index] {
+                    if ui.button("Copy result as JSON").clicked() {
+                        match serde_json::to_string_pretty(report) {
+                            Ok(json) => ui.ctx().copy_text(json),
+                            Err(error) => self.bytes = Some(Err(error.to_string())),
                         }
+                        ui.close_menu();
                     }
-                });
-            }
-        });
+                }
+            });
+        }
     }
 
     pub(super) fn is_scanning(&self, index: usize) -> bool {
@@ -177,62 +222,144 @@ impl View {
             )
     }
 
-    /// While scanning, one row holds the progress bar and, beside it, the
-    /// matched-rule count and state. Otherwise the status line replaces the bar.
-    pub(super) fn scan_status(&self, ui: &mut egui::Ui, index: usize, scanning: bool) {
-        let matched = self.results[index]
-            .as_ref()
-            .and_then(|result| result.as_ref().ok())
-            .map(|report| (report.findings.len(), report.state.clone()));
-        if scanning {
-            let fraction = self.progress[index]
-                .as_ref()
-                .and_then(engine::progress_fraction);
-            let label = match self.progress[index].as_ref() {
-                Some(progress) => engine::progress_text(progress),
-                None if self.phase[index].is_empty() => "running".to_owned(),
-                None => self.phase[index].clone(),
-            };
-            ui.horizontal(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if let Some((count, state_value)) = &matched {
-                        let (text, tone) = matched_summary(*count, state_value);
-                        presentation::badge(ui, state(state_value), tone);
-                        ui.label(RichText::new(text).color(theme::text()));
-                    }
-                    ui.add(
-                        egui::ProgressBar::new(fraction.unwrap_or(0.0))
-                            .animate(fraction.is_none())
-                            .text(label)
-                            .desired_width(ui.available_width()),
-                    );
-                });
-            });
-        } else {
+    /// Left to right: the scan status (only when no scan runs), the matched
+    /// rules, their state and how much was evaluated.
+    fn status_parts(&self, index: usize, scanning: bool) -> Vec<StatusPart> {
+        let mut parts = Vec::new();
+        if !scanning {
             let status = match self.progress[index].as_ref() {
                 Some(progress) => engine::progress_text(progress),
                 None => self.phase[index].clone(),
             };
-            if !status.is_empty() || matched.is_some() {
-                ui.horizontal_wrapped(|ui| {
-                    if !status.is_empty() {
-                        ui.label(RichText::new(format!("Scan: {status}")).color(theme::muted()));
-                    }
-                    if let Some((count, state_value)) = &matched {
-                        let (text, tone) = matched_summary(*count, state_value);
-                        ui.label(RichText::new(text).color(theme::text()));
-                        presentation::badge(ui, state(state_value), tone);
-                    }
-                });
+            if !status.is_empty() {
+                parts.push(StatusPart::Muted(format!("Scan: {status}")));
             }
         }
-        if let Some(line) = matched
+        if let Some(Ok(report)) = self.results[index].as_ref() {
+            let (text, tone) = matched_summary(report.findings.len(), &report.state);
+            parts.push(StatusPart::Count(text));
+            parts.push(StatusPart::Badge(state(&report.state), tone));
+            let (short, long) = evaluated_text(report);
+            parts.push(StatusPart::Evaluated(short, long));
+        }
+        parts
+    }
+
+    /// While scanning, the progress bar has a row of its own.
+    pub(super) fn scan_progress(&self, ui: &mut egui::Ui, index: usize) {
+        let fraction = self.progress[index]
             .as_ref()
-            .and_then(|(_, state_value)| limitation_line(state_value))
-        {
-            ui.label(RichText::new(line).small().color(theme::warn()));
+            .and_then(engine::progress_fraction);
+        let label = match self.progress[index].as_ref() {
+            Some(progress) => engine::progress_text(progress),
+            None if self.phase[index].is_empty() => "running".to_owned(),
+            None => self.phase[index].clone(),
+        };
+        ui.add(
+            egui::ProgressBar::new(fraction.unwrap_or(0.0))
+                .animate(fraction.is_none())
+                .text(label)
+                .desired_width(ui.available_width()),
+        );
+    }
+
+    /// One muted line for limits of the result, with the full wording on hover.
+    pub(super) fn notes_line(&self, ui: &mut egui::Ui, index: usize) {
+        let mut short = Vec::new();
+        let mut long = Vec::new();
+        let mut note = |brief: String, full: String| {
+            short.push(brief);
+            long.push(full);
+        };
+        if let Some(Ok(report)) = self.results[index].as_ref() {
+            if let Some(line) = limitation_line(&report.state) {
+                note(line.to_owned(), line.to_owned());
+            }
+            if report.omitted_evidence > 0 {
+                note(
+                    format!(
+                        "{} evidence locations not previewed",
+                        engine::group_digits(report.omitted_evidence)
+                    ),
+                    format!(
+                        "{} evidence locations exceed the preview or have no recorded position",
+                        report.omitted_evidence
+                    ),
+                );
+            }
+        }
+        if !self.notes[index].is_empty() {
+            note(self.notes[index].clone(), self.notes[index].clone());
+        }
+        if short.is_empty() {
+            return;
+        }
+        ui.add(
+            egui::Label::new(
+                RichText::new(short.join(" · "))
+                    .small()
+                    .color(theme::warn()),
+            )
+            .truncate(),
+        )
+        .on_hover_text(long.join("\n"));
+    }
+}
+
+/// Narrower rows stack the status under the scan buttons.
+const SIDE_BY_SIDE_WIDTH: f32 = 780.0;
+
+/// One item of the status cluster beside the scan buttons.
+enum StatusPart {
+    Muted(String),
+    Count(String),
+    Badge(&'static str, egui::Color32),
+    /// Short text and the longer wording shown on hover.
+    Evaluated(String, String),
+}
+
+impl StatusPart {
+    fn show(&self, ui: &mut egui::Ui) {
+        // Whole items move to the next row; none breaks across rows.
+        let label = |text: RichText| egui::Label::new(text).wrap_mode(egui::TextWrapMode::Extend);
+        match self {
+            Self::Muted(text) => {
+                ui.add(label(RichText::new(text).color(theme::muted())));
+            }
+            Self::Count(text) => {
+                ui.add(label(RichText::new(text).color(theme::text())));
+            }
+            Self::Badge(text, tone) => presentation::badge(ui, text, *tone),
+            Self::Evaluated(short, long) => {
+                ui.add(label(RichText::new(short).small().color(theme::muted())))
+                    .on_hover_text(long);
+            }
         }
     }
+}
+
+/// "1 object · 2,096 rules evaluated" and the same in full words.
+fn evaluated_text(report: &Report) -> (String, String) {
+    let objects = engine::group_digits(report.scanned_objects);
+    let noun = if report.scanned_objects == 1 {
+        "object"
+    } else {
+        "objects"
+    };
+    let rules = report.scanned_rules.map_or_else(
+        || "Unknown rules".to_owned(),
+        |count| {
+            format!(
+                "{} {}",
+                engine::group_digits(count),
+                if count == 1 { "rule" } else { "rules" }
+            )
+        },
+    );
+    (
+        format!("{objects} {noun} · {rules} evaluated"),
+        format!("{objects} {noun} evaluated · {rules} evaluated"),
+    )
 }
 
 #[cfg(test)]
@@ -338,5 +465,100 @@ mod tests {
         assert!(joined.contains("running"), "{joined}");
         assert!(joined.contains("1 matched rule"), "{joined}");
         assert!(joined.contains("Partial"), "{joined}");
+    }
+
+    /// Every painted text of a pane of the given size, in paint order.
+    fn pane_texts(view: &mut View, size: egui::Vec2, above: f32) -> Vec<(String, egui::Rect)> {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut shapes = Vec::new();
+        for _ in 0..3 {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        // Stands in for the run selector and section tabs above.
+                        ui.add_space(above);
+                        view.show(ui, None)
+                    });
+                },
+            );
+            shapes = output.shapes;
+        }
+        let mut texts = Vec::new();
+        for shape in &shapes {
+            super::super::tests::each_galley_rect(&shape.shape, &mut |text, rect| {
+                texts.push((text.to_owned(), rect));
+            });
+        }
+        texts
+    }
+
+    fn rect_of(texts: &[(String, egui::Rect)], needle: &str) -> egui::Rect {
+        texts
+            .iter()
+            .find(|(text, _)| text.contains(needle))
+            .unwrap_or_else(|| panic!("{needle} is not painted: {texts:?}"))
+            .1
+    }
+
+    #[test]
+    fn first_match_card_is_visible_in_a_docked_pane() {
+        let mut view = partial_view();
+        view.phase[0] = "canceled".into();
+        let size = egui::vec2(900.0, 600.0);
+        // Triage's run selector and section tabs take about 120 points.
+        let texts = pane_texts(&mut view, size, 120.0);
+        let title = rect_of(&texts, "Sample");
+        let details = rect_of(&texts, "Details…");
+        assert!(
+            title.max.y <= size.y && details.max.y <= size.y,
+            "card title {title:?}"
+        );
+        assert!(title.min.y < size.y * 0.7, "card title {title:?}");
+    }
+
+    #[test]
+    fn status_and_counts_sit_right_of_the_scan_button_on_one_row() {
+        let mut view = partial_view();
+        view.phase[0] = "canceled".into();
+        let texts = pane_texts(&mut view, egui::vec2(900.0, 600.0), 0.0);
+        let scan = rect_of(&texts, "Scan");
+        for needle in [
+            "Scan: canceled",
+            "1 matched rule",
+            "Partial",
+            "1 object · 2,094 rules evaluated",
+        ] {
+            let item = rect_of(&texts, needle);
+            assert!(item.min.x > scan.max.x, "{needle} is not right of Scan");
+            assert!(
+                (item.center().y - scan.center().y).abs() < 6.0,
+                "{needle} is on another row: {item:?} vs {scan:?}"
+            );
+        }
+        // Counts are the rightmost item; the separate counts block is gone.
+        assert!(rect_of(&texts, "rules evaluated").min.x > rect_of(&texts, "Partial").max.x);
+        assert!(!texts
+            .iter()
+            .any(|(text, _)| text.contains("objects evaluated")));
+        // The rule-set title and the manager button share a row.
+        let sets = rect_of(&texts, "Rule sets");
+        let manager = rect_of(&texts, "Rule manager");
+        assert!((sets.center().y - manager.center().y).abs() < 6.0);
+    }
+
+    #[test]
+    fn a_narrow_pane_wraps_the_status_below_the_scan_buttons() {
+        let mut view = partial_view();
+        view.phase[0] = "canceled".into();
+        let size = egui::vec2(420.0, 600.0);
+        let texts = pane_texts(&mut view, size, 0.0);
+        let counts = rect_of(&texts, "rules evaluated");
+        assert!(counts.max.x <= size.x, "counts are clipped: {counts:?}");
+        assert!(counts.min.y > rect_of(&texts, "Scan").max.y);
     }
 }
