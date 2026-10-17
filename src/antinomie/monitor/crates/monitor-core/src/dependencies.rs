@@ -25,6 +25,8 @@ pub enum Dependency {
     Bubblewrap,
     Tshark,
     Prlimit,
+    Suricata,
+    PythonVenv,
 }
 
 /// One checked requirement, its affected action and a concrete repair hint.
@@ -35,6 +37,8 @@ pub struct Check {
     pub purpose: &'static str,
     pub problem: Option<String>,
     pub hint: &'static str,
+    /// Only one optional feature needs it; missing it is not a startup problem.
+    pub optional: bool,
 }
 
 /// Snapshot of runtime availability. Recheck after changing host packages.
@@ -44,8 +48,11 @@ pub struct Report {
 }
 
 impl Report {
+    /// A required check failed; missing optional tools do not count.
     pub fn has_missing(&self) -> bool {
-        self.checks.iter().any(|check| check.problem.is_some())
+        self.checks
+            .iter()
+            .any(|check| check.problem.is_some() && !check.optional)
     }
 
     /// Reject only the listed requirements, preserving unrelated workflows.
@@ -102,6 +109,45 @@ fn tool(
             .is_none()
             .then(|| format!("{} is missing or not executable", path.display())),
         hint,
+        optional: false,
+    }
+}
+
+/// Where IDS scans look for Suricata.
+pub const SURICATA: &[&str] = &[
+    "/usr/bin/suricata",
+    "/usr/sbin/suricata",
+    "/usr/local/bin/suricata",
+];
+
+/// The system Python can create the virtual environment of the Sigma tool;
+/// Debian and Ubuntu ship `ensurepip` separately, in python3-venv.
+fn venv_problem() -> Option<String> {
+    let mut child = match Command::new("/usr/bin/python3")
+        .args(["-I", "-c", "import ensurepip, venv"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => return Some(format!("/usr/bin/python3 did not run: {error}")),
+    };
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return None,
+            Ok(Some(_)) => {
+                return Some("/usr/bin/python3 cannot create virtual environments".into());
+            }
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Some("the Python check did not finish".into());
+            }
+            Err(error) => return Some(error.to_string()),
+        }
     }
 }
 
@@ -160,6 +206,25 @@ pub fn check(options: &BackendOptions) -> Report {
             Path::new("prlimit"),
             "On Debian/Ubuntu: sudo apt install util-linux",
         ),
+        Check {
+            dependency: Suricata,
+            name: "Suricata",
+            purpose: "IDS scans of captured traffic",
+            problem: SURICATA
+                .iter()
+                .all(|path| executable(Path::new(path)).is_none())
+                .then(|| "Suricata is not installed".to_owned()),
+            hint: "On Debian/Ubuntu: sudo apt install suricata",
+            optional: true,
+        },
+        Check {
+            dependency: PythonVenv,
+            name: "Python venv",
+            purpose: "Install the Sigma tool from Tools > Analysis tools",
+            problem: venv_problem(),
+            hint: "On Debian/Ubuntu: sudo apt install python3-venv",
+            optional: true,
+        },
     ];
     if !options.headless {
         checks.push(Check {
@@ -168,6 +233,7 @@ pub fn check(options: &BackendOptions) -> Report {
             purpose: "Open VM display windows",
             problem: gtk_problem(&options.qemu),
             hint: "On Debian/Ubuntu: sudo apt install qemu-system-gui",
+            optional: false,
         });
     }
     // Always report KVM, even when TCG is selected; it remains a recommendation
@@ -178,6 +244,7 @@ pub fn check(options: &BackendOptions) -> Report {
         purpose: "Start VMs with hardware acceleration (TCG does not need it)",
         problem: kvm_problem(),
         hint: "Enable hardware virtualization and access to /dev/kvm (kvm group; sign in again), or select TCG in VM settings",
+        optional: false,
     });
     Report { checks }
 }
@@ -316,6 +383,38 @@ mod tests {
     use super::*;
     use std::{fs, os::unix::fs::PermissionsExt};
 
+    #[test]
+    fn a_missing_optional_tool_is_not_a_startup_problem() {
+        let entry = |optional, problem: Option<&str>| Check {
+            dependency: Dependency::Suricata,
+            name: "Suricata",
+            purpose: "IDS scans",
+            problem: problem.map(str::to_owned),
+            hint: "On Debian/Ubuntu: sudo apt install suricata",
+            optional,
+        };
+        let optional = Report {
+            checks: vec![
+                entry(true, Some("Suricata is not installed")),
+                entry(false, None),
+            ],
+        };
+        assert!(!optional.has_missing());
+        let required = Report {
+            checks: vec![entry(false, Some("missing"))],
+        };
+        assert!(required.has_missing());
+        let checked = check(&BackendOptions::default());
+        for dependency in [Dependency::Suricata, Dependency::PythonVenv] {
+            assert!(
+                checked
+                    .checks
+                    .iter()
+                    .any(|check| check.dependency == dependency && check.optional)
+            );
+        }
+    }
+
     struct Fixture(PathBuf);
     impl Fixture {
         fn new(script: &str) -> Self {
@@ -427,6 +526,7 @@ mod tests {
                 purpose: "Downloads",
                 problem: Some("missing".into()),
                 hint: "sudo apt install curl",
+                optional: false,
             }],
         };
         assert!(report.has_missing());
