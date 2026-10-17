@@ -222,7 +222,7 @@ impl MonitorApp {
             .iter()
             .find(|location| location.vm_id == vm_id)
         {
-            Some(location) => open_directory(&location.disk_directory, &mut self.status),
+            Some(location) => open_directory(&location.disk_directory),
             None => self.status = "VM directory unavailable".into(),
         }
     }

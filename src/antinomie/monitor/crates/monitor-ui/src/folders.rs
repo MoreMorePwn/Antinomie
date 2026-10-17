@@ -1,7 +1,7 @@
 //! Host folder selection without blocking native rendering.
 use std::{
     io::Read,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::mpsc::{self, Receiver},
     thread::{self, JoinHandle},
@@ -177,6 +177,68 @@ impl Drop for FolderPicker {
     }
 }
 
+/// Open `directory` in the desktop file manager and wait for the request.
+///
+/// The FileManager1 D-Bus service reaches the file manager itself. `xdg-open`
+/// is only the fallback: it hands a folder to whichever application claims
+/// `inode/directory`, which on Xfce can be the Catfish search tool.
+pub(crate) fn show(directory: &Path) -> Result<(), String> {
+    let shown = Command::new("dbus-send")
+        .args([
+            "--session",
+            "--print-reply",
+            "--reply-timeout=5000",
+            "--dest=org.freedesktop.FileManager1",
+            "/org/freedesktop/FileManager1",
+            "org.freedesktop.FileManager1.ShowFolders",
+        ])
+        .arg(format!("array:string:{}", file_uri(directory)))
+        .arg("string:")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    if shown.is_ok_and(|status| status.success()) {
+        return Ok(());
+    }
+    let status = Command::new("xdg-open")
+        .arg(directory)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|error| format!("Open directory: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("Open directory failed: {status}"))
+    }
+}
+
+/// `show` on a background thread; a failure is only logged.
+pub(crate) fn show_detached(directory: PathBuf) {
+    thread::spawn(move || {
+        if let Err(error) = show(&directory) {
+            eprintln!("{error}");
+        }
+    });
+}
+
+/// A `file://` URI with every byte outside the unreserved set and `/`
+/// percent-encoded, so a comma cannot split the dbus-send array argument.
+fn file_uri(path: &Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    let mut uri = String::from("file://");
+    for &byte in path.as_os_str().as_bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~/".contains(&byte) {
+            uri.push(byte as char);
+        } else {
+            uri.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    uri
+}
+
 /// A path the user typed: surrounding spaces removed and a leading `~`
 /// expanded to the home directory, as a shell would.
 pub(crate) fn user_path(text: &str) -> PathBuf {
@@ -196,6 +258,12 @@ pub(crate) fn user_path(text: &str) -> PathBuf {
 
 #[cfg(test)]
 mod path_tests {
+    #[test]
+    fn a_folder_uri_escapes_separators_of_the_dbus_array() {
+        let uri = super::file_uri(std::path::Path::new("/tmp/a b,c/ü%"));
+        assert_eq!(uri, "file:///tmp/a%20b%2Cc/%C3%BC%25");
+    }
+
     #[test]
     fn availability_does_not_wait_for_a_slow_probe_and_can_be_refreshed() {
         let ctx = eframe::egui::Context::default();

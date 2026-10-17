@@ -760,17 +760,5 @@ fn choose_path(save: bool, title: &str, cancelled: &AtomicBool) -> Result<Option
 }
 
 pub(super) fn reveal(path: &Path) -> Result<(), String> {
-    let mut child = Command::new("xdg-open")
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| error.to_string())?;
-    let status = child.wait().map_err(|error| error.to_string())?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("Directory opener failed: {status}"))
-    }
+    crate::folders::show(path)
 }

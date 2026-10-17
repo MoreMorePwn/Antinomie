@@ -134,27 +134,12 @@ pub(crate) fn reveal(ctx: &egui::Context, directory: &Path) {
     } else {
         directory.parent().unwrap_or(directory)
     };
-    match std::process::Command::new("xdg-open")
-        .arg(directory)
-        .spawn()
-    {
-        Ok(mut child) => {
-            std::thread::spawn(move || {
-                let error = match child.wait() {
-                    Ok(status) if status.success() => None,
-                    Ok(status) => Some(format!("Open directory failed: {status}")),
-                    Err(error) => Some(format!("Open directory failed: {error}")),
-                };
-                if let Some(error) = error {
-                    shared.lock().unwrap_or_else(|e| e.into_inner()).error = Some(error);
-                }
-            });
+    let directory = directory.to_owned();
+    std::thread::spawn(move || {
+        if let Err(error) = crate::folders::show(&directory) {
+            shared.lock().unwrap_or_else(|e| e.into_inner()).error = Some(error);
         }
-        Err(error) => {
-            shared.lock().unwrap_or_else(|e| e.into_inner()).error =
-                Some(format!("Open directory: {error}"))
-        }
-    }
+    });
 }
 
 pub(crate) fn dialogs(ctx: &egui::Context) {

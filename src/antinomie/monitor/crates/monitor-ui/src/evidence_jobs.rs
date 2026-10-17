@@ -21,15 +21,8 @@ pub(crate) struct EvidenceJobs {
 impl EvidenceJobs {
     pub(crate) fn reveal(&mut self, directory: PathBuf) {
         self.start(move || {
-            let status = std::process::Command::new("xdg-open")
-                .arg(&directory)
-                .status()
-                .map_err(|e| e.to_string())?;
-            if status.success() {
-                Ok(format!("Opened {}", directory.display()))
-            } else {
-                Err(format!("Open directory failed: {status}"))
-            }
+            crate::folders::show(&directory)?;
+            Ok(format!("Opened {}", directory.display()))
         });
     }
     pub(crate) fn export(

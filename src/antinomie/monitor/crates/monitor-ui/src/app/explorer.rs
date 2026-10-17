@@ -48,7 +48,7 @@ impl MonitorApp {
                     });
                 });
                 if open {
-                    open_directory(root, &mut self.status);
+                    open_directory(root);
                 }
                 if refresh {
                     self.explorer_browser.invalidate();
@@ -78,7 +78,7 @@ impl MonitorApp {
                 match action {
                     upload_browser::Action::Select(_) => {}
                     upload_browser::Action::OpenDirectory(path) => {
-                        open_directory(&path, &mut self.status)
+                        open_directory(&path)
                     }
                     upload_browser::Action::SendRun(path) => self.send_explorer_file(path),
                 }
