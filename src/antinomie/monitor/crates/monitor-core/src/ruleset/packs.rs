@@ -55,7 +55,7 @@ pub fn install_archive(data_dir: &Path, entry: &PackEntry, bytes: &[u8]) -> Resu
             crate::storage::private_dir(parent).map_err(|error| error.to_string())?;
         }
         fs::rename(&unpacked, &version_dir).map_err(|error| error.to_string())?;
-        switch_version(data_dir, entry)
+        switch_version(data_dir, entry, None)
     })();
     if result.is_err() {
         let _ = fs::remove_dir_all(&staging);
@@ -87,10 +87,18 @@ fn reuse_version(data_dir: &Path, version_dir: &Path, entry: &PackEntry) -> Resu
         .ok_or("retained manifest has no pack provenance")?;
     let stored_entry: PackEntry =
         serde_json::from_value(stored_entry).map_err(|error| error.to_string())?;
-    switch_version(data_dir, &stored_entry)
+    switch_version(
+        data_dir,
+        &stored_entry,
+        retained_source(version_dir)?.as_ref(),
+    )
 }
 
-fn switch_version(data_dir: &Path, entry: &PackEntry) -> Result<(), String> {
+pub(super) fn switch_version(
+    data_dir: &Path,
+    entry: &PackEntry,
+    source: Option<&SourceProvenance>,
+) -> Result<(), String> {
     let mut registry = load_registry(data_dir)?;
     if let Some(installed) = registry.packs.iter_mut().find(|pack| pack.id == entry.id) {
         if installed.engine != entry.engine {
@@ -116,6 +124,7 @@ fn switch_version(data_dir: &Path, entry: &PackEntry) -> Result<(), String> {
         installed.upstream_url = entry.upstream_url.clone();
         installed.app = entry.app.clone();
         installed.engine_requirement = entry.engine_requirement.clone();
+        installed.source = source.cloned();
     } else {
         registry.packs.push(InstalledPack {
             id: entry.id.clone(),
@@ -130,6 +139,7 @@ fn switch_version(data_dir: &Path, entry: &PackEntry) -> Result<(), String> {
             evidence: entry.evidence.clone(),
             limits: entry.limits.clone(),
             versions: vec![entry.version.clone()],
+            source: source.cloned(),
             app: entry.app.clone(),
             engine_requirement: entry.engine_requirement.clone(),
         });
@@ -156,7 +166,12 @@ pub fn rollback(data_dir: &Path, id: &str, version: &str) -> Result<(), String> 
         return Err(format!("version {version} is not retained"));
     }
     let stored = retained_entry(data_dir, &engine, id, version)?;
-    switch_version(data_dir, &stored)
+    let dir = rules_root(data_dir)
+        .join("packs")
+        .join(&engine)
+        .join(id)
+        .join(version);
+    switch_version(data_dir, &stored, retained_source(&dir)?.as_ref())
 }
 
 /// The catalog entry recorded with an installed version. It does not change
@@ -277,4 +292,39 @@ pub struct PackDiff {
     pub removed: Vec<String>,
     pub changed: Vec<String>,
     pub conflicts: Vec<String>,
+}
+
+/// Remove an installed pack and every retained version of it.
+///
+/// Scans that already ran keep their own record of what they used; the pack's
+/// toggles go with it. A pack that is not installed is an error.
+pub fn remove_pack(data_dir: &Path, id: &str) -> Result<(), String> {
+    let _lock = registry_lock();
+    path_component(id, "id")?;
+    let mut registry = load_registry(data_dir)?;
+    let at = registry
+        .packs
+        .iter()
+        .position(|pack| pack.id == id)
+        .ok_or_else(|| format!("pack {id} is not installed"))?;
+    let pack = registry.packs.remove(at);
+    path_component(&pack.engine, "engine")?;
+    let key = format!("pack:{id}");
+    registry.disabled.remove(&key);
+    registry.obsolete_disabled.remove(&key);
+    registry.obsolete_reasons.remove(&key);
+    save_registry(data_dir, &registry)?;
+    let dir = rules_root(data_dir)
+        .join("packs")
+        .join(&pack.engine)
+        .join(id);
+    if dir.is_dir() {
+        fs::remove_dir_all(&dir).map_err(|error| {
+            format!(
+                "{id} was removed from the list but {} could not be deleted: {error}",
+                dir.display()
+            )
+        })?;
+    }
+    Ok(())
 }

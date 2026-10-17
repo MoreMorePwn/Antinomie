@@ -4,15 +4,20 @@ use crate::theme;
 use antinomie_monitor_core::ruleset::{self, Catalog, IndexedRule, Registry};
 use eframe::egui::{self, RichText};
 use std::{
+    collections::{BTreeMap, BTreeSet},
     path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver},
-        Arc,
+        Arc, Mutex,
     },
     thread,
     time::Duration,
 };
+
+#[cfg(test)]
+mod source_tests;
+mod sources;
 
 pub(crate) const WINDOW_ID: &str = "rule_manager";
 
@@ -34,6 +39,8 @@ enum Done {
 
 struct Job {
     cancel: Arc<AtomicBool>,
+    /// The latest status line of a long job, such as a download.
+    progress: Arc<Mutex<String>>,
     rx: Receiver<Result<Done, String>>,
 }
 
@@ -58,6 +65,8 @@ pub(crate) struct Model {
     group_name: String,
     import_path: String,
     tags_text: String,
+    /// Options chosen per source pack before installing, by pack id.
+    choices: BTreeMap<String, BTreeSet<String>>,
     changed: bool,
     /// Tools the triage scans run; a manifest export qualifies packs against them.
     tools: ruleset::ToolConfig,
@@ -353,7 +362,8 @@ impl Model {
                     .button("Allow downloads")
                     .on_hover_text(
                         "Turns on Settings > Allow outbound catalog and rule downloads. \
-                         Only Check for updates and Download use the network; scans stay offline.",
+                         Only Check for updates and installing or updating a pack use the network, \
+                         and only the hosts listed here; scans stay offline.",
                     )
                     .clicked()
                 {
@@ -361,12 +371,22 @@ impl Model {
                     self.status = "Downloads allowed. Check for updates reads the catalog.".into();
                 }
             });
+            ui.add(egui::Label::new(RichText::new(self.hosts_line()).color(theme::text())).wrap());
         }
         ui.label(RichText::new(&self.status).color(theme::text()));
         if self.job.is_some() {
-            ui.horizontal(|ui| {
+            let progress = self
+                .job
+                .as_ref()
+                .and_then(|job| job.progress.lock().ok().map(|text| text.clone()))
+                .unwrap_or_default();
+            ui.horizontal_wrapped(|ui| {
                 ui.spinner();
-                ui.label("Working…");
+                ui.label(if progress.is_empty() {
+                    "Working…"
+                } else {
+                    progress.as_str()
+                });
             });
         }
         ui.separator();
@@ -454,7 +474,12 @@ impl Model {
                     });
                 }
             });
-            if let Some(catalog) = &self.catalog {
+            self.installed_source(ui, data_dir, *outbound, &pack);
+            if let Some(catalog) = self
+                .catalog
+                .clone()
+                .filter(|c| c.schema == ruleset::CATALOG_SCHEMA)
+            {
                 if let Some(entry) = catalog
                     .packs
                     .iter()
@@ -473,14 +498,20 @@ impl Model {
                             }
                         });
                     }
-                } else {
+                } else if pack.source.is_none() {
                     ui.weak("This installed version is not in the current catalog.");
                 }
             }
         }
         ui.separator();
         ui.label(RichText::new("Catalog").strong().color(theme::heading()));
-        if let Some(catalog) = self.catalog.clone() {
+        if let Some(catalog) = self
+            .catalog
+            .clone()
+            .filter(|catalog| catalog.schema == ruleset::CATALOG_SCHEMA_SOURCES)
+        {
+            self.source_catalog(ui, data_dir, *outbound, &catalog);
+        } else if let Some(catalog) = self.catalog.clone() {
             let entries: Vec<_> = catalog
                 .packs
                 .iter()
@@ -888,11 +919,14 @@ impl Model {
             return;
         }
         let dir = data_dir.to_path_buf();
+        self.status = "Checking the catalog…".into();
         self.spawn(move |cancel| {
-            let bytes = fetch(ruleset::CATALOG_URL, &cancel, 2 * 1024 * 1024)?;
-            let value = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
-            let catalog = ruleset::validate_catalog(&value)?;
-            ruleset::store_catalog(&dir, &catalog)?;
+            let catalog = ruleset::refresh_catalog(
+                &dir,
+                ruleset::CATALOG_URL,
+                &ruleset::Curl::default(),
+                &cancel,
+            )?;
             Ok(Done::Catalog(catalog))
         });
     }
@@ -919,17 +953,27 @@ impl Model {
         &mut self,
         work: impl FnOnce(Arc<AtomicBool>) -> Result<Done, String> + Send + 'static,
     ) {
+        self.spawn_with_progress(move |cancel, _| work(cancel));
+    }
+
+    fn spawn_with_progress(
+        &mut self,
+        work: impl FnOnce(Arc<AtomicBool>, Arc<Mutex<String>>) -> Result<Done, String> + Send + 'static,
+    ) {
         if self.job.is_some() {
             self.status = "A rules job is already running.".into();
             return;
         }
         let cancel = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&cancel);
+        let progress = Arc::new(Mutex::new(String::new()));
+        let shown = Arc::clone(&progress);
         let (tx, rx) = mpsc::channel();
         if let Err(error) = thread::Builder::new()
             .name("rules-job".into())
             .spawn(move || {
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(flag)));
+                let result =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(flag, shown)));
                 let message = match result {
                     Ok(result) => result,
                     Err(_) => Err("rules job panicked".into()),
@@ -940,7 +984,11 @@ impl Model {
             self.status = error.to_string();
             return;
         }
-        self.job = Some(Job { cancel, rx });
+        self.job = Some(Job {
+            cancel,
+            progress,
+            rx,
+        });
     }
 }
 

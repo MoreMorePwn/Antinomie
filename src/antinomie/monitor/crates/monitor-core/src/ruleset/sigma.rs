@@ -2,7 +2,7 @@
 //! Sigma rule parsing and the captured-category check.
 use super::*;
 
-const SIGMA_CATEGORIES: [&str; 9] = [
+const SIGMA_CATEGORIES: [&str; 10] = [
     "process_creation",
     "file_event",
     "file_delete",
@@ -10,6 +10,7 @@ const SIGMA_CATEGORIES: [&str; 9] = [
     "file_access",
     "dns_query",
     "http_request",
+    "network_connection",
     "antinomie_bpf",
     "antinomie_file_metadata",
 ];
@@ -21,7 +22,8 @@ pub(super) fn parse_sigma(text: &str) -> Vec<IndexedRule> {
             let id = meta_line(doc, "id").unwrap_or_else(|| "missing-id".into());
             let category = meta_line(doc, "category").unwrap_or_default();
             let product = meta_line(doc, "product").unwrap_or_default();
-            let (compatible, reason) = sigma_support(&product, &category, doc);
+            let service = logsource_of(doc).2;
+            let (compatible, reason) = sigma_support(&product, &category, &service, doc);
             IndexedRule {
                 id: id.clone(),
                 name: meta_line(doc, "title").unwrap_or_else(|| id.clone()),
@@ -43,11 +45,19 @@ pub(super) fn parse_sigma(text: &str) -> Vec<IndexedRule> {
         .collect()
 }
 
-fn sigma_support(product: &str, category: &str, doc: &str) -> (bool, String) {
+fn sigma_support(product: &str, category: &str, service: &str, doc: &str) -> (bool, String) {
     if !product.is_empty() && product != "linux" {
         return (
             false,
             format!("product {product} is not a captured Linux event"),
+        );
+    }
+    if category.is_empty() && !service.is_empty() {
+        return (
+            false,
+            format!(
+                "service {service} log lines are not captured; Antinomie records system calls and network observations, not that service's log"
+            ),
         );
     }
     if !SIGMA_CATEGORIES.contains(&category) {
@@ -101,6 +111,7 @@ fn sigma_unknown_fields(doc: &str) -> Vec<String> {
         "BpfCommand",
         "Mode",
         "Setuid",
+        "Initiated",
     ];
     let mut unknown = Vec::new();
     let mut detection = false;

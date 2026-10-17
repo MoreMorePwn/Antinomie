@@ -103,9 +103,76 @@ Detection has independent YARA, IDS and Sigma jobs. Production rules come from
 the rule manager under `<data-dir>/rules/`: installed community packs, custom
 group revisions and the enabled-rule selection. The manager reads
 `https://huggingface.co/buckets/MoreMorePwn/antinomie-rules/resolve/catalog.json`
-only when Check or Download is used, and only if
+only when Check or Install/Update is used, and only if
 Settings allows outbound catalog access; the Rule manager offers to allow it
-in place. Scans do not contact the network. Suricata is an optional system
+in place and names every host it will contact. Scans do not contact the network.
+
+The catalog has two schemas, both read by `monitor-core/src/ruleset/catalog.rs`.
+Schema 1 lists hosted tar.gz archives (`download_url`, `sha256`, `size`) and is
+still read so existing installs keep working. Schema 2 lists *sources*; the
+bucket holds only `catalog.json`, a README and a NOTICE. When a catalog says
+`"schema": 2` it takes precedence. A schema 2 pack entry:
+
+| Field | Meaning |
+|---|---|
+| `id`, `engine`, `name` | Stable pack id, `yara`/`ids`/`sigma`, display name |
+| `homepage`, `license`, `license_url` | The publisher's project, license in words, license text |
+| `revision`, `revision_kind` | The pin: a release tag, a commit, or `rolling` |
+| `app`, `engine_requirement`, `rules`, `helpers`, `evidence`, `limits` | As schema 1; counts are approximate |
+| `sources[]` | `url` (HTTPS), `format` (`file`, `zip`, `tar.gz`), `size`, optional archive `sha256`, `rolling`, `strip`, `paths` (directories holding rules) and `files[]` (`path`, `sha256` of every file kept) |
+| `filter` | `copy` (extensions, support files), `yara-forge` (allowed rule licenses, allowed repository licenses, repository to license table) or `sigma` (log sources to keep) |
+| `options[]` | Per-install choices, off unless `default`; `include-unlicensed` adds YARA-Forge rules from repositories without a license, with a warning |
+| `notices[]` | Terms shown before the download |
+
+```json
+{
+  "id": "yara-forge-core", "engine": "yara", "name": "YARA-Forge Core",
+  "homepage": "https://github.com/YARAHQ/yara-forge",
+  "revision": "20261011", "revision_kind": "release",
+  "sources": [{
+    "url": "https://github.com/YARAHQ/yara-forge/releases/download/20261011/yara-forge-rules-core.zip",
+    "format": "zip", "size": 1748575, "sha256": "bf0cc68e…",
+    "files": [{"path": "packages/core/yara-rules-core.yar", "sha256": "f871f618…"}]}],
+  "filter": {"kind": "yara-forge", "allowed_licenses": ["MIT", "…"],
+             "allowed_repository_licenses": ["DRL-1.1", "…"],
+             "repository_licenses": {"https://github.com/SEKOIA-IO/Community": {"license": "DRL-1.1"}}},
+  "options": [{"id": "include-unlicensed", "default": false, "label": "…", "warning": "…"}]
+}
+```
+
+`ruleset::install_source` (`source_install.rs`) downloads each source through a
+`Fetcher` (`source_fetch.rs`: the system `curl`, HTTPS only, size and time
+bounded, cancellable; a redirect may only reach the publisher's own hosts, for
+example `github.com` to `codeload.github.com`), reads only the listed files from
+the download (`source_archive.rs`), and compares each with its pinned hash. A
+pinned source that differs, or lacks a listed file, refuses the install and
+leaves the previous selection. A `rolling` source (Emerging Threats, abuse.ch)
+records the difference in the pack's provenance instead, because the publisher
+updates it in place. Downloaded content is parsed and never executed. The local
+filter then runs: the YARA-Forge filter (`source_yara.rs`) splits the package
+by source repository, keeps a rule whose own `license` meta starts with an
+allowed license or, when it names none, whose repository's license is allowed,
+drops repositories without a license unless the `include-unlicensed` option is
+on, adds the repository license to kept rules as `antinomie_repo_license` meta,
+and drops rules YARA-X cannot compile; the Sigma filter (`source_sigma.rs`)
+keeps documents whose log source is listed. The result is indexed like any
+pack and registered as a version named `<revision>-<12 hex of the plan digest>`,
+where the plan digest covers the pinned inputs, the filter, the chosen options
+and `FILTER_REVISION`; the installed pack records its source, hashes and what
+the filter removed (`SourceProvenance`), which the Rule manager, the rule-set
+list and each scan's selection manifest show.
+
+`scripts/rules/prepare-catalog.py` generates the catalog from pinned upstream
+revisions: it downloads each source into its own directory, hashes every kept
+file, counts rules, verifies repository licenses and writes `catalog.json`,
+`README.md` and `NOTICE`. `scripts/rules/publish-rules.py` publishes it; a
+schema 2 catalog has no archives to upload.
+
+Sigma `network_connection` rules are evaluated from `connect()` calls the
+kernel accepted (`DestinationIp`, `DestinationPort`, `Initiated`); there is no
+`DestinationHostname`, so rules that use it are listed as not evaluated. Sigma
+`auditd` rules need auditd log records, which a recording does not hold, so they
+are imported and marked not evaluated with that reason. Suricata is an optional system
 package, listed in App dependencies. pySigma 2.x with its SQLite backend is
 the Sigma analysis tool: Tools > Analysis tools creates
 `<data-dir>/tools/sigma/venv` with the system Python and installs a

@@ -140,6 +140,14 @@ impl View {
                             ui.label(RichText::new("disabled").small().color(theme::muted()));
                         }
                     });
+                    if !set.source.is_empty() {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&set.source).small().color(theme::muted()),
+                            )
+                            .wrap(),
+                        );
+                    }
                 }
             });
         }
@@ -381,6 +389,7 @@ mod tests {
             revision: "20261004".into(),
             enabled: true,
             rules: 2094,
+            source: String::new(),
         }];
         let mut report = report(vec![finding(
             "sample",
@@ -409,18 +418,21 @@ mod tests {
                 revision: "20261004".into(),
                 enabled: true,
                 rules: 2094,
+                source: String::new(),
             },
             EngineSet {
                 name: "Extra".into(),
                 revision: "r2".into(),
                 enabled: false,
                 rules: 4,
+                source: String::new(),
             },
             EngineSet {
                 name: "Local".into(),
                 revision: "r1".into(),
                 enabled: true,
                 rules: 1,
+                source: String::new(),
             },
         ];
         assert_eq!(rule_set_title(&sets), "Rule sets: 2 enabled · 2,095 rules");

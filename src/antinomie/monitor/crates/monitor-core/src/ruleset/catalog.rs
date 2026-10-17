@@ -5,13 +5,16 @@ use super::*;
 pub fn validate_catalog(value: &Value) -> Result<Catalog, String> {
     let object = value.as_object().ok_or("catalog must be a JSON object")?;
     let schema = required_u64(object, "schema")?;
-    if schema != u64::from(CATALOG_SCHEMA) {
-        return Err(format!("unsupported rules catalog schema {schema}"));
-    }
     let packs = object
         .get("packs")
         .and_then(Value::as_array)
         .ok_or("catalog packs must be an array")?;
+    if schema == u64::from(CATALOG_SCHEMA_SOURCES) {
+        return validate_source_catalog(packs);
+    }
+    if schema != u64::from(CATALOG_SCHEMA) {
+        return Err(format!("unsupported rules catalog schema {schema}"));
+    }
     let mut entries = Vec::new();
     let mut seen = BTreeSet::new();
     for pack in packs {
@@ -24,6 +27,24 @@ pub fn validate_catalog(value: &Value) -> Result<Catalog, String> {
     Ok(Catalog {
         schema: CATALOG_SCHEMA,
         packs: entries,
+        sources: Vec::new(),
+    })
+}
+
+fn validate_source_catalog(packs: &[Value]) -> Result<Catalog, String> {
+    let mut sources = Vec::new();
+    let mut seen = BTreeSet::new();
+    for pack in packs {
+        let pack = validate_source_pack(pack)?;
+        if !seen.insert(pack.id.clone()) {
+            return Err(format!("duplicate pack id {}", pack.id));
+        }
+        sources.push(pack);
+    }
+    Ok(Catalog {
+        schema: CATALOG_SCHEMA_SOURCES,
+        packs: Vec::new(),
+        sources,
     })
 }
 
@@ -112,5 +133,10 @@ pub fn load_catalog(data_dir: &Path) -> Result<Option<Catalog>, String> {
 pub fn store_catalog(data_dir: &Path, catalog: &Catalog) -> Result<(), String> {
     let root = rules_root(data_dir);
     crate::storage::private_dir(&root).map_err(|error| error.to_string())?;
-    crate::storage::atomic_json(&root.join("catalog.json"), catalog)
+    if catalog.schema == CATALOG_SCHEMA_SOURCES {
+        let stored = serde_json::json!({"schema": catalog.schema, "packs": catalog.sources});
+        return crate::storage::atomic_json(&root.join("catalog.json"), &stored);
+    }
+    let stored = serde_json::json!({"schema": catalog.schema, "packs": catalog.packs});
+    crate::storage::atomic_json(&root.join("catalog.json"), &stored)
 }
