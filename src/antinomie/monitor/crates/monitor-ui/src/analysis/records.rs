@@ -10,15 +10,17 @@ pub(super) enum Structure {
     All,
     Headers,
     Sections,
+    Segments,
     Imports,
     Exports,
     Symbols,
 }
 
 impl Structure {
-    pub const FILTERS: [Self; 5] = [
+    pub const FILTERS: [Self; 6] = [
         Self::Headers,
         Self::Sections,
+        Self::Segments,
         Self::Imports,
         Self::Exports,
         Self::Symbols,
@@ -28,12 +30,26 @@ impl Structure {
             Self::All => "All structures",
             Self::Headers => "Headers",
             Self::Sections => "Sections",
+            Self::Segments => "Segments",
             Self::Imports => "Imports",
             Self::Exports => "Exports",
             Self::Symbols => "Symbols",
         }
     }
     pub fn accepts(self, entry: &AnalysisEntry) -> bool {
+        // Segments are recorded with the shape of a section.
+        let segment = entry.label == "Segment";
+        match self {
+            Self::Sections if segment => return false,
+            Self::Segments => {
+                return segment
+                    && matches!(
+                        entry.record.as_ref().map(|record| &record.data),
+                        Some(AnalysisData::Section { .. })
+                    );
+            }
+            _ => {}
+        }
         matches!(
             (self, entry.record.as_ref().map(|record| &record.data)),
             (Self::All, _)
@@ -103,7 +119,11 @@ impl Column {
                 .and_then(|r| r.location.as_ref())
                 .and_then(|l| l.file_range)
                 .map(|r| r.offset)
-                .or(entry.offset),
+                .or(entry.offset)
+                .or_else(|| match &record?.data {
+                    AnalysisData::Signature { offset, .. } => Some(*offset),
+                    _ => None,
+                }),
             Self::Address => record
                 .and_then(|r| r.location.as_ref())
                 .filter(|l| l.kind != AnalysisAddressKind::FileOffset)
@@ -222,7 +242,7 @@ pub(super) fn columns(kind: AnalysisKind, filter: Structure, legacy: bool) -> &'
         return &[Name, Value, Offset];
     }
     match (kind, filter) {
-        (AnalysisKind::Structures, Structure::Sections) => {
+        (AnalysisKind::Structures, Structure::Sections | Structure::Segments) => {
             &[Name, Address, Offset, VirtualSize, FileSize, Flags]
         }
         (AnalysisKind::Structures, Structure::Imports) => &[Name, Library, Ordinal],
@@ -236,6 +256,7 @@ pub(super) fn columns(kind: AnalysisKind, filter: Structure, legacy: bool) -> &'
         (AnalysisKind::Identification, _) => &[Category, Name, Version, Value],
         (AnalysisKind::Capabilities, _) => &[Name, Scope, Attack, Value],
         (AnalysisKind::Hardening, _) => &[Name, Scope, Value],
+        (AnalysisKind::Embedded, _) => &[Offset, Value],
         _ => &[Name, Value, Offset],
     }
 }

@@ -6,6 +6,7 @@ pub use export::{
     ghidra_open_exported_project, retained_ghidra_project,
 };
 pub use types::*;
+mod binwalk;
 mod capa;
 mod decompile;
 pub mod detection;

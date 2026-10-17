@@ -324,6 +324,7 @@ pub(crate) fn section_title(kind: AnalysisKind) -> &'static str {
         AnalysisKind::Capabilities => "Capabilities",
         AnalysisKind::Disassembly => "Disassembly",
         AnalysisKind::Decompilation => "Decompilation",
+        AnalysisKind::Embedded => "Binwalk",
     }
 }
 

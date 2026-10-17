@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use object::{Object, ObjectSection, ObjectSymbol};
+use object::{Object, ObjectSection, ObjectSegment, ObjectSymbol};
 use sha2::{Digest, Sha256};
 use std::{fs, io::Write, path::Path};
 
@@ -280,6 +280,7 @@ pub(super) fn bound_data(data: &mut AnalysisData) -> bool {
         }
         AnalysisData::String { encoding, .. } => bound(encoding),
         AnalysisData::Entropy { .. } => {}
+        AnalysisData::Signature { description, .. } => bound(description),
         AnalysisData::Property {
             scope,
             observed,
@@ -480,6 +481,35 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
                                 file_size: file_range.map(|r| r.len),
                                 raw_flags,
                                 flags,
+                            },
+                        );
+                    }
+                    for segment in segments(&file) {
+                        let file_range = checked_range(segment.file_range, specimen.len() as u64);
+                        if segment.file_range.is_some() && file_range.is_none() {
+                            section.state = AnalysisSectionState::Partial;
+                        }
+                        structured_entry(
+                            section,
+                            "Segment",
+                            format!(
+                                "{}; size {}; {}",
+                                segment.name,
+                                segment.size,
+                                segment.flags.join(" ")
+                            ),
+                            Some(AnalysisLocation {
+                                kind: AnalysisAddressKind::ObjectAddress,
+                                value: segment.address,
+                                file_range,
+                            }),
+                            AnalysisData::Section {
+                                name: segment.name,
+                                address: segment.address,
+                                virtual_size: segment.size,
+                                file_size: file_range.map(|r| r.len),
+                                raw_flags: segment.raw_flags,
+                                flags: segment.flags,
                             },
                         );
                     }
@@ -760,6 +790,7 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
         AnalysisKind::Identification => super::ident::identify(section, specimen),
         AnalysisKind::Rules => super::rules::scan(section, specimen),
         AnalysisKind::Capabilities => super::capa::capabilities(section),
+        AnalysisKind::Embedded => super::binwalk::embedded(section, specimen.len() as u64),
         AnalysisKind::Decompilation => super::decompile::decompile(section, specimen, listings),
     }
     if section.state == AnalysisSectionState::Partial {
@@ -969,6 +1000,107 @@ fn entropy_entry(section: &mut AnalysisSection, label: &str, specimen: &[u8], of
         },
     );
 }
+/// A program header or load command, recorded under Structures with the
+/// label "Segment" and the shape of a section.
+struct Segment {
+    name: String,
+    address: u64,
+    size: u64,
+    file_range: Option<(u64, u64)>,
+    raw_flags: String,
+    flags: Vec<String>,
+}
+
+/// Every ELF program header (the object crate's segments are PT_LOAD only),
+/// or the segments other formats declare.
+fn segments(file: &object::File) -> Vec<Segment> {
+    match file {
+        object::File::Elf32(elf) => elf_segments(elf),
+        object::File::Elf64(elf) => elf_segments(elf),
+        _ => file
+            .segments()
+            .map(|segment| {
+                let permissions = segment.permissions();
+                Segment {
+                    name: segment
+                        .name()
+                        .ok()
+                        .flatten()
+                        .unwrap_or("<unnamed>")
+                        .to_owned(),
+                    address: segment.address(),
+                    size: segment.size(),
+                    file_range: Some(segment.file_range()),
+                    raw_flags: format!("{:?}", segment.flags()),
+                    flags: [
+                        (permissions.readable(), "R"),
+                        (permissions.writable(), "W"),
+                        (permissions.executable(), "X"),
+                    ]
+                    .into_iter()
+                    .filter(|(set, _)| *set)
+                    .map(|(_, name)| name.to_owned())
+                    .collect(),
+                }
+            })
+            .collect(),
+    }
+}
+
+fn elf_segments<Elf: object::read::elf::FileHeader<Endian = object::Endianness>>(
+    elf: &object::read::elf::ElfFile<'_, Elf>,
+) -> Vec<Segment> {
+    use object::read::elf::ProgramHeader;
+    let endian = elf.endian();
+    elf.elf_program_headers()
+        .iter()
+        .map(|header| {
+            let kind = header.p_type(endian);
+            let flags = header.p_flags(endian);
+            Segment {
+                name: program_type(kind.0),
+                address: header.p_vaddr(endian).into(),
+                size: header.p_memsz(endian).into(),
+                file_range: Some((
+                    header.p_offset(endian).into(),
+                    header.p_filesz(endian).into(),
+                )),
+                raw_flags: format!("0x{:x}", flags.0),
+                flags: [
+                    (object::elf::PF_R, "R"),
+                    (object::elf::PF_W, "W"),
+                    (object::elf::PF_X, "X"),
+                ]
+                .into_iter()
+                .filter(|(flag, _)| flags.0 & flag.0 != 0)
+                .map(|(_, name)| name.to_owned())
+                .collect(),
+            }
+        })
+        .collect()
+}
+
+/// The name of an ELF `p_type`, without its `PT_` prefix.
+fn program_type(value: u32) -> String {
+    match value {
+        0 => "NULL",
+        1 => "LOAD",
+        2 => "DYNAMIC",
+        3 => "INTERP",
+        4 => "NOTE",
+        5 => "SHLIB",
+        6 => "PHDR",
+        7 => "TLS",
+        0x6474_e550 => "GNU_EH_FRAME",
+        0x6474_e551 => "GNU_STACK",
+        0x6474_e552 => "GNU_RELRO",
+        0x6474_e553 => "GNU_PROPERTY",
+        0x6474_e554 => "GNU_SFRAME",
+        _ => return format!("0x{value:x}"),
+    }
+    .to_owned()
+}
+
 fn section_flags(flags: object::SectionFlags) -> (String, Vec<String>) {
     let (raw, masks): (u64, Vec<(u64, &str)>) = match flags {
         object::SectionFlags::Elf { sh_flags, .. } => (

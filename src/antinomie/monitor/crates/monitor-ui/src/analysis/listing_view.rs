@@ -431,6 +431,7 @@ pub(crate) fn listing_fields(kind: AnalysisKind) -> Vec<crate::query::FieldSpec<
             F::text("version", "Identified version, when present"),
         ],
         AnalysisKind::Metadata => vec![F::text("group", "Metadata group")],
+        AnalysisKind::Embedded => vec![F::text("description", "binwalk signature description")],
     });
     fields
 }
@@ -496,7 +497,11 @@ pub(crate) fn listing_row(entry: &AnalysisEntry) -> Vec<(&'static str, crate::qu
                 ("raw_flags", V::Text(raw_flags.clone())),
                 ("flags", V::List(flags.clone())),
             ]);
-            "section"
+            if entry.label == "Segment" {
+                "segment"
+            } else {
+                "section"
+            }
         }
         AnalysisData::Symbol {
             name,
@@ -617,6 +622,17 @@ pub(crate) fn listing_row(entry: &AnalysisEntry) -> Vec<(&'static str, crate::qu
                 ("code", V::Text(entry.value.clone())),
             ]);
             "source_line"
+        }
+        AnalysisData::Signature {
+            offset,
+            description,
+        } => {
+            row.retain(|(name, _)| *name != "offset");
+            row.extend([
+                ("offset", number(Some(*offset))),
+                ("description", V::Text(description.clone())),
+            ]);
+            "signature"
         }
         AnalysisData::RuleMatch {
             rule,
