@@ -65,7 +65,64 @@ fn value(value: &serde_json::Value, key: &str) -> String {
         .collect()
 }
 
-fn alert(event: &serde_json::Value, capture: &Capture, report: &mut Report) {
+fn sid_of(rule: &str) -> Option<u64> {
+    rule.split("sid:")
+        .nth(1)
+        .and_then(|rest| rest.split([';', ',']).next())
+        .map(str::trim)
+        .and_then(|sid| sid.parse().ok())
+}
+
+fn index_rule_lines(text: &str) -> std::collections::BTreeMap<u64, String> {
+    let mut lines = std::collections::BTreeMap::new();
+    let mut current = String::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        current.push_str(line);
+        current.push('\n');
+        if !trimmed.ends_with(')') {
+            continue;
+        }
+        if let Some(sid) = sid_of(&current) {
+            lines
+                .entry(sid)
+                .or_insert_with(|| current.trim().to_owned());
+        }
+        current.clear();
+    }
+    lines
+}
+
+fn suricata_loaded(text: &str) -> Option<u64> {
+    for line in text.lines() {
+        let marker = if let Some(at) = line.find("rules successfully loaded") {
+            at
+        } else if let Some(at) = line.find("rule successfully loaded") {
+            at
+        } else {
+            continue;
+        };
+        let before = line[..marker].trim();
+        let Some(number) = before.split_whitespace().last() else {
+            continue;
+        };
+        if let Ok(count) = number.parse() {
+            return Some(count);
+        }
+    }
+    None
+}
+
+fn alert(
+    event: &serde_json::Value,
+    capture: &Capture,
+    rules: &std::collections::BTreeMap<u64, String>,
+    budget: &mut super::RuleTextBudget,
+    report: &mut Report,
+) {
     if event.get("event_type").and_then(serde_json::Value::as_str) != Some("alert") {
         return;
     }
@@ -126,6 +183,7 @@ fn alert(event: &serde_json::Value, capture: &Capture, report: &mut Report) {
                 .chars()
                 .take(8192)
                 .collect(),
+                rule_text: budget.take(rules.get(&sid).map(String::as_str).unwrap_or("")),
             });
             report.findings.len() - 1
         }
@@ -156,7 +214,13 @@ fn alert(event: &serde_json::Value, capture: &Capture, report: &mut Report) {
     }
 }
 
-fn read_eve(path: &Path, capture: &Capture, report: &mut Report) -> Result<(), String> {
+fn read_eve(
+    path: &Path,
+    capture: &Capture,
+    rules: &std::collections::BTreeMap<u64, String>,
+    budget: &mut super::RuleTextBudget,
+    report: &mut Report,
+) -> Result<(), String> {
     let file = File::open(path).map_err(|error| error.to_string())?;
     if file.metadata().map_err(|error| error.to_string())?.len() > 128 * 1024 * 1024 {
         return Err("EVE output exceeds 128 MiB".into());
@@ -177,7 +241,7 @@ fn read_eve(path: &Path, capture: &Capture, report: &mut Report) -> Result<(), S
         }
         let event: serde_json::Value = serde_json::from_slice(&line)
             .map_err(|error| format!("invalid EVE record: {error}"))?;
-        alert(&event, capture, report);
+        alert(&event, capture, rules, budget, report);
     }
     Err("EVE output exceeds one million records".into())
 }
@@ -280,6 +344,11 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
         return Ok(report);
     }
     report.source_digest = Some(crate::storage::sha256_hex(&rules));
+    let rule_text = String::from_utf8_lossy(&rules).into_owned();
+    let rule_lines = index_rule_lines(&rule_text);
+    let mut budget = super::RuleTextBudget::new();
+    let mut progress = super::runner::ProgressWriter::new(work);
+    progress.set_rules(rule_lines.len() as u64);
     let rule_path = work.join("combined.rules");
     fs::write(&rule_path, rules).map_err(|error| error.to_string())?;
     let classification = work.join("classification.config");
@@ -312,7 +381,12 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
     }
     let deadline = Instant::now() + Duration::from_secs(100);
     let mut successful = 0;
+    let capture_total = staged.captures.len() as u64;
     for (index, capture) in staged.captures.iter().enumerate() {
+        progress.stage(ScanTarget::CaptureSegment {
+            index: index as u64 + 1,
+            total: capture_total.max(1),
+        });
         let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
             report.state = State::Partial;
             report
@@ -348,15 +422,16 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
             1024 * 1024,
             true,
         )?;
-        if let Some(line) = result
-            .stderr
-            .lines()
-            .chain(result.stdout.lines())
-            .find(|line| line.contains("rules successfully loaded"))
-        {
-            report
-                .warnings
-                .push(format!("Suricata reported: {}", line.trim()));
+        let tool_log = format!("{}\n{}", result.stderr, result.stdout);
+        if let Some(loaded) = suricata_loaded(&tool_log) {
+            progress.set_rules(loaded);
+            progress.stage(ScanTarget::CaptureSegment {
+                index: index as u64 + 1,
+                total: capture_total.max(1),
+            });
+            report.warnings.push(format!(
+                "Suricata reported: {loaded} rules successfully loaded"
+            ));
         }
         for line in result
             .stderr
@@ -386,7 +461,13 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
         if !capture.complete {
             report.state = State::Partial;
         }
-        if let Err(error) = read_eve(&output.join("eve.json"), capture, &mut report) {
+        if let Err(error) = read_eve(
+            &output.join("eve.json"),
+            capture,
+            &rule_lines,
+            &mut budget,
+            &mut report,
+        ) {
             report.state = State::Partial;
             report
                 .warnings
@@ -418,6 +499,7 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
         };
     }
     report.warnings.push("IDS sees captured plaintext and metadata; encrypted application contents are unavailable. Stream reassembly is capped at 1 MiB. VM-wide PCAP is not process attribution.".into());
+    progress.flush();
     Ok(report)
 }
 
@@ -442,9 +524,15 @@ mod tests {
             packets: 10,
         };
         let event = serde_json::json!({"event_type":"alert","pcap_cnt":2,"alert":{"signature_id":99,"signature":"test","metadata":{"mitre_technique_id":["T1105"]}}});
-        alert(&event, &capture, &mut report);
+        let mut rules = std::collections::BTreeMap::new();
+        rules.insert(
+            99,
+            "alert tcp any any -> any any (msg:\"test\"; sid:99; rev:1;)".into(),
+        );
+        let mut budget = super::RuleTextBudget::new();
+        alert(&event, &capture, &rules, &mut budget, &mut report);
         capture.original = "/second.pcap".into();
-        alert(&event, &capture, &mut report);
+        alert(&event, &capture, &rules, &mut budget, &mut report);
         assert_eq!(report.findings[0].count, 2);
         assert_ne!(
             report.findings[0].evidence[0],
@@ -453,10 +541,21 @@ mod tests {
         assert_eq!(report.findings[0].mitre, vec!["T1105"]);
         let mut pseudo = event;
         pseudo.as_object_mut().unwrap().remove("pcap_cnt");
-        alert(&pseudo, &capture, &mut report);
+        alert(&pseudo, &capture, &rules, &mut budget, &mut report);
         assert_eq!(report.findings[0].count, 3);
         assert_eq!(report.findings[0].evidence.len(), 2);
         assert_eq!(report.omitted_evidence, 1);
+        assert!(report.findings[0].rule_text.contains("sid:99"));
+        assert!(!report.findings[0].details.contains("sid:99"));
+    }
+
+    #[test]
+    fn loaded_rule_count_is_parsed_from_the_suricata_line() {
+        assert_eq!(
+            suricata_loaded("<Info> -- 40231 rules successfully loaded"),
+            Some(40231)
+        );
+        assert_eq!(suricata_loaded("no engine output"), None);
     }
 
     #[test]

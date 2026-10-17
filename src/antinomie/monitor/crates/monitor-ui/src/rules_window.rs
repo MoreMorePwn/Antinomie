@@ -112,6 +112,7 @@ impl Model {
         data_dir: &Path,
         outbound: &mut bool,
         tools: &ruleset::ToolConfig,
+        detection: &mut antinomie_monitor_core::analysis::detection::Settings,
     ) -> Option<RulesAction> {
         if self.tools != *tools {
             self.tools = tools.clone();
@@ -137,7 +138,7 @@ impl Model {
                     .drag_to_scroll(false)
                     .id_salt("rule-manager-body")
                     .show(ui, |ui| {
-                        self.contents(ui, data_dir, outbound);
+                        self.contents(ui, data_dir, outbound, detection);
                     });
             });
         *open = window_open;
@@ -296,7 +297,13 @@ impl Model {
         action
     }
 
-    fn contents(&mut self, ui: &mut egui::Ui, data_dir: &Path, outbound: &mut bool) {
+    fn contents(
+        &mut self,
+        ui: &mut egui::Ui,
+        data_dir: &Path,
+        outbound: &mut bool,
+        detection: &mut antinomie_monitor_core::analysis::detection::Settings,
+    ) {
         if !self.loaded {
             self.ensure(data_dir);
         }
@@ -316,6 +323,7 @@ impl Model {
         if let Some(next) = self.engine_status(ui) {
             self.requested = Some(next);
         }
+        self.options(ui, data_dir, detection);
         ui.horizontal_wrapped(|ui| {
             let busy = self.job.is_some();
             if ui
@@ -789,6 +797,76 @@ impl Model {
         }
     }
 
+    fn options(
+        &mut self,
+        ui: &mut egui::Ui,
+        data_dir: &Path,
+        detection: &mut antinomie_monitor_core::analysis::detection::Settings,
+    ) {
+        egui::CollapsingHeader::new("Options")
+            .id_salt("rule-manager-options")
+            .default_open(true)
+            .show(ui, |ui| {
+                match self.engine.as_str() {
+                    "yara" => {
+                        ui.checkbox(
+                            &mut detection.scan_memory,
+                            "Scan recorded core / RAM extents",
+                        );
+                        ui.checkbox(&mut detection.scan_recovered, "Scan recovered files");
+                    }
+                    "sigma" => {
+                        ui.label("Python with pySigma and its SQLite backend");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut detection.sigma_python)
+                                .desired_width(ui.available_width())
+                                .hint_text("Empty: Antinomie's Sigma tool"),
+                        );
+                    }
+                    _ => {}
+                }
+                let legacy = match self.engine.as_str() {
+                    "yara" => detection.yara_rules.clone(),
+                    "ids" => detection.ids_rules.clone(),
+                    "sigma" => detection.sigma_rules.clone(),
+                    _ => String::new(),
+                };
+                let legacy = legacy.trim().to_owned();
+                if legacy.is_empty() {
+                    return;
+                }
+                ui.label(
+                    RichText::new(format!("Saved local path: {legacy}")).color(theme::text()),
+                );
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("Import as custom group").clicked() {
+                        let dir = data_dir.to_path_buf();
+                        let engine = self.engine.clone();
+                        let path = legacy.clone();
+                        let name = Path::new(&path)
+                            .file_stem()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("local")
+                            .to_owned();
+                        self.spawn(move |_| {
+                            let id = ruleset::import_group(&dir, &name, &engine, Path::new(&path))?;
+                            Ok(Done::Message(format!(
+                                "Imported {id} as a managed copy. Scans still use the saved path until Forget."
+                            )))
+                        });
+                    }
+                    if ui.button("Forget").clicked() {
+                        match self.engine.as_str() {
+                            "yara" => detection.yara_rules.clear(),
+                            "ids" => detection.ids_rules.clear(),
+                            "sigma" => detection.sigma_rules.clear(),
+                            _ => {}
+                        }
+                    }
+                });
+            });
+    }
+
     fn rule_key(&self) -> String {
         if !self.pack_id.is_empty() {
             format!("pack:{}", self.pack_id)
@@ -1177,6 +1255,7 @@ with open(destination, "wb") as output:
     ) -> (egui::FullOutput, Option<RulesAction>) {
         let mut open = true;
         let mut action = None;
+        let mut detection = antinomie_monitor_core::analysis::detection::Settings::default();
         ctx.style_mut(|style| {
             style.animation_time = 0.0;
         });
@@ -1187,10 +1266,107 @@ with open(destination, "wb") as output:
                 ..Default::default()
             },
             |ctx| {
-                action = model.show(ctx, &mut open, dir, outbound, tools);
+                action = model.show(ctx, &mut open, dir, outbound, tools, &mut detection);
             },
         );
         (output, action)
+    }
+
+    #[test]
+    fn options_move_scan_settings_and_keep_a_legacy_path_until_forget() {
+        let dir = std::env::temp_dir().join(format!("ant-rules-options-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut model = Model {
+            loaded: true,
+            engine: "yara".into(),
+            ..Default::default()
+        };
+        let mut detection = antinomie_monitor_core::analysis::detection::Settings {
+            yara_rules: dir.join("old.yar").display().to_string(),
+            scan_memory: false,
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let size = egui::vec2(960.0, 900.0);
+        let mut open = true;
+        let mut outbound = false;
+        let tools = ruleset::ToolConfig::default();
+        let mut paint =
+            |events: Vec<egui::Event>,
+             model: &mut Model,
+             detection: &mut antinomie_monitor_core::analysis::detection::Settings| {
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        let _ = model.show(ctx, &mut open, &dir, &mut outbound, &tools, detection);
+                    },
+                )
+            };
+        let _ = paint(Vec::new(), &mut model, &mut detection);
+        let output = paint(Vec::new(), &mut model, &mut detection);
+        let joined = texts(&output)
+            .into_iter()
+            .map(|(text, _, _)| text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("Scan recorded core / RAM extents"),
+            "shapes={} text={joined:?}",
+            output.shapes.len()
+        );
+        assert!(joined.contains("Scan recovered files"), "{joined}");
+        assert!(joined.contains("Saved local path:"), "{joined}");
+        assert!(joined.contains("Import as custom group"), "{joined}");
+        assert!(joined.contains("Forget"), "{joined}");
+        assert!(!joined.contains("Additional local rule"), "{joined}");
+        let forget = texts(&output)
+            .into_iter()
+            .find(|(text, _, _)| text == "Forget")
+            .expect("Forget")
+            .1
+            .center();
+        let _ = paint(
+            vec![
+                egui::Event::PointerMoved(forget),
+                egui::Event::PointerButton {
+                    pos: forget,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos: forget,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            &mut model,
+            &mut detection,
+        );
+        assert!(
+            detection.yara_rules.is_empty(),
+            "Forget clears the saved path scans keep using"
+        );
+        model.engine = "sigma".into();
+        let output = paint(Vec::new(), &mut model, &mut detection);
+        let joined = texts(&output)
+            .into_iter()
+            .map(|(text, _, _)| text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("Python with pySigma and its SQLite backend"),
+            "{joined}"
+        );
+        assert!(joined.contains("Empty: Antinomie's Sigma tool"), "{joined}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Click the first text that equals `label`, rendering until it shows.

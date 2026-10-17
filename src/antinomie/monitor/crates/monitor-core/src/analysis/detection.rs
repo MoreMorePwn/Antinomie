@@ -245,6 +245,10 @@ pub struct Finding {
     pub count: u64,
     pub evidence: Vec<Evidence>,
     pub details: String,
+    /// Original rule body: one YARA rule, one Suricata rule, or one Sigma document.
+    /// Empty on results saved before this was retained.
+    #[serde(default)]
+    pub rule_text: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -322,8 +326,184 @@ mod ids;
 mod runner;
 mod yara;
 pub use runner::{
-    FrozenSelection, Request, load, read_evidence, result_directory, run, worker_main_if_requested,
+    FrozenSelection, Request, load, read_evidence, result_directory, run, run_with_progress,
+    worker_main_if_requested,
 };
+
+/// One step a running scan can name. YARA and Suricata are a single pass over
+/// targets; Sigma walks rules.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ScanTarget {
+    Specimen,
+    MemoryBlock {
+        index: u64,
+        total: u64,
+    },
+    RecoveredFile {
+        index: u64,
+        total: u64,
+    },
+    CaptureSegment {
+        index: u64,
+        total: u64,
+    },
+    SigmaRule {
+        index: u64,
+        total: u64,
+        title: String,
+    },
+}
+
+/// Structured scan progress written by the worker and read on the phase channel.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScanProgress {
+    pub target: ScanTarget,
+    pub rules_loaded: u64,
+}
+
+/// Decimal grouping for counts shown beside a scan (`2094` → `2,094`).
+pub fn group_digits(value: u64) -> String {
+    let text = value.to_string();
+    let mut out = String::with_capacity(text.len() + text.len() / 3);
+    for (index, character) in text.chars().rev().enumerate() {
+        if index > 0 && index % 3 == 0 {
+            out.push(',');
+        }
+        out.push(character);
+    }
+    out.chars().rev().collect()
+}
+
+/// Status text for one progress value.
+pub fn progress_text(progress: &ScanProgress) -> String {
+    match &progress.target {
+        ScanTarget::SigmaRule {
+            index,
+            total,
+            title,
+        } => format!("rule {index} of {total} — {title}"),
+        ScanTarget::Specimen => progress_target("specimen", progress.rules_loaded),
+        ScanTarget::MemoryBlock { index, total } => progress_target(
+            &format!("memory block {index} of {total}"),
+            progress.rules_loaded,
+        ),
+        ScanTarget::RecoveredFile { index, total } => progress_target(
+            &format!("recovered file {index} of {total}"),
+            progress.rules_loaded,
+        ),
+        ScanTarget::CaptureSegment { index, total } => progress_target(
+            &format!("capture segment {index} of {total}"),
+            progress.rules_loaded,
+        ),
+    }
+}
+
+fn progress_target(stage: &str, rules_loaded: u64) -> String {
+    if rules_loaded == 0 {
+        stage.to_owned()
+    } else {
+        format!("{stage} · {} rules loaded", group_digits(rules_loaded))
+    }
+}
+
+/// `index / total` for a counted target. A specimen has no fraction.
+pub fn progress_fraction(progress: &ScanProgress) -> Option<f32> {
+    let (done, total) = match &progress.target {
+        ScanTarget::Specimen => return None,
+        ScanTarget::MemoryBlock { index, total }
+        | ScanTarget::RecoveredFile { index, total }
+        | ScanTarget::CaptureSegment { index, total }
+        | ScanTarget::SigmaRule { index, total, .. } => (*index, *total),
+    };
+    if total == 0 {
+        None
+    } else {
+        Some((done as f32 / total as f32).clamp(0.0, 1.0))
+    }
+}
+
+/// Keeps the newest progress and publishes at most a few times a second.
+pub(super) struct ProgressCoalescer {
+    interval: std::time::Duration,
+    last_emit: Option<std::time::Instant>,
+    pending: Option<ScanProgress>,
+}
+
+impl ProgressCoalescer {
+    pub(super) fn new(interval: std::time::Duration) -> Self {
+        Self {
+            interval,
+            last_emit: None,
+            pending: None,
+        }
+    }
+
+    pub(super) fn push(
+        &mut self,
+        progress: ScanProgress,
+        now: std::time::Instant,
+    ) -> Option<ScanProgress> {
+        self.pending = Some(progress);
+        self.poll(now)
+    }
+
+    pub(super) fn poll(&mut self, now: std::time::Instant) -> Option<ScanProgress> {
+        let due = match self.last_emit {
+            None => true,
+            Some(then) => now.saturating_duration_since(then) >= self.interval,
+        };
+        if due && self.pending.is_some() {
+            self.last_emit = Some(now);
+            self.pending.take()
+        } else {
+            None
+        }
+    }
+
+    /// A stage change is written by the caller. Drop any held update so it
+    /// cannot replace that stage, and start a new interval.
+    pub(super) fn force(&mut self, now: std::time::Instant) {
+        self.pending = None;
+        self.last_emit = Some(now);
+    }
+}
+
+pub(crate) const RULE_TEXT_LIMIT: usize = 8192;
+const RULE_TEXT_BUDGET: usize = 4 * 1024 * 1024;
+
+pub(crate) fn clip_rule(text: &str) -> String {
+    let mut out = String::new();
+    for character in text.chars() {
+        if out.len() + character.len_utf8() > RULE_TEXT_LIMIT {
+            break;
+        }
+        out.push(character);
+    }
+    out
+}
+
+/// Caps stored rule bodies so a large match list still fits the result file.
+pub(crate) struct RuleTextBudget {
+    remaining: usize,
+}
+
+impl RuleTextBudget {
+    pub(crate) fn new() -> Self {
+        Self {
+            remaining: RULE_TEXT_BUDGET,
+        }
+    }
+
+    pub(crate) fn take(&mut self, text: &str) -> String {
+        let clipped = clip_rule(text);
+        if clipped.is_empty() || clipped.len() > self.remaining {
+            return String::new();
+        }
+        self.remaining -= clipped.len();
+        clipped
+    }
+}
 
 /// Parse rule-supplied ATT&CK identifiers without inventing technique mappings.
 pub fn mitre_references(text: &str) -> Vec<String> {
@@ -456,5 +636,101 @@ mod tests {
         let encoded = serde_json::to_string(&authored).unwrap();
         let reopened: Finding = serde_json::from_str(&encoded).unwrap();
         assert_eq!(reopened.author, "One Author, Second Author");
+    }
+
+    #[test]
+    fn progress_text_names_sigma_rules_and_one_pass_targets() {
+        assert_eq!(group_digits(0), "0");
+        assert_eq!(group_digits(12), "12");
+        assert_eq!(group_digits(2094), "2,094");
+        let specimen = ScanProgress {
+            target: ScanTarget::Specimen,
+            rules_loaded: 2094,
+        };
+        assert_eq!(progress_text(&specimen), "specimen · 2,094 rules loaded");
+        assert!(progress_fraction(&specimen).is_none());
+        let memory = ScanProgress {
+            target: ScanTarget::MemoryBlock {
+                index: 3,
+                total: 12,
+            },
+            rules_loaded: 2094,
+        };
+        assert_eq!(
+            progress_text(&memory),
+            "memory block 3 of 12 · 2,094 rules loaded"
+        );
+        assert_eq!(progress_fraction(&memory), Some(0.25));
+        let recovered = ScanProgress {
+            target: ScanTarget::RecoveredFile { index: 2, total: 8 },
+            rules_loaded: 10,
+        };
+        assert_eq!(
+            progress_text(&recovered),
+            "recovered file 2 of 8 · 10 rules loaded"
+        );
+        let capture = ScanProgress {
+            target: ScanTarget::CaptureSegment { index: 1, total: 3 },
+            rules_loaded: 40_000,
+        };
+        assert_eq!(
+            progress_text(&capture),
+            "capture segment 1 of 3 · 40,000 rules loaded"
+        );
+        assert_eq!(progress_fraction(&capture), Some(1.0 / 3.0));
+        let raw = r#"{"target":{"kind":"sigma_rule","index":2,"total":9,"title":"Curl pipe"},"rules_loaded":9}"#;
+        let sigma: ScanProgress = serde_json::from_str(raw).unwrap();
+        assert_eq!(progress_text(&sigma), "rule 2 of 9 — Curl pipe");
+        let fraction = progress_fraction(&sigma).unwrap();
+        assert!((fraction - 2.0 / 9.0).abs() < f32::EPSILON);
+        let bare = ScanProgress {
+            target: ScanTarget::Specimen,
+            rules_loaded: 0,
+        };
+        assert_eq!(progress_text(&bare), "specimen");
+    }
+
+    #[test]
+    fn progress_updates_coalesce_to_a_few_a_second_and_keep_the_latest() {
+        let mut coalescer = ProgressCoalescer::new(std::time::Duration::from_millis(250));
+        let start = std::time::Instant::now();
+        let mut published = Vec::new();
+        for index in 1..=20 {
+            let progress = ScanProgress {
+                target: ScanTarget::RecoveredFile { index, total: 20 },
+                rules_loaded: 4,
+            };
+            if let Some(progress) = coalescer.push(progress, start) {
+                published.push(progress);
+            }
+        }
+        assert_eq!(published.len(), 1);
+        assert!(matches!(
+            published[0].target,
+            ScanTarget::RecoveredFile {
+                index: 1,
+                total: 20
+            }
+        ));
+        assert!(
+            coalescer
+                .poll(start + std::time::Duration::from_millis(249))
+                .is_none()
+        );
+        let flushed = coalescer
+            .poll(start + std::time::Duration::from_millis(250))
+            .unwrap();
+        assert_eq!(
+            progress_text(&flushed),
+            "recovered file 20 of 20 · 4 rules loaded"
+        );
+        let directory =
+            std::env::temp_dir().join(format!("ant-progress-{}", crate::storage::unique_id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("progress.json");
+        super::runner::write_progress(&path, &flushed);
+        let stored: ScanProgress = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(stored, flushed);
+        let _ = std::fs::remove_dir_all(&directory);
     }
 }

@@ -350,28 +350,16 @@ impl TriageView {
         let jump = match self.section {
             Section::Summary | Section::Properties | Section::Detection => None,
             Section::Process => {
-                presentation::heading(
-                    ui,
-                    "Process activity",
-                    "Process relationships and observed behavior",
-                );
+                presentation::heading(ui, "Process activity", "");
                 self.process(ui, &input)
             }
             Section::Files => {
-                presentation::heading(
-                    ui,
-                    "File activity",
-                    "Observed access, captured reads and file changes",
-                );
+                presentation::heading(ui, "File activity", "");
                 self.files(ui, &input);
                 None
             }
             Section::Network => {
-                presentation::heading(
-                    ui,
-                    "Network activity",
-                    "Destinations, hosts and recorded requests",
-                );
+                presentation::heading(ui, "Network activity", "");
                 self.network(ui, &input);
                 None
             }

@@ -10,7 +10,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[cfg(test)]
@@ -489,6 +489,7 @@ fn validate_report(report: &Report, request: &Request) -> Result<(), String> {
         if finding.rule_id.len() > 8192
             || finding.title.len() > 8192
             || finding.details.len() > 8192
+            || finding.rule_text.len() > super::RULE_TEXT_LIMIT
             || finding.source.len() > 8192
             || finding.license.len() > 8192
             || finding.severity.len() > 1024
@@ -525,14 +526,25 @@ fn validate_report(report: &Report, request: &Request) -> Result<(), String> {
 /// | `request` | Run identity, retained directory, local rules and chosen engine. |
 /// | `cancel` | Shared cancellation; sandbox descendants are reaped before return. |
 pub fn run(request: Request, cancel: &Arc<AtomicBool>) -> Result<Report, String> {
+    run_with_progress(request, cancel, None)
+}
+
+/// [`run`], publishing coalesced [`ScanProgress`] values while the sandbox runs.
+/// `progress` is the phase channel. A full or dropped receiver does not fail the scan.
+pub fn run_with_progress(
+    request: Request,
+    cancel: &Arc<AtomicBool>,
+    progress: Option<std::sync::mpsc::Sender<ScanProgress>>,
+) -> Result<Report, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    run_program(request, cancel, &executable)
+    run_program(request, cancel, &executable, progress)
 }
 
 fn run_program(
     mut request: Request,
     cancel: &Arc<AtomicBool>,
     executable: &Path,
+    progress: Option<std::sync::mpsc::Sender<ScanProgress>>,
 ) -> Result<Report, String> {
     if cancel.load(Ordering::Relaxed) {
         return Err("cancelled".into());
@@ -544,6 +556,16 @@ fn run_program(
     validate_run(&request)?;
     let work = std::env::temp_dir().join(format!("ant-detection-{}", crate::storage::unique_id()));
     crate::storage::private_dir(&work).map_err(|error| error.to_string())?;
+    let stop_progress = Arc::new(AtomicBool::new(false));
+    let progress_watcher = progress.map(|tx| {
+        let path = work.join("progress.json");
+        let cancel = Arc::clone(cancel);
+        let stop = Arc::clone(&stop_progress);
+        std::thread::Builder::new()
+            .name("triage-detector-progress".into())
+            .spawn(move || watch_progress(&path, &cancel, &stop, &tx))
+            .ok()
+    });
     let mut attempted = false;
     let result = (|| {
         let (staged, _snapshots, mut read_only) = stage(request.clone(), &work, cancel)?;
@@ -614,6 +636,10 @@ fn run_program(
         )),
         (result, Ok(())) => result,
     };
+    stop_progress.store(true, Ordering::Relaxed);
+    if let Some(watcher) = progress_watcher.flatten() {
+        let _ = watcher.join();
+    }
     let result = match (result, fs::remove_dir_all(&work)) {
         (Ok(mut report), Err(error)) => {
             report
@@ -826,6 +852,85 @@ pub fn result_directory(run: &Path, engine: Engine) -> PathBuf {
     })
 }
 
+pub(super) struct ProgressWriter {
+    path: PathBuf,
+    rules_loaded: u64,
+    coalescer: super::ProgressCoalescer,
+}
+
+impl ProgressWriter {
+    pub(super) fn new(work: &Path) -> Self {
+        Self {
+            path: work.join("progress.json"),
+            rules_loaded: 0,
+            coalescer: super::ProgressCoalescer::new(Duration::from_millis(250)),
+        }
+    }
+
+    pub(super) fn set_rules(&mut self, count: u64) {
+        self.rules_loaded = count;
+    }
+
+    pub(super) fn stage(&mut self, target: ScanTarget) {
+        let progress = ScanProgress {
+            target,
+            rules_loaded: self.rules_loaded,
+        };
+        self.coalescer.force(Instant::now());
+        write_progress(&self.path, &progress);
+    }
+
+    pub(super) fn note(&mut self, target: ScanTarget) {
+        let progress = ScanProgress {
+            target,
+            rules_loaded: self.rules_loaded,
+        };
+        if let Some(progress) = self.coalescer.push(progress, Instant::now()) {
+            write_progress(&self.path, &progress);
+        }
+    }
+
+    pub(super) fn flush(&mut self) {
+        if let Some(progress) = self.coalescer.poll(Instant::now() + Duration::from_secs(1)) {
+            write_progress(&self.path, &progress);
+        }
+    }
+}
+
+pub(super) fn write_progress(path: &Path, progress: &ScanProgress) {
+    let _ = crate::storage::atomic_json(path, progress);
+}
+
+/// Reads `progress.json` until `cancel` or `stop`. Cancellation closes the
+/// phase channel without another update.
+fn watch_progress(
+    path: &Path,
+    cancel: &AtomicBool,
+    stop: &AtomicBool,
+    tx: &std::sync::mpsc::Sender<ScanProgress>,
+) {
+    if cancel.load(Ordering::Relaxed) {
+        return;
+    }
+    let mut seen = Vec::<u8>::new();
+    while !stop.load(Ordering::Relaxed) && !cancel.load(Ordering::Relaxed) {
+        if let Ok(bytes) = fs::read(path)
+            && bytes != seen
+        {
+            seen = bytes;
+            if cancel.load(Ordering::Relaxed) {
+                return;
+            }
+            if let Ok(progress) = serde_json::from_slice::<ScanProgress>(&seen)
+                && tx.send(progress).is_err()
+            {
+                return;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    }
+}
+
 fn sigma(staged: &Staged, work: &Path) -> Result<Report, String> {
     if staged.no_rules || staged.sigma_sources.is_empty() && staged.warnings.is_empty() {
         let mut report = Report::empty(Engine::Sigma, staged.request.identity.clone());
@@ -957,6 +1062,18 @@ pub fn worker_main_if_requested() -> Option<i32> {
 mod tests {
     use super::*;
     #[test]
+    fn a_cancelled_progress_watch_publishes_nothing() {
+        let cancel = Arc::new(AtomicBool::new(true));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let started = Instant::now();
+        watch_progress(Path::new("/no/such/progress.json"), &cancel, &stop, &tx);
+        assert!(started.elapsed() < Duration::from_millis(200));
+        drop(tx);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
     #[ignore = "requires explicit built monitor executable and optional QA Python venv"]
     fn complete_job_driver_retains_reports_and_bounded_diagnostics() {
         let program = PathBuf::from(
@@ -1013,8 +1130,13 @@ mod tests {
                 source_digest: None,
                 frozen: None,
             };
-            let report =
-                run_program(request.clone(), &Arc::new(AtomicBool::new(false)), &program).unwrap();
+            let report = run_program(
+                request.clone(),
+                &Arc::new(AtomicBool::new(false)),
+                &program,
+                None,
+            )
+            .unwrap();
             assert!(
                 report
                     .warnings

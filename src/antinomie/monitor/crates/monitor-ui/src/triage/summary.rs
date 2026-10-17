@@ -248,6 +248,7 @@ mod tests {
                     call: 1,
                 }],
                 details: "Synthetic match for native layout review".into(),
+                rule_text: String::new(),
             });
             view.detection.results[index] = Some(Ok(report));
             view.detection.rows(index);

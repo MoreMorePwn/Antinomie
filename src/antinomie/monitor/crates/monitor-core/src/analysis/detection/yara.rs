@@ -41,6 +41,8 @@ fn record(
     scanner: &mut yara_x::Scanner<'_>,
     data: &[u8],
     target: Target<'_>,
+    sources: &[String],
+    budget: &mut super::RuleTextBudget,
     report: &mut Report,
 ) -> Result<(), String> {
     let results = scanner.scan(data).map_err(|error| error.to_string())?;
@@ -89,6 +91,12 @@ fn record(
                     .chain([tags])
                     .collect::<Vec<_>>()
                     .join(" ");
+                let namespace = rule.namespace();
+                let body = namespace
+                    .strip_prefix('s')
+                    .and_then(|index| index.parse::<usize>().ok())
+                    .and_then(|index| sources.get(index))
+                    .and_then(|text| crate::ruleset::yara_rule_source(text, rule.identifier()));
                 report.findings.push(Finding {
                     rule_id,
                     title: rule.identifier().into(),
@@ -96,13 +104,13 @@ fn record(
                         .get("severity")
                         .cloned()
                         .unwrap_or_else(|| "indicator".into()),
-                    source: rule.namespace().into(),
+                    source: namespace.into(),
                     license: metadata
                         .get("license")
                         .or_else(|| metadata.get("malpedia_license"))
                         .cloned()
                         .unwrap_or_else(|| {
-                            if rule.namespace() == "antinomie" {
+                            if namespace == "antinomie" {
                                 "MIT".into()
                             } else {
                                 "Not declared by rule".into()
@@ -113,6 +121,7 @@ fn record(
                     count: 0,
                     evidence: vec![],
                     details: details.chars().take(8192).collect(),
+                    rule_text: budget.take(body.as_deref().unwrap_or("")),
                 });
                 report.findings.len() - 1
             }
@@ -165,6 +174,8 @@ fn record(
 fn scan_file(
     scanner: &mut yara_x::Scanner<'_>,
     path: &Path,
+    sources: &[String],
+    budget: &mut super::RuleTextBudget,
     report: &mut Report,
     total: &mut u64,
 ) -> Result<(), String> {
@@ -198,8 +209,53 @@ fn scan_file(
             address: None,
             report_id: None,
         },
+        sources,
+        budget,
         report,
     )
+}
+
+fn memory_blocks(path: &Path) -> u64 {
+    let Ok(core) = crate::core_dump::CoreDump::open(path) else {
+        return 0;
+    };
+    core.mappings
+        .iter()
+        .map(|mapping| {
+            let available = mapping.available_size.min(mapping.captured_size);
+            if available == 0 {
+                0
+            } else {
+                available.div_ceil(BLOCK_SIZE as u64)
+            }
+        })
+        .sum()
+}
+
+/// What the core and RAM passes share: rule sources, input budgets and block progress.
+struct MemoryPass<'a> {
+    sources: &'a [String],
+    budget: &'a mut super::RuleTextBudget,
+    total: &'a mut u64,
+    deadline: Instant,
+    progress: &'a mut super::runner::ProgressWriter,
+    block_index: u64,
+    block_total: u64,
+}
+
+impl MemoryPass<'_> {
+    fn next_block(&mut self) {
+        self.block_index += 1;
+        let target = ScanTarget::MemoryBlock {
+            index: self.block_index,
+            total: self.block_total.max(self.block_index),
+        };
+        if self.block_index == 1 {
+            self.progress.stage(target);
+        } else {
+            self.progress.note(target);
+        }
+    }
 }
 
 fn scan_core(
@@ -207,8 +263,7 @@ fn scan_core(
     path: &Path,
     virtual_addresses: bool,
     report: &mut Report,
-    total: &mut u64,
-    deadline: Instant,
+    pass: &mut MemoryPass<'_>,
 ) -> Result<(), String> {
     let mut file =
         crate::archive_io::open_regular(path.parent().ok_or("core has no parent")?, path)
@@ -237,12 +292,13 @@ fn scan_core(
         }
         let mut consumed = 0;
         while consumed < available {
-            if Instant::now() >= deadline || *total >= TOTAL_SIZE {
+            if Instant::now() >= pass.deadline || *pass.total >= TOTAL_SIZE {
                 return Err("memory scan reached its time / 512 MiB input budget".into());
             }
+            pass.next_block();
             let len = (available - consumed)
                 .min(BLOCK_SIZE as u64)
-                .min(TOTAL_SIZE - *total) as usize;
+                .min(TOTAL_SIZE - *pass.total) as usize;
             let offset = mapping
                 .file_offset
                 .checked_add(consumed)
@@ -269,9 +325,11 @@ fn scan_core(
                         .flatten(),
                     report_id: None,
                 },
+                pass.sources,
+                pass.budget,
                 report,
             )?;
-            *total += len as u64;
+            *pass.total += len as u64;
             consumed += len as u64;
         }
         if available > BLOCK_SIZE as u64 {
@@ -281,7 +339,7 @@ fn scan_core(
     Ok(())
 }
 
-pub(super) fn scan(staged: &Staged, _work: &Path) -> Result<Report, String> {
+pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
     let request = &staged.request;
     let mut report = Report::empty(Engine::Yara, request.identity.clone());
     report.selection = staged.selection.clone();
@@ -318,7 +376,13 @@ pub(super) fn scan(staged: &Staged, _work: &Path) -> Result<Report, String> {
             return Ok(report);
         }
     };
-    report.scanned_rules = Some(rules.iter().count() as u64);
+    let loaded = rules.iter().count() as u64;
+    report.scanned_rules = Some(loaded);
+    let sources: Vec<String> = extra.iter().map(|(_, text)| text.clone()).collect();
+    let mut budget = super::RuleTextBudget::new();
+    let mut progress = super::runner::ProgressWriter::new(work);
+    progress.set_rules(loaded);
+    progress.stage(ScanTarget::Specimen);
     let mut scanner = yara_x::Scanner::new(&rules);
     scanner.set_timeout(Duration::from_secs(15));
     let deadline = Instant::now() + Duration::from_secs(100);
@@ -338,6 +402,8 @@ pub(super) fn scan(staged: &Staged, _work: &Path) -> Result<Report, String> {
                 address: None,
                 report_id: Some(&saved.id),
             },
+            &sources,
+            &mut budget,
             &mut report,
         )
     })();
@@ -346,11 +412,33 @@ pub(super) fn scan(staged: &Staged, _work: &Path) -> Result<Report, String> {
         report.state = State::Partial;
     }
     if request.settings.scan_memory || request.settings.scan_recovered {
-        if let Some(artifacts) = super::runner::owned_artifacts(request)? {
+        let artifacts = match super::runner::owned_artifacts(request) {
+            Ok(value) => value,
+            Err(error) => {
+                progress.flush();
+                return Err(error);
+            }
+        };
+        if let Some(artifacts) = artifacts {
             if request.settings.scan_memory {
+                let mut block_total = 0u64;
+                if let Some(path) = artifacts.core_dump.as_deref() {
+                    block_total += memory_blocks(path);
+                }
+                if let Some(directory) = artifacts.memory_dump.as_deref() {
+                    block_total += memory_blocks(&directory.join("memory.elf"));
+                }
+                let mut pass = MemoryPass {
+                    sources: &sources,
+                    budget: &mut budget,
+                    total: &mut total,
+                    deadline,
+                    progress: &mut progress,
+                    block_index: 0,
+                    block_total,
+                };
                 if let Some(path) = artifacts.core_dump.as_deref()
-                    && let Err(error) =
-                        scan_core(&mut scanner, path, true, &mut report, &mut total, deadline)
+                    && let Err(error) = scan_core(&mut scanner, path, true, &mut report, &mut pass)
                 {
                     report.warnings.push(format!("Core: {error}"));
                     report.state = State::Partial;
@@ -361,8 +449,7 @@ pub(super) fn scan(staged: &Staged, _work: &Path) -> Result<Report, String> {
                         &directory.join("memory.elf"),
                         false,
                         &mut report,
-                        &mut total,
-                        deadline,
+                        &mut pass,
                     )
                 {
                     report.warnings.push(format!("RAM: {error}"));
@@ -378,6 +465,7 @@ pub(super) fn scan(staged: &Staged, _work: &Path) -> Result<Report, String> {
                     .map(|directory| (directory, false, 0))
                     .collect::<Vec<_>>();
                 let mut visited = 0;
+                let mut files = Vec::new();
                 while let Some((path, in_files, depth)) = pending.pop() {
                     visited += 1;
                     if visited > 8192 || depth > 8 || Instant::now() >= deadline {
@@ -407,10 +495,32 @@ pub(super) fn scan(staged: &Staged, _work: &Path) -> Result<Report, String> {
                             let selected = in_files || entry.file_name() == "files";
                             pending.push((entry.path(), selected, depth + 1));
                         }
-                    } else if metadata.is_file()
-                        && in_files
-                        && let Err(error) = scan_file(&mut scanner, &path, &mut report, &mut total)
-                    {
+                    } else if metadata.is_file() && in_files {
+                        files.push(path);
+                    }
+                }
+                let file_total = files.len() as u64;
+                for (index, path) in files.iter().enumerate() {
+                    let seen = index as u64 + 1;
+                    if seen == 1 {
+                        progress.stage(ScanTarget::RecoveredFile {
+                            index: seen,
+                            total: file_total.max(1),
+                        });
+                    } else {
+                        progress.note(ScanTarget::RecoveredFile {
+                            index: seen,
+                            total: file_total,
+                        });
+                    }
+                    if let Err(error) = scan_file(
+                        &mut scanner,
+                        path,
+                        &sources,
+                        &mut budget,
+                        &mut report,
+                        &mut total,
+                    ) {
                         report.state = State::Partial;
                         if report.warnings.len() < 64 {
                             report.warnings.push(format!("{}: {error}", path.display()));
@@ -428,6 +538,7 @@ pub(super) fn scan(staged: &Staged, _work: &Path) -> Result<Report, String> {
     if report.scanned_objects == 0 {
         report.state = State::Unavailable;
     }
+    progress.flush();
     Ok(report)
 }
 
@@ -447,6 +558,7 @@ mod tests {
                 root_cookie: 1,
             },
         );
+        let mut budget = super::RuleTextBudget::new();
         record(
             &mut scanner,
             b"xxxneedle",
@@ -456,6 +568,8 @@ mod tests {
                 address: Some(4096),
                 report_id: None,
             },
+            &[],
+            &mut budget,
             &mut report,
         )
         .unwrap();
@@ -485,5 +599,48 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn a_match_keeps_the_original_yara_rule() {
+        let source = "rule other { condition: false }\nrule located { strings: $a = \"needle\" condition: $a }\n";
+        let rules = super::super::super::rules::compile_sources(
+            &[("local.yar".into(), source.into())],
+            None,
+        )
+        .unwrap();
+        let mut scanner = yara_x::Scanner::new(&rules);
+        let mut report = Report::empty(
+            Engine::Yara,
+            Identity {
+                vm_id: "v".into(),
+                boot_id: "b".into(),
+                run_id: "r".into(),
+                root_cookie: 1,
+            },
+        );
+        let mut budget = super::super::RuleTextBudget::new();
+        record(
+            &mut scanner,
+            b"needle",
+            Target {
+                path: Path::new("/specimen"),
+                offset: 0,
+                address: None,
+                report_id: None,
+            },
+            &[source.into()],
+            &mut budget,
+            &mut report,
+        )
+        .unwrap();
+        let located = report
+            .findings
+            .iter()
+            .find(|finding| finding.title == "located")
+            .unwrap();
+        assert!(located.rule_text.contains("rule located"));
+        assert!(!located.rule_text.contains("rule other"));
+        assert!(located.details.contains("author"));
     }
 }
