@@ -1246,6 +1246,26 @@ with open(destination, "wb") as output:
         let mut model = Model::default();
         let mut outbound = false;
         let tools = ruleset::ToolConfig::from_sigma_setting("/nonexistent/antinomie-python");
+        // Opening the manager loads the local registry in a job; let it finish
+        // so the check below sees only what the button started.
+        let start = std::time::Instant::now();
+        while !model.loaded || model.job.is_some() {
+            let size = egui::vec2(900.0, 900.0);
+            let _ = render_with(
+                &ctx,
+                &mut model,
+                &dir,
+                size,
+                Vec::new(),
+                &mut outbound,
+                &tools,
+            );
+            assert!(
+                start.elapsed() < Duration::from_secs(20),
+                "the registry never loaded"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
         click_label(
             &ctx,
             &mut model,
