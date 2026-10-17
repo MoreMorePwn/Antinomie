@@ -1759,3 +1759,77 @@ fn bpf_program_attach_uses_the_loaded_fd() {
         Some("attach returned 3; interpretation depends on recorded flags")
     );
 }
+
+#[test]
+fn a_long_content_cell_shows_a_bounded_hover_and_keeps_the_full_value() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    crate::theme::text_size(&ctx, 22.0);
+    let long = format!("4096 B: {}", "ELF\\x02\\x01".repeat(200));
+    let rows = vec![vec![
+        cell("12:00:00", theme::text(), true),
+        cell("/tmp/sample", theme::text(), true),
+        cell(long.clone(), theme::text(), true),
+    ]];
+    let headers = ["Time", "Path", "Transferred / content"];
+    let draw = |events, time| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 600.0),
+                )),
+                events,
+                time: Some(time),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default()
+                    .show(ctx, |ui| table(ui, "triage-read", &headers, &rows));
+            },
+        )
+    };
+    fn shown(output: &egui::FullOutput) -> Vec<(String, egui::Rect)> {
+        fn all(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::Shape::Text(t) => {
+                    out.push((t.galley.text().to_owned(), t.visual_bounding_rect()))
+                }
+                egui::Shape::Vec(v) => v.iter().for_each(|s| all(s, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        output.shapes.iter().for_each(|s| all(&s.shape, &mut out));
+        out
+    }
+    let first = draw(vec![], 0.0);
+    let cell_rect = shown(&first)
+        .into_iter()
+        .find(|(text, _)| text.starts_with("4096 B:"))
+        .unwrap()
+        .1;
+    let mut output = first;
+    for frame in 0..40 {
+        output = draw(
+            vec![egui::Event::PointerMoved(
+                cell_rect.left_center() + egui::vec2(30.0, 0.0),
+            )],
+            0.1 + f64::from(frame) * 0.05,
+        );
+    }
+    let texts: Vec<_> = shown(&output)
+        .into_iter()
+        .filter(|(text, _)| text.starts_with("4096 B:"))
+        .collect();
+    assert!(texts.len() >= 2, "the cell and its hover text are drawn");
+    for (text, rect) in &texts {
+        assert!(
+            text.chars().count() <= 240 + 30,
+            "{} characters",
+            text.chars().count()
+        );
+        assert!(rect.height() < 600.0, "hover box fits the window: {rect:?}");
+    }
+    assert_eq!(rows[0][2].text, long, "Details keeps the full value");
+}

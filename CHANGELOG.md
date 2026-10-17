@@ -50,7 +50,9 @@ it runs.
 - **Triage tables.** Click column titles to sort; archive tables sort the whole
   matched query before paging. Missing values stay last, ties preserve recorded
   order, and right-clicking a title restores recorded order. File triage has
-  default-on standard-stream and library-path visibility controls.
+  default-on standard-stream and library-path visibility controls. A cell
+  shows at most 240 characters, so hovering a long value such as read content
+  no longer opens a box taller than the window; Details keeps the full value.
 - **Executable identity.** Process names include committed exec events without
   syscall exits and recorded fork inheritance. File rows retain operation-time
   executable names and PID/TID. Standard descriptor roles retain their numbers;
@@ -92,9 +94,10 @@ it runs.
   Dedicated capture ownership comes from the run's artifact manifest, so QEMU
   capture-clock offsets cannot discard every packet. Shared captures retain
   their run-time bounds. PCAP timestamps are identified separately from the
-  host clock, and a run-owned capture takes priority over another manual capture. The capture
-  list's right-click menu no longer offers Filter by field, and the panel no
-  longer lists protocol coverage or reconstruction counts above the packets.
+  host clock, and a run-owned capture takes priority over another manual
+  capture. The capture list's right-click menu no longer offers Filter by
+  field, and the panel no longer lists protocol coverage or reconstruction
+  counts above the packets.
 - **Presentation.** Removed indexing/count explanation blocks; warnings stay
   below the run selector. Times use the host timezone with an explicit UTC offset;
   guest event times mapped through host receipt anchors are marked estimated.
