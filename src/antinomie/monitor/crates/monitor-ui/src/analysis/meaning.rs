@@ -8,6 +8,8 @@ use crate::theme;
 use antinomie_monitor_core::{AnalysisData, AnalysisEntry, AnalysisKind};
 use eframe::egui::{self, Color32};
 
+mod metadata;
+
 /// The list cell that carries the row's meaning, when this list has one.
 pub(super) fn cell_color(
     kind: AnalysisKind,
@@ -43,7 +45,23 @@ pub(super) fn cell_color(
                 None
             }
         }
+        AnalysisKind::Metadata => metadata::cell_color(column, entry),
         _ => None,
+    }
+}
+
+/// The text a cell shows. Metadata sizes read as bytes with a KB/MB/GB
+/// figure and timestamps in local time; every other list shows `text`.
+pub(super) fn shown_text(
+    kind: AnalysisKind,
+    column: Column,
+    entry: &AnalysisEntry,
+    text: &str,
+) -> String {
+    if kind == AnalysisKind::Metadata {
+        metadata::shown_text(column, entry, text)
+    } else {
+        text.to_owned()
     }
 }
 
@@ -53,7 +71,10 @@ pub(super) fn meaning_text(
     entry: &AnalysisEntry,
     text: String,
 ) -> egui::RichText {
-    let text = egui::RichText::new(text);
+    let mut text = egui::RichText::new(text);
+    if kind == AnalysisKind::Metadata && metadata::monospace(column, entry) {
+        text = text.monospace();
+    }
     match cell_color(kind, column, entry) {
         Some(color) => text.color(color),
         None => text,
@@ -610,6 +631,29 @@ mod tests {
                 &property("NX compatible", "declared")
             ),
             None
+        );
+    }
+
+    #[test]
+    fn metadata_cells_use_theme_colors_and_shown_text() {
+        let size = AnalysisEntry {
+            label: "File size".into(),
+            value: "4096".into(),
+            offset: None,
+            record: None,
+        };
+        assert_eq!(
+            cell_color(AnalysisKind::Metadata, Column::Name, &size),
+            Some(theme::muted())
+        );
+        assert_eq!(
+            shown_text(AnalysisKind::Metadata, Column::Value, &size, "4096"),
+            "4096 bytes (4.0 KB)"
+        );
+        // Other lists show their text unchanged.
+        assert_eq!(
+            shown_text(AnalysisKind::Strings, Column::Value, &size, "4096"),
+            "4096"
         );
     }
 

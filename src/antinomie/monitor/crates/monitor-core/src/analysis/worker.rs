@@ -391,7 +391,12 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
                 format!("{:x}", Sha256::digest(specimen)),
                 None,
             );
-            entry(section, "Length (octets)", specimen.len().to_string(), None);
+            entry(
+                section,
+                "File size",
+                crate::byte_size::file_size(specimen.len() as u64),
+                None,
+            );
             match object::File::parse(specimen) {
                 Ok(file) => {
                     for (label, value) in [
@@ -1000,7 +1005,7 @@ fn strings(section: &mut AnalysisSection, specimen: &[u8], listings: &Path) {
         section.state = AnalysisSectionState::Partial;
     }
     section.summary = format!(
-        "{} strings (printable ASCII of four or more octets, UTF-16LE of four or more characters); offsets are file offsets",
+        "{} strings (printable ASCII of four or more bytes, UTF-16LE of four or more characters); offsets are file offsets",
         found.len()
     );
 }
@@ -1291,6 +1296,25 @@ mod tests {
             let mut result = section(AnalysisKind::Structures);
             analyze_section(&mut result, specimen, &listings());
             assert_eq!(result.state, AnalysisSectionState::Unavailable);
+        }
+    }
+    #[test]
+    fn metadata_shows_the_file_size_as_bytes_with_a_unit() {
+        for (len, text) in [(5, "5 bytes"), (4096, "4096 bytes (4.0 KB)")] {
+            let mut result = section(AnalysisKind::Metadata);
+            analyze_section(&mut result, &vec![0u8; len], &listings());
+            let size = result
+                .entries
+                .iter()
+                .find(|entry| entry.label == "File size")
+                .unwrap();
+            assert_eq!(size.value, text);
+            assert!(
+                result
+                    .entries
+                    .iter()
+                    .all(|entry| !entry.label.contains("octet"))
+            );
         }
     }
     #[test]

@@ -610,10 +610,14 @@ fn bounded_core_image(path: &Path, bound: u64) -> Result<(Vec<u8>, String), Stri
         cursor = cursor.saturating_add(filesz);
     }
     let note = if omitted.is_empty() {
-        format!("{phnum} load extents, {kept_size} octets, within the decompile bound")
+        format!(
+            "{phnum} load extents, {}, within the decompile bound",
+            crate::byte_size::file_size(kept_size)
+        )
     } else {
         format!(
-            "{phnum} load extents kept ({kept_size} octets); omitted outside the decompile bound: {}",
+            "{phnum} load extents kept ({}); omitted outside the decompile bound: {}",
+            crate::byte_size::file_size(kept_size),
             omitted.join(", ")
         )
     };
@@ -707,10 +711,10 @@ pub fn decompile_captured_core(
         let image_path = attempt.join("captured-image.elf");
         fs::write(&image_path, &image).map_err(|error| error.to_string())?;
         let plan_note = format!(
-            "captured {} octets across {} extents; {} unavailable tail octets omitted",
-            plan.captured_bytes(),
+            "captured {} across {} extents; {} of unavailable tail omitted",
+            crate::byte_size::file_size(plan.captured_bytes()),
             plan.extents.len(),
-            plan.unavailable_tails()
+            crate::byte_size::file_size(plan.unavailable_tails())
         );
         let plan_note = format!("{plan_note}. {bound_note}");
         fs::write(work.join("sparse-plan.txt"), &plan_note).map_err(|error| error.to_string())?;

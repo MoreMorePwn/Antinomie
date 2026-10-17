@@ -247,7 +247,10 @@ pub(super) fn show(
         AnalysisKind::Strings => &[
             ("Offset", Column::exact(mono.size * 8.0)),
             ("Encoding", Column::exact(mono.size * 6.0)),
-            ("Length", Column::exact(mono.size * 5.0)),
+            (
+                "Length",
+                Column::initial(mono.size * 12.0).at_least(40.0).clip(true),
+            ),
             ("Text", Column::remainder().at_least(200.0).clip(true)),
         ],
         _ => &[
@@ -395,7 +398,7 @@ pub(crate) fn listing_fields(kind: AnalysisKind) -> Vec<crate::query::FieldSpec<
     let mut fields = vec![
         F::text("name", "Row label"),
         F::text("value", "Complete retained row value"),
-        F::number("offset", "File offset in octets"),
+        F::number("offset", "File offset in bytes"),
         F::number("record.id", "Structured record identity"),
         F::text("kind", "Structured record kind"),
     ];
@@ -404,23 +407,23 @@ pub(crate) fn listing_fields(kind: AnalysisKind) -> Vec<crate::query::FieldSpec<
     fields.extend(match kind {
         AnalysisKind::Disassembly => vec![
             F::number("address", "Original instruction or function address"),
-            F::text("bytes", "Instruction octets as hex text"),
+            F::text("bytes", "Instruction bytes as hex text"),
             F::text("mnemonic", "Instruction mnemonic"),
             F::text("operands", "Instruction operands"),
             F::text("function", "Containing function name"),
-            F::number("size", "Function extent in octets"),
+            F::number("size", "Function extent in bytes"),
         ],
         AnalysisKind::Decompilation => vec![
             F::number("address", "Original function address"),
             F::text("function", "Function name"),
             F::number("line", "Source line number"),
             F::text("code", "Retained source text"),
-            F::number("size", "Function extent in octets"),
+            F::number("size", "Function extent in bytes"),
         ],
         AnalysisKind::Strings => vec![
             F::text("encoding", "String encoding"),
-            F::number("length", "Observed string extent in octets"),
-            F::number("retained_len", "Retained text extent in octets"),
+            F::number("length", "Observed string extent in bytes"),
+            F::number("retained_len", "Retained text extent in bytes"),
             F::text("text", "Retained string text"),
         ],
         AnalysisKind::Structures => vec![
@@ -431,16 +434,16 @@ pub(crate) fn listing_fields(kind: AnalysisKind) -> Vec<crate::query::FieldSpec<
             F::text("library", "Import library"),
             F::number("ordinal", "Import/export ordinal"),
             F::number("address", "Recorded object address"),
-            F::number("size", "Symbol or virtual section extent in octets"),
-            F::number("file_size", "Section extent in file octets"),
+            F::number("size", "Symbol or virtual section extent in bytes"),
+            F::number("file_size", "Section extent in file bytes"),
             F::tags("flags", "Decoded section flags"),
             F::text("raw_flags", "Original section flags"),
         ],
         AnalysisKind::Entropy => vec![
-            F::number("length", "Sampled range extent in octets"),
+            F::number("length", "Sampled range extent in bytes"),
             F::number(
                 "milli_bits",
-                "Shannon entropy in thousandths of a bit per octet",
+                "Shannon entropy in thousandths of a bit per byte",
             ),
         ],
         AnalysisKind::Hardening => vec![
@@ -975,7 +978,10 @@ fn cells(
                 ui.label(mono_text(first, mono, theme::blue()).strong());
             });
             let title = if *size > 0 {
-                format!("{name}  ·  0x{address:x}, {size} octets")
+                format!(
+                    "{name}  ·  0x{address:x}, {}",
+                    crate::values::file_size(*size)
+                )
             } else {
                 format!("{name}  ·  0x{address:x}")
             };
@@ -1047,7 +1053,7 @@ fn cells(
                 ));
             });
             row.col(|ui| {
-                ui.label(byte_len.to_string());
+                ui.label(crate::values::file_size(*byte_len));
             });
             row.col(|ui| {
                 ui.add(
@@ -1058,13 +1064,17 @@ fn cells(
             });
         }
         _ => {
+            let label =
+                super::meaning::shown_text(kind, records::Column::Name, entry, &entry.label);
+            let value =
+                super::meaning::shown_text(kind, records::Column::Value, entry, &entry.value);
             row.col(|ui| {
                 ui.add(
                     egui::Label::new(super::meaning::meaning_text(
                         kind,
                         records::Column::Name,
                         entry,
-                        entry.label.clone(),
+                        label,
                     ))
                     .truncate(),
                 );
@@ -1075,11 +1085,11 @@ fn cells(
                         kind,
                         records::Column::Value,
                         entry,
-                        entry.value.clone(),
+                        value.clone(),
                     ))
                     .truncate(),
                 )
-                .on_hover_text(&entry.value);
+                .on_hover_text(value);
             });
         }
     }

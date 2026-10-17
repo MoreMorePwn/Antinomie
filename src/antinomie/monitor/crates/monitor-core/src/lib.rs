@@ -7,6 +7,7 @@ mod backend;
 pub mod build;
 mod build_choices;
 mod builder_vm;
+pub mod byte_size;
 pub mod capture;
 pub mod capture_processes;
 mod control;

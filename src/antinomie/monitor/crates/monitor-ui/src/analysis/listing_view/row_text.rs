@@ -26,7 +26,10 @@ pub(super) fn texts(
             }),
         ) => {
             let title = if *size > 0 {
-                format!("{name}  ·  0x{address:x}, {size} octets")
+                format!(
+                    "{name}  ·  0x{address:x}, {}",
+                    crate::values::file_size(*size)
+                )
             } else {
                 format!("{name}  ·  0x{address:x}")
             };
@@ -60,7 +63,7 @@ pub(super) fn texts(
         ) => vec![
             format!("{:x}", entry.offset.unwrap_or(0)),
             encoding.clone(),
-            byte_len.to_string(),
+            crate::values::file_size(*byte_len),
             entry.value.clone(),
         ],
         _ => vec![entry.label.clone(), entry.value.clone()],

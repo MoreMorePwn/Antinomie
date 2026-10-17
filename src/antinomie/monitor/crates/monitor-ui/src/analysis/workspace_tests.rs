@@ -507,7 +507,10 @@ fn row_menus_copy_each_column_and_open_details_windows() {
         pages,
     )
     .copied;
-    assert_eq!(copied, ["0x20\tASCII\t16\t16\tfixture string 1"]);
+    assert_eq!(
+        copied,
+        ["0x20\tASCII\t16 bytes\t16 bytes\tfixture string 1"]
+    );
     // Details open in a titled window; another row replaces its content.
     let menu = press(
         &ctx,
@@ -540,7 +543,7 @@ fn row_menus_copy_each_column_and_open_details_windows() {
     assert!(shown.iter().any(|(text, _)| text == "Record 201"));
     assert!(shown
         .iter()
-        .any(|(text, _)| text == "File range: 0x20 + 16 octets"));
+        .any(|(text, _)| text == "File range: 0x20 + 16 bytes"));
     let other = report.sections[1].entries[2].clone();
     state.rows.open(RowCommand::Details(other));
     let mut replaced = egui::FullOutput::default();
@@ -603,7 +606,7 @@ fn listing_rows_copy_their_laid_out_columns_and_show_the_offset_in_content() {
         (primary, item),
         pages,
     );
-    assert_eq!(copied.copied, ["20\tASCII\t16\tfixture string 1"]);
+    assert_eq!(copied.copied, ["20\tASCII\t16 bytes\tfixture string 1"]);
     let view = &state.views["Strings/listing"];
     assert_eq!(
         view.listing.selected.as_ref().map(|(index, _)| *index),
@@ -1391,7 +1394,7 @@ fn lists_are_colored_by_meaning_and_entropy_stays_a_chart() {
     assert!(
         shown
             .iter()
-            .any(|(text, _)| text == "Measured regions / bits per octet (0..8)"),
+            .any(|(text, _)| text == "Measured regions / bits per byte (0..8)"),
         "entropy keeps its chart: {:?}",
         shown
             .iter()

@@ -202,8 +202,9 @@ fn details(ui: &mut egui::Ui, report: &AnalysisReport, entry: &AnalysisEntry) {
                     ui.monospace(format!("{:?}: 0x{:x}", location.kind, location.value));
                     if let Some(range) = location.file_range {
                         ui.monospace(format!(
-                            "File range: 0x{:x} + {} octets",
-                            range.offset, range.len
+                            "File range: 0x{:x} + {}",
+                            range.offset,
+                            crate::values::file_size(range.len)
                         ));
                     }
                 }
@@ -317,8 +318,10 @@ fn bytes(
             action = Some(next);
         }
         ui.monospace(format!(
-            "File offset 0x{offset:x} / {data_len} octets of 0x{:x} + {}",
-            range.offset, range.len
+            "File offset 0x{offset:x} / {} of 0x{:x} + {}",
+            crate::values::file_size(data_len as u64),
+            range.offset,
+            crate::values::file_size(range.len)
         ));
     });
     let (offset, data_len) = window.requested.unwrap_or((offset, data_len));

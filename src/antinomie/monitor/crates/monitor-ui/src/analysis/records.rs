@@ -114,7 +114,7 @@ impl Column {
             Self::Encoding => "Encoding",
             Self::Size => "Byte length",
             Self::Retained => "Retained",
-            Self::Entropy => "Bits/octet",
+            Self::Entropy => "Bits/byte",
             Self::Scope => "Scope",
             Self::Kind => "Kind",
             Self::Defined => "Defined",
@@ -174,6 +174,9 @@ impl Column {
             return match self {
                 Self::Address | Self::Offset => format!("0x{number:x}"),
                 Self::Entropy => format!("{}.{:03}", number / 1000, number % 1000),
+                Self::VirtualSize | Self::FileSize | Self::Size | Self::Retained => {
+                    crate::values::file_size(number)
+                }
                 _ => number.to_string(),
             };
         }

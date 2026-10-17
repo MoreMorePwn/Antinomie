@@ -27,7 +27,7 @@ pub fn read_specimen_range(
     data_len: usize,
 ) -> Result<AnalysisSpecimenPage, String> {
     if !(1..=ANALYSIS_PREVIEW_MAX_SIZE).contains(&data_len) {
-        return Err("specimen preview length must be 1..4096 octets".into());
+        return Err("specimen preview length must be 1..4096 bytes".into());
     }
     read_verified_range(directory, report_id, offset, data_len)
 }

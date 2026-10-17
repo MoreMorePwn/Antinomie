@@ -764,7 +764,12 @@ fn table(
                         row.set_selected(view.selected == Some(id));
                         for &column in columns {
                             row.col(|ui| {
-                                let text = column.text(entry);
+                                let text = super::meaning::shown_text(
+                                    section.kind,
+                                    column,
+                                    entry,
+                                    &column.text(entry),
+                                );
                                 ui.add(
                                     egui::Label::new(super::meaning::meaning_text(
                                         section.kind,

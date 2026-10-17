@@ -36,7 +36,7 @@ pub(super) fn chart(
     if regions.is_empty() {
         return None;
     }
-    ui.label("Measured regions / bits per octet (0..8)");
+    ui.label("Measured regions / bits per byte (0..8)");
     let (rect, _) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 80.0), egui::Sense::hover());
     ui.painter().rect_filled(rect, 0.0, crate::theme::bg());
@@ -62,7 +62,8 @@ pub(super) fn chart(
                 egui::Sense::click(),
             )
             .on_hover_text(format!(
-                "File 0x{offset:x} + {len} octets\n{}.{:03} bits/octet",
+                "File 0x{offset:x} + {}\n{}.{:03} bits/byte",
+                crate::values::file_size(len),
                 milli_bits / 1000,
                 milli_bits % 1000
             ))

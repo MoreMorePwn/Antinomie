@@ -1034,8 +1034,8 @@ impl SandboxLog {
         if self.total_len > self.head_len as u64 {
             writeln!(
                 self.file,
-                "\n[output truncated; {} octets observed; final observed output tail follows]",
-                self.total_len
+                "\n[output truncated; {} observed; final observed output tail follows]",
+                crate::byte_size::file_size(self.total_len)
             )
             .map_err(|e| e.to_string())?;
             let (a, b) = self.tail.as_slices();
