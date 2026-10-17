@@ -88,6 +88,9 @@ it runs.
   captured content. Changed files group original-to-final observed bytes with an
   operation timeline and known byte-difference count. Missing originals, partial
   transfers, unknown offsets, namespace changes and shared mappings retain gaps.
+  The source of a sendfile, copy_file_range, splice or FICLONE copy is listed
+  under Read files with its bytes marked as not captured, and reflink clones
+  (FICLONE, FICLONERANGE) are file changes.
 - **Network.** IPs, Hosts, HTTP and DNS tables retain packet evidence links.
   Country/organization use locally configured TShark GeoIP data; missing data
   stays unavailable. Hostnames come from DNS questions, HTTP Host and TLS SNI.
