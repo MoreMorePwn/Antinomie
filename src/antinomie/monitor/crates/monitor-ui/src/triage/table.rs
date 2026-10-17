@@ -11,10 +11,25 @@ pub(super) fn cell(text: impl Into<String>, color: egui::Color32, mono: bool) ->
     }
 }
 
+/// Characters a table cell shows. A cut cell's hover text is its shown text,
+/// so this also bounds the hover box; Details keeps the whole value.
+const CELL_TEXT_MAX: usize = 240;
+
 /// Keep the unresolved directory reason in Details while shortening table text.
-pub(super) fn display_cell(text: &str) -> String {
+pub(super) fn display_text(text: &str) -> String {
     text.replace("(relative, cwd not recorded)", "(relative)")
         .replace("(relative, dirfd not recorded)", "(relative)")
+}
+
+fn display_cell(text: &str) -> String {
+    bounded_cell(&display_text(text))
+}
+
+fn bounded_cell(text: &str) -> String {
+    match text.char_indices().nth(CELL_TEXT_MAX) {
+        Some((end, _)) => format!("{}… (full value in Details)", &text[..end]),
+        None => text.to_owned(),
+    }
 }
 
 #[cfg(test)]
@@ -343,7 +358,7 @@ fn finding_table_rows(
                 row.set_selected(selected == Some(finding.key));
                 for cell in &finding.cells {
                     row.col(|ui| {
-                        let mut text = RichText::new(&cell.text).color(cell.color);
+                        let mut text = RichText::new(bounded_cell(&cell.text)).color(cell.color);
                         if cell.mono {
                             text = text.monospace();
                         }

@@ -77,7 +77,7 @@ fn atom(header: &str, column: usize, row: &[Cell]) -> Atom {
         }
     }
     cell.text.trim_start_matches('#').parse().map_or_else(
-        |_| Atom::Text(display_cell(&cell.text).to_lowercase()),
+        |_| Atom::Text(display_text(&cell.text).to_lowercase()),
         Atom::Number,
     )
 }
