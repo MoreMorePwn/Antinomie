@@ -108,6 +108,60 @@ struct FileDigest {
     digest: String,
 }
 
+fn rule_set_title(sets: &[antinomie_monitor_core::ruleset::EngineSet]) -> String {
+    let enabled = sets.iter().filter(|set| set.enabled).count();
+    let rules: u64 = sets
+        .iter()
+        .filter(|set| set.enabled)
+        .map(|set| set.rules)
+        .sum();
+    format!(
+        "Rule sets: {enabled} enabled · {} {}",
+        engine::group_digits(rules),
+        if rules == 1 { "rule" } else { "rules" }
+    )
+}
+
+fn limitation_line(state: &State) -> Option<&'static str> {
+    match state {
+        State::Complete => None,
+        State::Partial => Some("Limited: coverage is incomplete."),
+        State::Unavailable => Some("Limited: this scan could not evaluate the evidence."),
+        State::NoRules => Some("Limited: no rules are enabled."),
+        State::Missing => Some("Limited: the evidence for this engine is missing."),
+    }
+}
+
+fn card_summary(finding: &Finding) -> String {
+    if finding.details.is_empty() {
+        "The rule matched, but it did not record an explanation.".into()
+    } else {
+        finding.details.clone()
+    }
+}
+
+fn evidence_label(evidence: &Evidence) -> String {
+    match evidence {
+        Evidence::Call {
+            stream,
+            cookie,
+            call,
+        } => format!("Open syscall {stream}/{cookie}/{call}"),
+        Evidence::Packet { capture, frame } => format!(
+            "Open packet #{} — {}",
+            frame,
+            capture.file_name().unwrap_or_default().to_string_lossy()
+        ),
+        Evidence::Bytes { path, offset, .. } => format!(
+            "{} — {}",
+            path.file_name().unwrap_or_default().to_string_lossy(),
+            offset.map_or("file-level match; no byte position".into(), |offset| {
+                format!("open bytes at 0x{offset:x}")
+            })
+        ),
+    }
+}
+
 fn state(state: &State) -> &'static str {
     match state {
         State::Complete => "Complete",
@@ -147,7 +201,12 @@ enum Reply {
 
 struct RegistryMsg {
     epoch: u64,
-    result: Result<antinomie_monitor_core::ruleset::Registry, String>,
+    result: Result<RegistryPayload, String>,
+}
+
+struct RegistryPayload {
+    registry: antinomie_monitor_core::ruleset::Registry,
+    sets: [Vec<antinomie_monitor_core::ruleset::EngineSet>; 3],
 }
 
 struct PendingScan {
@@ -206,6 +265,9 @@ pub(super) struct View {
     pending: Option<PendingScan>,
     epoch: u64,
     phase: [String; 3],
+    progress: [Option<engine::ScanProgress>; 3],
+    progress_rx: Option<Receiver<engine::ScanProgress>>,
+    sets: [Vec<antinomie_monitor_core::ruleset::EngineSet>; 3],
 }
 
 impl View {
@@ -236,6 +298,9 @@ impl View {
                 *phase = "canceled".into();
             }
         }
+        self.progress = Default::default();
+        self.progress_rx = None;
+        self.sets = Default::default();
     }
     fn request(&self, engine: Engine, digest: Option<String>) -> Option<engine::Request> {
         self.identity
@@ -368,10 +433,12 @@ impl View {
                     self.registry_rx = None;
                     if message.epoch == self.epoch {
                         match message.result {
-                            Ok(registry) => {
-                                self.profile =
-                                    antinomie_monitor_core::ruleset::profile_label_of(&registry);
-                                self.registry = Some(registry);
+                            Ok(payload) => {
+                                self.profile = antinomie_monitor_core::ruleset::profile_label_of(
+                                    &payload.registry,
+                                );
+                                self.sets = payload.sets;
+                                self.registry = Some(payload.registry);
                                 self.registry_for = self.rules_generation;
                                 self.digest_generation = u64::MAX;
                             }
@@ -429,6 +496,7 @@ impl View {
                 }
             }
         }
+        self.drain_progress();
         if let Some(rx) = &self.rx {
             let reply = match rx.try_recv() {
                 Ok(reply) => Some(Ok(reply)),
@@ -455,6 +523,7 @@ impl View {
                     }) => {
                         if epoch != self.epoch || generation != self.rules_generation {
                             self.phase[index] = "canceled".into();
+                            self.progress[index] = None;
                         } else {
                             let automatic = self.auto_started[index];
                             self.auto_started[index] = false;
@@ -474,15 +543,18 @@ impl View {
                             }
                             self.results[index] = Some(*result);
                             self.rows(index);
+                            self.progress[index] = None;
                         }
                     }
                     Err(error) => {
                         let index = self.busy.unwrap_or(0);
                         self.phase[index] = "failed".into();
                         self.results[index] = Some(Err(error));
+                        self.progress[index] = None;
                     }
                 }
                 self.rx = None;
+                self.progress_rx = None;
                 self.cancel = None;
                 self.busy = None;
             }
@@ -760,8 +832,14 @@ impl View {
         match std::thread::Builder::new()
             .name("triage-rules-registry".into())
             .spawn(move || {
-                let result = antinomie_monitor_core::ruleset::migrate_indexes(&dir)
-                    .and_then(|_| antinomie_monitor_core::ruleset::load_registry(&dir));
+                let result = (|| {
+                    antinomie_monitor_core::ruleset::migrate_indexes(&dir)?;
+                    let registry = antinomie_monitor_core::ruleset::load_registry(&dir)?;
+                    let sets = ["yara", "ids", "sigma"].map(|engine| {
+                        antinomie_monitor_core::ruleset::engine_sets(&dir, &registry, engine)
+                    });
+                    Ok(RegistryPayload { registry, sets })
+                })();
                 let _ = tx.send(RegistryMsg { epoch, result });
                 ctx.request_repaint_of(egui::ViewportId::ROOT);
             }) {
@@ -836,6 +914,7 @@ impl View {
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = Arc::clone(&cancel);
         let (tx, rx) = mpsc::sync_channel(1);
+        let (progress_tx, progress_rx) = mpsc::channel();
         let ctx = ctx.clone();
         let epoch = self.epoch;
         let generation = self.rules_generation;
@@ -875,7 +954,7 @@ impl View {
                             warnings: snap.warnings,
                         });
                     }
-                    engine::run(request, &worker_cancel)
+                    engine::run_with_progress(request, &worker_cancel, Some(progress_tx))
                 })();
                 let _ = tx.send(Reply::Scanned {
                     epoch,
@@ -887,6 +966,8 @@ impl View {
             }) {
             Ok(_) => {
                 self.rx = Some(rx);
+                self.progress_rx = Some(progress_rx);
+                self.progress[index] = None;
                 self.cancel = Some(cancel);
                 self.busy = Some(index);
                 self.phase[index] = "running".into();
@@ -922,12 +1003,36 @@ impl View {
             Err(error) => self.bytes = Some(Err(error.to_string())),
         }
     }
+    fn drain_progress(&mut self) {
+        let mut latest = None;
+        let mut dead = false;
+        if let Some(rx) = &self.progress_rx {
+            loop {
+                match rx.try_recv() {
+                    Ok(progress) => latest = Some(progress),
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        dead = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if dead {
+            self.progress_rx = None;
+        }
+        if let Some(progress) = latest {
+            if let Some(index) = self.busy {
+                self.progress[index] = Some(progress);
+            }
+        }
+    }
+
     pub fn show(&mut self, ui: &mut egui::Ui, scan: Option<&ArchiveScan>) {
-        presentation::heading(
-            ui,
-            "Detection",
-            "Evaluate retained evidence with local rules",
-        );
+        presentation::heading(ui, "Detection", "");
+        if self.fresh_registry().is_none() {
+            self.request_registry(ui.ctx());
+        }
         ui.horizontal_wrapped(|ui| {
             for engine in ENGINES {
                 let selected = self.selected == engine;
@@ -952,52 +1057,49 @@ impl View {
             .iter()
             .position(|engine| *engine == self.selected)
             .unwrap_or(0);
+        let loading = self.registry_rx.is_some() && self.sets[index].is_empty();
+        let title = if loading {
+            "Rule sets: loading…".to_owned()
+        } else {
+            rule_set_title(&self.sets[index])
+        };
+        egui::CollapsingHeader::new(RichText::new(title).color(theme::text()))
+            .id_salt(("detector-rule-sets", index))
+            .default_open(false)
+            .show(ui, |ui| {
+                if self.sets[index].is_empty() {
+                    ui.weak(if loading {
+                        "Reading installed packs…"
+                    } else {
+                        "No packs or custom groups for this engine."
+                    });
+                }
+                for set in &self.sets[index] {
+                    ui.horizontal_wrapped(|ui| {
+                        let rules = if set.rules == 1 { "rule" } else { "rules" };
+                        ui.label(
+                            RichText::new(format!(
+                                "{} {} · {} {rules}",
+                                set.name,
+                                set.revision,
+                                engine::group_digits(set.rules)
+                            ))
+                            .color(theme::text()),
+                        );
+                        if !set.enabled {
+                            ui.label(RichText::new("disabled").small().color(theme::muted()));
+                        }
+                    });
+                }
+            });
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Profile").color(theme::muted()));
-            ui.label(
-                RichText::new(if self.profile.is_empty() {
-                    "No rules enabled"
-                } else {
-                    self.profile.as_str()
-                })
-                .color(theme::text()),
-            );
             if ui.button("Rule manager…").clicked() {
                 self.open_manager = true;
             }
         });
-        if !self.phase[index].is_empty() {
-            ui.label(RichText::new(format!("Scan: {}", self.phase[index])).color(theme::muted()));
-        }
         if !self.notes[index].is_empty() {
             ui.colored_label(theme::warn(), &self.notes[index]);
         }
-        egui::CollapsingHeader::new("Local rules and data sources").show(ui, |ui| {
-            egui::ScrollArea::vertical().id_salt(("detector-settings", index)).max_height((ui.available_height() * 0.4).min(260.0)).show(ui, |ui| {
-            ui.add(egui::Label::new(match self.selected {
-                Engine::Yara => "Enabled YARA packs scan the verified executable. Optional targets: captured core/RAM blocks and recovered files. Gaps in a capture are preserved.",
-                Engine::Ids => "Enabled Suricata rules scan saved run-owned PCAP segments. The HTTP/DNS table is not the input. Encrypted contents and process attribution are unavailable.",
-                Engine::Sigma => "Enabled Sigma rules use the retained event journal. Missing fields stay missing. Unsupported rules stay unevaluated. Command lines are not invented from truncated previews.",
-            }).wrap());
-            let rules = match self.selected { Engine::Yara => &mut self.settings.yara_rules, Engine::Ids => &mut self.settings.ids_rules, Engine::Sigma => &mut self.settings.sigma_rules };
-            ui.label("Additional local rule file or folder");
-            ui.add(egui::TextEdit::singleline(rules).desired_width(ui.available_width()).hint_text("Optional local path"));
-            if self.selected == Engine::Yara {
-                ui.checkbox(&mut self.settings.scan_memory, "Scan recorded core / RAM extents");
-                ui.checkbox(&mut self.settings.scan_recovered, "Scan recovered files");
-            } else if self.selected == Engine::Sigma {
-                ui.label("Python with pySigma and its SQLite backend");
-                ui.add(egui::TextEdit::singleline(&mut self.settings.sigma_python).desired_width(ui.available_width()).hint_text("Empty: Antinomie's Sigma tool, else /usr/bin/python3"));
-            }
-            ui.weak("Scans stay offline. Checking the catalog or installing a pack is a separate action in Rule manager.");
-            let (label, url) = match self.selected {
-                Engine::Yara => ("YARA-Forge sources", "https://github.com/YARAHQ/yara-forge"),
-                Engine::Ids => ("Emerging Threats Open sources", "https://rules.emergingthreats.net/"),
-                Engine::Sigma => ("SigmaHQ Linux rule sources", "https://github.com/SigmaHQ/sigma/tree/master/rules/linux"),
-            };
-            if ui.add(egui::Button::new(format!("Copy {label} URL")).wrap()).clicked() { ui.ctx().copy_text(url.into()); }
-            });
-        });
         ui.horizontal_wrapped(|ui| {
             let ready = self.rx.is_none() && self.identity.is_some();
             if ui.add_enabled(ready, egui::Button::new("Scan")).clicked() {
@@ -1034,13 +1136,70 @@ impl View {
                 });
             }
         });
+        let scanning = self.busy == Some(index)
+            || matches!(
+                self.phase[index].as_str(),
+                "queued" | "preparing" | "running"
+            );
+        if scanning {
+            let fraction = self.progress[index]
+                .as_ref()
+                .and_then(engine::progress_fraction);
+            let label = match self.progress[index].as_ref() {
+                Some(progress) => engine::progress_text(progress),
+                None if self.phase[index].is_empty() => "running".to_owned(),
+                None => self.phase[index].clone(),
+            };
+            ui.add(
+                egui::ProgressBar::new(fraction.unwrap_or(0.0))
+                    .animate(fraction.is_none())
+                    .text(label)
+                    .desired_width(ui.available_width()),
+            );
+        }
+        let status = match self.progress[index].as_ref() {
+            Some(progress) => engine::progress_text(progress),
+            None => self.phase[index].clone(),
+        };
+        let matched = self.results[index]
+            .as_ref()
+            .and_then(|result| result.as_ref().ok())
+            .map(|report| (report.findings.len(), report.state.clone()));
+        if !status.is_empty() || matched.is_some() {
+            ui.horizontal_wrapped(|ui| {
+                if !status.is_empty() {
+                    ui.label(RichText::new(format!("Scan: {status}")).color(theme::muted()));
+                }
+                if let Some((count, state_value)) = &matched {
+                    let label = if *count == 1 {
+                        "matched rule"
+                    } else {
+                        "matched rules"
+                    };
+                    ui.label(RichText::new(format!("{count} {label}")).color(theme::text()));
+                    let tone = match state_value {
+                        State::Complete => theme::blue(),
+                        State::Partial => theme::warn(),
+                        State::Unavailable => theme::muted(),
+                        State::NoRules => theme::warn(),
+                        State::Missing => theme::warn(),
+                    };
+                    presentation::badge(ui, state(state_value), tone);
+                    if let Some(line) = limitation_line(state_value) {
+                        ui.label(RichText::new(line).small().color(theme::warn()));
+                    }
+                }
+            });
+        }
         if self.selected == Engine::Sigma {
             if let Some(error) = scan.and_then(|scan| scan.event_error.as_ref()) {
                 ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
             }
         }
         let Some(result) = &self.results[index] else {
-            ui.weak("Not scanned. Choose Scan to evaluate this run.");
+            if !scanning {
+                ui.weak("Not scanned. Choose Scan to evaluate this run.");
+            }
             return;
         };
         let report = match result {
@@ -1065,23 +1224,6 @@ impl View {
         ui.add_space(8.0);
         presentation::frame().fill(theme::panel()).show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    RichText::new(report.findings.len().to_string())
-                        .strong()
-                        .color(theme::text())
-                        .size(25.0),
-                );
-                ui.label("matched rules");
-                let tone = match report.state {
-                    State::Complete => theme::blue(),
-                    State::Partial => theme::warn(),
-                    State::Unavailable => theme::muted(),
-                    State::NoRules => theme::warn(),
-                    State::Missing => theme::warn(),
-                };
-                presentation::badge(ui, state(&report.state), tone);
-            });
             ui.label(
                 RichText::new(format!(
                     "{} objects evaluated · {} rules evaluated",
@@ -1101,32 +1243,6 @@ impl View {
                 report.omitted_evidence
             ));
         }
-        egui::CollapsingHeader::new("Coverage and provenance").show(ui, |ui| {
-            egui::ScrollArea::vertical()
-                .max_height(180.0)
-                .id_salt(("detector-coverage", index))
-                .show(ui, |ui| {
-                    for warning in report.warnings.iter().chain(&report.skipped) {
-                        ui.add(
-                            egui::Label::new(RichText::new(warning).color(theme::warn())).wrap(),
-                        );
-                    }
-                    for source in &report.sources {
-                        ui.add(
-                            egui::Label::new(format!(
-                                "{}\n{}\n{}\nSHA-256 {}\n{}",
-                                source.name,
-                                source.version,
-                                source.license,
-                                source.sha256,
-                                source.data
-                            ))
-                            .wrap(),
-                        );
-                        ui.separator();
-                    }
-                });
-        });
         if report.findings.is_empty() {
             ui.weak(match report.state {
                 State::Complete => "No rule matched the evaluated data.",
@@ -1190,7 +1306,26 @@ impl View {
         ui.label(
             RichText::new(format!("Author: {}", attribution(&finding.author))).color(theme::text()),
         );
-        ui.add(egui::Label::new(&finding.details).wrap());
+        ui.add(egui::Label::new(card_summary(finding)).wrap());
+        ui.add_space(6.0);
+        ui.label(RichText::new("Rule").strong().color(theme::heading()));
+        if finding.rule_text.is_empty() {
+            ui.weak("The original rule text is not in this result.");
+        } else {
+            egui::ScrollArea::vertical()
+                .id_salt("detection-rule-text")
+                .max_height(220.0)
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(&finding.rule_text)
+                                .monospace()
+                                .color(theme::text()),
+                        )
+                        .wrap(),
+                    );
+                });
+        }
         for reference in &finding.mitre {
             let url = format!(
                 "https://attack.mitre.org/techniques/{}/",
@@ -1205,33 +1340,23 @@ impl View {
         egui::CollapsingHeader::new(format!("Evidence locations ({})", finding.evidence.len()))
             .default_open(true)
             .show(ui, |ui| {
-                for evidence in finding.evidence.iter().take(32) {
-                    let label = match evidence {
-                        Evidence::Call {
-                            stream,
-                            cookie,
-                            call,
-                        } => format!("Open syscall {stream}/{cookie}/{call}"),
-                        Evidence::Packet { capture, frame } => format!(
-                            "Open packet #{} — {}",
-                            frame,
-                            capture.file_name().unwrap_or_default().to_string_lossy()
-                        ),
-                        Evidence::Bytes { path, offset, .. } => format!(
-                            "{} — {}",
-                            path.file_name().unwrap_or_default().to_string_lossy(),
-                            offset.map_or(
-                                "file-level match; no byte position".into(),
-                                |offset| format!("open bytes at 0x{offset:x}")
-                            )
-                        ),
-                    };
-                    if ui.add(egui::Button::new(label).wrap()).clicked() {
-                        selected = Some(evidence.clone());
-                    }
-                }
-                if finding.evidence.len() > 32 {
-                    ui.weak("More locations are retained in the exported JSON result.");
+                egui::ScrollArea::vertical()
+                    .id_salt("detection-evidence-hits")
+                    .max_height(240.0)
+                    .show(ui, |ui| {
+                        for evidence in &finding.evidence {
+                            let label = evidence_label(evidence);
+                            if ui.add(egui::Button::new(label).wrap()).clicked() {
+                                selected = Some(evidence.clone());
+                            }
+                        }
+                    });
+                if (finding.count as usize) > finding.evidence.len() {
+                    ui.weak(format!(
+                        "{} hits are counted; {} locations are listed.",
+                        finding.count,
+                        finding.evidence.len()
+                    ));
                 }
             });
         if let Some(evidence) = selected {
@@ -1324,14 +1449,7 @@ fn match_cards(ui: &mut egui::Ui, report: &Report, table_id: &str, rows: &[Vec<C
                             );
                         }
                     });
-                    ui.add(
-                        egui::Label::new(if finding.details.is_empty() {
-                            "The rule matched, but it did not record an explanation.".into()
-                        } else {
-                            finding.details.clone()
-                        })
-                        .wrap(),
-                    );
+                    ui.add(egui::Label::new(card_summary(finding)).wrap());
                     ui.label(
                         RichText::new(&finding.rule_id)
                             .small()
@@ -1557,7 +1675,14 @@ mod tests {
                 },
             ],
             details: "marker".into(),
+            rule_text: "rule sample { condition: true }".into(),
         };
+        assert_eq!(card_summary(&finding), "marker");
+        assert!(finding.rule_text.contains("rule sample"));
+        assert_eq!(
+            evidence_label(&finding.evidence[0]),
+            "specimen — open bytes at 0x10"
+        );
         assert_eq!(
             match_location(&finding),
             "Matched specimen at 0x10 and 1 more locations"
@@ -1574,6 +1699,121 @@ mod tests {
         assert_eq!(severity_color("4"), theme::blue());
         assert_eq!(severity_color("informational"), theme::blue());
         assert_eq!(severity_color("unspecified"), theme::muted());
+    }
+
+    #[test]
+    fn rule_set_title_counts_only_enabled_sets() {
+        use antinomie_monitor_core::ruleset::EngineSet;
+        let sets = vec![
+            EngineSet {
+                name: "Core".into(),
+                revision: "20261004".into(),
+                enabled: true,
+                rules: 2094,
+            },
+            EngineSet {
+                name: "Extra".into(),
+                revision: "r2".into(),
+                enabled: false,
+                rules: 4,
+            },
+            EngineSet {
+                name: "Local".into(),
+                revision: "r1".into(),
+                enabled: true,
+                rules: 1,
+            },
+        ];
+        assert_eq!(rule_set_title(&sets), "Rule sets: 2 enabled · 2,095 rules");
+        assert_eq!(limitation_line(&State::Complete), None);
+        assert_eq!(
+            limitation_line(&State::Partial),
+            Some("Limited: coverage is incomplete.")
+        );
+        assert!(limitation_line(&State::Missing)
+            .unwrap()
+            .starts_with("Limited:"));
+    }
+
+    #[test]
+    fn detection_panel_drops_the_old_sections_and_keeps_rule_sets() {
+        let mut view = View::default();
+        view.sets[0] = vec![antinomie_monitor_core::ruleset::EngineSet {
+            name: "YARA-Forge Core".into(),
+            revision: "20261004".into(),
+            enabled: true,
+            rules: 2094,
+        }];
+        let mut report = Report::empty(
+            Engine::Yara,
+            Identity {
+                vm_id: "v".into(),
+                boot_id: "b".into(),
+                run_id: "r".into(),
+                root_cookie: 1,
+            },
+        );
+        report.state = State::Partial;
+        report.scanned_objects = 1;
+        report.scanned_rules = Some(2094);
+        report.findings.push(Finding {
+            rule_id: "sample".into(),
+            title: "Sample".into(),
+            severity: "high".into(),
+            source: "s0".into(),
+            license: "MIT".into(),
+            author: "A".into(),
+            mitre: vec![],
+            count: 1,
+            evidence: vec![Evidence::Bytes {
+                path: PathBuf::from("/tmp/specimen"),
+                offset: Some(1),
+                address: None,
+                report_id: None,
+                block: None,
+            }],
+            details: "readable summary".into(),
+            rule_text: "rule sample { condition: true }".into(),
+        });
+        view.results[0] = Some(Ok(report));
+        view.rows(0);
+        view.phase[0] = "running".into();
+        let ctx = egui::Context::default();
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                view.show(ui, None);
+            });
+        });
+        let mut texts = Vec::new();
+        fn collect(shape: &egui::epaint::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::epaint::Shape::Text(text) => out.push(text.galley.text().to_owned()),
+                egui::epaint::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for shape in &output.shapes {
+            collect(&shape.shape, &mut texts);
+        }
+        let joined = texts.join("\n");
+        assert!(
+            joined.contains("Rule sets: 1 enabled · 2,094 rules"),
+            "{joined}"
+        );
+        assert!(joined.contains("1 matched rule"), "{joined}");
+        assert!(
+            joined.contains("Limited: coverage is incomplete."),
+            "{joined}"
+        );
+        assert!(joined.contains("Scan: running"), "{joined}");
+        assert!(!joined.contains("Local rules and data sources"), "{joined}");
+        assert!(!joined.contains("Coverage and provenance"), "{joined}");
+        assert!(!joined.contains("Copy YARA-Forge"), "{joined}");
+        assert!(!joined.contains("rule sample"), "{joined}");
     }
 
     #[test]

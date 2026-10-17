@@ -222,6 +222,14 @@ fn clip(text: &str, limit: usize) -> String {
     text.chars().take(limit).collect()
 }
 
+/// The original text of one YARA rule, including a leading `private` or `global`.
+pub fn yara_rule_source(text: &str, name: &str) -> Option<String> {
+    yara::yara_blocks(text)
+        .into_iter()
+        .find(|(found, _, _)| found == name)
+        .map(|(_, body, _)| body)
+}
+
 fn slug(name: &str) -> String {
     let mut out = String::new();
     for character in name.chars().flat_map(|c| c.to_lowercase()) {

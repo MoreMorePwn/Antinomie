@@ -125,6 +125,61 @@ def attack_tags(tags):
     return sorted(set(result))
 
 
+_sigma_progress_at = 0.0
+
+
+def note_sigma(events_path, index, total, title):
+    """Write one coalesced progress file beside the event journal."""
+    global _sigma_progress_at
+    now = time.monotonic()
+    if index not in (1, total) and now - _sigma_progress_at < 0.25:
+        return
+    _sigma_progress_at = now
+    payload = {
+        "target": {
+            "kind": "sigma_rule",
+            "index": index,
+            "total": max(total, 1),
+            "title": str(title)[:240],
+        },
+        "rules_loaded": total,
+    }
+    path = Path(events_path).with_name("progress.json")
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(payload), encoding="utf-8")
+    temporary.replace(path)
+
+
+def rule_yaml(data, rule):
+    text = data.decode("utf-8", errors="replace")
+    ident = str(getattr(rule, "id", "") or "")
+    title = str(getattr(rule, "title", "") or "")
+    parts = []
+    current = []
+    for line in text.splitlines(keepends=True):
+        if line.strip() == "---" and current:
+            parts.append("".join(current))
+            current = []
+            continue
+        current.append(line)
+    if current:
+        parts.append("".join(current))
+    chosen = text
+    for part in parts:
+        if ident and ident in part and "id:" in part:
+            chosen = part
+            break
+    else:
+        for part in parts:
+            if title and title in part:
+                chosen = part
+                break
+    encoded = chosen.strip().encode("utf-8", errors="replace")
+    if len(encoded) > 8192:
+        encoded = encoded[:8192]
+    return encoded.decode("utf-8", errors="ignore")
+
+
 def scan(request, events_path):
     report = {"engine": "sigma", "identity": request["identity"], "state": "complete", "sources": [], "findings": [], "scanned_rules": 0, "skipped_rules": 0, "skipped": [], "omitted_evidence": 0, "warnings": ["Category acceptance is not full compatibility. Syntax, backend conversion, logsource, and per-run evidence are counted separately."], "source_digest": request.get("source_digest"), "category_accepted": 0, "backend_rejected": 0, "missing_field_events": 0, "category_rejected": 0, "syntax_rejected": 0, "evidence_rejected": 0}
     try:
@@ -153,6 +208,8 @@ def scan(request, events_path):
         except ImportError:
             pass  # REGEXP queries fail explicitly; other rules remain usable.
         backend = sqliteBackend(collate_nocase=True)
+        prepared = []
+        rule_total = 0
         for source in request["sigma_sources"]:
             path = Path(source["path"])
             data = path.read_bytes()
@@ -169,7 +226,14 @@ def scan(request, events_path):
                     report["skipped"].append(source["name"] + ": syntax: " + str(error)[:400])
                 report["state"] = "partial"
                 continue
-            for rule in collection.rules:
+            rules = list(collection.rules)
+            rule_total += len(rules)
+            prepared.append((source, data, sha256, rules))
+        seen = 0
+        for source, data, sha256, rules in prepared:
+            for rule in rules:
+                seen += 1
+                note_sigma(events_path, seen, rule_total, getattr(rule, "title", "") or "")
                 if report["scanned_rules"] + report["skipped_rules"] >= 4096:
                     report["state"] = "partial"
                     report["warnings"].append("Rule evaluation reached the 4096-rule budget.")
@@ -215,7 +279,7 @@ def scan(request, events_path):
                         details = "Evaluated against normalized captured Linux events; joined argv is not original shell quoting."
                         if ref_text:
                             details += " References: " + ref_text
-                        report["findings"].append({"rule_id": str(rule.id or (source["name"] + ":" + rule.title)), "title": rule.title, "severity": level, "source": source["name"] + " sha256:" + sha256, "license": str(getattr(rule, "license", None) or "Not supplied by rule"), "author": supplied_authors(rule), "mitre": attack_tags(rule.tags or []), "count": total, "evidence": retained, "details": details})
+                        report["findings"].append({"rule_id": str(rule.id or (source["name"] + ":" + rule.title)), "title": rule.title, "severity": level, "source": source["name"] + " sha256:" + sha256, "license": str(getattr(rule, "license", None) or "Not supplied by rule"), "author": supplied_authors(rule), "mitre": attack_tags(rule.tags or []), "count": total, "evidence": retained, "details": details, "rule_text": rule_yaml(data, rule)})
                 except Exception as error:
                     if "no such column" in str(error):
                         report["backend_rejected"] += 1

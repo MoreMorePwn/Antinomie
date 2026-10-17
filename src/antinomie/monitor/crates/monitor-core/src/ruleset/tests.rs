@@ -183,6 +183,40 @@ fn disabled_helper_is_not_reported_as_a_successful_compile() {
 }
 
 #[test]
+fn engine_sets_count_enabled_rules_and_keep_a_disabled_group() {
+    let dir = std::env::temp_dir().join(format!("ant-rules-{}", crate::storage::unique_id()));
+    let source = dir.join("incoming");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(
+        source.join("local.yar"),
+        "rule Local { condition: true }\nprivate rule Helper { condition: true }\n",
+    )
+    .unwrap();
+    let id = import_group(&dir, "Local group", "yara", &source).unwrap();
+    let registry = load_registry(&dir).unwrap();
+    let sets = engine_sets(&dir, &registry, "yara");
+    assert_eq!(sets.len(), 1);
+    assert_eq!(sets[0].name, "Local group");
+    assert_eq!(sets[0].revision, "r1");
+    assert!(sets[0].enabled);
+    assert_eq!(sets[0].rules, 1, "private helpers are not rule counts");
+    set_group_enabled(&dir, &id, false).unwrap();
+    let registry = load_registry(&dir).unwrap();
+    let sets = engine_sets(&dir, &registry, "yara");
+    assert!(!sets[0].enabled);
+    assert_eq!(sets[0].rules, 1);
+    assert!(engine_sets(&dir, &registry, "ids").is_empty());
+    let body = yara_rule_source(
+        "rule Other { condition: false }\nrule Local { condition: true }\n",
+        "Local",
+    )
+    .unwrap();
+    assert!(body.contains("rule Local"));
+    assert!(!body.contains("rule Other"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn import_is_a_copy_and_rejects_a_link() {
     let dir = std::env::temp_dir().join(format!("ant-rules-{}", crate::storage::unique_id()));
     let source = dir.join("incoming");

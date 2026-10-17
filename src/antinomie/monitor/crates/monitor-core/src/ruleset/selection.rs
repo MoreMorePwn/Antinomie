@@ -624,3 +624,79 @@ pub(super) fn filter_rules(engine: &str, text: &str, ids: &[&str]) -> String {
     }
     out
 }
+
+/// One installed pack or custom group, with the rules that are turned on inside it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EngineSet {
+    pub name: String,
+    pub revision: String,
+    pub enabled: bool,
+    /// Compatible, non-helper rules that are not disabled and whose dependencies are enabled.
+    pub rules: u64,
+}
+
+/// Installed packs, then custom groups, for one engine. Disabled sets stay in the list.
+pub fn engine_sets(data_dir: &Path, registry: &Registry, engine: &str) -> Vec<EngineSet> {
+    let mut sets = Vec::new();
+    for pack in registry.packs.iter().filter(|pack| pack.engine == engine) {
+        let root = rules_root(data_dir)
+            .join("packs")
+            .join(&pack.engine)
+            .join(&pack.id)
+            .join(&pack.version);
+        let disabled = registry
+            .disabled
+            .get(&format!("pack:{}", pack.id))
+            .cloned()
+            .unwrap_or_default();
+        sets.push(EngineSet {
+            name: pack.name.clone(),
+            revision: pack.version.clone(),
+            enabled: pack.enabled,
+            rules: count_enabled(&root, &disabled),
+        });
+    }
+    for group in registry
+        .groups
+        .iter()
+        .filter(|group| group.engine == engine && !group.deleted)
+    {
+        let root = rules_root(data_dir)
+            .join("custom")
+            .join(&group.id)
+            .join(group.revision.to_string());
+        let disabled = registry
+            .disabled
+            .get(&format!("group:{}", group.id))
+            .cloned()
+            .unwrap_or_default();
+        sets.push(EngineSet {
+            name: group.name.clone(),
+            revision: format!("r{}", group.revision),
+            enabled: group.enabled,
+            rules: count_enabled(&root, &disabled),
+        });
+    }
+    sets
+}
+
+fn count_enabled(root: &Path, disabled: &BTreeSet<String>) -> u64 {
+    let Ok(rules) = read_index(root) else {
+        return 0;
+    };
+    let blocked = dependency_closure(&rules, disabled);
+    let mut seen = BTreeSet::new();
+    let mut count = 0u64;
+    for rule in &rules {
+        if rule.helper || !rule.compatible {
+            continue;
+        }
+        if disabled.contains(&rule.id) || rule.depends_on.iter().any(|id| blocked.contains(id)) {
+            continue;
+        }
+        if seen.insert(rule.id.clone()) {
+            count += 1;
+        }
+    }
+    count
+}

@@ -122,6 +122,7 @@ impl MonitorApp {
                 &self.options.data_dir,
                 &mut self.settings.outbound_catalog,
                 &tools,
+                self.triage.detection_settings(),
             ) {
                 Some(crate::rules_window::RulesAction::AppDependencies) => {
                     self.dependencies.open = true;
@@ -129,6 +130,9 @@ impl MonitorApp {
                 Some(crate::rules_window::RulesAction::AnalysisTools) => self.tools_open = true,
                 None => {}
             }
+            // The triage view owns the live detection settings; keep the saved copy in step.
+            self.settings.triage_detection = self.triage.detection_settings().clone();
+            self.settings.triage_detection.rules_root.clear();
             if self.rules_ui.changed() {
                 self.rules_generation = self.rules_generation.saturating_add(1);
                 self.rules_summary = self.rules_ui.profile();
