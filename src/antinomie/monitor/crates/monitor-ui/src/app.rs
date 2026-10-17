@@ -14,6 +14,7 @@ mod history;
 mod menus;
 mod panels;
 mod recording;
+mod run_selector;
 mod session;
 mod sidebar;
 mod trace_view;

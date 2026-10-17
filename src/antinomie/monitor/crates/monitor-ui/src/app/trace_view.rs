@@ -93,6 +93,7 @@ impl MonitorApp {
         }
         ui.horizontal_wrapped(|ui| {
             theme::section(ui, "Syscalls");
+            self.show_trace_run_selector(ui);
             if let Some(capture) = self.selected_capture_summary() {
                 ui.add(egui::Label::new(captures::scope(&capture.scope)).truncate())
                     .on_hover_text(&capture.id);
@@ -640,6 +641,7 @@ impl MonitorApp {
         captures.truncate(6);
 
         let mut open = None;
+        ui.horizontal(|ui| self.show_trace_run_selector(ui));
         egui::ScrollArea::vertical()
             .id_salt("empty_trace")
             .auto_shrink([false, false])

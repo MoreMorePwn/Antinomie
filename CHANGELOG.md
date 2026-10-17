@@ -21,6 +21,12 @@ it runs.
   that fallback. A file change is an observed write or metadata change;
   a mapping alone is not.
 
+- **Run selector in the syscall trace.** The Syscalls view has the same
+  program-run dropdown as Triage: the live trace first, then the VM's runs,
+  newest first. Choosing a past run reads its recorded syscalls from the
+  archive in the background. Triage, the trace and Run history share one
+  selection.
+
 - **Summary.** Triage opens with whole-run activity, file, network and detection
   counts. Counts precede table filters and pagination; missing captures or scans
   remain unavailable. Select a count to open its corresponding evidence view.
@@ -56,10 +62,14 @@ it runs.
   missing, so a rule cannot match on an argument that was not seen.
 
 - **Detection scan progress and rule sets.** While a scan runs, a progress bar
-  names the rules or evidence being checked, and the matched-rule count and
-  Complete / Partial state sit beside it. The scan status line shows only when
-  no scan is running. Each engine lists its installed rule sets, with their
-  rule counts, in a collapsible list. The local rule folders, scan-recovered
+  on its own row names the rules or evidence being checked. The Scan row keeps
+  the scan status (shown only when no scan is running), the matched-rule count,
+  the Complete / Partial state and the objects and rules evaluated on its right,
+  so the match cards stay in view with Details and Activity docked; a narrow
+  pane wraps them below the buttons. Limits of a result are one muted line, with
+  the full wording on hover. Each engine lists its installed rule sets, with
+  their rule counts, in a collapsible list on the same row as the Rule manager
+  button. The local rule folders, scan-recovered
   files, memory extent and Sigma Python options moved from the Detection tab
   to Tools > Rule manager > Options; a saved local path stays in use until
   Forget, and can be imported as a custom group.

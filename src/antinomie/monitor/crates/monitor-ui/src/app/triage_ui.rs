@@ -1,48 +1,20 @@
 // SPDX-License-Identifier: MIT
 //! Run selection and evidence navigation for the native triage pane.
+use super::run_selector::RunSelector;
 use super::*;
 
 impl MonitorApp {
-    pub(super) fn triage_runs(&self) -> Vec<RunSummary> {
-        let mut runs = BTreeMap::new();
-        for run in self.snapshot.runs.iter().chain(&self.history) {
-            if Some(&run.vm_id) == self.selected.as_ref() && run.root_task_cookie != 0 {
-                runs.entry(run.id.clone()).or_insert_with(|| run.clone());
-            }
-        }
-        let mut runs: Vec<_> = runs.into_values().collect();
-        runs.sort_by(|a, b| {
-            b.started_ms
-                .cmp(&a.started_ms)
-                .then_with(|| b.id.cmp(&a.id))
-        });
-        runs
-    }
-
     pub(super) fn show_triage(&mut self, ui: &mut egui::Ui) {
         let runs = self.triage_runs();
-        let mut selected = self.selected_run.clone();
-        let label = runs
-            .iter()
-            .find(|run| Some(&run.id) == selected.as_ref())
-            .map(triage_run_label)
-            .unwrap_or_else(|| "Select a program run".into());
-        egui::ComboBox::from_id_salt("triage-run-selector")
-            .selected_text(label)
-            .width(ui.available_width().min(720.0))
-            .show_ui(ui, |ui| {
-                for run in &runs {
-                    ui.selectable_value(&mut selected, Some(run.id.clone()), triage_run_label(run));
-                }
-            }).response.on_hover_text("Network evidence is captured VM traffic during the selected run, without proven process ownership.");
-        if selected != self.selected_run {
-            self.select_run(selected);
-            self.capture_tab = false;
-        }
-        let Some(run) = runs
-            .into_iter()
-            .find(|run| Some(&run.id) == self.selected_run.as_ref())
-        else {
+        let view = RunSelector {
+            id_salt: "triage-run-selector",
+            clear_label: None,
+            empty_text: "Select a program run",
+            max_width: 720.0,
+            hover: "Network evidence is captured VM traffic during the selected run, without proven process ownership.",
+        };
+        self.show_run_selector(ui, &runs, &view);
+        let Some(run) = self.selected_triage_run() else {
             self.triage
                 .tick(ui.ctx(), crate::triage::TriageInput::empty());
             ui.weak("Choose a program run above or in Run history.");
@@ -201,13 +173,4 @@ impl MonitorApp {
         self.selected_event = Some(key);
         self.focus_trace();
     }
-}
-
-fn triage_run_label(run: &RunSummary) -> String {
-    format!(
-        "{}  {}  [{}]",
-        crate::time_format::unix_ms(run.started_ms),
-        run.request.path,
-        run.id.chars().take(8).collect::<String>()
-    )
 }
