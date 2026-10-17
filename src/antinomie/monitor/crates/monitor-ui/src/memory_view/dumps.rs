@@ -424,13 +424,7 @@ fn dump_detail(dump: &MemoryDump) -> String {
 }
 
 pub(super) fn open_directory(path: &Path) -> Result<(), String> {
-    let mut child = Command::new("xdg-open")
-        .arg(path)
-        .spawn()
-        .map_err(|error| format!("Open folder: {error}"))?;
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
+    crate::folders::show_detached(path.to_owned());
     Ok(())
 }
 

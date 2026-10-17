@@ -42,18 +42,8 @@ pub(super) fn program_name(path: &str) -> &str {
         .unwrap_or(path)
 }
 
-pub(super) fn open_directory(directory: &std::path::Path, status: &mut String) {
-    match std::process::Command::new("xdg-open")
-        .arg(directory)
-        .spawn()
-    {
-        Ok(mut child) => {
-            std::thread::spawn(move || {
-                let _ = child.wait();
-            });
-        }
-        Err(error) => *status = format!("Open directory: {error}"),
-    }
+pub(super) fn open_directory(directory: &std::path::Path) {
+    crate::folders::show_detached(directory.to_owned());
 }
 
 /// One line of colored text pieces, cut with "…" at `width`.

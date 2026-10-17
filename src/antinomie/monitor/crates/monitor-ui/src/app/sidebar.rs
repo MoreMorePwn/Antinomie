@@ -394,7 +394,7 @@ impl MonitorApp {
                 BaseAction::OpenDirectory => {
                     if let Some(base) = self.snapshot.bases.iter().find(|base| base.id == identity)
                     {
-                        open_directory(&base.directory.clone(), &mut self.status);
+                        open_directory(&base.directory);
                     }
                 }
                 BaseAction::Delete => self.confirm = Some(Confirm::DeleteBase(identity)),

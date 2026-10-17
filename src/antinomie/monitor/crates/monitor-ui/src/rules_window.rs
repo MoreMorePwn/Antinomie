@@ -246,7 +246,7 @@ impl Model {
             if ui.button("Open rules directory").clicked() {
                 let root = ruleset::rules_root(data_dir);
                 let _ = std::fs::create_dir_all(&root);
-                let _ = std::process::Command::new("xdg-open").arg(&root).spawn();
+                crate::folders::show_detached(root);
             }
         });
         if !outbound {

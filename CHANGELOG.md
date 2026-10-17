@@ -97,6 +97,9 @@ it runs.
 - **Presentation.** Removed indexing/count explanation blocks; warnings stay
   below the run selector. Times use the host timezone with an explicit UTC offset;
   guest event times mapped through host receipt anchors are marked estimated.
+- **Open directory.** Folder actions ask the desktop file manager through the
+  FileManager1 D-Bus service and fall back to `xdg-open`, so a folder no longer
+  opens in a search tool registered for directories (Catfish on Xfce).
 
 Uses existing 0.6.0/0.6.1 guest bases; no kernel or image rebuild is required.
 

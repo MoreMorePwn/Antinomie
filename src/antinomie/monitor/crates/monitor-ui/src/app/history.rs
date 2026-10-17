@@ -493,7 +493,7 @@ impl MonitorApp {
                         }
                         if ui.link("Open core directory").clicked() {
                             if let Some(directory) = file.parent() {
-                                open_directory(directory, &mut self.status);
+                                open_directory(directory);
                             }
                         }
                     }
