@@ -2,6 +2,7 @@
 //! bytes / instruction table, decompilation as numbered source, strings as a
 //! table. Rows load from the retained listing in pages, as they scroll in.
 use super::records::{self, Structure};
+use super::row_menu::{self, RowCommand};
 use super::ReportAction;
 use crate::theme;
 use antinomie_monitor_core::{
@@ -10,6 +11,8 @@ use antinomie_monitor_core::{
 };
 use eframe::egui::{self, text::LayoutJob, Color32, FontId, RichText, TextFormat};
 use egui_extras::{Column, TableBuilder};
+
+mod row_text;
 
 #[derive(Default)]
 pub(super) struct ListingState {
@@ -25,6 +28,10 @@ pub(super) struct ListingState {
     record: Vec<(&'static str, crate::query::RowValue)>,
     /// The structures view a Structures listing shows.
     pub(super) scope: Option<Structure>,
+    /// Whether the Content tab can show a row's offset.
+    pub(super) content: bool,
+    /// What the last row menu chose; the caller takes and carries it out.
+    pub(super) command: Option<RowCommand>,
 }
 
 impl ListingState {
@@ -163,20 +170,6 @@ pub(super) fn show(
             }))
             .show_inside(ui, |ui| {
                 ui.label(RichText::new("Functions").strong());
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(format!(
-                            "Module: {}. Symbol and address stay separate. These are not original source symbols.",
-                            if report.source_path.is_empty() {
-                                "not recorded"
-                            } else {
-                                report.source_path.as_str()
-                            }
-                        ))
-                        .color(theme::muted()),
-                    )
-                    .wrap(),
-                );
                 if ui.button("Export text").clicked() {
                     action = Some(ReportAction::Export {
                         report_id: report.id.clone(),
@@ -190,25 +183,27 @@ pub(super) fn show(
                 egui::ScrollArea::vertical()
                     .id_salt(("listing-functions", kind_salt(kind)))
                     .show(ui, |ui| {
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                         for item in &names {
                             let identity = function_identity(item.address, &item.name);
-                            let label = format!(
-                                "symbol {}\naddress {:x}\nmodule {}",
-                                item.name,
-                                item.address,
-                                if report.source_path.is_empty() {
-                                    "not recorded"
-                                } else {
-                                    report.source_path.as_str()
-                                }
+                            // One line: the name, then its address.
+                            let mut label = LayoutJob::default();
+                            label.append(
+                                &item.name,
+                                0.0,
+                                format(&egui::TextStyle::Body.resolve(ui.style()), theme::text()),
                             );
-                            if ui
-                                .selectable_label(
-                                    state.function.as_deref() == Some(identity.as_str()),
-                                    &label,
-                                )
-                                .clicked()
-                            {
+                            label.append(
+                                &format!("  0x{:x}", item.address),
+                                0.0,
+                                format(&mono, theme::muted()),
+                            );
+                            let selected = state.function.as_deref() == Some(identity.as_str());
+                            let mut response = ui.selectable_label(selected, label);
+                            if !report.source_path.is_empty() {
+                                response = response.on_hover_text(&report.source_path);
+                            }
+                            if response.clicked() {
                                 state.function = Some(identity);
                             }
                         }
@@ -330,6 +325,21 @@ pub(super) fn show(
                             row.set_selected(selected);
                             cells(&mut row, kind, state.scope, entry, &mono);
                             row.response().context_menu(|ui| {
+                                let cells: Vec<_> = columns
+                                    .iter()
+                                    .map(|(title, _)| *title)
+                                    .zip(row_text::texts(kind, state.scope, entry))
+                                    .collect();
+                                if let Some(next) = row_menu::menu(
+                                    ui,
+                                    &cells,
+                                    entry,
+                                    report.specimen_len,
+                                    state.content,
+                                ) {
+                                    state.command = Some(next);
+                                }
+                                ui.separator();
                                 let field = match kind {
                                     AnalysisKind::Disassembly => "mnemonic",
                                     AnalysisKind::Decompilation => "code",
@@ -354,13 +364,14 @@ pub(super) fn show(
                                         });
                                     }
                                 });
-                                if ui.button("Copy complete retained row").clicked() {
+                                if ui.button("Copy label and value").clicked() {
                                     ui.ctx()
                                         .copy_text(format!("{}\n{}", entry.label, entry.value));
                                     ui.close_menu();
                                 }
                             });
-                            if row.response().clicked() {
+                            let response = row.response();
+                            if response.clicked() || response.secondary_clicked() {
                                 clicked = Some((*listing_index, entry.clone()));
                             }
                         });

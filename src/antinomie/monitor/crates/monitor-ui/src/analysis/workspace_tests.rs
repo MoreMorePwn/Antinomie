@@ -1,6 +1,8 @@
 use super::*;
+use crate::analysis::row_menu::preview_matches;
 use antinomie_monitor_core::{
-    AnalysisAddressKind, AnalysisLocation, AnalysisRange, AnalysisRecord, AnalysisSectionState,
+    AnalysisAddressKind, AnalysisListing, AnalysisLocation, AnalysisRange, AnalysisRecord,
+    AnalysisSectionState,
 };
 
 fn fixture() -> AnalysisReport {
@@ -138,13 +140,19 @@ fn texts(output: &egui::FullOutput) -> Vec<(String, egui::Rect)> {
     result
 }
 
-fn render(
+type Listing = Result<AnalysisListingPage, String>;
+
+fn frame(
     ctx: &egui::Context,
     report: &AnalysisReport,
     state: &mut WorkspaceState,
+    kind: Option<AnalysisKind>,
     size: egui::Vec2,
     events: Vec<egui::Event>,
-    preview: Option<&Result<AnalysisSpecimenPage, String>>,
+    pages: (
+        Option<&Result<AnalysisSpecimenPage, String>>,
+        Option<&Listing>,
+    ),
 ) -> (egui::FullOutput, Option<ReportAction>) {
     let mut action = None;
     let output = ctx.run(
@@ -155,18 +163,93 @@ fn render(
         },
         |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                action = workspace_section(
-                    ui,
-                    Some(report),
-                    AnalysisKind::Strings,
-                    state,
-                    preview,
-                    None,
-                );
+                action = match kind {
+                    Some(kind) => {
+                        workspace_section(ui, Some(report), kind, state, pages.0, pages.1)
+                    }
+                    None => workspace(ui, Some(report), state, pages.0, pages.1),
+                };
             });
         },
     );
     (output, action)
+}
+
+fn render(
+    ctx: &egui::Context,
+    report: &AnalysisReport,
+    state: &mut WorkspaceState,
+    size: egui::Vec2,
+    events: Vec<egui::Event>,
+    preview: Option<&Result<AnalysisSpecimenPage, String>>,
+) -> (egui::FullOutput, Option<ReportAction>) {
+    let pages = (preview, None);
+    frame(
+        ctx,
+        report,
+        state,
+        Some(AnalysisKind::Strings),
+        size,
+        events,
+        pages,
+    )
+}
+
+/// What a pointer click did: the last frame, the first action it returned and
+/// the text it copied.
+struct Click {
+    output: egui::FullOutput,
+    action: Option<ReportAction>,
+    copied: Vec<String>,
+}
+
+/// A click of `button`, then frames in which a menu it opened can show.
+fn press(
+    ctx: &egui::Context,
+    report: &AnalysisReport,
+    state: &mut WorkspaceState,
+    kind: Option<AnalysisKind>,
+    size: egui::Vec2,
+    at: (egui::PointerButton, egui::Pos2),
+    pages: (
+        Option<&Result<AnalysisSpecimenPage, String>>,
+        Option<&Listing>,
+    ),
+) -> Click {
+    let (button, pos) = at;
+    let button = |pressed| egui::Event::PointerButton {
+        pos,
+        button,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let mut click = Click {
+        output: egui::FullOutput::default(),
+        action: None,
+        copied: Vec::new(),
+    };
+    for events in [
+        vec![egui::Event::PointerMoved(pos)],
+        vec![button(true)],
+        vec![button(false)],
+        Vec::new(),
+        Vec::new(),
+    ] {
+        let (output, action) = frame(ctx, report, state, kind, size, events, pages);
+        click.action = action.or(click.action);
+        click.copied.extend(
+            output
+                .platform_output
+                .commands
+                .iter()
+                .filter_map(|command| match command {
+                    egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                    _ => None,
+                }),
+        );
+        click.output = output;
+    }
+    click
 }
 
 fn click(
@@ -176,25 +259,107 @@ fn click(
     size: egui::Vec2,
     pos: egui::Pos2,
 ) -> Option<ReportAction> {
-    let mut action = None;
-    for events in [
-        vec![egui::Event::PointerMoved(pos)],
-        vec![egui::Event::PointerButton {
-            pos,
-            button: egui::PointerButton::Primary,
-            pressed: true,
-            modifiers: egui::Modifiers::NONE,
-        }],
-        vec![egui::Event::PointerButton {
-            pos,
-            button: egui::PointerButton::Primary,
-            pressed: false,
-            modifiers: egui::Modifiers::NONE,
-        }],
-    ] {
-        action = render(ctx, report, state, size, events, None).1.or(action);
+    let button = egui::PointerButton::Primary;
+    let kind = Some(AnalysisKind::Strings);
+    press(ctx, report, state, kind, size, (button, pos), (None, None)).action
+}
+
+fn center_of(output: &egui::FullOutput, text: &str) -> egui::Pos2 {
+    texts(output)
+        .into_iter()
+        .find(|(shown, _)| shown == text)
+        .unwrap_or_else(|| panic!("{text:?} not shown"))
+        .1
+        .center()
+}
+
+/// The menu items shown after right-clicking the row whose text starts with `cell`.
+fn row_menu(
+    ctx: &egui::Context,
+    report: &AnalysisReport,
+    state: &mut WorkspaceState,
+    kind: Option<AnalysisKind>,
+    cell: &str,
+    listing: Option<&Listing>,
+) -> (Vec<String>, egui::Pos2, Click) {
+    let size = egui::vec2(1280.0, 820.0);
+    let mut output = frame(ctx, report, state, kind, size, Vec::new(), (None, listing)).0;
+    for _ in 0..2 {
+        output = frame(ctx, report, state, kind, size, Vec::new(), (None, listing)).0;
     }
-    action
+    let pos = texts(&output)
+        .into_iter()
+        .find(|(text, _)| text == cell || text.starts_with(&format!("{cell} ")))
+        .unwrap_or_else(|| panic!("row {cell:?} not shown"))
+        .1
+        .center();
+    let button = egui::PointerButton::Secondary;
+    let click = press(
+        ctx,
+        report,
+        state,
+        kind,
+        size,
+        (button, pos),
+        (None, listing),
+    );
+    let items = texts(&click.output)
+        .into_iter()
+        .map(|(text, _)| text)
+        .filter(|text| text.starts_with("Copy ") || text.starts_with("Show "))
+        .collect();
+    (items, pos, click)
+}
+
+fn listing_page(report: &AnalysisReport, kind: AnalysisKind) -> Listing {
+    let rows: Vec<_> = report
+        .sections
+        .iter()
+        .find(|section| section.kind == kind)
+        .unwrap()
+        .entries
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(index, entry)| (index as u64, entry))
+        .collect();
+    Ok(AnalysisListingPage {
+        report_id: report.id.clone(),
+        kind,
+        query: String::new(),
+        start: 0,
+        total: rows.len() as u64,
+        rows,
+    })
+}
+
+fn with_listing(mut report: AnalysisReport, kind: AnalysisKind, keep: usize) -> AnalysisReport {
+    let section = report
+        .sections
+        .iter_mut()
+        .find(|section| section.kind == kind)
+        .unwrap();
+    section.entries.truncate(keep);
+    section.listing = Some(AnalysisListing {
+        rows: keep as u64,
+        bytes: 0,
+        truncated: false,
+    });
+    report
+}
+
+fn instruction(id: u64, entry: AnalysisData) -> AnalysisEntry {
+    AnalysisEntry {
+        label: format!("line {id}"),
+        value: format!("line {id}"),
+        offset: None,
+        record: Some(AnalysisRecord {
+            revision: 1,
+            id,
+            location: None,
+            data: entry,
+        }),
+    }
 }
 
 #[test]
@@ -220,6 +385,13 @@ fn virtualized_rows_and_large_text_narrow_tabs_keep_selection_and_read_actions()
                 .count()
                 < 40
         );
+        // The table owns the whole width: no Results/Details/Bytes tabs or pane.
+        for text in ["Results", "Details", "Bytes"] {
+            assert!(!shown.iter().any(|(shown, _)| shown == text), "{text}");
+        }
+        assert!(!shown
+            .iter()
+            .any(|(text, _)| text.contains("Select a result")));
         let pos = shown
             .iter()
             .find(|(text, _)| text == "0x0")
@@ -230,17 +402,33 @@ fn virtualized_rows_and_large_text_narrow_tabs_keep_selection_and_read_actions()
         assert!(click(&ctx, &report, &mut state, size, pos).is_none());
         let view = state.views.get_mut("Strings/All").unwrap();
         assert_eq!(view.selected, Some((true, 200)));
-        view.detail_tab = 2;
-        let output = render(&ctx, &report, &mut state, size, Vec::new(), None).0;
-        let pos = texts(&output)
-            .into_iter()
-            .find(|(text, _)| text.ends_with(" Bytes"))
-            .expect("byte request control visible")
-            .1
-            .center();
-        assert!(egui::Rect::from_min_size(egui::Pos2::ZERO, size).contains(pos));
+        // Reading bytes is a menu choice, asked for once.
+        let kind = Some(AnalysisKind::Strings);
+        let secondary = egui::PointerButton::Secondary;
+        let primary = egui::PointerButton::Primary;
+        let pages = (None, None);
+        let menu = press(
+            &ctx,
+            &report,
+            &mut state,
+            kind,
+            size,
+            (secondary, pos),
+            pages,
+        );
+        assert!(menu.action.is_none());
+        let item = center_of(&menu.output, "Show bytes…");
+        let chosen = press(
+            &ctx,
+            &report,
+            &mut state,
+            kind,
+            size,
+            (primary, item),
+            pages,
+        );
         assert_eq!(
-            click(&ctx, &report, &mut state, size, pos),
+            chosen.action,
             Some(ReportAction::ReadSpecimen {
                 report_id: report.id.clone(),
                 offset: 0,
@@ -257,7 +445,262 @@ fn virtualized_rows_and_large_text_narrow_tabs_keep_selection_and_read_actions()
 }
 
 #[test]
-fn stale_preview_and_category_switch_cannot_replace_selected_evidence() {
+fn row_menus_copy_each_column_and_open_details_windows() {
+    let report = fixture();
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let mut state = WorkspaceState::default();
+    let kind = Some(AnalysisKind::Strings);
+    let (items, pos, menu) = row_menu(&ctx, &report, &mut state, kind, "0x20", None);
+    assert_eq!(
+        items,
+        [
+            "Copy file offset",
+            "Copy encoding",
+            "Copy byte length",
+            "Copy retained",
+            "Copy value",
+            "Copy row",
+            "Show details…",
+            "Show bytes…",
+        ]
+    );
+    assert_eq!(
+        state.views["Strings/All"].selected,
+        Some((true, 201)),
+        "a right click selects its row"
+    );
+    // Values are complete and row copies are tab separated.
+    let size = egui::vec2(1280.0, 820.0);
+    let primary = egui::PointerButton::Primary;
+    let secondary = egui::PointerButton::Secondary;
+    let pages = (None, None);
+    let item = center_of(&menu.output, "Copy value");
+    let copied = press(
+        &ctx,
+        &report,
+        &mut state,
+        kind,
+        size,
+        (primary, item),
+        pages,
+    )
+    .copied;
+    assert_eq!(copied, ["fixture string 1"]);
+    let menu = press(
+        &ctx,
+        &report,
+        &mut state,
+        kind,
+        size,
+        (secondary, pos),
+        pages,
+    );
+    let item = center_of(&menu.output, "Copy row");
+    let copied = press(
+        &ctx,
+        &report,
+        &mut state,
+        kind,
+        size,
+        (primary, item),
+        pages,
+    )
+    .copied;
+    assert_eq!(copied, ["0x20\tASCII\t16\t16\tfixture string 1"]);
+    // Details open in a titled window; another row replaces its content.
+    let menu = press(
+        &ctx,
+        &report,
+        &mut state,
+        kind,
+        size,
+        (secondary, pos),
+        pages,
+    );
+    let item = center_of(&menu.output, "Show details…");
+    let opened = press(
+        &ctx,
+        &report,
+        &mut state,
+        kind,
+        size,
+        (primary, item),
+        pages,
+    );
+    let windows = |shown: &[(String, egui::Rect)]| {
+        shown
+            .iter()
+            .filter(|(text, _)| text.starts_with("Details · "))
+            .map(|(text, _)| text.clone())
+            .collect::<Vec<_>>()
+    };
+    let shown = texts(&opened.output);
+    assert_eq!(windows(&shown), ["Details · fixture string 1"]);
+    assert!(shown.iter().any(|(text, _)| text == "Record 201"));
+    assert!(shown
+        .iter()
+        .any(|(text, _)| text == "File range: 0x20 + 16 octets"));
+    let other = report.sections[1].entries[2].clone();
+    state.rows.open(RowCommand::Details(other));
+    let mut replaced = egui::FullOutput::default();
+    for _ in 0..2 {
+        let pages = (None, None);
+        replaced = frame(&ctx, &report, &mut state, kind, size, Vec::new(), pages).0;
+    }
+    assert_eq!(windows(&texts(&replaced)), ["Details · fixture string 2"]);
+}
+
+#[test]
+fn rows_without_a_proven_byte_range_offer_no_bytes_window() {
+    let mut report = fixture();
+    report.specimen_len = Some(100);
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let mut state = WorkspaceState::default();
+    // The fourth string ends past the specimen, so its range is unproven.
+    let kind = Some(AnalysisKind::Strings);
+    let (items, _, _) = row_menu(&ctx, &report, &mut state, kind, "0x60", None);
+    assert!(items.contains(&"Show details…".to_owned()), "{items:?}");
+    assert!(!items.iter().any(|item| item == "Show bytes…"), "{items:?}");
+}
+
+#[test]
+fn listing_rows_copy_their_laid_out_columns_and_show_the_offset_in_content() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let report = with_listing(fixture(), AnalysisKind::Strings, 3);
+    let page = listing_page(&report, AnalysisKind::Strings);
+    let size = egui::vec2(1280.0, 820.0);
+    let primary = egui::PointerButton::Primary;
+    let pages = (None, Some(&page));
+    let mut state = WorkspaceState::default();
+    let kind = Some(AnalysisKind::Strings);
+    let (items, _, menu) = row_menu(&ctx, &report, &mut state, kind, "20", Some(&page));
+    assert_eq!(
+        items[..5],
+        [
+            "Copy offset",
+            "Copy encoding",
+            "Copy length",
+            "Copy text",
+            "Copy row"
+        ]
+    );
+    assert!(items.contains(&"Show details…".to_owned()));
+    assert!(items.contains(&"Show bytes…".to_owned()));
+    assert!(
+        !items.iter().any(|item| item.ends_with("in Content")),
+        "a separate pane has no Content tab"
+    );
+    let item = center_of(&menu.output, "Copy row");
+    let copied = press(
+        &ctx,
+        &report,
+        &mut state,
+        kind,
+        size,
+        (primary, item),
+        pages,
+    );
+    assert_eq!(copied.copied, ["20\tASCII\t16\tfixture string 1"]);
+    let view = &state.views["Strings/listing"];
+    assert_eq!(
+        view.listing.selected.as_ref().map(|(index, _)| *index),
+        Some(1)
+    );
+    let shown = texts(&copied.output);
+    assert!(!shown
+        .iter()
+        .any(|(text, _)| text.contains("Select a result")));
+    // In the tabbed window the same row can open the Content tab at its offset.
+    let mut tabbed = WorkspaceState::default();
+    tabbed.bind(&report.id);
+    tabbed.tab = Tab::Strings;
+    let (items, _, menu) = row_menu(&ctx, &report, &mut tabbed, None, "20", Some(&page));
+    assert!(items.contains(&"Show in Content".to_owned()), "{items:?}");
+    let item = center_of(&menu.output, "Show in Content");
+    let opened = press(
+        &ctx,
+        &report,
+        &mut tabbed,
+        None,
+        size,
+        (primary, item),
+        pages,
+    );
+    assert_eq!(tabbed.tab, Tab::Content);
+    assert!(matches!(
+        opened.action,
+        Some(ReportAction::ReadSpecimen { offset: 0x20, .. })
+    ));
+}
+
+#[test]
+fn disassembly_functions_panel_has_no_module_note_and_rows_have_no_pane() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let mut report = fixture();
+    report.sections.push(AnalysisSection {
+        kind: AnalysisKind::Disassembly,
+        state: AnalysisSectionState::Complete,
+        summary: String::new(),
+        tools: Vec::new(),
+        listing: None,
+        entries: vec![
+            instruction(
+                1,
+                AnalysisData::Function {
+                    name: "entry".into(),
+                    address: 0x1000,
+                    size: 8,
+                },
+            ),
+            instruction(
+                2,
+                AnalysisData::Instruction {
+                    address: 0x1000,
+                    bytes: "b8 01 00 00 00".into(),
+                    mnemonic: "mov".into(),
+                    operands: "eax, 1".into(),
+                    function: Some("entry".into()),
+                },
+            ),
+        ],
+    });
+    let report = with_listing(report, AnalysisKind::Disassembly, 2);
+    let page = listing_page(&report, AnalysisKind::Disassembly);
+    let mut state = WorkspaceState::default();
+    let kind = Some(AnalysisKind::Disassembly);
+    let (items, _, menu) = row_menu(&ctx, &report, &mut state, kind, "mov", Some(&page));
+    assert_eq!(
+        items[..4],
+        ["Copy address", "Copy bytes", "Copy instruction", "Copy row"]
+    );
+    let shown = texts(&menu.output);
+    assert!(shown.iter().any(|(text, _)| text == "Functions"));
+    assert!(!shown.iter().any(|(text, _)| text.starts_with("Module:")));
+    for text in ["Results", "Details"] {
+        assert!(!shown.iter().any(|(shown, _)| shown == text), "{text}");
+    }
+    let size = egui::vec2(1280.0, 820.0);
+    let primary = egui::PointerButton::Primary;
+    let item = center_of(&menu.output, "Copy instruction");
+    let pages = (None, Some(&page));
+    let copied = press(
+        &ctx,
+        &report,
+        &mut state,
+        kind,
+        size,
+        (primary, item),
+        pages,
+    );
+    assert_eq!(copied.copied, ["mov eax, 1"]);
+}
+
+#[test]
+fn bytes_window_waits_for_a_matching_page_and_yields_to_the_content_tab() {
     let report = fixture();
     let page = AnalysisSpecimenPage {
         report_id: report.id.clone(),
@@ -271,27 +714,99 @@ fn stale_preview_and_category_switch_cannot_replace_selected_evidence() {
     other.report_id = "other-report".into();
     assert!(!preview_matches(&other, &report, 0, 16));
     let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let entry = report.sections[1].entries[0].clone();
+    let range = AnalysisRange { offset: 0, len: 16 };
     let mut state = WorkspaceState::default();
     state.bind(&report.id);
-    state.active_view = Some("Structures/All".into());
-    state.views.insert(
-        "Strings/All".into(),
-        ViewState {
-            selected: Some((true, 200)),
-            requested: Some((0, 16)),
-            ..Default::default()
-        },
-    );
-    render(
+    state.rows.open(RowCommand::Bytes(entry, range));
+    let size = egui::vec2(800.0, 600.0);
+    let read = ReportAction::ReadSpecimen {
+        report_id: report.id.clone(),
+        offset: 0,
+        data_len: 16,
+    };
+    let stale = Ok(AnalysisSpecimenPage {
+        offset: 16,
+        ..page.clone()
+    });
+    let kind = Some(AnalysisKind::Strings);
+    let (_, action) = frame(
         &ctx,
         &report,
         &mut state,
-        egui::vec2(800.0, 600.0),
+        kind,
+        size,
         Vec::new(),
-        Some(&Ok(page)),
+        (Some(&stale), None),
     );
-    assert!(state.views["Strings/All"].requested.is_none());
-    assert_eq!(state.views["Strings/All"].selected, Some((true, 200)));
+    assert_eq!(action, Some(read));
+    // A new window is laid out once before it shows.
+    let (output, action) = frame(
+        &ctx,
+        &report,
+        &mut state,
+        kind,
+        size,
+        Vec::new(),
+        (Some(&stale), None),
+    );
+    assert_eq!(action, None);
+    assert!(texts(&output)
+        .iter()
+        .any(|(text, _)| text == "Awaiting matching specimen preview."));
+    let (_, action) = frame(
+        &ctx,
+        &report,
+        &mut state,
+        kind,
+        size,
+        Vec::new(),
+        (Some(&stale), None),
+    );
+    assert_eq!(action, None);
+    let page = Ok(page);
+    let (output, _) = frame(
+        &ctx,
+        &report,
+        &mut state,
+        kind,
+        size,
+        Vec::new(),
+        (Some(&page), None),
+    );
+    assert!(texts(&output)
+        .iter()
+        .any(|(text, _)| text.starts_with("00000000  00 00 00")));
+    // The Content tab reads its own page; coming back asks for the bytes again.
+    let is_read = |action, wanted| {
+        matches!(
+            action,
+            Some(ReportAction::ReadSpecimen { offset: 0, data_len, .. }) if (data_len == 16) == wanted
+        )
+    };
+    state.tab = Tab::Content;
+    let (_, action) = frame(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        size,
+        Vec::new(),
+        (None, None),
+    );
+    assert!(is_read(action, false), "the Content tab reads its own page");
+    state.tab = Tab::Strings;
+    let (_, action) = frame(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        size,
+        Vec::new(),
+        (None, None),
+    );
+    assert!(is_read(action, true), "the bytes window reads again");
 }
 
 #[test]

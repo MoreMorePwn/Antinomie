@@ -3,6 +3,7 @@
 //! as a hex dump, text or a byte literal. Reading is a report action; this
 //! view only asks for the page it shows.
 use super::*;
+use crate::analysis::row_menu::preview_matches;
 use antinomie_monitor_core::ANALYSIS_PREVIEW_MAX_SIZE;
 use std::fmt::Write as _;
 

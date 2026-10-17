@@ -120,6 +120,11 @@ it runs.
   or MBC objective, or as a table), Disassembly, Decompilation and Symbols
   (symbols, imports and exports). A selected row with a file offset opens at
   that offset in Content.
+- **Static analysis rows.** Result tables, Disassembly and Decompilation use
+  the whole window; the right-hand Details and Bytes pane is gone. Right-click
+  a row to select it and copy any column or the whole row, show its details or
+  bytes in a floating window, or open its offset in Content. The functions list
+  no longer repeats the module note.
 - **Embedded content and segments.** Static analysis runs binwalk's signature
   scan as its own category; it records each signature's file offset and
   extracts nothing. Structures records every ELF program header (not only

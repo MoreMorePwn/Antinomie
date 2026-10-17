@@ -6,6 +6,7 @@ mod tabs;
 use self::tabs::{FileInfo, Tab};
 use super::{
     records::{self, Column, Structure},
+    row_menu::{self, RowCommand, RowWindows},
     section_title, ReportAction,
 };
 use antinomie_monitor_core::{
@@ -33,6 +34,7 @@ pub(crate) struct WorkspaceState {
     symbols: Structure,
     content: content::ContentState,
     capa: capa_matrix::CapaState,
+    rows: RowWindows,
 }
 
 impl WorkspaceState {
@@ -136,8 +138,6 @@ struct ViewState {
     query_error: Option<String>,
     sort: Option<(Column, bool)>,
     selected: Option<(bool, u64)>,
-    detail_tab: u8,
-    requested: Option<(u64, usize)>,
     listing: super::listing_view::ListingState,
 }
 
@@ -145,6 +145,18 @@ impl WorkspaceState {
     /// Bring the tab that shows `kind` to the front.
     fn show(&mut self, kind: AnalysisKind) {
         (self.tab, self.file_info) = tabs::locate(kind, self.file_info);
+    }
+
+    /// Carry out what a row's context menu chose.
+    fn run_row(&mut self, command: Option<RowCommand>) {
+        match command {
+            Some(RowCommand::ShowInContent(offset)) => {
+                self.content.go_to(offset);
+                self.tab = Tab::Content;
+            }
+            Some(command) => self.rows.open(command),
+            None => {}
+        }
     }
 
     fn bind(&mut self, report_id: &str) {
@@ -225,12 +237,22 @@ fn render(
         }
         Some(kind) => {
             ui.separator();
-            if let Some(next) = results(ui, report, state, preview, listing, Some(kind)) {
+            if let Some(next) = results(ui, report, state, listing, Some(kind)) {
                 action = Some(next);
             }
         }
     }
-    action
+    // The Content tab reads the same specimen preview as the bytes window.
+    let bytes_visible = forced.is_some() || state.tab != Tab::Content;
+    let windows = state.rows.show(
+        ui.ctx(),
+        (&report.id, forced),
+        report,
+        preview,
+        bytes_visible,
+        action.is_none(),
+    );
+    windows.or(action)
 }
 
 /// Export operations are explicit UI actions; no file or tool IO runs here.
@@ -279,7 +301,6 @@ fn results(
     ui: &mut egui::Ui,
     report: &AnalysisReport,
     state: &mut WorkspaceState,
-    preview: Option<&Result<AnalysisSpecimenPage, String>>,
     listing: Option<&Result<AnalysisListingPage, String>>,
     forced: Option<AnalysisKind>,
 ) -> Option<ReportAction> {
@@ -352,81 +373,25 @@ fn results(
         let view = state.views.entry(view_key).or_default();
         view.listing.set_record(record_context);
         view.listing.scope = (kind == AnalysisKind::Structures).then_some(filter);
-        let wide = ui.available_width() >= 800.0;
-        if wide {
-            ui.horizontal_top(|ui| {
-                let height = ui.available_height();
-                let width = (ui.available_width() * 0.64).max(300.0);
-                ui.allocate_ui_with_layout(
-                    egui::vec2(width, height),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        if let Some(next) = super::listing_view::show(
-                            ui,
-                            report,
-                            section,
-                            listing,
-                            &mut view.listing,
-                        ) {
-                            action = Some(next);
-                        }
-                    },
-                );
-                ui.separator();
-                ui.allocate_ui_with_layout(
-                    egui::vec2(ui.available_width(), height),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        let selected = view
-                            .listing
-                            .selected
-                            .as_ref()
-                            .map(|(_, entry)| entry.clone());
-                        if let Some(next) = detail(ui, report, selected.as_ref(), view, preview) {
-                            action = Some(next);
-                        }
-                    },
-                );
-            });
-        } else {
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut view.detail_tab, 0, "Results");
-                ui.selectable_value(&mut view.detail_tab, 1, "Details");
-                ui.selectable_value(&mut view.detail_tab, 2, "Bytes");
-            });
-            if view.detail_tab == 0 {
-                if let Some(next) =
-                    super::listing_view::show(ui, report, section, listing, &mut view.listing)
-                {
-                    action = Some(next);
-                }
-            } else {
-                let selected = view
-                    .listing
-                    .selected
-                    .as_ref()
-                    .map(|(_, entry)| entry.clone());
-                if let Some(next) = detail(ui, report, selected.as_ref(), view, preview) {
-                    action = Some(next);
-                }
-            }
+        view.listing.content = forced.is_none();
+        if let Some(next) =
+            super::listing_view::show(ui, report, section, listing, &mut view.listing)
+        {
+            action = Some(next);
         }
+        let command = view.listing.command.take();
+        state.run_row(command);
         return action;
     }
     let record_context = state.record_context_for(report, kind);
     let record_tags = state.record_tags.clone();
     let view_key = format!("{kind:?}/{filter:?}");
-    let changed_view = state.active_view.as_ref() != Some(&view_key);
     state.active_view = Some(view_key.clone());
     let view = state.views.entry(view_key).or_default();
-    if changed_view {
-        view.requested = None;
-    }
     if kind == AnalysisKind::Entropy {
         if let Some(index) = super::entropy::chart(ui, section, report.specimen_len) {
             view.selected = Some(records::identity(index, &section.entries[index]));
-            view.requested = None;
-            view.detail_tab = 1;
+            state.rows.open_details(section.entries[index].clone());
         }
     }
     ui.horizontal(|ui| {
@@ -463,45 +428,17 @@ fn results(
         .map(|(_, entry)| entry);
     if view.selected.is_some() && selected.is_none() {
         view.selected = None;
-        view.requested = None;
     }
-    let wide = ui.available_width() >= 800.0;
-    if wide {
-        ui.horizontal_top(|ui| {
-            let height = ui.available_height();
-            let width = (ui.available_width() * 0.64).max(300.0);
-            ui.allocate_ui_with_layout(
-                egui::vec2(width, height),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| table(ui, section, filter, &indices, view),
-            );
-            ui.separator();
-            ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width(), height),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    let selected = selected_entry(section, view);
-                    if let Some(next) = detail(ui, report, selected, view, preview) {
-                        action = Some(next);
-                    }
-                },
-            );
-        });
-    } else {
-        ui.horizontal(|ui| {
-            ui.selectable_value(&mut view.detail_tab, 0, "Results");
-            ui.selectable_value(&mut view.detail_tab, 1, "Details");
-            ui.selectable_value(&mut view.detail_tab, 2, "Bytes");
-        });
-        if view.detail_tab == 0 {
-            table(ui, section, filter, &indices, view);
-        } else {
-            let selected = selected_entry(section, view);
-            if let Some(next) = detail(ui, report, selected, view, preview) {
-                action = Some(next);
-            }
-        }
-    }
+    let command = table(
+        ui,
+        section,
+        filter,
+        &indices,
+        view,
+        report.specimen_len,
+        forced.is_none(),
+    );
+    state.run_row(command);
     action
 }
 
@@ -749,21 +686,28 @@ fn selected_entry<'a>(section: &'a AnalysisSection, view: &ViewState) -> Option<
         .map(|(_, entry)| entry)
 }
 
+/// The retained rows as a table; a row's context menu may ask for a command.
 fn table(
     ui: &mut egui::Ui,
     section: &AnalysisSection,
     filter: Structure,
     indices: &[usize],
     view: &mut ViewState,
-) {
+    specimen_len: Option<u64>,
+    content: bool,
+) -> Option<RowCommand> {
     let legacy = indices
         .iter()
         .all(|&index| section.entries[index].record.is_none());
     let columns = records::columns(section.kind, filter, legacy);
     let height = ui.text_style_height(&egui::TextStyle::Body) + 12.0;
+    let mut command = None;
     egui::ScrollArea::horizontal()
         .id_salt("analysis-table-horizontal")
+        .auto_shrink([false, false])
         .show(ui, |ui| {
+            // Rows select on click; text selection would swallow it.
+            ui.style_mut().interaction.selectable_labels = false;
             let max_height = ui.available_height().max(height);
             let mut table = TableBuilder::new(ui)
                 .id_salt("analysis-table")
@@ -772,16 +716,18 @@ fn table(
                 .sense(egui::Sense::click())
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                 .max_scroll_height(max_height);
-            for &column in columns {
-                table = table.column(
-                    TableColumn::initial(if column == Column::Value {
-                        300.0
-                    } else {
-                        145.0
-                    })
-                    .at_least(90.0)
-                    .clip(true),
-                );
+            for (position, &column) in columns.iter().enumerate() {
+                let width = if column == Column::Value {
+                    300.0
+                } else {
+                    145.0
+                };
+                // The last column takes the width the other columns leave.
+                table = table.column(if position + 1 == columns.len() {
+                    TableColumn::remainder().at_least(width).clip(true)
+                } else {
+                    TableColumn::initial(width).at_least(90.0).clip(true)
+                });
             }
             table
                 .header(height, |mut header| {
@@ -816,228 +762,32 @@ fn table(
                         let entry = &section.entries[index];
                         let id = records::identity(index, entry);
                         row.set_selected(view.selected == Some(id));
-                        let mut clicked = false;
                         for &column in columns {
                             row.col(|ui| {
                                 let text = column.text(entry);
-                                clicked |= ui
-                                    .add(
-                                        egui::Label::new(&text)
-                                            .truncate()
-                                            .sense(egui::Sense::click()),
-                                    )
-                                    .on_hover_text(text)
-                                    .clicked();
+                                ui.add(egui::Label::new(&text).truncate())
+                                    .on_hover_text(text);
                             });
                         }
-                        if clicked || row.response().clicked() {
-                            if view.selected != Some(id) {
-                                view.requested = None;
+                        row.response().context_menu(|ui| {
+                            let cells: Vec<_> = columns
+                                .iter()
+                                .map(|column| (column.label(), column.text(entry)))
+                                .collect();
+                            if let Some(next) =
+                                row_menu::menu(ui, &cells, entry, specimen_len, content)
+                            {
+                                command = Some(next);
                             }
+                        });
+                        let response = row.response();
+                        if response.clicked() || response.secondary_clicked() {
                             view.selected = Some(id);
                         }
                     });
                 });
         });
-}
-
-fn copy_value(ui: &mut egui::Ui, label: &str, value: &str) {
-    ui.horizontal(|ui| {
-        ui.strong(label);
-        if ui
-            .button(egui_phosphor::regular::COPY)
-            .on_hover_text(format!("Copy full {label}"))
-            .clicked()
-        {
-            ui.ctx().copy_text(value.to_owned());
-        }
-    });
-    ui.add(egui::Label::new(egui::RichText::new(value).monospace()).wrap());
-}
-
-fn detail(
-    ui: &mut egui::Ui,
-    report: &AnalysisReport,
-    entry: Option<&AnalysisEntry>,
-    view: &mut ViewState,
-    preview: Option<&Result<AnalysisSpecimenPage, String>>,
-) -> Option<ReportAction> {
-    let Some(entry) = entry else {
-        ui.add(
-            egui::Label::new(
-                "Select a result to read its complete retained value, evidence and bytes here.",
-            )
-            .wrap(),
-        );
-        return None;
-    };
-    let mut action = None;
-    egui::ScrollArea::both()
-        .id_salt("analysis-item-detail")
-        .show(ui, |ui| {
-            if view.detail_tab != 2 {
-                copy_value(ui, &entry.label, &entry.value);
-                if let Some(record) = &entry.record {
-                    ui.label(format!("Record {}", record.id));
-                    if let Some(location) = &record.location {
-                        ui.monospace(format!("{:?}: 0x{:x}", location.kind, location.value));
-                        if let Some(range) = location.file_range {
-                            ui.monospace(format!(
-                                "File range: 0x{:x} + {} octets",
-                                range.offset, range.len
-                            ));
-                        }
-                    }
-                    if let AnalysisData::Section {
-                        raw_flags, flags, ..
-                    } = &record.data
-                    {
-                        copy_value(ui, "Raw flags", raw_flags);
-                        copy_value(ui, "Decoded flags", &flags.join(" | "));
-                    }
-                    for column in [
-                        Column::Address,
-                        Column::VirtualSize,
-                        Column::FileSize,
-                        Column::Library,
-                        Column::Ordinal,
-                        Column::Encoding,
-                        Column::Size,
-                        Column::Retained,
-                        Column::Entropy,
-                        Column::Scope,
-                        Column::Kind,
-                        Column::Defined,
-                    ] {
-                        let value = column.text(entry);
-                        if value != "-" {
-                            copy_value(ui, column.label(), &value);
-                        }
-                    }
-                    if let AnalysisData::Property {
-                        observed, evidence, ..
-                    } = &record.data
-                    {
-                        copy_value(ui, "Observed", observed);
-                        copy_value(ui, "Evidence", evidence);
-                    }
-                } else {
-                    ui.label("Legacy field/value evidence");
-                    if let Some(offset) = entry.offset {
-                        ui.monospace(format!("File offset: 0x{offset:x}"));
-                    }
-                }
-                ui.separator();
-            }
-            let Some(range) = records::file_range(entry, report.specimen_len) else {
-                ui.label("No proven retained file range for byte preview.");
-                return;
-            };
-            let data_len = usize::try_from(range.len.min(256)).unwrap_or(256);
-            if ui
-                .button(format!("{} Bytes", egui_phosphor::regular::EYE))
-                .on_hover_text("Read bounded retained specimen bytes")
-                .clicked()
-            {
-                view.requested = Some((range.offset, data_len));
-                action = Some(ReportAction::ReadSpecimen {
-                    report_id: report.id.clone(),
-                    offset: range.offset,
-                    data_len,
-                });
-            }
-            let Some((offset, data_len)) = view.requested else {
-                return;
-            };
-            ui.horizontal(|ui| {
-                let previous = offset.saturating_sub(256).max(range.offset);
-                let next = offset
-                    .checked_add(data_len as u64)
-                    .filter(|next| *next < range.offset + range.len);
-                let mut target = None;
-                if ui
-                    .add_enabled(
-                        offset > range.offset,
-                        egui::Button::new(egui_phosphor::regular::ARROW_LEFT),
-                    )
-                    .on_hover_text("Previous specimen page")
-                    .clicked()
-                {
-                    target = Some(previous);
-                }
-                if ui
-                    .add_enabled(
-                        next.is_some(),
-                        egui::Button::new(egui_phosphor::regular::ARROW_RIGHT),
-                    )
-                    .on_hover_text("Next specimen page")
-                    .clicked()
-                {
-                    target = next;
-                }
-                if let Some(offset) = target {
-                    let data_len = usize::try_from((range.offset + range.len - offset).min(256))
-                        .unwrap_or(256);
-                    view.requested = Some((offset, data_len));
-                    action = Some(ReportAction::ReadSpecimen {
-                        report_id: report.id.clone(),
-                        offset,
-                        data_len,
-                    });
-                }
-            });
-            let (offset, data_len) = view.requested.unwrap_or((offset, data_len));
-            ui.monospace(format!("File offset 0x{offset:x} / {data_len} octets"));
-            match preview {
-                Some(Ok(page)) if preview_matches(page, report, offset, data_len) => {
-                    for (index, chunk) in page.data.chunks(16).enumerate() {
-                        let hex = chunk
-                            .iter()
-                            .map(|byte| format!("{byte:02x}"))
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        let text: String = chunk
-                            .iter()
-                            .map(|&byte| {
-                                if byte.is_ascii_graphic() || byte == b' ' {
-                                    char::from(byte)
-                                } else {
-                                    '.'
-                                }
-                            })
-                            .collect();
-                        ui.monospace(format!(
-                            "{:08x}  {:47}  {}",
-                            offset + index as u64 * 16,
-                            hex,
-                            text
-                        ));
-                    }
-                }
-                Some(Err(reason)) => {
-                    ui.colored_label(crate::theme::error(), reason);
-                }
-                _ => {
-                    ui.label("Awaiting matching specimen preview.");
-                }
-            }
-        });
-    action
-}
-
-fn preview_matches(
-    page: &AnalysisSpecimenPage,
-    report: &AnalysisReport,
-    offset: u64,
-    data_len: usize,
-) -> bool {
-    page.report_id == report.id
-        && page.offset == offset
-        && page.data.len() == data_len
-        && Some(page.total_len) == report.specimen_len
-        && offset
-            .checked_add(data_len as u64)
-            .is_some_and(|end| end <= page.total_len)
+    command
 }
 
 #[cfg(test)]
@@ -1094,7 +844,6 @@ mod tests {
             "strings".into(),
             ViewState {
                 selected: Some((true, 1)),
-                requested: Some((8, 4)),
                 ..Default::default()
             },
         );

@@ -172,7 +172,7 @@ pub(super) fn show(
         state.content.leave();
     }
     let next = match state.tab {
-        Tab::FileInfo => file_info(ui, report, state, preview, listing),
+        Tab::FileInfo => file_info(ui, report, state, listing),
         Tab::Content => content::show(ui, report, &mut state.content, preview),
         Tab::Symbols => {
             if !matches!(
@@ -187,15 +187,7 @@ pub(super) fn show(
                 }
             });
             let filter = state.symbols;
-            category(
-                ui,
-                report,
-                state,
-                preview,
-                listing,
-                AnalysisKind::Structures,
-                filter,
-            )
+            category(ui, report, state, listing, AnalysisKind::Structures, filter)
         }
         Tab::Capa => {
             let section = report
@@ -215,7 +207,6 @@ pub(super) fn show(
                         ui,
                         report,
                         state,
-                        preview,
                         listing,
                         AnalysisKind::Capabilities,
                         Structure::All,
@@ -225,7 +216,7 @@ pub(super) fn show(
         }
         tab => {
             let kind = tab.kind().expect("a single-category tab");
-            category(ui, report, state, preview, listing, kind, Structure::All)
+            category(ui, report, state, listing, kind, Structure::All)
         }
     };
     action = action.or(next);
@@ -278,7 +269,6 @@ fn file_info(
     ui: &mut egui::Ui,
     report: &AnalysisReport,
     state: &mut WorkspaceState,
-    preview: Option<&Result<AnalysisSpecimenPage, String>>,
     listing: Option<&Result<AnalysisListingPage, String>>,
 ) -> Option<ReportAction> {
     ui.horizontal_wrapped(|ui| {
@@ -302,7 +292,7 @@ fn file_info(
             state.active_view = None;
             overview(ui, report, state)
         }
-        Some((kind, filter)) => category(ui, report, state, preview, listing, kind, filter),
+        Some((kind, filter)) => category(ui, report, state, listing, kind, filter),
     }
 }
 
@@ -311,7 +301,6 @@ fn category(
     ui: &mut egui::Ui,
     report: &AnalysisReport,
     state: &mut WorkspaceState,
-    preview: Option<&Result<AnalysisSpecimenPage, String>>,
     listing: Option<&Result<AnalysisListingPage, String>>,
     kind: AnalysisKind,
     filter: Structure,
@@ -329,7 +318,7 @@ fn category(
         );
         return None;
     }
-    results(ui, report, state, preview, listing, None)
+    results(ui, report, state, listing, None)
 }
 
 fn pending(report: &AnalysisReport, kind: AnalysisKind) -> bool {
@@ -358,16 +347,5 @@ fn selected_offset(report: &AnalysisReport, state: &WorkspaceState) -> Option<u6
             selected_entry(section, view)
         }
     }?;
-    let location = entry.record.as_ref()?.location.as_ref();
-    location
-        .and_then(|location| location.file_range.map(|range| range.offset))
-        .or_else(|| {
-            location
-                .filter(|location| {
-                    location.kind == antinomie_monitor_core::AnalysisAddressKind::FileOffset
-                })
-                .map(|location| location.value)
-        })
-        .or(entry.offset)
-        .filter(|offset| report.specimen_len.is_some_and(|len| *offset < len))
+    records::file_offset(entry, report.specimen_len)
 }

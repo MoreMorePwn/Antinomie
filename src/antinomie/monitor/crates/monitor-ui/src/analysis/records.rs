@@ -291,6 +291,20 @@ pub(super) fn file_range(
     (range.len > 0 && end <= specimen_len?).then_some(range)
 }
 
+/// The file offset a row records, when the specimen holds it.
+pub(super) fn file_offset(entry: &AnalysisEntry, specimen_len: Option<u64>) -> Option<u64> {
+    let location = entry.record.as_ref()?.location.as_ref();
+    location
+        .and_then(|location| location.file_range.map(|range| range.offset))
+        .or_else(|| {
+            location
+                .filter(|location| location.kind == AnalysisAddressKind::FileOffset)
+                .map(|location| location.value)
+        })
+        .or(entry.offset)
+        .filter(|offset| specimen_len.is_some_and(|len| *offset < len))
+}
+
 pub(super) fn searchable(entry: &AnalysisEntry) -> String {
     let mut value = format!("{} {}", entry.label, entry.value);
     if let Some(record) = &entry.record {
