@@ -6,6 +6,9 @@ impl MonitorApp {
     pub(super) fn draw(&mut self, ctx: &egui::Context) {
         self.escape(ctx);
         self.performance.show(ctx, &self.options.data_dir);
+        if self.settings.show_fps {
+            self.performance.show_fps(ctx);
+        }
         self.shortcuts(ctx);
         self.accept_dropped_file(ctx);
         if self.dependencies.show(ctx, &self.options) {

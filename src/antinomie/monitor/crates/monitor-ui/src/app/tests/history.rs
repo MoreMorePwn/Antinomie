@@ -660,3 +660,43 @@ fn all_live_windows_keep_independent_run_identity_when_one_closes() {
     app.reopen(run("one"));
     assert!(app.terminals["one"].open);
 }
+
+#[test]
+fn the_run_list_keeps_the_analysis_mark_without_copying_report_rows() {
+    let mut analyzed = run("analyzed");
+    analyzed.state = RunState::Finalized;
+    analyzed.request.path = "/bin/analyzed".into();
+    analyzed.analysis = Some(section_report("analyzed", "sample"));
+    let copy = listed(&analyzed);
+    assert!(copy
+        .analysis
+        .as_ref()
+        .is_some_and(|report| report.sections.is_empty() && report.id == "analyzed"));
+    assert_eq!(copy.id, analyzed.id);
+    assert_eq!(copy.request.path, analyzed.request.path);
+    assert_eq!(analyzed.analysis.as_ref().unwrap().sections.len(), 3);
+    assert!(listed(&run("plain")).analysis.is_none());
+
+    let mut app = app();
+    observer_fixture(&mut app);
+    app.history = vec![analyzed.clone()];
+    app.focus_panel = Some(Panel::RunHistory);
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let size = egui::vec2(1400.0, 900.0);
+    for _ in 0..3 {
+        render(&mut app, &ctx, size);
+    }
+    let shown: Vec<_> = texts(&render(&mut app, &ctx, size))
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect();
+    assert!(
+        shown.iter().any(|text| text.ends_with("[static analysis]")),
+        "{shown:?}"
+    );
+    assert_eq!(
+        app.history[0].analysis, analyzed.analysis,
+        "drawing leaves the retained run whole"
+    );
+}

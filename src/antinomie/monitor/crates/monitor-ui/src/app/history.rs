@@ -83,19 +83,22 @@ impl MonitorApp {
             &fields,
             &[],
         );
+        // Copies for drawing only: they keep whether a report exists, not the
+        // report's rows, so this list does not duplicate every retained run's
+        // analysis each frame.
         let mut runs: Vec<_> = self
             .snapshot
             .runs
             .iter()
             .filter(|run| run.vm_id == vm_id)
-            .cloned()
+            .map(listed)
             .collect();
+        let live: std::collections::HashSet<_> = runs.iter().map(|run| run.id.clone()).collect();
         runs.extend(
             self.history
                 .iter()
-                .filter(|run| run.vm_id == vm_id && !runs.iter().any(|live| live.id == run.id))
-                .cloned()
-                .collect::<Vec<_>>(),
+                .filter(|run| run.vm_id == vm_id && !live.contains(&run.id))
+                .map(listed),
         );
         runs.retain(|run| match self.run_filter {
             RunFilter::All => true,
@@ -169,6 +172,7 @@ impl MonitorApp {
             };
         let height = (ui.available_height() - 36.0).max(50.0);
         let mut inspect = navigation.map(|index| (runs[index].id.clone(), false));
+        let mut reopen = None;
         ui.allocate_ui_with_layout(
             egui::vec2(ui.available_width(), height + 28.0),
             egui::Layout::top_down(egui::Align::Min),
@@ -254,7 +258,7 @@ impl MonitorApp {
                                     "Open terminal",
                                     true,
                                 ) {
-                                    self.reopen(run.clone());
+                                    reopen = Some(run.id.clone());
                                 }
                                 if icon(
                                     ui,
@@ -288,6 +292,17 @@ impl MonitorApp {
                     });
             },
         );
+        // The terminal keeps the complete run, not the drawing copy.
+        if let Some(run) = reopen.and_then(|id| {
+            self.snapshot
+                .runs
+                .iter()
+                .chain(&self.history)
+                .find(|run| run.id == id && run.vm_id == vm_id)
+                .cloned()
+        }) {
+            self.reopen(run);
+        }
         if let Some((id, open)) = inspect {
             let _ = open;
             self.select_run(Some(id));
@@ -714,6 +729,39 @@ impl MonitorApp {
                 run.state,
                 RunState::Running | RunState::StopRequested | RunState::TerminalClosed
             )
+    }
+}
+
+/// `run` for listing: everything but the static-analysis rows. Whether a
+/// report exists stays visible to the row, filter and `[static analysis]` mark.
+pub(super) fn listed(run: &RunSummary) -> RunSummary {
+    RunSummary {
+        started_ms: run.started_ms,
+        clock_anchor: run.clock_anchor,
+        id: run.id.clone(),
+        vm_id: run.vm_id.clone(),
+        boot_id: run.boot_id.clone(),
+        session_id: run.session_id,
+        root_task_cookie: run.root_task_cookie,
+        pid: run.pid,
+        request: run.request.clone(),
+        directory: run.directory.clone(),
+        terminal_eof: run.terminal_eof,
+        state: run.state.clone(),
+        recording_error: run.recording_error.clone(),
+        execution: run.execution.clone(),
+        analysis: run
+            .analysis
+            .as_ref()
+            .map(|report| antinomie_monitor_core::AnalysisReport {
+                id: report.id.clone(),
+                state: report.state,
+                source_path: String::new(),
+                specimen_sha256: None,
+                specimen_len: report.specimen_len,
+                reason: None,
+                sections: Vec::new(),
+            }),
     }
 }
 
