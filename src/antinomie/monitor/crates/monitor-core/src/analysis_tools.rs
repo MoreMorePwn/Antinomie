@@ -10,6 +10,7 @@ use std::{
     fs::{self, File},
     io::{self, Read},
     path::{Component, Path, PathBuf},
+    process::{Command, Stdio},
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
@@ -49,6 +50,18 @@ pub struct Download {
     pub into: &'static str,
 }
 
+/// A Python tool installed into its own virtual environment from a
+/// hash-locked requirements file, with the system Python.
+#[derive(Debug)]
+pub struct Requirements {
+    /// pip requirements pinning every package and the SHA-256 of each wheel.
+    pub lock: &'static str,
+    /// Approximate download size of the wheels, in octets.
+    pub size: u64,
+    /// Python statement that succeeds once the tool can be used.
+    pub check: &'static str,
+}
+
 #[derive(Debug)]
 pub struct Package {
     pub id: &'static str,
@@ -58,15 +71,20 @@ pub struct Package {
     pub purpose: &'static str,
     pub license: &'static str,
     pub downloads: &'static [Download],
+    pub requirements: Option<Requirements>,
     /// A file that exists once the tool is unpacked.
     pub entry: &'static str,
 }
 
 impl Package {
     pub fn size(&self) -> u64 {
-        self.downloads.iter().map(|d| d.size).sum()
+        self.downloads.iter().map(|d| d.size).sum::<u64>()
+            + self.requirements.as_ref().map_or(0, |r| r.size)
     }
 }
+
+/// The Python a requirements-based tool's environment is created with.
+const SYSTEM_PYTHON: &str = "/usr/bin/python3";
 
 pub const PACKAGES: &[Package] = &[
     Package {
@@ -83,6 +101,7 @@ pub const PACKAGES: &[Package] = &[
             archive: Archive::Zip { strip: 0 },
             into: "",
         }],
+        requirements: None,
         entry: "capa",
     },
     Package {
@@ -112,6 +131,7 @@ pub const PACKAGES: &[Package] = &[
                 into: "base",
             },
         ],
+        requirements: None,
         entry: "diec.sh",
     },
     Package {
@@ -138,6 +158,7 @@ pub const PACKAGES: &[Package] = &[
                 into: "jdk",
             },
         ],
+        requirements: None,
         entry: "ghidra/support/analyzeHeadless",
     },
     // Wheels are zip files: unpacked side by side they form an import path
@@ -183,7 +204,24 @@ pub const PACKAGES: &[Package] = &[
                 into: "lib",
             },
         ],
+        requirements: None,
         entry: "lib/volatility3/__init__.py",
+    },
+    // pip installs exactly the wheels the lock names; the system Python
+    // creates the environment, so there is no interpreter to download.
+    Package {
+        id: "sigma",
+        name: "Sigma (pySigma)",
+        version: "2.0.1",
+        purpose: "Sigma detection with pySigma and its SQLite backend 2.1.0",
+        license: "LGPL-3.0 (pySigma); LGPL-2.1 (SQLite backend); dependencies under their own licenses",
+        downloads: &[],
+        requirements: Some(Requirements {
+            lock: include_str!("../assets/sigma-requirements.txt"),
+            size: 3_600_000,
+            check: "import sigma.backends.sqlite",
+        }),
+        entry: "venv/bin/python",
     },
 ];
 
@@ -228,7 +266,8 @@ impl ToolStatus {
 pub struct ToolInstall {
     pub id: String,
     pub name: String,
-    /// "download", "verify", "unpack", "done" or "failed".
+    /// "download", "verify", "unpack", "prepare", "packages", "done" or
+    /// "failed".
     pub stage: String,
     pub received: u64,
     pub total: u64,
@@ -467,6 +506,9 @@ pub fn install(
     mut progress: impl FnMut(&str, u64, u64),
 ) -> Result<(), String> {
     let package = package(id).ok_or("unknown analysis tool")?;
+    if let Some(requirements) = &package.requirements {
+        return install_python(data_dir, package, requirements, cancel, progress);
+    }
     let tools = tools_dir(data_dir);
     let downloads = tools.join(".downloads").join(package.id);
     fs::create_dir_all(&downloads).map_err(|e| format!("{}: {e}", downloads.display()))?;
@@ -548,6 +590,177 @@ pub fn install(
     Ok(())
 }
 
+/// Create `<tool>/venv` with the system Python and install the locked wheels
+/// into it. pip refuses any file whose SHA-256 the lock does not name; the
+/// environment replaces an earlier one only after its check passes.
+fn install_python(
+    data_dir: &Path,
+    package: &Package,
+    requirements: &Requirements,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(&str, u64, u64),
+) -> Result<(), String> {
+    let total = requirements.size;
+    progress("prepare", 0, total);
+    let version = step(
+        Command::new(SYSTEM_PYTHON).args([
+            "-I",
+            "-c",
+            "import sys; print(*sys.version_info[:2], sep='.')",
+        ]),
+        cancel,
+    )
+    .map_err(|error| {
+        format!("{SYSTEM_PYTHON} did not run: {error}; on Debian/Ubuntu: sudo apt install python3")
+    })?;
+    let minor = version
+        .trim()
+        .strip_prefix("3.")
+        .and_then(|minor| minor.parse::<u32>().ok());
+    if minor.is_none_or(|minor| minor < 11) {
+        return Err(format!(
+            "{} needs Python 3.11 or newer; {SYSTEM_PYTHON} is {}",
+            package.name,
+            version.trim()
+        ));
+    }
+    let tools = tools_dir(data_dir);
+    let partial = tools.join(format!(".{}.partial", package.id));
+    let _ = fs::remove_dir_all(&partial);
+    fs::create_dir_all(&partial).map_err(|e| format!("{}: {e}", partial.display()))?;
+    let result = (|| {
+        let venv = partial.join("venv");
+        step(
+            Command::new(SYSTEM_PYTHON).arg("-m").arg("venv").arg(&venv),
+            cancel,
+        )
+        .map_err(|error| {
+            format!(
+                "the system Python cannot create a virtual environment ({error}); \
+                     on Debian/Ubuntu: sudo apt install python3-venv"
+            )
+        })?;
+        let lock = partial.join("requirements.txt");
+        fs::write(&lock, requirements.lock).map_err(|e| e.to_string())?;
+        progress("packages", 0, total);
+        let python = venv.join("bin/python");
+        step(
+            Command::new(&python)
+                .args([
+                    "-I",
+                    "-m",
+                    "pip",
+                    "install",
+                    "--disable-pip-version-check",
+                    "--no-input",
+                    "--no-cache-dir",
+                    "--require-hashes",
+                    "--only-binary=:all:",
+                    "--no-deps",
+                    "-r",
+                ])
+                .arg(&lock),
+            cancel,
+        )
+        .map_err(|error| format!("pip could not install the locked packages: {error}"))?;
+        progress("verify", total, total);
+        step(
+            Command::new(&python).args(["-I", "-c", requirements.check]),
+            cancel,
+        )
+        .map_err(|error| format!("the installed environment failed its check: {error}"))?;
+        fs::write(
+            partial.join("tool.json"),
+            serde_json::to_vec_pretty(&Manifest {
+                id: package.id.into(),
+                version: package.version.into(),
+            })
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())
+    })();
+    if let Err(error) = result {
+        let _ = fs::remove_dir_all(&partial);
+        return Err(error);
+    }
+    let directory = tools.join(package.id);
+    let _ = fs::remove_dir_all(&directory);
+    fs::rename(&partial, &directory).map_err(|e| e.to_string())?;
+    progress("done", total, total);
+    Ok(())
+}
+
+/// Run one installation step; its standard output on success, the end of
+/// its diagnostics on failure. `cancel` stops it.
+fn step(command: &mut Command, cancel: &AtomicBool) -> Result<String, String> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let mut stdout = child.stdout.take().ok_or("no output pipe")?;
+    let mut stderr = child.stderr.take().ok_or("no diagnostics pipe")?;
+    let output = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = stdout.read_to_string(&mut text);
+        text
+    });
+    let diagnostics = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = stderr.read_to_string(&mut text);
+        text
+    });
+    let status = loop {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("tool installation cancelled".into());
+        }
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            break status;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    let output = output.join().unwrap_or_default();
+    let diagnostics = diagnostics.join().unwrap_or_default();
+    if status.success() {
+        Ok(output)
+    } else {
+        let tail: Vec<_> = diagnostics.lines().rev().take(3).collect();
+        Err(tail
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .trim()
+            .to_owned())
+    }
+}
+
+/// The Python of the Sigma tool installed in `data_dir`, if it is there.
+/// Answers are reused for two seconds, so frames do not read the disk.
+pub fn managed_sigma_python(data_dir: &Path) -> Option<PathBuf> {
+    type Answer = (std::time::Instant, PathBuf, Option<PathBuf>);
+    static CACHE: std::sync::Mutex<Option<Answer>> = std::sync::Mutex::new(None);
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, directory, answer)) = cache.as_ref()
+        && directory == data_dir
+        && at.elapsed() < Duration::from_secs(2)
+    {
+        return answer.clone();
+    }
+    let package = package("sigma")?;
+    let answer = installed_version(data_dir, package)
+        .map(|_| tools_dir(data_dir).join(package.id).join(package.entry));
+    *cache = Some((
+        std::time::Instant::now(),
+        data_dir.to_owned(),
+        answer.clone(),
+    ));
+    answer
+}
+
 /// Remove an Antinomie-installed tool (system installations are untouched).
 pub fn remove(data_dir: &Path, id: &str) -> Result<(), String> {
     let package = package(id).ok_or("unknown analysis tool")?;
@@ -584,7 +797,27 @@ mod tests {
     #[test]
     fn packages_are_pinned_and_consistent() {
         for package in PACKAGES {
-            assert!(!package.downloads.is_empty());
+            // Archives or a hash-locked Python environment, never both.
+            assert!(package.downloads.is_empty() != package.requirements.is_none());
+            if let Some(requirements) = &package.requirements {
+                let mut pins = 0;
+                for requirement in requirements.lock.split("\n\n").flat_map(|block| {
+                    block
+                        .lines()
+                        .filter(|line| !line.starts_with('#'))
+                        .collect::<Vec<_>>()
+                }) {
+                    if requirement.contains("==") {
+                        pins += 1;
+                    } else {
+                        let hash = requirement.trim().trim_end_matches(" \\");
+                        let digest = hash.strip_prefix("--hash=sha256:").unwrap();
+                        assert_eq!(digest.len(), 64);
+                        assert!(digest.bytes().all(|c| c.is_ascii_hexdigit()));
+                    }
+                }
+                assert!(pins > 0 && requirements.size > 0);
+            }
             for download in package.downloads {
                 assert_eq!(download.sha256.len(), 64);
                 assert!(download.sha256.bytes().all(|c| c.is_ascii_hexdigit()));
@@ -594,10 +827,10 @@ mod tests {
                 );
                 assert!(download.size > 0);
             }
-            // Volatility only runs from Antinomie's own pinned install.
+            // Volatility and Sigma only run from Antinomie's own pinned install.
             assert_eq!(
                 system_candidates(package.id).is_empty(),
-                package.id == "volatility3"
+                matches!(package.id, "volatility3" | "sigma")
             );
         }
     }

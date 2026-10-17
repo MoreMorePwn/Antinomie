@@ -122,6 +122,10 @@ pub(crate) fn show(
                                 ),
                                 "verify" => "Checking SHA-256".into(),
                                 "unpack" => "Unpacking".into(),
+                                "prepare" => "Creating the Python environment".into(),
+                                "packages" => {
+                                    "Installing the locked Python packages (SHA-256 checked)".into()
+                                }
                                 stage => stage.to_owned(),
                             },
                         ));
@@ -133,7 +137,8 @@ pub(crate) fn show(
                 RichText::new(
                     "Licenses: capa Apache-2.0; Detect It Easy MIT (with Qt LGPL-3.0 and ICU); \
                      Ghidra Apache-2.0 with the Eclipse Temurin JDK (GPL-2.0 with Classpath \
-                     exception). Set ANTINOMIE_ANALYSIS_TOOLS=managed to prefer Antinomie's \
+                     exception); pySigma LGPL-3.0 with its SQLite backend LGPL-2.1, installed \
+                     from PyPI into its own environment. Set ANTINOMIE_ANALYSIS_TOOLS=managed to prefer Antinomie's \
                      copies over the system's.",
                 )
                 .small()

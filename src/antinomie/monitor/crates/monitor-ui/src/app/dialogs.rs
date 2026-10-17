@@ -114,15 +114,21 @@ impl MonitorApp {
         if self.rules_open {
             let mut open = true;
             let tools = antinomie_monitor_core::ruleset::ToolConfig::from_sigma_setting(
-                &self.triage.detection_settings().sigma_python,
+                &self.triage.detection_settings().effective_sigma_python(),
             );
-            self.rules_ui.show(
+            match self.rules_ui.show(
                 ctx,
                 &mut open,
                 &self.options.data_dir,
-                self.settings.outbound_catalog,
+                &mut self.settings.outbound_catalog,
                 &tools,
-            );
+            ) {
+                Some(crate::rules_window::RulesAction::AppDependencies) => {
+                    self.dependencies.open = true;
+                }
+                Some(crate::rules_window::RulesAction::AnalysisTools) => self.tools_open = true,
+                None => {}
+            }
             if self.rules_ui.changed() {
                 self.rules_generation = self.rules_generation.saturating_add(1);
                 self.rules_summary = self.rules_ui.profile();

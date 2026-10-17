@@ -41,6 +41,20 @@ pub struct Settings {
     pub evidence_key: String,
 }
 
+impl Settings {
+    /// The Sigma Python a scan runs: the one set here, else the Sigma tool
+    /// installed in the data directory, else empty for the system Python.
+    pub fn effective_sigma_python(&self) -> String {
+        let configured = self.sigma_python.trim();
+        if !configured.is_empty() || self.rules_root.is_empty() {
+            return configured.to_owned();
+        }
+        crate::analysis_tools::managed_sigma_python(std::path::Path::new(&self.rules_root))
+            .map(|python| python.display().to_string())
+            .unwrap_or_default()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Identity {
     pub vm_id: String,
@@ -335,6 +349,45 @@ pub fn mitre_references(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_configured_python_wins_over_the_installed_sigma_tool() {
+        let data = std::env::temp_dir().join(format!("ant-sigma-tool-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&data);
+        let mut settings = Settings {
+            rules_root: data.display().to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            settings.effective_sigma_python(),
+            "",
+            "no tool: the system Python"
+        );
+        let tool = data.join("tools/sigma");
+        std::fs::create_dir_all(tool.join("venv/bin")).unwrap();
+        std::fs::write(tool.join("venv/bin/python"), b"").unwrap();
+        std::fs::write(
+            tool.join("tool.json"),
+            br#"{"id":"sigma","version":"2.0.1"}"#,
+        )
+        .unwrap();
+        // A different directory is not served from the previous answer.
+        let other = Settings {
+            rules_root: data.join("elsewhere").display().to_string(),
+            ..Default::default()
+        };
+        assert_eq!(other.effective_sigma_python(), "");
+        assert_eq!(
+            crate::analysis_tools::managed_sigma_python(&data),
+            Some(tool.join("venv/bin/python"))
+        );
+        settings.sigma_python = " /opt/python/bin/python ".into();
+        assert_eq!(settings.effective_sigma_python(), "/opt/python/bin/python");
+        settings.rules_root.clear();
+        settings.sigma_python.clear();
+        assert_eq!(settings.effective_sigma_python(), "", "no data directory");
+        let _ = std::fs::remove_dir_all(&data);
+    }
     #[test]
     fn journal_is_filter_independent_atomic_and_marks_omitted_events_partial() {
         let directory =

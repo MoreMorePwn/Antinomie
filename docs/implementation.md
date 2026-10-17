@@ -94,8 +94,13 @@ the rule manager under `<data-dir>/rules/`: installed community packs, custom
 group revisions and the enabled-rule selection. The manager reads
 `https://huggingface.co/buckets/MoreMorePwn/antinomie-rules/resolve/catalog.json`
 only when Check or Download is used, and only if
-Settings allows outbound catalog access. Scans do not contact the network.
-Suricata and pySigma 2.x with its SQLite backend are optional local executables.
+Settings allows outbound catalog access; the Rule manager offers to allow it
+in place. Scans do not contact the network. Suricata is an optional system
+package, listed in App dependencies. pySigma 2.x with its SQLite backend is
+the Sigma analysis tool: Tools > Analysis tools creates
+`<data-dir>/tools/sigma/venv` with the system Python and installs a
+hash-locked set of wheels (`assets/sigma-requirements.txt`, written by
+`scripts/rules/lock-sigma.py`); scans use it unless a Sigma Python is set.
 A downloaded pack does not install its engine. All execution stays in the
 existing mandatory offline sandbox. Results retain sources, versions, the
 selection digest, licenses, corpus hashes, coverage, rule-supplied ATT&CK
