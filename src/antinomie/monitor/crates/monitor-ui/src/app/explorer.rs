@@ -77,9 +77,7 @@ impl MonitorApp {
             if let Some(action) = action {
                 match action {
                     upload_browser::Action::Select(_) => {}
-                    upload_browser::Action::OpenDirectory(path) => {
-                        open_directory(&path)
-                    }
+                    upload_browser::Action::OpenDirectory(path) => open_directory(&path),
                     upload_browser::Action::SendRun(path) => self.send_explorer_file(path),
                 }
             }
