@@ -45,7 +45,9 @@ it runs.
   remain optional host tools. Missing fields/tools are explicit unavailable
   states. Byte previews verify scanned digests; packet evidence includes the
   owning capture segment. Network triage aggregates all run-owned segments
-  before queries and pagination.
+  before queries and pagination. Sigma process events carry a CommandLine
+  when the exec's whole argument vector was captured; otherwise it stays
+  missing, so a rule cannot match on an argument that was not seen.
 
 - **Triage tables.** Click column titles to sort; archive tables sort the whole
   matched query before paging. Missing values stay last, ties preserve recorded
