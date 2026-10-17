@@ -276,9 +276,11 @@ def scan(request, events_path):
                         level = getattr(rule.level, "name", "informational").lower()
                         refs = getattr(rule, "references", None) or []
                         ref_text = "; ".join(str(item) for item in refs if str(item).strip())
-                        details = "Evaluated against normalized captured Linux events; joined argv is not original shell quoting."
+                        description = " ".join(str(getattr(rule, "description", None) or "").split())[:2000]
+                        details = (description + " " if description else "") + "Evaluated against normalized captured Linux events; joined argv is not original shell quoting."
                         if ref_text:
                             details += " References: " + ref_text
+                        details = details.encode("utf-8")[:8000].decode("utf-8", errors="ignore")
                         report["findings"].append({"rule_id": str(rule.id or (source["name"] + ":" + rule.title)), "title": rule.title, "severity": level, "source": source["name"] + " sha256:" + sha256, "license": str(getattr(rule, "license", None) or "Not supplied by rule"), "author": supplied_authors(rule), "mitre": attack_tags(rule.tags or []), "count": total, "evidence": retained, "details": details, "rule_text": rule_yaml(data, rule)})
                 except Exception as error:
                     if "no such column" in str(error):
