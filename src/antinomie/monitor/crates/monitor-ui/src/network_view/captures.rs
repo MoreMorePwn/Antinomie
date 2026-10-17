@@ -83,7 +83,7 @@ impl NetworkView {
                     )
                     .on_hover_text(active.file.display().to_string());
                     response.context_menu(|ui| {
-                        self.capture_menu(ui, active, true);
+                        self.capture_menu(ui, active);
                     });
                     if response.clicked() {
                         open = Some(active.file.clone());
@@ -120,7 +120,7 @@ impl NetworkView {
                         capture.file.display()
                     ));
                     response.context_menu(|ui| {
-                        self.capture_menu(ui, capture, false);
+                        self.capture_menu(ui, capture);
                     });
                     if response.clicked() {
                         open = Some(capture.file.clone());
@@ -136,18 +136,9 @@ impl NetworkView {
         action
     }
 
-    fn capture_menu(&mut self, ui: &mut egui::Ui, capture: &NetworkCapture, live: bool) {
+    fn capture_menu(&self, ui: &mut egui::Ui, capture: &NetworkCapture) {
         let directory = capture.file.with_extension("metadata");
         crate::evidence::menu(ui, &directory);
-        let annotation = crate::evidence::annotation(ui, &directory);
-        let values = capture_row_values(capture, annotation.as_ref(), live);
-        ui.menu_button("Filter by field", |ui| {
-            for (field, value) in &values {
-                ui.menu_button(*field, |ui| {
-                    crate::query::value_menu(ui, field, value, &mut self.record_filter);
-                });
-            }
-        });
         if ui.button("Open PCAP directory").clicked() {
             if let Some(parent) = capture.file.parent() {
                 crate::evidence::reveal(ui.ctx(), parent);
