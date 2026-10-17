@@ -22,4 +22,5 @@ pub use listing::{LISTING_PAGE_MAX_ROWS, read_listing_page, read_listing_page_wi
 pub use specimen::read_specimen_range;
 pub use worker::worker_main_if_requested;
 pub(crate) mod jobs;
+pub(crate) mod validation;
 pub use jobs::open_report;

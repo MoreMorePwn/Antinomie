@@ -87,7 +87,7 @@ fn read_verified_range(
     }
     let report: AnalysisReport = serde_json::from_slice(&encoded)
         .map_err(|e| format!("saved analysis report malformed: {e}"))?;
-    super::jobs::validate_report(&report)?;
+    super::validation::validate_report(&report)?;
     if report.id != report_id {
         return Err("saved analysis report identity mismatch".into());
     }

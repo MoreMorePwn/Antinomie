@@ -100,7 +100,7 @@ fn worker_main() -> Result<(), String> {
         AnalysisState::Partial
     };
     let encoded = bounded_report(&mut report)?;
-    super::jobs::validate_report(&report)?;
+    super::validation::validate_report(&report)?;
     fs::File::create("/output/report.json")
         .and_then(|mut f| f.write_all(&encoded).and_then(|_| f.sync_all()))
         .map_err(|e| e.to_string())
@@ -1122,7 +1122,7 @@ mod tests {
             report.specimen_len = Some(specimen.len() as u64);
             report.sections = vec![result];
             bounded_report(&mut report).unwrap();
-            crate::analysis::jobs::validate_report(&report).unwrap();
+            crate::analysis::validation::validate_report(&report).unwrap();
             if kind == AnalysisKind::Entropy {
                 let entropy: Vec<_> = report.sections[0]
                     .entries
