@@ -19,27 +19,12 @@ impl NetworkView {
             });
         }
         self.refresh_payloads();
-        if let Some(rebuilt) = self.reconstruction() {
-            for note in rebuilt
-                .notes
-                .iter()
-                .filter(|note| !note.starts_with("Supported:"))
-            {
+        // Protocol coverage and reconstruction counts are not shown; the
+        // HTTP and DNS tables carry the rows themselves.
+        if self.reconstruction().is_none() {
+            if let Some(note) = self.payloads.as_ref().and_then(|cache| cache.note.clone()) {
                 ui.colored_label(theme::muted(), note);
             }
-            ui.colored_label(
-                theme::muted(),
-                format!(
-                    "{} HTTP/1 requests, {} DNS queries, {} retransmissions dropped. HTTPS segments seen: {}. HTTP/2 prefaces seen: {}.",
-                    rebuilt.http.len(),
-                    rebuilt.dns.len(),
-                    rebuilt.retransmissions_dropped,
-                    rebuilt.https_segments,
-                    rebuilt.http2_prefaces,
-                ),
-            );
-        } else if let Some(note) = self.payloads.as_ref().and_then(|cache| cache.note.clone()) {
-            ui.colored_label(theme::muted(), note);
         }
         if self.list.path.is_none() {
             empty_state(
