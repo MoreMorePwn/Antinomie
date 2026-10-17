@@ -83,6 +83,8 @@ struct LoadedResult {
     table: Result<ResultTable, String>,
     /// Indices of the rows the filter keeps, in the chosen order.
     shown: Vec<usize>,
+    /// The tree branches in front of each of `shown`; none when sorted.
+    branches: Vec<crate::tree_lines::Prefix>,
     filter: String,
     filter_error: Option<String>,
     sort: Option<Sort>,

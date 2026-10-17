@@ -514,7 +514,7 @@ fn field_color(kind: FieldKind) -> egui::Color32 {
     })
 }
 
-/// The packet's layers as a collapsible tree; a click chooses a layer or a
+/// The packet's layers as a collapsible tree of branches; a click chooses a layer or a
 /// field (`chosen`). Returns the byte range under the pointer.
 fn layer_tree(
     ui: &mut egui::Ui,
@@ -528,65 +528,72 @@ fn layer_tree(
     ui.spacing_mut().item_spacing.y = 0.0;
     ui.spacing_mut().button_padding.y = 1.0;
     ui.spacing_mut().interact_size.y = theme::row_height(font_size) - 2.0;
+    let char_width = crate::tree_lines::char_width(ui, mono);
+    let root = crate::tree_lines::Prefix::default();
     for (index, layer) in layers.iter().enumerate() {
         let id = ui.make_persistent_id(("packet_layer", &layer.name));
-        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
-            .show_header(ui, |ui| {
+        let mut state =
+            egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
+        let mut open = state.is_open();
+        crate::tree_lines::row(ui, &root, char_width, |ui| {
+            open = crate::tree_lines::caret(ui, &mut state);
+            let mut job = egui::text::LayoutJob::default();
+            job.append(
+                &layer.name,
+                0.0,
+                text_format(egui::FontId::proportional(font_size), theme::heading()),
+            );
+            if !layer.summary.is_empty() {
+                job.append(
+                    &format!("  {}", layer.summary),
+                    0.0,
+                    text_format(egui::FontId::proportional(font_size), theme::text()),
+                );
+            }
+            let response = ui.selectable_label(*chosen == Some((index, None)), job);
+            if response.clicked() {
+                *chosen = Some((index, None));
+            }
+            if response.hovered() {
+                hovered = Some(layer.start..layer.start + layer.len);
+            }
+        });
+        if !open {
+            continue;
+        }
+        let depths: Vec<_> = layer
+            .fields
+            .iter()
+            .map(|field| usize::from(field.depth) + 1)
+            .collect();
+        let branches = crate::tree_lines::prefixes(&depths);
+        for ((field_index, field), branch) in layer.fields.iter().enumerate().zip(&branches) {
+            crate::tree_lines::row(ui, branch, char_width, |ui| {
                 let mut job = egui::text::LayoutJob::default();
                 job.append(
-                    &layer.name,
+                    &format!("{}: ", field.name),
                     0.0,
-                    text_format(egui::FontId::proportional(font_size), theme::heading()),
+                    text_format(egui::FontId::proportional(font_size), theme::muted()),
                 );
-                if !layer.summary.is_empty() {
-                    job.append(
-                        &format!("  {}", layer.summary),
-                        0.0,
-                        text_format(egui::FontId::proportional(font_size), theme::text()),
-                    );
-                }
-                let response = ui.selectable_label(*chosen == Some((index, None)), job);
+                let font = match field.kind {
+                    FieldKind::Number | FieldKind::Address | FieldKind::Bytes => mono.clone(),
+                    _ => egui::FontId::proportional(font_size),
+                };
+                job.append(
+                    &field.value,
+                    0.0,
+                    text_format(font, field_color(field.kind)),
+                );
+                let selected = *chosen == Some((index, Some(field_index)));
+                let response = ui.selectable_label(selected, job);
                 if response.clicked() {
-                    *chosen = Some((index, None));
+                    *chosen = Some((index, Some(field_index)));
                 }
                 if response.hovered() {
-                    hovered = Some(layer.start..layer.start + layer.len);
-                }
-            })
-            .body(|ui| {
-                for (field_index, field) in layer.fields.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        if field.depth > 0 {
-                            ui.add_space(f32::from(field.depth) * 16.0);
-                        }
-                        let mut job = egui::text::LayoutJob::default();
-                        job.append(
-                            &format!("{}: ", field.name),
-                            0.0,
-                            text_format(egui::FontId::proportional(font_size), theme::muted()),
-                        );
-                        let font = match field.kind {
-                            FieldKind::Number | FieldKind::Address | FieldKind::Bytes => {
-                                mono.clone()
-                            }
-                            _ => egui::FontId::proportional(font_size),
-                        };
-                        job.append(
-                            &field.value,
-                            0.0,
-                            text_format(font, field_color(field.kind)),
-                        );
-                        let selected = *chosen == Some((index, Some(field_index)));
-                        let response = ui.selectable_label(selected, job);
-                        if response.clicked() {
-                            *chosen = Some((index, Some(field_index)));
-                        }
-                        if response.hovered() {
-                            hovered = Some(field.start..field.start + field.len);
-                        }
-                    });
+                    hovered = Some(field.start..field.start + field.len);
                 }
             });
+        }
     }
     hovered
 }

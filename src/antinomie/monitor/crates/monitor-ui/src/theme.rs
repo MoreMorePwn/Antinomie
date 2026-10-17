@@ -33,7 +33,12 @@ pub struct Palette {
     pub pointer: Color32,
     pub flag: Color32,
     pub name: Color32,
+    /// Branch colors of tree views, one per level, cycling.
+    pub tree: [Color32; TREE_COLOR_COUNT],
 }
+
+/// How many distinct branch colors a tree cycles through.
+pub const TREE_COLOR_COUNT: usize = 6;
 
 pub const DARK: Palette = Palette {
     bg: Color32::from_rgb(22, 24, 29),
@@ -58,6 +63,14 @@ pub const DARK: Palette = Palette {
     pointer: Color32::from_rgb(196, 160, 255),
     flag: Color32::from_rgb(120, 172, 255),
     name: Color32::from_rgb(255, 214, 128),
+    tree: [
+        Color32::from_rgb(110, 176, 255),
+        Color32::from_rgb(246, 168, 84),
+        Color32::from_rgb(110, 214, 150),
+        Color32::from_rgb(244, 134, 190),
+        Color32::from_rgb(98, 214, 226),
+        Color32::from_rgb(200, 140, 255),
+    ],
 };
 
 pub const LIGHT: Palette = Palette {
@@ -83,6 +96,14 @@ pub const LIGHT: Palette = Palette {
     pointer: Color32::from_rgb(112, 64, 196),
     flag: Color32::from_rgb(28, 92, 196),
     name: Color32::from_rgb(140, 92, 0),
+    tree: [
+        Color32::from_rgb(28, 92, 196),
+        Color32::from_rgb(190, 86, 0),
+        Color32::from_rgb(20, 132, 66),
+        Color32::from_rgb(190, 40, 130),
+        Color32::from_rgb(0, 122, 142),
+        Color32::from_rgb(130, 60, 200),
+    ],
 };
 
 static LIGHT_THEME: AtomicBool = AtomicBool::new(false);
@@ -142,6 +163,12 @@ pub fn info() -> Color32 {
 }
 pub fn terminal() -> Color32 {
     palette().terminal
+}
+
+/// The branch color of tree level `level` (0 is the first level below the
+/// roots); levels past the palette start over.
+pub fn tree_branch(level: usize) -> Color32 {
+    palette().tree[level % TREE_COLOR_COUNT]
 }
 
 /// What a value is, for its syntax color.

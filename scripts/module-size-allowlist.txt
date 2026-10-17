@@ -6,6 +6,6 @@ src/antinomie/monitor/crates/monitor-core/src/storage.rs 1804
 src/antinomie/monitor/crates/monitor-core/src/syscalls.rs 1241
 src/antinomie/monitor/crates/monitor-ui/src/samples_view.rs 1621
 src/antinomie/monitor/crates/monitor-ui/src/summary.rs 1238
-src/antinomie/monitor/crates/monitor-ui/src/trace.rs 2033
+src/antinomie/monitor/crates/monitor-ui/src/trace.rs 1927
 src/antinomie/monitor/crates/monitor-ui/src/triage.rs 1328
 src/antinomie/monitor/crates/monitor-ui/src/triage/detection.rs 1500

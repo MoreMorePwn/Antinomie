@@ -89,10 +89,22 @@ pub(super) fn column_widths<'a>(
 }
 
 pub(super) fn table(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[Vec<Cell>]) {
+    table_with(ui, id, headers, rows, None);
+}
+
+/// A table whose first column is a tree: `branches` holds the prefix of each
+/// row, in the order of `rows`. A sorted table is flat and leaves them out.
+pub(super) fn table_with(
+    ui: &mut egui::Ui,
+    id: &str,
+    headers: &[&str],
+    rows: &[Vec<Cell>],
+    branches: Option<&[crate::tree_lines::Prefix]>,
+) {
     egui::ScrollArea::horizontal()
         .id_salt((id, "columns"))
         .auto_shrink([false, true])
-        .show(ui, |ui| table_rows(ui, id, headers, rows));
+        .show(ui, |ui| table_rows_with(ui, id, headers, rows, branches));
     details::refresh(ui.ctx(), id, headers, rows);
 }
 
@@ -178,13 +190,31 @@ pub(super) fn request_evidence_jump(ctx: &egui::Context, values: &[(&str, RowVal
 }
 
 pub(super) fn table_rows(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[Vec<Cell>]) {
+    table_rows_with(ui, id, headers, rows, None);
+}
+
+fn table_rows_with(
+    ui: &mut egui::Ui,
+    id: &str,
+    headers: &[&str],
+    rows: &[Vec<Cell>],
+    branches: Option<&[crate::tree_lines::Prefix]>,
+) {
     use egui_extras::{Column, TableBuilder};
     if rows.is_empty() {
         ui.colored_label(theme::muted(), "Nothing recorded for this view.");
         return;
     }
-    let widths = column_widths(ui, headers, rows.iter().map(Vec::as_slice));
+    let mut widths = column_widths(ui, headers, rows.iter().map(Vec::as_slice));
     let order = sorting::order(ui.ctx(), id, headers, rows.iter().map(Vec::as_slice));
+    // Sorted rows lose their tree: shown flat.
+    let branches = branches.filter(|_| order.is_none());
+    let branch_font = egui::TextStyle::Monospace.resolve(ui.style());
+    let branch_char = crate::tree_lines::char_width(ui, &branch_font);
+    if let (Some(branches), Some(first)) = (branches, widths.first_mut()) {
+        let deepest = branches.iter().map(|prefix| prefix.width(branch_char));
+        *first += deepest.fold(0.0, f32::max).min(branch_char * 64.0);
+    }
     ui.set_width(
         (widths.iter().sum::<f32>()
             + ui.spacing().item_spacing.x * headers.len().saturating_sub(1) as f32
@@ -233,18 +263,35 @@ pub(super) fn table_rows(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[
                     .map_or(row.index(), |order| order[row.index()])];
                 let key = evidence_key(cells);
                 row.set_selected(selected.as_ref() == Some(&key));
-                for cell in cells {
+                let branch = branches.map(|branches| &branches[row.index()]);
+                for (column, cell) in cells.iter().enumerate() {
                     row.col(|ui| {
+                        let indent = branch.filter(|_| column == 0).map(|branch| {
+                            let reach = ui.spacing().item_spacing.y * 0.5;
+                            let lines = ui.max_rect().expand2(egui::vec2(0.0, reach));
+                            branch.paint(ui.painter(), lines, branch_char);
+                            branch.width(branch_char)
+                        });
                         let mut text = RichText::new(display_cell(&cell.text)).color(cell.color);
                         if cell.mono {
                             text = text.monospace();
                         }
-                        ui.add(
-                            egui::Label::new(text)
-                                .truncate()
-                                .selectable(false)
-                                .sense(egui::Sense::hover()),
-                        );
+                        let label = egui::Label::new(text)
+                            .truncate()
+                            .selectable(false)
+                            .sense(egui::Sense::hover());
+                        match indent {
+                            Some(width) => {
+                                let mut rect = ui.max_rect();
+                                rect.min.x += width;
+                                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                                    ui.add(label);
+                                });
+                            }
+                            None => {
+                                ui.add(label);
+                            }
+                        }
                     });
                 }
                 if row.response().clicked() {

@@ -16,6 +16,15 @@ pub(super) enum Row {
     },
 }
 
+impl Row {
+    fn depth(&self) -> usize {
+        match self {
+            Self::Entry(_, depth) | Self::Loading(_, depth) | Self::Message(_, depth) => *depth,
+            Self::Page { depth, .. } => *depth,
+        }
+    }
+}
+
 fn flatten(browser: &Browser, path: &Path, depth: usize, result: &mut Vec<Row>) {
     if depth >= DEPTH_LIMIT {
         result.push(Row::Message(
@@ -63,6 +72,10 @@ pub(super) fn show(browser: &mut Browser, ui: &mut egui::Ui, view: View) -> Opti
     if browser.rows_dirty {
         let mut rows = Vec::new();
         flatten(browser, root, 0, &mut rows);
+        // The root folder is the tree's root: its entries are the first level.
+        browser.branches = crate::tree_lines::prefixes(
+            &rows.iter().map(|row| row.depth() + 1).collect::<Vec<_>>(),
+        );
         browser.rows = rows;
         browser.rows_dirty = false;
     }
@@ -83,6 +96,8 @@ pub(super) fn show(browser: &mut Browser, ui: &mut egui::Ui, view: View) -> Opti
         .interact_size
         .y
         .max(ui.text_style_height(&egui::TextStyle::Body));
+    let mono = egui::TextStyle::Monospace.resolve(ui.style());
+    let char_width = crate::tree_lines::char_width(ui, &mono);
     #[cfg(test)]
     let mut drawn_rows = 0;
     egui::ScrollArea::both()
@@ -104,111 +119,116 @@ pub(super) fn show(browser: &mut Browser, ui: &mut egui::Ui, view: View) -> Opti
                     Row::Message(..) => egui::Id::new((index, "message")),
                 };
                 ui.push_id((view.id, browser.generation, row_id), |ui| {
-                    ui.horizontal(|ui| match &browser.rows[index] {
-                        Row::Entry(entry, depth) => {
-                            ui.add_space(*depth as f32 * ui.spacing().indent);
-                            let name = entry.path.file_name().unwrap_or_default().to_string_lossy();
-                            let available = entry.regular && entry.path.to_str().is_some();
-                            let response = if entry.directory {
-                                let icon = if browser.expanded.contains(&entry.path) {
-                                    "▾"
-                                } else {
-                                    "▸"
-                                };
-                                let response = ui.selectable_label(false, format!("{icon} {name}"));
-                                if response.clicked() {
-                                    toggle = Some(entry.path.clone());
-                                }
-                                response
-                            } else {
-                                ui.add_enabled(
-                                    available,
-                                    egui::SelectableLabel::new(
-                                        browser.selected.as_ref() == Some(&entry.path),
-                                        name.as_ref(),
-                                    ),
-                                )
-                            };
-                            if !entry.directory
-                                && (response.clicked() || response.secondary_clicked())
-                            {
-                                selected = Some(Action::Select(entry.path.clone()));
-                            }
-                            if view.actions {
-                                if available && response.double_clicked() && view.can_send {
-                                    selected = Some(Action::SendRun(entry.path.clone()));
-                                }
-                                response.context_menu(|ui| {
-                                    if available
-                                        && ui
-                                            .add_enabled(
-                                                view.can_send,
-                                                egui::Button::new("Send and Run"),
-                                            )
-                                            .clicked()
-                                    {
-                                        selected = Some(Action::SendRun(entry.path.clone()));
-                                        ui.close_menu();
+                    let branch = &browser.branches[index];
+                    crate::tree_lines::row(ui, branch, char_width, |ui| {
+                        match &browser.rows[index] {
+                            Row::Entry(entry, _) => {
+                                let name =
+                                    entry.path.file_name().unwrap_or_default().to_string_lossy();
+                                let available = entry.regular && entry.path.to_str().is_some();
+                                let response = if entry.directory {
+                                    let icon = if browser.expanded.contains(&entry.path) {
+                                        "▾"
+                                    } else {
+                                        "▸"
+                                    };
+                                    let response =
+                                        ui.selectable_label(false, format!("{icon} {name}"));
+                                    if response.clicked() {
+                                        toggle = Some(entry.path.clone());
                                     }
-                                    if ui.button("Open Directory").clicked() {
-                                        let directory = if entry.directory {
-                                            Some(entry.path.as_path())
-                                        } else {
-                                            entry.path.parent()
-                                        };
-                                        if let Some(directory) = directory {
-                                            selected =
-                                                Some(Action::OpenDirectory(directory.to_owned()));
+                                    response
+                                } else {
+                                    ui.add_enabled(
+                                        available,
+                                        egui::SelectableLabel::new(
+                                            browser.selected.as_ref() == Some(&entry.path),
+                                            name.as_ref(),
+                                        ),
+                                    )
+                                };
+                                if !entry.directory
+                                    && (response.clicked() || response.secondary_clicked())
+                                {
+                                    selected = Some(Action::Select(entry.path.clone()));
+                                }
+                                if view.actions {
+                                    if available && response.double_clicked() && view.can_send {
+                                        selected = Some(Action::SendRun(entry.path.clone()));
+                                    }
+                                    response.context_menu(|ui| {
+                                        if available
+                                            && ui
+                                                .add_enabled(
+                                                    view.can_send,
+                                                    egui::Button::new("Send and Run"),
+                                                )
+                                                .clicked()
+                                        {
+                                            selected = Some(Action::SendRun(entry.path.clone()));
+                                            ui.close_menu();
                                         }
-                                        ui.close_menu();
+                                        if ui.button("Open Directory").clicked() {
+                                            let directory = if entry.directory {
+                                                Some(entry.path.as_path())
+                                            } else {
+                                                entry.path.parent()
+                                            };
+                                            if let Some(directory) = directory {
+                                                selected = Some(Action::OpenDirectory(
+                                                    directory.to_owned(),
+                                                ));
+                                            }
+                                            ui.close_menu();
+                                        }
+                                    });
+                                }
+                                response.on_hover_ui(|ui| {
+                                    ui.label(entry.path.display().to_string());
+                                    if available && view.actions {
+                                        ui.label(if view.can_send {
+                                            "Double-click to Send and Run"
+                                        } else {
+                                            "Start the selected VM to Send and Run"
+                                        });
                                     }
                                 });
                             }
-                            response.on_hover_ui(|ui| {
-                                ui.label(entry.path.display().to_string());
-                                if available && view.actions {
-                                    ui.label(if view.can_send {
-                                        "Double-click to Send and Run"
-                                    } else {
-                                        "Start the selected VM to Send and Run"
-                                    });
-                                }
-                            });
-                        }
-                        Row::Loading(_, depth) | Row::Message(_, depth) => {
-                            ui.add_space(*depth as f32 * ui.spacing().indent);
-                            let text = match &browser.rows[index] {
-                                Row::Message(text, _) => text.as_str(),
-                                _ => "Reading folder…",
-                            };
-                            ui.add(
-                                egui::Label::new(egui::RichText::new(text).color(theme::muted()))
+                            Row::Loading(..) | Row::Message(..) => {
+                                let text = match &browser.rows[index] {
+                                    Row::Message(text, _) => text.as_str(),
+                                    _ => "Reading folder…",
+                                };
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(text).color(theme::muted()),
+                                    )
                                     .truncate(),
-                            )
-                            .on_hover_text(text);
-                        }
-                        Row::Page {
-                            path,
-                            depth,
-                            offset,
-                            count,
-                            more,
-                        } => {
-                            ui.add_space(*depth as f32 * ui.spacing().indent);
-                            ui.label(format!("{}–{}", offset + 1, offset + count));
-                            if ui
-                                .add_enabled(*offset > 0, egui::Button::new("Previous entries"))
-                                .clicked()
-                            {
-                                page = Some((path.clone(), offset.saturating_sub(PAGE_LEN)));
+                                )
+                                .on_hover_text(text);
                             }
-                            if ui
-                                .add_enabled(*more, egui::Button::new("Next entries"))
-                                .clicked()
-                            {
-                                page = offset
-                                    .checked_add(PAGE_LEN)
-                                    .map(|offset| (path.clone(), offset));
+                            Row::Page {
+                                path,
+                                offset,
+                                count,
+                                more,
+                                ..
+                            } => {
+                                ui.label(format!("{}–{}", offset + 1, offset + count));
+                                if ui
+                                    .add_enabled(*offset > 0, egui::Button::new("Previous entries"))
+                                    .clicked()
+                                {
+                                    page = Some((path.clone(), offset.saturating_sub(PAGE_LEN)));
+                                }
+                                if ui
+                                    .add_enabled(*more, egui::Button::new("Next entries"))
+                                    .clicked()
+                                {
+                                    page = offset
+                                        .checked_add(PAGE_LEN)
+                                        .map(|offset| (path.clone(), offset));
+                                }
                             }
                         }
                     });

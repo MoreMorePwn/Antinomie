@@ -104,6 +104,34 @@ fn results_copy_as_tab_separated_text_with_tree_indent() {
 }
 
 #[test]
+fn result_rows_get_tree_branches_from_their_depth_after_filtering() {
+    let row = |depth| memory::ResultRow {
+        depth,
+        values: vec![1.into()],
+    };
+    let table = ResultTable {
+        columns: vec![ResultColumn {
+            name: "PID".into(),
+            kind: ColumnKind::Int,
+        }],
+        rows: [0, 1, 2, 2, 1, 0, 1].map(row).to_vec(),
+        truncated: false,
+    };
+    let text = |shown: &[usize]| {
+        result_branches(&table, shown)
+            .iter()
+            .map(|branch| branch.text())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        text(&[0, 1, 2, 3, 4, 5, 6]),
+        ["", "├── ", "│   ├── ", "│   └── ", "└── ", "", "└── "]
+    );
+    // Rows without their parents are siblings of each other.
+    assert_eq!(text(&[1, 6]), ["├── ", "└── "]);
+}
+
+#[test]
 fn column_clicks_sort_up_then_down_then_back() {
     let up = next_sort(None, 2);
     assert_eq!(

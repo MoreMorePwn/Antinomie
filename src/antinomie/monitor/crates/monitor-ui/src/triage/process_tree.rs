@@ -7,26 +7,12 @@ pub(super) fn process_tree_nodes(
     nodes: &[ProcessNode],
     clock: Option<antinomie_monitor_core::HostClockAnchor>,
 ) {
-    let sorted = ui
-        .ctx()
-        .data(|data| {
-            data.get_temp::<sorting::Spec>(egui::Id::new(("triage-sort", "triage-process")))
-        })
-        .is_some();
     let rows = nodes
         .iter()
         .map(|node| {
             let mut row = vec![
                 cell(
-                    format!(
-                        "{}{}",
-                        if sorted {
-                            String::new()
-                        } else {
-                            "│ ".repeat(node.depth.min(16))
-                        },
-                        process_label(node)
-                    ),
+                    process_label(node),
                     theme::value(theme::ValueKind::Pointer),
                     true,
                 ),
@@ -127,7 +113,13 @@ pub(super) fn process_tree_nodes(
         .into_iter()
         .filter(|row| compiled.keep_table(&row[0].values))
         .collect::<Vec<_>>();
-    table(
+    // The tree is of the rows that are left: a filter leaves gaps, not stale
+    // branches.
+    let depths = filtered
+        .iter()
+        .map(|row| files::number(&row[0].values, "process.depth").map_or(0, |depth| depth as usize))
+        .collect::<Vec<_>>();
+    table_with(
         ui,
         "triage-process",
         &[
@@ -141,6 +133,7 @@ pub(super) fn process_tree_nodes(
             "Exec history",
         ],
         &filtered,
+        Some(&crate::tree_lines::prefixes(&depths)),
     );
 }
 

@@ -23,6 +23,7 @@ mod theme;
 mod time_format;
 mod tools_window;
 mod trace;
+mod tree_lines;
 mod triage;
 mod ui_performance;
 mod values;
