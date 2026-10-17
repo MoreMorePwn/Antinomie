@@ -5,6 +5,7 @@ mod analysis_sections;
 mod bases;
 mod capture;
 mod chrome;
+mod file_drop;
 mod history;
 mod launch;
 mod layout;

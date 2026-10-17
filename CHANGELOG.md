@@ -180,6 +180,11 @@ it runs.
   Properties, downloaded samples, snapshots and memory dumps.
 - **Upload.** The Upload dialog starts with Executable and Overwrite existing
   file checked.
+- **Drag and drop upload.** Dropping one file onto the Antinomie window opens
+  Upload with it as the host file and the guest path filled in; nothing is sent
+  until you press Upload. Several files, folders, items without a path, a VM
+  that is not running and an upload in progress are refused with a note on the
+  status line. The QEMU display window does not accept drops.
 - **Tree views.** Process trees (triage, capture and history), the guest file
   browser, memory results (pstree), the snapshot tree, packet layers, the
   decoded syscall tree and the analysis options draw branches like the `tree`

@@ -142,7 +142,9 @@ fn main() -> eframe::Result<()> {
                 .with_app_id("antinomie")
                 .with_title(format!("Antinomie {}", antinomie_monitor_core::APP_VERSION))
                 .with_inner_size([1280.0, 820.0])
-                .with_min_inner_size([800.0, 600.0]),
+                .with_min_inner_size([800.0, 600.0])
+                // Dropping a host file on this window opens Upload with it.
+                .with_drag_and_drop(true),
             ..Default::default()
         },
         Box::new(move |cc| {

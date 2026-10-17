@@ -7,6 +7,7 @@ impl MonitorApp {
         self.escape(ctx);
         self.performance.show(ctx, &self.options.data_dir);
         self.shortcuts(ctx);
+        self.accept_dropped_file(ctx);
         if self.dependencies.show(ctx, &self.options) {
             self.folder_picker.refresh(ctx);
         }
@@ -22,6 +23,7 @@ impl MonitorApp {
         self.layout = layout;
         self.dialogs(ctx);
         self.data_windows.show(ctx);
+        self.file_drop_overlay(ctx);
         let enabled = if self.process_picker.purpose == captures::ProcessPurpose::Core {
             self.manual_core_unavailable().is_none()
         } else {
