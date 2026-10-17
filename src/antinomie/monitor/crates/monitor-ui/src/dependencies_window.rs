@@ -130,14 +130,25 @@ impl DependenciesWindow {
                 if let Some(report) = &self.report {
                     egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
                         // Put repairs first so their commands stay visible even
-                        // on a small desktop or with enlarged application text.
-                        for check in report.checks.iter().filter(|check| check.problem.is_some())
-                            .chain(report.checks.iter().filter(|check| check.problem.is_none())) {
+                        // on a small desktop or with enlarged application text;
+                        // optional tools follow the required ones.
+                        let rank = |check: &dependencies::Check| match (&check.problem, check.optional) {
+                            (Some(_), false) => 0,
+                            (Some(_), true) => 1,
+                            (None, _) => 2,
+                        };
+                        let mut ordered: Vec<_> = report.checks.iter().collect();
+                        ordered.sort_by_key(|check| rank(check));
+                        for check in ordered {
                             ui.separator();
                             ui.horizontal_wrapped(|ui| {
                                 ui.label(egui::RichText::new(check.name).strong().color(theme::heading()));
-                                ui.colored_label(if check.problem.is_some() { theme::warn() } else { theme::good() },
-                                    if check.problem.is_some() { "Unavailable" } else { "Ready" });
+                                let (color, state) = match (&check.problem, check.optional) {
+                                    (Some(_), false) => (theme::warn(), "Unavailable"),
+                                    (Some(_), true) => (theme::muted(), "Optional, not installed"),
+                                    (None, _) => (theme::good(), "Ready"),
+                                };
+                                ui.colored_label(color, state);
                             });
                             ui.weak(check.purpose);
                             if let Some(problem) = &check.problem {
@@ -233,6 +244,7 @@ impl DependenciesWindow {
                         purpose: "test",
                         problem: None,
                         hint: "test fix",
+                        optional: false,
                     })
                     .collect(),
             }),
@@ -337,6 +349,7 @@ mod tests {
                         purpose: "Open VM windows",
                         problem: Some("missing".into()),
                         hint: "sudo apt install qemu-system-gui",
+                        optional: false,
                     }],
                 })
                 .unwrap();

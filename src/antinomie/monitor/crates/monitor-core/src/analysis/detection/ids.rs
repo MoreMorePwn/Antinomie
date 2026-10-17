@@ -193,12 +193,7 @@ fn suricata_tool() -> Option<String> {
     {
         return Some(path);
     }
-    super::super::tools::find(&[
-        "/usr/bin/suricata",
-        "/usr/sbin/suricata",
-        "/usr/local/bin/suricata",
-    ])
-    .map(str::to_owned)
+    super::super::tools::find(crate::dependencies::SURICATA).map(str::to_owned)
 }
 
 fn suricata_config(classification: &Path, reference: &Path, threshold: &Path) -> String {

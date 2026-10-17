@@ -378,14 +378,7 @@ fn probe_suricata() -> ToolProbe {
     if let Some(path) = std::env::var_os("ANTINOMIE_SURICATA") {
         paths.push(PathBuf::from(path));
     }
-    paths.extend(
-        [
-            "/usr/bin/suricata",
-            "/usr/sbin/suricata",
-            "/usr/local/bin/suricata",
-        ]
-        .map(PathBuf::from),
-    );
+    paths.extend(crate::dependencies::SURICATA.iter().map(PathBuf::from));
     for path in paths.iter().filter(|path| path.is_file()) {
         let Some(text) = path.to_str() else {
             continue;
