@@ -276,12 +276,26 @@ static void tools(void)
     run_tool("groups", (char *[]){"groups", NULL});
     run_tool("who", (char *[]){"who", NULL});
     run_tool("ip", (char *[]){"ip", "addr", NULL});
-    run_tool("find", (char *[]){"find", ".", "-maxdepth", "1", "-perm", "-4000", NULL});
+    run_tool("find", (char *[]){"find", ".", "-perm", "-4000", "-type", "f", NULL});
+    run_tool("ls", (char *[]){"ls", "-R", "/etc/default", NULL});
+    run_tool("cat", (char *[]){"cat", "/etc/passwd", NULL});
+    run_tool("cat", (char *[]){"cat", "/etc/group", NULL});
+    run_tool("cat", (char *[]){"cat", "/proc/1/cgroup", NULL});
+    run_tool("crontab", (char *[]){"crontab", "-l", NULL});
     run_tool("mkfifo", (char *[]){"mkfifo", "./named-pipe", NULL});
     run_tool("rm", (char *[]){"rm", "-f", "./named-pipe", NULL});
     run_tool("nohup", (char *[]){"nohup", "true", NULL});
     run_tool("sh", (char *[]){"sh", "-c", "printf 'shell child\\n' > shell.txt; "
                               "(printf 'grandchild\\n' > grandchild.txt) & wait", NULL});
+    /* Pipelines whose whole command line the rules read. The decoded text
+     * is "echo antinomie-feature-sample". */
+    run_tool("sh", (char *[]){"sh", "-c",
+                              "echo ZWNobyBhbnRpbm9taWUtZmVhdHVyZS1zYW1wbGU= | base64 -d | sh", NULL});
+    run_tool("sh", (char *[]){"sh", "-c", "uname -m | grep x86_64", NULL});
+    /* A setuid bit set and cleared on an empty data file that is never run. */
+    write_file("setuid.bin", "", 0, 0600);
+    run_tool("sh", (char *[]){"sh", "-c", "chown root ./setuid.bin 2>/dev/null; "
+                              "chmod u+s ./setuid.bin; chmod u-s ./setuid.bin", NULL});
 }
 
 static void dropped_programs(void)

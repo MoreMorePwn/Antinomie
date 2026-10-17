@@ -49,7 +49,7 @@ Run it as root to also load the BPF program; other steps work unprivileged.
 | Files › Changed | write, pwrite, writev, fallocate, truncate, chmod, chown, xattrs, utimensat, rename, link, symlink, unlink, mkdir/rmdir, `copy_file_range`, `sendfile`, shared-mapping `msync`, `O_TMPFILE` + `linkat` |
 | Network | DNS questions for `*.ngrok.io`, `api.ipify.org` and `example.com`; HTTP to example.com, testmynids.org, api.ipify.org and icanhazip.com; TLS ClientHellos with SNI |
 | Detection › IDS | ET 2047702 (ipify DNS), 2022642 (ngrok DNS), 2029622 (ipify HTTP), 2017398 (icanhazip HTTP), 2047703 (ipify SNI), 2019512 (ipify certificate), GPL 2100498 (testmynids `uid=0(root)` reply), and the custom 9900631 |
-| Detection › Sigma | Execution from `/tmp` and from `/dev/shm`; system information (`uname`, `hostname`, `uptime`), account (`id`), group (`groups`), file (`find`) and network (`ip`, `who`) discovery; `rm`, `mkfifo`, `nohup`; file names with an embedded base64 command and the Triple Cross lock and persistence names |
+| Detection › Sigma | Execution from `/tmp` and from `/dev/shm`; system information (`uname`, `hostname`, `uptime`), account (`id`, `cat /etc/passwd`), group (`groups`, `cat /etc/group`), file (`find`, `ls -R`), container (`cat /proc/1/cgroup`) and network (`ip`, `who`) discovery; `find -perm -4000`; `crontab -l`; base64 decoded and piped to a shell; `uname -m \| grep x86_64`; `chown root` with `chmod u+s`; `rm`, `mkfifo`, `nohup`; file names with an embedded base64 command and the Triple Cross lock and persistence names |
 | Detection › YARA | The custom `Antinomie_Feature_Sample` rule |
 | Static analysis | Sections and all 14 program headers; 700+ strings; binwalk finds the ZIP, PNG, zlib and gzip payloads and the Base64 table; capa reports about 40 capabilities, including XOR, Base64 and RC4 (T1027) and discovery (T1082, T1083, T1033); a high-entropy region; symbols, imports, disassembly and decompilation |
 
@@ -57,9 +57,8 @@ Run it as root to also load the BPF program; other steps work unprivileged.
 
 - YARA-Forge Core holds family signatures; a benign file can only match
   them by copying malware strings, which this sample does not do.
-- Antinomie does not record a process `CommandLine` (argv may be cut short),
-  so Sigma rules that need one do not apply; matches here use `Image` and
-  `TargetFilename` only.
+- Sigma sees a `CommandLine` only when the exec's whole argument vector was
+  captured; otherwise rules that need one do not apply to that process.
 - binwalk also reports two "ESP Image" signatures inside the random noise
   block; they are false positives of its signature scan.
 - The certificate rule needs a TLS 1.2 reply; the ClientHello offers only
