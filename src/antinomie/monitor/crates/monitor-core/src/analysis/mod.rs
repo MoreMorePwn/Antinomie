@@ -15,6 +15,7 @@ mod ident;
 mod listing;
 pub mod properties;
 mod rules;
+mod segments;
 mod specimen;
 pub(crate) mod tools;
 mod worker;
