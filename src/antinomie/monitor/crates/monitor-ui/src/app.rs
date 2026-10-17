@@ -82,6 +82,8 @@ struct Settings {
     automatic_detection: bool,
     /// Allow the explicit catalog check and rule-pack download buttons.
     outbound_catalog: bool,
+    /// Debug: draw the repaint rate in a corner of the window.
+    show_fps: bool,
     /// Sidebar sections folded away.
     vms_collapsed: bool,
     bases_collapsed: bool,
@@ -118,6 +120,7 @@ impl Default for Settings {
             address_lookup: crate::triage::AddressLookup::Tshark,
             automatic_detection: true,
             outbound_catalog: false,
+            show_fps: false,
             vms_collapsed: false,
             bases_collapsed: false,
             explorer_collapsed: false,

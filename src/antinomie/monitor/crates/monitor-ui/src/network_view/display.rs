@@ -368,6 +368,9 @@ pub(super) fn counts(packets: &[NetworkPacket]) -> Counts {
     fn sorted<K: Ord>(map: HashMap<K, usize>) -> Vec<(K, usize)> {
         let mut entries: Vec<_> = map.into_iter().collect();
         entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        // The quick-filter lists show this many; the rest would only be kept
+        // in memory (one entry per distinct port and address in the capture).
+        entries.truncate(QUICK_ENTRIES);
         entries
     }
     let (mut ports, mut addresses, mut protocols) = (

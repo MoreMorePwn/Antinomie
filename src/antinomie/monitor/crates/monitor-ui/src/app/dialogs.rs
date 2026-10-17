@@ -553,6 +553,11 @@ impl MonitorApp {
                     .on_hover_text(
                         "Only the Rule manager Check and Download buttons use the network. Scans stay offline.",
                     );
+                    dialog_section(ui, "Debug");
+                    ui.checkbox(&mut self.settings.show_fps, "Show FPS counter")
+                        .on_hover_text(
+                            "Shows frames per second, frame time and UI build time in the window corner. It reads only frames that are painted anyway, so an idle window shows idle.",
+                        );
                     dialog_section(ui, "Recording");
                     ui.add_enabled_ui(self.snapshot.active_vm.is_none(), |ui| {
                         form_grid("settings_recording", ui).show(ui, |ui| {

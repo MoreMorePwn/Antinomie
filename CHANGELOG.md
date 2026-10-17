@@ -99,6 +99,18 @@ it runs.
   UI CPU timings; `--graphics-driver d3d12` explicitly selects Mesa D3D12 for one
   compatible WSLg launch. Default graphics selection is unchanged.
 
+- **FPS counter.** Settings > Debug > Show FPS counter (off by default, kept with
+  the other settings) draws frames per second, frame time and UI build time in
+  the top-right corner of the window, averaged over the last second. It only
+  reads frames that are painted anyway and never requests a repaint, so a quiet
+  window reads “idle” with the last rate dimmed instead of a made-up number.
+
+- **Run History memory.** The Run History list no longer copies every retained
+  run's static-analysis rows on each redraw (a list of 500 runs with full
+  reports redrew in about 1.3 ms instead of 90 ms and no longer spiked memory
+  by hundreds of MiB per frame). The network quick-filter lists keep only the
+  entries they show instead of one per distinct port and address.
+
 - **Shared Details.** Selecting any triage row shows its information in the
   docked Details panel, including suspicious activity, process/file/network
   entries, changed-file diffs and BPF decoding/exports. Row information no longer

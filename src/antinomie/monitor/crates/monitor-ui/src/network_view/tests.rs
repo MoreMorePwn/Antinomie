@@ -353,6 +353,29 @@ fn quick_filter_counts_are_sorted_by_use() {
 }
 
 #[test]
+fn quick_filter_counts_keep_only_the_entries_the_lists_show() {
+    // A busy capture has a distinct port and address per packet; only the
+    // most used QUICK_ENTRIES of each are listed, so only those are kept.
+    let packets: Vec<_> = (0..QUICK_ENTRIES as u32 * 5)
+        .map(|n| {
+            let mut packet = packet("TCP", "10.0.2.15:1", "1.2.3.4:80");
+            packet.src_ip = Some(IpAddr::from([10, 0, (n >> 8) as u8, n as u8]));
+            packet.src_port = Some(1000 + n as u16);
+            packet
+        })
+        .collect();
+    let counts = counts(&packets);
+    assert_eq!(counts.ports.len(), QUICK_ENTRIES);
+    assert_eq!(counts.addresses.len(), QUICK_ENTRIES);
+    // The busiest entries survive: every packet shares 1.2.3.4 and port 80.
+    assert_eq!(counts.ports[0], (80, packets.len()));
+    assert_eq!(
+        counts.addresses[0],
+        ("1.2.3.4".parse().unwrap(), packets.len())
+    );
+}
+
+#[test]
 fn packets_are_colored_like_wireshark() {
     let mut syn = packet("TCP", "10.0.2.15:40000", "1.2.3.4:80");
     syn.tcp_flags = Some(network::TCP_SYN);
@@ -452,4 +475,81 @@ fn capture_history_merges_retained_roots_and_deduplicates_moved_captures() {
     assert_eq!(captures[2].file, legacy);
     assert!(captures[2].whole_boot);
     std::fs::remove_dir_all(fixture).unwrap();
+}
+
+/// A pcap of `count` distinct TCP and UDP frames, like a busy capture.
+fn busy_pcap(count: u32) -> Vec<u8> {
+    let mut file = Vec::new();
+    file.extend(0xa1b2c3d4u32.to_le_bytes());
+    file.extend([2, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    file.extend(65535u32.to_le_bytes());
+    file.extend(1u32.to_le_bytes());
+    for n in 0..count {
+        let tcp = n % 2 == 0;
+        let mut transport = if tcp {
+            let mut header = Vec::new();
+            header.extend(((40_000 + n % 20_000) as u16).to_be_bytes());
+            header.extend(([443u16, 80, 8080][(n % 3) as usize]).to_be_bytes());
+            header.extend(n.to_be_bytes());
+            header.extend(0u32.to_be_bytes());
+            header.extend([0x50, 0x18, 0, 0, 0, 0, 0, 0]);
+            header
+        } else {
+            let mut header = vec![0x14, 0xe9, 0, 53, 0, 8, 0, 0];
+            header.extend(b"");
+            header
+        };
+        transport.extend(std::iter::repeat_n(b'a', (n % 40) as usize));
+        let mut frame = vec![
+            0x52, 0x55, 10, 0, 2, 2, 0x52, 0x54, 0, 0x12, 0x34, 0x56, 8, 0,
+        ];
+        let total = (20 + transport.len()) as u16;
+        frame.extend([0x45, 0]);
+        frame.extend(total.to_be_bytes());
+        frame.extend([0, 0, 0x40, 0, 64, if tcp { 6 } else { 17 }, 0, 0]);
+        frame.extend([10, (n >> 16) as u8, (n >> 8) as u8, n as u8]);
+        frame.extend([93, 184, (n >> 8) as u8, n as u8]);
+        frame.extend(&transport);
+        file.extend((1_800_000_000 + n / 1000).to_le_bytes());
+        file.extend((n % 1000 * 1000).to_le_bytes());
+        file.extend((frame.len() as u32).to_le_bytes());
+        file.extend((frame.len() as u32).to_le_bytes());
+        file.extend(frame);
+    }
+    file
+}
+
+#[test]
+#[ignore = "memory probe; run explicitly with --test-threads=1"]
+fn memory_probe_packet_list_at_its_cap() {
+    use crate::memory_probe::{anon_kib, report};
+    let path = std::env::temp_dir().join(format!("ant-mem-probe-{}.pcap", std::process::id()));
+    std::fs::write(&path, busy_pcap(220_000)).unwrap();
+    let before = anon_kib();
+    let mut list = PacketList::new(Some(path.clone()));
+    while !list.truncated {
+        list.last_read = None;
+        list.refresh(false);
+    }
+    let loaded = anon_kib();
+    report("network", "packets", list.packets.len());
+    report("network", "packet_list_kib", loaded as i64 - before as i64);
+    list.filter_rows("");
+    let rows = anon_kib();
+    report("network", "rows_kib", rows as i64 - loaded as i64);
+    let _ = list.counts();
+    report(
+        "network",
+        "quick_counts_kib",
+        anon_kib() as i64 - rows as i64,
+    );
+    report(
+        "network",
+        "quick_count_entries",
+        list.counts
+            .as_ref()
+            .map_or(0, |(_, c)| c.ports.len() + c.addresses.len()),
+    );
+    drop(list);
+    std::fs::remove_file(path).unwrap();
 }

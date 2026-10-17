@@ -9,6 +9,8 @@ mod dependencies_window;
 mod evidence;
 mod evidence_jobs;
 mod folders;
+#[cfg(test)]
+mod memory_probe;
 mod memory_view;
 mod network_view;
 mod query;
