@@ -234,7 +234,7 @@ fn header(
     ui.horizontal_wrapped(|ui| {
         ui.strong(file_name(report, state));
         if let Some(len) = report.specimen_len {
-            ui.label(format!("{len} octets"));
+            ui.label(crate::values::file_size(len));
         }
         if let Some(hash) = &report.specimen_sha256 {
             ui.monospace(format!("SHA-256 {}…", &hash[..hash.len().min(16)]))

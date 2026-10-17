@@ -152,7 +152,7 @@ pub(super) fn disassemble(section: &mut AnalysisSection, specimen: &[u8], listin
                 && !writer.push(
                     name.clone(),
                     if *size > 0 {
-                        format!("{name} ({size} octets)")
+                        format!("{name} · {}", crate::byte_size::file_size(*size))
                     } else {
                         name.clone()
                     },

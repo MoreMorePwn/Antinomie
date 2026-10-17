@@ -155,9 +155,10 @@ pub(super) fn show(
     }
     ui.horizontal_wrapped(|ui| {
         ui.monospace(format!(
-            "0x{:x}–0x{:x} of {total} octets",
+            "0x{:x}–0x{:x} of {}",
             state.offset,
-            state.offset + data_len as u64 - 1
+            state.offset + data_len as u64 - 1,
+            crate::values::file_size(total)
         ));
     });
     match preview {
@@ -166,8 +167,8 @@ pub(super) fn show(
             if ui
                 .button(format!("{} Copy page", egui_phosphor::regular::COPY))
                 .on_hover_text(format!(
-                    "Copy these {} octets as {}",
-                    page.data.len(),
+                    "Copy these {} as {}",
+                    crate::values::file_size(page.data.len() as u64),
                     state.format.label()
                 ))
                 .clicked()
@@ -304,7 +305,11 @@ fn render(format: Format, offset: u64, data: &[u8]) -> String {
             }
         }
         Format::CArray => {
-            let _ = writeln!(out, "/* 0x{offset:x}, {} octets */", data.len());
+            let _ = writeln!(
+                out,
+                "/* 0x{offset:x}, {} */",
+                crate::values::file_size(data.len() as u64)
+            );
             out.push_str("unsigned char data[] = {\n");
             for chunk in data.chunks(12) {
                 let line: Vec<_> = chunk.iter().map(|byte| format!("0x{byte:02x}")).collect();
@@ -313,7 +318,11 @@ fn render(format: Format, offset: u64, data: &[u8]) -> String {
             out.push_str("};\n");
         }
         Format::Python => {
-            let _ = writeln!(out, "# 0x{offset:x}, {} octets", data.len());
+            let _ = writeln!(
+                out,
+                "# 0x{offset:x}, {}",
+                crate::values::file_size(data.len() as u64)
+            );
             out.push_str("data = (\n");
             for chunk in data.chunks(16) {
                 let line: String = chunk.iter().map(|byte| format!("\\x{byte:02x}")).collect();

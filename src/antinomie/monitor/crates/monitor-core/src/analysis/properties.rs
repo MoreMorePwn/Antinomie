@@ -240,7 +240,7 @@ fn compute(directory: &Path, report_id: &str, work: &Path) -> Result<FilePropert
                 "File size",
                 data.len().to_string(),
                 true,
-                "Verified captured octets",
+                "Verified captured bytes",
             ),
         ],
     })

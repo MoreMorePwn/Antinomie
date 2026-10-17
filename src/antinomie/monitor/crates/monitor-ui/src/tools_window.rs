@@ -10,8 +10,8 @@ use eframe::egui::{self, RichText};
 /// The window's egui ID (Escape closes it).
 pub(crate) const WINDOW_ID: &str = "analysis_tools";
 
-fn size(octets: u64) -> String {
-    format!("{:.0} MB", octets as f64 / 1_000_000.0)
+fn size(bytes: u64) -> String {
+    crate::values::file_size(bytes)
 }
 
 /// Draw the window; returns a command to send.
@@ -91,7 +91,7 @@ pub(crate) fn show(
                                     enabled && !running,
                                     egui::Button::new(
                                         RichText::new(format!(
-                                            "Install {} ({})",
+                                            "Install {} · {}",
                                             tool.version,
                                             size(tool.size)
                                         ))

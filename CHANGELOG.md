@@ -131,6 +131,19 @@ it runs.
   loadable ones) as a segment with its permissions, and keeps its full
   listing beside the report, so headers, sections, symbols and imports of an
   unstripped binary are no longer cut to fit the report.
+- **Static analysis colors.** Lists color the cell that carries the meaning:
+  YARA rule names by severity, string encodings by type, structure names by
+  kind (section, segment, import, export, symbol, header field) and Hardening
+  values by pass or fail. Metadata labels are muted; hashes and hex values are
+  monospace; yes/no and present/absent values are green or amber; timestamps
+  read in local time. Entropy keeps its chart.
+- **Content zoom.** The Content tab has text size buttons, and Ctrl+wheel over
+  the content zooms it too.
+- **Static analysis sizes.** Every size in the static analysis window reads as
+  `4096 bytes (4.0 KB)`: the exact byte count, then a rounded KB, MB or GB
+  figure (1024-based) from 1024 bytes up. This covers the file size, function,
+  section and range sizes, Content, and the Analysis tools download sizes.
+  Static analysis text says bytes where it said octets.
 - **Open directory.** Folder actions ask the desktop file manager through the
   FileManager1 D-Bus service and fall back to `xdg-open`, so a folder no longer
   opens in a search tool registered for directories (Catfish on Xfce).
