@@ -16,6 +16,13 @@ use std::{
 
 pub(crate) const WINDOW_ID: &str = "rule_manager";
 
+/// A window the Rule manager asks the app to open, to repair an engine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RulesAction {
+    AppDependencies,
+    AnalysisTools,
+}
+
 enum Done {
     Catalog(Catalog),
     Message(String),
@@ -32,6 +39,8 @@ struct Job {
 
 #[derive(Default)]
 pub(crate) struct Model {
+    /// A window an engine repair asked for, handed to the app once.
+    requested: Option<RulesAction>,
     loaded: bool,
     engine: String,
     filter: String,
@@ -94,14 +103,16 @@ impl Model {
         }
     }
 
+    /// Show the manager. `outbound` is the Settings permission; the manager
+    /// can turn it on when asked to. Returns a window the manager asks for.
     pub(crate) fn show(
         &mut self,
         ctx: &egui::Context,
         open: &mut bool,
         data_dir: &Path,
-        outbound: bool,
+        outbound: &mut bool,
         tools: &ruleset::ToolConfig,
-    ) {
+    ) -> Option<RulesAction> {
         if self.tools != *tools {
             self.tools = tools.clone();
         }
@@ -130,6 +141,7 @@ impl Model {
                     });
             });
         *open = window_open;
+        self.requested.take()
     }
 
     fn poll(&mut self) {
@@ -199,7 +211,92 @@ impl Model {
         self.page = 0;
     }
 
-    fn contents(&mut self, ui: &mut egui::Ui, data_dir: &Path, outbound: bool) {
+    /// Whether the selected engine can scan, and how to repair it if not.
+    /// Engine facts come from the shared non-blocking probe.
+    fn engine_status(&self, ui: &mut egui::Ui) -> Option<RulesAction> {
+        use ruleset::ToolProbe;
+        let mut action = None;
+        if self.engine == "yara" {
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(theme::good(), "YARA-X is built in.");
+                ui.colored_label(
+                    theme::muted(),
+                    "A downloaded pack is not scanned until it is enabled.",
+                );
+            });
+            return None;
+        }
+        let repaint = ui.ctx().clone();
+        let Some(facts) = ruleset::try_tool_facts(&self.tools, move || {
+            repaint.request_repaint_of(egui::ViewportId::ROOT)
+        }) else {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Checking the engine…");
+            });
+            return None;
+        };
+        ui.horizontal_wrapped(
+            |ui| match (self.engine.as_str(), &facts.suricata, &facts.sigma) {
+                ("ids", probe @ ToolProbe::Found { .. }, _) => {
+                    ui.colored_label(theme::good(), format!("{} is installed.", probe.identity()));
+                    ui.colored_label(
+                        theme::muted(),
+                        "Rules that need unsupported keywords or datasets stay skipped.",
+                    );
+                }
+                ("ids", probe, _) => {
+                    ui.colored_label(
+                        theme::warn(),
+                        match probe {
+                            ToolProbe::Absent(_) => {
+                                "Suricata is not installed, so IDS scans are unavailable. \
+                             It is a system package: sudo apt install suricata"
+                                    .to_owned()
+                            }
+                            probe => format!("Suricata cannot scan: {}", probe.identity()),
+                        },
+                    );
+                    if ui.small_button("Copy command").clicked() {
+                        ui.ctx().copy_text("sudo apt install suricata".into());
+                    }
+                    if ui.button("App dependencies…").clicked() {
+                        action = Some(RulesAction::AppDependencies);
+                    }
+                }
+                (_, _, probe @ ToolProbe::Found { .. }) => {
+                    ui.colored_label(theme::good(), format!("{} is ready.", probe.identity()));
+                    ui.colored_label(
+                        theme::muted(),
+                        format!("Python: {}", facts.sigma_python.display()),
+                    );
+                }
+                (_, _, probe) => {
+                    ui.colored_label(
+                        theme::warn(),
+                        format!(
+                            "Sigma cannot scan with {}: {}",
+                            facts.sigma_python.display(),
+                            probe.identity()
+                        ),
+                    );
+                    if ui
+                        .button("Install the Sigma tool…")
+                        .on_hover_text(
+                            "Tools > Analysis tools installs pySigma and its SQLite backend into \
+                         Antinomie's own environment; scans then use it automatically.",
+                        )
+                        .clicked()
+                    {
+                        action = Some(RulesAction::AnalysisTools);
+                    }
+                }
+            },
+        );
+        action
+    }
+
+    fn contents(&mut self, ui: &mut egui::Ui, data_dir: &Path, outbound: &mut bool) {
         if !self.loaded {
             self.ensure(data_dir);
         }
@@ -216,27 +313,16 @@ impl Model {
                 }
             }
         });
-        let suricata = [
-            "/usr/bin/suricata",
-            "/usr/sbin/suricata",
-            "/usr/local/bin/suricata",
-        ]
-        .iter()
-        .any(|path| Path::new(path).is_file());
-        let engine_note = match self.engine.as_str() {
-            "yara" => "YARA-X is built in. A downloaded pack is not scanned until it is enabled.",
-            "ids" if suricata => "Suricata is installed. Rules that need unsupported keywords or datasets stay skipped.",
-            "ids" => "Suricata is not installed. Install it from App dependencies before an IDS scan.",
-            _ => "Sigma scans need local Python with pySigma and the SQLite backend. A missing tool stays unavailable.",
-        };
-        ui.label(RichText::new(engine_note).color(theme::muted()));
+        if let Some(next) = self.engine_status(ui) {
+            self.requested = Some(next);
+        }
         ui.horizontal_wrapped(|ui| {
             let busy = self.job.is_some();
             if ui
                 .add_enabled(!busy, egui::Button::new("Check for updates"))
                 .clicked()
             {
-                self.refresh_catalog(data_dir, outbound);
+                self.refresh_catalog(data_dir, *outbound);
             }
             if busy && ui.button("Cancel").clicked() {
                 if let Some(job) = &self.job {
@@ -249,11 +335,24 @@ impl Model {
                 crate::folders::show_detached(root);
             }
         });
-        if !outbound {
-            ui.colored_label(
-                theme::warn(),
-                "Outbound catalog access is disabled in Settings.",
-            );
+        if !*outbound {
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(
+                    theme::warn(),
+                    "Downloads are off: Antinomie contacts no server unless you allow it.",
+                );
+                if ui
+                    .button("Allow downloads")
+                    .on_hover_text(
+                        "Turns on Settings > Allow outbound catalog and rule downloads. \
+                         Only Check for updates and Download use the network; scans stay offline.",
+                    )
+                    .clicked()
+                {
+                    *outbound = true;
+                    self.status = "Downloads allowed. Check for updates reads the catalog.".into();
+                }
+            });
         }
         ui.label(RichText::new(&self.status).color(theme::text()));
         if self.job.is_some() {
@@ -362,7 +461,7 @@ impl Model {
                                     .color(theme::warn()),
                             );
                             if ui.button("Update").clicked() {
-                                self.install(data_dir, outbound, entry.clone());
+                                self.install(data_dir, *outbound, entry.clone());
                             }
                         });
                     }
@@ -403,7 +502,7 @@ impl Model {
                     if installed {
                         ui.colored_label(theme::good(), "installed");
                     } else if ui.button("Download").clicked() {
-                        self.install(data_dir, outbound, entry.clone());
+                        self.install(data_dir, *outbound, entry.clone());
                     }
                 });
                 ui.label(
@@ -1055,20 +1154,124 @@ with open(destination, "wb") as output:
         size: egui::Vec2,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
+        render_with(
+            ctx,
+            model,
+            dir,
+            size,
+            events,
+            &mut false,
+            &ruleset::ToolConfig::default(),
+        )
+        .0
+    }
+
+    fn render_with(
+        ctx: &egui::Context,
+        model: &mut Model,
+        dir: &Path,
+        size: egui::Vec2,
+        events: Vec<egui::Event>,
+        outbound: &mut bool,
+        tools: &ruleset::ToolConfig,
+    ) -> (egui::FullOutput, Option<RulesAction>) {
         let mut open = true;
+        let mut action = None;
         ctx.style_mut(|style| {
             style.animation_time = 0.0;
         });
-        ctx.run(
+        let output = ctx.run(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                 events,
                 ..Default::default()
             },
             |ctx| {
-                model.show(ctx, &mut open, dir, false, &ruleset::ToolConfig::default());
+                action = model.show(ctx, &mut open, dir, outbound, tools);
             },
-        )
+        );
+        (output, action)
+    }
+
+    /// Click the first text that equals `label`, rendering until it shows.
+    fn click_label(
+        ctx: &egui::Context,
+        model: &mut Model,
+        dir: &Path,
+        outbound: &mut bool,
+        tools: &ruleset::ToolConfig,
+        label: &str,
+    ) -> Option<RulesAction> {
+        let size = egui::vec2(900.0, 900.0);
+        let start = std::time::Instant::now();
+        let position = loop {
+            let (output, _) = render_with(ctx, model, dir, size, Vec::new(), outbound, tools);
+            if let Some((_, rect, _)) = texts(&output)
+                .into_iter()
+                .find(|(text, _, _)| text == label)
+            {
+                break rect.center();
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(20),
+                "{label} never appeared"
+            );
+            thread::sleep(Duration::from_millis(20));
+        };
+        let mut action = None;
+        for pressed in [None, Some(true), Some(false)] {
+            let mut events = vec![egui::Event::PointerMoved(position)];
+            if let Some(pressed) = pressed {
+                events.push(egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            action = render_with(ctx, model, dir, size, events, outbound, tools)
+                .1
+                .or(action);
+        }
+        action
+    }
+
+    #[test]
+    fn the_manager_allows_downloads_and_sends_each_engine_to_its_repair() {
+        let dir = std::env::temp_dir().join(format!("ant-rules-repair-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut model = Model::default();
+        let mut outbound = false;
+        let tools = ruleset::ToolConfig::from_sigma_setting("/nonexistent/antinomie-python");
+        click_label(
+            &ctx,
+            &mut model,
+            &dir,
+            &mut outbound,
+            &tools,
+            "Allow downloads",
+        );
+        assert!(outbound, "the button grants the Settings permission");
+        assert!(model.status.starts_with("Downloads allowed"));
+        assert!(
+            model.job.is_none(),
+            "allowing downloads does not contact the catalog"
+        );
+
+        model.engine = "sigma".into();
+        let action = click_label(
+            &ctx,
+            &mut model,
+            &dir,
+            &mut outbound,
+            &tools,
+            "Install the Sigma tool…",
+        );
+        assert_eq!(action, Some(RulesAction::AnalysisTools));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn visible_control(

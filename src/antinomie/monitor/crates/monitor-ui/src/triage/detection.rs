@@ -714,7 +714,7 @@ impl View {
             return "preparing".into();
         };
         let tools = antinomie_monitor_core::ruleset::ToolConfig::from_sigma_setting(
-            &self.settings.sigma_python,
+            &self.settings.effective_sigma_python(),
         );
         let repaint = ctx.clone();
         let Some(facts) = antinomie_monitor_core::ruleset::try_tool_facts(&tools, move || {
@@ -841,7 +841,7 @@ impl View {
         let generation = self.rules_generation;
         let root = request.settings.rules_root.clone();
         let tools = antinomie_monitor_core::ruleset::ToolConfig::from_sigma_setting(
-            &request.settings.sigma_python,
+            &request.settings.effective_sigma_python(),
         );
         let engine_name = engine_key(request.engine).to_owned();
         match std::thread::Builder::new()
@@ -987,7 +987,7 @@ impl View {
                 ui.checkbox(&mut self.settings.scan_recovered, "Scan recovered files");
             } else if self.selected == Engine::Sigma {
                 ui.label("Python with pySigma and its SQLite backend");
-                ui.add(egui::TextEdit::singleline(&mut self.settings.sigma_python).desired_width(ui.available_width()).hint_text("/usr/bin/python3 or a local venv/bin/python"));
+                ui.add(egui::TextEdit::singleline(&mut self.settings.sigma_python).desired_width(ui.available_width()).hint_text("Empty: Antinomie's Sigma tool, else /usr/bin/python3"));
             }
             ui.weak("Scans stay offline. Checking the catalog or installing a pack is a separate action in Rule manager.");
             let (label, url) = match self.selected {

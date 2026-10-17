@@ -263,7 +263,9 @@ fn managed_sources(
         let live = crate::ruleset::snapshot(
             &host_path(&request.settings.rules_root),
             engine,
-            &crate::ruleset::ToolConfig::from_sigma_setting(&request.settings.sigma_python),
+            &crate::ruleset::ToolConfig::from_sigma_setting(
+                &request.settings.effective_sigma_python(),
+            ),
         )?;
         FrozenSelection {
             digest: live.digest,
@@ -445,8 +447,9 @@ fn stage(
             let path = work.join(JOURNAL_FILE);
             fs::write(&path, &data).map_err(|error| error.to_string())?;
             staged.journal = Some(path);
-            if !request.settings.sigma_python.is_empty() {
-                let python = host_path(&request.settings.sigma_python);
+            let configured = request.settings.effective_sigma_python();
+            if !configured.is_empty() {
+                let python = host_path(&configured);
                 let root = python
                     .parent()
                     .and_then(Path::parent)

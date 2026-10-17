@@ -37,7 +37,13 @@ it runs.
   runs, including the configured Sigma interpreter, and each installed version
   keeps the requirements it was installed with, so a missing or edited catalog
   does not change them. Upgrading an old index keeps rule toggles of the
-  selected version.
+  selected version. With downloads off, the Rule manager offers to allow them
+  in place. It shows whether each engine can scan and links to the repair:
+  Suricata is an optional system package in App dependencies, and Tools >
+  Analysis tools installs Sigma (pySigma 2.0.1 with its SQLite backend) from
+  hash-locked wheels into Antinomie's own environment, which scans use unless a
+  Sigma Python is set. App dependencies lists Suricata and Python venv support
+  as optional; a missing optional tool does not open the dialog at startup.
 
 - **Detection.** On-demand YARA, IDS and Sigma tabs evaluate retained evidence
   offline, preserve coverage and source provenance, and open match details in
