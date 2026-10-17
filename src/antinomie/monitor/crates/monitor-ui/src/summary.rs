@@ -36,6 +36,8 @@ pub(crate) struct VmHistory {
     times: VecDeque<Option<Instant>>,
     residents: VecDeque<Option<f64>>,
     disk_available: VecDeque<Option<f64>>,
+    guest_used: VecDeque<Option<f64>>,
+    guest_root: VecDeque<Option<f64>>,
     retained: Option<RetainedSample>,
     stopped_at: Option<SystemTime>,
     last_gap: Option<Instant>,
@@ -107,7 +109,7 @@ impl CpuHistory {
                 .last_gap
                 .is_none_or(|last| now.saturating_duration_since(last) >= Duration::from_secs(1))
             {
-                series.push(now, None, None, None);
+                series.push(now, None, None, None, None, None);
                 series.last_gap = Some(now);
             }
             return;
@@ -138,7 +140,7 @@ impl CpuHistory {
             let span = now.saturating_duration_since(old_time);
             for gap in 0..gap_count {
                 let part = (gap + 1) as f64 / (gap_count + 1) as f64;
-                series.push(old_time + span.mul_f64(part), None, None, None);
+                series.push(old_time + span.mul_f64(part), None, None, None, None, None);
             }
         }
         series.push(
@@ -146,6 +148,12 @@ impl CpuHistory {
             cpu_value(sample.qemu_cpu_percent),
             sample.qemu_resident_size.map(|value| value as f64),
             sample.data_disk_available_size.map(|value| value as f64),
+            sample.guest.as_ref().and_then(|guest| {
+                fraction(guest.memory_used_size, guest.memory_total_size).map(|ratio| ratio * 100.0)
+            }),
+            sample.guest.as_ref().and_then(|guest| {
+                fraction(guest.root_used_size, guest.root_total_size).map(|ratio| ratio * 100.0)
+            }),
         );
         series.retained = Some(RetainedSample {
             cpu: cpu_value(sample.qemu_cpu_percent),
@@ -170,17 +178,29 @@ impl CpuHistory {
     }
 }
 impl VmHistory {
-    fn push(&mut self, time: Instant, cpu: Option<f64>, rss: Option<f64>, disk: Option<f64>) {
+    fn push(
+        &mut self,
+        time: Instant,
+        cpu: Option<f64>,
+        rss: Option<f64>,
+        disk: Option<f64>,
+        guest: Option<f64>,
+        root: Option<f64>,
+    ) {
         if self.samples.len() == HISTORY_LIMIT {
             self.samples.pop_front();
             self.times.pop_front();
             self.residents.pop_front();
             self.disk_available.pop_front();
+            self.guest_used.pop_front();
+            self.guest_root.pop_front();
         }
         self.samples.push_back(cpu);
         self.times.push_back(Some(time));
         self.residents.push_back(rss);
         self.disk_available.push_back(disk);
+        self.guest_used.push_back(guest);
+        self.guest_root.push_back(root);
     }
     fn scale(&self, cpus: u16) -> f64 {
         let peak = self
@@ -339,30 +359,27 @@ pub(crate) fn show(
             });
             let stacked = width < ui.text_style_height(&egui::TextStyle::Body) * 32.0;
             let gap = 10.0;
-            let panel_width = if stacked {
+            let top_width = if stacked {
                 width.max(80.0)
             } else {
                 ((width - gap * 2.0) / 3.0).max(80.0)
             };
+            let bottom_width = if stacked {
+                width.max(80.0)
+            } else {
+                ((width - gap) / 2.0).max(80.0)
+            };
             if stacked {
-                resource_cards(
-                    ui,
-                    "summary-resources",
-                    5,
-                    1,
-                    panel_width,
-                    12,
-                    |ui, slot| {
-                        summary_resource(ui, slot, guest, values, vm, series);
-                    },
-                );
+                resource_cards(ui, "summary-resources", 5, 1, top_width, 12, |ui, slot| {
+                    summary_resource(ui, slot, guest, values, vm, series);
+                });
             } else {
                 resource_cards(
                     ui,
                     "summary-resources-top",
                     3,
                     3,
-                    panel_width,
+                    top_width,
                     12,
                     |ui, slot| summary_resource(ui, slot, guest, values, vm, series),
                 );
@@ -372,7 +389,7 @@ pub(crate) fn show(
                     "summary-resources-bottom",
                     2,
                     2,
-                    panel_width,
+                    bottom_width,
                     12,
                     |ui, slot| summary_resource(ui, slot + 3, guest, values, vm, series),
                 );
@@ -469,73 +486,274 @@ fn summary_resource(
     history: Option<&VmHistory>,
 ) {
     match slot {
-        0 => resource_contents(ui, 0, sample, vm, history),
-        1 => guest_card(ui, 0, guest),
-        2 => guest_card(ui, 1, guest),
-        3 => resource_contents(ui, 1, sample, vm, history),
-        _ => resource_contents(ui, 2, sample, vm, history),
+        0 => resource_contents(ui, sample, vm, history),
+        1 => guest_gauge(
+            ui,
+            GuestGauge {
+                title: "Guest RAM",
+                used: guest.and_then(|guest| guest.memory_used_size),
+                total: guest.and_then(|guest| guest.memory_total_size),
+                available: guest.and_then(|guest| guest.memory_available_size),
+                free: None,
+                hover: "Guest /proc/meminfo: used = MemTotal − MemAvailable. Reclaimable cache is included in available memory.",
+                missing: "Guest RAM utilization unavailable",
+                root: false,
+            },
+            history,
+        ),
+        2 => guest_gauge(
+            ui,
+            GuestGauge {
+                title: "Guest root filesystem /",
+                used: guest.and_then(|guest| guest.root_used_size),
+                total: guest.and_then(|guest| guest.root_total_size),
+                available: guest.and_then(|guest| guest.root_available_size),
+                free: guest.and_then(|guest| guest.root_free_size),
+                hover: "Guest statvfs(/): available = f_bavail × f_frsize; used = (f_blocks − f_bfree) × f_frsize. Other mounts are outside this meter.",
+                missing: "Guest root filesystem unavailable",
+                root: true,
+            },
+            history,
+        ),
+        3 => resident_meter(ui, sample, vm),
+        _ => volume_meter(ui, sample, vm),
     }
 }
 
-fn guest_card(
-    ui: &mut egui::Ui,
-    kind: usize,
-    guest: Option<&antinomie_monitor_core::GuestResources>,
-) {
-    ui.strong(if kind == 0 {
-        "Guest RAM"
+struct GuestGauge {
+    title: &'static str,
+    used: Option<u64>,
+    total: Option<u64>,
+    available: Option<u64>,
+    free: Option<u64>,
+    hover: &'static str,
+    missing: &'static str,
+    root: bool,
+}
+
+fn guest_gauge(ui: &mut egui::Ui, gauge_spec: GuestGauge, history: Option<&VmHistory>) {
+    let GuestGauge {
+        title,
+        used,
+        total,
+        available,
+        free,
+        hover,
+        missing,
+        root,
+    } = gauge_spec;
+    let ratio = fraction(used, total);
+    let percent = ratio.map(|ratio| ratio * 100.0);
+    ui.strong(title);
+    let inner = ui.available_width();
+    let font = ui.text_style_height(&egui::TextStyle::Body);
+    let color = pressure_color(ratio);
+    gauge(
+        ui,
+        ratio,
+        &percent.map_or_else(|| "—".into(), |value| format!("{value:.1}")),
+        "%",
+        color,
+        inner,
+        (font * 6.0).clamp(96.0, 160.0),
+    );
+    ui.add(
+        egui::Label::new(
+            RichText::new(format!(
+                "{} used / {} · available {}",
+                optional_size(used),
+                optional_size(total),
+                optional_size(available)
+            ))
+            .small()
+            .color(theme::muted()),
+        )
+        .wrap(),
+    )
+    .on_hover_text(hover);
+    if let Some(free) = free {
+        ui.add(
+            egui::Label::new(
+                RichText::new(format!("Free including reserved: {}", size(free)))
+                    .small()
+                    .color(theme::muted()),
+            )
+            .wrap(),
+        );
+    }
+    if used.is_none() {
+        ui.add(egui::Label::new(missing).wrap());
+    } else if ratio.is_none() {
+        ui.add(
+            egui::Label::new(
+                RichText::new("Capacity unavailable")
+                    .small()
+                    .color(theme::muted()),
+            )
+            .wrap(),
+        );
+    }
+    ui.add_space(5.0);
+    let (data, scale) = if let Some(series) = history {
+        let values = if root {
+            &series.guest_root
+        } else {
+            &series.guest_used
+        };
+        let peak = values.iter().flatten().copied().fold(100.0, f64::max);
+        (values, (peak / 100.0).ceil() * 100.0)
     } else {
-        "Guest root filesystem /"
-    });
-    let (used, total, available, free) = guest
-        .map(|g| {
-            if kind == 0 {
+        (&VecDeque::new(), 100.0)
+    };
+    trend(
+        ui,
+        history,
+        data,
+        scale,
+        0,
+        color,
+        (font * 5.0).clamp(88.0, 140.0),
+    );
+}
+
+fn resident_meter(ui: &mut egui::Ui, sample: &VmResources, vm: &VmConfig) {
+    usage_meter(
+        ui,
+        Usage {
+            title: "QEMU resident memory",
+            used: sample.qemu_resident_size,
+            total: sample.host_memory_total_size,
+            available: sample.host_memory_available_size.map(|available| {
                 (
-                    g.memory_used_size,
-                    g.memory_total_size,
-                    g.memory_available_size,
-                    None,
+                    "Host RAM available",
+                    format!("{:.2} GiB", available as f64 / 1_073_741_824.0),
                 )
-            } else {
-                (
-                    g.root_used_size,
-                    g.root_total_size,
-                    g.root_available_size,
-                    g.root_free_size,
-                )
-            }
-        })
-        .unwrap_or((None, None, None, None));
+            }),
+            free: None,
+            color: accent(1),
+            available_hover: "Host /proc/meminfo MemAvailable, including reclaimable memory; this is not guest RAM usage.",
+            missing: "Unavailable measurement",
+        },
+    );
+    ui.add(
+        egui::Label::new(
+            RichText::new(format!(
+                "Guest capacity {} · host visible {}",
+                size(u64::from(vm.ram_mib) * 1_048_576),
+                optional_size(sample.host_memory_total_size)
+            ))
+            .small()
+            .color(theme::muted()),
+        )
+        .wrap(),
+    );
+}
+
+fn volume_meter(ui: &mut egui::Ui, sample: &VmResources, vm: &VmConfig) {
+    let ratio = sample
+        .data_disk_available_size
+        .zip(sample.data_disk_total_size)
+        .filter(|(available, total)| available <= total)
+        .and_then(|(available, total)| fraction(Some(available), Some(total)));
+    ui.strong("Host data volume free");
     ui.add(
         egui::Label::new(format!(
-            "{} used / {}",
-            optional_size(used),
-            optional_size(total)
+            "{} free / {}",
+            optional_size(sample.data_disk_available_size),
+            optional_size(sample.data_disk_total_size)
         ))
         .wrap(),
     );
-    meter(
-        ui,
-        fraction(used, total),
-        accent(kind + 1),
-        "Guest measurement unavailable",
+    meter(ui, ratio, accent(2), "Guest measurement unavailable");
+    ui.add(
+        egui::Label::new(
+            RichText::new(format!(
+                "{} volume · {} guest disk",
+                optional_size(sample.data_disk_total_size),
+                size(u64::from(vm.disk_gib) * 1_073_741_824)
+            ))
+            .small()
+            .color(theme::muted()),
+        )
+        .wrap(),
     );
-    ui.add(egui::Label::new(format!("Available: {}", optional_size(available))).wrap())
-        .on_hover_text(if kind == 0 {
-            "Guest /proc/meminfo: used = MemTotal − MemAvailable. Reclaimable cache is included in available memory."
-        } else {
-            "Guest statvfs(/): available = f_bavail × f_frsize; used = (f_blocks − f_bfree) × f_frsize. Other mounts are outside this meter."
-        });
-    if let Some(free) = free {
+    if sample.data_disk_available_size.is_none() {
+        ui.add(
+            egui::Label::new(
+                RichText::new("Unavailable measurement")
+                    .small()
+                    .color(theme::muted()),
+            )
+            .wrap(),
+        );
+    } else if ratio.is_none() {
+        ui.add(
+            egui::Label::new(
+                RichText::new("Capacity unavailable")
+                    .small()
+                    .color(theme::muted()),
+            )
+            .wrap(),
+        );
+    }
+    if let Some(used) = sample.data_disk_used_size {
+        ui.add(egui::Label::new(RichText::new(format!("Data volume used: {:.2} GiB", used as f64 / 1_073_741_824.0)).small().color(theme::muted())).wrap())
+            .on_hover_text("Host statvfs: (f_blocks - f_bfree) × f_frsize. Reserved free blocks are not counted as used; this is not guest filesystem usage.");
+    }
+    if let Some(free) = sample.data_disk_free_size {
+        ui.add(
+            egui::Label::new(
+                RichText::new(format!(
+                    "Free including reserved: {:.2} GiB",
+                    free as f64 / 1_073_741_824.0
+                ))
+                .small()
+                .color(theme::muted()),
+            )
+            .wrap(),
+        );
+    }
+}
+
+struct Usage {
+    title: &'static str,
+    used: Option<u64>,
+    total: Option<u64>,
+    available: Option<(&'static str, String)>,
+    free: Option<u64>,
+    color: Color32,
+    available_hover: &'static str,
+    missing: &'static str,
+}
+
+fn usage_meter(ui: &mut egui::Ui, usage: Usage) {
+    ui.strong(usage.title);
+    ui.add(
+        egui::Label::new(format!(
+            "{} used / {}",
+            optional_size(usage.used),
+            optional_size(usage.total)
+        ))
+        .wrap(),
+    );
+    let ratio = fraction(usage.used, usage.total);
+    meter(ui, ratio, usage.color, "Guest measurement unavailable");
+    if let Some((label, value)) = usage.available {
+        ui.add(egui::Label::new(format!("{label}: {value}")).wrap())
+            .on_hover_text(usage.available_hover);
+    }
+    if let Some(free) = usage.free {
         ui.add(egui::Label::new(format!("Free including reserved: {}", size(free))).wrap());
     }
-    if used.is_none() {
+    if usage.used.is_none() {
+        ui.add(egui::Label::new(usage.missing).wrap());
+    } else if ratio.is_none() {
         ui.add(
-            egui::Label::new(if kind == 0 {
-                "Guest RAM utilization unavailable"
-            } else {
-                "Guest root filesystem unavailable"
-            })
+            egui::Label::new(
+                RichText::new("Capacity unavailable")
+                    .small()
+                    .color(theme::muted()),
+            )
             .wrap(),
         );
     }
@@ -592,73 +810,37 @@ fn resource_cards(
 
 fn resource_contents(
     ui: &mut egui::Ui,
-    kind: usize,
     sample: &VmResources,
     vm: &VmConfig,
     history: Option<&VmHistory>,
 ) {
     let inner = ui.available_width();
-    let (title, value, unit, ratio, note) = match kind {
-        0 => (
-            "QEMU host CPU",
-            cpu_value(sample.qemu_cpu_percent).map(|v| format!("{v:.1}")),
-            "%",
-            cpu_value(sample.qemu_cpu_percent).map(|v| v / (f64::from(vm.cpus.max(1)) * 100.0)),
-            format!("{} vCPU capacity · 100% = one host core", vm.cpus),
-        ),
-        1 => {
-            let (v, u) = split_size(sample.qemu_resident_size);
-            (
-                "QEMU resident memory",
-                v,
-                u,
-                fraction(sample.qemu_resident_size, sample.host_memory_total_size),
-                format!(
-                    "Guest capacity {} · host visible {}",
-                    size(u64::from(vm.ram_mib) * 1_048_576),
-                    optional_size(sample.host_memory_total_size)
-                ),
-            )
-        }
-        _ => {
-            let (v, u) = split_size(sample.data_disk_available_size);
-            (
-                "Host data volume free",
-                v,
-                u,
-                sample
-                    .data_disk_available_size
-                    .zip(sample.data_disk_total_size)
-                    .filter(|(a, t)| a <= t)
-                    .and_then(|(a, t)| fraction(Some(a), Some(t))),
-                format!(
-                    "{} volume · {} guest disk",
-                    optional_size(sample.data_disk_total_size),
-                    size(u64::from(vm.disk_gib) * 1_073_741_824)
-                ),
-            )
-        }
-    };
-    ui.strong(title);
+    let value = cpu_value(sample.qemu_cpu_percent).map(|value| format!("{value:.1}"));
+    let ratio =
+        cpu_value(sample.qemu_cpu_percent).map(|value| value / (f64::from(vm.cpus.max(1)) * 100.0));
+    ui.strong("QEMU host CPU");
     let font = ui.text_style_height(&egui::TextStyle::Body);
-    let color = if kind == 0 {
-        sample
-            .qemu_cpu_percent
-            .map(|v| cpu_load_color(v, vm.cpus))
-            .unwrap_or_else(theme::muted)
-    } else {
-        accent(kind)
-    };
+    let color = sample
+        .qemu_cpu_percent
+        .map(|value| cpu_load_color(value, vm.cpus))
+        .unwrap_or_else(theme::muted);
     gauge(
         ui,
         ratio,
         value.as_deref().unwrap_or("—"),
-        unit,
+        "%",
         color,
         inner,
         (font * 6.0).clamp(96.0, 160.0),
     );
-    ui.add(egui::Label::new(RichText::new(note).small().color(theme::muted())).wrap());
+    ui.add(
+        egui::Label::new(
+            RichText::new(format!("{} vCPU capacity · 100% = one host core", vm.cpus))
+                .small()
+                .color(theme::muted()),
+        )
+        .wrap(),
+    );
     if value.is_none() {
         ui.add(
             egui::Label::new(
@@ -680,37 +862,7 @@ fn resource_contents(
     }
     ui.add_space(5.0);
     let (data, scale) = if let Some(series) = history {
-        match kind {
-            0 => (&series.samples, series.scale(vm.cpus)),
-            1 => (
-                &series.residents,
-                sample
-                    .host_memory_total_size
-                    .map(|v| v as f64)
-                    .unwrap_or_else(|| {
-                        series
-                            .residents
-                            .iter()
-                            .flatten()
-                            .copied()
-                            .fold(1.0, f64::max)
-                    }),
-            ),
-            _ => (
-                &series.disk_available,
-                sample
-                    .data_disk_total_size
-                    .map(|v| v as f64)
-                    .unwrap_or_else(|| {
-                        series
-                            .disk_available
-                            .iter()
-                            .flatten()
-                            .copied()
-                            .fold(1.0, f64::max)
-                    }),
-            ),
-        }
+        (&series.samples, series.scale(vm.cpus))
     } else {
         (&VecDeque::new(), 1.0)
     };
@@ -719,34 +871,18 @@ fn resource_contents(
         history,
         data,
         scale,
-        kind,
+        0,
         color,
         (font * 5.0).clamp(88.0, 140.0),
     );
-    if kind == 1 {
-        if let Some(available) = sample.host_memory_available_size {
-            ui.add(egui::Label::new(RichText::new(format!("Host RAM available: {:.2} GiB", available as f64 / 1_073_741_824.0)).small().color(theme::muted())).wrap())
-                            .on_hover_text("Host /proc/meminfo MemAvailable, including reclaimable memory; this is not guest RAM usage.");
-        }
-    }
-    if kind == 2 {
-        if let Some(used) = sample.data_disk_used_size {
-            ui.add(egui::Label::new(RichText::new(format!("Data volume used: {:.2} GiB", used as f64 / 1_073_741_824.0)).small().color(theme::muted())).wrap())
-                            .on_hover_text("Host statvfs: (f_blocks - f_bfree) × f_frsize. Reserved free blocks are not counted as used; this is not guest filesystem usage.");
-        }
-        if let Some(free) = sample.data_disk_free_size {
-            ui.add(
-                egui::Label::new(
-                    RichText::new(format!(
-                        "Free including reserved: {:.2} GiB",
-                        free as f64 / 1_073_741_824.0
-                    ))
-                    .small()
-                    .color(theme::muted()),
-                )
-                .wrap(),
-            );
-        }
+}
+
+fn pressure_color(ratio: Option<f64>) -> Color32 {
+    match ratio {
+        Some(ratio) if ratio >= 1.0 => theme::error(),
+        Some(ratio) if ratio >= 0.8 => theme::warn(),
+        Some(_) => accent(0),
+        None => theme::muted(),
     }
 }
 fn gauge(
