@@ -148,6 +148,12 @@ it runs.
   Properties, downloaded samples, snapshots and memory dumps.
 - **Upload.** The Upload dialog starts with Executable and Overwrite existing
   file checked.
+- **Tree views.** Process trees (triage, capture and history), the guest file
+  browser, memory results (pstree), the snapshot tree, packet layers, the
+  decoded syscall tree and the analysis options draw branches like the `tree`
+  command (`├──`, `└──`, `│`), each level in its own color that cycles through
+  six in both themes. Labels keep their colors. A sorted table is flat, and a
+  filter leaves a tree of the rows that remain.
 
 Uses existing 0.6.0/0.6.1 guest bases; no kernel or image rebuild is required.
 

@@ -164,6 +164,8 @@ pub(crate) struct Browser {
     error: Option<String>,
     expanded: std::collections::BTreeSet<PathBuf>,
     rows: Vec<rows::Row>,
+    /// The tree branches in front of each of `rows`.
+    branches: Vec<crate::tree_lines::Prefix>,
     rows_dirty: bool,
     #[cfg(test)]
     drawn_rows: usize,
@@ -367,6 +369,56 @@ pub(crate) mod tests {
             browser.rows.as_ptr(),
             "unchanged frames reuse the flattened tree"
         );
+    }
+
+    #[test]
+    fn expanded_folders_get_tree_branches_for_their_entries_and_paging_row() {
+        let root = PathBuf::from("/root");
+        let entry = |name: &str, directory: bool| Entry {
+            path: root.join(name),
+            directory,
+            regular: !directory,
+        };
+        let listing = |entries: Vec<Entry>, more| Listing {
+            offset: 0,
+            result: Some(Ok(Page { entries, more })),
+        };
+        let mut browser = Browser::default();
+        browser.reset(root.clone());
+        browser.listings.insert(
+            root.clone(),
+            listing(vec![entry("a", true), entry("b", false)], false),
+        );
+        browser.listings.insert(
+            root.join("a"),
+            listing(vec![entry("a/x", false), entry("a/y", false)], true),
+        );
+        browser.expanded.insert(root.join("a"));
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let view = View {
+                    id: "branches",
+                    height: 200.0,
+                    actions: false,
+                    can_send: false,
+                };
+                rows::show(&mut browser, ui, view);
+            });
+        });
+        // ├── a
+        // │   ├── x
+        // │   ├── y
+        // │   └── the paging row
+        // └── b
+        let shown: Vec<_> = browser
+            .branches
+            .iter()
+            .map(|branch| branch.text())
+            .collect();
+        assert_eq!(shown, ["├── ", "│   ├── ", "│   ├── ", "│   └── ", "└── "]);
+        assert_eq!(browser.rows.len(), browser.branches.len());
     }
 
     pub(crate) struct Fixture(pub(crate) PathBuf);

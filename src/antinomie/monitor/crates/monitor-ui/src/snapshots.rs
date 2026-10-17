@@ -332,11 +332,15 @@ impl SnapshotManager {
             .max_height(height)
             .id_salt("snapshot_tree")
             .show(ui, |ui| {
-                ui.label(RichText::new("Base image").strong());
-                for item in graph_layout(tree) {
+                ui.label(RichText::new("Base image").strong().color(theme::text()));
+                let items = graph_layout(tree);
+                // The base image is the root; every checkpoint hangs below it.
+                let depths: Vec<_> = items.iter().map(|item| item.depth + 1).collect();
+                let mono = egui::TextStyle::Monospace.resolve(ui.style());
+                let char_width = crate::tree_lines::char_width(ui, &mono);
+                for (item, branch) in items.iter().zip(crate::tree_lines::prefixes(&depths)) {
                     let node = &tree.nodes[item.index];
-                    ui.horizontal(|ui| {
-                        ui.add_space((item.depth.min(8) as f32) * 16.0);
+                    crate::tree_lines::row(ui, &branch, char_width, |ui| {
                         let name = if node.deleted {
                             "Hidden checkpoint"
                         } else {

@@ -1,4 +1,5 @@
 //! Paired invocation presentation and inspectors for actually captured content.
+use crate::tree_lines::Prefix;
 use crate::{
     data_view::{self, OpenData},
     theme::{self, ValueKind},
@@ -6,6 +7,9 @@ use crate::{
 };
 use antinomie_monitor_core::{syscalls, FieldSummary, InvocationSummary, WaitStatus};
 use eframe::egui::{self, Color32, RichText};
+
+mod tree_row;
+use tree_row::{note_row, section_row, tree_row, Row};
 
 pub(crate) type InvocationKey = (u64, u64, u64);
 
@@ -278,6 +282,7 @@ impl Inspector {
         };
         let nr = event.syscall_nr;
         let salt = key(invocation);
+        let root = Prefix::default();
         ui.spacing_mut().item_spacing.y = 0.0;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
@@ -332,6 +337,7 @@ impl Inspector {
             match args {
                 Some(args) => {
                     for index in 0..arg_count(nr) {
+                        let branch = root.child(index + 1 == arg_count(nr));
                         let value = args[index];
                         let name = argument_name(nr, index);
                         let shown = values::argument(nr, index, &args);
@@ -361,7 +367,7 @@ impl Inspector {
                             ui,
                             Row {
                                 id: ui.id().with((salt, "argument", index)),
-                                depth: 1,
+                                branch: &branch,
                                 expand: (!owned.is_empty()).then_some(true),
                                 name,
                                 name_color: theme::text(),
@@ -388,12 +394,17 @@ impl Inspector {
                             self.select_argument(arg_phase, index, value);
                         }
                         if open {
-                            self.phase_fields(ui, invocation, nr, &owned, 2, true);
+                            self.phase_fields(ui, invocation, nr, &owned, &branch, true);
                         }
                     }
                 }
                 None => {
-                    note_row(ui, 1, "Arguments unavailable", theme::muted());
+                    note_row(
+                        ui,
+                        &root.child(true),
+                        "Arguments unavailable",
+                        theme::muted(),
+                    );
                 }
             }
         }
@@ -409,7 +420,7 @@ impl Inspector {
                     ui,
                     Row {
                         id: ui.id().with((salt, "return")),
-                        depth: 0,
+                        branch: &root,
                         expand: None,
                         name: "Return",
                         name_color: theme::heading(),
@@ -449,7 +460,7 @@ impl Inspector {
                     ui,
                     Row {
                         id: ui.id().with((salt, "return")),
-                        depth: 0,
+                        branch: &root,
                         expand: None,
                         name: "Task ended",
                         name_color: theme::heading(),
@@ -469,7 +480,7 @@ impl Inspector {
                     ui,
                     Row {
                         id: ui.id().with((salt, "return")),
-                        depth: 0,
+                        branch: &root,
                         expand: None,
                         name: "Return",
                         name_color: theme::heading(),
@@ -494,11 +505,13 @@ impl Inspector {
                 true,
             )
         {
-            self.phase_fields(ui, invocation, nr, &objects, 1, false);
+            self.phase_fields(ui, invocation, nr, &objects, &root, false);
         }
 
         if section_row(ui, ui.id().with((salt, "phases")), "Phases", false) {
             for (label, event) in [("Entry", &invocation.entry), ("Exit", &invocation.exit)] {
+                // The task exit record, when there is one, comes last.
+                let branch = root.child(label == "Exit" && invocation.task_exit.is_none());
                 let Some(event) = event else {
                     // A call the task ended in has no Exit to lose.
                     let ended = label == "Exit" && invocation.task_exit.is_some();
@@ -506,7 +519,7 @@ impl Inspector {
                         ui,
                         Row {
                             id: ui.id().with((salt, label)),
-                            depth: 1,
+                            branch: &branch,
                             expand: None,
                             name: label,
                             name_color: theme::text(),
@@ -537,7 +550,7 @@ impl Inspector {
                     ui,
                     Row {
                         id: ui.id().with((salt, label)),
-                        depth: 1,
+                        branch: &branch,
                         // What the call read or wrote is listed under the
                         // phase that captured it, as well as by argument.
                         expand: (!event.fields.is_empty()).then_some(false),
@@ -561,7 +574,7 @@ impl Inspector {
                 if open {
                     let phase = if label == "Entry" { 1 } else { 2 };
                     let fields: Vec<_> = event.fields.iter().collect();
-                    field_tree(ui, (invocation, nr, phase), &fields, false, self, 2);
+                    field_tree(ui, (invocation, nr, phase), &fields, false, self, &branch);
                 }
             }
             if let Some(event) = &invocation.task_exit {
@@ -579,7 +592,7 @@ impl Inspector {
                     ui,
                     Row {
                         id: ui.id().with((salt, "task exit")),
-                        depth: 1,
+                        branch: &root.child(true),
                         expand: None,
                         name: "Task exit",
                         name_color: theme::text(),
@@ -598,10 +611,16 @@ impl Inspector {
             false,
         ) {
             if invocation.async_events.is_empty() {
-                note_row(ui, 1, "No correlated async observations", theme::muted());
+                note_row(
+                    ui,
+                    &root.child(true),
+                    "No correlated async observations",
+                    theme::muted(),
+                );
             }
-            for event in &invocation.async_events {
-                self.async_event(ui, invocation, event);
+            let count = invocation.async_events.len();
+            for (index, event) in invocation.async_events.iter().enumerate() {
+                self.async_event(ui, invocation, event, root.child(index + 1 == count));
             }
         }
     }
@@ -614,7 +633,7 @@ impl Inspector {
         invocation: &InvocationSummary,
         nr: u64,
         fields: &[(u8, &FieldSummary)],
-        depth: usize,
+        parent: &Prefix,
         strip_arg: bool,
     ) {
         let both = fields.iter().any(|(phase, _)| *phase == 1)
@@ -629,13 +648,17 @@ impl Inspector {
                 continue;
             }
             if both {
+                let branch = parent.child(phase == 2);
                 let (_, open) = tree_row(
                     ui,
                     Row {
-                        id: ui
-                            .id()
-                            .with((key(invocation), depth, label, fields[0].1.object_id)),
-                        depth,
+                        id: ui.id().with((
+                            key(invocation),
+                            parent.levels(),
+                            label,
+                            fields[0].1.object_id,
+                        )),
+                        branch: &branch,
                         expand: Some(true),
                         name: label,
                         name_color: theme::muted(),
@@ -651,7 +674,7 @@ impl Inspector {
                         &phase_fields,
                         strip_arg,
                         self,
-                        depth + 1,
+                        &branch,
                     );
                 }
             } else {
@@ -661,7 +684,7 @@ impl Inspector {
                     &phase_fields,
                     strip_arg,
                     self,
-                    depth,
+                    parent,
                 );
             }
         }
@@ -672,6 +695,7 @@ impl Inspector {
         ui: &mut egui::Ui,
         invocation: &InvocationSummary,
         event: &antinomie_monitor_core::EventSummary,
+        branch: Prefix,
     ) {
         let stage = async_stage(event);
         let record = format!("record {}", event.event_seq);
@@ -680,7 +704,7 @@ impl Inspector {
             ui,
             Row {
                 id: ui.id().with(("async", event.event_seq)),
-                depth: 1,
+                branch: &branch,
                 expand: Some(false),
                 name: &stage,
                 name_color: theme::text(),
@@ -703,13 +727,20 @@ impl Inspector {
         if !open {
             return;
         }
-        for issue in &event.issues {
-            note_row(ui, 2, issue, theme::warn());
-        }
-        if let Some(result) = async_scalar(event, "async.result")
+        let result = async_scalar(event, "async.result")
             .map(|value| value as i64)
-            .or(event.result)
-        {
+            .or(event.result);
+        // The rows below the event, to tell the last from the others.
+        let count = event.issues.len() + usize::from(result.is_some()) + event.fields.len();
+        let mut position = 0;
+        let mut next = || {
+            position += 1;
+            branch.child(position == count)
+        };
+        for issue in &event.issues {
+            note_row(ui, &next(), issue, theme::warn());
+        }
+        if let Some(result) = result {
             let label = match async_scalar(event, "async.stage") {
                 Some(6) => "Observation error",
                 Some(4 | 5) => "Operation result",
@@ -721,7 +752,7 @@ impl Inspector {
                 ui,
                 Row {
                     id: ui.id().with(("async result", event.event_seq)),
-                    depth: 2,
+                    branch: &next(),
                     expand: None,
                     name: label,
                     name_color: theme::text(),
@@ -742,7 +773,7 @@ impl Inspector {
                     id: ui
                         .id()
                         .with(("async field", event.event_seq, field.object_id)),
-                    depth: 2,
+                    branch: &next(),
                     expand: None,
                     name: &field.key,
                     name_color: theme::text(),
@@ -1118,7 +1149,7 @@ fn field_tree(
     fields: &[&FieldSummary],
     strip_arg: bool,
     inspector: &mut Inspector,
-    depth: usize,
+    parent: &Prefix,
 ) {
     let mut root = FieldNode::default();
     for field in fields {
@@ -1154,17 +1185,20 @@ fn field_tree(
         owner: FieldOwner<'_>,
         node: &FieldNode<'_>,
         inspector: &mut Inspector,
-        depth: usize,
+        parent: &Prefix,
     ) {
         let (invocation, nr, phase) = owner;
-        for (label, child) in &node.children {
+        for (position, (label, child)) in node.children.iter().enumerate() {
+            let branch = parent.child(position + 1 == node.children.len());
             let size = child.field.map(capture_size);
             let shown = child.field.map(preview);
             let (response, open) = tree_row(
                 ui,
                 Row {
-                    id: ui.id().with((key(invocation), phase, depth, label)),
-                    depth,
+                    id: ui
+                        .id()
+                        .with((key(invocation), phase, parent.levels(), label)),
+                    branch: &branch,
                     expand: (!child.children.is_empty()).then_some(false),
                     name: label,
                     name_color: theme::text(),
@@ -1195,151 +1229,11 @@ fn field_tree(
                 }
             }
             if open {
-                show(ui, owner, child, inspector, depth + 1);
+                show(ui, owner, child, inspector, &branch);
             }
         }
     }
-    show(ui, owner, &root, inspector, depth);
-}
-
-/// One line of the decoded tree.
-struct Row<'a> {
-    id: egui::Id,
-    depth: usize,
-    /// Rows with children draw a caret: `Some(open by default)`.
-    expand: Option<bool>,
-    name: &'a str,
-    name_color: Color32,
-    /// Monospace, in its syntax color.
-    value: Option<(&'a str, Color32)>,
-    /// After the value: a decoded form, a preview or a remark.
-    note: Option<(&'a str, Color32)>,
-    selected: bool,
-}
-
-/// Draw a tree row: caret, name, then value and note aligned on a column
-/// shared by the row's siblings. A click selects; the caret or a double
-/// click opens and closes. Returns the response and whether the row is open.
-fn tree_row(ui: &mut egui::Ui, row: Row<'_>) -> (egui::Response, bool) {
-    let body = egui::TextStyle::Body.resolve(ui.style());
-    let mono = theme::mono(body.size - 1.0);
-    let height = theme::row_height(body.size);
-    let step = body.size * 1.1;
-    let caret = body.size;
-    let name_x = 2.0 + row.depth as f32 * step + caret;
-    let painter = ui.painter();
-    let name = painter.layout_no_wrap(row.name.to_owned(), body.clone(), row.name_color);
-    let value = row
-        .value
-        .map(|(text, color)| painter.layout_no_wrap(text.to_owned(), mono.clone(), color));
-    let note = row
-        .note
-        .map(|(text, color)| painter.layout_no_wrap(text.to_owned(), body.clone(), color));
-    let gap = body.size * 0.8;
-    let value_x = (name_x + name.size().x + gap).max(name_x + body.size * 6.5);
-    let note_x = value_x + value.as_ref().map_or(0.0, |value| value.size().x + gap);
-    let end = note_x + note.as_ref().map_or(0.0, |note| note.size().x) + 4.0;
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width().max(end), height),
-        egui::Sense::click(),
-    );
-    let mut open = false;
-    if let Some(default) = row.expand {
-        open = ui.data_mut(|data| *data.get_temp_mut_or(row.id, default));
-        let caret_rect = egui::Rect::from_min_size(
-            egui::pos2(rect.left() + name_x - caret, rect.top()),
-            egui::vec2(caret, height),
-        );
-        let on_caret = response.clicked()
-            && response
-                .interact_pointer_pos()
-                .is_some_and(|pos| caret_rect.contains(pos));
-        if on_caret || response.double_clicked() {
-            open = !open;
-            ui.data_mut(|data| data.insert_temp(row.id, open));
-        }
-    }
-    if ui.is_rect_visible(rect) {
-        let palette = theme::palette();
-        let painter = ui.painter();
-        if row.selected {
-            painter.rect_filled(rect, 2.0, palette.selection);
-        } else if response.hovered() {
-            painter.rect_filled(rect, 2.0, palette.hover);
-        }
-        let y = rect.center().y;
-        if row.expand.is_some() {
-            painter.text(
-                egui::pos2(rect.left() + name_x - caret * 0.5, y),
-                egui::Align2::CENTER_CENTER,
-                if open {
-                    egui_phosphor::regular::CARET_DOWN
-                } else {
-                    egui_phosphor::regular::CARET_RIGHT
-                },
-                body.clone(),
-                theme::muted(),
-            );
-        }
-        let place = |x: f32, galley: &std::sync::Arc<egui::Galley>| {
-            egui::pos2(rect.left() + x, y - galley.size().y / 2.0)
-        };
-        painter.galley(place(name_x, &name), name.clone(), row.name_color);
-        if let Some(value) = value {
-            painter.galley(place(value_x, &value), value.clone(), theme::text());
-        }
-        if let Some(note) = note {
-            painter.galley(place(note_x, &note), note.clone(), theme::muted());
-        }
-    }
-    (response, open)
-}
-
-/// A top-level section of the tree (Arguments, Phases); true when open.
-fn section_row(ui: &mut egui::Ui, id: egui::Id, title: &str, default_open: bool) -> bool {
-    let (response, open) = tree_row(
-        ui,
-        Row {
-            id,
-            depth: 0,
-            expand: Some(default_open),
-            name: title,
-            name_color: theme::heading(),
-            value: None,
-            note: None,
-            selected: false,
-        },
-    );
-    // A section has nothing to select: a click anywhere opens or closes it.
-    if response.clicked() && !response.double_clicked() {
-        let caret = egui::TextStyle::Body.resolve(ui.style()).size + 2.0;
-        let on_caret = response
-            .interact_pointer_pos()
-            .is_some_and(|pos| pos.x < response.rect.left() + caret);
-        if !on_caret {
-            let open = !open;
-            ui.data_mut(|data| data.insert_temp(id, open));
-            return open;
-        }
-    }
-    open
-}
-
-/// A remark in the tree, such as "Arguments unavailable".
-fn note_row(ui: &mut egui::Ui, depth: usize, text: &str, color: Color32) {
-    tree_row(
-        ui,
-        Row {
-            id: ui.id().with(("note", depth, text)),
-            depth,
-            expand: None,
-            name: text,
-            name_color: color,
-            value: None,
-            note: None,
-            selected: false,
-        },
-    );
+    show(ui, owner, &root, inspector, parent);
 }
 
 fn warning_line(ui: &mut egui::Ui, text: &str) {

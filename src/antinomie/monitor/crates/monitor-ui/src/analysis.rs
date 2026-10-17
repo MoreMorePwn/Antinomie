@@ -182,33 +182,60 @@ pub(crate) fn selection(
     tools: &[ToolStatus],
     install: &mut bool,
 ) -> egui::Response {
-    let (_, master, _) = egui::collapsing_header::CollapsingState::load_with_default_open(
+    use crate::tree_lines::{self, Prefix};
+    let mono = egui::TextStyle::Monospace.resolve(ui.style());
+    let char_width = tree_lines::char_width(ui, &mono);
+    let root = Prefix::default();
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
         ui.ctx(),
         ui.make_persistent_id("analysis-tree"),
         true,
-    )
-    .show_header(ui, |ui| {
+    );
+    let master = tree_lines::row(ui, &root, char_width, |ui| {
+        tree_lines::caret(ui, &mut state);
         ui.checkbox(&mut selection.enabled, "Static Analysis")
             .on_hover_text("Analyze the initial executable only")
-    })
-    .body(|ui| {
+    });
+    if state.is_open() {
         ui.add_enabled_ui(selection.enabled, |ui| {
-            for (label, kinds) in [
+            let groups = [
                 ("Triage", AnalysisKind::TRIAGE),
                 ("Deep analysis", AnalysisKind::DEEP),
-            ] {
-                egui::CollapsingHeader::new(label)
-                    .id_salt(("analysis-branch", label))
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        for &kind in kinds {
-                            check(ui, selection, kind);
-                            needs_tool(ui, selection, kind, tools, install);
-                        }
-                    });
+            ];
+            for (index, (label, kinds)) in groups.into_iter().enumerate() {
+                let branch = root.child(index + 1 == groups.len());
+                let mut group = egui::collapsing_header::CollapsingState::load_with_default_open(
+                    ui.ctx(),
+                    ui.make_persistent_id(("analysis-branch", label)),
+                    true,
+                );
+                let mut open = group.is_open();
+                tree_lines::row(ui, &branch, char_width, |ui| {
+                    open = tree_lines::caret(ui, &mut group);
+                    let name = ui
+                        .add(
+                            egui::Label::new(label)
+                                .selectable(false)
+                                .sense(egui::Sense::click()),
+                        )
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if name.clicked() {
+                        open = !open;
+                        group.set_open(open);
+                        group.store(ui.ctx());
+                    }
+                });
+                if !open {
+                    continue;
+                }
+                for (position, &kind) in kinds.iter().enumerate() {
+                    let leaf = branch.child(position + 1 == kinds.len());
+                    tree_lines::row(ui, &leaf, char_width, |ui| check(ui, selection, kind));
+                    needs_tool(ui, &leaf, char_width, selection, kind, tools, install);
+                }
             }
         });
-    });
+    }
     if let Err(reason) = selection.validate() {
         ui.colored_label(crate::theme::error(), reason);
     }
@@ -219,6 +246,8 @@ pub(crate) fn selection(
 /// to install it.
 fn needs_tool(
     ui: &mut egui::Ui,
+    parent: &crate::tree_lines::Prefix,
+    char_width: f32,
     selection: &AnalysisSelection,
     kind: AnalysisKind,
     tools: &[ToolStatus],
@@ -237,8 +266,7 @@ fn needs_tool(
     {
         return;
     }
-    ui.horizontal_wrapped(|ui| {
-        ui.add_space(24.0);
+    crate::tree_lines::row(ui, &parent.child(true), char_width, |ui| {
         ui.colored_label(crate::theme::warn(), format!("Needs {name}, not installed"));
         if ui.small_button("Install…").clicked() {
             *install = true;

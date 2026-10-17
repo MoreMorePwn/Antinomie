@@ -607,7 +607,8 @@ pub(super) fn process_tree(
             "PID reuse or incomplete ancestry: cyclic components shown as detached roots",
         );
     }
-    let guides = tree_guides(&rows);
+    let branches =
+        crate::tree_lines::prefixes(&rows.iter().map(|(_, depth)| *depth).collect::<Vec<_>>());
     ui.horizontal_wrapped(|ui| {
         theme::section(ui, "Processes");
         ui.colored_label(
@@ -628,7 +629,6 @@ pub(super) fn process_tree(
     let mono = theme::mono(font_size - 1.0);
     let char_width = ui.fonts(|fonts| fonts.glyph_width(&mono, '0'));
     let row_height = theme::row_height(font_size);
-    let indent = 18.0;
     TableBuilder::new(ui)
         .id_salt("capture_process_tree")
         .sense(egui::Sense::click())
@@ -650,31 +650,14 @@ pub(super) fn process_tree(
         })
         .body(|body| {
             body.rows(row_height, rows.len(), |mut row| {
-                let (process, depth) = rows[row.index()];
-                let continues = &guides[row.index()];
+                let (process, _) = rows[row.index()];
+                let branch = &branches[row.index()];
                 row.set_selected(selected == Some(process.pid));
                 row.col(|ui| {
-                    let rect = ui.max_rect();
-                    let stroke = egui::Stroke::new(1.0_f32, theme::muted().gamma_multiply(0.6));
-                    let painter = ui.painter();
-                    for level in 1..=depth {
-                        let x = rect.left() + (level - 1) as f32 * indent + indent * 0.5;
-                        let below = continues[level - 1];
-                        if level < depth {
-                            if below {
-                                painter.vline(x, rect.y_range(), stroke);
-                            }
-                        } else {
-                            let bottom = if below {
-                                rect.bottom()
-                            } else {
-                                rect.center().y
-                            };
-                            painter.vline(x, rect.top()..=bottom, stroke);
-                            painter.hline(x..=x + indent * 0.5, rect.center().y, stroke);
-                        }
-                    }
-                    ui.add_space(depth as f32 * indent + 4.0);
+                    let reach = ui.spacing().item_spacing.y * 0.5;
+                    let lines = ui.max_rect().expand2(egui::vec2(0.0, reach));
+                    branch.paint(ui.painter(), lines, char_width);
+                    ui.add_space(branch.width(char_width) + 4.0);
                     let name = if process.name.is_empty() {
                         "?"
                     } else {
@@ -755,28 +738,6 @@ fn exit_status(process: &CaptureProcess) -> (String, egui::Color32) {
     }
 }
 
-/// For each row of `tree_rows`, whether each of its levels (1..=depth)
-/// continues below it: a later sibling of the row (last level) or of its
-/// ancestor at that level, so the guide line goes on down.
-fn tree_guides(rows: &[(&CaptureProcess, usize)]) -> Vec<Vec<bool>> {
-    let mut guides = vec![Vec::new(); rows.len()];
-    // Walking up from the bottom: whether a row at each depth was seen
-    // since the last shallower one.
-    let mut seen: Vec<bool> = Vec::new();
-    for (index, (_, depth)) in rows.iter().enumerate().rev() {
-        let depth = *depth;
-        if seen.len() <= depth {
-            seen.resize(depth + 1, false);
-        }
-        guides[index] = (1..=depth).map(|level| seen[level]).collect();
-        seen[depth] = true;
-        for deeper in seen.iter_mut().skip(depth + 1) {
-            *deeper = false;
-        }
-    }
-    guides
-}
-
 /// Processes in tree order (parents before children) with their depth; a
 /// cycle (reused PIDs) ends at a process already listed.
 fn tree_rows(processes: &[CaptureProcess]) -> Vec<(&CaptureProcess, usize)> {
@@ -852,8 +813,17 @@ pub(super) fn process_menu(
             {
                 action = Some(ProcessSelection::All);
             }
-            for (process, depth) in tree_rows(processes) {
-                let text = format!("{}{}", "  ".repeat(depth), process_label(process));
+            let rows = tree_rows(processes);
+            let depths: Vec<_> = rows.iter().map(|(_, depth)| *depth).collect();
+            let font = egui::TextStyle::Monospace.resolve(ui.style());
+            let body = egui::TextStyle::Body.resolve(ui.style());
+            for ((process, _), branch) in rows.iter().zip(crate::tree_lines::prefixes(&depths)) {
+                let mut text = branch.job(&font);
+                text.append(
+                    &process_label(process),
+                    0.0,
+                    egui::TextFormat::simple(body.clone(), theme::text()),
+                );
                 if ui
                     .selectable_label(selected == Some(process.pid), text)
                     .on_hover_text(process_hover(process))
@@ -1055,12 +1025,12 @@ mod tests {
     }
 
     #[test]
-    fn tree_guides_continue_only_to_later_siblings() {
+    fn process_branches_follow_the_tree_order() {
         // 1
-        // ├ 2
-        // │ └ 4
-        // └ 3
-        //   └ 5
+        // ├── 2
+        // │   └── 4
+        // └── 3
+        //     └── 5
         let processes = [
             process(1, 0),
             process(2, 1),
@@ -1071,16 +1041,16 @@ mod tests {
         let rows = tree_rows(&processes);
         let order: Vec<_> = rows.iter().map(|(p, depth)| (p.pid, *depth)).collect();
         assert_eq!(order, [(1, 0), (2, 1), (4, 2), (3, 1), (5, 2)]);
-        assert_eq!(
-            tree_guides(&rows),
-            [
-                vec![],
-                vec![true],
-                vec![true, false],
-                vec![false],
-                vec![false, false],
-            ]
-        );
+        let depths: Vec<_> = rows.iter().map(|(_, depth)| *depth).collect();
+        let branches: Vec<_> = crate::tree_lines::prefixes(&depths)
+            .iter()
+            .map(crate::tree_lines::Prefix::text)
+            .collect();
+        assert_eq!(branches, ["", "├── ", "│   └── ", "└── ", "    └── "]);
+    }
+
+    #[test]
+    fn exit_status_colors_follow_the_wait_status() {
         let mut failed = process(9, 1);
         failed.exited = true;
         failed.exit_code = Some(2 << 8);

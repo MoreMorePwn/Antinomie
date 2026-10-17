@@ -457,9 +457,7 @@ impl MemoryView {
         // Wider than the panel: every column keeps its width and the table
         // scrolls sideways; otherwise the last column takes the rest.
         let fits = total <= ui.available_width();
-        let indent = 14.0;
-        // Sorted rows lose their tree: shown flat.
-        let nested = result.sort.is_none();
+        // Sorted rows lose their tree: shown flat, with no branches.
         let selected_row = self.selected_row;
         let mut clicked_row = None;
         let mut clicked_header = None;
@@ -529,17 +527,16 @@ impl MemoryView {
                             let row_index = result.shown[row.index()];
                             let data = &table.rows[row_index];
                             row.set_selected(selected_row == Some(row_index));
+                            let branch = result.branches.get(row.index());
                             for (index, (value, column)) in
                                 data.values.iter().zip(&table.columns).enumerate()
                             {
                                 row.col(|ui| {
-                                    if nested && index == 0 && data.depth > 0 {
-                                        ui.add_space(f32::from(data.depth) * indent);
-                                        ui.label(
-                                            RichText::new("└")
-                                                .font(mono.clone())
-                                                .color(theme::line()),
-                                        );
+                                    if let Some(branch) = branch.filter(|_| index == 0) {
+                                        let reach = ui.spacing().item_spacing.y * 0.5;
+                                        let lines = ui.max_rect().expand2(egui::vec2(0.0, reach));
+                                        branch.paint(ui.painter(), lines, char_width);
+                                        ui.add_space(branch.width(char_width));
                                     }
                                     let text = memory::value_text(column.kind, value);
                                     let mut label = RichText::new(&text)
@@ -641,6 +638,19 @@ pub(super) fn value_color(kind: ColumnKind, value: &serde_json::Value) -> egui::
     }
 }
 
+/// The tree branches of the shown rows, a tree of the rows a filter left.
+pub(super) fn result_branches(
+    table: &ResultTable,
+    shown: &[usize],
+) -> Vec<crate::tree_lines::Prefix> {
+    crate::tree_lines::prefixes(
+        &shown
+            .iter()
+            .map(|&row| usize::from(table.rows[row].depth))
+            .collect::<Vec<_>>(),
+    )
+}
+
 pub(super) fn load_result(
     run: PluginRun,
     request: &ResultRequest,
@@ -707,14 +717,19 @@ pub(super) fn load_result(
     if let Err(error) = annotation {
         log.push_str(&format!("\nAnnotation unavailable: {error}"));
     }
-    let shown = table
+    let shown: Vec<usize> = table
         .as_ref()
         .map(|table| (0..table.rows.len()).collect())
         .unwrap_or_default();
+    let branches = match (&table, request.sort) {
+        (Ok(table), None) => result_branches(table, &shown),
+        _ => Vec::new(),
+    };
     LoadedResult {
         run,
         table,
         shown,
+        branches,
         filter: request.query.clone(),
         filter_error,
         sort: request.sort,
@@ -900,7 +915,7 @@ pub(super) fn column_widths(table: &ResultTable, char_width: f32) -> Vec<f32> {
                     row.values.get(index).map_or(0, |value| {
                         memory::value_text(column.kind, value).chars().count()
                     }) + if index == 0 {
-                        row.depth as usize * 2 + 2
+                        row.depth as usize * crate::tree_lines::CELL_CHARS + 1
                     } else {
                         0
                     }
