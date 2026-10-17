@@ -367,6 +367,8 @@ fn native_analysis_workspace_fixture() {
         report: AnalysisReport,
         state: WorkspaceState,
         preview: Option<Result<AnalysisSpecimenPage, String>>,
+        listing: Option<Result<antinomie_monitor_core::AnalysisListingPage, String>>,
+        directory: Option<std::path::PathBuf>,
         specimen: Option<Vec<u8>>,
         deadline: Instant,
     }
@@ -378,7 +380,7 @@ fn native_analysis_workspace_fixture() {
                     Some(&self.report),
                     &mut self.state,
                     self.preview.as_ref(),
-                    None,
+                    self.listing.as_ref(),
                 ) {
                     match action {
                         ReportAction::ReadSpecimen {
@@ -401,6 +403,27 @@ fn native_analysis_workspace_fixture() {
                                     data: (0..data_len).map(|index| (index % 256) as u8).collect(),
                                 },
                             }));
+                        }
+                        ReportAction::ReadListing {
+                            report_id,
+                            kind,
+                            start,
+                            query,
+                        } if self.directory.is_some() => {
+                            let fields = super::super::listing_view::listing_fields(kind);
+                            let filter = crate::query::compile_table(&query, &fields);
+                            self.listing = Some(antinomie_monitor_core::read_listing_page_with(
+                                self.directory.as_ref().unwrap(),
+                                &report_id,
+                                kind,
+                                start,
+                                antinomie_monitor_core::LISTING_PAGE_MAX_ROWS,
+                                &query,
+                                |entry| {
+                                    filter
+                                        .keep_table(&super::super::listing_view::listing_row(entry))
+                                },
+                            ));
                         }
                         action => eprintln!("Synthetic workspace action: {action:?}"),
                     }
@@ -435,14 +458,18 @@ fn native_analysis_workspace_fixture() {
         Box::new(move |cc| {
             crate::theme::install(&cc.egui_ctx);
             crate::theme::text_size(&cc.egui_ctx, if small { 24.0 } else { 18.0 });
-            // A retained report.json and its specimen replace the synthetic
-            // fixture; the tab is chosen by its position in the strip.
-            let report = std::env::var_os("ANTINOMIE_ANALYSIS_QA_REPORT")
-                .map_or_else(fixture, |path| {
-                    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
-                });
-            let specimen = std::env::var_os("ANTINOMIE_ANALYSIS_QA_SPECIMEN")
-                .map(|path| std::fs::read(path).unwrap());
+            // A retained analysis directory (report.json, specimen and
+            // listings) replaces the synthetic fixture; the tab is chosen by
+            // its position in the strip.
+            let directory =
+                std::env::var_os("ANTINOMIE_ANALYSIS_QA_DIR").map(std::path::PathBuf::from);
+            let report = directory.as_ref().map_or_else(fixture, |directory| {
+                serde_json::from_slice(&std::fs::read(directory.join("report.json")).unwrap())
+                    .unwrap()
+            });
+            let specimen = directory
+                .as_ref()
+                .map(|directory| std::fs::read(directory.join("specimen")).unwrap());
             let mut state = WorkspaceState::default();
             state.bind(&report.id);
             state.tab = Tab::FileInfo;
@@ -466,6 +493,8 @@ fn native_analysis_workspace_fixture() {
                 report,
                 state,
                 preview: None,
+                listing: None,
+                directory,
                 specimen,
                 deadline: Instant::now() + Duration::from_secs(seconds),
             }))
