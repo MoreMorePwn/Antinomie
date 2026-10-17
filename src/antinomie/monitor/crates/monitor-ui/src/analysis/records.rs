@@ -36,6 +36,19 @@ impl Structure {
             Self::Symbols => "Symbols",
         }
     }
+    /// The listing filter that keeps this view's rows; see the `kind`
+    /// field of `listing_view::listing_row`.
+    pub fn kind_query(self) -> &'static str {
+        match self {
+            Self::All => "",
+            Self::Headers => "kind == \"field\"",
+            Self::Sections => "kind == \"section\"",
+            Self::Segments => "kind == \"segment\"",
+            Self::Imports => "kind == \"import\"",
+            Self::Exports => "kind == \"export\"",
+            Self::Symbols => "kind == \"symbol\"",
+        }
+    }
     pub fn accepts(self, entry: &AnalysisEntry) -> bool {
         // Segments are recorded with the shape of a section.
         let segment = entry.label == "Segment";

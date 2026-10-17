@@ -1,6 +1,7 @@
 //! Paged views of a category's full listing: disassembly as an address /
 //! bytes / instruction table, decompilation as numbered source, strings as a
 //! table. Rows load from the retained listing in pages, as they scroll in.
+use super::records::{self, Structure};
 use super::ReportAction;
 use crate::theme;
 use antinomie_monitor_core::{
@@ -22,6 +23,8 @@ pub(super) struct ListingState {
     /// Keyed by "{address:x}:{name}". Empty until a page is shown.
     functions: Vec<ListedFunction>,
     record: Vec<(&'static str, crate::query::RowValue)>,
+    /// The structures view a Structures listing shows.
+    pub(super) scope: Option<Structure>,
 }
 
 impl ListingState {
@@ -98,7 +101,8 @@ pub(super) fn show(
             ui.weak("The selected row is hidden by this filter.");
         }
     }
-    let query = state.applied_query.as_str();
+    let query = scoped_query(state.scope, &state.applied_query);
+    let query = query.as_str();
     let current = page
         .and_then(|page| page.as_ref().ok())
         .filter(|page| page.kind == kind && page.query == query);
@@ -123,7 +127,7 @@ pub(super) fn show(
     };
     remember_functions(&mut state.functions, section, page);
     if page.total == 0 {
-        ui.label(if query.is_empty() {
+        ui.label(if state.applied_query.is_empty() {
             "This listing is empty."
         } else {
             "No row matches the search."
@@ -211,7 +215,25 @@ pub(super) fn show(
                     });
             });
     }
+    let structure_columns: Vec<(&str, Column)> = match state.scope {
+        Some(scope) if kind == AnalysisKind::Structures => records::columns(kind, scope, false)
+            .iter()
+            .map(|column| {
+                let width = if *column == records::Column::Value {
+                    300.0
+                } else {
+                    140.0
+                };
+                (
+                    column.label(),
+                    Column::initial(width).at_least(70.0).clip(true),
+                )
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
     let columns: &[(&str, Column)] = match kind {
+        AnalysisKind::Structures if !structure_columns.is_empty() => &structure_columns,
         AnalysisKind::Disassembly => &[
             ("Address", Column::exact(mono.size * 7.5)),
             (
@@ -306,7 +328,7 @@ pub(super) fn show(
                                 .as_ref()
                                 .is_some_and(|(selected, _)| selected == listing_index);
                             row.set_selected(selected);
-                            cells(&mut row, kind, entry, &mono);
+                            cells(&mut row, kind, state.scope, entry, &mono);
                             row.response().context_menu(|ui| {
                                 let field = match kind {
                                     AnalysisKind::Disassembly => "mnemonic",
@@ -875,6 +897,16 @@ fn identity_name(identity: &str) -> Option<&str> {
     identity.split_once(':').map(|(_, name)| name)
 }
 
+/// The user's filter limited to one structures view.
+fn scoped_query(scope: Option<Structure>, query: &str) -> String {
+    let base = scope.map_or("", Structure::kind_query);
+    match (base.is_empty(), query.trim().is_empty()) {
+        (true, _) => query.to_owned(),
+        (false, true) => base.to_owned(),
+        (false, false) => format!("{base} && ({query})"),
+    }
+}
+
 fn kind_salt(kind: AnalysisKind) -> &'static str {
     match kind {
         AnalysisKind::Disassembly => "disassembly",
@@ -891,10 +923,21 @@ fn mono_text(text: impl Into<String>, font: &FontId, color: Color32) -> RichText
 fn cells(
     row: &mut egui_extras::TableRow,
     kind: AnalysisKind,
+    scope: Option<Structure>,
     entry: &AnalysisEntry,
     mono: &FontId,
 ) {
     let data = entry.record.as_ref().map(|record| &record.data);
+    if let (AnalysisKind::Structures, Some(scope)) = (kind, scope) {
+        for column in records::columns(kind, scope, false) {
+            let text = column.text(entry);
+            row.col(|ui| {
+                ui.add(egui::Label::new(text.as_str()).truncate())
+                    .on_hover_text(&text);
+            });
+        }
+        return;
+    }
     match (kind, data) {
         (
             _,

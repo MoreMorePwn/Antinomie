@@ -793,8 +793,45 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
         AnalysisKind::Embedded => super::binwalk::embedded(section, specimen.len() as u64),
         AnalysisKind::Decompilation => super::decompile::decompile(section, specimen, listings),
     }
+    // Headers, sections, segments, symbols, imports and exports of an
+    // ordinary binary outgrow the report; the report keeps a preview.
+    if section.kind == AnalysisKind::Structures {
+        keep_listing(section, listings);
+    }
     if section.state == AnalysisSectionState::Partial {
         section.summary.push_str("; partial/bounded evidence");
+    }
+}
+
+/// Write a category's structured rows to its full listing beside the report.
+fn keep_listing(section: &mut AnalysisSection, listings: &Path) {
+    let Ok(mut writer) = super::listing::ListingWriter::create(
+        listings,
+        section.kind,
+        super::listing::LISTING_MAX_SIZE,
+    ) else {
+        return;
+    };
+    let mut full = false;
+    for entry in &section.entries {
+        let Some(record) = &entry.record else {
+            continue;
+        };
+        if !writer.push(
+            entry.label.clone(),
+            entry.value.clone(),
+            record.location.clone(),
+            record.data.clone(),
+        ) {
+            full = true;
+            break;
+        }
+    }
+    if let Ok(listing) = writer.finish(full) {
+        if listing.truncated {
+            section.state = AnalysisSectionState::Partial;
+        }
+        section.listing = Some(listing);
     }
 }
 

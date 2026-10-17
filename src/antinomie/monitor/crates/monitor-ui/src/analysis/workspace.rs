@@ -326,12 +326,32 @@ fn results(
     {
         action = Some(ReportAction::OpenAnalysisTools);
     }
-    if section.listing.is_some() && kind != AnalysisKind::Structures {
+    // The tab strip chooses the structure filter; a separate pane has only this.
+    if kind == AnalysisKind::Structures && forced.is_some() {
+        egui::ComboBox::from_id_salt("analysis-structure-filter")
+            .selected_text(state.structure.label())
+            .show_ui(ui, |ui| {
+                for filter in std::iter::once(Structure::All).chain(Structure::FILTERS) {
+                    ui.selectable_value(&mut state.structure, filter, filter.label());
+                }
+            });
+    }
+    let filter = if kind == AnalysisKind::Structures {
+        state.structure
+    } else {
+        Structure::All
+    };
+    if section.listing.is_some() {
         let record_context = state.record_context_for(report, kind);
-        let view_key = format!("{kind:?}/listing");
+        let view_key = if kind == AnalysisKind::Structures {
+            format!("{kind:?}/{filter:?}/listing")
+        } else {
+            format!("{kind:?}/listing")
+        };
         state.active_view = Some(view_key.clone());
         let view = state.views.entry(view_key).or_default();
         view.listing.set_record(record_context);
+        view.listing.scope = (kind == AnalysisKind::Structures).then_some(filter);
         let wide = ui.available_width() >= 800.0;
         if wide {
             ui.horizontal_top(|ui| {
@@ -393,21 +413,6 @@ fn results(
         }
         return action;
     }
-    // The tab strip chooses the structure filter; a separate pane has only this.
-    if kind == AnalysisKind::Structures && forced.is_some() {
-        egui::ComboBox::from_id_salt("analysis-structure-filter")
-            .selected_text(state.structure.label())
-            .show_ui(ui, |ui| {
-                for filter in std::iter::once(Structure::All).chain(Structure::FILTERS) {
-                    ui.selectable_value(&mut state.structure, filter, filter.label());
-                }
-            });
-    }
-    let filter = if kind == AnalysisKind::Structures {
-        state.structure
-    } else {
-        Structure::All
-    };
     let record_context = state.record_context_for(report, kind);
     let record_tags = state.record_tags.clone();
     let view_key = format!("{kind:?}/{filter:?}");
