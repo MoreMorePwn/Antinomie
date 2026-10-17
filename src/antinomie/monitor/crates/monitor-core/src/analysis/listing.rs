@@ -32,6 +32,7 @@ pub(crate) fn file_name(kind: AnalysisKind) -> &'static str {
         AnalysisKind::Capabilities => "capabilities.jsonl",
         AnalysisKind::Disassembly => "disassembly.jsonl",
         AnalysisKind::Decompilation => "decompilation.jsonl",
+        AnalysisKind::Embedded => "embedded.jsonl",
     }
 }
 

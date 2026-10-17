@@ -14,6 +14,8 @@ pub enum AnalysisKind {
     Capabilities,
     Disassembly,
     Decompilation,
+    /// Signatures of embedded files and data found by binwalk.
+    Embedded,
 }
 
 impl AnalysisKind {
@@ -26,6 +28,7 @@ impl AnalysisKind {
         Self::Rules,
         Self::Identification,
         Self::Capabilities,
+        Self::Embedded,
     ];
     pub const DEEP: &'static [Self] = &[Self::Disassembly, Self::Decompilation];
 
@@ -41,6 +44,7 @@ impl AnalysisKind {
             Self::Capabilities => "Capabilities",
             Self::Disassembly => "Disassembly",
             Self::Decompilation => "Decompilation",
+            Self::Embedded => "Embedded content",
         }
     }
 }
@@ -63,8 +67,8 @@ impl Default for AnalysisSelection {
 
 impl AnalysisSelection {
     pub fn validate(&self) -> Result<(), String> {
-        if self.checks.len() > 10 {
-            return Err("at most ten analyses may be selected".into());
+        if self.checks.len() > AnalysisKind::TRIAGE.len() + AnalysisKind::DEEP.len() {
+            return Err("more analyses selected than exist".into());
         }
         for (index, kind) in self.checks.iter().enumerate() {
             if self.checks[..index].contains(kind) {
@@ -222,6 +226,12 @@ pub enum AnalysisData {
         namespace: String,
         attack: Vec<String>,
         mbc: Vec<String>,
+    },
+    /// A signature of embedded content at a file offset (binwalk); the entry
+    /// value is the signature's description.
+    Signature {
+        offset: u64,
+        description: String,
     },
     /// A compiler, language, linker, packer or protector identification;
     /// the entry value is the evidence.

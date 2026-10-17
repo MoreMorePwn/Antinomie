@@ -97,6 +97,10 @@ it runs.
 - **Presentation.** Removed indexing/count explanation blocks; warnings stay
   below the run selector. Times use the host timezone with an explicit UTC offset;
   guest event times mapped through host receipt anchors are marked estimated.
+- **Embedded content and segments.** Static analysis runs binwalk's signature
+  scan as its own category; it records each signature's file offset and
+  extracts nothing. Structures records every ELF program header (not only
+  loadable ones) as a segment with its permissions.
 - **Open directory.** Folder actions ask the desktop file manager through the
   FileManager1 D-Bus service and fall back to `xdg-open`, so a folder no longer
   opens in a search tool registered for directories (Catfish on Xfce).

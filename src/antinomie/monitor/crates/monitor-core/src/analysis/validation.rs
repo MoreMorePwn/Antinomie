@@ -7,7 +7,7 @@ use crate::control;
 
 pub(crate) fn validate_report(report: &AnalysisReport) -> Result<(), String> {
     if serde_json::to_vec(report).map_err(|e| e.to_string())?.len() > REPORT_MAX_SIZE
-        || report.sections.len() > 10
+        || report.sections.len() > AnalysisKind::TRIAGE.len() + AnalysisKind::DEEP.len()
         || report.id.len() > 128
         || report.source_path.len() > 4096
         || report.reason.as_ref().is_some_and(|s| s.len() > 4096)
@@ -246,6 +246,19 @@ pub(crate) fn validate_record(
                 && attack.len() <= 64
                 && mbc.len() <= 64
                 && attack.iter().chain(mbc.iter()).all(|t| bounded(t))
+        }
+        AnalysisData::Signature {
+            offset,
+            description,
+        } => {
+            kind == AnalysisKind::Embedded
+                && bounded(description)
+                && !description.is_empty()
+                && location.is_some_and(|l| {
+                    l.kind == AnalysisAddressKind::FileOffset
+                        && l.value == *offset
+                        && l.file_range.is_none()
+                })
         }
         AnalysisData::Identification {
             category,
