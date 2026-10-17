@@ -387,18 +387,23 @@ impl FileIndex {
         } else {
             CapturedPayload::default()
         };
-        let read_row = reading.then(|| {
+        // One Read files row; `content` is None when the kernel moved the
+        // bytes itself and none were captured.
+        let read_cells = |path: &str,
+                          path_known: bool,
+                          fd: Option<u64>,
+                          content: Option<&CapturedPayload>| {
             let mut row = vec![
                 cell(event.timestamp_ns.to_string(), theme::text(), true),
-                cell(&path, theme::text(), true),
+                cell(path, theme::text(), true),
                 cell(
                     process_identity(event.pid, event.tid, process_image(files, event)),
                     theme::text(),
                     true,
                 ),
                 cell(
-                    if success {
-                        format!(
+                    match (success, content) {
+                        (true, Some(bytes)) => format!(
                             "{size} B: {}{}",
                             bytes.preview(),
                             if bytes.len() as u64 != size {
@@ -406,9 +411,9 @@ impl FileIndex {
                             } else {
                                 ""
                             }
-                        )
-                    } else {
-                        "Unavailable".into()
+                        ),
+                        (true, None) => format!("{size} B: kernel transfer; bytes not captured"),
+                        (false, _) => "Unavailable".into(),
                     },
                     theme::text(),
                     true,
@@ -429,7 +434,7 @@ impl FileIndex {
                 (
                     "file.path",
                     if path_known {
-                        RowValue::Text(path.clone())
+                        RowValue::Text(path.to_owned())
                     } else {
                         RowValue::Missing
                     },
@@ -461,10 +466,11 @@ impl FileIndex {
                 ),
                 (
                     "file.content",
-                    if success && (bytes.len() > 0 || size == 0) {
-                        RowValue::Text(bytes.preview())
-                    } else {
-                        RowValue::Missing
+                    match content {
+                        Some(bytes) if success && (bytes.len() > 0 || size == 0) => {
+                            RowValue::Text(bytes.preview())
+                        }
+                        _ => RowValue::Missing,
                     },
                 ),
                 (
@@ -473,7 +479,24 @@ impl FileIndex {
                 ),
             ];
             row
-        });
+        };
+        let read_row = if reading {
+            Some(read_cells(&path, path_known, fd, Some(&bytes)))
+        } else {
+            // The source of a kernel-side copy was read too.
+            transfer_source(name, args).map(|source| {
+                let owner = table_owner(files, call.task_cookie, event.tid);
+                match files.opened.get(&(owner.0, owner.1, source)) {
+                    Some(path) => read_cells(path, true, Some(source), None),
+                    None => read_cells(
+                        &unavailable_descriptor(Some(source)),
+                        false,
+                        Some(source),
+                        None,
+                    ),
+                }
+            })
+        };
         if !self.changes.contains_key(&group) && self.changes.len() >= TRACKED_FILES {
             self.omitted_files += 1;
             return read_row;
@@ -617,6 +640,13 @@ impl FileIndex {
                 | "symlinkat" => {
                     change.gaps.insert("Namespace change observed; overwritten destination, inode identity and aliases are not fully captured.");
                 }
+                "ioctl" => {
+                    change.modified = true;
+                    change.final_data.clear();
+                    change
+                        .gaps
+                        .insert("Reflink clone observed; the cloned bytes are unavailable.");
+                }
                 "sendfile" | "copy_file_range" | "splice" => {
                     change.modified = true;
                     change.final_data.clear();
@@ -662,6 +692,18 @@ impl FileIndex {
     }
 }
 
+/// The descriptor a sendfile, copy_file_range or splice reads from.
+fn transfer_source(name: &str, args: Option<[u64; 6]>) -> Option<u64> {
+    let args = args?;
+    match name {
+        "sendfile" => Some(args[1]),
+        "copy_file_range" | "splice" => Some(args[0]),
+        // FICLONERANGE names its source inside a structure that is not decoded.
+        "ioctl" if args[1] == FICLONE => Some(args[2]),
+        _ => None,
+    }
+}
+
 fn unavailable_descriptor(fd: Option<u64>) -> String {
     fd.and_then(crate::values::standard_fd_name)
         .map(str::to_owned)
@@ -683,6 +725,16 @@ pub(super) fn change_operation(call: &InvocationSummary, event: &EventSummary) -
     CHANGE_NAMES.contains(&name)
         || (OPEN_NAMES.contains(&name)
             && open_flags(call, event).is_some_and(|flags| flags & (0x40 | 0x200) != 0))
+        || reflink(name, call_args(call))
+}
+
+/// ioctl FICLONE and FICLONERANGE: the destination descriptor's contents are
+/// replaced by a shared extent of the source, without a write.
+const FICLONE: u64 = 0x4004_9409;
+const FICLONERANGE: u64 = 0x4020_940d;
+
+fn reflink(name: &str, args: Option<[u64; 6]>) -> bool {
+    name == "ioctl" && args.is_some_and(|args| matches!(args[1], FICLONE | FICLONERANGE))
 }
 
 pub(super) fn opened_row(
@@ -776,6 +828,55 @@ mod tests {
             }
         }
         (index, reads)
+    }
+
+    #[test]
+    fn a_reflink_clone_changes_its_destination_and_reads_its_source() {
+        let calls = [
+            open(2),
+            operation(2, 16, "ioctl", 0, [3, FICLONE, 5, 0, 0, 0], b""),
+            operation(3, 16, "ioctl", 0, [3, 0x5401, 0, 0, 0, 0], b""),
+        ];
+        let (index, reads) = build(&calls);
+        assert_eq!(reads.len(), 1, "only the clone reads a source");
+        assert_eq!(reads[0][1].text, "fd 5");
+        let changes = index.finish();
+        let change = changes
+            .iter()
+            .find(|change| change.path == "/tmp/file")
+            .unwrap();
+        assert!(change
+            .gaps
+            .iter()
+            .any(|gap| gap.starts_with("Reflink clone observed")));
+    }
+
+    #[test]
+    fn a_kernel_copy_reads_its_source_without_inventing_content() {
+        let calls = [
+            open(0),
+            operation(2, 40, "sendfile", 5, [4, 3, 0, 5, 0, 0], b""),
+            operation(3, 326, "copy_file_range", 7, [3, 0, 4, 0, 7, 0], b""),
+            operation(4, 275, "splice", -22, [9, 0, 4, 0, 7, 0], b""),
+        ];
+        let (_, reads) = build(&calls);
+        assert_eq!(reads.len(), 3);
+        for (row, size) in reads[..2].iter().zip(["5 B", "7 B"]) {
+            assert_eq!(row[1].text, "/tmp/file");
+            assert_eq!(
+                row[3].text,
+                format!("{size}: kernel transfer; bytes not captured")
+            );
+            assert!(
+                row[0]
+                    .values
+                    .iter()
+                    .any(|(name, value)| *name == "file.content"
+                        && matches!(value, RowValue::Missing))
+            );
+        }
+        assert_eq!(reads[2][1].text, "fd 9");
+        assert_eq!(reads[2][3].text, "Unavailable");
     }
 
     #[test]
