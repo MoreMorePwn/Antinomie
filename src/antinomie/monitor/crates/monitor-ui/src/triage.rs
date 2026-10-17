@@ -277,6 +277,12 @@ impl TriageView {
             );
         }
     }
+    /// Draw the open finding Details windows. Called once per frame, whichever
+    /// triage section is showing.
+    pub(crate) fn show_finding_windows(&mut self, ctx: &egui::Context) {
+        self.detection.show_windows(ctx);
+    }
+
     /// `Some(call_id)` on the frame a Suspicious activity row is clicked.
     pub(crate) fn show(
         &mut self,

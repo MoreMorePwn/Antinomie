@@ -55,6 +55,25 @@ it runs.
   when the exec's whole argument vector was captured; otherwise it stays
   missing, so a rule cannot match on an argument that was not seen.
 
+- **Detection scan progress and rule sets.** While a scan runs, a progress bar
+  names the rules or evidence being checked, and the matched-rule count and
+  Complete / Partial state sit beside it. The scan status line shows only when
+  no scan is running. Each engine lists its installed rule sets, with their
+  rule counts, in a collapsible list. The local rule folders, scan-recovered
+  files, memory extent and Sigma Python options moved from the Detection tab
+  to Tools > Rule manager > Options; a saved local path stays in use until
+  Forget, and can be imported as a custom group.
+- **Match cards and the Details window.** Each matched rule is a card with a
+  severity stripe and badge, a short summary, and a facts line with hit count,
+  first location, rule pack and author, plus MITRE technique chips. Engine
+  metadata is no longer printed as raw text. Details… opens a movable,
+  resizable window per finding, and several can stay open. It shows the rule
+  id, source, license and author, the description and metadata as rows, the
+  original rule text with a Copy rule button, and every recorded evidence
+  location, each opening its exact evidence. Results saved before this version
+  did not keep the rule text and say so. The side Details pane no longer
+  repeats the rule.
+
 - **Triage tables.** Click column titles to sort; archive tables sort the whole
   matched query before paging. Missing values stay last, ties preserve recorded
   order, and right-clicking a title restores recorded order. File triage has

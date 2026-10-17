@@ -560,6 +560,7 @@ impl eframe::App for MonitorApp {
             })
             .unwrap_or_else(crate::triage::TriageInput::empty);
         self.triage.tick(ctx, input);
+        self.triage.show_finding_windows(ctx);
         let close = ctx.input(|input| input.viewport().close_requested())
             || self
                 .smoke
