@@ -103,6 +103,10 @@ impl MonitorApp {
             &self.rules_summary,
             self.rules_generation,
         );
+        self.triage
+            .set_tools_dir(&antinomie_monitor_core::analysis_tools::tools_dir(
+                &self.options.data_dir,
+            ));
         if self.triage.take_rule_manager() {
             self.rules_open = true;
         }

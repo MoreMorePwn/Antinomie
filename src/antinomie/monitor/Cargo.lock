@@ -184,6 +184,7 @@ version = "0.6.2"
 dependencies = [
  "cc",
  "flate2",
+ "fuzzyhash",
  "iced-x86",
  "lzma-rs",
  "md-5",
@@ -195,6 +196,7 @@ dependencies = [
  "sha1 0.10.7",
  "sha2",
  "tar",
+ "tlsh2",
  "vt100",
  "x11rb",
  "yara-x",
@@ -1707,6 +1709,12 @@ dependencies = [
  "pin-project-lite",
  "slab",
 ]
+
+[[package]]
+name = "fuzzyhash"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f79db37cf4b2ca9a6b735f62ca679926ba0d233d47e164147298fd4fa4786db"
 
 [[package]]
 name = "generic-array"
@@ -4482,6 +4490,12 @@ name = "tinyzip"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6847a2bf223d67c916a25d5fb8d197fc1c7c3205421e05d50f3373e092034146"
+
+[[package]]
+name = "tlsh2"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7184dfffa0d05e10284df327c6cb52f0d62c5aa6c9a8b9236fa151d4361882f1"
 
 [[package]]
 name = "tokio"

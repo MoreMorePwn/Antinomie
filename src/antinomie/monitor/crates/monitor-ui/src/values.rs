@@ -1,7 +1,8 @@
 //! Syscall values shown by meaning: counts, sizes, descriptors, PIDs and
 //! results in decimal; pointers, addresses and flags in hex; errors by name
 //! (the number stays available on hover); captured strings without their
-//! terminating NUL.
+//! terminating NUL. File sizes read as the exact byte count with a rounded
+//! 1024-based figure.
 use crate::theme::ValueKind;
 use antinomie_monitor_core::{syscalls, WaitStatus};
 
@@ -520,9 +521,46 @@ pub(crate) fn sockaddr(data: &[u8]) -> Option<String> {
     }
 }
 
+/// A file's size as the exact byte count and, from 1024 bytes up, a rounded
+/// figure in 1024-based units: `16080 bytes (15.7 KB)`.
+pub(crate) fn file_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
+    if bytes < 1024 {
+        return format!("{bytes} byte{}", if bytes == 1 { "" } else { "s" });
+    }
+    let mut value = bytes as f64 / 1024.0;
+    let mut unit = 0;
+    // 1048575 bytes is 1023.999 KB: judge the rounded figure, so it reads
+    // 1.0 MB and never 1024.0 KB.
+    while (value * 10.0).round() >= 10240.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{bytes} bytes ({value:.1} {})", UNITS[unit])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_sizes_show_the_byte_count_and_a_rounded_unit() {
+        for (bytes, text) in [
+            (0, "0 bytes"),
+            (1, "1 byte"),
+            (1023, "1023 bytes"),
+            (1024, "1024 bytes (1.0 KB)"),
+            (16_080, "16080 bytes (15.7 KB)"),
+            (1_048_575, "1048575 bytes (1.0 MB)"),
+            (1_048_576, "1048576 bytes (1.0 MB)"),
+            (1_572_864, "1572864 bytes (1.5 MB)"),
+            (5 * 1024 * 1024 * 1024, "5368709120 bytes (5.0 GB)"),
+            (3 * 1024_u64.pow(4), "3298534883328 bytes (3.0 TB)"),
+            (u64::MAX, "18446744073709551615 bytes (16777216.0 TB)"),
+        ] {
+            assert_eq!(file_size(bytes), text);
+        }
+    }
 
     #[test]
     fn errors_show_by_name_with_the_number_kept() {

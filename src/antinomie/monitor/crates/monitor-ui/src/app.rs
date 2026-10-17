@@ -480,8 +480,9 @@ impl MonitorApp {
             env,
             source: String::new(),
             destination: "/tmp/program".into(),
-            executable: false,
-            overwrite: false,
+            // The Upload dialog starts with both options on.
+            executable: true,
+            overwrite: true,
             upload_browser: Default::default(),
             explorer_browser,
             pending_upload: None,

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Offline properties of an exact digest-verified retained executable.
 use super::{AnalysisReport, jobs, specimen, tools};
+use crate::analysis_tools;
 use object::Object;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -16,14 +17,21 @@ pub const LABELS: &[&str] = &[
     "MD5",
     "SHA-1",
     "SHA-256",
-    "vhash",
     "ssdeep",
     "TLSH",
     "File type",
     "Magic",
-    "TrID",
     "Magika",
     "File size",
+];
+
+/// TLSH needs at least this many octets (and some variety among them).
+const TLSH_MIN_LEN: usize = 50;
+/// Magika from the managed tools folder first, then the system's.
+const MAGIKA: &[&str] = &[
+    analysis_tools::MAGIKA_MANAGED,
+    analysis_tools::MAGIKA_SYSTEM[0],
+    analysis_tools::MAGIKA_SYSTEM[1],
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -57,9 +65,14 @@ fn unavailable(label: &str, reason: impl Into<String>) -> Property {
     field(label, reason, false, "Local analysis")
 }
 
-fn optional_tool(label: &str, candidates: &[&'static str], args: &[&str]) -> Property {
+fn optional_tool(
+    label: &str,
+    candidates: &[&'static str],
+    args: &[&str],
+    missing: &str,
+) -> Property {
     let Some(tool) = tools::find(candidates) else {
-        return unavailable(label, "Local tool is not installed");
+        return unavailable(label, missing);
     };
     let timeout = Duration::from_secs(if label == "Magika" { 30 } else { 10 });
     match tools::run(tool, args, &[], timeout, 24 * 1024) {
@@ -80,26 +93,36 @@ fn optional_tool(label: &str, candidates: &[&'static str], args: &[&str]) -> Pro
     }
 }
 
-fn ssdeep(text: &str) -> Option<String> {
-    text.lines().find_map(|line| {
-        let hash = line.split(',').next()?.trim_matches('"');
-        let parts: Vec<_> = hash.split(':').collect();
-        (parts.len() == 3
-            && parts[0].parse::<u64>().is_ok_and(|size| size > 0)
-            && parts[1..].iter().all(|part| {
-                part.len() <= 64
-                    && part
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/')
-            }))
-        .then(|| hash.into())
-    })
+/// ssdeep context-triggered piecewise hash, computed in process.
+fn ssdeep(data: &[u8]) -> Property {
+    field(
+        "ssdeep",
+        fuzzyhash::FuzzyHash::new(data).to_string(),
+        true,
+        "fuzzyhash 0.2 (ssdeep-compatible)",
+    )
 }
 
-fn tlsh(text: &str) -> Option<String> {
-    let hash = text.split_whitespace().next()?;
-    let hex = hash.strip_prefix("T1").unwrap_or(hash);
-    (hex.len() == 70 && hex.bytes().all(|b| b.is_ascii_hexdigit())).then(|| hash.into())
+/// TLSH (128 buckets, 1 octet checksum, `T1` version), computed in process.
+fn tlsh(data: &[u8]) -> Property {
+    let mut builder = tlsh2::TlshDefaultBuilder::new();
+    builder.update(data);
+    match builder.build() {
+        Some(hash) => field(
+            "TLSH",
+            String::from_utf8_lossy(&hash.hash()).into_owned(),
+            true,
+            "tlsh2 1.1",
+        ),
+        None if data.len() < TLSH_MIN_LEN => unavailable(
+            "TLSH",
+            format!("The file is too small: TLSH needs at least {TLSH_MIN_LEN} bytes"),
+        ),
+        None => unavailable(
+            "TLSH",
+            "The file has too little variety (too uniform or repetitive) for TLSH",
+        ),
+    }
 }
 
 fn magika(text: &str) -> Option<String> {
@@ -109,7 +132,8 @@ fn magika(text: &str) -> Option<String> {
         .and_then(|rows| rows.first())
         .unwrap_or(&result);
     let output = result
-        .pointer("/prediction/output")
+        .pointer("/result/value/output")
+        .or_else(|| result.pointer("/prediction/output"))
         .or_else(|| result.pointer("/result/output"))
         .or_else(|| result.get("output"))?;
     let label = output
@@ -172,22 +196,9 @@ fn compute(directory: &Path, report_id: &str, work: &Path) -> Result<FilePropert
                 "File type",
                 &["/usr/bin/file", "/bin/file"],
                 &["-b", "--mime-type", "--", input],
+                "Local tool is not installed",
             )
         });
-    let mut trid = optional_tool("TrID", &["/usr/bin/trid", "/usr/local/bin/trid"], &[input]);
-    if trid.available {
-        let lines: Vec<_> = trid
-            .value
-            .lines()
-            .filter(|line| line.contains('%'))
-            .take(8)
-            .collect();
-        if lines.is_empty() {
-            trid = unavailable("TrID", "No match from the installed local definitions");
-        } else {
-            trid.value = lines.join("\n");
-        }
-    }
     Ok(FileProperties {
         report_id: report.id,
         source_path: report.source_path,
@@ -207,42 +218,21 @@ fn compute(directory: &Path, report_id: &str, work: &Path) -> Result<FilePropert
                 "Verified specimen / RustCrypto",
             ),
             field("SHA-256", sha256, true, "Verified specimen / RustCrypto"),
-            unavailable(
-                "vhash",
-                "Provider-specific hash; local computation is unavailable. No online lookup is performed.",
-            ),
-            parsed(
-                optional_tool(
-                    "ssdeep",
-                    &["/usr/bin/ssdeep", "/usr/local/bin/ssdeep"],
-                    &["-b", input],
-                ),
-                ssdeep,
-            ),
-            parsed(
-                optional_tool(
-                    "TLSH",
-                    &[
-                        "/usr/bin/tlsh",
-                        "/usr/local/bin/tlsh",
-                        "/usr/bin/tlsh_unittest",
-                    ],
-                    &["-f", input],
-                ),
-                tlsh,
-            ),
+            ssdeep(&data),
+            tlsh(&data),
             file_type,
             optional_tool(
                 "Magic",
                 &["/usr/bin/file", "/bin/file"],
                 &["-b", "--", input],
+                "Local tool is not installed",
             ),
-            trid,
             parsed(
                 optional_tool(
                     "Magika",
-                    &["/usr/bin/magika", "/usr/local/bin/magika"],
+                    MAGIKA,
                     &["--json", input],
+                    "Magika is not installed (Tools > Analysis tools installs it)",
                 ),
                 magika,
             ),
@@ -256,43 +246,75 @@ fn compute(directory: &Path, report_id: &str, work: &Path) -> Result<FilePropert
     })
 }
 
-fn validate(result: &FileProperties, expected: &AnalysisReport) -> Result<(), String> {
+/// Check a decoded result against its report. Fields this version no longer
+/// computes (`vhash`, `TrID` in older saved files) are dropped, not rejected.
+fn validate(result: &mut FileProperties, expected: &AnalysisReport) -> Result<(), String> {
     if result.report_id != expected.id
         || !expected
             .specimen_sha256
             .as_ref()
             .is_some_and(|digest| digest.eq_ignore_ascii_case(&result.sha256))
         || result.source_path != expected.source_path
-        || result.fields.len() != LABELS.len()
         || result.warnings.len() > 4
         || result.warnings.iter().any(|warning| warning.len() > 1024)
     {
         return Err("property result identity or field set mismatch".into());
     }
-    for (field, label) in result.fields.iter().zip(LABELS) {
-        if field.label != *label
-            || field.value.len() > 8192
+    result
+        .fields
+        .retain(|field| LABELS.contains(&field.label.as_str()));
+    result
+        .fields
+        .sort_by_key(|field| LABELS.iter().position(|label| *label == field.label));
+    if result.fields.len() != LABELS.len()
+        || result
+            .fields
+            .iter()
+            .zip(LABELS)
+            .any(|(field, label)| field.label != *label)
+    {
+        return Err("property result identity or field set mismatch".into());
+    }
+    for field in &result.fields {
+        if field.value.len() > 8192
             || field.source.len() > 512
             || (field.available && field.value.is_empty())
         {
             return Err("invalid property field".into());
         }
     }
-    for (index, len) in [(0, 32), (1, 40), (2, 64)] {
-        let field = &result.fields[index];
-        if !field.available
-            || field.value.len() != len
-            || !field.value.bytes().all(|b| b.is_ascii_hexdigit())
+    let value = |label: &str| {
+        result
+            .fields
+            .iter()
+            .find(|field| field.label == label)
+            .filter(|field| field.available)
+            .map(|field| field.value.as_str())
+    };
+    for (label, len) in [("MD5", 32), ("SHA-1", 40), ("SHA-256", 64)] {
+        if !value(label)
+            .is_some_and(|hash| hash.len() == len && hash.bytes().all(|b| b.is_ascii_hexdigit()))
         {
             return Err("invalid property digest".into());
         }
     }
-    if result.fields[2].value != result.sha256
-        || result.fields[10].value.parse::<u64>().ok() != expected.specimen_len
+    if value("SHA-256") != Some(result.sha256.as_str())
+        || value("File size").and_then(|size| size.parse::<u64>().ok()) != expected.specimen_len
     {
         return Err("property digest/length mismatch".into());
     }
     Ok(())
+}
+
+/// Parse and validate a worker result or a saved `properties.json`.
+fn decode(encoded: &[u8], expected: &AnalysisReport) -> Result<FileProperties, String> {
+    if encoded.len() > 64 * 1024 {
+        return Err("property result exceeds 64 KiB".into());
+    }
+    let mut result: FileProperties =
+        serde_json::from_slice(encoded).map_err(|error| error.to_string())?;
+    validate(&mut result, expected)?;
+    Ok(result)
 }
 
 /// Compute offline properties in the existing mandatory sandbox. Call on a worker.
@@ -301,12 +323,14 @@ fn validate(result: &FileProperties, expected: &AnalysisReport) -> Result<(), St
 /// |---|---|
 /// | `directory` | Retained analysis directory containing report.json and specimen. |
 /// | `report_id` | Expected immutable analysis identity. |
+/// | `tools_dir` | `<data>/tools`, mounted read-only for managed tools such as Magika. |
 /// | `cancel` | Cancels/reaps the sandbox on run change or view destruction. |
 ///
 /// Returns verified values with explicit unavailable states and persistence warnings.
 pub fn run(
     directory: &Path,
     report_id: &str,
+    tools_dir: Option<&Path>,
     cancel: &AtomicBool,
 ) -> Result<FileProperties, String> {
     if cancel.load(std::sync::atomic::Ordering::Relaxed) {
@@ -329,7 +353,11 @@ pub fn run(
                 .ok_or("property path is not UTF-8")
         };
         let output = work.join("properties.json");
-        jobs::run_sandboxed(
+        let mounts = jobs::Mounts {
+            paths: &[directory.clone(), executable.clone()],
+            tools: tools_dir,
+        };
+        jobs::run_sandboxed_with(
             &executable,
             &[
                 "--antinomie-properties-worker".into(),
@@ -338,7 +366,7 @@ pub fn run(
                 path_text(&output)?,
             ],
             &work,
-            &[directory.clone(), executable.clone()],
+            &mounts,
             &[("ANTINOMIE_ISOLATED_WORKER", "1")],
             Duration::from_secs(120),
             cancel,
@@ -349,12 +377,7 @@ pub fn run(
         file.take(64 * 1024 + 1)
             .read_to_end(&mut encoded)
             .map_err(|error| error.to_string())?;
-        if encoded.len() > 64 * 1024 {
-            return Err("property result exceeds 64 KiB".into());
-        }
-        let mut result: FileProperties =
-            serde_json::from_slice(&encoded).map_err(|error| error.to_string())?;
-        validate(&result, &expected)?;
+        let mut result = decode(&encoded, &expected)?;
         if let Err(error) = crate::storage::atomic_json(&directory.join("properties.json"), &result)
         {
             result
@@ -411,31 +434,85 @@ pub fn worker_main_if_requested() -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn property<'a>(result: &'a FileProperties, label: &str) -> &'a Property {
+        result
+            .fields
+            .iter()
+            .find(|field| field.label == label)
+            .unwrap()
+    }
+
+    /// Deterministic octets: a linear congruential generator, so a reference
+    /// implementation can regenerate them.
+    fn lcg(len: usize) -> Vec<u8> {
+        let mut x: u32 = 12345;
+        (0..len)
+            .map(|_| {
+                x = x.wrapping_mul(1_103_515_245).wrapping_add(12345) & 0x7fff_ffff;
+                (x >> 16) as u8
+            })
+            .collect()
+    }
+
+    fn words(count: u32) -> Vec<u8> {
+        const WORDS: [&str; 8] = [
+            "alpha", "beta", "gamma", "delta", "kernel", "sandbox", "trace", "syscall",
+        ];
+        let mut x: u32 = 99;
+        let mut text = Vec::new();
+        for index in 0..count {
+            x = x.wrapping_mul(1_103_515_245).wrapping_add(12345) & 0x7fff_ffff;
+            if index > 0 {
+                text.push(b' ');
+            }
+            text.extend_from_slice(WORDS[((x >> 16) % 8) as usize].as_bytes());
+            text.extend_from_slice(((x >> 8) % 1000).to_string().as_bytes());
+        }
+        text
+    }
+
+    fn fixture_report(data: &[u8]) -> AnalysisReport {
+        AnalysisReport {
+            id: "fixture".into(),
+            state: super::super::AnalysisState::Complete,
+            source_path: "/guest/fixture".into(),
+            specimen_sha256: Some(format!("{:x}", Sha256::digest(data))),
+            specimen_len: Some(data.len() as u64),
+            reason: None,
+            sections: vec![],
+        }
+    }
+
     #[test]
     fn retained_benign_specimen_properties_verify_bytes_and_reject_mutation() {
         let directory =
             std::env::temp_dir().join(format!("ant-property-test-{}", crate::storage::unique_id()));
         crate::storage::private_dir(&directory).unwrap();
-        let report = AnalysisReport {
-            id: "fixture".into(),
-            state: super::super::AnalysisState::Complete,
-            source_path: "/guest/fixture".into(),
-            specimen_sha256: Some(format!("{:x}", Sha256::digest(b"abc"))),
-            specimen_len: Some(3),
-            reason: None,
-            sections: vec![],
-        };
+        let report = fixture_report(b"abc");
         fs::write(directory.join("specimen"), b"abc").unwrap();
         crate::storage::atomic_json(&directory.join("report.json"), &report).unwrap();
         // Component test with known benign bytes; mandatory sandbox integration
         // is a separate environment-dependent check.
-        let result = compute(&directory, "fixture", &directory).unwrap();
-        validate(&result, &report).unwrap();
-        assert_eq!(result.fields[0].value, "900150983cd24fb0d6963f7d28e17f72");
-        assert!(!result.fields[3].available);
+        let mut result = compute(&directory, "fixture", &directory).unwrap();
+        validate(&mut result, &report).unwrap();
+        assert_eq!(
+            result
+                .fields
+                .iter()
+                .map(|f| f.label.as_str())
+                .collect::<Vec<_>>(),
+            LABELS
+        );
+        assert_eq!(
+            property(&result, "MD5").value,
+            "900150983cd24fb0d6963f7d28e17f72"
+        );
+        assert_eq!(property(&result, "ssdeep").value, "3:uG:uG");
+        assert!(!property(&result, "TLSH").available);
         let mut wrong = result.clone();
         wrong.report_id = "other".into();
-        assert!(validate(&wrong, &report).is_err());
+        assert!(validate(&mut wrong, &report).is_err());
         fs::write(directory.join("specimen"), b"xyz").unwrap();
         assert!(
             compute(&directory, "fixture", &directory)
@@ -444,29 +521,135 @@ mod tests {
         );
         fs::remove_dir_all(directory).unwrap();
     }
+
+    // Digests below come from the reference implementations (ppdeep 20260221
+    // and py-tlsh 5.0.0) on the same octets.
     #[test]
-    fn classifiers_accept_known_formats_and_reject_errors_and_unknown_json_layouts() {
-        assert_eq!(
-            ssdeep("ssdeep,1.1--blocksize:hash:hash,filename\n3:abc:def,\"specimen\"\n").as_deref(),
-            Some("3:abc:def")
-        );
-        assert!(ssdeep("error: cannot read").is_none());
-        assert!(tlsh("TNULL specimen").is_none());
-        let hash = format!("T1{} specimen", "AB".repeat(35));
-        assert_eq!(tlsh(&hash).unwrap().len(), 72);
+    fn ssdeep_and_tlsh_match_the_reference_implementations() {
+        let fox = b"The quick brown fox jumps over the lazy dog. ".repeat(3);
+        let cases: [(Vec<u8>, &str, &str); 4] = [
+            (
+                fox,
+                "3:FJKKIUKacnAeKKIUKacnAeKKIUKacb:FHIG8NIG8NIGY",
+                "T12DC0024A311C1794658A1888438D95B2D2C9C910612114116570604219482359CD8551",
+            ),
+            (
+                lcg(4096),
+                "96:b+8zEekwuxCkQw9cn8dHaI5Dt5/RSP+RuiNCmDJ:i3ekwunQmc0Ham/8wDJ",
+                "T132816DEBA6257155CB37997812FD3AD5D2DFE72817CD7C8457048FD338351E05444085",
+            ),
+            (
+                lcg(300_000),
+                "6144:LeKzUBKIxz/gxiSe0ctvz1/ByTbbXGpNU3aw2AReU:CKgfgxev5/AXzYNU3mMeU",
+                "T1545423838BE5268562E770F3C55818EE1AD7205969C6A7C68D720CDA6EC315208FFC6F",
+            ),
+            (
+                words(900),
+                "96:yVkh2rjxIOn4tfAJH1a3IzGw8clNmjBT+PUAh831rwxB01bywGRKM486dN2cc8G5:xu4EHQ4a6mV66lwxRwGwCEN2UU",
+                "T17E020C1C85E943FC3D823A68655B749FB2CCEBF25E30D2BB87AB0785A2251D7B42044D",
+            ),
+        ];
+        for (data, expected_ssdeep, expected_tlsh) in cases {
+            let len = data.len();
+            assert_eq!(
+                ssdeep(&data).value,
+                expected_ssdeep,
+                "ssdeep of {len} octets"
+            );
+            let hash = tlsh(&data);
+            assert!(hash.available);
+            assert_eq!(hash.value, expected_tlsh, "TLSH of {len} octets");
+        }
+    }
+
+    #[test]
+    fn tlsh_explains_why_a_small_or_uniform_input_is_unavailable() {
+        for (data, reason) in [
+            (&b""[..], "too small"),
+            (&b"abc"[..], "too small"),
+            (&[0u8; 49][..], "too small"),
+            (&[0u8; 5000][..], "too little variety"),
+        ] {
+            let hash = tlsh(data);
+            assert!(!hash.available, "{} octets", data.len());
+            assert!(hash.value.contains(reason), "{}", hash.value);
+        }
+        // ssdeep still has a (trivial) digest for the same inputs.
+        assert_eq!(ssdeep(&[0u8; 5000]).value, "3::");
+        assert_eq!(ssdeep(b"").value, "3::");
+    }
+
+    #[test]
+    fn magika_reads_its_cli_json_and_rejects_other_layouts() {
+        // Magika CLI 1.1.0 `--json` on an ELF executable.
+        let cli = r#"[{"path":"/usr/bin/ls","result":{"status":"ok","value":{"dl":{"description":"ELF executable","extensions":["elf"],"group":"executable","is_text":false,"label":"elf","mime_type":"application/x-executable-elf"},"output":{"description":"ELF executable","extensions":["elf"],"group":"executable","is_text":false,"label":"elf","mime_type":"application/x-executable-elf"},"score":0.9990000128746033}}}]"#;
+        assert_eq!(magika(cli).as_deref(), Some("elf: ELF executable"));
         assert_eq!(
             magika(r#"[{"prediction":{"output":{"label":"elf","description":"ELF executable"}}}]"#)
                 .as_deref(),
             Some("elf: ELF executable")
         );
+        assert!(magika(r#"[{"path":"x","result":{"status":"error"}}]"#).is_none());
         assert!(magika(r#"{"label":"guessed"}"#).is_none());
-        assert_eq!(
-            format!("{:x}", md5::Md5::digest(b"abc")),
-            "900150983cd24fb0d6963f7d28e17f72"
-        );
+        assert!(magika("not json").is_none());
         assert_eq!(
             format!("{:x}", sha1::Sha1::digest(b"abc")),
             "a9993e364706816aba3e25717850c26c9cd0d89d"
         );
+    }
+
+    #[test]
+    fn saved_results_with_removed_fields_still_load_and_incomplete_ones_do_not() {
+        let data = b"abc";
+        let report = fixture_report(data);
+        let sha256 = report.specimen_sha256.clone().unwrap();
+        let saved = |label: &str, value: &str, available: bool| Property {
+            label: label.into(),
+            value: value.into(),
+            available,
+            source: "Local analysis".into(),
+        };
+        // The 0.6.1 field set and order, with vhash and TrID.
+        let old_fields = vec![
+            saved("MD5", "900150983cd24fb0d6963f7d28e17f72", true),
+            saved("SHA-1", "a9993e364706816aba3e25717850c26c9cd0d89d", true),
+            saved("SHA-256", &sha256, true),
+            saved("vhash", "Provider-specific hash is unavailable", false),
+            saved("ssdeep", "Local tool is not installed", false),
+            saved("TLSH", "Local tool is not installed", false),
+            saved("File type", "Elf Dynamic X86_64", true),
+            saved("Magic", "ELF 64-bit LSB shared object", true),
+            saved("TrID", "Local tool is not installed", false),
+            saved("Magika", "Local tool is not installed", false),
+            saved("File size", "3", true),
+        ];
+        let encode = |fields: Vec<Property>| {
+            serde_json::to_vec(&FileProperties {
+                report_id: report.id.clone(),
+                source_path: report.source_path.clone(),
+                sha256: sha256.clone(),
+                fields,
+                warnings: vec![],
+            })
+            .unwrap()
+        };
+        let loaded = decode(&encode(old_fields.clone()), &report).unwrap();
+        assert_eq!(
+            loaded
+                .fields
+                .iter()
+                .map(|f| f.label.as_str())
+                .collect::<Vec<_>>(),
+            LABELS
+        );
+        assert_eq!(property(&loaded, "File type").value, "Elf Dynamic X86_64");
+        assert_eq!(property(&loaded, "File size").value, "3");
+        // A required field missing, or the same one twice, is still an error.
+        let mut missing = old_fields.clone();
+        missing.retain(|field| field.label != "Magika");
+        assert!(decode(&encode(missing), &report).is_err());
+        let mut twice = old_fields;
+        twice.push(saved("MD5", "900150983cd24fb0d6963f7d28e17f72", true));
+        assert!(decode(&encode(twice), &report).is_err());
     }
 }

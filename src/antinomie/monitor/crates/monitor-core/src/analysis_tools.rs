@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 //! Optional static-analysis tools Antinomie installs when the system has
-//! none: capa, Detect It Easy and Ghidra with its Java runtime. Each is
-//! downloaded from its upstream release, pinned by SHA-256, unpacked into
-//! `<data>/tools/<id>/` and mounted read-only into the analysis sandbox at
-//! `SANDBOX_DIR`. A tool installed on the system always takes precedence.
+//! none: capa, Detect It Easy, Ghidra with its Java runtime, Volatility 3,
+//! Sigma and Magika. Each is downloaded from its upstream release, pinned by
+//! SHA-256, unpacked into `<data>/tools/<id>/` and mounted read-only into the
+//! analysis sandbox at `SANDBOX_DIR`. A tool installed on the system takes
+//! precedence, except Magika, which the Properties panel looks for here first.
 use serde::{Deserialize, Serialize};
 
 use std::{
@@ -26,6 +27,9 @@ pub const GHIDRA_SYSTEM: &[&str] = &[
     "/usr/local/share/ghidra/support/analyzeHeadless",
 ];
 pub const RADARE2_SYSTEM: &[&str] = &["/usr/bin/r2", "/usr/local/bin/r2", "/usr/bin/radare2"];
+pub const MAGIKA_SYSTEM: &[&str] = &["/usr/bin/magika", "/usr/local/bin/magika"];
+/// Magika as the sandbox sees the managed copy.
+pub const MAGIKA_MANAGED: &str = "/opt/antinomie-tools/magika/magika";
 
 /// How a download is unpacked.
 #[derive(Clone, Copy, Debug)]
@@ -34,6 +38,8 @@ pub enum Archive {
     Zip { strip: usize },
     /// A gzip-compressed tar file; the first `strip` components are dropped.
     TarGz { strip: usize },
+    /// An xz-compressed tar file; the first `strip` components are dropped.
+    TarXz { strip: usize },
     /// A Debian package: the files of its data archive under `prefix`, placed
     /// flat (file names only).
     DebFiles { prefix: &'static str },
@@ -223,6 +229,25 @@ pub const PACKAGES: &[Package] = &[
         }),
         entry: "venv/bin/python",
     },
+    // Google's prebuilt command-line tool: one executable with its model
+    // built in. It links only the system's libc and libstdc++.
+    Package {
+        id: "magika",
+        name: "Magika",
+        version: "1.1.0",
+        purpose: "Deep-learning file-type detection for the Properties panel",
+        license: "Apache-2.0 (Google)",
+        downloads: &[Download {
+            file: "magika-cli-x86_64-unknown-linux-gnu.tar.xz",
+            url: "https://github.com/google/magika/releases/download/cli/v1.1.0/magika-cli-x86_64-unknown-linux-gnu.tar.xz",
+            sha256: "6b4c1010c84d1f4f06205ccef4597f1690bcd7744f46d841eee26426bc100485",
+            size: 8_625_112,
+            archive: Archive::TarXz { strip: 1 },
+            into: "",
+        }],
+        requirements: None,
+        entry: "magika",
+    },
 ];
 
 pub fn package(id: &str) -> Option<&'static Package> {
@@ -235,6 +260,7 @@ pub fn system_candidates(id: &str) -> &'static [&'static str] {
         "capa" => CAPA_SYSTEM,
         "die" => DIE_SYSTEM,
         "ghidra" => GHIDRA_SYSTEM,
+        "magika" => MAGIKA_SYSTEM,
         _ => &[],
     }
 }
@@ -439,6 +465,13 @@ fn unpack_tar(
     Ok(())
 }
 
+/// An xz stream, decompressed.
+fn xz_bytes(reader: &mut impl io::BufRead) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    lzma_rs::xz_decompress(reader, &mut out).map_err(|e| format!("xz: {e}"))?;
+    Ok(out)
+}
+
 /// The data archive of a Debian package (an ar file), decompressed.
 fn deb_data(path: &Path) -> Result<Vec<u8>, String> {
     let bytes = fs::read(path).map_err(|e| e.to_string())?;
@@ -462,10 +495,7 @@ fn deb_data(path: &Path) -> Result<Vec<u8>, String> {
             .filter(|end| *end <= bytes.len())
             .ok_or("Debian package truncated")?;
         if name == "data.tar.xz" {
-            let mut out = Vec::new();
-            lzma_rs::xz_decompress(&mut &bytes[start..end], &mut out)
-                .map_err(|e| format!("data.tar.xz: {e}"))?;
-            return Ok(out);
+            return xz_bytes(&mut &bytes[start..end]).map_err(|e| format!("data.tar.xz: {e}"));
         }
         offset = end + (size % 2);
     }
@@ -482,6 +512,11 @@ fn unpack(download: &Download, archive: &Path, target: &Path) -> Result<(), Stri
             &target,
             |path| inside(path, strip),
         ),
+        Archive::TarXz { strip } => {
+            let file = File::open(archive).map_err(|e| e.to_string())?;
+            let tar = xz_bytes(&mut io::BufReader::new(file))?;
+            unpack_tar(io::Cursor::new(tar), &target, |path| inside(path, strip))
+        }
         Archive::DebFiles { prefix } => {
             unpack_tar(io::Cursor::new(deb_data(archive)?), &target, |path| {
                 Ok(path
@@ -833,6 +868,73 @@ mod tests {
                 matches!(package.id, "volatility3" | "sigma")
             );
         }
+        // Magika is the official release binary of exactly the listed version,
+        // and the sandbox path the Properties panel runs is the package entry.
+        let magika = package("magika").unwrap();
+        let [download] = magika.downloads else {
+            panic!("one Magika download");
+        };
+        assert_eq!(
+            download.url,
+            format!(
+                "https://github.com/google/magika/releases/download/cli/v{}/{}",
+                magika.version, download.file
+            )
+        );
+        assert!(matches!(download.archive, Archive::TarXz { strip: 1 }));
+        assert_eq!(
+            MAGIKA_MANAGED,
+            format!("{SANDBOX_DIR}/{}/{}", magika.id, magika.entry)
+        );
+        assert!(MAGIKA_SYSTEM.iter().all(|path| path.ends_with("/magika")));
+    }
+
+    #[test]
+    fn a_tar_xz_download_unpacks_without_its_top_directory() {
+        let root =
+            std::env::temp_dir().join(format!("ant-tools-xz-{}", crate::storage::unique_id()));
+        fs::create_dir_all(&root).unwrap();
+        let mut builder = tar::Builder::new(Vec::new());
+        let body = b"#!/bin/sh\n";
+        let mut header = tar::Header::new_gnu();
+        header.set_size(body.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        builder
+            .append_data(
+                &mut header,
+                "magika-cli-x86_64-unknown-linux-gnu/magika",
+                &body[..],
+            )
+            .unwrap();
+        let tar = builder.into_inner().unwrap();
+        let mut xz = Vec::new();
+        lzma_rs::xz_compress(&mut tar.as_slice(), &mut xz).unwrap();
+        let archive = root.join("magika.tar.xz");
+        fs::write(&archive, &xz).unwrap();
+        let download = Download {
+            file: "magika.tar.xz",
+            url: "https://example.invalid/magika.tar.xz",
+            sha256: "",
+            size: 0,
+            archive: Archive::TarXz { strip: 1 },
+            into: "",
+        };
+        let target = root.join("out");
+        unpack(&download, &archive, &target).unwrap();
+        assert_eq!(fs::read(target.join("magika")).unwrap(), body);
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(target.join("magika"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o111,
+            0o111
+        );
+        fs::write(&archive, b"not an xz stream").unwrap();
+        assert!(unpack(&download, &archive, &target).is_err());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -129,6 +129,20 @@ it runs.
 - **Open directory.** Folder actions ask the desktop file manager through the
   FileManager1 D-Bus service and fall back to `xdg-open`, so a folder no longer
   opens in a search tool registered for directories (Catfish on Xfce).
+- **Properties.** ssdeep and TLSH are now computed inside Antinomie (the
+  `fuzzyhash` and `tlsh2` crates, matching ppdeep and py-tlsh), so they appear
+  without installing anything; a file TLSH cannot hash, such as one under 50
+  bytes or an all-zero one, says why. vhash and TrID are no longer listed, and
+  an older saved properties.json that has them still loads. Labels and values
+  in the table are centered on each other.
+- **Magika.** Tools > Analysis tools installs Magika 1.1.0, Google's file-type
+  detector, from the official release (pinned by SHA-256, one executable with
+  its model built in). The Properties tab runs it in the offline sandbox,
+  using Antinomie's copy before the system's.
+- **File sizes.** Sizes of files read as `16080 bytes (15.7 KB)` in
+  Properties, downloaded samples, snapshots and memory dumps.
+- **Upload.** The Upload dialog starts with Executable and Overwrite existing
+  file checked.
 
 Uses existing 0.6.0/0.6.1 guest bases; no kernel or image rebuild is required.
 
