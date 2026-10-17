@@ -1,4 +1,9 @@
 //! Native retained-evidence workspace; all acquisition remains outside rendering.
+mod capa_matrix;
+mod content;
+mod tabs;
+
+use self::tabs::{FileInfo, Tab};
 use super::{
     records::{self, Column, Structure},
     section_title, ReportAction,
@@ -23,6 +28,11 @@ pub(crate) struct WorkspaceState {
     record_path: String,
     record_tags: Vec<String>,
     identities: Vec<(&'static str, crate::query::RowValue)>,
+    tab: Tab,
+    file_info: FileInfo,
+    symbols: Structure,
+    content: content::ContentState,
+    capa: capa_matrix::CapaState,
 }
 
 impl WorkspaceState {
@@ -132,6 +142,11 @@ struct ViewState {
 }
 
 impl WorkspaceState {
+    /// Bring the tab that shows `kind` to the front.
+    fn show(&mut self, kind: AnalysisKind) {
+        (self.tab, self.file_info) = tabs::locate(kind, self.file_info);
+    }
+
     fn bind(&mut self, report_id: &str) {
         if self.report_id.as_deref() != Some(report_id) {
             let record_id = self.record_id.clone();
@@ -202,52 +217,17 @@ fn render(
         action = Some(ReportAction::Cancel(report.id.clone()));
     }
     super::progress_banner(ui, report);
-    if forced.is_none() && state.kind.is_none() {
-        if let Some(next) = export_controls(ui, report, None) {
-            return Some(next);
+    match forced {
+        None => {
+            if let Some(next) = tabs::show(ui, report, state, preview, listing) {
+                action = Some(next);
+            }
         }
-    }
-    ui.separator();
-    if forced.is_none() && ui.available_width() >= 900.0 {
-        ui.horizontal_top(|ui| {
-            let height = ui.available_height();
-            ui.allocate_ui_with_layout(
-                egui::vec2(185.0, height),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("analysis-categories")
-                        .show(ui, |ui| navigation(ui, report, state));
-                },
-            );
+        Some(kind) => {
             ui.separator();
-            ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width(), height),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    if let Some(next) = results(ui, report, state, preview, listing, None) {
-                        action = Some(next);
-                    }
-                },
-            );
-        });
-    } else {
-        if forced.is_none() {
-            egui::ComboBox::from_id_salt("analysis-category")
-                .selected_text(state.kind.map(section_title).unwrap_or("Overview"))
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut state.kind, None, "Overview");
-                    for section in &report.sections {
-                        ui.selectable_value(
-                            &mut state.kind,
-                            Some(section.kind),
-                            section_title(section.kind),
-                        );
-                    }
-                });
-        }
-        if let Some(next) = results(ui, report, state, preview, listing, forced) {
-            action = Some(next);
+            if let Some(next) = results(ui, report, state, preview, listing, Some(kind)) {
+                action = Some(next);
+            }
         }
     }
     action
@@ -258,10 +238,12 @@ fn export_controls(
     ui: &mut egui::Ui,
     report: &AnalysisReport,
     kind: Option<AnalysisKind>,
+    directory: bool,
 ) -> Option<ReportAction> {
     let mut action = None;
     ui.horizontal_wrapped(|ui| {
         ui.menu_button(if kind.is_some() { "Export category…" } else { "Export report…" }, |ui| {
+            ui.weak("Exports include all retained rows");
             for (label, format) in [("Plain text (.txt)", AnalysisExportFormat::Text), ("Structured results (.json)", AnalysisExportFormat::Json)] {
                 if ui.button(label).clicked() {
                     action = Some(ReportAction::Export { report_id: report.id.clone(), kind, format });
@@ -282,88 +264,11 @@ fn export_controls(
                 }
             }
         });
-        if ui.button("Open result directory").on_hover_text("Show retained report, specimen, complete listings and any native artifacts").clicked() {
+        if directory && ui.button("Open result directory").on_hover_text("Show retained report, specimen, complete listings and any native artifacts").clicked() {
             action = Some(ReportAction::ShowDirectory { report_id: report.id.clone() });
         }
-        ui.weak("Exports include all retained rows");
     });
     action
-}
-
-fn navigation(ui: &mut egui::Ui, report: &AnalysisReport, state: &mut WorkspaceState) {
-    if ui
-        .selectable_label(state.kind.is_none(), "Overview")
-        .clicked()
-    {
-        state.kind = None;
-    }
-    for section in &report.sections {
-        if section.kind == AnalysisKind::Structures {
-            egui::CollapsingHeader::new(nav_title(report, section))
-                .id_salt("Structures")
-                .default_open(true)
-                .show(ui, |ui| {
-                    if ui
-                        .add(
-                            egui::Button::new("All structures")
-                                .selected(
-                                    state.kind == Some(section.kind)
-                                        && state.structure == Structure::All,
-                                )
-                                .frame(false)
-                                .truncate(),
-                        )
-                        .clicked()
-                    {
-                        state.kind = Some(section.kind);
-                        state.structure = Structure::All;
-                    }
-                    for filter in Structure::FILTERS {
-                        if ui
-                            .add(
-                                egui::Button::new(filter.label())
-                                    .selected(
-                                        state.kind == Some(section.kind)
-                                            && state.structure == filter,
-                                    )
-                                    .frame(false)
-                                    .truncate(),
-                            )
-                            .clicked()
-                        {
-                            state.kind = Some(section.kind);
-                            state.structure = filter;
-                        }
-                    }
-                });
-        } else if ui
-            .add(
-                egui::Button::new(nav_title(report, section))
-                    .selected(state.kind == Some(section.kind))
-                    .frame(false)
-                    .truncate(),
-            )
-            .on_hover_text(state_word(report, section))
-            .clicked()
-        {
-            state.kind = Some(section.kind);
-        }
-    }
-}
-
-/// A category's name, marked with an hourglass while it is still running.
-fn nav_title(report: &AnalysisReport, section: &AnalysisSection) -> String {
-    if super::in_progress(report)
-        && section.state == antinomie_monitor_core::AnalysisSectionState::Pending
-    {
-        format!(
-            "{} {}",
-            egui_phosphor::regular::HOURGLASS_MEDIUM,
-            section_title(section.kind)
-        )
-    } else {
-        section_title(section.kind).to_owned()
-    }
 }
 
 #[cfg(test)]
@@ -387,13 +292,21 @@ fn results(
         return None;
     };
     let mut action = None;
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.strong(section_title(kind));
         let rows = section
             .listing
             .as_ref()
             .map_or(section.entries.len() as u64, |listing| listing.rows);
         ui.label(format!("{} · {rows} rows", state_word(report, section)));
+        let tools = tools(section);
+        if !tools.is_empty() {
+            ui.weak(tools.join(", "));
+        }
+        // The window's header already opens the result directory.
+        if let Some(next) = export_controls(ui, report, Some(kind), forced.is_some()) {
+            action = Some(next);
+        }
         if forced.is_none()
             && ui
                 .button(egui_phosphor::regular::ARROW_SQUARE_OUT)
@@ -406,23 +319,12 @@ fn results(
             });
         }
     });
-    ui.add(egui::Label::new(&section.summary).wrap());
-    if let Some(next) = export_controls(ui, report, Some(kind)) {
-        return Some(next);
-    }
-    ui.add_space(6.0);
+    ui.add(egui::Label::new(egui::RichText::new(&section.summary).weak()).wrap());
     if section.summary.contains("Tools > Analysis tools")
         && section.state != antinomie_monitor_core::AnalysisSectionState::Complete
         && ui.button("Install analysis tools…").clicked()
     {
         action = Some(ReportAction::OpenAnalysisTools);
-    }
-    let tools = tools(section);
-    if !tools.is_empty() {
-        ui.add(
-            egui::Label::new(egui::RichText::new(format!("Tools: {}", tools.join(", "))).weak())
-                .wrap(),
-        );
     }
     if section.listing.is_some() && kind != AnalysisKind::Structures {
         let record_context = state.record_context_for(report, kind);
@@ -491,7 +393,8 @@ fn results(
         }
         return action;
     }
-    if kind == AnalysisKind::Structures {
+    // The tab strip chooses the structure filter; a separate pane has only this.
+    if kind == AnalysisKind::Structures && forced.is_some() {
         egui::ComboBox::from_id_salt("analysis-structure-filter")
             .selected_text(state.structure.label())
             .show_ui(ui, |ui| {
@@ -603,84 +506,152 @@ fn overview(
     state: &mut WorkspaceState,
 ) -> Option<ReportAction> {
     let mut action = None;
-    egui::ScrollArea::vertical()
-        .id_salt("analysis-overview")
-        .show(ui, |ui| {
-            identity_value(ui, "State", &format!("{:?}", report.state));
-            if matches!(
-                report.state,
-                AnalysisState::Partial | AnalysisState::Unavailable | AnalysisState::Cancelled
-            ) {
-                if let Some(reason) = &report.reason {
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(reason).color(crate::theme::warn()))
-                            .wrap(),
-                    );
-                }
-            }
-            identity_value(ui, "Report", &report.id);
-            if let Some(len) = report.specimen_len {
-                ui.label(format!("Specimen: {len} octets"));
-            }
-            if let Some(hash) = &report.specimen_sha256 {
-                identity_value(ui, "SHA-256", hash);
-            }
-            if let Some(metadata) = report
-                .sections
-                .iter()
-                .find(|section| section.kind == AnalysisKind::Metadata)
-            {
-                for entry in &metadata.entries {
-                    if matches!(
+    if ui.available_width() >= 700.0 {
+        ui.columns(2, |columns| {
+            egui::ScrollArea::vertical()
+                .id_salt("analysis-overview-identity")
+                .show(&mut columns[0], |ui| identity(ui, report));
+            egui::ScrollArea::vertical()
+                .id_salt("analysis-overview")
+                .show(&mut columns[1], |ui| action = categories(ui, report, state));
+        });
+    } else {
+        egui::ScrollArea::vertical()
+            .id_salt("analysis-overview")
+            .show(ui, |ui| {
+                identity(ui, report);
+                ui.separator();
+                action = categories(ui, report, state);
+            });
+    }
+    action
+}
+
+/// The report's state, the file's path and hashes, and its object format.
+fn identity(ui: &mut egui::Ui, report: &AnalysisReport) {
+    if matches!(
+        report.state,
+        AnalysisState::Partial | AnalysisState::Unavailable | AnalysisState::Cancelled
+    ) {
+        if let Some(reason) = &report.reason {
+            ui.add(
+                egui::Label::new(egui::RichText::new(reason).color(crate::theme::warn())).wrap(),
+            );
+        }
+    }
+    let mut rows = vec![
+        ("State".to_owned(), format!("{:?}", report.state)),
+        ("Path".to_owned(), report.source_path.clone()),
+    ];
+    let metadata = report
+        .sections
+        .iter()
+        .find(|section| section.kind == AnalysisKind::Metadata);
+    let field = |label: &str| {
+        metadata?
+            .entries
+            .iter()
+            .find(|entry| {
+                entry.label.eq_ignore_ascii_case(label)
+                    && matches!(
                         entry.record.as_ref().map(|record| &record.data),
                         Some(AnalysisData::Field { .. })
-                    ) && [
-                        "Format",
-                        "Architecture",
-                        "Class",
-                        "Object kind",
-                        "Kind",
-                        "Endianness",
-                    ]
-                    .iter()
-                    .any(|label| entry.label.eq_ignore_ascii_case(label))
-                    {
-                        identity_value(ui, &entry.label, &entry.value);
-                    }
-                }
-            }
-            for section in &report.sections {
-                ui.separator();
+                    )
+            })
+            .map(|entry| entry.value.clone())
+    };
+    for label in ["MD5", "SHA-1"] {
+        if let Some(value) = field(label) {
+            rows.push((label.to_owned(), value));
+        }
+    }
+    if let Some(hash) = &report.specimen_sha256 {
+        rows.push(("SHA-256".to_owned(), hash.clone()));
+    }
+    for label in [
+        "Format",
+        "Architecture",
+        "Class",
+        "Object kind",
+        "Kind",
+        "Endianness",
+    ] {
+        if let Some(value) = field(label) {
+            rows.push((label.to_owned(), value));
+        }
+    }
+    rows.push(("Report".to_owned(), report.id.clone()));
+    egui::Grid::new("analysis-identity")
+        .num_columns(2)
+        .striped(true)
+        .show(ui, |ui| {
+            for (label, value) in rows {
+                ui.strong(&label);
                 ui.horizontal(|ui| {
                     if ui
-                        .selectable_label(false, section_title(section.kind))
+                        .small_button(egui_phosphor::regular::COPY)
+                        .on_hover_text(format!("Copy {label}"))
                         .clicked()
                     {
-                        state.kind = Some(section.kind);
+                        ui.ctx().copy_text(value.clone());
                     }
-                    ui.label(format!(
-                        "{} / {} rows",
-                        state_word(report, section),
-                        section
-                            .listing
-                            .as_ref()
-                            .map_or(section.entries.len() as u64, |listing| listing.rows)
-                    ));
-                    if ui
-                        .button(egui_phosphor::regular::ARROW_SQUARE_OUT)
-                        .on_hover_text("Open category in a separate pane")
-                        .clicked()
-                    {
-                        action = Some(ReportAction::OpenSection {
-                            report_id: report.id.clone(),
-                            kind: section.kind,
-                        });
-                    }
+                    ui.add(egui::Label::new(egui::RichText::new(value).monospace()).wrap());
                 });
-                ui.add(egui::Label::new(&section.summary).wrap());
+                ui.end_row();
             }
         });
+}
+
+/// Each category with its state and size; a name opens its tab.
+fn categories(
+    ui: &mut egui::Ui,
+    report: &AnalysisReport,
+    state: &mut WorkspaceState,
+) -> Option<ReportAction> {
+    let mut action = None;
+    for section in &report.sections {
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .selectable_label(false, section_title(section.kind))
+                .on_hover_text(&section.summary)
+                .clicked()
+            {
+                state.show(section.kind);
+            }
+            ui.label(format!(
+                "{} / {} rows",
+                state_word(report, section),
+                section
+                    .listing
+                    .as_ref()
+                    .map_or(section.entries.len() as u64, |listing| listing.rows)
+            ));
+            if ui
+                .button(egui_phosphor::regular::ARROW_SQUARE_OUT)
+                .on_hover_text("Open category in a separate pane")
+                .clicked()
+            {
+                action = Some(ReportAction::OpenSection {
+                    report_id: report.id.clone(),
+                    kind: section.kind,
+                });
+            }
+        });
+    }
     action
+}
+
+/// The specimen's name: the record's when it has one, else the path's last part.
+fn file_name(report: &AnalysisReport, state: &WorkspaceState) -> String {
+    if !state.record_name.is_empty() {
+        return state.record_name.clone();
+    }
+    report
+        .source_path
+        .rsplit('/')
+        .find(|part| !part.is_empty())
+        .unwrap_or(&report.source_path)
+        .to_owned()
 }
 
 fn visible(
@@ -877,20 +848,6 @@ fn copy_value(ui: &mut egui::Ui, label: &str, value: &str) {
         }
     });
     ui.add(egui::Label::new(egui::RichText::new(value).monospace()).wrap());
-}
-
-fn identity_value(ui: &mut egui::Ui, label: &str, value: &str) {
-    ui.horizontal(|ui| {
-        ui.strong(label);
-        if ui
-            .button(egui_phosphor::regular::COPY)
-            .on_hover_text(format!("Copy full {label}"))
-            .clicked()
-        {
-            ui.ctx().copy_text(value.to_owned());
-        }
-        ui.add(egui::Label::new(value).wrap());
-    });
 }
 
 fn detail(

@@ -367,6 +367,7 @@ fn native_analysis_workspace_fixture() {
         report: AnalysisReport,
         state: WorkspaceState,
         preview: Option<Result<AnalysisSpecimenPage, String>>,
+        specimen: Option<Vec<u8>>,
         deadline: Instant,
     }
     impl eframe::App for FixtureApp {
@@ -385,11 +386,20 @@ fn native_analysis_workspace_fixture() {
                             offset,
                             data_len,
                         } => {
-                            self.preview = Some(Ok(AnalysisSpecimenPage {
-                                report_id,
-                                offset,
-                                total_len: 65536,
-                                data: (0..data_len).map(|index| (index % 256) as u8).collect(),
+                            self.preview = Some(Ok(match &self.specimen {
+                                Some(bytes) => AnalysisSpecimenPage {
+                                    report_id,
+                                    offset,
+                                    total_len: bytes.len() as u64,
+                                    data: bytes[offset as usize..offset as usize + data_len]
+                                        .to_vec(),
+                                },
+                                None => AnalysisSpecimenPage {
+                                    report_id,
+                                    offset,
+                                    total_len: 65536,
+                                    data: (0..data_len).map(|index| (index % 256) as u8).collect(),
+                                },
                             }));
                         }
                         action => eprintln!("Synthetic workspace action: {action:?}"),
@@ -425,11 +435,25 @@ fn native_analysis_workspace_fixture() {
         Box::new(move |cc| {
             crate::theme::install(&cc.egui_ctx);
             crate::theme::text_size(&cc.egui_ctx, if small { 24.0 } else { 18.0 });
-            let report = fixture();
+            // A retained report.json and its specimen replace the synthetic
+            // fixture; the tab is chosen by its position in the strip.
+            let report = std::env::var_os("ANTINOMIE_ANALYSIS_QA_REPORT")
+                .map_or_else(fixture, |path| {
+                    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+                });
+            let specimen = std::env::var_os("ANTINOMIE_ANALYSIS_QA_SPECIMEN")
+                .map(|path| std::fs::read(path).unwrap());
             let mut state = WorkspaceState::default();
             state.bind(&report.id);
-            state.kind = Some(AnalysisKind::Structures);
-            state.structure = Structure::Sections;
+            state.tab = Tab::FileInfo;
+            state.file_info = FileInfo::Sections;
+            if let Some(tab) = std::env::var("ANTINOMIE_ANALYSIS_QA_TAB")
+                .ok()
+                .and_then(|tab| tab.parse::<usize>().ok())
+            {
+                state.tab = Tab::ALL[tab.min(Tab::ALL.len() - 1)];
+                state.file_info = FileInfo::Summary;
+            }
             state.active_view = Some("Structures/Sections".into());
             state.views.insert(
                 "Structures/Sections".into(),
@@ -442,6 +466,7 @@ fn native_analysis_workspace_fixture() {
                 report,
                 state,
                 preview: None,
+                specimen,
                 deadline: Instant::now() + Duration::from_secs(seconds),
             }))
         }),
