@@ -765,8 +765,16 @@ fn table(
                         for &column in columns {
                             row.col(|ui| {
                                 let text = column.text(entry);
-                                ui.add(egui::Label::new(&text).truncate())
-                                    .on_hover_text(text);
+                                ui.add(
+                                    egui::Label::new(super::meaning::meaning_text(
+                                        section.kind,
+                                        column,
+                                        entry,
+                                        text.clone(),
+                                    ))
+                                    .truncate(),
+                                )
+                                .on_hover_text(text);
                             });
                         }
                         row.response().context_menu(|ui| {
