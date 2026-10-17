@@ -9,6 +9,7 @@ mod capture;
 mod captures;
 mod dialogs;
 mod explorer;
+mod file_drop;
 mod history;
 mod menus;
 mod panels;
