@@ -375,14 +375,6 @@ pub(crate) struct SamplesView {
     awaiting: Option<Option<ExecRequest>>,
 }
 
-fn format_size(bytes: u64) -> String {
-    match bytes {
-        0..1024 => format!("{bytes} B"),
-        1024..1_048_576 => format!("{:.1} KiB", bytes as f64 / 1024.0),
-        _ => format!("{:.1} MiB", bytes as f64 / 1_048_576.0),
-    }
-}
-
 /// What the warning before first use says, one point per line.
 const FIRST_USE_POINTS: &[&str] = &[
     "Never run a sample on this computer. Antinomie keeps samples in their \
@@ -1277,7 +1269,7 @@ impl SamplesView {
             .column(Column::initial(120.0).clip(true))
             .column(Column::initial(70.0))
             .column(Column::initial(110.0))
-            .column(Column::initial(90.0))
+            .column(Column::initial(180.0))
             .column(Column::initial(200.0).clip(true))
             .column(Column::remainder().at_least(130.0))
             .header(row_height, |mut header| {
@@ -1390,7 +1382,7 @@ impl SamplesView {
                             RichText::new(if sample.file_size == 0 {
                                 "-".to_string()
                             } else {
-                                format_size(sample.file_size)
+                                crate::values::file_size(sample.file_size)
                             })
                             .color(theme::value(ValueKind::Number)),
                         );
@@ -1484,7 +1476,7 @@ impl SamplesView {
             .column(Column::initial(260.0).clip(true))
             .column(Column::initial(130.0).clip(true))
             .column(Column::initial(110.0))
-            .column(Column::initial(90.0))
+            .column(Column::initial(180.0))
             .column(Column::initial(90.0))
             .column(Column::remainder().at_least(380.0))
             .body(|body| {
@@ -1523,7 +1515,7 @@ impl SamplesView {
                         });
                     });
                     row.col(|ui| {
-                        ui.colored_label(theme::muted(), format_size(info.file_size));
+                        ui.colored_label(theme::muted(), crate::values::file_size(info.file_size));
                     });
                     row.col(|ui| {
                         ui.colored_label(

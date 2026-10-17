@@ -64,7 +64,7 @@ detector comparison and complementary behavior/network sections. The specimen
 name, path and hash are not repeated above the tabs. Detection shows each
 rule’s recorded explanation and match location. Local destination addresses
 are labeled without a country or organization lookup. Wide peer sections align to the taller content; narrow panes stack.
-Properties groups identification, exact hashes and optional classifiers; the
+Properties groups identification, exact hashes and similarity hashes/classifiers; the
 shared Details pane uses aligned field/value rows. Summary observation previews
 retain existing exact evidence and shared Details navigation. Missing or partial
 coverage stays explicit; count and detection semantics do not change. Use the
@@ -82,12 +82,22 @@ Details; recorded order restores tree indentation. A temporary SQLite spool
 bounds sorted query data and retains original evidence identities.
 
 The Properties tab analyzes the selected run's digest-verified retained specimen.
-MD5/SHA-1/SHA-256 use the locked local libraries; optional ssdeep, TLSH, file,
-TrID and Magika executables run in the existing mandatory offline sandbox.
-Missing tools, absent models/definitions and provider-only vhash computation
-are explicit unavailable states. No sample/hash lookup, model download or guest
-change is introduced. properties.json remains beside the saved specimen for
-export. Saved metadata stays readable and is labeled not reverified when needed.
+MD5/SHA-1/SHA-256, ssdeep and TLSH are computed in the sandboxed worker with
+locked Rust libraries (`fuzzyhash` for ssdeep, `tlsh2` for TLSH), so they need
+no installed tool; both were checked against ppdeep and py-tlsh. When TLSH
+cannot hash an input (under 50 octets, or too uniform), the field says why.
+File type comes from the executable parser; the file and Magika executables run
+in the same mandatory offline sandbox. Magika is looked up in the managed tools folder first (`<data-dir>/tools/magika`, mounted read-only at
+`/opt/antinomie-tools` as for the analysis worker), then in `/usr/bin` and
+`/usr/local/bin`. Tools > Analysis tools installs Magika 1.1.0 from the
+official google/magika release (a single Linux x86-64 executable with its model
+built in; pinned by URL, size and SHA-256). Missing tools are explicit
+unavailable states. vhash and TrID are no longer shown; fields of those names
+in an older properties.json are ignored when it is read. No sample/hash lookup,
+model download or guest change is introduced. properties.json remains beside
+the saved specimen for export. Saved metadata stays readable and is labeled not
+reverified when needed. File sizes in the UI read `N bytes (X.Y KB)` with
+1024-based units.
 
 Detection has independent YARA, IDS and Sigma jobs. Production rules come from
 the rule manager under `<data-dir>/rules/`: installed community packs, custom

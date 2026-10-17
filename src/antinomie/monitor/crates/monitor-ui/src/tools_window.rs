@@ -51,7 +51,12 @@ pub(crate) fn show(
                             ui.colored_label(theme::good(), "On this system");
                             ui.label(RichText::new(path).monospace().color(theme::muted()));
                             if let Some(version) = installed {
-                                ui.weak(format!("(Antinomie's {version} also installed; unused)"));
+                                ui.weak(if tool.id == "magika" {
+                                    // The Properties panel looks here first.
+                                    format!("(Antinomie's {version} also installed; used first)")
+                                } else {
+                                    format!("(Antinomie's {version} also installed; unused)")
+                                });
                             }
                         }
                         (None, Some(version)) => {
@@ -138,8 +143,10 @@ pub(crate) fn show(
                     "Licenses: capa Apache-2.0; Detect It Easy MIT (with Qt LGPL-3.0 and ICU); \
                      Ghidra Apache-2.0 with the Eclipse Temurin JDK (GPL-2.0 with Classpath \
                      exception); pySigma LGPL-3.0 with its SQLite backend LGPL-2.1, installed \
-                     from PyPI into its own environment. Set ANTINOMIE_ANALYSIS_TOOLS=managed to prefer Antinomie's \
-                     copies over the system's.",
+                     from PyPI into its own environment; Magika Apache-2.0 (Google), one \
+                     executable from its GitHub release, which the Properties panel prefers \
+                     over a system copy. Set ANTINOMIE_ANALYSIS_TOOLS=managed to prefer \
+                     Antinomie's copies over the system's elsewhere.",
                 )
                 .small()
                 .weak(),

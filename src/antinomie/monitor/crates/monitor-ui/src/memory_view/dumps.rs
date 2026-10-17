@@ -227,7 +227,7 @@ impl MemoryView {
                         &format!(
                             "{:.0}% of {} · VM paused",
                             fraction * 100.0,
-                            format_size(progress.total)
+                            crate::values::file_size(progress.total)
                         ),
                         font_size,
                     );
@@ -372,15 +372,6 @@ impl MemoryView {
     }
 }
 
-pub(super) fn format_size(bytes: u64) -> String {
-    const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
-    match bytes {
-        0..1_048_576 => format!("{:.1} KiB", bytes as f64 / 1024.0),
-        1_048_576..1_073_741_824 => format!("{:.1} MiB", bytes as f64 / 1_048_576.0),
-        _ => format!("{:.1} GiB", bytes as f64 / GIB),
-    }
-}
-
 pub(super) fn format_elapsed(ms: u64) -> String {
     if ms < 60_000 {
         format!("{:.1} s", ms as f64 / 1000.0)
@@ -409,7 +400,10 @@ pub(super) fn dump_title(dump: &MemoryDump) -> String {
 }
 
 fn dump_detail(dump: &MemoryDump) -> String {
-    let size = dump.bytes.map(format_size).unwrap_or_else(|| "…".into());
+    let size = dump
+        .bytes
+        .map(crate::values::file_size)
+        .unwrap_or_else(|| "…".into());
     if let Some(error) = &dump.error {
         return format!("Failed: {error}");
     }

@@ -357,7 +357,7 @@ impl MemoryView {
                                         );
                                         ui.colored_label(
                                             theme::muted(),
-                                            format_size(plugin.size()),
+                                            crate::values::file_size(plugin.size()),
                                         );
                                     });
                                 });

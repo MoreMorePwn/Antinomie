@@ -20,29 +20,29 @@ fn saved_properties(report: &antinomie_monitor_core::AnalysisReport) -> FileProp
             source: "Saved report".into(),
         })
         .collect();
-    for (index, len) in [(0, 32), (1, 40), (2, 64)] {
-        let value = if index == 2 {
+    // Labels, not positions: the set of properties changes between versions.
+    let mut set = |label: &str, value: &str| {
+        if let Some(field) = fields.iter_mut().find(|field| field.label == label) {
+            field.value = value.into();
+            field.available = true;
+        }
+    };
+    for (label, len) in [("MD5", 32), ("SHA-1", 40), ("SHA-256", 64)] {
+        let value = if label == "SHA-256" {
             report.specimen_sha256.as_deref()
         } else {
             metadata
-                .and_then(|section| {
-                    section
-                        .entries
-                        .iter()
-                        .find(|entry| entry.label == engine::LABELS[index])
-                })
+                .and_then(|section| section.entries.iter().find(|entry| entry.label == label))
                 .map(|entry| entry.value.as_str())
         };
         if let Some(value) = value.filter(|value| {
             value.len() == len && value.bytes().all(|byte| byte.is_ascii_hexdigit())
         }) {
-            fields[index].value = value.into();
-            fields[index].available = true;
+            set(label, value);
         }
     }
     if let Some(len) = report.specimen_len {
-        fields[10].value = len.to_string();
-        fields[10].available = true;
+        set("File size", &len.to_string());
     }
     if let Some(section) = metadata {
         let kind = ["Format", "Object kind", "Architecture"]
@@ -52,8 +52,7 @@ fn saved_properties(report: &antinomie_monitor_core::AnalysisReport) -> FileProp
             .collect::<Vec<_>>()
             .join(" ");
         if !kind.is_empty() {
-            fields[6].value = kind;
-            fields[6].available = true;
+            set("File type", &kind);
         }
     }
     if let Some(magic) = report
@@ -63,8 +62,7 @@ fn saved_properties(report: &antinomie_monitor_core::AnalysisReport) -> FileProp
         .flat_map(|section| &section.entries)
         .find(|entry| entry.label == "format: file magic")
     {
-        fields[7].value = magic.value.chars().take(4096).collect();
-        fields[7].available = true;
+        set("Magic", &magic.value.chars().take(4096).collect::<String>());
     }
     for field in &mut fields {
         if field.available {
@@ -86,6 +84,16 @@ pub(super) struct View {
     result: Option<Result<FileProperties, String>>,
     rx: Option<Receiver<Result<FileProperties, String>>>,
     cancel: Option<Arc<AtomicBool>>,
+    /// `<data>/tools`, for the managed tools the sandbox mounts (Magika).
+    tools_dir: Option<std::path::PathBuf>,
+}
+
+impl TriageView {
+    pub(crate) fn set_tools_dir(&mut self, dir: &std::path::Path) {
+        if self.properties.tools_dir.as_deref() != Some(dir) {
+            self.properties.tools_dir = Some(dir.to_owned());
+        }
+    }
 }
 
 impl View {
@@ -134,6 +142,7 @@ impl View {
         let Some((directory, id, Some(_))) = self.identity.clone() else {
             return;
         };
+        let tools_dir = self.tools_dir.clone();
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = Arc::clone(&cancel);
         let (tx, rx) = mpsc::sync_channel(1);
@@ -141,7 +150,7 @@ impl View {
         match std::thread::Builder::new()
             .name("triage-properties".into())
             .spawn(move || {
-                let result = engine::run(&directory, &id, &worker_cancel);
+                let result = engine::run(&directory, &id, tools_dir.as_deref(), &worker_cancel);
                 if tx.send(result).is_ok() {
                     ctx.request_repaint_of(egui::ViewportId::ROOT);
                 }
@@ -224,8 +233,8 @@ impl View {
                     ),
                     (
                         "Similarity & classifiers",
-                        "Optional local tools and provider-specific properties",
-                        &["vhash", "ssdeep", "TLSH", "TrID", "Magika"][..],
+                        "Fuzzy hashes computed locally, and Magika when it is installed",
+                        &["ssdeep", "TLSH", "Magika"][..],
                     ),
                 ] {
                     presentation::frame().show(ui, |ui| {
@@ -243,55 +252,58 @@ impl View {
                                         result.fields.iter().find(|field| field.label == *label)
                                     });
                                     ui.label(RichText::new(*label).strong().color(theme::text()));
-                                    ui.vertical(|ui| {
-                                        ui.set_max_width(width);
-                                        let value = field
-                                            .map_or("Unavailable", |field| field.value.as_str());
-                                        let available = field.is_some_and(|field| field.available);
-                                        let display = if available || value == "Not computed" {
-                                            value
-                                        } else {
-                                            "Unavailable"
-                                        };
-                                        let text = RichText::new(display).color(if available {
-                                            theme::text()
-                                        } else {
-                                            theme::muted()
-                                        });
-                                        let text = if title == "Exact hashes" {
-                                            text.monospace()
-                                        } else {
-                                            text
-                                        };
-                                        let response = ui.add(egui::Label::new(text).wrap());
-                                        if let Some(field) = field {
-                                            response.clone().on_hover_text(format!(
-                                                "{value}\n{}",
-                                                field.source
-                                            ));
+                                    let stored =
+                                        field.map_or("Unavailable", |field| field.value.as_str());
+                                    let available = field.is_some_and(|field| field.available);
+                                    // The stored size is the plain byte count.
+                                    let value = match stored.parse::<u64>() {
+                                        Ok(size) if available && *label == "File size" => {
+                                            crate::values::file_size(size)
                                         }
-                                        response.context_menu(|ui| {
-                                            if ui.button("Copy value").clicked() {
-                                                ui.ctx().copy_text(value.into());
+                                        _ => stored.to_owned(),
+                                    };
+                                    let display = if available || value == "Not computed" {
+                                        value.as_str()
+                                    } else {
+                                        "Unavailable"
+                                    };
+                                    let text = RichText::new(display).color(if available {
+                                        theme::text()
+                                    } else {
+                                        theme::muted()
+                                    });
+                                    let text = if title == "Exact hashes" {
+                                        text.monospace()
+                                    } else {
+                                        text
+                                    };
+                                    let response = ui.add(egui::Label::new(text).wrap());
+                                    if let Some(field) = field {
+                                        response
+                                            .clone()
+                                            .on_hover_text(format!("{value}\n{}", field.source));
+                                    }
+                                    response.context_menu(|ui| {
+                                        if ui.button("Copy value").clicked() {
+                                            ui.ctx().copy_text(value.clone());
+                                            ui.close_menu();
+                                        }
+                                        if let Some(result) = result {
+                                            if ui.button("Copy properties as JSON").clicked() {
+                                                if let Ok(json) =
+                                                    serde_json::to_string_pretty(result)
+                                                {
+                                                    ui.ctx().copy_text(json);
+                                                }
                                                 ui.close_menu();
                                             }
-                                            if let Some(result) = result {
-                                                if ui.button("Copy properties as JSON").clicked() {
-                                                    if let Ok(json) =
-                                                        serde_json::to_string_pretty(result)
-                                                    {
-                                                        ui.ctx().copy_text(json);
-                                                    }
-                                                    ui.close_menu();
-                                                }
-                                            }
-                                            if let Some(directory) = input
-                                                .archive
-                                                .map(|directory| directory.join("analysis"))
-                                            {
-                                                crate::evidence::menu(ui, &directory);
-                                            }
-                                        });
+                                        }
+                                        if let Some(directory) = input
+                                            .archive
+                                            .map(|directory| directory.join("analysis"))
+                                        {
+                                            crate::evidence::menu(ui, &directory);
+                                        }
                                     });
                                     ui.end_row();
                                 }
@@ -331,10 +343,11 @@ mod tests {
                 "File size" => "129736".into(),
                 "Magic" => "ELF 64-bit LSB shared object, x86-64, dynamically linked, stripped".into(),
                 "File type" => "Elf Dynamic X86_64".into(),
-                "vhash" => "Provider-specific hash; local computation is unavailable. No online lookup is performed.".into(),
-                _ => "Local tool is not installed".into(),
+                "ssdeep" => "3072:LylQMXZZ86ZnAD1XBRPIHnh+m7m8z+kijtJNBPoEteKQvO6ysX:LyS0bxARPIHh15REteh2e".into(),
+                "TLSH" => "The file is too small: TLSH needs at least 50 bytes".into(),
+                _ => "Magika is not installed".into(),
             },
-            available: matches!(*label, "MD5" | "SHA-1" | "SHA-256" | "File size" | "Magic" | "File type"),
+            available: matches!(*label, "MD5" | "SHA-1" | "SHA-256" | "File size" | "Magic" | "File type" | "ssdeep"),
             source: "Local verified specimen".into(),
         }).collect();
         let result = FileProperties {
@@ -440,7 +453,7 @@ mod tests {
             reason: None,
             sections: vec![],
         };
-        let fields = engine::LABELS.iter().map(|label| engine::Property { label: (*label).into(), value: match *label { "MD5" => "abcdef0123456789".repeat(2), "SHA-1" => "abcdef0123".repeat(4), "SHA-256" => "abcdef0123456789".repeat(4), "File size" => "129736".into(), "Magic" => "ELF 64-bit LSB shared object, x86-64, dynamically linked, stripped".into(), "File type" => "Elf Dynamic X86_64".into(), "vhash" => "Provider-specific hash; local computation is unavailable. No online lookup is performed.".into(), _ => "Local tool is not installed".into() }, available: matches!(*label, "MD5" | "SHA-1" | "SHA-256" | "File size" | "Magic" | "File type"), source: "Local verified specimen".into() }).collect();
+        let fields = engine::LABELS.iter().map(|label| engine::Property { label: (*label).into(), value: match *label { "MD5" => "abcdef0123456789".repeat(2), "SHA-1" => "abcdef0123".repeat(4), "SHA-256" => "abcdef0123456789".repeat(4), "File size" => "129736".into(), "Magic" => "ELF 64-bit LSB shared object, x86-64, dynamically linked, stripped".into(), "File type" => "Elf Dynamic X86_64".into(), "ssdeep" => "3072:LylQMXZZ86ZnAD1XBRPIHnh+m7m8z+kijtJNBPoEteKQvO6ysX:LyS0bxARPIHh15REteh2e".into(), _ => "Magika is not installed".into() }, available: matches!(*label, "MD5" | "SHA-1" | "SHA-256" | "File size" | "Magic" | "File type" | "ssdeep"), source: "Local verified specimen".into() }).collect();
         let result = FileProperties {
             report_id: report.id.clone(),
             source_path: report.source_path.clone(),
@@ -511,10 +524,94 @@ mod tests {
     fn saved_hash_and_size_remain_available_when_reverification_is_unavailable() {
         let (report, _) = fixture_properties();
         let saved = saved_properties(&report);
-        assert!(saved.fields[2].available);
-        assert_eq!(saved.fields[2].value, report.specimen_sha256.unwrap());
-        assert_eq!(saved.fields[10].value, "129736");
-        assert!(!saved.fields[0].available);
-        assert!(saved.fields[2].source.contains("not reverified"));
+        let field = |label: &str| {
+            saved
+                .fields
+                .iter()
+                .find(|field| field.label == label)
+                .unwrap()
+        };
+        assert!(field("SHA-256").available);
+        assert_eq!(field("SHA-256").value, report.specimen_sha256.unwrap());
+        assert_eq!(field("File size").value, "129736");
+        assert!(!field("MD5").available);
+        assert!(field("SHA-256").source.contains("not reverified"));
+        // Every label the panel shows has a saved entry, and none is stale.
+        assert_eq!(
+            saved
+                .fields
+                .iter()
+                .map(|f| f.label.as_str())
+                .collect::<Vec<_>>(),
+            engine::LABELS
+        );
+    }
+
+    #[test]
+    fn property_rows_center_label_and_value_and_show_file_size_with_a_unit() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let (report, result) = fixture_properties();
+        let mut view = View::default();
+        let mut rows = Vec::new();
+        let mut texts = Vec::new();
+        for frame in 0..3 {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 880.0),
+                    )),
+                    time: Some(f64::from(frame) / 60.0),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let input = TriageInput {
+                            analysis: Some(&report),
+                            archive: Some(Path::new("/fixture/run")),
+                            ..TriageInput::empty()
+                        };
+                        view.tick(ctx, &input);
+                        view.result = Some(Ok(result.clone()));
+                        view.show(ui, &input);
+                    });
+                },
+            );
+            rows.clear();
+            texts.clear();
+            for shape in output.shapes {
+                if let egui::epaint::Shape::Text(text) = shape.shape {
+                    let rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+                    texts.push(text.galley.job.text.clone());
+                    rows.push((text.galley.job.text.clone(), rect.center().y));
+                }
+            }
+        }
+        assert!(
+            texts.iter().any(|text| text == "129736 bytes (126.7 KB)"),
+            "{texts:?}"
+        );
+        for (label, value) in [
+            ("File size", "129736 bytes (126.7 KB)"),
+            ("MD5", &"abcdef0123456789".repeat(2)),
+            (
+                "ssdeep",
+                "3072:LylQMXZZ86ZnAD1XBRPIHnh+m7m8z+kijtJNBPoEteKQvO6ysX:LyS0bxARPIHh15REteh2e",
+            ),
+        ] {
+            let y = |wanted: &str| {
+                rows.iter()
+                    .find(|(text, _)| text == wanted)
+                    .unwrap_or_else(|| panic!("{wanted} not drawn: {texts:?}"))
+                    .1
+            };
+            assert!(
+                (y(label) - y(value)).abs() <= 1.0,
+                "{label}: label at {}, value at {}",
+                y(label),
+                y(value)
+            );
+        }
     }
 }

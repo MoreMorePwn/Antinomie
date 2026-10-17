@@ -533,8 +533,8 @@ impl SnapshotManager {
                 "Consistency",
                 consistency_label(node.consistency).to_owned(),
             ),
-            ("Disk layer", format_size(node.disk_size)),
-            ("Memory state", format_size(node.memory_size)),
+            ("Disk layer", crate::values::file_size(node.disk_size)),
+            ("Memory state", crate::values::file_size(node.memory_size)),
             (
                 "Configuration",
                 format!("{} CPUs, {} MiB RAM", node.config.cpus, node.config.ram_mib),
@@ -840,9 +840,6 @@ fn consistency_label(consistency: VmSnapshotConsistency) -> &'static str {
         VmSnapshotConsistency::CrashConsistent => "Crash-consistent",
         VmSnapshotConsistency::Paused => "Paused disk + memory",
     }
-}
-fn format_size(size: u64) -> String {
-    format!("{:.1} MiB", size as f64 / 1_048_576.0)
 }
 
 /// Format UTC without a new dependency; 400-year cycles bound the year loop.

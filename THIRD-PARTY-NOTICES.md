@@ -31,14 +31,19 @@ license and source meta.
 | `yara-x 1.21` (VirusTotal) and its dependencies | BSD-3-Clause (yara-x); dependencies under their own licenses |
 | `iced-x86 1.21` | MIT |
 
-Ghidra, radare2, capa, Detect It Easy, objdump, readelf and file are not
+Ghidra, radare2, capa, Detect It Easy, Magika, objdump, readelf and file are not
 bundled: the worker runs them when they are installed on the host. On the
 user's request (**Tools > Analysis tools**) the app downloads capa 9.4.0
 (Apache-2.0), Detect It Easy 3.21 (MIT, with Qt under LGPL-3.0) plus Ubuntu's
-ICU 66 libraries (Unicode license), and Ghidra 12.1.4 (Apache-2.0) with the
-Eclipse Temurin 21 JDK (GPL-2.0 with Classpath exception) directly from their
-upstream releases into the user's data folder; Antinomie does not
-redistribute them. Their license files arrive with each download.
+ICU 66 libraries (Unicode license), Ghidra 12.1.4 (Apache-2.0) with the
+Eclipse Temurin 21 JDK (GPL-2.0 with Classpath exception), and Magika 1.1.0
+(Apache-2.0, Google; the `magika-cli-x86_64-unknown-linux-gnu.tar.xz` release
+asset of google/magika, pinned by SHA-256) directly from their upstream
+releases into the user's data folder; Antinomie does not redistribute them.
+Their license files arrive with each download, except Magika, whose release
+asset holds only the executable: its license is the repository's Apache-2.0
+LICENSE at https://github.com/google/magika. The Properties tab runs Magika from
+that folder in the offline sandbox, or the system's copy.
 
 For memory analysis, the same dialog (or **Install Volatility 3** in the
 Memory tab) downloads Volatility 3 2.28.2 (Volatility Software License 1.0)
@@ -106,6 +111,15 @@ retained separately in
 [Rust-Standard-Library-COPYRIGHT.html](LICENSES/third-party/Rust-Standard-Library-COPYRIGHT.html);
 the inventory's earlier snapshot remains intact. The new static resource
 collector's musl notices are listed below.
+
+The 0.6.2 Properties worker computes similarity hashes in process with two
+new pure-Rust crates, `fuzzyhash 0.2.2` (MIT, ssdeep-compatible; notice in
+[fuzzyhash-MIT.txt](LICENSES/third-party/fuzzyhash-MIT.txt)) and `tlsh2 1.1.0`
+(Trend Micro TLSH port; Apache-2.0 OR BSD-3-Clause, with the BSD-3-Clause option
+selected; license text in [tlsh2-LICENSE.txt](LICENSES/third-party/tlsh2-LICENSE.txt)
+and notice in [tlsh2-NOTICE.txt](LICENSES/third-party/tlsh2-NOTICE.txt)), both
+copied unmodified from the locked crate distributions. Neither has runtime
+dependencies. They are new relative to the 0.6.0 dependency inventory above.
 
 The 0.6.2 UI directly uses the already locked `chrono 0.4.45` (MIT OR Apache-2.0)
 and its existing local timezone support for host-clock presentation. No new

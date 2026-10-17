@@ -1,12 +1,12 @@
 //! Install one optional analysis tool the way Tools > Analysis tools does.
 //!
-//! usage: install-tool DATA_DIR capa|die|ghidra|volatility3|sigma
+//! usage: install-tool DATA_DIR capa|die|ghidra|volatility3|sigma|magika
 use std::{path::PathBuf, process::ExitCode, sync::atomic::AtomicBool};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let [data, id] = args.as_slice() else {
-        eprintln!("usage: install-tool DATA_DIR capa|die|ghidra|volatility3|sigma");
+        eprintln!("usage: install-tool DATA_DIR capa|die|ghidra|volatility3|sigma|magika");
         return ExitCode::FAILURE;
     };
     let mut last = String::new();
