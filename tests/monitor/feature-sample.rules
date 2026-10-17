@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 MikiMiku (MoreMorePwn)
+# Deliberate benign fixture match, not a malicious-traffic classification.
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"Antinomie benign feature sample User-Agent"; flow:established,to_server; http.user_agent; content:"AntinomieFeatureSample/"; sid:9900631; rev:1; metadata:license MIT;)
