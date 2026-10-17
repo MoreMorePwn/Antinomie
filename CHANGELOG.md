@@ -51,6 +51,31 @@ it runs.
   Sigma Python is set. App dependencies lists Suricata and Python venv support
   as optional; a missing optional tool does not open the dialog at startup.
 
+- **Rules catalog v2.** The rules catalog (schema 2) now lists where each
+  collection is published, not archives we host. Tools > Rule manager downloads
+  the files from the publisher (GitHub, rules.emergingthreats.net,
+  sslbl.abuse.ch), checks them against pinned SHA-256 hashes, filters them on
+  your computer and installs the result as a pack. Each pack shows its source,
+  license, pinned revision and the hosts it contacts, and "Allow downloads" now
+  names every host. Redirects may only reach the publisher's own hosts, a pinned
+  file that differs is refused, and a download you cancel changes nothing.
+  Packs the publisher updates in place (Emerging Threats, abuse.ch) install and
+  are marked as different from the catalog. YARA-Forge keeps a rule when its
+  own license allows it or, when it names none, when its source repository is
+  openly licensed: about 4,700 rules instead of 2,100. Rules from repositories
+  with no license file stay out unless you tick a per-pack option, off by
+  default, that warns they are all rights reserved. New packs: Elastic
+  protections-artifacts YARA (Elastic License 2.0, stated in the pack),
+  Suricata's built-in event rules (GPL-2.0) and the abuse.ch SSL certificate
+  blacklist (CC0). SigmaHQ Linux adds auditd, network_connection and
+  threat-hunting rules; accepted connect() calls are now recorded as
+  network_connection events (destination address and port), while auditd rules
+  are imported and listed as not evaluated with their reason. Matches show the
+  repository license a rule took, and the rule-set list and each scan record
+  keep the pack's source and revision. A pack can be removed from the manager.
+  The old schema 1 catalog and packs installed from it keep working;
+  `scripts/rules/prepare-catalog.py` generates the new catalog.
+
 - **Detection.** On-demand YARA, IDS and Sigma tabs evaluate retained evidence
   offline, preserve coverage and source provenance, and open match details in
   the shared Details pane. Local rule folders are optional; Suricata and pySigma

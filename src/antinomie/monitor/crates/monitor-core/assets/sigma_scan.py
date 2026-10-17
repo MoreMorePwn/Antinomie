@@ -13,8 +13,8 @@ MAX_EVENTS = 1_000_000
 MAX_FINDINGS = 10_000
 MAX_EVIDENCE = 10_000
 MAX_RULE_SIZE = 1024 * 1024
-SUPPORTED_CATEGORIES = {"process_creation", "file_event", "file_delete", "file_rename", "file_access", "dns_query", "http_request", "antinomie_bpf", "antinomie_file_metadata"}
-SCHEMA = {"Image", "CommandLine", "ProcessId", "ThreadId", "TargetFilename", "SourceFilename", "QueryName", "QueryType", "ResponseCode", "DestinationIp", "DestinationPort", "HttpMethod", "HttpHost", "HttpUri", "Syscall", "Operation", "Result", "TransferredSize", "BpfCommand", "Mode", "Setuid"}
+SUPPORTED_CATEGORIES = {"process_creation", "file_event", "file_delete", "file_rename", "file_access", "dns_query", "http_request", "network_connection", "antinomie_bpf", "antinomie_file_metadata"}
+SCHEMA = {"Image", "CommandLine", "ProcessId", "ThreadId", "TargetFilename", "SourceFilename", "QueryName", "QueryType", "ResponseCode", "DestinationIp", "DestinationPort", "HttpMethod", "HttpHost", "HttpUri", "Syscall", "Operation", "Result", "TransferredSize", "BpfCommand", "Mode", "Setuid", "Initiated"}
 
 
 def quoted(name):

@@ -78,7 +78,17 @@ def validate_archive(name, raw):
 
 
 def catalog_objects(catalog, bucket):
+    """Archives a catalog references in the bucket. Schema 2 lists upstream
+    sources, not hosted archives, so the bucket holds only the catalog."""
     objects = []
+    if catalog.get("schema") == 2:
+        for pack in catalog["packs"]:
+            for source in pack["sources"]:
+                if not source["url"].startswith("https://") or any(
+                    not file["sha256"] or len(file["sha256"]) != 64 for file in source["files"]
+                ):
+                    raise SystemExit(f"{pack['id']} has a source without an https URL or file hashes")
+        return objects
     for pack in catalog["packs"]:
         url = pack["download_url"]
         prefix = bucket.rstrip("/") + "/"
@@ -436,6 +446,19 @@ def self_test():
             LocalStore(target), archive_rel, good + b"\n", []))
         expect_exit("refusing to overwrite immutable", lambda: put_object(
             LocalStore(target), snapshot_key(a_sha), b"{}", []))
+        # Schema 2 catalogs list upstream sources: only the catalog is stored.
+        third = tmp / "c"
+        third.mkdir()
+        sources = {"schema": 2, "packs": [{"id": "demo", "sources": [{
+            "url": "https://example.invalid/demo.yar",
+            "files": [{"path": "demo.yar", "sha256": "0" * 64}]}]}]}
+        c = json.dumps(sources, sort_keys=True).encode()
+        (third / ROOT).write_bytes(c)
+        assert f"promoted {ROOT} {b_sha} -> {sha256_bytes(c)}" in publish(third, expect=b_sha)
+        verify()
+        sources["packs"][0]["sources"][0]["files"][0]["sha256"] = ""
+        (third / ROOT).write_text(json.dumps(sources))
+        expect_exit("without an https URL or file hashes", lambda: publish(third))
         print("bucket self-test passed")
     finally:
         shutil.rmtree(tmp)

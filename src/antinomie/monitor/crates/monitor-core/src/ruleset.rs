@@ -26,18 +26,30 @@ mod registry;
 mod requirements;
 mod selection;
 mod sigma;
+mod source_archive;
+mod source_catalog;
+mod source_fetch;
+mod source_install;
+mod source_sigma;
+mod source_yara;
 mod yara;
 
 pub use self::{
     catalog::*, groups::*, index::*, packs::*, registry::*, requirements::*, selection::*,
+    source_catalog::*, source_fetch::*, source_install::*, source_yara::REPOSITORY_LICENSE_META,
 };
-use self::{files::*, ids::*, sigma::*, yara::*};
+use self::{
+    files::*, ids::*, sigma::*, source_archive::*, source_sigma::*, source_yara::*, yara::*,
+};
 pub use engines::{
     DEFAULT_SIGMA_PYTHON, ToolConfig, ToolFacts, ToolProbe, refresh_tool_facts, sigma_interpreter,
     tool_facts, try_tool_facts,
 };
 
+/// The catalog schema that lists hosted archives.
 pub const CATALOG_SCHEMA: u32 = 1;
+/// The catalog schema that lists upstream sources to fetch and filter locally.
+pub const CATALOG_SCHEMA_SOURCES: u32 = 2;
 /// Public rules bucket. This is not the dataset repository of the same name.
 pub const CATALOG_URL: &str =
     "https://huggingface.co/buckets/MoreMorePwn/antinomie-rules/resolve/catalog.json";
@@ -90,10 +102,14 @@ pub struct PackEntry {
     pub limits: Vec<String>,
 }
 
+/// A parsed catalog. Schema 1 fills `packs` with hosted archives; schema 2
+/// fills `sources` with upstream sources and leaves `packs` empty.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Catalog {
     pub schema: u32,
     pub packs: Vec<PackEntry>,
+    #[serde(default)]
+    pub sources: Vec<SourcePack>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -129,6 +145,9 @@ pub struct InstalledPack {
     pub limits: Vec<String>,
     /// Versions retained on disk, newest selection is `version`.
     pub versions: Vec<String>,
+    /// Where a source install fetched its files from; absent for hosted archives.
+    #[serde(default)]
+    pub source: Option<SourceProvenance>,
     /// Application requirement recorded for `version` when it was installed.
     #[serde(default)]
     pub app: String,

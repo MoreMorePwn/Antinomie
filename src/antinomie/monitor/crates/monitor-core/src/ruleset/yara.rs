@@ -12,7 +12,9 @@ pub(super) fn parse_yara(text: &str) -> Vec<IndexedRule> {
             helper,
             tags: Vec::new(),
             severity: String::new(),
-            license: meta_in(&body, "license"),
+            license: Some(meta_in(&body, "license"))
+                .filter(|license| !license.is_empty())
+                .unwrap_or_else(|| meta_in(&body, REPOSITORY_LICENSE_META)),
             source_url: meta_in(&body, "source_url"),
             condition: clip(&meta_in(&body, "description"), 180),
             references: reference_list(&body),

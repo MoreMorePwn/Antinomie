@@ -71,7 +71,7 @@ fn catalog_rejects_missing_malformed_and_accepts_null_lists() {
     assert!(validate_catalog(&missing).unwrap_err().contains("missing"));
     let bad = serde_json::json!({"schema": 1, "packs": "nope"});
     assert!(validate_catalog(&bad).is_err());
-    let unknown = serde_json::json!({"schema": 2, "packs": []});
+    let unknown = serde_json::json!({"schema": 3, "packs": []});
     assert!(validate_catalog(&unknown).unwrap_err().contains("schema"));
     let ok = serde_json::json!({
         "schema": 1,
@@ -937,6 +937,7 @@ fn an_unmet_engine_requirement_is_not_evaluated_and_notice_is_hashed() {
     let mut catalog = Catalog {
         schema: 1,
         packs: vec![listed.clone()],
+        sources: Vec::new(),
     };
     catalog.packs[0].version = "1".into();
     store_catalog(&dir, &catalog).unwrap();
@@ -1067,6 +1068,7 @@ fn installed_requirements_survive_catalog_loss_corruption_and_replacement() {
     let catalog = Catalog {
         schema: 1,
         packs: vec![good.clone()],
+        sources: Vec::new(),
     };
     store_catalog(&dir, &catalog).unwrap();
     let enabled = |dir: &Path| snapshot(dir, "yara", &tools).unwrap();
@@ -1142,6 +1144,7 @@ fn an_admitted_registry_is_not_changed_by_a_later_catalog_or_rollback() {
         &Catalog {
             schema: 1,
             packs: vec![old.clone()],
+            sources: Vec::new(),
         },
     )
     .unwrap();
@@ -1318,3 +1321,8 @@ fn group_migration_reconciles_only_the_selected_revision() {
     assert_eq!(registry.groups[0].revision, revision);
     let _ = fs::remove_dir_all(&dir);
 }
+
+mod source_catalog;
+mod source_fixture;
+mod source_install;
+mod source_policy;

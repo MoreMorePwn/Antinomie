@@ -159,6 +159,7 @@ pub fn snapshot_from(
                     "version": pack.version,
                     "upstream_revision": pack.upstream_revision,
                     "archive_sha256": pack.sha256,
+                    "source": pack.source,
                     "enabled": pack.enabled,
                     "app_requirement": app,
                     "engine_requirement": requirement,
@@ -633,6 +634,8 @@ pub struct EngineSet {
     pub enabled: bool,
     /// Compatible, non-helper rules that are not disabled and whose dependencies are enabled.
     pub rules: u64,
+    /// Where the rules were fetched from, for a pack installed from a source.
+    pub source: String,
 }
 
 /// Installed packs, then custom groups, for one engine. Disabled sets stay in the list.
@@ -654,6 +657,11 @@ pub fn engine_sets(data_dir: &Path, registry: &Registry, engine: &str) -> Vec<En
             revision: pack.version.clone(),
             enabled: pack.enabled,
             rules: count_enabled(&root, &disabled),
+            source: pack
+                .source
+                .as_ref()
+                .map(SourceProvenance::line)
+                .unwrap_or_default(),
         });
     }
     for group in registry
@@ -675,6 +683,7 @@ pub fn engine_sets(data_dir: &Path, registry: &Registry, engine: &str) -> Vec<En
             revision: format!("r{}", group.revision),
             enabled: group.enabled,
             rules: count_enabled(&root, &disabled),
+            source: String::new(),
         });
     }
     sets

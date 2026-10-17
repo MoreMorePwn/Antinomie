@@ -71,6 +71,43 @@ fn command_line(call: &InvocationSummary, event: &EventSummary) -> Option<String
 /// Arguments joined into a CommandLine; a longer vector stays missing.
 const MAX_ARGUMENTS: usize = 256;
 
+/// `EINPROGRESS`: a non-blocking connect the kernel accepted and has not finished.
+const EINPROGRESS: i64 = -115;
+
+/// The IP address and port a connect() was given, from the captured
+/// `struct sockaddr`. Only a complete AF_INET or AF_INET6 address is decoded;
+/// Unix sockets and short captures give nothing.
+fn connect_destination(call: &InvocationSummary) -> Option<(String, u16)> {
+    let field = call
+        .entry
+        .iter()
+        .chain(call.exit.iter())
+        .flat_map(|event| &event.fields)
+        .find(|field| {
+            field.key.contains("addr")
+                && !field.key.contains("len")
+                && !field.key.contains("capacity")
+                && trace::field_argument(42, &field.key) == Some(1)
+        })?;
+    if !field.complete {
+        return None;
+    }
+    let data = trace::covered_preview(field);
+    let family = u16::from_le_bytes(data.get(..2)?.try_into().ok()?);
+    let port = u16::from_be_bytes(data.get(2..4)?.try_into().ok()?);
+    match family {
+        2 => {
+            let octets: [u8; 4] = data.get(4..8)?.try_into().ok()?;
+            Some((std::net::Ipv4Addr::from(octets).to_string(), port))
+        }
+        10 => {
+            let octets: [u8; 16] = data.get(8..24)?.try_into().ok()?;
+            Some((std::net::Ipv6Addr::from(octets).to_string(), port))
+        }
+        _ => None,
+    }
+}
+
 pub(super) fn source_key(
     directory: &Path,
     pcap: Option<&Path>,
@@ -189,6 +226,18 @@ pub(super) fn call(
             fields.insert("CommandLine".into(), line.into());
         }
         emit("process_creation", fields)?;
+    }
+    // A connect() the kernel accepted is a connection this process initiated.
+    // Only an address that was captured whole is reported; there is no
+    // hostname, user or source address in the recording, so none is invented.
+    if event.syscall_nr == 42 && ret.is_some_and(|ret| ret == 0 || ret == EINPROGRESS) {
+        if let Some((address, port)) = connect_destination(call) {
+            let mut fields = fields.clone();
+            fields.insert("DestinationIp".into(), address.into());
+            fields.insert("DestinationPort".into(), port.into());
+            fields.insert("Initiated".into(), "true".into());
+            emit("network_connection", fields)?;
+        }
     }
     if ret.is_some_and(|ret| ret >= 0)
         && call_args(call).and_then(|args| bpf_command(event, args)) == Some("BPF_PROG_LOAD")
@@ -444,6 +493,64 @@ mod tests {
     }
     fn engine_file() -> &'static str {
         antinomie_monitor_core::analysis::detection::JOURNAL_FILE
+    }
+    #[test]
+    fn an_accepted_connect_with_a_whole_address_becomes_a_network_connection() {
+        let identity = Identity {
+            vm_id: "v".into(),
+            boot_id: "b".into(),
+            run_id: "r".into(),
+            root_cookie: 1,
+        };
+        let v4 = [2u8, 0, 0x1f, 0x90, 203, 0, 113, 9, 0, 0, 0, 0, 0, 0, 0, 0];
+        let mut v6 = vec![10u8, 0, 0x01, 0xbb, 0, 0, 0, 0];
+        v6.extend_from_slice(&std::net::Ipv6Addr::LOCALHOST.octets());
+        v6.extend_from_slice(&[0; 4]);
+        let unix = [1u8, 0, b'/', b't', 0];
+        type Case<'a> = (&'a [u8], i64, bool, Option<(&'a str, u64)>);
+        let cases: [Case; 7] = [
+            (&v4, 0, true, Some(("203.0.113.9", 8080))),
+            (&v4, EINPROGRESS, true, Some(("203.0.113.9", 8080))),
+            (&v4, -111, true, None),
+            (&v4, 0, false, None),
+            (&v6, 0, true, Some(("::1", 443))),
+            (&unix, 0, true, None),
+            (&v4[..6], 0, true, None),
+        ];
+        for (index, (address, result, complete, expected)) in cases.into_iter().enumerate() {
+            let temp = PacketSpool::new().unwrap();
+            let mut journal = EventJournal::new(&temp.directory, &identity).unwrap();
+            let mut files = FdState::default();
+            let mut connect = super::super::tests::call(7, 42, "connect", result);
+            let mut field = super::super::tests::captured("arg1.address", "", address);
+            field.complete = complete;
+            connect.entry.as_mut().unwrap().fields.push(field);
+            observe_processes(&mut files.process_images, std::slice::from_ref(&connect));
+            call(
+                &mut journal,
+                &files,
+                &connect,
+                trace::representative(&connect).unwrap(),
+            )
+            .unwrap();
+            let summary = journal.finish(true).unwrap();
+            assert_eq!(
+                summary.events,
+                u64::from(expected.is_some()),
+                "case {index}"
+            );
+            if let Some((ip, port)) = expected {
+                let data = std::fs::read_to_string(temp.directory.join(engine_file())).unwrap();
+                let event: serde_json::Value =
+                    serde_json::from_str(data.lines().nth(1).unwrap()).unwrap();
+                assert_eq!(event["event"]["category"], "network_connection");
+                let fields = &event["event"]["fields"];
+                assert_eq!(fields["DestinationIp"], ip);
+                assert_eq!(fields["DestinationPort"], port);
+                assert_eq!(fields["Initiated"], "true");
+                assert!(fields.get("DestinationHostname").is_none());
+            }
+        }
     }
     #[test]
     fn path_evidence_preserves_valid_names_and_excludes_unterminated_previews() {

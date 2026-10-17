@@ -55,8 +55,10 @@ read, and anything the app could not decode or lost is marked as such.
 - Wireshark packet display filters and HTTP/DNS triage use the installed
   `tshark` command with `prlimit` resource limits. On Debian/Ubuntu install
   `tshark util-linux`; these tools are checked in **Tools > App dependencies**.
-- Detection rules come from **Tools > Rule manager**, which downloads packs
-  only after you allow it. YARA is built in. IDS scans need Suricata
+- Detection rules come from **Tools > Rule manager**, which downloads each
+  pack from its publisher (GitHub, rules.emergingthreats.net, sslbl.abuse.ch),
+  verifies it and filters it on your computer, only after you allow it; it
+  shows each pack's source, license and the hosts it contacts. YARA is built in. IDS scans need Suricata
   (`sudo apt install suricata`, listed in App dependencies). Sigma scans use
   pySigma, which **Tools > Analysis tools** installs for Antinomie; it needs
   Python 3.11 or newer with venv support (`python3-venv` on Debian/Ubuntu).
