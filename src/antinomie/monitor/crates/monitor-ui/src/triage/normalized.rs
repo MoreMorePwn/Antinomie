@@ -26,6 +26,51 @@ pub(super) struct Cache {
     pub summary: JournalSummary,
 }
 
+/// The argument vector of an execve or execveat joined with spaces, when the
+/// collector captured every pointer up to the terminating NULL and every
+/// string whole. The collector names them `argN.ptr[i]` and `argN.string[i]`
+/// and adds `argN.vector` when its budget ran out. An argument longer than
+/// the 256-octet field preview also leaves the command line missing.
+fn command_line(call: &InvocationSummary, event: &EventSummary) -> Option<String> {
+    let argument = match event.syscall_nr {
+        59 => 1,
+        322 => 2,
+        _ => return None,
+    };
+    let fields: Vec<_> = call
+        .entry
+        .iter()
+        .chain(call.exit.iter())
+        .flat_map(|event| &event.fields)
+        .collect();
+    let field = |key: String| fields.iter().find(|field| field.key == key).copied();
+    if field(format!("arg{argument}.vector")).is_some() {
+        return None;
+    }
+    let mut arguments = Vec::new();
+    for index in 0..=MAX_ARGUMENTS {
+        let pointer = field(format!("arg{argument}.ptr[{index}]"))?;
+        let bytes: [u8; 8] = trace::covered_preview(pointer).get(..8)?.try_into().ok()?;
+        if !pointer.complete {
+            return None;
+        }
+        if u64::from_le_bytes(bytes) == 0 {
+            return (!arguments.is_empty()).then(|| arguments.join(" "));
+        }
+        let string = field(format!("arg{argument}.string[{index}]"))?;
+        let data = trace::covered_preview(string);
+        let end = data.iter().position(|byte| *byte == 0)?;
+        if !string.complete || string.logical_len != Some(end as u64 + 1) {
+            return None;
+        }
+        arguments.push(String::from_utf8_lossy(&data[..end]).into_owned());
+    }
+    None
+}
+
+/// Arguments joined into a CommandLine; a longer vector stays missing.
+const MAX_ARGUMENTS: usize = 256;
+
 pub(super) fn source_key(
     directory: &Path,
     pcap: Option<&Path>,
@@ -137,9 +182,13 @@ pub(super) fn call(
         })
     };
     if committed_exec(call) {
-        // argv previews do not prove the complete vector was captured. Exclude
-        // CommandLine rather than letting negation match an omitted argument.
-        emit("process_creation", fields.clone())?;
+        // CommandLine only from a proven complete vector; otherwise it stays
+        // missing rather than letting negation match an omitted argument.
+        let mut fields = fields.clone();
+        if let Some(line) = command_line(call, event) {
+            fields.insert("CommandLine".into(), line.into());
+        }
+        emit("process_creation", fields)?;
     }
     if ret.is_some_and(|ret| ret >= 0)
         && call_args(call).and_then(|args| bpf_command(event, args)) == Some("BPF_PROG_LOAD")
@@ -355,6 +404,43 @@ mod tests {
         assert_eq!(event["event"]["fields"]["Image"], "/bin/sh");
         assert!(event["event"]["fields"].get("CommandLine").is_none());
         assert_eq!(event["event"]["evidence"]["call"].as_u64(), Some(u64::MAX));
+    }
+    #[test]
+    fn a_complete_argument_vector_becomes_the_command_line() {
+        let pointer = |index: u64, value: u64| {
+            super::super::tests::captured(
+                &format!("arg1.ptr[{index}]"),
+                "linux-6.12.94/x86_64/pointer",
+                &value.to_le_bytes(),
+            )
+        };
+        let string = |index: u64, text: &[u8]| {
+            super::super::tests::captured(&format!("arg1.string[{index}]"), "", text)
+        };
+        let complete = vec![
+            pointer(0, 0x1000),
+            string(0, b"crontab\0"),
+            pointer(1, 0x1010),
+            string(1, b"-l\0"),
+            pointer(2, 0),
+        ];
+        let mut unterminated = complete.clone();
+        unterminated.pop();
+        let mut cut = complete.clone();
+        cut[3].complete = false;
+        let mut exhausted = complete.clone();
+        exhausted.push(super::super::tests::captured("arg1.vector", "", b""));
+        for (fields, expected) in [
+            (complete, Some("crontab -l")),
+            (unterminated, None),
+            (cut, None),
+            (exhausted, None),
+        ] {
+            let mut exec = super::super::tests::path_call(1, 59, "execve", 0, "/usr/bin/crontab");
+            exec.entry.as_mut().unwrap().fields.extend(fields);
+            let event = trace::representative(&exec).unwrap();
+            assert_eq!(command_line(&exec, event).as_deref(), expected);
+        }
     }
     fn engine_file() -> &'static str {
         antinomie_monitor_core::analysis::detection::JOURNAL_FILE
