@@ -150,8 +150,7 @@ impl<'a> CallReader<'a> {
                     }
                 }
                 Ok(None) => {}
-                Err(error) if self.issues.len() < 32 => self.issues.push(error.to_string()),
-                Err(_) => {}
+                Err(error) => push_issue(&mut self.issues, error.to_string()),
             }
         }
         let events: Vec<_> = latest.into_values().collect();

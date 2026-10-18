@@ -13,6 +13,13 @@ use std::{
 mod objects;
 use objects::StoreError;
 
+/// Default aggregate field budget. Large events share this same bounded pool
+/// with other events instead of having a smaller, conflicting per-event cap.
+pub(crate) const MAX_RETAINED_FIELDS: usize = 4096;
+
+#[cfg(test)]
+mod field_tests;
+
 #[derive(Default)]
 struct Issues(Vec<String>);
 impl Issues {
@@ -496,7 +503,7 @@ impl Assembler {
             chunk_count: 0,
             evicted: VecDeque::new(),
             finished: VecDeque::new(),
-            capacity: 2048,
+            capacity: MAX_RETAINED_FIELDS / 2,
             write_error,
         }
     }
@@ -723,9 +730,6 @@ impl Assembler {
                 }
             }
             2..=4 => {
-                if e.fields.len() >= 256 && !e.fields.contains_key(&h.object_id) {
-                    return Err(error("event object state limit"));
-                }
                 if !e.fields.contains_key(&h.object_id) {
                     self.field_count += 1;
                 }
@@ -931,7 +935,7 @@ pub fn status_name(status: u32) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn packet(kind: u8, id: u32, offset: u64, body: &[u8], seq: u64) -> Vec<u8> {
+    pub(super) fn packet(kind: u8, id: u32, offset: u64, body: &[u8], seq: u64) -> Vec<u8> {
         let mut p = vec![0; 128];
         p[..4].copy_from_slice(b"ANTT");
         p[4..6].copy_from_slice(&1u16.to_le_bytes());
