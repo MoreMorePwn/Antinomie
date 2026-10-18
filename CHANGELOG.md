@@ -6,6 +6,10 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Clear address-lookup warnings.** Unavailable WHOIS enrichment names the
+  affected IP and reports unknown country/organization instead of forwarding
+  the tool's ambiguous "Please upgrade this program" message.
+
 - **Analysis keeps working after a rebuild.** Rebuilding Antinomie while it
   ran made every sandboxed worker (file properties, detection, static
   analysis) fail with exit status 127, because the running program's file was
