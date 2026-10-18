@@ -754,16 +754,32 @@ mod tests {
             let deadline = Instant::now() + Duration::from_secs(2);
             let status = loop {
                 match process.poll_status() {
-                    Ok(Some(status)) => break Some(status),
+                    Ok(Some(status)) => break Ok(status),
                     Ok(None) if Instant::now() < deadline => {
                         thread::sleep(Duration::from_millis(5))
                     }
-                    _ => break None,
+                    Ok(None) => break Err("fast child completion deadline elapsed".to_string()),
+                    Err(error) => break Err(error),
                 }
             };
+            // Capture the original probe outcome before cleanup changes its
+            // process state; a timeout and a failed ownership probe differ.
+            let diagnostic = format!(
+                "code={code}, info_eof={}, info_len={}, init_pinned={}, init_known_dead={}, launcher={:?}",
+                process.info_eof,
+                process.info_data.len(),
+                process.init.is_some(),
+                process.init_known_dead,
+                process.launcher_identity,
+            );
             let cleaned = finish_cleanup(&mut process);
-            assert!(cleaned.unwrap(), "fast child cleanup did not finish");
-            let status = status.expect("fast child status was not delivered");
+            assert!(
+                cleaned.as_ref().is_ok_and(|finished| *finished),
+                "fast child cleanup did not finish: {cleaned:?}; status={status:?}; {diagnostic}"
+            );
+            let status = status.unwrap_or_else(|error| {
+                panic!("fast child status was not delivered: {error}; {diagnostic}")
+            });
             assert_eq!(status.code(), Some(code));
             assert_eq!(process.poll_status().unwrap(), Some(status));
             assert!(process.init_exit_confirmed().unwrap());
