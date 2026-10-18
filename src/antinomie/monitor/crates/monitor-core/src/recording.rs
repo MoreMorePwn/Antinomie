@@ -339,8 +339,31 @@ fn archive_index(
     directory: &Path,
     cancel: &AtomicBool,
 ) -> Result<(rusqlite::Connection, String), RecordingError> {
-    let raw = directory.join("telemetry.raw");
-    let (identity, length) = raw_identity(&raw)?;
+    match open_archive_index(directory, cancel) {
+        // The cache is written without syncing; one damaged by a crash or
+        // power loss is discarded and built again from the recording.
+        Err(RecordingError::Index(error)) if index_damaged(&error) => {
+            let index_path = archive_index_path(directory)?;
+            for suffix in ["", "-journal"] {
+                let mut path = index_path.clone().into_os_string();
+                path.push(suffix);
+                let _ = fs::remove_file(PathBuf::from(path));
+            }
+            open_archive_index(directory, cancel)
+        }
+        result => result,
+    }
+}
+
+fn index_damaged(error: &rusqlite::Error) -> bool {
+    matches!(
+        error.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase)
+    )
+}
+
+/// Where the packet index of `directory` is cached.
+fn archive_index_path(directory: &Path) -> Result<PathBuf, RecordingError> {
     let cache_root = std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -353,11 +376,23 @@ fn archive_index(
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect::<String>();
-    let index_path = cache_root.join(format!("{name}.sqlite"));
+    Ok(cache_root.join(format!("{name}.sqlite")))
+}
+
+fn open_archive_index(
+    directory: &Path,
+    cancel: &AtomicBool,
+) -> Result<(rusqlite::Connection, String), RecordingError> {
+    let raw = directory.join("telemetry.raw");
+    let (identity, length) = raw_identity(&raw)?;
+    let index_path = archive_index_path(directory)?;
     let mut connection = rusqlite::Connection::open(&index_path)?;
     fs::set_permissions(&index_path, fs::Permissions::from_mode(0o600))?;
     connection.busy_timeout(std::time::Duration::from_secs(1))?;
-    connection.execute_batch("PRAGMA trusted_schema=OFF; PRAGMA page_size=4096; PRAGMA cache_size=-2048; PRAGMA temp_store=FILE; CREATE TABLE IF NOT EXISTS indexed(identity TEXT NOT NULL, length INTEGER NOT NULL);")?;
+    // The index is a cache rebuilt from the recording when it is missing or
+    // stale, so its writes are not synced to disk: building it must not wait
+    // for the disk behind a recording that is being saved.
+    connection.execute_batch("PRAGMA trusted_schema=OFF; PRAGMA page_size=4096; PRAGMA cache_size=-2048; PRAGMA temp_store=FILE; PRAGMA synchronous=OFF; CREATE TABLE IF NOT EXISTS indexed(identity TEXT NOT NULL, length INTEGER NOT NULL);")?;
     let budget = length
         .checked_mul(2)
         .and_then(|size| size.checked_add(1024 * 1024))
@@ -1639,6 +1674,15 @@ mod tests {
             (pages as u64) * 4096
                 < fs::metadata(directory.join("telemetry.raw")).unwrap().len() * 2 + 1024 * 1024
         );
+        // A cache damaged by a crash is discarded and built again.
+        drop(index);
+        fs::write(archive_index_path(&directory).unwrap(), b"not an index").unwrap();
+        let (index, _) = archive_index(&directory, &AtomicBool::new(false)).unwrap();
+        let rows: i64 = index
+            .query_row("SELECT count(*) FROM invocations", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 3000);
+        drop(index);
         assert!(
             recording
                 .invocation_page_cancellable(0, 7, &AtomicBool::new(true))
