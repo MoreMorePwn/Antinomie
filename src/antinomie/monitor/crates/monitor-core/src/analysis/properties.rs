@@ -346,7 +346,7 @@ pub fn run(
     let work = std::env::temp_dir().join(format!("ant-properties-{}", crate::storage::unique_id()));
     crate::storage::private_dir(&work).map_err(|error| error.to_string())?;
     let result = (|| {
-        let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+        let executable = jobs::worker_executable()?;
         let path_text = |path: &Path| {
             path.to_str()
                 .map(str::to_owned)

@@ -778,7 +778,8 @@ pub fn decompile_captured_core(
             &env,
             Duration::from_secs(180),
             cancel,
-        )?;
+        )
+        .map_err(|error| format!("Ghidra: {error} sparse-plan.txt is not a load result."))?;
         if cancel.load(Ordering::Relaxed) {
             return Err("cancelled".into());
         }
@@ -1163,7 +1164,7 @@ mod sparse_tests {
             "{log}"
         );
         assert!(error.contains(&logs[0].display().to_string()), "{error}");
-        assert!(error.contains("not a load result"), "{error}");
+        assert!(error.contains("exited with"), "{error}");
         assert!(std::fs::metadata(&logs[0]).unwrap().len() <= 2 * 1024 * 1024);
         std::fs::remove_dir_all(work).unwrap();
     }

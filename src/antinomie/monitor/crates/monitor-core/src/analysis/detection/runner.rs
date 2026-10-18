@@ -551,7 +551,7 @@ pub fn run_with_progress(
     cancel: &Arc<AtomicBool>,
     progress: Option<std::sync::mpsc::Sender<ScanProgress>>,
 ) -> Result<Report, String> {
-    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let executable = super::super::jobs::worker_executable()?;
     run_program(request, cancel, &executable, progress)
 }
 
