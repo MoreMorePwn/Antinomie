@@ -28,7 +28,8 @@ fi
 
 cflags=(-O2 -g -Wall -Wextra -Wno-unused-result -pthread -D_GNU_SOURCE -I"$source_dir")
 sources=("$source_dir"/main.c "$source_dir"/load.c "$source_dir"/process.c "$source_dir"/files.c
-    "$source_dir"/network.c "$source_dir"/kernel.c "$source_dir"/memory.c "$source_dir"/detect.c)
+    "$source_dir"/network.c "$source_dir"/kernel.c "$source_dir"/memory.c "$source_dir"/detect.c
+    "$source_dir"/indicators.c)
 modules=(syscall-flood long-run object-capture terminal-flood process-tree unkillable file-churn
     network-storm async-io decoder-zoo crash-core memory-tricks detect-yara detect-sigma detect-ids
     argv-env timing)
@@ -46,7 +47,7 @@ check_glibc() {
 gcc "${cflags[@]}" "${sources[@]}" -o "$output/ant-torture" "${link[@]}"
 check_glibc "$output/ant-torture"
 for module in "${modules[@]}"; do
-    gcc "${cflags[@]}" -DSINGLE_MODULE="\"$module\"" "${sources[@]}" \
+    gcc "${cflags[@]}" -DSINGLE_MODULE="\"$module\"" -DSINGLE_ID_"${module//-/_}" "${sources[@]}" \
         -o "$output/ant-$module" "${link[@]}"
     check_glibc "$output/ant-$module"
 done

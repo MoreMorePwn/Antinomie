@@ -69,6 +69,11 @@ void remove_tree(const char *path);
 int default_gateway(char *address, size_t size);
 int first_nameserver(char *address, size_t size);
 
+// Inert strings that public YARA-Forge Core rules match (indicators.c).
+size_t executable_indicator_count(void);
+char *dropped_indicator_text(size_t *len);
+char *memory_indicator_text(void);
+
 #define MODULE(id) int module_##id(const struct options *options)
 
 MODULE(syscall_flood);

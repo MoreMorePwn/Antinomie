@@ -1,8 +1,0 @@
-# SPDX-License-Identifier: MIT
-# Rules for the Antinomie stress samples (ant-detect-ids, ant-network-storm).
-# Add this file as a custom IDS group in Tools > Rule manager. Each rule
-# matches only the samples' own benign traffic.
-alert dns any any -> any any (msg:"ANTINOMIE torture DNS test question"; dns.query; content:"antinomie-ids-test"; nocase; classtype:misc-activity; sid:9900701; rev:1;)
-alert udp any any -> any 9 (msg:"ANTINOMIE torture UDP marker"; content:"ANTINOMIE-IDS-UDP-MARKER"; classtype:misc-activity; sid:9900702; rev:1;)
-alert http any any -> any any (msg:"ANTINOMIE torture HTTP user agent"; flow:to_server,established; http.user_agent; content:"AntinomieTorture"; classtype:misc-activity; sid:9900703; rev:1;)
-alert dns any any -> any any (msg:"ANTINOMIE torture DNS flood question"; dns.query; content:"flood.antinomie-torture"; nocase; threshold:type limit, track by_src, count 1, seconds 60; classtype:misc-activity; sid:9900704; rev:1;)
