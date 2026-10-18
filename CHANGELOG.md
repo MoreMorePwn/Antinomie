@@ -6,6 +6,19 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Scanned inputs in Detection.** Below the rule sets, a collapsible
+  "Scanned inputs (N)" list shows exactly what the last scan passed to the
+  rules, so a count such as "10 objects" can be checked: for YARA the
+  executable, the process core and the guest memory dump (blocks scanned,
+  ranges not captured) and each recovered file; for IDS each PCAP segment
+  with its packets; for Sigma the event journal with its events per
+  category. Each row has the file's size, its SHA-256 when known, and
+  whether it was scanned, partly scanned or skipped, and why (an option is
+  off, a time or 512 MiB budget was reached, the file changed). Clicking a
+  row opens the sample in Static Analysis, the PCAP in Network, the core in
+  Core dumps or the dump in Memory. Results saved before say the list was
+  not recorded.
+
 - **Host clipboard typing.** VM → Type host clipboard into VM, or Ctrl+Shift+Y
   outside an editor, types into the guest's focused input through QMP. It uses
   a US keyboard layout with Caps Lock off, accepts up to 4 KiB, confirms long

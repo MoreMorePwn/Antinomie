@@ -91,6 +91,9 @@ pub(super) struct Staged {
     pub no_rules: bool,
     #[serde(default)]
     pub include_dir: Option<PathBuf>,
+    /// Inputs staging could not prepare; the scan lists them as skipped.
+    #[serde(default)]
+    pub skipped_inputs: Vec<super::ScannedInput>,
 }
 
 fn text(path: &Path) -> Result<String, String> {
@@ -355,6 +358,7 @@ fn stage(
         ids_sources: vec![],
         captures: vec![],
         journal: None,
+        skipped_inputs: vec![],
         warnings: vec![],
         selection: String::new(),
         no_rules: false,
@@ -423,6 +427,11 @@ fn stage(
                     })();
                     if let Err(error) = result {
                         staged.warnings.push(format!("{}: {error}", path.display()));
+                        staged.skipped_inputs.push(
+                            super::ScannedInput::new(super::InputKind::Capture, &path)
+                                .sized()
+                                .skipped(error),
+                        );
                     }
                 }
             }
@@ -482,6 +491,12 @@ fn validate_report(report: &Report, request: &Request) -> Result<(), String> {
         || report.warnings.len() > 1024
     {
         return Err("detector report identity/count mismatch".into());
+    }
+    if let Some(inputs) = &report.inputs
+        && (inputs.len() > super::inputs::INPUT_LIMIT
+            || inputs.iter().any(|input| !input.bounded()))
+    {
+        return Err("detector input list exceeds bounds".into());
     }
     let mut evidence_count = 0usize;
     for finding in &report.findings {
@@ -948,12 +963,17 @@ fn sigma(staged: &Staged, work: &Path) -> Result<Report, String> {
         report.selection = staged.selection.clone();
         return Ok(report);
     }
+    let original = staged.request.directory.join(JOURNAL_FILE);
     let Some(journal) = &staged.journal else {
         let mut report = Report::empty(Engine::Sigma, staged.request.identity.clone());
         report.state = State::Missing;
         report
             .warnings
             .push("Evidence missing: the captured event journal is not ready.".into());
+        report.input(
+            super::ScannedInput::new(super::InputKind::EventJournal, &original)
+                .skipped("the captured event journal is not ready"),
+        );
         if staged.request.settings.partial {
             report.state = State::Partial;
             report
@@ -984,15 +1004,25 @@ fn sigma(staged: &Staged, work: &Path) -> Result<Report, String> {
         64 * 1024,
         true,
     )?;
+    let input = super::inputs::journal_input(
+        &original,
+        journal,
+        staged.request.source_digest.as_deref(),
+        staged.request.settings.partial,
+    );
     if !result.success || result.timed_out {
-        return Ok(Report::unavailable(
+        let mut report = Report::unavailable(
             Engine::Sigma,
             staged.request.identity.clone(),
             "Local Sigma adapter failed or timed out; inspect the detector log.",
-        ));
+        );
+        report.input(input.skipped("the Sigma adapter failed or timed out"));
+        return Ok(report);
     }
     let data = read_bounded(work, Path::new("sigma-report.json"), REPORT_LIMIT)?;
-    serde_json::from_slice(&data).map_err(|error| error.to_string())
+    let mut report: Report = serde_json::from_slice(&data).map_err(|error| error.to_string())?;
+    report.inputs = Some(vec![input]);
+    Ok(report)
 }
 
 /// Internal isolated-process entry point; no desktop or provider is opened.
@@ -1276,6 +1306,7 @@ mod tests {
             ids_sources: vec![],
             captures: vec![],
             journal: None,
+            skipped_inputs: vec![],
             warnings: vec![],
             selection: String::new(),
             no_rules: false,

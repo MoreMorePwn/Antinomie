@@ -501,10 +501,13 @@ mod tests {
         texts
     }
 
+    /// The text equal to `needle`, else the first that contains it ("Scan"
+    /// must find the button, not "Scanned inputs").
     fn rect_of(texts: &[(String, egui::Rect)], needle: &str) -> egui::Rect {
         texts
             .iter()
-            .find(|(text, _)| text.contains(needle))
+            .find(|(text, _)| text == needle)
+            .or_else(|| texts.iter().find(|(text, _)| text.contains(needle)))
             .unwrap_or_else(|| panic!("{needle} is not painted: {texts:?}"))
             .1
     }
