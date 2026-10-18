@@ -375,6 +375,10 @@ int child_role(int argc, char **argv)
         execv(self, again);
         return 1;
     }
+    if (!strcmp(role, "dns-pcap") && argc > 3) {
+        int write_dns_pcap(const char *path);
+        return write_dns_pcap(argv[3]);
+    }
     if (!strcmp(role, "crash"))
         return crash_role(argc > 3 ? argv[3] : "segv", argc > 4 ? atol(argv[4]) : 32);
     fprintf(stderr, "unknown child role %s\n", role);

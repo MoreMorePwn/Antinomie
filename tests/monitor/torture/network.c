@@ -28,16 +28,15 @@ static void pause_us(long us)
     nanosleep(&ts, NULL);
 }
 
-// One DNS question for `name` of `type` to `server`; returns 1 if answered.
-static int dns_query(int sock, const struct sockaddr_in *server, const char *name, uint16_t type,
-                     uint16_t id, int wait_ms)
+// A DNS question for `name` of `type` with header `flags`; returns its length.
+static size_t dns_build(unsigned char *packet, const char *name, uint16_t type, uint16_t id,
+                        uint16_t flags)
 {
-    unsigned char packet[512];
     size_t len = 0;
     packet[len++] = id >> 8;
     packet[len++] = id & 255;
-    packet[len++] = 0x01;
-    packet[len++] = 0x00;
+    packet[len++] = flags >> 8;
+    packet[len++] = flags & 255;
     packet[len++] = 0;
     packet[len++] = 1;
     memset(packet + len, 0, 6);
@@ -60,6 +59,15 @@ static int dns_query(int sock, const struct sockaddr_in *server, const char *nam
     packet[len++] = type & 255;
     packet[len++] = 0;
     packet[len++] = 1;
+    return len;
+}
+
+// One DNS question for `name` of `type` to `server`; returns 1 if answered.
+static int dns_query(int sock, const struct sockaddr_in *server, const char *name, uint16_t type,
+                     uint16_t id, int wait_ms)
+{
+    unsigned char packet[512];
+    size_t len = dns_build(packet, name, type, id, 0x0100);
     if (sendto(sock, packet, len, 0, (const struct sockaddr *)server, sizeof *server) < 0)
         return 0;
     if (wait_ms <= 0)
@@ -298,44 +306,147 @@ MODULE(network_storm)
 
 // ---------------------------------------------------------------- detect-ids
 
+// Questions that public Emerging Threats Open rules report by name. They are
+// lookups only: nothing connects to these services.
+static const struct {
+    const char *name;
+    unsigned sid;
+} et_questions[] = {
+    {"api.ipify.org", 2047702},         // External IP lookup (ipify)
+    {"tunnel.ngrok.io", 2022642},       // *.ngrok.io
+    {"dashboard.ngrok.com", 2022641},   // *.ngrok.com
+    {"antinomie.duckdns.org", 2042936}, // dynamic DNS
+    {"checkip.dyndns.org", 2043238},    // external IP lookup (dyndns)
+    {"transfer.sh", 2034316},           // file transfer service
+    {"gateway.discord.com", 2035465},   // Discord
+    {"api.telegram.org", 2033966},      // Telegram API
+    {"termbin.com", 2050513},           // pastebin-like
+    {"ip-api.io", 2039045},             // external IP lookup (ip-api)
+};
+
+// Odd questions that public rules report: two Suricata built-in DNS event
+// rules, and an over-long name that Emerging Threats Open reports as a large
+// query. The resolver only rejects them. (Checked with Suricata 8: a response
+// sent as a request and a cut-short question raise no event, so they are not
+// sent.)
+static size_t malformed_dns(unsigned kind, unsigned char *packet, unsigned *sid)
+{
+    switch (kind) {
+    case 0: // Z flag set
+        *sid = 2240006;
+        return dns_build(packet, "antinomie-z-flag.invalid", 1, 0x5a01, 0x0140);
+    case 1: // opcode 15
+        *sid = 2240007;
+        return dns_build(packet, "antinomie-opcode.invalid", 1, 0x5a02, 0x7900);
+    default: { // a name longer than 255 bytes
+        *sid = 2013075;
+        char name[400];
+        size_t at = 0;
+        for (int label = 0; label < 5; label++) {
+            memset(name + at, 'a' + label, 60);
+            at += 60;
+            name[at++] = '.';
+        }
+        memcpy(name + at, "invalid", 8);
+        return dns_build(packet, name, 1, 0x5a05, 0x0100);
+    }
+    }
+}
+
+#define MALFORMED_KINDS 3
+
 MODULE(detect_ids)
 {
     const char *name = "detect-ids";
-    char gateway[64] = "", nameserver[64] = "";
-    note(name, "add tests/monitor/torture/torture.rules as a custom IDS group, with network capture on");
+    note(name, "install Emerging Threats Open and Suricata built-in in the Rule manager, "
+               "with network capture on");
+    char nameserver[64] = "";
     if (first_nameserver(nameserver, sizeof nameserver) == 0) {
         int sock = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
         struct sockaddr_in server = {.sin_family = AF_INET, .sin_port = htons(53)};
         inet_pton(AF_INET, nameserver, &server.sin_addr);
-        long repeats = scaled(options, 3);
-        for (long i = 0; i < repeats; i++)
-            dns_query(sock, &server, "antinomie-ids-test.invalid", 1, (uint16_t)(0x4100 + i), 300);
+        long repeats = scaled(options, 1);
+        size_t total = sizeof et_questions / sizeof et_questions[0];
+        for (long round = 0; round < repeats; round++)
+            for (size_t i = 0; i < total; i++)
+                dns_query(sock, &server, et_questions[i].name, 1, (uint16_t)(0x4100 + i), 300);
+        for (size_t i = 0; i < total; i++)
+            note(name, "ET Open sid %u: DNS question %s", et_questions[i].sid, et_questions[i].name);
+        pass(name, "%zu ET Open DNS questions to %s, %ld time(s) each", total, nameserver, repeats);
+        unsigned char packet[512];
+        for (unsigned kind = 0; kind < MALFORMED_KINDS; kind++) {
+            unsigned sid;
+            size_t len = malformed_dns(kind, packet, &sid);
+            sendto(sock, packet, len, 0, (struct sockaddr *)&server, sizeof server);
+            note(name, "%s sid %u: odd DNS question %u", sid < 2240000 ? "ET Open" : "Suricata built-in",
+                 sid, kind + 1);
+        }
+        pass(name, "%d odd DNS questions (Z flag, opcode 15, a 300-byte name)", MALFORMED_KINDS);
         close(sock);
-        pass(name, "DNS question for antinomie-ids-test.invalid (sid 9900701), %ld times", repeats);
     } else {
-        unavailable(name, "no nameserver for the DNS rule");
-    }
-    if (default_gateway(gateway, sizeof gateway) == 0) {
-        int sock = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
-        struct sockaddr_in sink = {.sin_family = AF_INET, .sin_port = htons(9)};
-        inet_pton(AF_INET, gateway, &sink.sin_addr);
-        const char marker[] = "ANTINOMIE-IDS-UDP-MARKER benign torture payload";
-        long repeats = scaled(options, 3);
-        for (long i = 0; i < repeats; i++)
-            sendto(sock, marker, sizeof marker - 1, 0, (struct sockaddr *)&sink, sizeof sink);
-        close(sock);
-        pass(name, "UDP marker to %s port 9 (sid 9900702), %ld times", gateway, repeats);
-    } else {
-        unavailable(name, "no gateway for the UDP rule");
+        unavailable(name, "no IPv4 nameserver in /etc/resolv.conf");
     }
     if (options->public_network) {
         unsigned long long bytes = 0;
-        if (http_get("example.com", "/antinomie-ids-test", "AntinomieTorture/1.0 ids-test", &bytes) == 0)
-            pass(name, "HTTP user agent AntinomieTorture to example.com (sid 9900703)");
-        else
-            unavailable(name, "example.com did not answer");
+        int ipify = http_get("api.ipify.org", "/", "curl/8.5.0", &bytes) == 0;
+        int icanhazip = http_get("icanhazip.com", "/", "curl/8.5.0", &bytes) == 0;
+        if (ipify)
+            pass(name, "HTTP to api.ipify.org (ET Open sid 2029622)");
+        if (icanhazip)
+            pass(name, "HTTP to icanhazip.com (ET Open sid 2017398)");
+        if (!ipify || !icanhazip)
+            unavailable(name, "a public HTTP lookup did not answer");
     } else {
-        note(name, "the HTTP rule (sid 9900703) needs --public");
+        note(name, "the HTTP rules (sids 2029622, 2017398) need --public");
     }
     return 0;
+}
+
+// The exact DNS questions above, as a capture from 10.0.2.15 to 10.0.2.3,
+// for checking the rules against Suricata without a VM.
+int write_dns_pcap(const char *path)
+{
+    FILE *out = fopen(path, "wb");
+    if (!out)
+        return 1;
+    const uint32_t header[] = {0xa1b2c3d4, 0x00040002, 0, 0, 65535, 1};
+    fwrite(header, sizeof header, 1, out);
+    unsigned char payload[512], frame[600];
+    for (unsigned n = 0; n < sizeof et_questions / sizeof et_questions[0] + MALFORMED_KINDS; n++) {
+        size_t len;
+        unsigned sid;
+        if (n < sizeof et_questions / sizeof et_questions[0])
+            len = dns_build(payload, et_questions[n].name, 1, (uint16_t)(0x4100 + n), 0x0100);
+        else
+            len = malformed_dns(n - (unsigned)(sizeof et_questions / sizeof et_questions[0]), payload,
+                                &sid);
+        static const unsigned char ethernet[] = {0x52, 0x55, 0x0a, 0x00, 0x02, 0x02, 0x52, 0x54,
+                                                 0x00, 0x12, 0x34, 0x56, 0x08, 0x00};
+        size_t at = 0;
+        memcpy(frame, ethernet, sizeof ethernet);
+        at += sizeof ethernet;
+        size_t ip_len = 20 + 8 + len;
+        unsigned char ip[20] = {0x45, 0, (unsigned char)(ip_len >> 8), (unsigned char)ip_len,
+                                0, (unsigned char)n, 0x40, 0, 64, 17, 0, 0, 10, 0, 2, 15, 10, 0, 2, 3};
+        uint32_t sum = 0;
+        for (int i = 0; i < 20; i += 2)
+            sum += (uint32_t)(ip[i] << 8 | ip[i + 1]);
+        while (sum >> 16)
+            sum = (sum & 0xffff) + (sum >> 16);
+        ip[10] = (unsigned char)(~sum >> 8);
+        ip[11] = (unsigned char)~sum;
+        memcpy(frame + at, ip, 20);
+        at += 20;
+        uint16_t sport = 40000; // one socket sends them all, as the module does
+        unsigned char udp[8] = {(unsigned char)(sport >> 8), (unsigned char)sport, 0, 53,
+                                (unsigned char)((8 + len) >> 8), (unsigned char)(8 + len), 0, 0};
+        memcpy(frame + at, udp, 8);
+        at += 8;
+        memcpy(frame + at, payload, len);
+        at += len;
+        const uint32_t record[] = {1700000000u + n, 0, (uint32_t)at, (uint32_t)at};
+        fwrite(record, sizeof record, 1, out);
+        fwrite(frame, at, 1, out);
+    }
+    return fclose(out) != 0;
 }

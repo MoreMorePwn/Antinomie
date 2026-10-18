@@ -26,33 +26,33 @@ static void hold(int seconds)
     nanosleep(&pause, NULL);
 }
 
-// Memory that only exists at run time: the text is assembled from pieces, so
-// the whole marker is never a literal in the executable.
-static char *assemble(const char *middle)
-{
-    static const char head[] = "ANTINOMIE_TORTURE_YARA_";
-    static const char tail[] = "_MARKER";
-    size_t len = strlen(head) + strlen(middle) + strlen(tail) + 1;
-    char *text = malloc(len);
-    if (text)
-        snprintf(text, len, "%s%s%s", head, middle, tail);
-    return text;
-}
-
-// Fill `mib` MiB with one recognizable line per 4 KiB page.
+// Fill `mib` MiB with one recognizable line per 4 KiB page, and the
+// memory-only indicator at the start of every MiB: a public YARA rule then
+// reports a core or memory dump that holds the heap.
 static unsigned char *patterned_heap(long mib)
 {
     if ((unsigned long long)mib << 20 > CAP_MEMORY_BYTES)
         mib = (long)(CAP_MEMORY_BYTES >> 20);
     size_t size = (size_t)mib << 20;
     unsigned char *heap = malloc(size);
-    if (!heap)
+    char *indicator = memory_indicator_text();
+    if (!heap || !indicator) {
+        free(heap);
+        free(indicator);
         return NULL;
-    for (size_t page = 0; page < size; page += 4096) {
-        int len = snprintf((char *)heap + page, 4096, "ANTINOMIE-CORE-PATTERN page %zu of %zu MiB\n",
-                           page / 4096, (size_t)mib);
-        memset(heap + page + len, (int)(page / 4096 & 0x7f), 4096 - (size_t)len);
     }
+    size_t indicator_len = strlen(indicator) + 1;
+    for (size_t page = 0; page < size; page += 4096) {
+        size_t at = 0;
+        if (page % (1 << 20) == 0) {
+            memcpy(heap + page, indicator, indicator_len);
+            at = indicator_len;
+        }
+        int len = snprintf((char *)heap + page + at, 4096 - at,
+                           "ANTINOMIE-CORE-PATTERN page %zu of %zu MiB\n", page / 4096, (size_t)mib);
+        memset(heap + page + at + (size_t)len, (int)(page / 4096 & 0x7f), 4096 - at - (size_t)len);
+    }
+    free(indicator);
     return heap;
 }
 
@@ -181,14 +181,15 @@ MODULE(memory_tricks)
         mib = (long)(CAP_MEMORY_BYTES >> 20);
     size_t size = (size_t)mib << 20;
     char *region = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    char *marker = assemble("MEMORY");
+    char *marker = memory_indicator_text();
     if (region != MAP_FAILED && marker) {
         for (size_t at = 0; at + 4096 <= size; at += 1 << 20)
             memcpy(region + at, marker, strlen(marker) + 1);
         int wait = seconds(options, 5, 20, 60);
-        note(name, "%ld MiB region with a memory-only marker held %d s for a memory dump", mib, wait);
+        note(name, "%ld MiB region with the memory-only indicator held %d s for a memory dump", mib,
+             wait);
         hold(wait);
-        pass(name, "memory-only marker in %ld MiB of anonymous memory", mib);
+        pass(name, "memory-only indicator (ESET_Kobalos_Ssh_Credential_Stealer) in %ld MiB", mib);
         munmap(region, size);
     }
     free(marker);
@@ -198,30 +199,33 @@ MODULE(memory_tricks)
 
 // ---------------------------------------------------------------- detect-yara
 
-// The marker that is in the executable itself.
-static volatile const char executable_marker[] = "ANTINOMIE_TORTURE_YARA_EXECUTABLE_MARKER";
-
 MODULE(detect_yara)
 {
     const char *name = "detect-yara";
-    note(name, "add tests/monitor/torture/torture.yar as a custom YARA group; turn on memory and "
-               "recovered-file scanning");
-    pass(name, "executable marker present (%zu bytes)", strlen((const char *)executable_marker));
-    char *dropped = assemble("DROPPED");
-    char path[512];
-    snprintf(path, sizeof path, "/tmp/antinomie-torture-yara-dropped.bin");
-    if (dropped && write_file(path, dropped, strlen(dropped), 0600) == 0)
-        pass(name, "dropped file %s carries the dropped-file marker (kept for recovery)", path);
+    note(name, "install YARA-Forge Core in the Rule manager; turn on memory and recovered-file "
+               "scanning for all three targets");
+    size_t in_executable = executable_indicator_count();
+    if (in_executable)
+        pass(name, "executable carries %zu bytes of SOLOSHRED and ORCSHRED indicator text",
+             in_executable);
+    else
+        unavailable(name, "this build carries no executable indicators (only ant-detect-yara "
+                          "and ant-torture do)");
+    size_t len = 0;
+    char *dropped = dropped_indicator_text(&len);
+    const char *path = "/tmp/antinomie-torture-yara-dropped.txt";
+    if (dropped && write_file(path, dropped, len, 0600) == 0)
+        pass(name, "dropped %s with the Mozi kill-switch text (kept for recovery)", path);
     else
         fail(name, "could not write %s", path);
-    char *memory = assemble("MEMORY");
+    free(dropped);
+    char *memory = memory_indicator_text();
     if (memory) {
         int wait = seconds(options, 5, 20, 60);
-        note(name, "memory-only marker held for %d s", wait);
+        note(name, "memory-only Kobalos format string held for %d s", wait);
         hold(wait);
-        pass(name, "memory-only marker was in memory");
+        pass(name, "memory-only indicator was held in memory");
+        free(memory);
     }
-    free(dropped);
-    free(memory);
     return 0;
 }
