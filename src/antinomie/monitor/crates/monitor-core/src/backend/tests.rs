@@ -1,23 +1,344 @@
 // SPDX-License-Identifier: MIT
 use super::{session_runs::*, *};
+use std::collections::BTreeSet;
 
 fn notification_backend() -> (Backend, SyncSender<Notification>) {
     let (commands, _) = mpsc::sync_channel(1);
     let (sender, notifications) = mpsc::sync_channel(4);
+    let (_completion_sender, completions) = mpsc::sync_channel(COMMAND_COMPLETION_CAPACITY);
     (
         Backend {
             commands,
             notifications,
+            completions,
+            completion_credits: Arc::new(CompletionCredits::default()),
+            admission: Mutex::new(()),
+            receive_cursor: AtomicUsize::new(0),
             thread: None,
             data_owner: None,
             closing: Arc::new(AtomicBool::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
+            owner_failed: Arc::new(AtomicBool::new(false)),
             sequence: AtomicU64::new(0),
             guest_epoch: Arc::new(AtomicU64::new(0)),
             latest_snapshot: Arc::new(Mutex::new(None)),
         },
         sender,
     )
+}
+
+/// The backend handle, the worker's command queue, and its notification and
+/// completion senders.
+type AdmissionParts = (
+    Backend,
+    Receiver<(u64, u64, Command)>,
+    SyncSender<Notification>,
+    SyncSender<Notification>,
+);
+
+fn admission_backend() -> AdmissionParts {
+    let (commands, queued) = mpsc::sync_channel(COMMAND_COMPLETION_CAPACITY);
+    let (sender, notifications) = mpsc::sync_channel(64);
+    let (completion_sender, completions) = mpsc::sync_channel(COMMAND_COMPLETION_CAPACITY);
+    let thread = thread::spawn(|| {});
+    (
+        Backend {
+            commands,
+            notifications,
+            completions,
+            completion_credits: Arc::new(CompletionCredits::default()),
+            admission: Mutex::new(()),
+            receive_cursor: AtomicUsize::new(0),
+            thread: Some(thread),
+            data_owner: None,
+            closing: Arc::new(AtomicBool::new(false)),
+            stopping: Arc::new(AtomicBool::new(false)),
+            owner_failed: Arc::new(AtomicBool::new(false)),
+            sequence: AtomicU64::new(0),
+            guest_epoch: Arc::new(AtomicU64::new(0)),
+            latest_snapshot: Arc::new(Mutex::new(None)),
+        },
+        queued,
+        sender,
+        completion_sender,
+    )
+}
+
+#[test]
+fn accepted_commands_reserve_bounded_completion_slots_until_results_are_read() {
+    let (backend, queued, _preview_sender, completion_sender) = admission_backend();
+    for _ in 0..COMMAND_COMPLETION_CAPACITY {
+        backend
+            .send(Command::RefreshVmSnapshots { vm_id: "vm".into() })
+            .unwrap();
+    }
+    assert_eq!(
+        backend.completion_credits.in_use(),
+        COMMAND_COMPLETION_CAPACITY
+    );
+    assert_eq!(
+        backend
+            .send(Command::RefreshVmSnapshots { vm_id: "vm".into() })
+            .unwrap_err(),
+        "backend command completion capacity full"
+    );
+    assert_eq!(
+        backend.completion_credits.in_use(),
+        COMMAND_COMPLETION_CAPACITY
+    );
+
+    for id in 1..=COMMAND_COMPLETION_CAPACITY as u64 {
+        completion_sender
+            .try_send(Notification::CommandResult {
+                id,
+                success: true,
+                message: "done".into(),
+            })
+            .unwrap();
+    }
+    let mut received = BTreeSet::new();
+    for _ in 0..COMMAND_COMPLETION_CAPACITY {
+        let Some(Notification::CommandResult { id, .. }) = backend.try_recv_status().unwrap()
+        else {
+            panic!("an accepted command result was not available");
+        };
+        assert!(received.insert(id), "duplicate result for command {id}");
+    }
+    assert_eq!(received.len(), COMMAND_COMPLETION_CAPACITY);
+    assert_eq!(backend.completion_credits.in_use(), 0);
+
+    // The queue itself is still full: a rejected send must return its
+    // temporary credit. Once the owner has room, admission succeeds again.
+    assert_eq!(
+        backend
+            .send(Command::RefreshVmSnapshots { vm_id: "vm".into() })
+            .unwrap_err(),
+        "backend command queue full"
+    );
+    assert_eq!(backend.completion_credits.in_use(), 0);
+    queued.try_recv().unwrap();
+    backend
+        .send(Command::RefreshVmSnapshots { vm_id: "vm".into() })
+        .unwrap();
+    assert_eq!(backend.completion_credits.in_use(), 1);
+}
+
+#[test]
+fn closing_owner_returns_a_result_for_each_accepted_queued_command() {
+    let root = std::env::temp_dir().join(format!("ant-close-results-{}", storage::unique_id()));
+    storage::private_dir(&root).unwrap();
+    let (command_sender, receiver) = mpsc::sync_channel(COMMAND_COMPLETION_CAPACITY);
+    let (sender, _notifications) = mpsc::sync_channel(64);
+    let (completion_sender, completions) = mpsc::sync_channel(COMMAND_COMPLETION_CAPACITY);
+    let completion_credits = Arc::new(CompletionCredits::default());
+    for id in 1..=3 {
+        assert!(completion_credits.reserve());
+        command_sender
+            .send((id, 0, Command::RefreshVmSnapshots { vm_id: "vm".into() }))
+            .unwrap();
+    }
+    let owner_failed = Arc::new(AtomicBool::new(false));
+    let worker = Worker {
+        options: BackendOptions {
+            data_dir: root.clone(),
+            bundle_dir: root.join("missing-bundle"),
+            ..BackendOptions::default()
+        },
+        snapshot: Snapshot::default(),
+        receiver,
+        sender,
+        completion_sender,
+        completion_credits: completion_credits.clone(),
+        closing: Arc::new(AtomicBool::new(true)),
+        stopping: Arc::new(AtomicBool::new(true)),
+        owner_failed: owner_failed.clone(),
+        session: None,
+        catalog: distribution::Catalog::default(),
+        refresh: None,
+        download: None,
+        build: None,
+        tool: None,
+        last_publish: Instant::now(),
+        latest_snapshot: Arc::new(Mutex::new(None)),
+        guest_epoch: Arc::new(AtomicU64::new(0)),
+        reconnect: (0, None),
+        wake: None,
+    };
+    worker.run();
+    drop(command_sender);
+
+    let results = completions.try_iter().collect::<Vec<_>>();
+    assert_eq!(results.len(), 3);
+    for (expected, result) in (1..=3).zip(results) {
+        assert!(matches!(
+            result,
+            Notification::CommandResult {
+                id,
+                success: false,
+                ref message,
+            } if id == expected && message.contains("outcome cancelled")
+        ));
+    }
+    assert!(!owner_failed.load(Ordering::Acquire));
+    assert_eq!(completion_credits.in_use(), 3);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn completion_polling_remains_fair_with_preview_and_coalesced_snapshot_traffic() {
+    let (backend, _queued, preview_sender, completion_sender) = admission_backend();
+    let id = backend
+        .send(Command::RefreshVmSnapshots { vm_id: "vm".into() })
+        .unwrap();
+    for _ in 0..64 {
+        preview_sender
+            .try_send(Notification::CommandResult {
+                id: 0,
+                success: true,
+                message: "preview".into(),
+            })
+            .unwrap();
+    }
+    completion_sender
+        .send(Notification::CommandResult {
+            id,
+            success: true,
+            message: "done".into(),
+        })
+        .unwrap();
+    *backend.latest_snapshot.lock().unwrap() = Some(Snapshot::default());
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        if let Some(notification) = backend.try_recv_status().unwrap() {
+            seen.push(notification);
+        }
+    }
+    assert!(
+        seen.iter()
+            .any(|notification| matches!(notification, Notification::CommandResult { id: 1, .. }))
+    );
+    assert!(
+        seen.iter()
+            .any(|notification| matches!(notification, Notification::Snapshot(_)))
+    );
+}
+
+#[test]
+fn inconsistent_completion_credit_enters_explicit_owner_failure_instead_of_wrapping() {
+    let (backend, _queued, preview_sender, completion_sender) = admission_backend();
+    completion_sender
+        .send(Notification::CommandResult {
+            id: 999,
+            success: true,
+            message: "injected invariant violation".into(),
+        })
+        .unwrap();
+    assert!(matches!(
+        backend.try_recv_status().unwrap(),
+        Some(Notification::CommandResult { id: 999, .. })
+    ));
+    assert!(backend.owner_failed.load(Ordering::Acquire));
+    assert!(
+        backend
+            .send(Command::RefreshVmSnapshots { vm_id: "vm".into() })
+            .unwrap_err()
+            .contains("owner failed")
+    );
+    drop(preview_sender);
+    drop(completion_sender);
+    assert!(
+        backend
+            .try_recv_status()
+            .unwrap_err()
+            .contains("remaining outcomes are unknown")
+    );
+    assert_eq!(backend.completion_credits.in_use(), 0);
+}
+
+#[test]
+fn full_completion_lane_surfaces_terminal_failure_for_an_accepted_command() {
+    let (commands, receiver) = mpsc::sync_channel(COMMAND_COMPLETION_CAPACITY);
+    let (sender, notifications) = mpsc::sync_channel(64);
+    let (completion_sender, completions) = mpsc::sync_channel(1);
+    let completion_credits = Arc::new(CompletionCredits::default());
+    let closing = Arc::new(AtomicBool::new(false));
+    let stopping = Arc::new(AtomicBool::new(false));
+    let owner_failed = Arc::new(AtomicBool::new(false));
+    let mut backend = Backend {
+        commands,
+        notifications,
+        completions,
+        completion_credits: completion_credits.clone(),
+        admission: Mutex::new(()),
+        receive_cursor: AtomicUsize::new(0),
+        thread: Some(thread::spawn(|| {})),
+        data_owner: None,
+        closing: closing.clone(),
+        stopping: stopping.clone(),
+        owner_failed: owner_failed.clone(),
+        sequence: AtomicU64::new(0),
+        guest_epoch: Arc::new(AtomicU64::new(0)),
+        latest_snapshot: Arc::new(Mutex::new(None)),
+    };
+    let id = backend
+        .send(Command::RefreshVmSnapshots { vm_id: "vm".into() })
+        .unwrap();
+    assert_eq!(id, 1);
+    let mut worker = Worker {
+        options: BackendOptions::default(),
+        snapshot: Snapshot::default(),
+        receiver,
+        sender,
+        completion_sender: completion_sender.clone(),
+        completion_credits,
+        closing,
+        stopping,
+        owner_failed: owner_failed.clone(),
+        session: None,
+        catalog: distribution::Catalog::default(),
+        refresh: None,
+        download: None,
+        build: None,
+        tool: None,
+        last_publish: Instant::now(),
+        latest_snapshot: Arc::new(Mutex::new(None)),
+        guest_epoch: Arc::new(AtomicU64::new(0)),
+        reconnect: (0, None),
+        wake: None,
+    };
+    completion_sender
+        .try_send(Notification::CommandResult {
+            id: 999,
+            success: true,
+            message: "injected lane saturation".into(),
+        })
+        .unwrap();
+    worker.emit(Notification::CommandResult {
+        id,
+        success: true,
+        message: "completed".into(),
+    });
+    assert!(owner_failed.load(Ordering::Acquire));
+    drop(worker);
+    drop(completion_sender);
+
+    assert!(matches!(
+        backend.try_recv_status().unwrap(),
+        Some(Notification::CommandResult { id: 999, .. })
+    ));
+    assert!(
+        backend
+            .try_recv_status()
+            .unwrap_err()
+            .contains("remaining outcomes are unknown")
+    );
+    assert!(
+        backend
+            .send(Command::RefreshVmSnapshots { vm_id: "vm".into() })
+            .unwrap_err()
+            .contains("owner failed")
+    );
+    backend.shutdown().unwrap();
 }
 
 #[test]
@@ -387,6 +708,7 @@ fn run_artifacts_sidecar_load_is_optional_bounded_and_retains_failures() {
 fn download_worker(root: PathBuf) -> Worker {
     let (_commands, receiver) = mpsc::sync_channel(1);
     let (sender, _notifications) = mpsc::sync_channel(1);
+    let (completion_sender, _completions) = mpsc::sync_channel(COMMAND_COMPLETION_CAPACITY);
     Worker {
         options: BackendOptions {
             bundle_dir: root.join("missing-bundle"),
@@ -396,8 +718,11 @@ fn download_worker(root: PathBuf) -> Worker {
         snapshot: Snapshot::default(),
         receiver,
         sender,
+        completion_sender,
+        completion_credits: Arc::new(CompletionCredits::default()),
         closing: Arc::new(AtomicBool::new(false)),
         stopping: Arc::new(AtomicBool::new(false)),
+        owner_failed: Arc::new(AtomicBool::new(false)),
         session: None,
         catalog: distribution::Catalog::default(),
         refresh: None,
@@ -413,7 +738,7 @@ fn download_worker(root: PathBuf) -> Worker {
 }
 
 #[test]
-fn frontend_is_woken_for_results_without_holding_the_snapshot_lock() {
+fn frontend_is_woken_for_worker_notifications_without_holding_snapshot_lock() {
     let mut worker = download_worker(std::env::temp_dir());
     let snapshot = Arc::clone(&worker.latest_snapshot);
     let wakes = Arc::new(AtomicU64::new(0));
@@ -427,7 +752,7 @@ fn frontend_is_woken_for_results_without_holding_the_snapshot_lock() {
     }));
     worker.publish();
     worker.emit(Notification::CommandResult {
-        id: 1,
+        id: 0,
         success: true,
         message: "ready".into(),
     });
@@ -684,6 +1009,7 @@ fn invalid_launch_settings_are_rejected_before_lifecycle_io() {
     };
     let (_commands, receiver) = mpsc::sync_channel(1);
     let (sender, _notifications) = mpsc::sync_channel(1);
+    let (completion_sender, _completions) = mpsc::sync_channel(COMMAND_COMPLETION_CAPACITY);
     let mut worker = Worker {
         options: BackendOptions {
             data_dir: root.clone(),
@@ -696,8 +1022,11 @@ fn invalid_launch_settings_are_rejected_before_lifecycle_io() {
         },
         receiver,
         sender,
+        completion_sender,
+        completion_credits: Arc::new(CompletionCredits::default()),
         closing: Arc::new(AtomicBool::new(false)),
         stopping: Arc::new(AtomicBool::new(false)),
+        owner_failed: Arc::new(AtomicBool::new(false)),
         session: None,
         catalog: distribution::Catalog::default(),
         refresh: None,
@@ -774,13 +1103,17 @@ fn fixed_display_guards_selected_boot_without_changing_pinned_disk() {
     let legacy = legacy.install(&options).unwrap();
     let (_commands, receiver) = mpsc::sync_channel(1);
     let (sender, _notifications) = mpsc::sync_channel(1);
+    let (completion_sender, _completions) = mpsc::sync_channel(COMMAND_COMPLETION_CAPACITY);
     let mut worker = Worker {
         options,
         snapshot: Snapshot::default(),
         receiver,
         sender,
+        completion_sender,
+        completion_credits: Arc::new(CompletionCredits::default()),
         closing: Arc::new(AtomicBool::new(false)),
         stopping: Arc::new(AtomicBool::new(false)),
+        owner_failed: Arc::new(AtomicBool::new(false)),
         session: None,
         catalog: distribution::Catalog::default(),
         refresh: None,
@@ -868,13 +1201,17 @@ fn base_import_and_failed_credential_creation_preserve_published_state() {
     storage::private_dir(&options.data_dir).unwrap();
     let (_commands, receiver) = mpsc::sync_channel(1);
     let (sender, _notifications) = mpsc::sync_channel(1);
+    let (completion_sender, _completions) = mpsc::sync_channel(COMMAND_COMPLETION_CAPACITY);
     let mut worker = Worker {
         options,
         snapshot: Snapshot::default(),
         receiver,
         sender,
+        completion_sender,
+        completion_credits: Arc::new(CompletionCredits::default()),
         closing: Arc::new(AtomicBool::new(false)),
         stopping: Arc::new(AtomicBool::new(false)),
+        owner_failed: Arc::new(AtomicBool::new(false)),
         session: None,
         catalog: distribution::Catalog::default(),
         refresh: None,
@@ -1008,6 +1345,7 @@ fn running_vm_duplicate_and_delete_guards_preserve_data() {
     storage::atomic_json(&root.join(&vm.id).join("config.json"), &vm).unwrap();
     let (_commands, receiver) = mpsc::sync_channel(1);
     let (sender, _notifications) = mpsc::sync_channel(1);
+    let (completion_sender, _completions) = mpsc::sync_channel(COMMAND_COMPLETION_CAPACITY);
     let mut worker = Worker {
         options,
         snapshot: Snapshot {
@@ -1018,8 +1356,11 @@ fn running_vm_duplicate_and_delete_guards_preserve_data() {
         },
         receiver,
         sender,
+        completion_sender,
+        completion_credits: Arc::new(CompletionCredits::default()),
         closing: Arc::new(AtomicBool::new(false)),
         stopping: Arc::new(AtomicBool::new(false)),
+        owner_failed: Arc::new(AtomicBool::new(false)),
         session: None,
         catalog: distribution::Catalog::default(),
         refresh: None,

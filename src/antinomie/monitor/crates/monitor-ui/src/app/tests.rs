@@ -13,6 +13,7 @@ mod launch;
 mod layout;
 mod memory_probe;
 mod network;
+mod pending;
 mod run_selection;
 mod startup;
 mod terminal_windows;
@@ -138,6 +139,11 @@ pub(crate) fn app() -> MonitorApp {
         explorer_browser: Default::default(),
         pending_upload: None,
         pending_launch: None,
+        pending_launch_context: None,
+        pending_sessions: BTreeMap::new(),
+        stale_command_ids: VecDeque::new(),
+        backend_disconnected: false,
+        error_status_mark: None,
         started: Instant::now(),
         smoke: None,
         closing: false,
@@ -587,3 +593,4 @@ pub(super) fn test_pcap() -> Vec<u8> {
     }
     file
 }
+mod stale_controls;

@@ -51,7 +51,7 @@ use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -60,6 +60,22 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use {bases::*, dialogs::*, history::*, panels::*, vm::*, widgets::*};
+
+#[derive(Clone, Debug, Default)]
+struct PendingSession {
+    vm_id: Option<String>,
+    boot_id: Option<String>,
+    vm_only: bool,
+}
+
+struct PendingLaunch {
+    id: u64,
+    vm_id: Option<String>,
+    boot_id: Option<String>,
+    request: ExecRequest,
+    runs_before: BTreeSet<String>,
+    preview_run: Option<String>,
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
@@ -156,6 +172,8 @@ struct Activity {
 
 const ACTIVITY_LIMIT: usize = 256;
 const TERMINAL_VIEW_LIMIT: usize = 128;
+const PENDING_SESSION_LIMIT: usize = 256;
+const STALE_COMMAND_LIMIT: usize = 1024;
 const CAPTURE_HISTORY_LIMIT: usize = 1024;
 
 #[derive(Default)]
@@ -342,6 +360,13 @@ pub struct MonitorApp {
     explorer_browser: upload_browser::Browser,
     pending_upload: Option<upload::Pending>,
     pending_launch: Option<u64>,
+    pending_launch_context: Option<PendingLaunch>,
+    pending_sessions: BTreeMap<u64, PendingSession>,
+    stale_command_ids: VecDeque<u64>,
+    backend_disconnected: bool,
+    /// The status text when the current backend error arrived. The error shows
+    /// on the status line until a newer status message replaces that text.
+    error_status_mark: Option<String>,
     started: Instant,
     smoke: Option<Duration>,
     closing: bool,
@@ -500,6 +525,11 @@ impl MonitorApp {
             explorer_browser,
             pending_upload: None,
             pending_launch: None,
+            pending_launch_context: None,
+            pending_sessions: BTreeMap::new(),
+            stale_command_ids: VecDeque::new(),
+            backend_disconnected: false,
+            error_status_mark: None,
             started: Instant::now(),
             smoke,
             closing: false,

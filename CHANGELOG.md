@@ -6,6 +6,15 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **No more stuck buttons.** Command results travel on their own channel with
+  a slot reserved for every accepted command, so a busy window no longer loses
+  them and leaves Upload, Run program or sample sends waiting forever. A
+  pending operation whose VM or boot changed, or whose backend went away, is
+  ended with "outcome unknown" instead of blocking the next boot, and nothing
+  is retried behind your back. A launch counts as started only when its run
+  appears. The status line shows a backend error until a newer message
+  replaces it, and Cancel in Run program works while the VM is stopped.
+
 - **Recording survives a long session.** After about 20 minutes of VM uptime
   the next program run could stop all recording of the boot (the "storage
   lost" counter grew and terminal output was not saved). The buffer for

@@ -18,6 +18,14 @@ impl MonitorApp {
                 | Command::DeleteVmSnapshot { .. }
                 | Command::ReconnectTransport
         );
+        let vm_snapshot_target = match &command {
+            Command::RefreshVmSnapshots { vm_id }
+            | Command::CreateVmSnapshot { vm_id, .. }
+            | Command::RestoreVmSnapshot { vm_id, .. }
+            | Command::RenameVmSnapshot { vm_id, .. }
+            | Command::DeleteVmSnapshot { vm_id, .. } => Some(vm_id.clone()),
+            _ => None,
+        };
         if let Err(error) = self
             .dependencies
             .require(&command, &self.options, &self.snapshot)
@@ -42,6 +50,26 @@ impl MonitorApp {
             &command,
             Command::StartNetworkCapture | Command::StopNetworkCapture
         );
+        let launch_request = match &command {
+            Command::Execute(request) => Some(request.clone()),
+            _ => None,
+        };
+        let bind_to_session = launch
+            || observer
+            || process_list
+            || core_capture
+            || sample
+            || network
+            || matches!(
+                &command,
+                Command::Upload { .. } | Command::UploadSample { .. } | Command::ReconnectTransport
+            );
+        let has_pending_binding = bind_to_session || vm_snapshot_target.is_some();
+        if has_pending_binding && self.pending_sessions.len() >= PENDING_SESSION_LIMIT {
+            self.status =
+                "Too many pending VM operations; wait for existing requests to settle".into();
+            return None;
+        }
         let admission = if launch {
             self.launch_admission()
         } else {
@@ -80,6 +108,38 @@ impl MonitorApp {
                     }
                     if launch {
                         self.pending_launch = Some(id);
+                        self.pending_launch_context = Some(PendingLaunch {
+                            id,
+                            vm_id: self.snapshot.active_vm.clone(),
+                            boot_id: self.snapshot.boot_id.clone(),
+                            request: launch_request.expect("Execute request captured"),
+                            runs_before: self
+                                .snapshot
+                                .runs
+                                .iter()
+                                .map(|run| run.id.clone())
+                                .collect(),
+                            preview_run: None,
+                        });
+                    }
+                    if bind_to_session {
+                        self.pending_sessions.insert(
+                            id,
+                            PendingSession {
+                                vm_id: self.snapshot.active_vm.clone(),
+                                boot_id: self.snapshot.boot_id.clone(),
+                                vm_only: false,
+                            },
+                        );
+                    } else if let Some(vm_id) = vm_snapshot_target {
+                        self.pending_sessions.insert(
+                            id,
+                            PendingSession {
+                                vm_id: Some(vm_id),
+                                boot_id: None,
+                                vm_only: true,
+                            },
+                        );
                     }
                     if sample {
                         self.samples.sent(id);
@@ -111,12 +171,40 @@ impl MonitorApp {
         snapshot: Snapshot,
         activity: &mut Vec<(&'static str, String)>,
     ) {
+        let launch_confirmed = self.pending_launch_context.as_ref().is_some_and(|pending| {
+            snapshot.runs.iter().any(|run| {
+                snapshot
+                    .active_vm
+                    .as_ref()
+                    .is_none_or(|active_vm| active_vm == &run.vm_id)
+                    && snapshot
+                        .boot_id
+                        .as_ref()
+                        .is_none_or(|boot_id| boot_id == &run.boot_id)
+                    && pending.vm_id.as_deref() == Some(run.vm_id.as_str())
+                    && pending.boot_id.as_deref() == Some(run.boot_id.as_str())
+                    && requests_match(&pending.request, &run.request)
+                    && (pending.preview_run.as_deref() == Some(run.id.as_str())
+                        || !pending.runs_before.contains(&run.id))
+            })
+        });
+        if launch_confirmed {
+            if let Some(pending) = self.pending_launch_context.as_ref() {
+                self.pending_sessions.remove(&pending.id);
+            }
+            self.pending_launch = None;
+            self.pending_launch_context = None;
+        }
+        self.reconcile_pending_sessions(&snapshot);
         if snapshot.state != self.snapshot.state {
             activity.push(("INFO", format!("Session {:?}", snapshot.state)));
         }
         if snapshot.last_error != self.snapshot.last_error {
             if let Some(error) = &snapshot.last_error {
                 activity.push(("ERROR", error.clone()));
+                self.error_status_mark = Some(self.status.clone());
+            } else {
+                self.error_status_mark = None;
             }
         }
         if snapshot.health.persistence_error != self.snapshot.health.persistence_error {
@@ -129,13 +217,7 @@ impl MonitorApp {
                 terminal.dirty = true;
             }
         }
-        let new_run = snapshot.runs.iter().any(|run| {
-            run_in_live_session(&snapshot, run) && !self.terminals.contains_key(&run.id)
-        });
         sync_runs(&mut self.terminals, &snapshot);
-        if new_run {
-            self.pending_launch = None;
-        }
         if let Some(capture) = self
             .selected_capture_summary()
             .filter(|capture| {
@@ -198,12 +280,17 @@ impl MonitorApp {
         let mut analysis_changed = false;
         let was_offline = self.trace_archive_directory().is_some();
         let mut incoming = Vec::new();
+        let mut backend_lost = false;
         if let Some(backend) = &self.backend {
             while incoming.len() < 256 {
-                let Some(notification) = backend.try_recv() else {
-                    break;
+                match backend.try_recv_status() {
+                    Ok(Some(notification)) => incoming.push(notification),
+                    Ok(None) => break,
+                    Err(_) => {
+                        backend_lost = true;
+                        break;
+                    }
                 };
-                incoming.push(notification);
             }
         }
         for notification in incoming {
@@ -217,6 +304,13 @@ impl MonitorApp {
                     success,
                     message,
                 } => {
+                    if self.consume_stale_command_id(id) {
+                        continue;
+                    }
+                    let launch_still_pending = success && self.pending_launch == Some(id);
+                    if !launch_still_pending {
+                        self.pending_sessions.remove(&id);
+                    }
                     self.vm_snapshots.complete(id, success, &message);
                     if let Some(run) = self.samples.complete(id, success, &message) {
                         launch_sample = Some(run);
@@ -250,6 +344,14 @@ impl MonitorApp {
                         }
                     }
                     resolve_launch_result(&mut self.pending_launch, id, success);
+                    if !success
+                        && self
+                            .pending_launch_context
+                            .as_ref()
+                            .is_some_and(|pending| pending.id == id)
+                    {
+                        self.pending_launch_context = None;
+                    }
                     self.status = if success {
                         message
                     } else {
@@ -261,22 +363,7 @@ impl MonitorApp {
                     }
                 }
                 Notification::RunStarted(run) => {
-                    self.pending_launch = None;
-                    activity.push((
-                        "INFO",
-                        format!("Started {} (PID {})", run.request.path, run.pid),
-                    ));
-                    if let Some(current) = self
-                        .snapshot
-                        .runs
-                        .iter_mut()
-                        .find(|current| current.id == run.id)
-                    {
-                        *current = run;
-                    } else {
-                        self.snapshot.runs.push(run);
-                    }
-                    sync_runs(&mut self.terminals, &self.snapshot);
+                    self.accept_run_started(run, &mut activity);
                 }
                 Notification::AnalysisUpdated { run_id, report } => {
                     if let Some(current) = self.analysis_windows.get_mut(&report.id) {
@@ -350,17 +437,180 @@ impl MonitorApp {
         if let Some((id, success)) = upload_result {
             self.complete_upload(id, success);
         }
-        if self
-            .pending_upload
-            .as_ref()
-            .is_some_and(|upload| !upload.intent.same_session(&self.snapshot))
-        {
-            self.pending_upload = None;
-        }
         if !was_offline && self.trace_archive_directory().is_some() {
             self.request_page(0);
         }
+        if backend_lost {
+            self.resolve_backend_disconnect();
+        }
+        self.retire_unbound_launch();
         self.refresh_history_when_idle();
+    }
+
+    fn reconcile_pending_sessions(&mut self, snapshot: &Snapshot) {
+        let mut changed = Vec::new();
+        for (&id, session) in &mut self.pending_sessions {
+            if session.vm_only {
+                if !session
+                    .vm_id
+                    .as_ref()
+                    .is_some_and(|vm_id| snapshot.vms.iter().any(|vm| &vm.id == vm_id))
+                {
+                    changed.push(id);
+                }
+                continue;
+            }
+            let vm_changed = session
+                .vm_id
+                .as_ref()
+                .is_some_and(|vm_id| snapshot.active_vm.as_ref() != Some(vm_id));
+            let boot_changed = session
+                .boot_id
+                .as_ref()
+                .is_some_and(|boot_id| snapshot.boot_id.as_ref() != Some(boot_id));
+            if vm_changed || boot_changed {
+                changed.push(id);
+            } else {
+                if session.vm_id.is_none() {
+                    session.vm_id = snapshot.active_vm.clone();
+                }
+                if session.boot_id.is_none() {
+                    session.boot_id = snapshot.boot_id.clone();
+                }
+            }
+        }
+        for id in changed {
+            self.retire_pending_command(id);
+        }
+    }
+
+    /// A launch whose VM and boot were never recorded cannot be matched to a
+    /// later session; once no VM runs, it can no longer start anything.
+    fn retire_unbound_launch(&mut self) {
+        let Some(id) = self.pending_launch else {
+            return;
+        };
+        let unbound = !self.pending_sessions.contains_key(&id);
+        if unbound && (self.snapshot.state != VmState::Running || self.snapshot.active_vm.is_none())
+        {
+            self.retire_pending_command(id);
+        }
+    }
+
+    fn retire_pending_command(&mut self, id: u64) {
+        self.pending_sessions.remove(&id);
+        self.remember_stale_command_id(id);
+        const UNKNOWN: &str = "Operation outcome unknown after the VM or boot session changed; no side effects were retried";
+        self.vm_snapshots.complete(id, false, UNKNOWN);
+        self.samples.cancel_pending(id, UNKNOWN);
+        if self
+            .pending_upload
+            .as_ref()
+            .is_some_and(|pending| pending.id == id)
+        {
+            self.pending_upload = None;
+        }
+        if self.pending_observer == Some(id) {
+            self.pending_observer = None;
+        }
+        if self.pending_core == Some(id) {
+            self.pending_core = None;
+        }
+        if self.pending_network == Some(id) {
+            self.pending_network = None;
+        }
+        if self.process_picker.pending == Some(id) {
+            self.process_picker.pending = None;
+        }
+        if self.pending_launch == Some(id) {
+            self.pending_launch = None;
+            self.pending_launch_context = None;
+        }
+        for terminal in self.terminals.values_mut() {
+            if terminal.snapshot_request == Some(id) {
+                terminal.snapshot_request = None;
+                terminal.snapshot_started = None;
+                terminal.snapshot_error = Some(UNKNOWN.into());
+            }
+        }
+        self.status = UNKNOWN.into();
+        self.log("WARN", self.status.clone());
+    }
+
+    fn remember_stale_command_id(&mut self, id: u64) {
+        if !self.stale_command_ids.contains(&id) {
+            if self.stale_command_ids.len() == STALE_COMMAND_LIMIT {
+                self.stale_command_ids.pop_front();
+            }
+            self.stale_command_ids.push_back(id);
+        }
+    }
+
+    fn consume_stale_command_id(&mut self, id: u64) -> bool {
+        if let Some(index) = self.stale_command_ids.iter().position(|stale| *stale == id) {
+            self.stale_command_ids.remove(index);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(super) fn accept_run_started(
+        &mut self,
+        run: RunSummary,
+        activity: &mut Vec<(&'static str, String)>,
+    ) {
+        if let Some(pending) = self.pending_launch_context.as_mut() {
+            if pending.vm_id.as_deref() == Some(run.vm_id.as_str())
+                && pending.boot_id.as_deref() == Some(run.boot_id.as_str())
+                && requests_match(&pending.request, &run.request)
+            {
+                pending.preview_run = Some(run.id.clone());
+            }
+        }
+        activity.push((
+            "INFO",
+            format!("Started {} (PID {})", run.request.path, run.pid),
+        ));
+        if let Some(current) = self
+            .snapshot
+            .runs
+            .iter_mut()
+            .find(|current| current.id == run.id)
+        {
+            *current = run;
+        } else {
+            self.snapshot.runs.push(run);
+        }
+        sync_runs(&mut self.terminals, &self.snapshot);
+    }
+
+    pub(super) fn resolve_backend_disconnect(&mut self) {
+        if self.backend_disconnected {
+            return;
+        }
+        self.backend_disconnected = true;
+        self.stale_command_ids.clear();
+        let message = "Backend disconnected; pending operation outcomes are unknown. No commands were retried.";
+        self.vm_snapshots.pending = None;
+        self.vm_snapshots.result = Some((false, message.into()));
+        self.pending_upload = None;
+        self.pending_launch = None;
+        self.pending_launch_context = None;
+        self.pending_sessions.clear();
+        self.pending_observer = None;
+        self.pending_core = None;
+        self.pending_network = None;
+        self.process_picker.pending = None;
+        for terminal in self.terminals.values_mut() {
+            if terminal.snapshot_request.take().is_some() {
+                terminal.snapshot_started = None;
+                terminal.snapshot_error = Some(message.into());
+            }
+        }
+        self.samples.cancel_all_pending(message);
+        self.status = message.into();
+        self.log("ERROR", message.into());
     }
 
     pub(super) fn running(&self) -> bool {
@@ -374,7 +624,15 @@ impl MonitorApp {
                     .snapshot_started
                     .is_some_and(|started| started.elapsed() > Duration::from_secs(5))
                 {
-                    terminal.snapshot_request = None;
+                    if let Some(id) = terminal.snapshot_request.take() {
+                        self.pending_sessions.remove(&id);
+                        if !self.stale_command_ids.contains(&id) {
+                            if self.stale_command_ids.len() == STALE_COMMAND_LIMIT {
+                                self.stale_command_ids.pop_front();
+                            }
+                            self.stale_command_ids.push_back(id);
+                        }
+                    }
                     terminal.snapshot_started = None;
                     terminal.snapshot_error =
                         Some("Terminal screen reply timed out; reopen to retry".into());
@@ -385,11 +643,20 @@ impl MonitorApp {
                     && terminal.snapshot_request.is_none()
                     && terminal.snapshot_error.is_none()
                     && run_in_live_session(&self.snapshot, &terminal.run)
+                    && self.pending_sessions.len() < PENDING_SESSION_LIMIT
                 {
                     match backend.send(Command::TerminalSnapshot {
                         run_id: terminal.run.id.clone(),
                     }) {
                         Ok(id) => {
+                            self.pending_sessions.insert(
+                                id,
+                                PendingSession {
+                                    vm_id: self.snapshot.active_vm.clone(),
+                                    boot_id: self.snapshot.boot_id.clone(),
+                                    vm_only: false,
+                                },
+                            );
                             terminal.snapshot_request = Some(id);
                             terminal.snapshot_started = Some(Instant::now());
                         }
@@ -418,6 +685,20 @@ pub(super) fn resolve_launch_result(pending: &mut Option<u64>, id: u64, success:
     if !success && *pending == Some(id) {
         *pending = None;
     }
+}
+
+fn requests_match(left: &ExecRequest, right: &ExecRequest) -> bool {
+    left.path == right.path
+        && left.args == right.args
+        && left.cwd == right.cwd
+        && left.env == right.env
+        && left.uid == right.uid
+        && left.gid == right.gid
+        && left.analysis == right.analysis
+        && left.run_in == right.run_in
+        && left.capture_network == right.capture_network
+        && left.memory_dump_on_exit == right.memory_dump_on_exit
+        && left.core_dump_on_exit == right.core_dump_on_exit
 }
 
 pub(super) fn sync_runs(terminals: &mut BTreeMap<String, RunTerminal>, snapshot: &Snapshot) {

@@ -14,11 +14,53 @@ impl Worker {
         Ok(())
     }
     pub(super) fn emit(&mut self, notification: Notification) {
+        if matches!(
+            &notification,
+            Notification::CommandResult { id, .. } if *id > 0
+        ) {
+            self.complete(notification);
+            return;
+        }
         if self.sender.try_send(notification).is_err() {
             self.snapshot.health.ui_dropped += 1;
         }
         if let Some(wake) = &self.wake {
             wake();
+        }
+    }
+    fn complete(&mut self, notification: Notification) {
+        // Every accepted command holds one admission credit until this result is
+        // consumed. The result lane has one slot per credit, so Full is an
+        // invariant violation; try_send keeps the sole owner nonblocking.
+        match self.completion_sender.try_send(notification) {
+            Ok(()) => {}
+            Err(mpsc::TrySendError::Full(_)) => self.fail_owner(),
+            Err(mpsc::TrySendError::Disconnected(_)) => self.fail_owner(),
+        }
+        if let Some(wake) = &self.wake {
+            wake();
+        }
+    }
+    fn fail_owner(&mut self) {
+        self.owner_failed.store(true, Ordering::Release);
+        self.closing.store(true, Ordering::Release);
+        self.stopping.store(true, Ordering::Release);
+    }
+    fn release_completion_credit(&mut self) {
+        if !self.completion_credits.release() {
+            self.fail_owner();
+        }
+    }
+    fn cancel_command(&mut self, id: u64) {
+        self.complete(Notification::CommandResult {
+            id,
+            success: false,
+            message: "backend closed before command execution; outcome cancelled".into(),
+        });
+    }
+    fn cancel_queued_commands(&mut self) {
+        while let Ok((id, _, _command)) = self.receiver.try_recv() {
+            self.cancel_command(id);
         }
     }
     pub(super) fn publish(&mut self) {
@@ -228,6 +270,7 @@ impl Worker {
         self.publish();
         loop {
             if self.closing.load(Ordering::Relaxed) {
+                self.cancel_queued_commands();
                 if let Some(job) = self.download.as_ref() {
                     job.cancel.store(true, Ordering::Relaxed);
                 }
@@ -266,28 +309,48 @@ impl Worker {
             // busy guest makes each pass slow and the bounded queue would fill.
             // Repeated terminal reads of one run in a batch are answered once.
             let mut handled = 0;
-            let mut terminal_reads = std::collections::BTreeSet::new();
+            let mut terminal_reads =
+                std::collections::BTreeMap::<String, Result<String, String>>::new();
             let mut disconnected = false;
             loop {
                 match received {
                     Ok((id, epoch, command)) => {
+                        if self.closing.load(Ordering::Acquire) {
+                            self.cancel_command(id);
+                            self.cancel_queued_commands();
+                            handled += 1;
+                            break;
+                        }
                         let quiet = matches!(
                             command,
                             Command::TerminalRead { .. } | Command::TerminalResize { .. }
                         );
-                        let repeated = matches!(&command, Command::TerminalRead { run_id }
-                            if !terminal_reads.insert(run_id.clone()));
-                        let result = if repeated {
-                            Ok(String::new())
+                        let terminal_read_run = match &command {
+                            Command::TerminalRead { run_id } => Some(run_id.clone()),
+                            _ => None,
+                        };
+                        let repeated = terminal_read_run
+                            .as_ref()
+                            .and_then(|run_id| terminal_reads.get(run_id).cloned());
+                        let result = if let Some(repeated) = repeated {
+                            repeated
                         } else {
-                            self.command_at_epoch(epoch, command)
+                            let result = self.command_at_epoch(epoch, command);
+                            if let Some(run_id) = terminal_read_run {
+                                terminal_reads.insert(run_id, result.clone());
+                            }
+                            result
                         };
                         let success = result.is_ok();
                         let message = result.unwrap_or_else(|e| e);
-                        if !success {
+                        if success {
+                            self.snapshot.last_error = None;
+                        } else {
                             self.snapshot.last_error = Some(message.clone());
                         }
-                        if !quiet || !success {
+                        if quiet && success {
+                            self.release_completion_credit();
+                        } else {
                             self.emit(Notification::CommandResult {
                                 id,
                                 success,
@@ -312,6 +375,9 @@ impl Worker {
             }
             if handled > 0 {
                 self.publish();
+            }
+            if self.closing.load(Ordering::Acquire) {
+                continue;
             }
             if disconnected {
                 self.closing.store(true, Ordering::Relaxed);
