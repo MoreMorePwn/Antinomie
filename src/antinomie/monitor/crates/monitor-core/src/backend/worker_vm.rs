@@ -7,6 +7,8 @@ impl Worker {
         if self.session.is_some() {
             return Err("only one VM may run at a time".into());
         }
+        // Reconnection state belongs to one boot; a new start begins clean.
+        self.reconnect = (0, None);
         if self.deferred_flush.is_some() || !self.flusher.can_submit_retired() {
             return Err(
                 "recording flush queue is full; wait for saved recordings before starting a VM"
@@ -183,6 +185,8 @@ impl Worker {
         self.publish();
     }
     pub(super) fn stop(&mut self) -> Result<(), String> {
+        // A reconnection pending for this boot must not run against the next.
+        self.reconnect = (0, None);
         let Some(mut session) = self.session.take() else {
             self.snapshot.active_vm = None;
             self.snapshot.state = VmState::Stopped;

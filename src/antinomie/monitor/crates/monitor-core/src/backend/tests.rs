@@ -1749,3 +1749,20 @@ fn shutdown_request_budget_saturates_at_shared_deadline() {
         Duration::from_secs(1)
     );
 }
+
+#[test]
+fn stopping_ends_a_pending_reconnection_of_the_boot() {
+    let root = std::env::temp_dir().join(format!("ant-reconnect-{}", storage::unique_id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let mut worker = download_worker(root.clone());
+    // Failed attempts and a scheduled retry left over from a stalled boot.
+    worker.reconnect = (3, Some(Instant::now()));
+    worker.stop().unwrap();
+    assert_eq!(
+        worker.reconnect,
+        (0, None),
+        "the next boot starts without the stalled boot's reconnection"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+

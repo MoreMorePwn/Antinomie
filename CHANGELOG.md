@@ -6,6 +6,17 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Runs that survive restarts and failures.** A run that continued after the
+  guest was reconnected or restored is listed in Run History again, with a
+  note naming the run it continues. One damaged run record no longer hides a
+  VM's whole history, and a history past 1,024 runs lists the newest instead
+  of failing. A launch the guest rejected leaves no phantom run behind. A
+  queued static analysis gets its full transfer time when it starts, not when
+  it was queued. Stopping or starting a VM clears a reconnection left over
+  from a stalled boot. QEMU is ended with the app when util-linux `setpriv` is
+  available, so a crashed app no longer leaves the VM's disk locked, and a
+  QEMU start failure says what QEMU reported.
+
 - **Long sessions stay small.** A run whose program tree ended and whose
   terminal closed no longer keeps its event table in memory until the VM
   stops (about 55 MiB per run before); its trace is read from the saved

@@ -870,4 +870,62 @@ mod tests {
         next.id = vm.id;
         assert!(prepare(&fixture.options, &mut next).is_err());
     }
+
+    #[test]
+    fn history_lists_the_good_runs_beside_a_damaged_one() {
+        let fixture = Fixture::new();
+        let (vm, location) = fixture.create(VmConfig {
+            id: "history-damaged".into(),
+            ..VmConfig::default()
+        });
+        fixture.save_run(&vm, &location.recording_directory, "good-1", "boot-a");
+        fixture.save_run(&vm, &location.recording_directory, "good-2", "boot-a");
+        // A run.json cut short by a crash, a full disk or a manual edit.
+        let bad = location.recording_directory.join("runs/bad");
+        fs::create_dir_all(&bad).unwrap();
+        fs::write(bad.join("run.json"), b"{\"id\":\"bad\",").unwrap();
+        let history = crate::recording::list_vm_runs(&fixture.options, &vm.id).unwrap();
+        assert_eq!(history.len(), 2, "{history:?}");
+    }
+
+    #[test]
+    fn a_long_history_keeps_its_newest_runs() {
+        let fixture = Fixture::new();
+        let (vm, location) = fixture.create(VmConfig {
+            id: "history-long".into(),
+            ..VmConfig::default()
+        });
+        for n in 0..1030 {
+            fixture.save_run(
+                &vm,
+                &location.recording_directory,
+                &format!("run-{n:04}"),
+                "boot-a",
+            );
+        }
+        let history = crate::recording::list_vm_runs(&fixture.options, &vm.id).unwrap();
+        assert_eq!(history.len(), 1024);
+    }
+
+    #[test]
+    fn history_lists_a_run_continued_after_a_reconnect() {
+        let fixture = Fixture::new();
+        let (vm, location) = fixture.create(VmConfig {
+            id: "history-reconnect".into(),
+            ..VmConfig::default()
+        });
+        fixture.save_run(&vm, &location.recording_directory, "launched", "boot-a");
+        let boot = location.recording_directory.join("boots/boot-b");
+        fixture.save_run(&vm, &boot, "continued-after-reconnect", "boot-b");
+        let ids: Vec<_> = crate::recording::list_vm_runs(&fixture.options, &vm.id)
+            .unwrap()
+            .into_iter()
+            .map(|run| run.id)
+            .collect();
+        assert!(
+            ids.iter().any(|id| id == "continued-after-reconnect"),
+            "{ids:?}"
+        );
+        assert!(ids.iter().any(|id| id == "launched"), "{ids:?}");
+    }
 }

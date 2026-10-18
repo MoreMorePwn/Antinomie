@@ -9,6 +9,15 @@ impl Session {
         mut owner: RunArtifactOwner,
         error: String,
     ) -> String {
+        // Nothing ran and nothing was captured: leave no run behind, or Run
+        // History would list a run that never existed.
+        if error.starts_with(super::launch_failure::REJECTED) && owner.network.is_none() {
+            run.storage_error(error.clone());
+            if let Err(cleanup) = fs::remove_dir_all(&run.summary.directory) {
+                return format!("{error}; its run directory remains: {cleanup}");
+            }
+            return error;
+        }
         let mut issues = vec![error];
         owner.tree_complete = true;
         if owner.network.is_some() {

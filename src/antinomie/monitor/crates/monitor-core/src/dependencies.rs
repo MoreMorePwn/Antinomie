@@ -72,7 +72,7 @@ impl Report {
     }
 }
 
-fn executable(path: &Path) -> Option<PathBuf> {
+pub(crate) fn executable(path: &Path) -> Option<PathBuf> {
     let runnable = |candidate: &Path| {
         candidate.is_file() && accessat(CWD, candidate, Access::EXEC_OK, AtFlags::EACCESS).is_ok()
     };

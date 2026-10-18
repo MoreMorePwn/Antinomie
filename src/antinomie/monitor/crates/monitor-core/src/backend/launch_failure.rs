@@ -6,6 +6,9 @@ const ENOENT: i32 = 2;
 const EACCES: i32 = 13;
 const ETXTBSY: i32 = 26;
 
+/// How the text of a launch the guest rejected begins.
+pub(super) const REJECTED: &str = "launch rejected by the guest, nothing was started";
+
 /// A launch the guest answered with an error: it did not happen, and the text
 /// says why as far as the error number tells.
 pub(super) fn launch_failure(error: RequestError, path: &str, cwd: &str) -> String {
@@ -23,7 +26,7 @@ pub(super) fn launch_failure(error: RequestError, path: &str, cwd: &str) -> Stri
                 ),
                 _ => message,
             };
-            format!("launch rejected by the guest, nothing was started: {cause}")
+            format!("{REJECTED}: {cause}")
         }
         RequestError::TimedOut(message) | RequestError::Failed(message) => launch_unknown(&message),
     }
