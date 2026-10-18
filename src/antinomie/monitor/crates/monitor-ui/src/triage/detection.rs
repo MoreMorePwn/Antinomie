@@ -109,6 +109,10 @@ impl AttemptBudget {
     }
 }
 
+/// How long the size and time of an evidence file are trusted before the
+/// disk is asked again. Detection looks at them every frame.
+const STAT_KEEP: Duration = Duration::from_secs(1);
+
 struct FileDigest {
     len: u64,
     modified: u128,
@@ -196,6 +200,8 @@ pub(super) struct View {
     budgets: [AttemptBudget; 3],
     auto_started: [bool; 3],
     digests: std::collections::BTreeMap<String, FileDigest>,
+    /// Size and modification time of evidence files, with when they were read.
+    stats: std::collections::BTreeMap<String, (Instant, Option<(u64, u128)>)>,
     digest_rx: Option<Receiver<(String, u64, u128, String)>>,
     digest_cache: [String; 3],
     digest_generation: u64,
@@ -234,6 +240,7 @@ impl View {
         self.results = Default::default();
         self.counts = Default::default();
         self.references.clear();
+        self.stats.clear();
         self.rows = Default::default();
         self.filtered = Default::default();
         self.applied = Default::default();
@@ -563,28 +570,41 @@ impl View {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
+    /// Size and modification time of a regular file, `None` if it is not one.
+    /// Read from the disk at most once per [`STAT_KEEP`].
+    fn stat(&mut self, id: &str, path: &Path) -> Option<(u64, u128)> {
+        if let Some((at, found)) = self.stats.get(id) {
+            if at.elapsed() < STAT_KEEP {
+                return *found;
+            }
+        }
+        let found = std::fs::metadata(path)
+            .ok()
+            .filter(|meta| meta.is_file())
+            .map(|meta| {
+                let modified = meta
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|time| time.as_nanos())
+                    .unwrap_or(0);
+                (meta.len(), modified)
+            });
+        self.stats.insert(id.to_owned(), (Instant::now(), found));
+        found
+    }
     fn cached_file_digest(&mut self, ctx: &egui::Context, path: &Path) -> Option<String> {
         let id = path.display().to_string();
-        let Ok(meta) = std::fs::metadata(path) else {
+        let Some((len, modified)) = self.stat(&id, path) else {
             return Some("missing".into());
         };
-        if !meta.is_file() {
-            return Some("missing".into());
-        }
-        let modified = meta
-            .modified()
-            .ok()
-            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|time| time.as_nanos())
-            .unwrap_or(0);
         if let Some(cached) = self.digests.get(&id) {
-            if cached.len == meta.len() && cached.modified == modified {
+            if cached.len == len && cached.modified == modified {
                 return Some(cached.digest.clone());
             }
         }
         if self.digest_rx.is_none() {
             let path = path.to_path_buf();
-            let len = meta.len();
             let (tx, rx) = mpsc::sync_channel(1);
             let ctx = ctx.clone();
             if std::thread::Builder::new()

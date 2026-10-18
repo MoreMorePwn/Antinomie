@@ -521,6 +521,11 @@ impl Assembler {
         }
         Ok(Self::empty(directory, u64::MAX, true))
     }
+    /// A reader for an objects directory that [`Self::open_archive`] already
+    /// accepted: one check per scan, not one per invocation.
+    pub(crate) fn archive_checked(directory: PathBuf) -> Self {
+        Self::empty(directory, u64::MAX, true)
+    }
     pub fn stored_len(&self) -> u64 {
         self.stored_len
     }

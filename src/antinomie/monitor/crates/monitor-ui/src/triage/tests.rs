@@ -619,7 +619,8 @@ pub(super) fn write_rwx_calls(raw: &mut dyn std::io::Write, calls: std::ops::Ran
 }
 
 #[test]
-fn hidden_tick_refreshes_growing_archive_preserves_selection_and_rejects_prior_run() {
+fn hidden_tick_indexes_once_a_shown_pane_refreshes_growth_preserves_selection_and_rejects_prior_run(
+) {
     fn input<'a>(archive: &'a Path, run: &'a str) -> TriageInput<'a> {
         TriageInput {
             analysis: None,
@@ -677,6 +678,15 @@ fn hidden_tick_refreshes_growing_archive_preserves_selection_and_rejects_prior_r
     let first_refresh = view.last_refresh.unwrap();
     write_rwx_calls(&mut raw, 1..2);
     raw.sync_all().unwrap();
+    // Hidden, a live run keeps the index it has: the pane refreshes it when shown.
+    let generation = view.scan_generation;
+    let hidden_until = Instant::now() + Duration::from_millis(2300);
+    while Instant::now() < hidden_until {
+        view.tick(&ctx, input(&first.directory, "first"));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(view.scan_generation, generation, "re-indexed while hidden");
+    view.mark_shown(&ctx);
     wait(&mut view, &ctx, &first.directory, "first", 2);
     assert!(view.last_refresh.unwrap() > first_refresh);
     assert_eq!(view.selected_call_id, Some((1, 55, 0)));

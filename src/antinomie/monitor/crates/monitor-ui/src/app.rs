@@ -18,6 +18,7 @@ mod run_selector;
 mod session;
 mod sidebar;
 mod trace_view;
+mod triage_pcap;
 mod triage_ui;
 mod upload;
 mod upload_browser;
@@ -277,6 +278,8 @@ pub struct MonitorApp {
     core_view: crate::core_view::CoreView,
     triage: crate::triage::TriageView,
     cpu_history: crate::summary::CpuHistory,
+    /// What the disk said about the capture Triage shows; see `triage_pcap`.
+    triage_pcap: std::cell::RefCell<triage_pcap::PcapLookup>,
     run_tree: Option<(String, crate::archive::ProcessTreeResult)>,
     run_tree_pending: Option<String>,
     archive_total: Option<u64>,
@@ -433,6 +436,7 @@ impl MonitorApp {
             core_view: Default::default(),
             triage: Default::default(),
             cpu_history: Default::default(),
+            triage_pcap: Default::default(),
             run_tree: None,
             run_tree_pending: None,
             archive_total: None,

@@ -402,34 +402,33 @@ impl MonitorApp {
         if let Some(capture) = capture {
             captures::detail(ui, &capture);
         }
-        let processes = match self.snapshot.capture_processes.get(&id) {
-            Some(live) => Ok(live.clone()),
+        // Borrowed, not copied: the list can hold tens of thousands of processes.
+        let font_size = self.settings.font_size;
+        let selected = self.selected_process;
+        let selection = match self.snapshot.capture_processes.get(&id) {
+            Some(live) => Some(Ok(live.as_slice())),
             None => match &self.archived_processes {
-                Some((loaded, result)) if *loaded == id => result.clone(),
-                _ => Ok(Vec::new()),
+                Some((loaded, result)) if *loaded == id => Some(result.as_ref().map(Vec::as_slice)),
+                _ => None,
             },
         };
-        match processes {
-            Err(error) => {
+        let selection = match selection {
+            Some(Err(error)) => {
                 ui.colored_label(theme::warn(), format!("Process tree unavailable: {error}"));
+                None
             }
-            Ok(processes) if processes.is_empty() => {
+            None | Some(Ok([])) => {
                 ui.colored_label(
                     theme::muted(),
                     "No process tree (captures before Antinomie 0.3.0 keep one combined trace)",
                 );
+                None
             }
-            Ok(processes) => {
-                if let Some(selection) = captures::process_tree(
-                    ui,
-                    &processes,
-                    self.selected_process,
-                    self.settings.font_size,
-                ) {
-                    self.select_process(selection);
-                    self.focus_trace();
-                }
-            }
+            Some(Ok(processes)) => captures::process_tree(ui, processes, selected, font_size),
+        };
+        if let Some(selection) = selection {
+            self.select_process(selection);
+            self.focus_trace();
         }
     }
 
@@ -566,13 +565,13 @@ impl MonitorApp {
             });
             self.run_tree_pending = Some(run.id.clone());
         }
-        let tree = self
-            .run_tree
-            .as_ref()
-            .filter(|(id, _)| id == &run.id)
-            .map(|(_, result)| result.clone());
-        match tree {
-            Some(Ok((processes, issues))) => {
+        // Drawn from the stored result, not a copy of it: the list can hold
+        // tens of thousands of processes.
+        let font_size = self.settings.font_size;
+        let selected = self.selected_process;
+        let mut selection = None;
+        match self.run_tree.as_ref().filter(|(id, _)| id == &run.id) {
+            Some((_, Ok((processes, issues)))) => {
                 for issue in issues {
                     ui.colored_label(theme::warn(), issue);
                 }
@@ -580,25 +579,21 @@ impl MonitorApp {
                     egui::vec2(ui.available_width(), ui.available_height().min(220.0)),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
-                        if let Some(selection) = captures::process_tree(
-                            ui,
-                            &processes,
-                            self.selected_process,
-                            self.settings.font_size,
-                        ) {
-                            self.select_process(selection);
-                            self.focus_trace();
-                        }
+                        selection = captures::process_tree(ui, processes, selected, font_size);
                     },
                 );
             }
-            Some(Err(error)) => {
+            Some((_, Err(error))) => {
                 ui.colored_label(theme::warn(), error);
             }
             None => {
                 ui.spinner();
                 ui.label("Reading saved lifecycle records…");
             }
+        }
+        if let Some(selection) = selection {
+            self.select_process(selection);
+            self.focus_trace();
         }
     }
 
@@ -674,13 +669,13 @@ impl MonitorApp {
     }
 
     /// The selected capture's process tree: live, or as saved.
-    pub(super) fn capture_process_list(&self) -> Option<Vec<CaptureProcess>> {
+    pub(super) fn capture_process_list(&self) -> Option<&[CaptureProcess]> {
         let id = self.selected_capture.as_ref()?;
         if let Some(live) = self.snapshot.capture_processes.get(id) {
-            return Some(live.clone());
+            return Some(live);
         }
         match &self.archived_processes {
-            Some((loaded, Ok(list))) if loaded == id => Some(list.clone()),
+            Some((loaded, Ok(list))) if loaded == id => Some(list),
             _ => None,
         }
     }

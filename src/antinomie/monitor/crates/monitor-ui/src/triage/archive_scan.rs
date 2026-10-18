@@ -102,6 +102,11 @@ pub(super) fn scan_archive_query(
         return Err("cancelled".into());
     }
     let directory = std::fs::canonicalize(directory).map_err(|error| error.to_string())?;
+    // Taken before anything is read: a recording that grows meanwhile differs next time.
+    let stamp = source_stamp(&directory, pcap, pcap_open, request);
+    if request.unchanged_since.as_deref() == Some(stamp.as_str()) {
+        return Err(UNCHANGED.into());
+    }
     if !directory.join("telemetry.raw").is_file() {
         return Err(
             "saved recording has no telemetry.raw; the visible page was not treated as the whole run"
@@ -436,6 +441,7 @@ pub(super) fn scan_archive_query(
         None
     };
     Ok(ArchiveScan {
+        stamp,
         event_cache,
         counts,
         network_counts: network.counts,

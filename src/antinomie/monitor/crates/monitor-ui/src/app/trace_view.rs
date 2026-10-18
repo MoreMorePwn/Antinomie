@@ -98,12 +98,12 @@ impl MonitorApp {
                 ui.add(egui::Label::new(captures::scope(&capture.scope)).truncate())
                     .on_hover_text(&capture.id);
             }
-            if let Some(processes) = self.capture_process_list().filter(|list| !list.is_empty()) {
-                if let Some(selection) =
-                    captures::process_menu(ui, &processes, self.selected_process)
-                {
-                    self.select_process(selection);
-                }
+            let selection = self
+                .capture_process_list()
+                .filter(|list| !list.is_empty())
+                .and_then(|processes| captures::process_menu(ui, processes, self.selected_process));
+            if let Some(selection) = selection {
+                self.select_process(selection);
             }
             if self.trace_archive_directory().is_some() {
                 if icon(
@@ -138,6 +138,16 @@ impl MonitorApp {
                         self.archive_offset
                     };
                     self.request_page(offset);
+                }
+                if self.archive_total.is_none()
+                    && !self.archive_pending
+                    && self.archive_page_generation == self.archive_generation
+                    && self.archive_error.is_none()
+                {
+                    ui.label(format!(
+                        "Page {} · counting matches...",
+                        self.archive_previous.len() + 1
+                    ));
                 }
                 if let Some(total) = self.archive_total {
                     if self.archive_page_generation == self.archive_generation {

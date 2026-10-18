@@ -403,6 +403,30 @@ impl MonitorApp {
                     Err(error) => self.archive_error = Some(error),
                 }
             }
+            Answer::Totals { key, result } => {
+                let Some(directory) = self.trace_archive_directory() else {
+                    return;
+                };
+                let current = crate::archive::totals_key(
+                    &directory,
+                    self.selected_capture.is_some(),
+                    self.selected_process,
+                    &self.applied_filter,
+                    &self.archive_hidden_categories,
+                );
+                // Counts of the view being shown; those of an earlier filter are dropped.
+                if key == current {
+                    match result {
+                        Ok((total, source_total)) => {
+                            self.archive_total = Some(total);
+                            self.archive_source_total = Some(source_total);
+                        }
+                        Err(error) => {
+                            self.archive_error = Some(format!("Counting matches: {error}"))
+                        }
+                    }
+                }
+            }
             Answer::ProcessTree { run_id, result } => {
                 if self.run_tree_pending.as_ref() == Some(&run_id)
                     && self.selected_run.as_ref() == Some(&run_id)

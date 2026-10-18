@@ -12,6 +12,9 @@ use std::{
     thread,
 };
 
+mod totals;
+pub(crate) use totals::key as totals_key;
+
 pub(crate) type ProcessTreeResult = Result<
     (
         Vec<antinomie_monitor_core::capture_processes::CaptureProcess>,
@@ -134,259 +137,311 @@ pub(crate) enum Answer {
         generation: u64,
         result: Result<antinomie_monitor_core::AnalysisListingPage, String>,
     },
+    /// The match counts of a trace view whose page came without them, as
+    /// `(matching, saved)`. `key` is [`totals_key`] of the view.
+    Totals {
+        key: String,
+        result: Result<(u64, u64), String>,
+    },
 }
 
-pub(crate) struct ArchiveWorker {
-    sender: Option<mpsc::SyncSender<Request>>,
-    receiver: Option<mpsc::Receiver<Answer>>,
-    worker: Option<thread::JoinHandle<()>>,
+/// State the worker threads share.
+struct Shared {
     cancelled: Arc<AtomicBool>,
     active_invocations: Arc<Mutex<Option<Arc<AtomicBool>>>>,
+    counts: Arc<totals::Counts>,
+    answers: mpsc::SyncSender<Answer>,
+    wake: Option<eframe::egui::Context>,
+}
+
+fn serve(requests: mpsc::Receiver<Request>, shared: &Shared) {
+    while let Ok(request) = requests.recv() {
+        if shared.cancelled.load(Ordering::Relaxed) {
+            break;
+        }
+        let answer = answer(request, shared);
+        if shared.cancelled.load(Ordering::Relaxed) || shared.answers.send(answer).is_err() {
+            break;
+        }
+        if let Some(ctx) = &shared.wake {
+            ctx.request_repaint_of(eframe::egui::ViewportId::ROOT);
+        }
+    }
+}
+
+fn invocations(
+    shared: &Shared,
+    view: &totals::View,
+    offset: u64,
+    cancel: &Arc<AtomicBool>,
+) -> Result<(InvocationPage, Option<(u64, u64)>), String> {
+    let filter = crate::query::compile_note(&view.query);
+    if let Some(error) = filter.error.as_ref() {
+        return Err(error.clone());
+    }
+    // A page seeks to its cursor; the counts come from memory, from a thread
+    // of their own, or here for a small recording.
+    let found = view
+        .open(cancel)?
+        .matching_page_cancellable(
+            offset,
+            100,
+            view.pid,
+            cancel,
+            totals::predicate(&filter, &view.hidden_categories),
+        )
+        .map_err(|error| error.to_string())?;
+    let counts = shared
+        .counts
+        .totals(view, &found.stamp, cancel, &shared.answers, &shared.wake)?;
+    Ok((found.page, counts))
+}
+
+fn answer(request: Request, shared: &Shared) -> Answer {
+    match request {
+        Request::ProcessTree {
+            run_id,
+            directory,
+            root_pid,
+            path,
+        } => Answer::ProcessTree {
+            run_id,
+            result: Ok(recording::Recording {
+                directory,
+                manifest: serde_json::Value::Null,
+                events: Vec::new(),
+            })
+            .and_then(|recording| {
+                recording.process_tree_cancellable(root_pid, &path, &shared.cancelled)
+            })
+            .map_err(|e| e.to_string()),
+        },
+        Request::ListCaptures {
+            options,
+            vm_id,
+            generation,
+        } => Answer::ListCaptures {
+            result: antinomie_monitor_core::capture::list_vm_captures(&options, &vm_id)
+                .map_err(|error| error.to_string()),
+            vm_id,
+            generation,
+        },
+        Request::ListVm {
+            options,
+            vm_id,
+            generation,
+        } => Answer::ListVm {
+            result: recording::list_vm_runs(&options, &vm_id).map_err(|e| e.to_string()),
+            vm_id,
+            generation,
+        },
+        Request::Invocations {
+            generation,
+            directory,
+            offset,
+            capture,
+            pid,
+            query,
+            hidden_categories,
+            cancel,
+        } => {
+            *shared
+                .active_invocations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&cancel));
+            if shared.cancelled.load(Ordering::Relaxed) {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            let view = totals::View {
+                directory,
+                capture,
+                pid,
+                query,
+                hidden_categories,
+            };
+            let read = invocations(shared, &view, offset, &cancel);
+            *shared
+                .active_invocations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+            let (total, source_total) = match &read {
+                Ok((_, Some((total, source_total)))) => (Some(*total), Some(*source_total)),
+                _ => (None, None),
+            };
+            Answer::Invocations {
+                generation,
+                offset,
+                total,
+                source_total,
+                result: read.map(|(page, _)| page),
+            }
+        }
+        Request::Terminal {
+            run_id,
+            generation,
+            directory,
+            offset,
+        } => Answer::Terminal {
+            run_id,
+            generation,
+            result: recording::open_recording_cancellable(&directory, &shared.cancelled)
+                .and_then(|r| {
+                    let mut page = r.terminal_replay(offset, 32)?;
+                    let screen_warning = if page.next_offset.is_none() {
+                        match r.terminal_screen() {
+                            Ok(data) => {
+                                page.records.push(TerminalRecord::Output(data));
+                                None
+                            }
+                            Err(error) => {
+                                Some(format!("Final terminal screen unavailable: {error}"))
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    Ok(TerminalReplay {
+                        page,
+                        screen_warning,
+                    })
+                })
+                .map_err(|e| e.to_string()),
+        },
+        Request::Captured {
+            generation,
+            directory,
+            field,
+            offset,
+            data_len,
+        } => Answer::Captured {
+            generation,
+            offset,
+            result: recording::read_captured_range(&directory, &field, offset, data_len)
+                .map_err(|e| e.to_string()),
+        },
+        Request::Specimen {
+            view_key,
+            generation,
+            directory,
+            report_id,
+            offset,
+            data_len,
+        } => Answer::Specimen {
+            result: antinomie_monitor_core::read_specimen_range(
+                &directory, &report_id, offset, data_len,
+            ),
+            view_key,
+            generation,
+            report_id,
+            offset,
+            data_len,
+        },
+        Request::Listing {
+            view_key,
+            generation,
+            directory,
+            report_id,
+            kind,
+            start,
+            query,
+            record_context,
+        } => Answer::Listing {
+            result: {
+                let fields = crate::analysis::listing_fields(kind);
+                let filter = crate::query::compile_table(&query, &fields);
+                if let Some(error) = filter.error.clone() {
+                    Err(error)
+                } else {
+                    antinomie_monitor_core::read_listing_page_with(
+                        &directory,
+                        &report_id,
+                        kind,
+                        start,
+                        antinomie_monitor_core::LISTING_PAGE_MAX_ROWS,
+                        &query,
+                        |entry| {
+                            filter.keep_table(&crate::analysis::listing_row_with(
+                                entry,
+                                &record_context,
+                            ))
+                        },
+                    )
+                }
+            },
+            view_key,
+            generation,
+        },
+    }
+}
+
+/// Reads saved recordings off the UI thread. Interactive reads (trace pages,
+/// terminal replay, history lists, evidence ranges) share one thread; the
+/// whole-recording process tree has its own, and the match counts of a big
+/// recording are counted by a third, so none of them waits for another.
+pub(crate) struct ArchiveWorker {
+    sender: Option<mpsc::SyncSender<Request>>,
+    bulk_sender: Option<mpsc::SyncSender<Request>>,
+    receiver: Option<mpsc::Receiver<Answer>>,
+    workers: Vec<thread::JoinHandle<()>>,
+    cancelled: Arc<AtomicBool>,
+    active_invocations: Arc<Mutex<Option<Arc<AtomicBool>>>>,
+    counts: Arc<totals::Counts>,
 }
 
 impl ArchiveWorker {
     pub(crate) fn new(wake: Option<eframe::egui::Context>) -> Result<Self, String> {
-        let (sender, requests) = mpsc::sync_channel(1);
-        let (answers, receiver) = mpsc::sync_channel(1);
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let worker_cancelled = Arc::clone(&cancelled);
-        let active_invocations = Arc::new(Mutex::new(None::<Arc<AtomicBool>>));
-        let worker_active_invocations = Arc::clone(&active_invocations);
-        let worker = thread::Builder::new()
-            .name("archive-reader".into())
-            .spawn(move || {
-                while let Ok(request) = requests.recv() {
-                    if worker_cancelled.load(Ordering::Relaxed) {
-                        break;
+        let (answers, receiver) = mpsc::sync_channel(4);
+        let shared = Arc::new(Shared {
+            cancelled: Arc::new(AtomicBool::new(false)),
+            active_invocations: Arc::new(Mutex::new(None::<Arc<AtomicBool>>)),
+            counts: totals::Counts::new(),
+            answers,
+            wake,
+        });
+        let mut lanes = Vec::new();
+        let mut workers = Vec::new();
+        for name in ["archive-reader", "archive-process-tree"] {
+            let (sender, requests) = mpsc::sync_channel(1);
+            let lane_shared = Arc::clone(&shared);
+            let spawned = thread::Builder::new()
+                .name(name.into())
+                .spawn(move || serve(requests, &lane_shared));
+            match spawned {
+                Ok(worker) => workers.push(worker),
+                Err(error) => {
+                    // Stop the lane that did start; its sender is dropped here.
+                    drop(lanes);
+                    shared.cancelled.store(true, Ordering::Relaxed);
+                    for worker in workers {
+                        let _ = worker.join();
                     }
-                    let answer = match request {
-                        Request::ProcessTree {
-                            run_id,
-                            directory,
-                            root_pid,
-                            path,
-                        } => Answer::ProcessTree {
-                            run_id,
-                            result: Ok(recording::Recording {
-                                directory,
-                                manifest: serde_json::Value::Null,
-                                events: Vec::new(),
-                            })
-                            .and_then(|recording| {
-                                recording.process_tree_cancellable(
-                                    root_pid,
-                                    &path,
-                                    &worker_cancelled,
-                                )
-                            })
-                            .map_err(|e| e.to_string()),
-                        },
-                        Request::ListCaptures {
-                            options,
-                            vm_id,
-                            generation,
-                        } => Answer::ListCaptures {
-                            result: antinomie_monitor_core::capture::list_vm_captures(
-                                &options, &vm_id,
-                            )
-                            .map_err(|error| error.to_string()),
-                            vm_id,
-                            generation,
-                        },
-                        Request::ListVm {
-                            options,
-                            vm_id,
-                            generation,
-                        } => Answer::ListVm {
-                            result: recording::list_vm_runs(&options, &vm_id)
-                                .map_err(|e| e.to_string()),
-                            vm_id,
-                            generation,
-                        },
-                        Request::Invocations {
-                            generation,
-                            directory,
-                            offset,
-                            capture,
-                            pid,
-                            query,
-                            hidden_categories,
-                            cancel,
-                        } => {
-                            *worker_active_invocations
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                                Some(Arc::clone(&cancel));
-                            if worker_cancelled.load(Ordering::Relaxed) {
-                                cancel.store(true, Ordering::Relaxed);
-                            }
-                            let filter = crate::query::compile_note(&query);
-                            let opened = if let Some(error) = filter.error.as_ref() {
-                                Err(error.clone())
-                            } else if capture {
-                                antinomie_monitor_core::capture::open_capture_recording_cancellable(
-                                    &directory, &cancel,
-                                )
-                                .map_err(|error| error.to_string())
-                            } else {
-                                recording::open_recording_cancellable(&directory, &cancel)
-                                    .map_err(|error| error.to_string())
-                            };
-                            let filtered = opened.and_then(|recording| {
-                                recording
-                                    .filtered_page_cancellable(
-                                        offset,
-                                        100,
-                                        pid,
-                                        &cancel,
-                                        |invocation| {
-                                            let visible = crate::trace::representative(invocation)
-                                                .is_some_and(|event| {
-                                                    SyscallGroup::of(&event.syscall_name)
-                                                        .is_none_or(|group| {
-                                                            !hidden_categories.contains(&group)
-                                                        })
-                                                });
-                                            visible && filter.keep(invocation)
-                                        },
-                                    )
-                                    .map_err(|error| error.to_string())
-                            });
-                            let total = filtered.as_ref().ok().map(|page| page.total);
-                            let source_total = filtered.as_ref().ok().map(|page| page.source_total);
-                            *worker_active_invocations
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-                            Answer::Invocations {
-                                generation,
-                                offset,
-                                total,
-                                source_total,
-                                result: filtered.map(|filtered| filtered.page),
-                            }
-                        }
-                        Request::Terminal {
-                            run_id,
-                            generation,
-                            directory,
-                            offset,
-                        } => Answer::Terminal {
-                            run_id,
-                            generation,
-                            result: recording::open_recording_cancellable(
-                                &directory,
-                                &worker_cancelled,
-                            )
-                            .and_then(|r| {
-                                let mut page = r.terminal_replay(offset, 32)?;
-                                let screen_warning = if page.next_offset.is_none() {
-                                    match r.terminal_screen() {
-                                        Ok(data) => {
-                                            page.records.push(TerminalRecord::Output(data));
-                                            None
-                                        }
-                                        Err(error) => Some(format!(
-                                            "Final terminal screen unavailable: {error}"
-                                        )),
-                                    }
-                                } else {
-                                    None
-                                };
-                                Ok(TerminalReplay {
-                                    page,
-                                    screen_warning,
-                                })
-                            })
-                            .map_err(|e| e.to_string()),
-                        },
-                        Request::Captured {
-                            generation,
-                            directory,
-                            field,
-                            offset,
-                            data_len,
-                        } => Answer::Captured {
-                            generation,
-                            offset,
-                            result: recording::read_captured_range(
-                                &directory, &field, offset, data_len,
-                            )
-                            .map_err(|e| e.to_string()),
-                        },
-                        Request::Specimen {
-                            view_key,
-                            generation,
-                            directory,
-                            report_id,
-                            offset,
-                            data_len,
-                        } => Answer::Specimen {
-                            result: antinomie_monitor_core::read_specimen_range(
-                                &directory, &report_id, offset, data_len,
-                            ),
-                            view_key,
-                            generation,
-                            report_id,
-                            offset,
-                            data_len,
-                        },
-                        Request::Listing {
-                            view_key,
-                            generation,
-                            directory,
-                            report_id,
-                            kind,
-                            start,
-                            query,
-                            record_context,
-                        } => Answer::Listing {
-                            result: {
-                                let fields = crate::analysis::listing_fields(kind);
-                                let filter = crate::query::compile_table(&query, &fields);
-                                if let Some(error) = filter.error.clone() {
-                                    Err(error)
-                                } else {
-                                    antinomie_monitor_core::read_listing_page_with(
-                                        &directory,
-                                        &report_id,
-                                        kind,
-                                        start,
-                                        antinomie_monitor_core::LISTING_PAGE_MAX_ROWS,
-                                        &query,
-                                        |entry| {
-                                            filter.keep_table(&crate::analysis::listing_row_with(
-                                                entry,
-                                                &record_context,
-                                            ))
-                                        },
-                                    )
-                                }
-                            },
-                            view_key,
-                            generation,
-                        },
-                    };
-                    if worker_cancelled.load(Ordering::Relaxed) || answers.send(answer).is_err() {
-                        break;
-                    }
-                    if let Some(ctx) = &wake {
-                        ctx.request_repaint_of(eframe::egui::ViewportId::ROOT);
-                    }
+                    return Err(error.to_string());
                 }
-            })
-            .map_err(|e| e.to_string())?;
+            }
+            lanes.push(sender);
+        }
+        let bulk_sender = lanes.pop();
+        let sender = lanes.pop();
         Ok(Self {
-            sender: Some(sender),
+            sender,
+            bulk_sender,
             receiver: Some(receiver),
-            worker: Some(worker),
-            cancelled,
-            active_invocations,
+            workers,
+            cancelled: Arc::clone(&shared.cancelled),
+            active_invocations: Arc::clone(&shared.active_invocations),
+            counts: Arc::clone(&shared.counts),
         })
     }
 
+    fn lane(&self, request: &Request) -> Option<&mpsc::SyncSender<Request>> {
+        match request {
+            Request::ProcessTree { .. } => self.bulk_sender.as_ref(),
+            _ => self.sender.as_ref(),
+        }
+    }
+
     pub(crate) fn request(&self, request: Request) -> Result<(), String> {
-        self.sender
-            .as_ref()
+        self.lane(&request)
             .ok_or("archive worker closed")?
             .try_send(request)
             .map_err(|e| e.to_string())
@@ -396,7 +451,7 @@ impl ArchiveWorker {
         &self,
         request: Request,
     ) -> Result<(), Box<mpsc::TrySendError<Request>>> {
-        match &self.sender {
+        match self.lane(&request) {
             Some(sender) => sender.try_send(request).map_err(Box::new),
             None => Err(Box::new(mpsc::TrySendError::Disconnected(request))),
         }
@@ -425,12 +480,14 @@ impl Drop for ArchiveWorker {
         }
         // Disconnect both directions before joining, including a worker blocked on answers.
         self.sender.take();
+        self.bulk_sender.take();
         self.receiver.take();
-        if let Some(worker) = self.worker.take() {
+        for worker in self.workers.drain(..) {
             if worker.join().is_err() {
                 eprintln!("archive worker panicked");
             }
         }
+        self.counts.shut_down();
     }
 }
 
@@ -644,6 +701,102 @@ mod tests {
             assert!(total.is_none() && source_total.is_none());
         }
     }
+    #[test]
+    fn a_big_recording_answers_its_page_first_and_counts_once_for_the_view() {
+        // 12,000 calls are about 3 MB of raw packets: past the inline limit.
+        let fixture = fixture(12_000);
+        let worker = ArchiveWorker::new(None).unwrap();
+        // Answers that arrive while another is awaited (the counts may beat the page).
+        let held = std::cell::RefCell::new(Vec::new());
+        let next = |wanted: fn(&Answer) -> bool| loop {
+            let position = held.borrow().iter().position(wanted);
+            if let Some(position) = position {
+                return held.borrow_mut().remove(position);
+            }
+            held.borrow_mut()
+                .push(worker.wait_answer(Duration::from_secs(20)).unwrap());
+        };
+        let page = |query: &str, offset: u64| {
+            let mut asked = request(
+                &fixture.0,
+                query,
+                None,
+                Vec::new(),
+                Arc::new(AtomicBool::new(false)),
+            );
+            if let Request::Invocations { offset: at, .. } = &mut asked {
+                *at = offset;
+            }
+            worker.request(asked).unwrap();
+            let Answer::Invocations {
+                total,
+                source_total,
+                result,
+                ..
+            } = next(|answer| matches!(answer, Answer::Invocations { .. }))
+            else {
+                unreachable!()
+            };
+            (total, source_total, result.unwrap())
+        };
+        let (total, source_total, first) = page("call.id >= 150", 0);
+        assert_eq!((total, source_total), (None, None));
+        assert_eq!(first.invocations.len(), 100);
+        let key = totals_key(&fixture.0, true, None, "call.id >= 150", &[]);
+        let Answer::Totals {
+            key: counted,
+            result,
+        } = next(|answer| matches!(answer, Answer::Totals { .. }))
+        else {
+            unreachable!()
+        };
+        assert_eq!(counted, key);
+        assert_eq!(result, Ok((11_850, 12_000)));
+        // The next page of the same view carries the counts from memory.
+        let (total, source_total, second) = page("call.id >= 150", first.next_offset.unwrap());
+        assert_eq!((total, source_total), (Some(11_850), Some(12_000)));
+        assert_eq!(second.invocations[0].call_id, 250);
+        // Another filter is another view: counted by itself.
+        let (total, _, _) = page("call.id >= 10000", 0);
+        assert_eq!(total, None);
+        let Answer::Totals {
+            key: counted,
+            result,
+        } = next(|answer| matches!(answer, Answer::Totals { .. }))
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            counted,
+            totals_key(&fixture.0, true, None, "call.id >= 10000", &[])
+        );
+        assert_eq!(result, Ok((2_000, 12_000)));
+    }
+
+    #[test]
+    fn dropping_the_worker_stops_a_count_in_progress() {
+        let fixture = fixture(12_000);
+        let worker = ArchiveWorker::new(None).unwrap();
+        worker
+            .request(request(
+                &fixture.0,
+                "call.id >= 0",
+                None,
+                Vec::new(),
+                Arc::new(AtomicBool::new(false)),
+            ))
+            .unwrap();
+        let Answer::Invocations { total, .. } =
+            worker.wait_answer(Duration::from_secs(20)).unwrap()
+        else {
+            panic!("wrong answer")
+        };
+        assert_eq!(total, None);
+        let started = Instant::now();
+        drop(worker);
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
     #[test]
     fn dropping_worker_cancels_an_active_archive_scan() {
         let fixture = fixture(15_000);

@@ -6,6 +6,9 @@ use antinomie_monitor_core::{
 };
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
+use std::sync::Arc;
+
+mod layout;
 
 const PROCESS_FIELDS: &[crate::query::FieldSpec<'static>] = &[
     crate::query::FieldSpec::number("pid", "Guest process ID"),
@@ -593,22 +596,22 @@ pub(super) fn process_tree(
     font_size: f32,
 ) -> Option<ProcessSelection> {
     let mut action = None;
-    let rows = tree_rows(processes);
-    if rows.iter().any(|(process, depth)| {
-        *depth == 0
-            && process.parent_pid != 0
-            && process.parent_pid != process.pid
-            && processes
-                .iter()
-                .any(|parent| parent.pid == process.parent_pid)
-    }) {
+    // Built once per change of the list; a frame only checks the fingerprint.
+    let cache_id = ui.id().with("process-tree-layout");
+    let layout = match ui.data(|data| data.get_temp::<Arc<layout::Layout>>(cache_id)) {
+        Some(layout) if layout.matches(processes) => layout,
+        _ => {
+            let layout = Arc::new(layout::Layout::build(processes));
+            ui.data_mut(|data| data.insert_temp(cache_id, Arc::clone(&layout)));
+            layout
+        }
+    };
+    if layout.detached {
         ui.colored_label(
             theme::warn(),
             "PID reuse or incomplete ancestry: cyclic components shown as detached roots",
         );
     }
-    let branches =
-        crate::tree_lines::prefixes(&rows.iter().map(|(_, depth)| *depth).collect::<Vec<_>>());
     ui.horizontal_wrapped(|ui| {
         theme::section(ui, "Processes");
         ui.colored_label(
@@ -649,9 +652,9 @@ pub(super) fn process_tree(
             }
         })
         .body(|body| {
-            body.rows(row_height, rows.len(), |mut row| {
-                let (process, _) = rows[row.index()];
-                let branch = &branches[row.index()];
+            body.rows(row_height, layout.rows.len(), |mut row| {
+                let process = &processes[layout.rows[row.index()].process as usize];
+                let branch = layout.prefix(row.index());
                 row.set_selected(selected == Some(process.pid));
                 row.col(|ui| {
                     let reach = ui.spacing().item_spacing.y * 0.5;
@@ -741,46 +744,11 @@ fn exit_status(process: &CaptureProcess) -> (String, egui::Color32) {
 /// Processes in tree order (parents before children) with their depth; a
 /// cycle (reused PIDs) ends at a process already listed.
 fn tree_rows(processes: &[CaptureProcess]) -> Vec<(&CaptureProcess, usize)> {
-    let known: std::collections::BTreeSet<u32> = processes.iter().map(|p| p.pid).collect();
-    let mut children: std::collections::BTreeMap<u32, Vec<&CaptureProcess>> =
-        std::collections::BTreeMap::new();
-    let mut roots = Vec::new();
-    for process in processes {
-        if process.parent_pid != 0
-            && process.parent_pid != process.pid
-            && known.contains(&process.parent_pid)
-        {
-            children
-                .entry(process.parent_pid)
-                .or_default()
-                .push(process);
-        } else {
-            roots.push(process);
-        }
-    }
-    let mut rows = Vec::new();
-    let mut visited = std::collections::BTreeSet::new();
-    let mut stack: Vec<(&CaptureProcess, usize)> = roots.iter().rev().map(|p| (*p, 0)).collect();
-    loop {
-        let Some((process, depth)) = stack.pop() else {
-            if let Some(process) = processes
-                .iter()
-                .find(|process| !visited.contains(&process.pid))
-            {
-                stack.push((process, 0));
-                continue;
-            }
-            break;
-        };
-        if !visited.insert(process.pid) {
-            continue;
-        }
-        rows.push((process, depth));
-        if let Some(kids) = children.get(&process.pid) {
-            stack.extend(kids.iter().rev().map(|kid| (*kid, depth + 1)));
-        }
-    }
-    rows
+    layout::Layout::build(processes)
+        .rows
+        .iter()
+        .map(|row| (&processes[row.process as usize], row.depth as usize))
+        .collect()
 }
 
 fn process_label(process: &CaptureProcess) -> String {

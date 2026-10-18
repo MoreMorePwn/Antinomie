@@ -192,6 +192,16 @@ impl ProcessTracker {
         }
     }
 
+    /// How many distinct processes are tracked so far.
+    pub fn tracked_count(&self) -> usize {
+        self.processes.len()
+    }
+
+    /// True when `pid` is already tracked.
+    pub fn tracks(&self, pid: u32) -> bool {
+        self.processes.contains_key(&pid)
+    }
+
     /// True once since the last call when the tree changed.
     pub fn take_changed(&mut self) -> bool {
         std::mem::take(&mut self.changed)
