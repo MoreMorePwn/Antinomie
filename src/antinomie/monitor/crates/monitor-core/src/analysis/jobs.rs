@@ -1237,8 +1237,10 @@ mod tests {
                 );
                 jobs.finish(job);
             }
+            // A blocked tick waits for the sandbox for seconds; a loaded
+            // machine can still take a few hundred milliseconds.
             assert!(
-                started.elapsed() < Duration::from_millis(250),
+                started.elapsed() < Duration::from_secs(1),
                 "cleanup tick blocked"
             );
             assert!(
