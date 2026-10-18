@@ -11,8 +11,9 @@ it runs.
   as a realistic desktop: a real vendor's SMBIOS identity (BIOS, system,
   board, chassis, memory) and ACPI OEM IDs with fresh serials, the host CPU
   passed through without the hypervisor flag or the KVM signature,
-  performance counters, one socket of N cores, an Intel e1000e card with an
-  Intel MAC address, and no VMware port. Realistic laptop and server presets
+  performance counters and the host's cache sizes, one socket of N cores,
+  Intel ICH9 USB controllers, an Intel e1000e card with an Intel MAC address,
+  and no VMware port. Realistic laptop and server presets
   pick a machine whose CPU vendor matches the host. Every entry can be
   changed (the profile then reads Custom), and the window lists what still
   gives the VM away. VMs saved before keep QEMU's own identity (Transparent).

@@ -150,8 +150,10 @@ VMs default to Realistic desktop.
 | Machine identity | `-smbios type=0,1,2,4,17`, `-smbios file=` (type 3 chassis table written to the runtime directory), `-machine smbios-entry-point-type=64` | QEMU strings, chassis Other | One of eight built-in vendor machines (Dell, HP, Lenovo, Supermicro; Intel and AMD) with random serials and UUID |
 | ACPI OEM IDs | `-machine x-oem-id=,x-oem-table-id=` | `BOCHS` / `BXPC` | The machine's vendor IDs |
 | CPU | `-cpu host,-hypervisor,kvm=off,pmu=on` (without KVM: `max,model-id=<host CPU name>,-hypervisor`); passthrough replaces the VM's CPU model setting | QEMU model, hypervisor bit, KVM signature | Passthrough, hidden hypervisor bit and KVM signature, performance counters |
+| CPU caches | `-cpu host,host-cache-info=on` (passthrough only) | QEMU's cache sizes | The host's cache sizes |
 | Topology | `-smp N,sockets=1,cores=N,threads=1` | `-smp N` | One socket of N cores |
-| Network card | `-device e1000e\|e1000\|rtl8139\|virtio-net-pci,mac=` | virtio-net, `52:54:00:12:34:56` | e1000e with a random Intel (`3c:fd:fe`) address |
+| Network card | `-device e1000e\|e1000\|rtl8139\|virtio-net-pci,mac=` | virtio-net, `52:54:00:12:34:56` | e1000e with a random Intel (`3c:fd:fe`) address; a random locally administered address is offered |
+| USB | `-machine usb=on` (ICH9 EHCI with UHCI companions at 00:1d) | No USB controller | Present |
 | Disk and CD-ROM | `-global virtio-blk-pci.serial=`, `-global ide-cd.model=` | QEMU defaults | A Samsung-style disk serial, an LG DVD model |
 | Devices | `-machine vmport=off,hpet=off` | VMware port and HPET present | No VMware port; HPET kept |
 | Clock | `-rtc base=localtime` | UTC | UTC (local time is offered for Windows-like guests) |
@@ -165,7 +167,14 @@ bytes, and the UUID is in 8-4-4-4-12 form.
 
 **What a profile cannot change.** The root disk stays virtio-blk: the bases'
 kernels build AHCI and NVMe as modules and the bootstrap initrd loads none.
-The firmware stays SeaBIOS. The fw_cfg device, the q35 chipset layout, the
+The firmware stays SeaBIOS: under OVMF the kernel's EFI stub places the
+kernel through firmware allocations that do not know the bootstrap page
+(`antinomie_boot_gpa`), so with KASLR the kernel could land on it and the
+transport would fail now and then; UEFI needs that page reserved in the EFI
+stub first. The pointer stays virtio-tablet (the Antinomie window needs an
+absolute pointer, and the USB tablet is named QEMU as well). The RTC stays in
+UTC by default because Linux guests read it as UTC; local time would shift
+the guest clock and every recorded timestamp. The fw_cfg device, the q35 chipset layout, the
 virtio display, the Antinomie options and build string of the guest kernel,
 and VM-exit timing are outside launch options. The rating in the dialog
 ("certain", "possible", "unlikely") is what common checks would conclude
@@ -176,8 +185,9 @@ hardware may not restore after the profile changes.
 **Verified** on QEMU 11 with KVM (AMD host): a Realistic desktop BusyBox
 guest reads `LENOVO` / `11JN0047US` / chassis 35 from DMI, has no
 hypervisor CPU flag, uses the `tsc` clocksource, sees an Intel 0x8086 e1000e
-card with a `3c:fd:fe` address and a `LENOVO` ACPI OEM ID, and records a
-guest-run without loss.
+card with a `3c:fd:fe` address, Intel ICH9 USB controllers (8086:2934-2936,
+293a), the host's 16 MiB L3 and a `LENOVO` ACPI OEM ID, and records a
+guest-run without loss (3,456 packets, none dropped).
 
 ## Accepted ANT-T0091 run triage (0.6.2)
 
