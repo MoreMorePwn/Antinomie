@@ -311,6 +311,7 @@ fn specimen_requests_use_retained_directories_and_supersession_clears_pending() 
         options: app.options.clone(),
         vm_id: "vm".into(),
         generation: 1,
+        carried: Vec::new(),
     });
     assert!(app.analysis_views["workspace"].pending.is_none());
     assert!(app.analysis_views["workspace"]

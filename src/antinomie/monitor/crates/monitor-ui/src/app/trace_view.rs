@@ -188,6 +188,9 @@ impl MonitorApp {
             )
             .on_hover_text(crate::query::HELP);
         });
+        if let Some(run) = self.selected_vm_run() {
+            crate::run_recording::show(ui, run);
+        }
         if let Some(error) = &self.archive_error {
             ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).truncate())
                 .on_hover_text(error);
@@ -598,11 +601,13 @@ impl MonitorApp {
         {
             let options = self.options.clone();
             let generation = self.history_generation;
+            let carried = self.carried_run_directories();
             self.queue_archive(if self.capture_tab {
                 Request::ListVm {
                     options,
                     vm_id: vm_id.clone(),
                     generation,
+                    carried,
                 }
             } else {
                 Request::ListCaptures {
@@ -764,6 +769,9 @@ impl MonitorApp {
     }
 
     pub(super) fn details(&mut self, ui: &mut egui::Ui) {
+        if let Some(run) = self.selected_vm_run() {
+            crate::run_recording::show(ui, run);
+        }
         let invocations = self.invocations();
         let invocation = invocations
             .iter()

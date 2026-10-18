@@ -191,13 +191,17 @@ pub fn run_filter_facts(
                         .and_then(serde_json::Value::as_bool),
                 )
                 .map(|(flags, terminal_complete)| {
+                    // Dropped on-screen previews (`ui_loss`) lose nothing from the
+                    // recording, so they never make a run incomplete.
                     flags & 2 != 0
                         && terminal_complete
                         && manifest
                             .get("persistence_error")
                             .is_none_or(serde_json::Value::is_null)
+                        && run
+                            .get("recording_error")
+                            .is_none_or(serde_json::Value::is_null)
                         && facts.transport_loss == Some(0)
-                        && facts.ui_loss == Some(0)
                         && facts.storage_loss == Some(0)
                 });
         }
@@ -1065,6 +1069,53 @@ pub fn read_captured_range(
 mod tests {
     use super::*;
     use std::io::Write;
+    fn facts_for_health(
+        health: serde_json::Value,
+        recording_error: serde_json::Value,
+    ) -> Option<bool> {
+        let directory =
+            std::env::temp_dir().join(format!("ant-run-facts-{}", storage::unique_id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("manifest.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "run": {"id": "r", "vm_id": "v", "boot_id": "b",
+                        "execution": {"flags": 2}, "recording_error": recording_error},
+                "terminal_complete": true,
+                "persistence_error": null,
+                "bytes": 1,
+                "health": health,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let facts = run_filter_facts(&directory, "r", "v", "b").unwrap();
+        std::fs::remove_dir_all(&directory).unwrap();
+        facts.complete
+    }
+    #[test]
+    fn dropped_ui_previews_do_not_make_a_complete_recording_incomplete() {
+        let health = |ui_dropped| serde_json::json!({"dropped": 0, "ui_dropped": ui_dropped, "storage_dropped_packets": 0});
+        assert_eq!(
+            facts_for_health(health(0), serde_json::Value::Null),
+            Some(true)
+        );
+        assert_eq!(
+            facts_for_health(health(3), serde_json::Value::Null),
+            Some(true)
+        );
+    }
+    #[test]
+    fn transport_loss_storage_loss_and_a_recording_error_still_make_a_run_incomplete() {
+        let health = |dropped, storage| serde_json::json!({"dropped": dropped, "ui_dropped": 0, "storage_dropped_packets": storage});
+        let none = serde_json::Value::Null;
+        assert_eq!(facts_for_health(health(1, 0), none.clone()), Some(false));
+        assert_eq!(facts_for_health(health(0, 1), none.clone()), Some(false));
+        assert_eq!(
+            facts_for_health(health(0, 0), serde_json::json!("disk full")),
+            Some(false)
+        );
+    }
     #[test]
     fn matching_analysis_sidecar_refreshes_reaper_state_and_rejects_identity_change() {
         use crate::analysis::{AnalysisSelection, AnalysisState};

@@ -34,6 +34,7 @@ fn invalid_syscall_filter_keeps_the_previous_applied_filter() {
 #[test]
 fn archive_filter_changes_cancel_old_scan_preserve_page_and_reject_invalid_draft() {
     let mut app = app();
+    app.selected = Some("vm".into());
     let mut past = run("past");
     past.state = RunState::Finalized;
     app.history.push(past);
@@ -86,6 +87,7 @@ fn archive_filter_changes_cancel_old_scan_preserve_page_and_reject_invalid_draft
 #[test]
 fn archive_category_predicate_restarts_global_matches_and_retains_visible_selection() {
     let mut app = app();
+    app.selected = Some("vm".into());
     let mut past = run("past");
     past.state = RunState::Finalized;
     app.history.push(past);

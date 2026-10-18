@@ -39,6 +39,7 @@ pub(crate) enum Request {
         options: BackendOptions,
         vm_id: String,
         generation: u64,
+        carried: Vec<(String, PathBuf)>,
     },
     Invocations {
         generation: u64,
@@ -106,6 +107,8 @@ pub(crate) enum Answer {
         vm_id: String,
         generation: u64,
         result: Result<Vec<RunSummary>, String>,
+        checked: Vec<String>,
+        retained: Vec<String>,
     },
     Invocations {
         generation: u64,
@@ -230,10 +233,13 @@ fn answer(request: Request, shared: &Shared) -> Answer {
             options,
             vm_id,
             generation,
+            carried,
         } => Answer::ListVm {
             result: recording::list_vm_runs(&options, &vm_id).map_err(|e| e.to_string()),
             vm_id,
             generation,
+            checked: carried.iter().map(|(id, _)| id.clone()).collect(),
+            retained: retained_run_ids(carried),
         },
         Request::Invocations {
             generation,
@@ -372,6 +378,13 @@ fn answer(request: Request, shared: &Shared) -> Answer {
             generation,
         },
     }
+}
+
+fn retained_run_ids(carried: Vec<(String, PathBuf)>) -> Vec<String> {
+    carried
+        .into_iter()
+        .filter_map(|(id, directory)| directory.is_dir().then_some(id))
+        .collect()
 }
 
 /// Reads saved recordings off the UI thread. Interactive reads (trace pages,
@@ -579,6 +592,19 @@ mod tests {
         raw.write_all(&[0; 40]).unwrap();
         raw.sync_all().unwrap();
         Fixture(directory)
+    }
+
+    #[test]
+    fn carried_run_paths_are_validated_by_archive_work() {
+        let existing = fixture(0);
+        let missing = existing.0.join("missing-run");
+        assert_eq!(
+            retained_run_ids(vec![
+                ("existing".into(), existing.0.clone()),
+                ("missing".into(), missing),
+            ]),
+            vec!["existing"]
+        );
     }
     fn request(
         directory: &std::path::Path,

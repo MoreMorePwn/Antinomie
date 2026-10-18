@@ -33,9 +33,7 @@ impl MonitorApp {
                 "No network capture is available for this run.",
             );
         }
-        if let Some(error) = &run.recording_error {
-            ui.colored_label(theme::warn(), format!("Recording incomplete: {error}"));
-        }
+        crate::run_recording::show(ui, &run);
         if let Some(error) = &self.archive_error {
             ui.colored_label(theme::warn(), error);
         }

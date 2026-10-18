@@ -105,6 +105,62 @@ impl MonitorApp {
         accepted
     }
 
+    /// Makes `snapshot` the current one, noting what changed for the Activity log.
+    pub(super) fn accept_snapshot(
+        &mut self,
+        snapshot: Snapshot,
+        activity: &mut Vec<(&'static str, String)>,
+    ) {
+        if snapshot.state != self.snapshot.state {
+            activity.push(("INFO", format!("Session {:?}", snapshot.state)));
+        }
+        if snapshot.last_error != self.snapshot.last_error {
+            if let Some(error) = &snapshot.last_error {
+                activity.push(("ERROR", error.clone()));
+            }
+        }
+        if snapshot.health.persistence_error != self.snapshot.health.persistence_error {
+            if let Some(error) = &snapshot.health.persistence_error {
+                activity.push(("ERROR", format!("Saving stopped: {error}")));
+            }
+        }
+        if snapshot.health.ui_dropped > self.snapshot.health.ui_dropped {
+            for terminal in self.terminals.values_mut() {
+                terminal.dirty = true;
+            }
+        }
+        let new_run = snapshot.runs.iter().any(|run| {
+            run_in_live_session(&snapshot, run) && !self.terminals.contains_key(&run.id)
+        });
+        sync_runs(&mut self.terminals, &snapshot);
+        if new_run {
+            self.pending_launch = None;
+        }
+        if let Some(capture) = self
+            .selected_capture_summary()
+            .filter(|capture| {
+                !snapshot
+                    .captures
+                    .iter()
+                    .any(|current| current.id == capture.id)
+            })
+            .cloned()
+        {
+            if !self
+                .capture_history
+                .iter()
+                .any(|saved| saved.id == capture.id)
+            {
+                if self.capture_history.len() >= CAPTURE_HISTORY_LIMIT {
+                    self.capture_history.remove(0);
+                }
+                self.capture_history.push(capture);
+            }
+        }
+        self.follow_runs(&snapshot);
+        self.snapshot = snapshot;
+    }
+
     pub(super) fn drain(&mut self) {
         if let Some((target, result)) = self.folder_picker.poll() {
             match result {
@@ -141,190 +197,145 @@ impl MonitorApp {
         let mut upload_result = None;
         let mut analysis_changed = false;
         let was_offline = self.trace_archive_directory().is_some();
+        let mut incoming = Vec::new();
         if let Some(backend) = &self.backend {
-            for _ in 0..256 {
-                match backend.try_recv() {
-                    Some(Notification::Snapshot(snapshot)) => {
-                        if snapshot.state != self.snapshot.state {
-                            activity.push(("INFO", format!("Session {:?}", snapshot.state)));
-                        }
-                        if snapshot.last_error != self.snapshot.last_error {
-                            if let Some(error) = &snapshot.last_error {
-                                activity.push(("ERROR", error.clone()));
-                            }
-                        }
-                        if snapshot.health.persistence_error
-                            != self.snapshot.health.persistence_error
-                        {
-                            if let Some(error) = &snapshot.health.persistence_error {
-                                activity.push(("ERROR", format!("Saving stopped: {error}")));
-                            }
-                        }
-                        if snapshot.health.ui_dropped > self.snapshot.health.ui_dropped {
-                            for terminal in self.terminals.values_mut() {
-                                terminal.dirty = true;
-                            }
-                        }
-                        let new_run = snapshot.runs.iter().any(|run| {
-                            run_in_live_session(&snapshot, run)
-                                && !self.terminals.contains_key(&run.id)
-                        });
-                        sync_runs(&mut self.terminals, &snapshot);
-                        if new_run {
-                            self.pending_launch = None;
-                        }
-                        if let Some(capture) = self
-                            .selected_capture_summary()
-                            .filter(|capture| {
-                                !snapshot
-                                    .captures
-                                    .iter()
-                                    .any(|current| current.id == capture.id)
-                            })
-                            .cloned()
-                        {
-                            if !self
-                                .capture_history
-                                .iter()
-                                .any(|saved| saved.id == capture.id)
-                            {
-                                if self.capture_history.len() >= CAPTURE_HISTORY_LIMIT {
-                                    self.capture_history.remove(0);
-                                }
-                                self.capture_history.push(capture);
-                            }
-                        }
-                        self.snapshot = snapshot;
-                        analysis_changed = true;
+            while incoming.len() < 256 {
+                let Some(notification) = backend.try_recv() else {
+                    break;
+                };
+                incoming.push(notification);
+            }
+        }
+        for notification in incoming {
+            match notification {
+                Notification::Snapshot(snapshot) => {
+                    self.accept_snapshot(snapshot, &mut activity);
+                    analysis_changed = true;
+                }
+                Notification::CommandResult {
+                    id,
+                    success,
+                    message,
+                } => {
+                    self.vm_snapshots.complete(id, success, &message);
+                    if let Some(run) = self.samples.complete(id, success, &message) {
+                        launch_sample = Some(run);
                     }
-                    Some(Notification::CommandResult {
-                        id,
-                        success,
-                        message,
-                    }) => {
-                        self.vm_snapshots.complete(id, success, &message);
-                        if let Some(run) = self.samples.complete(id, success, &message) {
-                            launch_sample = Some(run);
-                        }
-                        if self
-                            .pending_upload
-                            .as_ref()
-                            .is_some_and(|upload| upload.id == id)
-                        {
-                            upload_result = Some((id, success));
-                        }
-                        if self.pending_observer == Some(id) {
-                            self.pending_observer = None;
-                        }
-                        if self.pending_core == Some(id) {
-                            self.pending_core = None;
-                        }
-                        if self.pending_network == Some(id) {
-                            self.pending_network = None;
-                        }
-                        if self.process_picker.pending == Some(id) {
-                            self.process_picker.pending = None;
-                        }
-                        for terminal in self.terminals.values_mut() {
-                            if terminal.snapshot_request == Some(id) {
-                                terminal.snapshot_request = None;
-                                terminal.snapshot_started = None;
-                                if !success {
-                                    terminal.snapshot_error = Some(message.clone());
-                                }
+                    if self
+                        .pending_upload
+                        .as_ref()
+                        .is_some_and(|upload| upload.id == id)
+                    {
+                        upload_result = Some((id, success));
+                    }
+                    if self.pending_observer == Some(id) {
+                        self.pending_observer = None;
+                    }
+                    if self.pending_core == Some(id) {
+                        self.pending_core = None;
+                    }
+                    if self.pending_network == Some(id) {
+                        self.pending_network = None;
+                    }
+                    if self.process_picker.pending == Some(id) {
+                        self.process_picker.pending = None;
+                    }
+                    for terminal in self.terminals.values_mut() {
+                        if terminal.snapshot_request == Some(id) {
+                            terminal.snapshot_request = None;
+                            terminal.snapshot_started = None;
+                            if !success {
+                                terminal.snapshot_error = Some(message.clone());
                             }
-                        }
-                        resolve_launch_result(&mut self.pending_launch, id, success);
-                        self.status = if success {
-                            message
-                        } else {
-                            format!("Failed: {message}")
-                        };
-                        if !success || !self.status.starts_with("terminal input accepted") {
-                            activity.push((
-                                if success { "INFO" } else { "ERROR" },
-                                self.status.clone(),
-                            ));
                         }
                     }
-                    Some(Notification::RunStarted(run)) => {
-                        self.pending_launch = None;
-                        activity.push((
-                            "INFO",
-                            format!("Started {} (PID {})", run.request.path, run.pid),
-                        ));
-                        if let Some(current) = self
-                            .snapshot
-                            .runs
-                            .iter_mut()
-                            .find(|current| current.id == run.id)
-                        {
-                            *current = run;
-                        } else {
-                            self.snapshot.runs.push(run);
-                        }
-                        sync_runs(&mut self.terminals, &self.snapshot);
+                    resolve_launch_result(&mut self.pending_launch, id, success);
+                    self.status = if success {
+                        message
+                    } else {
+                        format!("Failed: {message}")
+                    };
+                    if !success || !self.status.starts_with("terminal input accepted") {
+                        activity
+                            .push((if success { "INFO" } else { "ERROR" }, self.status.clone()));
                     }
-                    Some(Notification::AnalysisUpdated { run_id, report }) => {
-                        if let Some(current) = self.analysis_windows.get_mut(&report.id) {
-                            current.clone_from(&report);
-                        }
-                        if let Some(id) = run_id {
-                            for run in self.snapshot.runs.iter_mut().chain(self.history.iter_mut())
-                            {
-                                if run.id == id {
-                                    run.analysis = Some(report.clone());
-                                }
+                }
+                Notification::RunStarted(run) => {
+                    self.pending_launch = None;
+                    activity.push((
+                        "INFO",
+                        format!("Started {} (PID {})", run.request.path, run.pid),
+                    ));
+                    if let Some(current) = self
+                        .snapshot
+                        .runs
+                        .iter_mut()
+                        .find(|current| current.id == run.id)
+                    {
+                        *current = run;
+                    } else {
+                        self.snapshot.runs.push(run);
+                    }
+                    sync_runs(&mut self.terminals, &self.snapshot);
+                }
+                Notification::AnalysisUpdated { run_id, report } => {
+                    if let Some(current) = self.analysis_windows.get_mut(&report.id) {
+                        current.clone_from(&report);
+                    }
+                    if let Some(id) = run_id {
+                        for run in self.snapshot.runs.iter_mut().chain(self.history.iter_mut()) {
+                            if run.id == id {
+                                run.analysis = Some(report.clone());
                             }
-                        } else if let Some(current) = self
-                            .snapshot
-                            .analysis_reports
-                            .iter_mut()
-                            .find(|current| current.id == report.id)
-                        {
-                            *current = report;
-                        } else {
-                            if self.snapshot.analysis_reports.len() >= 8 {
-                                self.snapshot.analysis_reports.remove(0);
-                            }
-                            self.selected_analysis = Some(report.id.clone());
-                            self.snapshot.analysis_reports.push(report);
                         }
-                    }
-                    Some(Notification::Terminal {
-                        run_id,
-                        sequence,
-                        data,
-                        eof,
-                    }) => {
-                        if let Some(terminal) = self.terminals.get_mut(&run_id) {
-                            terminal.output(sequence, &data, eof);
+                    } else if let Some(current) = self
+                        .snapshot
+                        .analysis_reports
+                        .iter_mut()
+                        .find(|current| current.id == report.id)
+                    {
+                        *current = report;
+                    } else {
+                        if self.snapshot.analysis_reports.len() >= 8 {
+                            self.snapshot.analysis_reports.remove(0);
                         }
+                        self.selected_analysis = Some(report.id.clone());
+                        self.snapshot.analysis_reports.push(report);
                     }
-                    Some(Notification::TerminalScreen {
-                        run_id,
-                        sequence,
-                        rows,
-                        cols,
-                        data,
-                    }) => {
-                        if let Some(terminal) = self.terminals.get_mut(&run_id) {
-                            terminal.screen(sequence, rows, cols, &data);
-                        }
+                }
+                Notification::Terminal {
+                    run_id,
+                    sequence,
+                    data,
+                    eof,
+                } => {
+                    if let Some(terminal) = self.terminals.get_mut(&run_id) {
+                        terminal.output(sequence, &data, eof);
                     }
-                    None => break,
+                }
+                Notification::TerminalScreen {
+                    run_id,
+                    sequence,
+                    rows,
+                    cols,
+                    data,
+                } => {
+                    if let Some(terminal) = self.terminals.get_mut(&run_id) {
+                        terminal.screen(sequence, rows, cols, &data);
+                    }
                 }
             }
         }
         if analysis_changed {
             self.refresh_analysis_windows();
         }
-        if self
+        if let Some(gone) = self
             .selected
-            .as_ref()
-            .is_some_and(|id| !self.snapshot.vms.iter().any(|vm| &vm.id == id))
+            .clone()
+            .filter(|id| !self.snapshot.vms.iter().any(|vm| &vm.id == id))
         {
             self.selected = None;
+            self.forget_deleted_vm(&gone);
         }
         if self.selected.is_none() {
             self.selected = self.snapshot.vms.first().map(|vm| vm.id.clone());
@@ -349,6 +360,7 @@ impl MonitorApp {
         if !was_offline && self.trace_archive_directory().is_some() {
             self.request_page(0);
         }
+        self.refresh_history_when_idle();
     }
 
     pub(super) fn running(&self) -> bool {

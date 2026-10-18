@@ -11,6 +11,7 @@ mod dialogs;
 mod explorer;
 mod file_drop;
 mod history;
+mod history_sync;
 mod menus;
 mod panels;
 mod recording;
@@ -313,6 +314,8 @@ pub struct MonitorApp {
     archive: Option<ArchiveWorker>,
     pending_archive: Option<Request>,
     history: Vec<RunSummary>,
+    /// Keeps `history` complete as the live snapshot changes.
+    history_sync: history_sync::HistorySync,
     archive_generation: u64,
     archive_page_generation: u64,
     archive_page: Vec<InvocationSummary>,
@@ -466,6 +469,7 @@ impl MonitorApp {
             archive: None,
             pending_archive: None,
             history: Vec::new(),
+            history_sync: Default::default(),
             archive_generation: 0,
             archive_page_generation: 0,
             archive_page: Vec::new(),
