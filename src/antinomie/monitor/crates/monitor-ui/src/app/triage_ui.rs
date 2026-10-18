@@ -63,13 +63,7 @@ impl MonitorApp {
             frames: None,
         };
         self.triage.set_address_lookup(self.settings.address_lookup);
-        *self.triage.detection_settings() = self.settings.triage_detection.clone();
-        self.triage.set_rules(
-            &self.options.data_dir,
-            self.settings.automatic_detection,
-            &self.rules_summary,
-            self.rules_generation,
-        );
+        self.configure_detection();
         self.triage
             .set_tools_dir(&antinomie_monitor_core::analysis_tools::tools_dir(
                 &self.options.data_dir,

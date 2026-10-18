@@ -6,6 +6,11 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Rules stay active after reopening.** The local rule selection loads at
+  startup without opening Rule manager. Changing runs keeps the enabled-set
+  list with its cached registry. Local registry failures are reported and can
+  be retried with Reload local rules; startup does not download rules.
+
 - **Scanned inputs in Detection.** Below the rule sets, a collapsible
   "Scanned inputs (N)" list shows exactly what the last scan passed to the
   rules, so a count such as "10 objects" can be checked: for YARA the

@@ -258,7 +258,9 @@ impl View {
         }
         self.progress = Default::default();
         self.progress_rx = None;
-        self.sets = Default::default();
+        // Installed rule configuration is independent of the selected run.
+        // Keep its set rows with the cached registry; otherwise a run change
+        // shows zero enabled sets while fresh_registry still accepts the cache.
     }
     fn request(&self, engine: Engine, digest: Option<String>) -> Option<engine::Request> {
         self.identity
@@ -1152,6 +1154,34 @@ impl Drop for View {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changing_run_keeps_rule_sets_with_the_cached_registry() {
+        let mut view = View::default();
+        view.registry = Some(antinomie_monitor_core::ruleset::Registry::default());
+        view.rules_generation = 7;
+        view.registry_for = 7;
+        view.sets[0] = vec![antinomie_monitor_core::ruleset::EngineSet {
+            name: "Installed fixture".into(),
+            revision: "1".into(),
+            enabled: true,
+            rules: 3,
+            source: String::new(),
+        }];
+        view.auto_key[0] = "old-run-evidence".into();
+        view.reset();
+        assert!(view.fresh_registry().is_some());
+        assert_eq!(
+            view.sets[0].len(),
+            1,
+            "registry and visible rule sets must remain consistent"
+        );
+        assert!(view.sets[0][0].enabled);
+        assert!(
+            view.auto_key[0].is_empty(),
+            "run-specific scan identity must reset"
+        );
+    }
 
     pub(super) fn finding(rule: &str, title: &str, evidence: Vec<Evidence>) -> Finding {
         Finding {

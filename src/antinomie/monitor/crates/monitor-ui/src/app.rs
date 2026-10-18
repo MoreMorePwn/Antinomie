@@ -17,6 +17,7 @@ mod menus;
 mod notices;
 mod panels;
 mod recording;
+mod rules;
 mod run_kill;
 mod run_selector;
 mod session;
@@ -561,7 +562,7 @@ impl MonitorApp {
             #[cfg(test)]
             launch_action_rects: None,
         };
-        *app.triage.detection_settings() = app.settings.triage_detection.clone();
+        app.configure_detection();
         match ArchiveWorker::new(Some(cc.egui_ctx.clone())) {
             Ok(worker) => {
                 app.archive = Some(worker);
@@ -587,6 +588,7 @@ impl eframe::App for MonitorApp {
         let frame_started = Instant::now();
         self.dependencies.poll();
         self.drain();
+        self.poll_rules(ctx);
         self.receive_clipboard(ctx);
         self.cpu_history
             .observe(&self.snapshot, self.selected.as_deref());
@@ -666,6 +668,7 @@ impl eframe::App for MonitorApp {
     }
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         self.settings.triage_detection = self.triage.detection_settings().clone();
+        self.settings.triage_detection.rules_root.clear();
         eframe::set_value(storage, "settings", &self.settings);
         eframe::set_value(storage, "workspace_layout", &self.layout);
         self.activity.save(storage);
