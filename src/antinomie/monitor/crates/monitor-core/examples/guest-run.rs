@@ -19,6 +19,8 @@
 //! ```
 //!
 //! `"vm": {"nat": true}` gives the VM NAT networking.
+//! `"vm": {"isolated_network": true}` uses restricted networking without
+//! outbound forwarding and overrides NAT, as in the application.
 //! `"vm": {"stealth": "desktop"}` (or `"laptop"`, `"server"`, or a whole
 //! stealth profile object) launches the VM with a realistic hardware identity.
 //! `"network_capture": true` (NAT VMs) starts a network capture before the
@@ -31,6 +33,8 @@
 //! `"capture_network"` (each boolean).
 //! `"analysis": {"enabled": true, "checks": ["metadata", "strings"]}`
 //! retains the exact executable specimen and runs the selected static checks.
+//! `"allow_incomplete": true` keeps diagnostic results after a run completion
+//! deadline. The report records the error; it never treats that run as complete.
 //!
 //! `"capture_all": true` starts Capture All once the guest is up, before the
 //! runs, and stops it after them; the report then includes its summary.
@@ -329,6 +333,10 @@ fn run() -> Result<Value, String> {
                 disk_gib: number(&vm_spec, "disk_gib", 1) as u32,
                 base_identity: base.clone(),
                 nat: vm_spec.get("nat").and_then(Value::as_bool).unwrap_or(false),
+                isolated_network: vm_spec
+                    .get("isolated_network")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
                 transport: vm_spec
                     .get("transport")
                     .map(|value| serde_json::from_value(value.clone()))
@@ -498,7 +506,7 @@ fn run() -> Result<Value, String> {
         }
         // The status is final once the tree exited and no request is pending.
         let id = run_id.clone();
-        session.settle(
+        let completion = session.settle(
             |s| {
                 s.runs.iter().any(|r| {
                     r.id == id
@@ -508,8 +516,29 @@ fn run() -> Result<Value, String> {
                 })
             },
             30,
-        )?;
-        let artifacts = session.finish_run_evidence(&run_id)?;
+        );
+        if let Err(error) = &completion
+            && !plan
+                .get("allow_incomplete")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        {
+            return Err(format!(
+                "{error}; last error {:?}; health {:?}",
+                session.snapshot.last_error, session.snapshot.health
+            ));
+        }
+        let artifacts = if completion.is_ok() {
+            session.finish_run_evidence(&run_id)?
+        } else {
+            let run = session
+                .snapshot
+                .runs
+                .iter()
+                .find(|run| run.id == run_id)
+                .ok_or("diagnostic run missing")?;
+            RunArtifacts::load(&run.directory)?
+        };
         let summary = session
             .snapshot
             .runs
@@ -520,6 +549,11 @@ fn run() -> Result<Value, String> {
             "run_id": run_id,
             "directory": summary.as_ref().map(|r| r.directory.clone()),
             "execution": summary.as_ref().and_then(|r| r.execution.clone()),
+            "state": summary.as_ref().map(|r| r.state.clone()),
+            "notes": summary.as_ref().map(|r| &r.notes),
+            "recording_error": summary.as_ref().and_then(|r| r.recording_error.as_ref()),
+            "completion_error": completion.err(),
+            "last_error": session.snapshot.last_error,
             "artifacts": artifacts,
             "analysis": summary.as_ref().and_then(|r| r.analysis.clone()),
             "seconds": elapsed,
