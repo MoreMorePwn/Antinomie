@@ -337,6 +337,7 @@ fn ipv6_and_icmp_carry_addresses_without_ports() {
 
 #[test]
 fn captures_are_listed_newest_first_with_older_whole_boot_files() {
+    let _disk = crate::storage::slow_disk::SlowDisk::install();
     let root = std::env::temp_dir().join(format!("ant-netcap-{}", crate::storage::unique_id()));
     let frames = vec![ethernet(
         0x0800,
@@ -364,6 +365,7 @@ fn captures_are_listed_newest_first_with_older_whole_boot_files() {
     };
     save_summary(&finished).unwrap();
     save_summary(&second).unwrap();
+    crate::storage::flush_json().unwrap();
     // The summary names the pcap relative to its folder.
     let saved: serde_json::Value =
         serde_json::from_slice(&std::fs::read(first.summary_path()).unwrap()).unwrap();

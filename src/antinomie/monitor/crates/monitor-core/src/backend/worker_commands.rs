@@ -609,7 +609,7 @@ impl Worker {
             Command::DumpMemory => self.start_memory_dump(),
             Command::Stop => {
                 self.stop()?;
-                Ok("VM stopped; capture finalized".into())
+                Ok("VM stopped; recordings are being saved in the background".into())
             }
             Command::Close => {
                 self.closing.store(true, Ordering::Relaxed);

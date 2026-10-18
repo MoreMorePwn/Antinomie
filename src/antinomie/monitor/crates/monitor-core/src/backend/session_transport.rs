@@ -251,11 +251,13 @@ impl Session {
     /// Write the packets the raw captures buffered during a drain pass.
     fn flush_raw(&mut self) {
         let mut failed = None;
+        self.assembler.flush();
         if !self.capture.flush() {
             self.assembler.stop_saving();
             failed = self.capture.error.clone();
         }
         for run in self.runs.values_mut() {
+            run.assembler.flush();
             if !run.capture.flush() {
                 let error = run
                     .capture
@@ -267,6 +269,7 @@ impl Session {
             }
         }
         for capture in self.captures.values_mut() {
+            capture.assembler.flush();
             if !capture.capture.flush() {
                 let error = capture
                     .capture
@@ -519,7 +522,16 @@ impl Session {
                 .map_err(RequestError::Failed)?;
         }
     }
-    pub(super) fn finalize(&mut self, state: &str, snapshot: &mut Snapshot) -> Result<(), String> {
+    /// Seal the boot on the transport thread: states, times, quota and the
+    /// summaries the frontend shows, all in memory. The disk work (waiting for
+    /// the recording writer, `fsync`, publishing the final files) is returned
+    /// as ordered steps for a flush job, which owns the recordings from here.
+    pub(super) fn seal(
+        &mut self,
+        state: &str,
+        snapshot: &mut Snapshot,
+    ) -> Vec<crate::recording_flush::Step> {
+        let mut steps = take_pending_flush_steps(&mut self.flush_queue);
         self.seal_manual_cores(state, snapshot);
         self.seal_process_cores(state, snapshot);
         // QEMU has ended (or host ownership is being sealed at a restore boundary).
@@ -547,9 +559,14 @@ impl Session {
                     "VM recording ended ({state}) before post-exit RAM dump completed"
                 ));
             }
-            if let Err(error) = owner.save() {
-                snapshot.last_error = Some(error);
-            }
+            let (directory, summary) = (owner.directory.clone(), owner.summary.clone());
+            steps.push((
+                format!("run artifacts {}", short_name(&summary.run_id)),
+                Box::new(move || {
+                    storage::atomic_json(&directory.join("artifacts.json"), &summary)
+                        .map_err(|error| format!("run artifacts: {error}"))
+                }),
+            ));
         }
         self.analysis.shutdown();
         self.analysis_updates(snapshot, &mpsc::sync_channel(1).0);
@@ -561,18 +578,12 @@ impl Session {
         let cookies: Vec<_> = self.runs.keys().copied().collect();
         for cookie in cookies {
             let available = self.available();
-            if let Some(run) = self.runs.get_mut(&cookie)
-                && let Err(error) = run.finalize(available, state, &snapshot.health)
-            {
-                run.storage_error(error.clone());
-                snapshot.last_error = Some(error);
+            if let Some(run) = self.runs.get_mut(&cookie) {
+                run.begin_finalize(available);
             }
         }
         for capture in self.captures.values_mut() {
-            if let Err(error) = capture.finalize(&snapshot.health) {
-                capture.storage_error(error.clone());
-                snapshot.last_error = Some(format!("capture finalization: {error}"));
-            }
+            capture.begin_finalize();
         }
         self.update_captures(snapshot);
         self.update_runs(snapshot);
@@ -584,23 +595,60 @@ impl Session {
                     .push("run finalized with unresolved capture".into());
             }
         }
-        let summaries = storage::atomic_json(
-            &self.capture.directory.join("events.json"),
-            &snapshot.events,
-        );
-        if let Err(e) = &summaries {
-            self.capture
-                .error
-                .get_or_insert_with(|| format!("event summaries persistence failed: {e}"));
-        }
         self.refresh_storage_health(&mut snapshot.health);
         self.capture.final_health = Some(snapshot.health.clone());
-        let manifest = self
-            .capture
-            .manifest(&self.vm, &self.bundle, &self.disk_bundle, state);
-        self.refresh_storage_health(&mut snapshot.health);
-        summaries.and(manifest)
+        let health = snapshot.health.clone();
+        for (_, mut run) in std::mem::take(&mut self.runs) {
+            let (state, health) = (state.to_owned(), health.clone());
+            steps.push((
+                format!("run {}", short_name(&run.summary.id)),
+                Box::new(move || run.complete_finalize(&state, &health)),
+            ));
+        }
+        for (id, mut capture) in std::mem::take(&mut self.captures) {
+            let health = health.clone();
+            steps.push((
+                format!("capture {}", short_name(&id)),
+                Box::new(move || capture.complete_finalize(&health)),
+            ));
+        }
+        // The boot's own archive and manifest are last: its final state says
+        // that everything above has been saved.
+        let quota = self.capture.quota();
+        let boot = std::mem::replace(&mut self.capture, RawCapture::sealed(quota));
+        let objects = std::mem::replace(&mut self.assembler, Assembler::sealed());
+        let (vm, bundle, disk_bundle) = (
+            self.vm.clone(),
+            self.bundle.clone(),
+            self.disk_bundle.clone(),
+        );
+        let events = snapshot.events.clone();
+        let state = state.to_owned();
+        steps.push((
+            "boot archive".into(),
+            Box::new(move || {
+                let (mut boot, mut objects) = (boot, objects);
+                let summaries = storage::atomic_json(&boot.directory.join("events.json"), &events);
+                if let Err(error) = &summaries {
+                    boot.error.get_or_insert_with(|| {
+                        format!("event summaries persistence failed: {error}")
+                    });
+                }
+                if let Err(error) = objects.sync() {
+                    boot.error.get_or_insert(error);
+                }
+                let manifest = boot.manifest(&vm, &bundle, &disk_bundle, &state);
+                summaries.and(manifest)
+            }),
+        ));
+        steps
     }
+    /// Read what the run's terminal has, until it has no more, a pass bound is
+    /// reached ([`TERMINAL_PASS_SIZE`] bytes, [`TERMINAL_PASS_SLICE`] of time)
+    /// or the guest is late. One 4 KiB read per pass capped a chatty program
+    /// at the pass rate (about 200 KB/s); a full read means more is waiting,
+    /// so the next one follows at once. The bound keeps other runs, commands
+    /// and the telemetry drain from waiting for one noisy terminal.
     pub(super) fn read_terminal(
         &mut self,
         run_id: &str,
@@ -608,10 +656,21 @@ impl Session {
         sender: &SyncSender<Notification>,
         timeout: Duration,
     ) -> Result<(), String> {
+        drain_pass(timeout, |left| {
+            self.read_terminal_once(run_id, snapshot, sender, left)
+        })
+    }
+    fn read_terminal_once(
+        &mut self,
+        run_id: &str,
+        snapshot: &mut Snapshot,
+        sender: &SyncSender<Notification>,
+        timeout: Duration,
+    ) -> Result<TerminalRead, String> {
         let cookie = self.run_cookie(run_id)?;
         let run = self.runs.get(&cookie).ok_or("unknown run")?;
         if run.summary.terminal_eof {
-            return Ok(());
+            return Ok(TerminalRead::default());
         }
         // Debug builds can force short deadlines to exercise late replies.
         #[cfg(debug_assertions)]
@@ -633,17 +692,17 @@ impl Session {
                 break;
             }
             if remaining.is_zero() {
-                return Ok(());
+                return Ok(TerminalRead::default());
             }
             self.transport.poll(remaining.as_millis().min(10) as i32)?;
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         let run = self.runs.get(&cookie).ok_or("unknown run")?;
         if run.summary.terminal_eof || remaining.is_zero() {
-            return Ok(());
+            return Ok(TerminalRead::default());
         }
         let mut args = control::with_session(session_id);
-        args.extend(4096u32.to_le_bytes());
+        args.extend((TERMINAL_READ_SIZE as u32).to_le_bytes());
         args.extend(0u32.to_le_bytes());
         let id = self.transport.send(control::READ, &args)?;
         match self.wait_reply(id, control::READ, snapshot, sender, remaining) {
@@ -652,7 +711,7 @@ impl Session {
                 // The guest may already have consumed output for this reply; keep
                 // the id so the reply is applied when it arrives.
                 self.late_reads.insert(id, cookie);
-                Ok(())
+                Ok(TerminalRead::default())
             }
             Err(RequestError::Failed(error) | RequestError::Rejected { message: error, .. }) => {
                 Err(error)
@@ -666,13 +725,13 @@ impl Session {
         reply: &[u8],
         snapshot: &mut Snapshot,
         sender: &SyncSender<Notification>,
-    ) -> Result<(), String> {
+    ) -> Result<TerminalRead, String> {
         if status != 0 {
             return Err(format!("terminal read returned status {status}"));
         }
         let flags = u32_at(reply, 0).map_err(|e| e.to_string())?;
         let count = u32_at(reply, 4).map_err(|e| e.to_string())? as usize;
-        if reply.len() != 8 + count || count > 4096 || flags & !1 != 0 {
+        if reply.len() != 8 + count || count > TERMINAL_READ_SIZE || flags & !1 != 0 {
             return Err("invalid terminal read reply".into());
         }
         let available = self.available();
@@ -724,8 +783,16 @@ impl Session {
         {
             snapshot.health.ui_dropped = snapshot.health.ui_dropped.saturating_add(1);
         }
-        Ok(())
+        Ok(TerminalRead {
+            len: count,
+            full: count == TERMINAL_READ_SIZE && !eof,
+        })
     }
+}
+
+/// The first characters of an identifier, for status lines.
+fn short_name(id: &str) -> &str {
+    &id[..id.len().min(8)]
 }
 
 /// The VM process ended before the awaited reply could be read.
@@ -746,4 +813,46 @@ pub(super) fn remaining_request_budget(deadline: Instant, maximum: Duration) -> 
     deadline
         .saturating_duration_since(Instant::now())
         .min(maximum)
+}
+
+/// Retired capture finalizers were queued earlier in this same boot. Put them
+/// ahead of the seal's final boot archive so Stop in the same worker batch
+/// cannot take the session and drop them before `poll_flush` runs.
+pub(super) fn take_pending_flush_steps(
+    pending: &mut Vec<crate::recording_flush::Step>,
+) -> Vec<crate::recording_flush::Step> {
+    std::mem::take(pending)
+}
+
+#[cfg(test)]
+mod flush_order_tests {
+    use super::*;
+
+    #[test]
+    fn pending_retired_capture_finalizer_precedes_the_seal_job() {
+        let order = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut pending: Vec<crate::recording_flush::Step> = vec![];
+        let retired_order = order.clone();
+        let retired: crate::recording_flush::Step = (
+            "retired capture".into(),
+            Box::new(move || -> Result<(), String> {
+                retired_order.lock().unwrap().push("retired");
+                Ok(())
+            }),
+        );
+        pending.push(retired);
+
+        let mut seal_steps = take_pending_flush_steps(&mut pending);
+        let boot_order = order.clone();
+        seal_steps.push((
+            "boot archive".into(),
+            Box::new(move || -> Result<(), String> {
+                boot_order.lock().unwrap().push("boot");
+                Ok(())
+            }),
+        ));
+        assert!(pending.is_empty());
+        assert!(crate::recording_flush::run_inline(seal_steps).is_empty());
+        assert_eq!(*order.lock().unwrap(), ["retired", "boot"]);
+    }
 }

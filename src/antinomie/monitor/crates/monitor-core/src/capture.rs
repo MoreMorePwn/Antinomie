@@ -100,9 +100,14 @@ impl CaptureSession {
             self.storage_error(error);
         }
     }
-    pub fn finalize(&mut self, health: &Health) -> Result<(), String> {
+    /// First half of finalization, for the transport thread.
+    pub fn begin_finalize(&mut self) {
         self.summary.state = CaptureState::Finalized;
-        let sync = self.capture.sync();
+    }
+    /// Second half, with the disk waits, on a flush thread: the archive's data
+    /// is written and synced before the files that call it final.
+    pub fn complete_finalize(&mut self, health: &Health) -> Result<(), String> {
+        let sync = self.capture.sync().and(self.assembler.sync());
         if let Err(error) = &sync {
             self.storage_error(error.clone());
         }
@@ -116,6 +121,11 @@ impl CaptureSession {
             &self.manifest(Some(health)),
         )?;
         sync
+    }
+    #[cfg(test)]
+    pub fn finalize(&mut self, health: &Health) -> Result<(), String> {
+        self.begin_finalize();
+        self.complete_finalize(health)
     }
 }
 

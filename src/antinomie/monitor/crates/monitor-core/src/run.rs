@@ -29,6 +29,9 @@ pub(crate) struct ProgramRun {
     pub execution_generation: u64,
     /// Terminal READ requests that never received a reply before finalize.
     pub terminal_reads_unanswered: u64,
+    /// The final screen prepared by [`Self::begin_finalize`], published by
+    /// [`Self::complete_finalize`].
+    pending_screen: Option<Result<Vec<u8>, String>>,
     started_ms: u64,
     ended_ms: Option<u64>,
 }
@@ -64,6 +67,7 @@ impl ProgramRun {
             disk_base_identity: None,
             execution_generation: 0,
             terminal_reads_unanswered: 0,
+            pending_screen: None,
             started_ms,
             ended_ms: None,
         };
@@ -283,25 +287,38 @@ impl ProgramRun {
         }
         Ok(screen)
     }
-    fn save_screen_now(&mut self, available: u64) -> Result<(), String> {
-        let screen = self.screen_bytes(available)?;
-        storage::atomic_bytes(
-            &self.summary.directory.join("terminal-screen.ansi"),
-            &screen,
-        )?;
-        self.screen_len = screen.len() as u64;
-        Ok(())
-    }
-    pub fn finalize(&mut self, available: u64, state: &str, health: &Health) -> Result<(), String> {
+    /// First half of finalization, for the transport thread: the run's final
+    /// state and times, and its final screen, with no wait for the disk.
+    pub fn begin_finalize(&mut self, available: u64) {
         self.ended_ms.get_or_insert_with(unix_ms);
         if !matches!(self.summary.state, RunState::Finished | RunState::Stopped) {
             self.summary.state = RunState::Finalized;
         }
+        let screen = self.screen_bytes(available);
+        if let Ok(screen) = &screen {
+            self.screen_len = screen.len() as u64;
+        }
+        self.pending_screen = Some(screen);
+    }
+    /// Second half, with the disk waits: the run's data is written and synced
+    /// (raw packets, objects, screen, terminal journal and transcript) before
+    /// `run.json` and `manifest.json` say it is final. Runs on a flush thread.
+    pub fn complete_finalize(&mut self, state: &str, health: &Health) -> Result<(), String> {
+        let screen = self
+            .pending_screen
+            .take()
+            .unwrap_or_else(|| Err("final screen was not prepared".into()));
         let results = [
             self.capture.sync(),
-            self.save_screen_now(available),
+            screen.and_then(|screen| {
+                storage::atomic_bytes(
+                    &self.summary.directory.join("terminal-screen.ansi"),
+                    &screen,
+                )
+            }),
             self.journal.sync_all().map_err(|e| e.to_string()),
             self.transcript.sync_all().map_err(|e| e.to_string()),
+            self.assembler.sync(),
         ];
         let result = results
             .into_iter()
@@ -319,6 +336,11 @@ impl ProgramRun {
         )?;
         result
     }
+    #[cfg(test)]
+    pub fn finalize(&mut self, available: u64, state: &str, health: &Health) -> Result<(), String> {
+        self.begin_finalize(available);
+        self.complete_finalize(state, health)
+    }
 }
 
 fn unix_ms() -> u64 {
@@ -334,6 +356,7 @@ mod tests {
     use super::*;
     #[test]
     fn embedded_analysis_metadata_counts_both_persisted_copies() {
+        let _disk = storage::slow_disk::SlowDisk::install();
         let directory =
             std::env::temp_dir().join(format!("ant-analysis-metadata-{}", storage::unique_id()));
         let summary = RunSummary {
@@ -368,7 +391,7 @@ mod tests {
         run.summary.analysis = Some(report);
         run.refresh_analysis_metadata().unwrap();
         run.persist_summary().unwrap();
-        storage::flush_json();
+        storage::flush_json().unwrap();
         let mut increment = 0;
         for (filename, nested) in [("run.json", false), ("manifest.json", true)] {
             let mut encoded: serde_json::Value =
@@ -622,11 +645,12 @@ mod tests {
     }
     #[test]
     fn a_refused_end_mark_still_saves_the_closed_terminal_and_names_the_cause() {
+        let _disk = storage::slow_disk::SlowDisk::install();
         let (mut run, directory) = open_run("ant-run-eof");
         run.storage_error("capture quota exhausted; terminal saving stopped");
         let error = run.eof(65536).unwrap_err();
         assert!(error.contains("capture quota exhausted"), "{error}");
-        storage::flush_json();
+        storage::flush_json().unwrap();
         let saved: RunSummary =
             serde_json::from_reader(File::open(directory.join("run.json")).unwrap()).unwrap();
         assert!(

@@ -101,7 +101,9 @@ pub fn filter_dump_del(capture: &NetworkCapture) -> serde_json::Value {
     serde_json::json!({"execute": "object-del", "arguments": {"id": capture.object_id()}})
 }
 
-/// Save `capture`'s summary beside its pcap.
+/// Queue `capture`'s summary for saving beside its pcap. The persistence
+/// thread publishes it, so the caller never waits for an `fsync`; a failure
+/// shows at the next save of the same summary.
 pub(crate) fn save_summary(capture: &NetworkCapture) -> Result<(), String> {
     let mut saved = capture.clone();
     saved.file = capture
@@ -109,7 +111,7 @@ pub(crate) fn save_summary(capture: &NetworkCapture) -> Result<(), String> {
         .file_name()
         .map(PathBuf::from)
         .unwrap_or_default();
-    crate::storage::atomic_json(&capture.summary_path(), &saved)
+    crate::storage::queue_json(&capture.summary_path(), &saved)
 }
 
 /// Every network capture in a VM's recording folder, newest first: the

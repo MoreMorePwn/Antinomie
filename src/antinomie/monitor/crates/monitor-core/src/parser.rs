@@ -1,16 +1,17 @@
 //! Checked ANTT application protocol parsing and bounded, disk-backed assembly.
 use crate::{
     api::{EventSummary, FieldSummary},
-    archive_io,
+    object_pack::{FieldKey, PackWriter},
     storage::private_dir,
 };
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, VecDeque},
-    fs::File,
-    io::{Read, Seek, SeekFrom},
     path::PathBuf,
 };
+
+mod objects;
+use objects::StoreError;
 
 #[derive(Default)]
 struct Issues(Vec<String>);
@@ -236,7 +237,10 @@ struct Field {
     summary: FieldSummary,
     begin: Option<Vec<u8>>,
     end: Option<Vec<u8>>,
-    chunks: BTreeMap<u64, (u64, PathBuf)>,
+    /// Chunks by offset in the object: length and location in the object store.
+    chunks: BTreeMap<u64, (u64, [u8; 16])>,
+    /// The field's number in the object index, once its first chunk is stored.
+    number: Option<u32>,
     chunk_count: u64,
     issues: Issues,
     total: Option<u64>,
@@ -260,6 +264,7 @@ impl Field {
             begin: None,
             end: None,
             chunks: BTreeMap::new(),
+            number: None,
             chunk_count: 0,
             issues: Issues::default(),
             total: None,
@@ -464,6 +469,8 @@ pub struct Assembler {
     capacity: usize,
     /// The recording writer thread's first object write error.
     write_error: crate::writer::ErrorSlot,
+    /// Where chunks are stored; none for a reader of a saved archive.
+    pack: Option<PackWriter>,
 }
 impl Assembler {
     pub fn new(directory: PathBuf, quota: u64) -> Result<Self> {
@@ -471,7 +478,9 @@ impl Assembler {
         Ok(Self::empty(directory, quota, false))
     }
     fn empty(directory: PathBuf, quota: u64, read_only: bool) -> Self {
+        let write_error = crate::writer::error_slot();
         Self {
+            pack: (!read_only).then(|| PackWriter::new(directory.clone(), write_error.clone())),
             directory,
             quota,
             stored_len: 0,
@@ -488,7 +497,29 @@ impl Assembler {
             evicted: VecDeque::new(),
             finished: VecDeque::new(),
             capacity: 2048,
-            write_error: crate::writer::error_slot(),
+            write_error,
+        }
+    }
+    /// A stand-in for an assembler whose recording moved to a flush job.
+    pub(crate) fn sealed() -> Self {
+        Self::empty(PathBuf::new(), 0, true)
+    }
+    /// Hand the chunks stored since the last call to the recording writer.
+    pub fn flush(&mut self) {
+        if let Some(pack) = &mut self.pack
+            && let Err(error) = pack.flush()
+        {
+            self.saving_error
+                .get_or_insert_with(|| format!("host object persistence: {error}"));
+            self.enabled = false;
+        }
+    }
+    /// Wait until every chunk stored so far is written, and make the object
+    /// files durable. Reports the first failure of this assembler's writes.
+    pub(crate) fn sync(&mut self) -> std::result::Result<(), String> {
+        match &mut self.pack {
+            Some(pack) => pack.sync(),
+            None => Ok(()),
         }
     }
     pub fn stop_saving(&mut self) {
@@ -749,32 +780,24 @@ impl Assembler {
                             f.issues.push("chunk exceeds final semantic extent".into());
                             return Ok(Some(e.summary()));
                         }
-                        if let Some((&offset, (len, path))) =
+                        let field_key = FieldKey {
+                            stream: h.stream_id,
+                            task: h.task_cookie,
+                            call: h.call_id,
+                            phase: h.phase,
+                            seq: h.event_seq,
+                            object: h.object_id,
+                        };
+                        let fingerprint = crate::object_pack::chunk_fingerprint(b);
+                        if let Some((&offset, &(len, prior_fingerprint))) =
                             f.chunks.range(..chunk_end).next_back()
-                            && offset.saturating_add(*len) > h.object_offset
+                            && offset.saturating_add(len) > h.object_offset
                         {
-                            if offset == h.object_offset && *len == b.len() as u64 {
-                                let mut previous = vec![0; b.len()];
-                                let result = (if self.read_only {
-                                    archive_io::open_regular(&self.directory, path)
-                                } else {
-                                    // The first copy may still be queued for writing.
-                                    crate::writer::barrier();
-                                    File::open(path)
-                                })
-                                .and_then(|mut file| {
-                                    file.seek(SeekFrom::Start(offset))
-                                        .and_then(|_| file.read_exact(&mut previous))
-                                });
-                                if let Err(err) = result {
-                                    let message = format!("host object persistence: {err}");
-                                    if !self.read_only {
-                                        self.saving_error.get_or_insert(message.clone());
-                                        self.enabled = false;
-                                    }
-                                    return Err(error(message));
-                                }
-                                if previous != b {
+                            if offset == h.object_offset && len == b.len() as u64 {
+                                // Keep a bounded fingerprint with the chunk so
+                                // recognizing a duplicate never waits for an
+                                // object writer flush and a disk read.
+                                if prior_fingerprint != fingerprint {
                                     f.issues.push("conflicting duplicate chunk".into());
                                 }
                             } else {
@@ -794,65 +817,40 @@ impl Assembler {
                             f.issues.push("host object saving stopped".into());
                             return Ok(Some(e.summary()));
                         }
-                        if chunk_end > self.quota
-                            || self.stored_len.saturating_add(b.len() as u64) > self.quota
-                        {
-                            let message = "host object quota exhausted; saving stopped".to_string();
-                            if !self.read_only {
-                                self.saving_error.get_or_insert(message.clone());
-                                self.enabled = false;
-                            }
-                            f.issues.push(message);
-                            return Ok(Some(e.summary()));
-                        }
-                        let path = self.directory.join(format!(
-                            "{}-{}-{}-{}-{}-{}.raw",
-                            h.stream_id,
-                            h.task_cookie,
-                            h.call_id,
-                            h.phase,
-                            h.event_seq,
-                            h.object_id
-                        ));
-                        let result = if self.read_only {
-                            archive_io::open_regular(&self.directory, &path).and_then(|mut file| {
-                                let mut previous = vec![0; b.len()];
-                                file.seek(SeekFrom::Start(h.object_offset))?;
-                                file.read_exact(&mut previous)?;
-                                if previous == b {
-                                    Ok(())
-                                } else {
-                                    Err(std::io::Error::other(
-                                        "archived field differs from raw packet",
-                                    ))
+                        let stored = objects::store(
+                            &mut self.pack,
+                            &self.directory,
+                            &field_key,
+                            &mut f.number,
+                            h.object_offset,
+                            b,
+                            self.quota.saturating_sub(self.stored_len),
+                        );
+                        let added = match stored {
+                            Ok(stored) => stored,
+                            Err(failure) => {
+                                let message = match failure {
+                                    StoreError::Quota => {
+                                        "host object quota exhausted; saving stopped".to_string()
+                                    }
+                                    StoreError::Failed(err) => {
+                                        format!("host object persistence: {err}")
+                                    }
+                                };
+                                if !self.read_only {
+                                    self.saving_error.get_or_insert(message.clone());
+                                    self.enabled = false;
                                 }
-                            })
-                        } else {
-                            {
-                                crate::writer::submit(crate::writer::Op::Object {
-                                    path: path.clone(),
-                                    offset: h.object_offset,
-                                    data: b.to_vec(),
-                                    error: self.write_error.clone(),
-                                });
-                                Ok(())
+                                f.issues.push(message);
+                                return Ok(Some(e.summary()));
                             }
                         };
-                        if let Err(err) = result {
-                            let message = format!("host object persistence: {err}");
-                            if !self.read_only {
-                                self.saving_error.get_or_insert(message.clone());
-                                self.enabled = false;
-                            }
-                            f.issues.push(message);
-                            return Ok(Some(e.summary()));
-                        }
-                        self.stored_len += b.len() as u64;
+                        self.stored_len += added;
                         self.chunk_count += 1;
                         f.chunk_count += 1;
                         f.chunks
-                            .insert(h.object_offset, (b.len() as u64, path.clone()));
-                        f.summary.raw_path = Some(path);
+                            .insert(h.object_offset, (b.len() as u64, fingerprint));
+                        f.summary.raw_path = Some(self.directory.join(field_key.file_name()));
                         if h.object_offset == 0 {
                             f.summary.preview = b[..b.len().min(256)].to_vec();
                         }
@@ -947,6 +945,42 @@ mod tests {
         for len in 0..128 {
             assert!(parse_packet(&p[..len]).is_err());
         }
+    }
+
+    #[test]
+    fn an_empty_data_fragment_does_not_disable_later_object_saving() {
+        let path = std::env::temp_dir().join(format!(
+            "ant-empty-fragment-{}",
+            crate::storage::unique_id()
+        ));
+        let mut assembler = Assembler::new(path.clone(), 1024).unwrap();
+        assembler.ingest(&packet(3, 1, 0, b"", 1)).unwrap();
+        assert!(assembler.saving_error().is_none());
+        assembler
+            .ingest(&packet(3, 2, 0, b"later field", 2))
+            .unwrap();
+        assert!(assembler.saving_error().is_none());
+        assembler.pack.as_mut().unwrap().sync().unwrap();
+        let empty = FieldKey {
+            stream: 0,
+            task: 0,
+            call: 0,
+            phase: 1,
+            seq: 0,
+            object: 1,
+        };
+        let later = FieldKey { object: 2, ..empty };
+        assert_eq!(
+            crate::object_pack::read_field_range(&path, &empty, 0, 0).unwrap(),
+            Some(Vec::new())
+        );
+        assert_eq!(
+            crate::object_pack::read_field_range(&path, &later, 0, 11)
+                .unwrap()
+                .unwrap(),
+            b"later field"
+        );
+        std::fs::remove_dir_all(path).unwrap();
     }
     #[test]
     fn extended_headers_keep_inherited_root_and_legacy_root_unknown() {
@@ -1114,9 +1148,22 @@ mod tests {
                 .join(format!("ant-object-saving-{}", crate::storage::unique_id()));
             let mut assembler = Assembler::new(path.clone(), 1024).unwrap();
             assembler.ingest(&packet(3, 1, 0, b"saved", 1)).unwrap();
-            let retained_path = assembler.history()[0].fields[0].raw_path.clone().unwrap();
+            let retained = assembler.history()[0].fields[0].clone();
+            let kept = crate::object_pack::FieldKey::parse(
+                retained
+                    .raw_path
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+            )
+            .unwrap();
             if io_failure {
-                std::fs::create_dir(path.join("0-0-0-1-0-2.raw")).unwrap();
+                // The next chunk needs a new segment, which cannot be created.
+                assembler.pack.as_mut().unwrap().set_segment_size(10);
+                std::fs::create_dir(path.join(crate::object_pack::segment_name(1))).unwrap();
             } else {
                 assembler.set_storage_limit(6);
             }
@@ -1124,10 +1171,7 @@ mod tests {
                 .ingest(&packet(3, 2, 0, b"not saved", 2))
                 .unwrap()
                 .unwrap();
-            // A quota refusal is immediate; a write failure is reported once
-            // the writer thread has tried, so the range was already listed.
-            assert_eq!(event.fields[1].ranges.is_empty(), !io_failure);
-            crate::writer::barrier();
+            assert!(event.fields[1].ranges.is_empty());
             let failure = assembler.saving_error().unwrap().to_owned();
             assert!(failure.contains(if io_failure { "persistence" } else { "quota" }));
             assembler.set_storage_limit(1024);
@@ -1137,8 +1181,19 @@ mod tests {
                 .unwrap();
             assert!(event.fields[2].ranges.is_empty());
             assert_eq!(assembler.saving_error(), Some(failure.as_str()));
-            assert_eq!(assembler.stored_len(), if io_failure { 14 } else { 5 });
-            assert_eq!(std::fs::read(retained_path).unwrap(), b"saved");
+            // Only the first chunk, its field and the index header were counted.
+            use crate::object_pack::{CHUNK_RECORD_SIZE, FIELD_RECORD_SIZE, HEADER_SIZE};
+            assert_eq!(
+                assembler.stored_len(),
+                5 + CHUNK_RECORD_SIZE + FIELD_RECORD_SIZE + HEADER_SIZE
+            );
+            assembler.pack.as_mut().unwrap().settle();
+            assert_eq!(
+                crate::object_pack::read_field_range(&path, &kept, 0, 5)
+                    .unwrap()
+                    .unwrap(),
+                b"saved"
+            );
             std::fs::remove_dir_all(path).unwrap();
         }
     }
@@ -1173,11 +1228,21 @@ mod tests {
         assert!(event.complete);
         assert_eq!(event.fields[0].preview.len(), 256);
         assert_eq!(event.fields[0].ranges.len(), 160);
-        crate::writer::barrier();
-        let mut file = File::open(event.fields[0].raw_path.as_ref().unwrap()).unwrap();
-        file.seek(SeekFrom::Start(159 * 65536)).unwrap();
-        let mut sample = [0; 32];
-        file.read_exact(&mut sample).unwrap();
+        a.pack.as_mut().unwrap().settle();
+        let key = crate::object_pack::FieldKey::parse(
+            event.fields[0]
+                .raw_path
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap(),
+        )
+        .unwrap();
+        let sample = crate::object_pack::read_field_range(&path, &key, 159 * 65536, 32)
+            .unwrap()
+            .unwrap();
         assert_eq!(sample, [159; 32]);
         std::fs::remove_dir_all(path).unwrap();
     }
