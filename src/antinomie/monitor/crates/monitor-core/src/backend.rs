@@ -12,6 +12,7 @@ mod saving;
 mod session_runs;
 mod session_transport;
 mod snapshot_recovery;
+mod terminal_drain;
 mod uploads;
 mod worker_artifacts;
 mod worker_commands;
@@ -20,8 +21,8 @@ mod worker_loop;
 mod worker_vm;
 
 use self::{
-    completions::*, launch_failure::*, run_network::*, saving::*, session_transport::*, uploads::*,
-    worker_artifacts::*, worker_loop::*, worker_vm::*,
+    completions::*, launch_failure::*, run_network::*, saving::*, session_transport::*,
+    terminal_drain::*, uploads::*, worker_artifacts::*, worker_loop::*, worker_vm::*,
 };
 use crate::{
     api::*,
@@ -136,6 +137,7 @@ impl Backend {
         let worker_snapshot = latest_snapshot.clone();
         let guest_epoch = Arc::new(AtomicU64::new(0));
         let worker_epoch = guest_epoch.clone();
+        let flusher = crate::recording_flush::Flusher::new()?;
         let analysis_tools = crate::analysis_tools::statuses(&options.data_dir);
         let thread = thread::Builder::new()
             .name("antinomie-transport".into())
@@ -166,6 +168,8 @@ impl Backend {
                     latest_snapshot: worker_snapshot,
                     guest_epoch: worker_epoch,
                     reconnect: (0, None),
+                    deferred_flush: None,
+                    flusher,
                     wake,
                 }
                 .run();
@@ -449,6 +453,9 @@ struct Session {
     last_status_query: Instant,
     persisted_packets: u64,
     kernel_probe: KernelProbe,
+    /// Disk work of recordings closed while the boot runs (a retired capture
+    /// archive), taken by the worker into a flush job.
+    flush_queue: Vec<crate::recording_flush::Step>,
 }
 
 /// Correlation survives a poll deadline, but never a new session or run generation.
@@ -564,8 +571,11 @@ impl RunArtifactOwner {
             core_stored_len: 0,
         }
     }
+    /// Queues the summary for the persistence thread: the transport thread
+    /// never waits for the `fsync` of a status file. A failure of an earlier
+    /// queued copy is returned here; finalization publishes the last one.
     fn save(&self) -> Result<(), String> {
-        storage::atomic_json(&self.directory.join("artifacts.json"), &self.summary)
+        storage::queue_json(&self.directory.join("artifacts.json"), &self.summary)
             .map_err(|error| format!("run artifacts: {error}"))
     }
     fn issue(&mut self, issue: String) {
@@ -690,6 +700,9 @@ struct Worker {
     /// Automatic reconnection after the guest stopped answering (see
     /// [`stalled`]): failed attempts so far and when to try next.
     reconnect: (u32, Option<Instant>),
+    /// Disk work of stopped boots, off this thread (see `crate::recording_flush`).
+    deferred_flush: Option<crate::recording_flush::RejectedFlushJob>,
+    flusher: crate::recording_flush::Flusher,
 }
 
 /// Attempts at reconnecting a guest that stopped answering, before the VM is
@@ -881,5 +894,7 @@ fn unix_ms() -> u64 {
         .map_or(0, |time| time.as_millis() as u64)
 }
 
+#[cfg(test)]
+mod stall_tests;
 #[cfg(test)]
 mod tests;

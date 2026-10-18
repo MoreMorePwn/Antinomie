@@ -1383,6 +1383,9 @@ pub struct Snapshot {
     /// At most the active/latest observer preview; older captures use archive paging.
     pub capture_events: std::collections::BTreeMap<String, Vec<EventSummary>>,
     pub boot_id: Option<String>,
+    /// Recordings of stopped boots that are still being made durable. The VM
+    /// is already Stopped; this is the host finishing its disk work.
+    pub recording_flush: Option<crate::RecordingFlushStatus>,
     pub process_page: Option<crate::observation::GuestProcessPage>,
     pub capture_dir: Option<PathBuf>,
     pub serial_log: Option<PathBuf>,

@@ -1081,6 +1081,15 @@ pub fn read_captured_range(
         .raw_path
         .as_ref()
         .ok_or(RecordingError::MissingRange)?;
+    // Archives made since objects were packed hold the field in segments.
+    if let Some(key) = saved_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(crate::object_pack::FieldKey::parse)
+        && let Some(data) = crate::object_pack::read_field_range(&root, &key, offset, data_len)?
+    {
+        return Ok(data);
+    }
     let candidate = if saved_path.is_absolute() {
         // Older archives held absolute paths. Relocate only their object basename.
         root.join(saved_path.file_name().ok_or(RecordingError::MissingRange)?)

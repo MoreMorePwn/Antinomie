@@ -262,209 +262,35 @@ pub(crate) fn sync_directory_parent(directory: &Path) -> Result<(), String> {
         .map_err(|error| format!("sync VM parent {}: {error}", parent.display()))
 }
 
-/// Atomic JSON writes that must not stall the transport worker on a slow
-/// `fsync`. One background thread writes them; a newer value for a path
-/// replaces one still pending, and a synchronous write to the same path first
-/// waits for the background copy so it can never be overwritten by older data.
-#[derive(Default)]
-struct JsonQueue {
-    pending: std::collections::BTreeMap<PathBuf, Vec<u8>>,
-    writing: Option<PathBuf>,
-    errors: std::collections::BTreeMap<PathBuf, String>,
-    observed:
-        std::collections::BTreeMap<PathBuf, std::sync::Weak<std::sync::Mutex<JsonWriteStatus>>>,
-}
-static JSON_QUEUE: std::sync::OnceLock<(std::sync::Mutex<JsonQueue>, std::sync::Condvar)> =
-    std::sync::OnceLock::new();
-
-fn json_queue() -> &'static (std::sync::Mutex<JsonQueue>, std::sync::Condvar) {
-    JSON_QUEUE.get_or_init(|| {
-        let spawned = std::thread::Builder::new()
-            .name("antinomie-json".into())
-            .spawn(json_writer);
-        if let Err(error) = spawned {
-            panic!("JSON writer thread: {error}");
-        }
-        Default::default()
-    })
-}
-
-fn json_writer() {
-    let (lock, ready) = json_queue();
-    let mut queue = lock.lock().unwrap_or_else(|e| e.into_inner());
-    loop {
-        let Some((path, bytes)) = queue.pending.pop_first() else {
-            queue = ready.wait(queue).unwrap_or_else(|e| e.into_inner());
-            continue;
-        };
-        queue.writing = Some(path.clone());
-        let observed = queue.observed.get(&path).and_then(std::sync::Weak::upgrade);
-        drop(queue);
-        let result = write_atomic(&path, &bytes);
-        queue = lock.lock().unwrap_or_else(|e| e.into_inner());
-        queue.writing = None;
-        if let Some(observed) = observed {
-            let mut status = observed.lock().unwrap_or_else(|error| error.into_inner());
-            if matches!(*status, JsonWriteStatus::Pending) {
-                *status = match &result {
-                    Ok(()) => JsonWriteStatus::Complete,
-                    Err(error) => JsonWriteStatus::Failed(error.message.clone()),
-                };
-            }
-        }
-        match result {
-            Ok(()) => queue.errors.remove(&path),
-            Err(error) => queue.errors.insert(path, error.message),
-        };
-        ready.notify_all();
-    }
-}
-
-/// Queues an atomic JSON write and returns at once. Reports the failure of an
-/// earlier background write to the same path, if any.
-pub(crate) fn queue_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
-    let mut bytes = serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?;
-    bytes.push(b'\n');
-    queue_bytes(path, bytes)
-}
-
-/// Publication state for an observed queued value. Failure remains observable
-/// until the caller retries or a later same-path write supersedes that value.
-#[derive(Clone, Debug)]
-pub(crate) enum JsonWriteStatus {
-    Pending,
-    Complete,
-    Failed(String),
-    Superseded,
-}
-/// An observed value is acknowledged only after its own durable publication.
-/// Any later same-path queue or synchronous write supersedes it, including
-/// coalesced writes. The caller may then publish its current final value again.
-/// Weak queue registrations are removed when the capture drops its receipt.
-pub(crate) struct JsonReceipt {
-    path: PathBuf,
-    status: std::sync::Arc<std::sync::Mutex<JsonWriteStatus>>,
-}
-impl JsonReceipt {
-    pub(crate) fn status(&self) -> JsonWriteStatus {
-        self.status
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone()
-    }
-}
-impl Drop for JsonReceipt {
-    fn drop(&mut self) {
-        if let Some((lock, _)) = JSON_QUEUE.get() {
-            let mut queue = lock.lock().unwrap_or_else(|error| error.into_inner());
-            if queue
-                .observed
-                .get(&self.path)
-                .is_some_and(|entry| entry.ptr_eq(&std::sync::Arc::downgrade(&self.status)))
-            {
-                queue.observed.remove(&self.path);
-            }
-        }
-    }
-}
-fn supersede_observed(queue: &JsonQueue, path: &Path) {
-    if let Some(observed) = queue.observed.get(path).and_then(std::sync::Weak::upgrade) {
-        *observed.lock().unwrap_or_else(|error| error.into_inner()) = JsonWriteStatus::Superseded;
-    }
-}
-pub(crate) fn queue_json_observed(
-    path: &Path,
-    value: &impl Serialize,
-) -> Result<JsonReceipt, String> {
-    let mut bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
-    bytes.push(b'\n');
-    let status = std::sync::Arc::new(std::sync::Mutex::new(JsonWriteStatus::Pending));
-    let (lock, ready) = json_queue();
-    let mut queue = lock.lock().unwrap_or_else(|error| error.into_inner());
-    supersede_observed(&queue, path);
-    // A new receipt describes the retry rather than a previous path failure.
-    // Callers observe the original receipt before explicitly queuing a retry.
-    queue.errors.remove(path);
-    queue
-        .observed
-        .insert(path.to_path_buf(), std::sync::Arc::downgrade(&status));
-    queue.pending.insert(path.to_path_buf(), bytes);
-    ready.notify_all();
-    Ok(JsonReceipt {
-        path: path.to_path_buf(),
-        status,
-    })
-}
-/// Queues an atomic write of `bytes` to `path`, like `queue_json`.
-pub(crate) fn queue_bytes(path: &Path, bytes: Vec<u8>) -> Result<(), String> {
-    let (lock, ready) = json_queue();
-    let mut queue = lock.lock().unwrap_or_else(|e| e.into_inner());
-    let earlier = queue.errors.remove(path);
-    supersede_observed(&queue, path);
-    queue.pending.insert(path.to_path_buf(), bytes);
-    ready.notify_all();
-    earlier.map_or(Ok(()), Err)
-}
-
-/// Drops a pending background write to `path` and waits for one in progress.
-fn settle_json(path: &Path) {
-    let Some((lock, ready)) = JSON_QUEUE.get() else {
-        return;
-    };
-    let mut queue = lock.lock().unwrap_or_else(|e| e.into_inner());
-    supersede_observed(&queue, path);
-    queue.pending.remove(path);
-    while queue.writing.as_deref() == Some(path) {
-        queue = ready.wait(queue).unwrap_or_else(|e| e.into_inner());
-    }
-    queue.errors.remove(path);
-}
-
-/// Before a test removes `directory`: drops background writes queued below it
-/// and waits for one in progress there, so none recreates a file meanwhile.
+mod json_queue;
 #[cfg(test)]
-pub(crate) fn settle_json_under(directory: &Path) {
-    let Some((lock, ready)) = JSON_QUEUE.get() else {
-        return;
-    };
-    let mut queue = lock.lock().unwrap_or_else(|e| e.into_inner());
-    queue.pending.retain(|path, _| !path.starts_with(directory));
-    while queue
-        .writing
-        .as_deref()
-        .is_some_and(|path| path.starts_with(directory))
-    {
-        queue = ready.wait(queue).unwrap_or_else(|e| e.into_inner());
-    }
-    queue.errors.retain(|path, _| !path.starts_with(directory));
-}
-
-/// Waits until every queued JSON write has reached the disk.
-pub(crate) fn flush_json() {
-    let Some((lock, ready)) = JSON_QUEUE.get() else {
-        return;
-    };
-    let mut queue = lock.lock().unwrap_or_else(|e| e.into_inner());
-    while !queue.pending.is_empty() || queue.writing.is_some() {
-        queue = ready.wait(queue).unwrap_or_else(|e| e.into_inner());
-    }
-}
+pub(crate) use json_queue::transport_sync_writes;
+pub(crate) use json_queue::{
+    JsonReceipt, JsonWriteStatus, flush_json, mark_transport_thread, queue_bytes, queue_json,
+    queue_json_observed,
+};
+#[cfg(test)]
+pub(crate) use json_queue::{held as slow_disk, settle_json_under};
+use json_queue::{note_sync_write, settle_json};
 
 pub(crate) fn atomic_json_checked(
     path: &Path,
     value: &impl Serialize,
 ) -> Result<(), PublicationError> {
+    // A direct write has no size cap; only queued values are bounded.
     let mut bytes = serde_json::to_vec_pretty(value).map_err(|e| PublicationError {
         published: false,
         message: e.to_string(),
     })?;
     bytes.push(b'\n');
+    note_sync_write();
     settle_json(path);
     write_atomic(path, &bytes)
 }
 
 /// Writes `bytes` to `path` atomically now, after any queued write to it.
 pub(crate) fn atomic_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    note_sync_write();
     settle_json(path);
     write_atomic(path, bytes).map_err(Into::into)
 }
@@ -1642,6 +1468,8 @@ pub struct RawCapture {
     buffer: Vec<u8>,
     /// File length and packet count handed to the writer thread.
     written: (u64, u64),
+    /// Ticket of the last block handed to the writer thread.
+    ticket: u64,
     /// The writer thread's first error for this file, reported once.
     write_error: crate::writer::ErrorSlot,
     write_error_seen: bool,
@@ -1662,9 +1490,9 @@ impl Drop for RawCapture {
 }
 impl RawCapture {
     pub(crate) fn sync(&mut self) -> Result<(), String> {
-        self.flush();
-        crate::writer::barrier();
-        self.flush();
+        self.flush_blocking();
+        crate::writer::wait_for(self.ticket);
+        self.flush_blocking();
         if let Some(error) = &self.error
             && error.starts_with("capture write failed")
         {
@@ -1679,6 +1507,25 @@ impl RawCapture {
     pub(crate) fn quota(&self) -> u64 {
         self.quota
     }
+    /// A stand-in for a capture whose recording moved to a flush job: it
+    /// refuses packets and holds no file of the recording.
+    pub(crate) fn sealed(quota: u64) -> Self {
+        Self {
+            directory: PathBuf::new(),
+            file: std::sync::Arc::new(File::open("/dev/null").expect("open /dev/null")),
+            buffer: Vec::new(),
+            written: (0, 0),
+            ticket: 0,
+            write_error: crate::writer::error_slot(),
+            write_error_seen: false,
+            quota,
+            packets: 0,
+            bytes: 0,
+            error: Some("recording sealed".into()),
+            final_health: None,
+            guest_kernel: None,
+        }
+    }
     pub fn new(directory: PathBuf, quota: u64) -> Result<Self, String> {
         private_dir(&directory).map_err(|e| e.to_string())?;
         let file = OpenOptions::new()
@@ -1692,6 +1539,7 @@ impl RawCapture {
             file: std::sync::Arc::new(file),
             buffer: Vec::new(),
             written: (0, 0),
+            ticket: 0,
             write_error: crate::writer::error_slot(),
             write_error_seen: false,
             quota,
@@ -1739,6 +1587,12 @@ impl RawCapture {
     /// back to the last complete block, so it stays whole packets, and
     /// nothing more is written.
     pub fn flush(&mut self) -> bool {
+        self.flush_with(false)
+    }
+    fn flush_blocking(&mut self) -> bool {
+        self.flush_with(true)
+    }
+    fn flush_with(&mut self, blocking: bool) -> bool {
         if !self.write_error_seen
             && let Some(error) = crate::writer::error_of(&self.write_error)
         {
@@ -1751,16 +1605,37 @@ impl RawCapture {
             return false;
         }
         if !self.buffer.is_empty() && !self.write_error_seen {
-            crate::writer::submit(crate::writer::Op::Append {
+            let op = crate::writer::Op::Append {
                 file: self.file.clone(),
                 data: std::mem::take(&mut self.buffer),
                 rollback: self.written.0,
                 error: self.write_error.clone(),
-            });
-            self.written = (self.bytes, self.packets);
+            };
+            let submitted = if blocking {
+                Ok(crate::writer::submit(op))
+            } else {
+                crate::writer::try_submit(op)
+            };
+            match submitted {
+                Ok(ticket) => {
+                    self.ticket = ticket;
+                    self.written = (self.bytes, self.packets);
+                }
+                Err(crate::writer::Op::Append { data, .. }) => {
+                    self.buffer = data;
+                    self.error.get_or_insert_with(|| {
+                        "recording writer queue is full; further capture admissions stopped".into()
+                    });
+                    return false;
+                }
+                Err(crate::writer::Op::WriteAt { .. }) => unreachable!("raw append operation"),
+            }
         }
         true
     }
+    /// Writes the manifest durably: waits for this file's data, syncs it and
+    /// publishes the manifest with `fsync`. For the end of a recording, off
+    /// the transport thread; use [`Self::queue_manifest`] while it runs.
     pub(crate) fn manifest(
         &mut self,
         vm: &VmConfig,
@@ -1768,35 +1643,59 @@ impl RawCapture {
         disk_bundle: &Bundle,
         state: &str,
     ) -> Result<(), String> {
-        self.flush();
-        crate::writer::barrier();
-        if self.flush()
+        self.flush_blocking();
+        crate::writer::wait_for(self.ticket);
+        if self.flush_blocking()
             && let Err(e) = self.file.sync_all()
         {
             self.error
                 .get_or_insert_with(|| format!("capture sync failed: {e}"));
         }
+        atomic_json(
+            &self.directory.join("manifest.json"),
+            &self.manifest_body(vm, bundle, disk_bundle, state),
+        )
+    }
+
+    /// Queues the manifest for the persistence thread and returns at once.
+    pub(crate) fn queue_manifest(
+        &mut self,
+        vm: &VmConfig,
+        bundle: &Bundle,
+        disk_bundle: &Bundle,
+        state: &str,
+    ) -> Result<(), String> {
+        queue_json(
+            &self.directory.join("manifest.json"),
+            &self.manifest_body(vm, bundle, disk_bundle, state),
+        )
+    }
+
+    fn manifest_body<'a>(
+        &'a mut self,
+        vm: &'a VmConfig,
+        bundle: &'a Bundle,
+        disk_bundle: &'a Bundle,
+        state: &'a str,
+    ) -> CaptureManifest<'a> {
         if let Some(health) = &mut self.final_health {
             health.persistence_error = self
                 .error
                 .clone()
                 .or_else(|| health.persistence_error.clone());
         }
-        atomic_json(
-            &self.directory.join("manifest.json"),
-            &CaptureManifest {
-                format: "ANTT1 length-prefixed raw LE32",
-                vm,
-                bundle,
-                disk_bundle,
-                packets: self.packets,
-                bytes: self.bytes,
-                persistence_error: &self.error,
-                final_state: state,
-                health: &self.final_health,
-                guest_kernel: &self.guest_kernel,
-            },
-        )
+        CaptureManifest {
+            format: "ANTT1 length-prefixed raw LE32",
+            vm,
+            bundle,
+            disk_bundle,
+            packets: self.packets,
+            bytes: self.bytes,
+            persistence_error: &self.error,
+            final_state: state,
+            health: &self.final_health,
+            guest_kernel: &self.guest_kernel,
+        }
     }
 }
 
@@ -1858,19 +1757,20 @@ mod tests {
     }
     #[test]
     fn queued_json_keeps_the_newest_value_and_never_overwrites_a_later_sync_write() {
+        let _disk = slow_disk::SlowDisk::install();
         let root = std::env::temp_dir().join(format!("ant-json-queue-{}", unique_id()));
         fs::create_dir(&root).unwrap();
         let path = root.join("run.json");
         for value in 0..50 {
             queue_json(&path, &value).unwrap();
         }
-        flush_json();
+        flush_json().unwrap();
         assert_eq!(read_json::<u32>(&path).unwrap(), 49);
         for value in 100..150 {
             queue_json(&path, &value).unwrap();
             atomic_json(&path, &(value + 1000)).unwrap();
         }
-        flush_json();
+        flush_json().unwrap();
         assert_eq!(read_json::<u32>(&path).unwrap(), 1149);
         assert_eq!(
             fs::read_dir(&root).unwrap().count(),
@@ -1881,17 +1781,18 @@ mod tests {
     }
     #[test]
     fn observed_json_reports_durability_failure_and_same_path_supersession() {
+        let _disk = slow_disk::SlowDisk::install();
         let root = std::env::temp_dir().join(format!("ant-json-receipt-{}", unique_id()));
         fs::create_dir(&root).unwrap();
         let path = root.join("artifacts.json");
         let first = queue_json_observed(&path, &1).unwrap();
-        flush_json();
+        flush_json().unwrap();
         assert!(matches!(first.status(), JsonWriteStatus::Complete));
         queue_json(&path, &2).unwrap();
         assert!(matches!(first.status(), JsonWriteStatus::Superseded));
-        flush_json();
+        flush_json().unwrap();
         let final_value = queue_json_observed(&path, &3).unwrap();
-        flush_json();
+        flush_json().unwrap();
         assert!(matches!(final_value.status(), JsonWriteStatus::Complete));
         assert_eq!(read_json::<u32>(&path).unwrap(), 3);
         atomic_json(&path, &4).unwrap();
@@ -1899,7 +1800,7 @@ mod tests {
         let blocked = root.join("blocked");
         fs::write(&blocked, b"file").unwrap();
         let failure = queue_json_observed(&blocked.join("artifacts.json"), &5).unwrap();
-        flush_json();
+        assert!(flush_json().is_err());
         assert!(matches!(failure.status(), JsonWriteStatus::Failed(_)));
         assert!(
             matches!(failure.status(), JsonWriteStatus::Failed(_)),
@@ -1908,6 +1809,7 @@ mod tests {
         drop(first);
         drop(final_value);
         drop(failure);
+        settle_json(&blocked.join("artifacts.json"));
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

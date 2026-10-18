@@ -2,6 +2,8 @@
 //! Runs, captures and analyses tracked by the session.
 use super::*;
 
+const MAX_RETIRED_FLUSH_STEPS: usize = 64;
+
 impl Session {
     pub(super) fn run_cookie(&self, id: &str) -> Result<u64, String> {
         self.runs
@@ -63,6 +65,21 @@ impl Session {
             return Err(format!(
                 "this base allows {OBSERVATION_MAX_COUNT} captures per VM boot; restart the VM, or use a base for Antinomie 0.2.0 or newer, which has no limit"
             ));
+        }
+        let retire_needed = self
+            .captures
+            .len()
+            .saturating_sub(OBSERVATION_RETAINED.saturating_sub(1))
+            .min(
+                self.captures
+                    .values()
+                    .filter(|capture| capture.summary.state == CaptureState::Stopped)
+                    .count(),
+            );
+        if self.flush_queue.len().saturating_add(retire_needed) > MAX_RETIRED_FLUSH_STEPS {
+            return Err(
+                "recording finalization queue is full; wait for saved captures before starting another".into(),
+            );
         }
         self.retire_captures(snapshot);
         let (opcode, args) = match &scope {
@@ -198,9 +215,13 @@ impl Session {
                         Some(reason) => format!("{reason}; {note}"),
                         None => note,
                     });
-                if let Err(error) = capture.finalize(&snapshot.health) {
-                    snapshot.last_error = Some(format!("capture finalization: {error}"));
-                }
+                // The archive's disk work goes to a flush job (see `seal`).
+                capture.begin_finalize();
+                let health = snapshot.health.clone();
+                self.flush_queue.push((
+                    format!("capture {}", id.chars().take(8).collect::<String>()),
+                    Box::new(move || capture.complete_finalize(&health)),
+                ));
             }
         }
     }

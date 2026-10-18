@@ -163,7 +163,7 @@ impl Session {
         let mut assembler = Assembler::new(capture_dir.join("objects"), options.capture_quota_size)
             .map_err(|error| error.to_string())?;
         assembler.set_event_table(vm.transport.event_table as usize);
-        capture.manifest(&vm, &bundle, &disk_bundle, "snapshot-resume-pending")?;
+        capture.queue_manifest(&vm, &bundle, &disk_bundle, "snapshot-resume-pending")?;
         storage::atomic_json(
             &boot_dir.join("resume-boundary.json"),
             &serde_json::json!({
@@ -318,6 +318,7 @@ impl Session {
             last_status_query: Instant::now() - Duration::from_secs(1),
             persisted_packets: 0,
             kernel_probe: KernelProbe::Due(Instant::now()),
+            flush_queue: Vec::new(),
         })
     }
     fn forget_unanswered(&mut self) {
@@ -499,7 +500,7 @@ impl Worker {
         }
         // From suspension through serialization, no transport call may write shared RAM.
         let operation = (|| {
-            storage::flush_json();
+            storage::flush_json()?;
             crate::writer::barrier();
             let host = if full {
                 Some(session.host_checkpoint()?)
@@ -596,6 +597,11 @@ impl Worker {
         boot_from_disk: bool,
         save_current: Option<SnapshotRequest>,
     ) -> Result<String, String> {
+        if self.deferred_flush.is_some() || !self.flusher.can_submit_retired() {
+            return Err(
+                "recording flush queue is full; wait for saved recordings before restoring a snapshot".into(),
+            );
+        }
         let vm = self.snapshot_vm(id)?;
         if let Some(session) = self.session.as_ref() {
             session.manual_snapshot_guard()?;
@@ -655,10 +661,12 @@ impl Worker {
         let _transition = self.begin_guest_transition()?;
         self.snapshot_stage(id, "Preparing snapshot recovery");
         if let Some(mut old) = self.session.take() {
-            let finalize = old.finalize("snapshot-branch-sealed", &mut self.snapshot);
+            let boot_id = old.boot_id.clone();
+            let steps = old.seal("snapshot-branch-sealed", &mut self.snapshot);
             let stop = old.process.force_stop();
             drop(old);
-            if let Err(error) = finalize.and(stop) {
+            self.submit_sealed_flush(boot_id, steps);
+            if let Err(error) = stop {
                 self.snapshot.active_vm = None;
                 self.snapshot.state = VmState::Stopped;
                 let cleanup = snapshots::cancel_restore(&self.options, &vm, &prepared);
@@ -723,7 +731,7 @@ impl Worker {
                     message: error,
                 });
             }
-            session.capture.manifest(
+            session.capture.queue_manifest(
                 &session.vm,
                 &session.bundle,
                 &session.disk_bundle,
@@ -769,6 +777,15 @@ impl Worker {
         }
     }
     pub(super) fn reconnect_transport(&mut self) -> Result<String, String> {
+        if self.session.is_none() {
+            return Err("VM is stopped".into());
+        }
+        if self.deferred_flush.is_some() || !self.flusher.can_submit_retired() {
+            return Err(
+                "recording flush queue is full; wait for saved recordings before reconnecting"
+                    .into(),
+            );
+        }
         if self.snapshot.network_capture.is_some() {
             self.stop_network_capture()?;
         }
@@ -802,9 +819,10 @@ impl Worker {
                 return self.reconnect_failed(old, error);
             }
         };
-        if let Err(error) = old.finalize("reconnect-boundary", &mut self.snapshot) {
-            return self.reconnect_failed(old, error);
-        }
+        // The old timeline's recordings are sealed here and made durable in
+        // the background; the new timeline records into fresh directories.
+        let steps = old.seal("reconnect-boundary", &mut self.snapshot);
+        self.submit_sealed_flush(old.boot_id.clone(), steps);
         let id = old.vm.id.clone();
         let mut fresh = match Session::restored(
             &self.options,

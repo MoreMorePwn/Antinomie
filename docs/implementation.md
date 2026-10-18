@@ -109,6 +109,35 @@ is claimed the loss becomes an entry in the run's `notes` (a field separate
 from `recording_error`, which gates terminal journaling); the lost packets
 remain in the boot's raw archives. A cookie nobody claims disappears.
 
+## Recording disk work off the transport thread (0.6.2)
+
+The thread that drains telemetry and serves commands never waits for the
+disk. Run, Upload, Stop and snapshots are answered while a recording saturates
+the disk.
+
+| Write | Where it happens | Durability |
+| --- | --- | --- |
+| Small JSON publications (`artifacts.json`, capture summaries, process lists) | A bounded queue drained by one writer thread (`storage/json_queue.rs`) | Published within the disk's latency, not when the call returns. A later value of a path replaces a pending earlier one and is never overwritten by it; a direct write to the same path waits for the queued one first. Queued values are capped at 8 MiB and the queue at 64 MiB / 4,096 paths; direct writes have no cap. |
+| Raw packets and object chunks | The recording writer thread (`writer.rs`) | Ordered per archive; payload before the index records that name it. |
+| Durability of a stopped boot (fsync of archives, final manifest) | One bounded background flush worker (`recording_flush.rs`) | Done after the guest is told to stop; the boot manifest is written after the archives it lists. |
+
+**Object packs.** Captured buffers of an archive are stored in append-only
+segment files `objects/objects-NNNNNN.seg` with an append-only index
+`objects/objects.idx`, instead of one file per buffer. A field keeps its
+`stream-task-call-phase-seq-object.raw` name; readers look for that file first
+(archives made before packing) and otherwise resolve it through the index.
+Identical chunks within an archive are stored once. Quota counts the segment
+and index bytes actually written.
+
+**Terminal output.** One worker pass reads a run's terminal until it is
+empty, up to 4 MiB or 40 ms per run, instead of a single 4 KiB read, so a
+chatty program is not throttled to the pass rate.
+
+**Stop.** Guest shutdown is requested before the host makes the recordings
+durable, so host disk work does not use up the guest's shutdown time. A
+graphical guest gets at least 30 s to shut down (`shutdown_timeout` applies
+as configured to console guests) before the VM is forced off.
+
 ## Accepted ANT-T0091 run triage (0.6.2)
 
 ANT-T0101 reorganizes triage presentation around section navigation,

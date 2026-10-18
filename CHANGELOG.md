@@ -6,6 +6,15 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Responsive while recording.** Run, Upload, Stop and snapshots no longer
+  wait behind the disk while a heavy run is being saved: small JSON files are
+  published by a background writer and the transport thread never syncs to
+  disk. Terminal output of a chatty program is read in full each pass instead
+  of 4 KiB at a time. Captured buffers go into a few append-only pack files
+  instead of one file each (a heavy run made over 100,000 files). Stop asks
+  the guest to shut down before the host makes the recordings durable, and a
+  desktop guest gets at least 30 s to shut down before it is forced off.
+
 - **No more stuck buttons.** Command results travel on their own channel with
   a slot reserved for every accepted command, so a busy window no longer loses
   them and leaves Upload, Run program or sample sends waiting forever. A

@@ -163,6 +163,8 @@ fn closing_owner_returns_a_result_for_each_accepted_queued_command() {
         guest_epoch: Arc::new(AtomicU64::new(0)),
         reconnect: (0, None),
         wake: None,
+        deferred_flush: None,
+        flusher: Default::default(),
     };
     worker.run();
     drop(command_sender);
@@ -305,6 +307,8 @@ fn full_completion_lane_surfaces_terminal_failure_for_an_accepted_command() {
         guest_epoch: Arc::new(AtomicU64::new(0)),
         reconnect: (0, None),
         wake: None,
+        deferred_flush: None,
+        flusher: Default::default(),
     };
     completion_sender
         .try_send(Notification::CommandResult {
@@ -467,6 +471,7 @@ fn late_status_validates_cookie_generation_status_and_exact_wire_extent() {
 
 #[test]
 fn late_status_owner_drift_cannot_overwrite_a_newer_or_different_run() {
+    let _disk = storage::slow_disk::SlowDisk::install();
     let root = std::env::temp_dir().join(format!("ant-status-owner-{}", storage::unique_id()));
     let mut run = ProgramRun::new(artifact_run(root.clone()), 1024).unwrap();
     run.execution_generation = 1;
@@ -494,7 +499,7 @@ fn late_status_owner_drift_cannot_overwrite_a_newer_or_different_run() {
         assert_eq!(run.summary.state, RunState::Running);
     }
     drop(run);
-    storage::flush_json();
+    storage::flush_json().unwrap();
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -684,6 +689,7 @@ fn run_artifacts_wait_for_descendants_and_async_drain_then_queue_once() {
 
 #[test]
 fn run_artifacts_sidecar_load_is_optional_bounded_and_retains_failures() {
+    let _disk = storage::slow_disk::SlowDisk::install();
     let root = std::env::temp_dir().join(format!("ant-artifacts-{}", storage::unique_id()));
     storage::private_dir(&root).unwrap();
     assert_eq!(RunArtifacts::load(&root).unwrap(), None);
@@ -693,6 +699,7 @@ fn run_artifacts_sidecar_load_is_optional_bounded_and_retains_failures() {
     owner.summary.memory_state = RunArtifactState::Failed;
     owner.issue("disk full".into());
     owner.save().unwrap();
+    storage::flush_json().unwrap();
     assert_eq!(RunArtifacts::load(&root).unwrap(), Some(owner.summary));
     fs::write(root.join("artifacts.json"), b"{broken").unwrap();
     assert!(RunArtifacts::load(&root).is_err());
@@ -733,6 +740,8 @@ fn download_worker(root: PathBuf) -> Worker {
         latest_snapshot: Arc::new(Mutex::new(None)),
         guest_epoch: Arc::new(AtomicU64::new(0)),
         reconnect: (0, None),
+        deferred_flush: None,
+        flusher: Default::default(),
         wake: None,
     }
 }
@@ -1037,6 +1046,8 @@ fn invalid_launch_settings_are_rejected_before_lifecycle_io() {
         latest_snapshot: Arc::new(Mutex::new(None)),
         guest_epoch: Arc::new(AtomicU64::new(0)),
         reconnect: (0, None),
+        deferred_flush: None,
+        flusher: Default::default(),
         wake: None,
     };
     for command in [
@@ -1124,6 +1135,8 @@ fn fixed_display_guards_selected_boot_without_changing_pinned_disk() {
         latest_snapshot: Arc::new(Mutex::new(None)),
         guest_epoch: Arc::new(AtomicU64::new(0)),
         reconnect: (0, None),
+        deferred_flush: None,
+        flusher: Default::default(),
         wake: None,
     };
     worker
@@ -1222,6 +1235,8 @@ fn base_import_and_failed_credential_creation_preserve_published_state() {
         latest_snapshot: Arc::new(Mutex::new(None)),
         guest_epoch: Arc::new(AtomicU64::new(0)),
         reconnect: (0, None),
+        deferred_flush: None,
+        flusher: Default::default(),
         wake: None,
     };
     for guest in [false, true] {
@@ -1371,6 +1386,8 @@ fn running_vm_duplicate_and_delete_guards_preserve_data() {
         latest_snapshot: Arc::new(Mutex::new(None)),
         guest_epoch: Arc::new(AtomicU64::new(0)),
         reconnect: (0, None),
+        deferred_flush: None,
+        flusher: Default::default(),
         wake: None,
     };
     assert!(
@@ -1501,6 +1518,8 @@ fn pending_raw_copy_quota_failure_stops_existing_and_acknowledged_runs() {
 fn object_saving_failure_preserves_raw_and_globally_denies_terminal_saving() {
     for run_owned in [false, true] {
         for io_failure in [false, true] {
+            let test_writer = crate::writer::held::SlowWriter::install();
+            test_writer.pause();
             let root = std::env::temp_dir()
                 .join(format!("ant-global-object-saving-{}", storage::unique_id()));
             let mut capture = RawCapture::new(root.join("unassigned"), 1024).unwrap();
@@ -1556,25 +1575,24 @@ fn object_saving_failure_preserves_raw_and_globally_denies_terminal_saving() {
                 &mut assembler
             };
             target.set_storage_limit(if io_failure { 1024 } else { 84 });
-            if io_failure {
-                let directory = if run_owned {
-                    root.join("1")
-                } else {
-                    capture.directory.clone()
-                };
-                fs::create_dir(directory.join("objects/0-0-0-1-0-1.raw")).unwrap();
-            }
             let event = target.ingest(&packet).unwrap().unwrap();
-            // Write failures surface once the writer thread has tried.
+            // A queued write failure arrives after ingest has reported the range.
             assert_eq!(event.fields[0].ranges.is_empty(), !io_failure);
+            target.flush();
+            if io_failure {
+                crate::writer::fail_next_write_at();
+            }
+            test_writer.resume();
             crate::writer::barrier();
             propagate_object_saving_failure(&mut capture, &mut assembler, &mut runs);
-            let error = capture.error.clone().unwrap();
+            let error = capture.error.clone().unwrap_or_else(|| {
+                panic!("capture error missing for run_owned={run_owned}, io_failure={io_failure}")
+            });
             assert!(error.contains(if io_failure { "persistence" } else { "quota" }));
             let mut health = Health::default();
             refresh_storage_health(&mut health, &capture, assembler.stored_len(), &runs);
-            // A chunk whose write failed was counted when it was queued.
-            assert_eq!(health.persisted_len, if io_failure { 1040 } else { 940 });
+            // A chunk's payload and packed index records are counted when queued.
+            assert_eq!(health.persisted_len, if io_failure { 1123 } else { 940 });
             assert_eq!(health.persistence_error.as_deref(), Some(error.as_str()));
             for run in runs.values_mut() {
                 assert_eq!(run.summary.recording_error.as_deref(), Some(error.as_str()));

@@ -7,6 +7,12 @@ impl Worker {
         if self.session.is_some() {
             return Err("only one VM may run at a time".into());
         }
+        if self.deferred_flush.is_some() || !self.flusher.can_submit_retired() {
+            return Err(
+                "recording flush queue is full; wait for saved recordings before starting a VM"
+                    .into(),
+            );
+        }
         let vm = self
             .snapshot
             .vms
@@ -64,21 +70,21 @@ impl Worker {
             let capture_dir = boot_dir.join("unassigned");
             let mut capture =
                 RawCapture::new(capture_dir.clone(), self.options.capture_quota_size)?;
-            capture.manifest(&vm, &bundle, &disk_bundle, "starting")?;
+            capture.queue_manifest(&vm, &bundle, &disk_bundle, "starting")?;
             self.snapshot.capture_dir = Some(capture_dir.clone());
             let mut assembler =
                 Assembler::new(capture_dir.join("objects"), self.options.capture_quota_size)
                     .map_err(|e| e.to_string())?;
             assembler.set_event_table(vm.transport.event_table as usize);
             if let Err(e) = process.verify_ram_layout() {
-                capture.manifest(&vm, &bundle, &disk_bundle, "start-failed")?;
+                capture.queue_manifest(&vm, &bundle, &disk_bundle, "start-failed")?;
                 return Err(e);
             }
             let mut transport =
                 match Transport::open(&process.ram_path, process.ram_size, process.bootstrap) {
                     Ok(t) => t,
                     Err(e) => {
-                        capture.manifest(&vm, &bundle, &disk_bundle, "start-failed")?;
+                        capture.queue_manifest(&vm, &bundle, &disk_bundle, "start-failed")?;
                         return Err(e);
                     }
                 };
@@ -93,7 +99,7 @@ impl Worker {
                 // instead of taking the host for gone and dropping.
                 let _ = transport.set_host_timeout(LOSSLESS_HOST_TIMEOUT_MS);
             }
-            capture.manifest(&vm, &bundle, &disk_bundle, "running")?;
+            capture.queue_manifest(&vm, &bundle, &disk_bundle, "running")?;
             Ok(Session {
                 resources: crate::resources::ResourceSampler::default(),
                 guest_resources: crate::guest_resources::Collector::default(),
@@ -133,6 +139,7 @@ impl Worker {
                 last_status_query: Instant::now(),
                 persisted_packets: 0,
                 kernel_probe: KernelProbe::Due(Instant::now()),
+                flush_queue: Vec::new(),
             })
         })();
         match result {
@@ -187,7 +194,12 @@ impl Worker {
         // wait on a host that is busy finalizing its recordings.
         let _ = session.transport.set_send_wait(0);
         let _ = session.transport.set_host_timeout(0);
-        let deadline = Instant::now() + self.options.shutdown_timeout;
+        let graphical = session
+            .disk_bundle
+            .guest
+            .as_ref()
+            .is_some_and(|guest| guest.graphical);
+        let deadline = Instant::now() + shutdown_timeout(self.options.shutdown_timeout, graphical);
         let mut issues = Vec::new();
         let terminal_ids: Vec<_> = session
             .runs
@@ -304,9 +316,10 @@ impl Worker {
             issues.push(format!("final bounded drain unavailable: {e}"));
         }
         let final_state = final_state(forced, shutdown_ack, exited_before_ack, exit_success);
-        if let Err(e) = session.finalize(final_state, &mut self.snapshot) {
-            issues.push(e);
-        }
+        // Everything left is disk work. It goes to a flush job, so the VM is
+        // Stopped now and the host's `fsync`s are not a wait for the user.
+        let steps = session.seal(final_state, &mut self.snapshot);
+        self.submit_sealed_flush(session.boot_id.clone(), steps);
         if let Err(e) = end_network_capture(&mut self.snapshot) {
             issues.push(e);
         }
@@ -349,8 +362,32 @@ pub(super) fn qmp_outcome_unknown(error: &str) -> bool {
     !error.starts_with("QMP error:")
 }
 
+/// Least time a graphical guest gets to shut down: a loaded desktop session
+/// takes longer than a console guest to stop its services.
+const GRAPHICAL_SHUTDOWN: Duration = Duration::from_secs(30);
+
+/// How long Stop waits for the guest before forcing the VM off.
+fn shutdown_timeout(configured: Duration, graphical: bool) -> Duration {
+    if graphical {
+        configured.max(GRAPHICAL_SHUTDOWN)
+    } else {
+        configured
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn graphical_guests_get_at_least_the_desktop_shutdown_time() {
+        let console = Duration::from_secs(10);
+        assert_eq!(super::shutdown_timeout(console, false), console);
+        assert_eq!(
+            super::shutdown_timeout(console, true),
+            super::GRAPHICAL_SHUTDOWN
+        );
+        let long = Duration::from_secs(90);
+        assert_eq!(super::shutdown_timeout(long, true), long);
+    }
     use super::*;
 
     #[test]

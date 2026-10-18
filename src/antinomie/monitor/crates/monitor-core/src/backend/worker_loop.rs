@@ -87,6 +87,80 @@ impl Worker {
             wake();
         }
     }
+    /// Show the progress of the background flush of stopped boots, and report
+    /// what failed when a job ends.
+    pub(super) fn poll_flush(&mut self) {
+        if let Some(deferred) = self.deferred_flush.take() {
+            match self.flusher.spawn(deferred.boot_id.clone(), deferred.steps) {
+                Ok(()) => {}
+                Err(rejected) => {
+                    self.snapshot.last_error =
+                        Some(format!("recording flush deferred: {}", rejected.reason));
+                    self.deferred_flush = Some(rejected);
+                }
+            }
+        }
+        if self.deferred_flush.is_none()
+            && self.flusher.can_submit_retired()
+            && let Some(session) = self.session.as_mut()
+            && !session.flush_queue.is_empty()
+        {
+            let steps = std::mem::take(&mut session.flush_queue);
+            match self.flusher.spawn(session.boot_id.clone(), steps) {
+                Ok(()) => {}
+                Err(mut rejected) => {
+                    rejected.steps.append(&mut session.flush_queue);
+                    session.flush_queue = rejected.steps;
+                    self.snapshot.last_error = Some(format!(
+                        "retired capture flush deferred: {}",
+                        rejected.reason
+                    ));
+                }
+            }
+        }
+        let errors = self.flusher.collect();
+        let status = self.flusher.status();
+        if !errors.is_empty() {
+            self.snapshot.last_error = Some(format!("saving recordings: {}", errors.join("; ")));
+        }
+        if status != self.snapshot.recording_flush || !errors.is_empty() {
+            self.snapshot.recording_flush = status;
+            self.publish();
+        }
+    }
+    /// Closing: wait for the background flush, showing its progress.
+    fn finish_flush(&mut self) {
+        while self.flusher.is_busy() || self.deferred_flush.is_some() {
+            self.poll_flush();
+            thread::sleep(Duration::from_millis(50));
+        }
+        self.poll_flush();
+    }
+
+    /// Submit finalizers for a sealed boot. The session-start admission check
+    /// reserves capacity for this job; if that invariant is ever violated,
+    /// retain the complete step list and retry on a later worker pass.
+    pub(super) fn submit_sealed_flush(
+        &mut self,
+        boot_id: String,
+        steps: Vec<crate::recording_flush::Step>,
+    ) {
+        if let Err(mut rejected) = self.flusher.spawn(boot_id, steps) {
+            self.snapshot.last_error = Some(format!(
+                "final recording flush deferred: {}",
+                rejected.reason
+            ));
+            if let Some(mut pending) = self.deferred_flush.take() {
+                pending.steps.append(&mut rejected.steps);
+                pending
+                    .reason
+                    .push_str("; another sealed boot is queued behind it");
+                self.deferred_flush = Some(pending);
+            } else {
+                self.deferred_flush = Some(rejected);
+            }
+        }
+    }
     fn poll_tool(&mut self) {
         let Some(job) = self.tool.as_ref() else {
             return;
@@ -254,6 +328,7 @@ impl Worker {
         self.snapshot.bases_checking = false;
     }
     pub(super) fn run(mut self) {
+        storage::mark_transport_thread();
         self.publish();
         self.load_bases();
         for id in self
@@ -287,7 +362,11 @@ impl Worker {
                     self.snapshot.last_error = Some("download worker panicked".into());
                 }
                 self.publish();
-                storage::flush_json();
+                self.finish_flush();
+                if let Err(error) = storage::flush_json() {
+                    self.snapshot.last_error = Some(format!("saving status files: {error}"));
+                    self.publish();
+                }
                 crate::writer::barrier();
                 break;
             }
@@ -468,10 +547,9 @@ impl Worker {
                 session.analysis_tick(&mut self.snapshot, &self.sender);
             }
             if exited {
-                if let Some(mut session) = self.session.take()
-                    && let Err(e) = session.finalize("unexpected-exit", &mut self.snapshot)
-                {
-                    self.snapshot.last_error = Some(e);
+                if let Some(mut session) = self.session.take() {
+                    let steps = session.seal("unexpected-exit", &mut self.snapshot);
+                    self.submit_sealed_flush(session.boot_id.clone(), steps);
                 }
                 if let Err(e) = end_network_capture(&mut self.snapshot) {
                     self.snapshot.last_error = Some(e);
@@ -523,6 +601,7 @@ impl Worker {
             self.check_manual_cores();
             self.check_memory_dump();
             self.check_run_artifacts();
+            self.poll_flush();
             if self.last_publish.elapsed() >= Duration::from_millis(250)
                 && (self.session.is_some()
                     || self.refresh.is_some()
