@@ -40,6 +40,7 @@ mod run;
 pub mod samples;
 mod sandbox_process;
 pub mod snapshots;
+pub mod stealth;
 pub mod storage;
 pub mod syscall_groups;
 pub mod syscalls;

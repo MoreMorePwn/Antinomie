@@ -19,6 +19,7 @@ mod recording;
 mod run_selector;
 mod session;
 mod sidebar;
+mod stealth;
 mod trace_view;
 mod triage_pcap;
 mod triage_ui;
@@ -155,7 +156,7 @@ enum Confirm {
     Delete(String),
     DeleteBase(String),
     Upload(upload::Intent),
-    Nat { vm: VmConfig, creating: bool },
+    Nat { vm: Box<VmConfig>, creating: bool },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -286,6 +287,8 @@ pub struct MonitorApp {
     selected_process: Option<u32>,
     /// The VM dialog's Telemetry transport window is open.
     transport_open: bool,
+    /// VM configuration > Stealth profile window.
+    stealth_open: bool,
     network_view: crate::network_view::NetworkView,
     memory_view: crate::memory_view::MemoryView,
     core_view: crate::core_view::CoreView,
@@ -460,6 +463,7 @@ impl MonitorApp {
             selected_capture: None,
             selected_process: None,
             transport_open: false,
+            stealth_open: false,
             network_view: Default::default(),
             memory_view: Default::default(),
             core_view: Default::default(),
@@ -728,6 +732,7 @@ enum Dialog {
     Confirm,
     Name,
     Transport,
+    Stealth,
     Vm,
     Launch,
     Upload,
@@ -747,10 +752,11 @@ enum Dialog {
 }
 
 impl Dialog {
-    const ALL: [Dialog; 19] = [
+    const ALL: [Dialog; 20] = [
         Dialog::Confirm,
         Dialog::Name,
         Dialog::Transport,
+        Dialog::Stealth,
         Dialog::Vm,
         Dialog::Launch,
         Dialog::Upload,
@@ -775,6 +781,7 @@ impl Dialog {
             Dialog::Confirm => "confirm_action",
             Dialog::Name => "name_action",
             Dialog::Transport => "vm_transport",
+            Dialog::Stealth => "vm_stealth",
             Dialog::Vm => "vm_configuration",
             Dialog::Launch => "run_program",
             Dialog::Upload => "upload_file",

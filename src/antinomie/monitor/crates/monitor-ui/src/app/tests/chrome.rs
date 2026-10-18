@@ -41,7 +41,7 @@ fn escape_closes_the_topmost_dialog_first() {
     app.snapshot.active_vm = None;
     app.new_image();
     app.confirm = Some(Confirm::Nat {
-        vm: app.draft.clone(),
+        vm: Box::new(app.draft.clone()),
         creating: true,
     });
     for _ in 0..3 {
@@ -76,6 +76,10 @@ fn escape_closes_the_topmost_dialog_first() {
             Dialog::Transport => {
                 app.new_image();
                 app.transport_open = true;
+            }
+            Dialog::Stealth => {
+                app.new_image();
+                app.stealth_open = true;
             }
             Dialog::Vm => app.new_image(),
             Dialog::Launch => app.launch_open = true,

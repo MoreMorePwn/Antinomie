@@ -28,6 +28,11 @@ impl MonitorApp {
         self.draft_generation = self.draft_generation.wrapping_add(1);
         self.draft = VmConfig::default();
         self.draft.name = "New VM".into();
+        // New VMs look like an ordinary PC; saved ones keep what they had.
+        self.draft.stealth = antinomie_monitor_core::stealth::StealthProfile::realistic(
+            antinomie_monitor_core::stealth::StealthPreset::RealisticDesktop,
+            &antinomie_monitor_core::stealth::host_cpu_vendor(),
+        );
         self.draft.base_identity =
             preferred_new_base(&self.snapshot, &self.settings.bundle).map(|base| base.id.clone());
         self.credentials.reset();
@@ -78,6 +83,9 @@ impl MonitorApp {
         if let Some(error) = self.fixed_display_error(&self.draft) {
             return Some(error);
         }
+        if let Err(error) = self.draft.stealth.validate() {
+            return Some(error);
+        }
         if requires_credentials {
             if let Err(error) = self.dependencies.require_dependencies(&[
                 antinomie_monitor_core::dependencies::Dependency::QemuImg,
@@ -106,6 +114,7 @@ impl MonitorApp {
             .validate_for(&self.options)
             .err()
             .or_else(|| self.fixed_display_error(vm))
+            .or_else(|| vm.stealth.validate().err())
     }
 
     pub(super) fn fixed_display_error(&self, vm: &VmConfig) -> Option<String> {
@@ -448,6 +457,7 @@ impl MonitorApp {
                             dialog_section(ui, "Display and emulation");
                             form_grid("vm_display", ui).show(ui, |ui| {
                                 launch_options(ui, &mut app.draft.launch);
+                                super::stealth::preset_row(ui, &mut app.draft.stealth, &mut app.stealth_open);
                             });
                         };
                         let storage = |app: &mut Self, ui: &mut egui::Ui, credentials_required: bool, nat: &mut bool| {
@@ -645,9 +655,20 @@ impl MonitorApp {
                 editable,
             );
         }
+        if self.stealth_open && open && !cancel {
+            let editable = creating || self.snapshot.active_vm.as_ref() != Some(&self.draft.id);
+            super::stealth::window(
+                ctx,
+                &mut self.stealth_open,
+                &mut self.draft.stealth,
+                editable,
+                creating,
+            );
+        }
         let open = open && !cancel;
         if !open {
             self.transport_open = false;
+            self.stealth_open = false;
         }
         self.create_open = creating && open;
         self.config_open = !creating && open;
@@ -656,7 +677,7 @@ impl MonitorApp {
         }
         if nat {
             self.confirm = Some(Confirm::Nat {
-                vm: self.draft.clone(),
+                vm: Box::new(self.draft.clone()),
                 creating,
             });
         }

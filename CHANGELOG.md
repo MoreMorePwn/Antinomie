@@ -6,6 +6,20 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Stealth profiles.** VM configuration has a Stealth row and a Stealth
+  profile window that choose the hardware a VM shows its guest. New VMs start
+  as a realistic desktop: a real vendor's SMBIOS identity (BIOS, system,
+  board, chassis, memory) and ACPI OEM IDs with fresh serials, the host CPU
+  passed through without the hypervisor flag or the KVM signature,
+  performance counters, one socket of N cores, an Intel e1000e card with an
+  Intel MAC address, and no VMware port. Realistic laptop and server presets
+  pick a machine whose CPU vendor matches the host. Every entry can be
+  changed (the profile then reads Custom), and the window lists what still
+  gives the VM away. VMs saved before keep QEMU's own identity (Transparent).
+  The guest-run plan takes `"vm": {"stealth": "desktop"}`. The disk stays
+  virtio and the firmware SeaBIOS, and the guest kernel's command line still
+  names Antinomie.
+
 - **Runs that survive restarts and failures.** A run that continued after the
   guest was reconnected or restored is listed in Run History again, with a
   note naming the run it continues. One damaged run record no longer hides a

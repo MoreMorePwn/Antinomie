@@ -189,6 +189,7 @@ fn apply_launch_settings(
     command: &mut Command,
     options: &BackendOptions,
     launch: &VmLaunchOptions,
+    stealth: &crate::stealth::StealthProfile,
     bundle: &Bundle,
     bootstrap: u64,
 ) -> Result<(), String> {
@@ -205,8 +206,11 @@ fn apply_launch_settings(
         VmCpuModel::Host => Some("host"),
         VmCpuModel::Max => Some("max"),
     };
-    if let Some(cpu) = cpu {
-        command.args(["-cpu", cpu]);
+    // Hiding the hypervisor needs a model to add flags to; QEMU's default
+    // model is named after QEMU, so a profile that hides it brings its own.
+    let base = cpu.or((stealth.hide_hypervisor || stealth.pmu).then_some("max"));
+    if let Some(cpu) = crate::stealth::cpu_option(stealth, base, acceleration == "kvm") {
+        command.arg("-cpu").arg(cpu);
     }
     let mut append = format!(
         "{} antinomie_boot_gpa=0x{bootstrap:x}",
@@ -455,7 +459,11 @@ impl VmProcess {
         let mut cmd = qemu_command(&options.qemu);
         cmd.arg("-name")
             .arg(&vm.name)
-            .args(["-machine", "q35,memory-backend=shared,max-ram-below-4g=4G"])
+            .arg("-machine")
+            .arg(format!(
+                "q35,memory-backend=shared,max-ram-below-4g=4G{}",
+                crate::stealth::machine_options(&vm.stealth)
+            ))
             .arg("-object")
             .arg(format!(
                 "memory-backend-file,id=shared,size={}M,mem-path={},share=on",
@@ -465,7 +473,7 @@ impl VmProcess {
             .arg("-m")
             .arg(vm.ram_mib.to_string())
             .arg("-smp")
-            .arg(vm.cpus.to_string())
+            .arg(crate::stealth::smp_option(&vm.stealth, vm.cpus))
             .arg("-kernel")
             .arg(&bundle.kernel)
             .arg("-drive")
@@ -492,13 +500,15 @@ impl VmProcess {
             boot.kernel_append
                 .push_str(&format!(" antinomie_ring_kib={}", vm.transport.ring_kib));
         }
-        apply_launch_settings(&mut cmd, options, &vm.launch, &boot, bootstrap)?;
+        apply_launch_settings(&mut cmd, options, &vm.launch, &vm.stealth, &boot, bootstrap)?;
+        crate::stealth::apply(&mut cmd, &vm.stealth, &runtime_dir)?;
         if let Some(initrd) = &bundle.initrd {
             cmd.arg("-initrd").arg(initrd);
         }
         if let Some(netdev) = user_network_backend(vm) {
             // Network captures attach a filter-dump to net0 over QMP.
-            cmd.args(["-netdev", netdev, "-device", "virtio-net-pci,netdev=net0"]);
+            cmd.args(["-netdev", netdev, "-device"])
+                .arg(crate::stealth::nic_option(&vm.stealth));
         } else {
             cmd.args(["-nic", "none"]);
         }
@@ -1135,6 +1145,7 @@ mod tests {
             &mut command,
             options,
             launch,
+            &crate::stealth::StealthProfile::transparent(),
             &bundle(graphical),
             0x40000000,
         )?;
@@ -1437,6 +1448,7 @@ mod tests {
                             &mut command,
                             &options,
                             &launch,
+                            &crate::stealth::StealthProfile::transparent(),
                             &bundle(true),
                             0x40000000,
                         )

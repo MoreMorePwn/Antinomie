@@ -434,7 +434,7 @@ impl MonitorApp {
                                 self.draft.isolated_network = false;
                             }
                             if !creating {
-                                if let Err(error) = self.save_vm(vm) {
+                                if let Err(error) = self.save_vm(*vm) {
                                     self.report_error(error);
                                 }
                             }
@@ -634,6 +634,7 @@ impl MonitorApp {
             Dialog::Confirm => self.confirm.is_some(),
             Dialog::Name => self.name_action.is_some(),
             Dialog::Transport => self.transport_open && (self.create_open || self.config_open),
+            Dialog::Stealth => self.stealth_open && (self.create_open || self.config_open),
             Dialog::Vm => self.create_open || self.config_open,
             Dialog::Launch => self.launch_open,
             Dialog::Upload => self.upload_open,
@@ -658,10 +659,12 @@ impl MonitorApp {
             Dialog::Confirm => self.confirm = None,
             Dialog::Name => self.name_action = None,
             Dialog::Transport => self.transport_open = false,
+            Dialog::Stealth => self.stealth_open = false,
             Dialog::Vm => {
                 self.create_open = false;
                 self.config_open = false;
                 self.transport_open = false;
+                self.stealth_open = false;
                 self.credentials.reset();
             }
             Dialog::Launch => self.launch_open = false,
