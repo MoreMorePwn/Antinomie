@@ -41,7 +41,7 @@ it runs.
   about one page: it seeks to its place in the recording's index instead of
   reading the whole run, and the "page N of M" counts are computed on a
   separate thread once per run and filter. The first read of a recording
-  builds its index about four times faster. The process tree and the counts
+  builds its index much faster; the index is a cache, so it is no longer synced to disk while a recording is being saved, and a damaged one is rebuilt. The process tree and the counts
   no longer hold up terminal replay, history or the next trace page. Triage
   re-reads a live run only while its pane is shown and the recording grew, and
   a finished, unchanged run is indexed once and never written to again. The

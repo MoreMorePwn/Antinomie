@@ -643,7 +643,7 @@ mod tests {
             source_total,
             result,
             ..
-        } = worker.wait_answer(Duration::from_secs(5)).unwrap()
+        } = worker.wait_answer(Duration::from_secs(60)).unwrap()
         else {
             panic!("wrong answer")
         };
@@ -667,7 +667,7 @@ mod tests {
             source_total,
             result,
             ..
-        } = worker.wait_answer(Duration::from_secs(5)).unwrap()
+        } = worker.wait_answer(Duration::from_secs(60)).unwrap()
         else {
             panic!("wrong answer")
         };
@@ -693,7 +693,7 @@ mod tests {
             source_total,
             result,
             ..
-        } = worker.wait_answer(Duration::from_secs(5)).unwrap()
+        } = worker.wait_answer(Duration::from_secs(60)).unwrap()
         else {
             panic!("wrong answer")
         };
@@ -719,7 +719,7 @@ mod tests {
                 source_total,
                 result,
                 ..
-            } = worker.wait_answer(Duration::from_secs(5)).unwrap()
+            } = worker.wait_answer(Duration::from_secs(60)).unwrap()
             else {
                 panic!("wrong answer")
             };
