@@ -210,6 +210,10 @@ fn firmware(ui: &mut egui::Ui, profile: &mut StealthProfile) {
             ui.checkbox(&mut profile.vmport, "VMware backdoor port")
                 .on_hover_text("Only VMware VMs have it; real PCs do not");
             ui.end_row();
+            ui.label("");
+            ui.checkbox(&mut profile.usb, "Intel ICH9 USB controllers")
+                .on_hover_text("Every PC has USB; QEMU adds none by default");
+            ui.end_row();
         });
 }
 
@@ -226,6 +230,11 @@ fn cpu(ui: &mut egui::Ui, profile: &mut StealthProfile) {
         );
     ui.checkbox(&mut profile.pmu, "Performance counters");
     ui.checkbox(&mut profile.realistic_topology, "One socket with N cores");
+    ui.add_enabled(
+        profile.cpu_passthrough,
+        egui::Checkbox::new(&mut profile.host_cache_info, "The host's cache sizes"),
+    )
+    .on_hover_text("QEMU otherwise reports its own cache sizes; passthrough only");
 }
 
 fn network(ui: &mut egui::Ui, profile: &mut StealthProfile) {
@@ -260,6 +269,13 @@ fn network(ui: &mut egui::Ui, profile: &mut StealthProfile) {
                     .clicked()
                 {
                     profile.new_mac();
+                }
+                if ui
+                    .button("Local")
+                    .on_hover_text("A random locally administered address, which names no vendor")
+                    .clicked()
+                {
+                    profile.new_local_mac();
                 }
                 if ui.button("QEMU default").clicked() {
                     profile.mac.clear();

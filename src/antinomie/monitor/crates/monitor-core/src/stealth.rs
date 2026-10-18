@@ -138,12 +138,16 @@ pub struct StealthProfile {
     pub pmu: bool,
     /// One socket with N cores instead of one socket per CPU.
     pub realistic_topology: bool,
+    /// The host's cache sizes instead of QEMU's made-up ones; passthrough only.
+    pub host_cache_info: bool,
     pub nic: NicModel,
     /// Empty: QEMU's default 52:54:00:12:34:56.
     pub mac: String,
     /// VMware's I/O backdoor port, a VMware giveaway.
     pub vmport: bool,
     pub hpet: bool,
+    /// Intel ICH9 USB controllers (EHCI with UHCI companions), as on a PC.
+    pub usb: bool,
     pub rtc_localtime: bool,
 }
 
@@ -465,10 +469,12 @@ impl StealthProfile {
             hide_kvm: false,
             pmu: false,
             realistic_topology: false,
+            host_cache_info: false,
             nic: NicModel::VirtioNet,
             mac: String::new(),
             vmport: true,
             hpet: true,
+            usb: false,
             rtc_localtime: false,
         }
     }
@@ -491,10 +497,12 @@ impl StealthProfile {
             hide_kvm: true,
             pmu: true,
             realistic_topology: true,
+            host_cache_info: true,
             nic,
             mac: random_mac(nic.mac_prefix()),
             vmport: false,
             hpet: true,
+            usb: true,
             rtc_localtime: false,
         }
     }
@@ -520,6 +528,12 @@ impl StealthProfile {
     /// A new random MAC address with the network card's vendor prefix.
     pub fn new_mac(&mut self) {
         self.mac = random_mac(self.nic.mac_prefix());
+    }
+
+    /// A new random locally administered MAC address (no vendor prefix).
+    pub fn new_local_mac(&mut self) {
+        let head = random_bytes(3);
+        self.mac = random_mac([(head[0] & 0xfc) | 0x02, head[1], head[2]]);
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -605,6 +619,9 @@ impl StealthProfile {
         if self.vmport {
             found.push("VMware backdoor port");
         }
+        if !self.usb {
+            found.push("no USB controller");
+        }
         if !self.pmu {
             found.push("no performance counters");
         }
@@ -646,6 +663,10 @@ pub(crate) fn machine_options(profile: &StealthProfile) -> String {
     if !profile.hpet {
         options.push_str(",hpet=off");
     }
+    if profile.usb {
+        // q35 then adds ICH9 EHCI with its UHCI companions at 00:1d.
+        options.push_str(",usb=on");
+    }
     if profile.identity_enabled {
         options.push_str(",smbios-entry-point-type=64");
         let identity = &profile.identity;
@@ -681,6 +702,9 @@ pub(crate) fn cpu_option(
     };
     if model.is_empty() {
         return None;
+    }
+    if profile.host_cache_info && model == "host" {
+        model.push_str(",host-cache-info=on");
     }
     if profile.hide_hypervisor {
         model.push_str(",-hypervisor");
@@ -916,7 +940,7 @@ mod tests {
         let profile = StealthProfile::realistic(StealthPreset::RealisticDesktop, "GenuineIntel");
         assert_eq!(
             cpu_option(&profile, None, true).as_deref(),
-            Some("host,-hypervisor,kvm=off,pmu=on")
+            Some("host,host-cache-info=on,-hypervisor,kvm=off,pmu=on")
         );
         assert!(
             cpu_option(&profile, None, false)
@@ -927,7 +951,13 @@ mod tests {
         assert!(nic_option(&profile).starts_with("e1000e,netdev=net0,mac=3c:fd:fe:"));
         let machine = machine_options(&profile);
         assert!(machine.contains(",vmport=off"));
+        assert!(machine.contains(",usb=on"));
         assert!(machine.contains(",x-oem-id=DELL  "));
+        let mut local = profile.clone();
+        local.new_local_mac();
+        let first = u8::from_str_radix(&local.mac[..2], 16).unwrap();
+        assert_eq!(first & 3, 2, "{}", local.mac);
+        assert!(local.validate().is_ok());
         let dir = std::env::temp_dir().join(format!("ant-stealth-{}", unique_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut command = Command::new("qemu");
