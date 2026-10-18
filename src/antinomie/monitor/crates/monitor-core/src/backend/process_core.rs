@@ -797,6 +797,7 @@ mod tests {
             terminal_eof: false,
             state: RunState::Running,
             recording_error: None,
+            notes: Vec::new(),
             execution: None,
             analysis: None,
         }

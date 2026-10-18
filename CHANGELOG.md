@@ -6,6 +6,28 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Recording survives a long session.** After about 20 minutes of VM uptime
+  the next program run could stop all recording of the boot (the "storage
+  lost" counter grew and terminal output was not saved). The buffer for
+  telemetry that arrives before a launch is acknowledged now keeps each root
+  cookie apart, drops packets older than 5 s, never holds the app's own
+  resource collector, and reports what it lost as a note on that run instead
+  of as a saving failure. A terminal write error stops saving for its run
+  only, and the first cause stays visible.
+
+- **Recording quota.** Reaching the quota stops new saving for the boot with
+  one clear message and keeps everything saved before: runs that had already
+  ended are no longer marked failed, and closed captures stay as they were.
+  Packets nobody owns are saved once while a capture observes them, not in
+  both the capture and the boot archive. The quota rules are in
+  docs/implementation.md.
+
+- **Clearer errors.** A normal Stop is recorded as clean even when the guest's
+  acknowledgement races its exit; a launch the guest rejects says so (and
+  that nothing started) instead of "outcome may be unknown"; a run whose
+  saving stopped keeps its closed terminal in its summary; an error of an
+  earlier boot no longer lingers when the next VM starts.
+
 - **Triage layout.** Section navigation and
   grouped report surfaces distinguish detection results, behavior, files and
   network evidence. Wide behavior/network sections share their height; narrow

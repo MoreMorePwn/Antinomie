@@ -1075,6 +1075,7 @@ pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
                 directory,
                 terminal_eof: true,
                 state: RunState::Finalized,
+                notes: Vec::new(),
                 recording_error: manifest
                     .get("persistence_error")
                     .and_then(|e| e.as_str())
@@ -1212,6 +1213,7 @@ mod tests {
             directory: root.clone(),
             terminal_eof: true,
             state: RunState::Finalized,
+            notes: Vec::new(),
             recording_error: None,
             execution: None,
             analysis: Some(report.clone()),

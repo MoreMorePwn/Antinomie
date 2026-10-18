@@ -13,6 +13,7 @@ impl Session {
         // of busy telemetry. A time budget still returns control to command
         // handling under continuous telemetry.
         let started = Instant::now();
+        self.pre_ack.expire(started);
         let mut drained = 0usize;
         while started.elapsed() < PUMP_BUDGET {
             let Some(packet) = self.transport.read()?.map(<[u8]>::to_vec) else {
@@ -25,67 +26,6 @@ impl Session {
                 .map(|(header, _)| header);
             let root = header.as_ref().map_or(0, |header| header.root_task_cookie);
             let capture_cookie = header.as_ref().map_or(0, |header| header.capture_cookie);
-            let reserved = self.stored_len();
-            let mut saved =
-                if let Some(run) = self.runs.get_mut(&root) {
-                    if let Some(header) = &header {
-                        run.observe_clock(header.timestamp_ns);
-                    }
-                    let saved = run
-                        .capture
-                        .append_with_reserved(&packet, reserved.saturating_sub(run.capture.bytes));
-                    if !saved {
-                        run.storage_error(
-                            run.capture
-                                .error
-                                .clone()
-                                .unwrap_or_else(|| "raw saving stopped".into()),
-                        );
-                    }
-                    run.assembler
-                        .set_storage_limit(run.assembler.stored_len().saturating_add(
-                            self.capture.quota().saturating_sub(
-                                reserved + if saved { packet.len() as u64 + 4 } else { 0 },
-                            ),
-                        ));
-                    if let Err(error) = run.assembler.ingest(&packet) {
-                        snapshot.health.parser_errors += 1;
-                        snapshot.last_error = Some(error.to_string());
-                    }
-                    saved
-                } else {
-                    let saved = self
-                        .capture
-                        .append_with_reserved(&packet, reserved.saturating_sub(self.capture.bytes));
-                    if !saved {
-                        self.assembler.stop_saving();
-                    }
-                    self.assembler
-                        .set_storage_limit(self.assembler.stored_len().saturating_add(
-                            self.capture.quota().saturating_sub(
-                                reserved + if saved { packet.len() as u64 + 4 } else { 0 },
-                            ),
-                        ));
-                    if let Err(error) = self.assembler.ingest(&packet) {
-                        snapshot.health.parser_errors += 1;
-                        snapshot.last_error = Some(error.to_string());
-                    }
-                    if root != 0 {
-                        while self.pending_len + packet.len() > 16 * 1024 * 1024 {
-                            if let Some(old) = self.pending.pop_front() {
-                                self.pending_len -= old.len();
-                                self.pending_overflow = true;
-                            } else {
-                                break;
-                            }
-                        }
-                        self.pending.push_back(packet.to_vec());
-                        self.pending_len += packet.len();
-                    }
-                    saved
-                };
-            // Observer copies do not contribute to canonical history: the primary
-            // run/unassigned assembler above already owns each incoming packet.
             let observer_id = self
                 .captures
                 .iter()
@@ -98,6 +38,58 @@ impl Session {
                         .then(|| self.pending_capture_id.clone())
                         .flatten()
                 });
+            // A packet no run owns is saved once: an observing capture that can
+            // still save is its archive, so the boot's unassigned archive skips it.
+            let held = held_by_capture(
+                self.runs.contains_key(&root),
+                observer_id.as_ref().and_then(|id| self.captures.get(id)),
+            );
+            let reserved = self.stored_len();
+            let mut saved = if let Some(run) = self.runs.get_mut(&root) {
+                if let Some(header) = &header {
+                    run.observe_clock(header.timestamp_ns);
+                }
+                let saved = run
+                    .capture
+                    .append_with_reserved(&packet, reserved.saturating_sub(run.capture.bytes));
+                if !saved && !run.recording_complete() {
+                    run.storage_error(
+                        run.capture
+                            .error
+                            .clone()
+                            .unwrap_or_else(|| "raw saving stopped".into()),
+                    );
+                }
+                run.assembler.set_storage_limit(
+                    run.assembler
+                        .stored_len()
+                        .saturating_add(self.capture.quota().saturating_sub(
+                            reserved + if saved { packet.len() as u64 + 4 } else { 0 },
+                        )),
+                );
+                if let Err(error) = run.assembler.ingest(&packet) {
+                    snapshot.health.parser_errors += 1;
+                    snapshot.last_error = Some(error.to_string());
+                }
+                saved
+            } else {
+                let stored_here = save_unowned(
+                    &mut self.capture,
+                    &mut self.assembler,
+                    held,
+                    &packet,
+                    reserved,
+                );
+                if let Err(error) = self.assembler.ingest(&packet) {
+                    snapshot.health.parser_errors += 1;
+                    snapshot.last_error = Some(error.to_string());
+                }
+                self.pre_ack
+                    .hold(root, self.guest_resources.cookie, &packet, started);
+                held || stored_here
+            };
+            // Observer copies do not contribute to canonical history: the primary
+            // run/unassigned assembler above already owns each incoming packet.
             if let Some(id) = observer_id {
                 let reserved = self.stored_len();
                 if let Some(observer) = self.captures.get_mut(&id) {
@@ -163,15 +155,7 @@ impl Session {
                     }
                 }
             }
-            propagate_object_saving_failure(&mut self.capture, &mut self.assembler, &mut self.runs);
-            if let Some(error) = self
-                .captures
-                .values()
-                .find_map(|capture| capture.summary.recording_error.clone())
-            {
-                // Unknown command outcomes are status, not persistence failures.
-                self.stop_saving(error);
-            }
+            self.propagate_saving_failures(root);
             if !saved {
                 let error = self
                     .capture
@@ -179,7 +163,7 @@ impl Session {
                     .clone()
                     .or_else(|| self.runs.values().find_map(|run| run.capture.error.clone()))
                     .unwrap_or_else(|| "capture saving stopped".into());
-                self.stop_saving(error);
+                self.saving_refused(root, error);
                 snapshot.health.storage_dropped_packets =
                     snapshot.health.storage_dropped_packets.saturating_add(1);
             } else {
@@ -521,9 +505,7 @@ impl Session {
                 .map_err(|e| RequestError::Failed(e.to_string()))?
                 .is_some()
             {
-                return Err(RequestError::Failed(
-                    "VM exited while waiting for command reply".into(),
-                ));
+                return Err(RequestError::Failed(VM_EXITED_WAITING_REPLY.into()));
             }
             if Instant::now() >= deadline {
                 return Err(RequestError::TimedOut(format!(
@@ -713,11 +695,22 @@ impl Session {
         {
             persistence_error = Some(error);
         }
+        let failure = persistence_error.map(|error| terminal_failure(run, error));
         let sequence = run.sequence;
         let run_id = run.summary.id.clone();
-        if let Some(error) = persistence_error {
-            self.stop_saving(error.clone());
-            snapshot.health.persistence_error = Some(error);
+        match failure {
+            // A terminal write that fails stops saving for this run only; the boot
+            // keeps recording everything else. The first cause stays the one
+            // reported.
+            Some(TerminalFailure::RunOnly(cause)) => {
+                snapshot.health.persistence_error.get_or_insert(cause);
+            }
+            // Only the quota, which every recording shares, stops the boot.
+            Some(TerminalFailure::Quota(cause)) => {
+                self.quota_reached(cookie);
+                snapshot.health.persistence_error.get_or_insert(cause);
+            }
+            None => {}
         }
         if (count > 0 || eof)
             && sender
@@ -734,6 +727,9 @@ impl Session {
         Ok(())
     }
 }
+
+/// The VM process ended before the awaited reply could be read.
+pub(super) const VM_EXITED_WAITING_REPLY: &str = "VM exited while waiting for command reply";
 
 pub(super) fn decode_stats(reply: &[u8]) -> Result<[u64; 10], String> {
     if reply.len() != 80 {

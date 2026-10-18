@@ -1718,9 +1718,7 @@ impl RawCapture {
             return false;
         };
         if total.saturating_add(reserved_len) > self.quota {
-            self.error = Some(
-                "capture quota exhausted; collection continues without saving new packets".into(),
-            );
+            self.error = Some(crate::quota::message(self.quota));
             return false;
         }
         let length = match u32::try_from(packet.len()) {

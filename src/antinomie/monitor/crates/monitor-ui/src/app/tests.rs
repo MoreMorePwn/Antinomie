@@ -253,6 +253,7 @@ pub(super) fn run(id: &str) -> RunSummary {
         directory: PathBuf::new(),
         terminal_eof: false,
         state: RunState::Running,
+        notes: Vec::new(),
         recording_error: None,
         execution: None,
         analysis: None,

@@ -9,6 +9,10 @@ use std::{
     os::unix::fs::OpenOptionsExt,
 };
 
+/// Notes kept per run, and the longest one.
+const MAX_NOTES: usize = 16;
+const NOTE_LEN: usize = 512;
+
 pub(crate) struct ProgramRun {
     pub summary: RunSummary,
     pub capture: RawCapture,
@@ -151,9 +155,26 @@ impl ProgramRun {
         self.summary.recording_error.get_or_insert(error.into());
         self.assembler.stop_saving();
     }
+    /// Record a fact about this run's recording that does not stop saving.
+    /// At most [`MAX_NOTES`] distinct notes are kept.
+    pub fn add_note(&mut self, note: impl Into<String>) {
+        let note: String = note.into().chars().take(NOTE_LEN).collect();
+        if self.summary.notes.len() < MAX_NOTES && !self.summary.notes.contains(&note) {
+            self.summary.notes.push(note);
+        }
+    }
+    /// The program tree has ended and its terminal is closed: no more telemetry
+    /// or output is expected, so the run's archive is complete as it stands.
+    pub fn recording_complete(&self) -> bool {
+        self.summary.terminal_eof
+            && matches!(
+                self.summary.state,
+                RunState::Finished | RunState::Stopped | RunState::Finalized
+            )
+    }
     fn journal(&mut self, kind: u8, data: &[u8], available: u64) -> Result<(), String> {
-        if self.summary.recording_error.is_some() {
-            return Err("run saving already stopped".into());
+        if let Some(cause) = &self.summary.recording_error {
+            return Err(format!("run saving already stopped: {cause}"));
         }
         let required = 5 + data.len() as u64 + if kind == 1 { data.len() as u64 } else { 0 };
         if required > available {
@@ -237,8 +258,11 @@ impl ProgramRun {
         if self.summary.execution.is_none() && self.summary.state != RunState::StopRequested {
             self.summary.state = RunState::TerminalClosed;
         }
-        self.journal(3, &[], available)?;
-        self.persist_summary()
+        // The summary records the closed terminal even when the journal refuses
+        // its end mark, so a run whose saving stopped is not left looking open.
+        let journal = self.journal(3, &[], available);
+        let persisted = self.persist_summary();
+        journal.and(persisted)
     }
     /// Saves the terminal screen on the background writer.
     pub fn save_screen(&mut self, available: u64) -> Result<(), String> {
@@ -247,8 +271,10 @@ impl ProgramRun {
         storage::queue_bytes(&self.summary.directory.join("terminal-screen.ansi"), screen)
     }
     fn screen_bytes(&mut self, available: u64) -> Result<Vec<u8>, String> {
-        if self.summary.recording_error.is_some() {
-            return Err("run saving stopped; final screen unavailable".into());
+        if let Some(cause) = &self.summary.recording_error {
+            return Err(format!(
+                "run saving stopped ({cause}); final screen unavailable"
+            ));
         }
         let screen = self.terminal.screen().state_formatted();
         if screen.len() as u64 > available + self.screen_len {
@@ -323,6 +349,7 @@ mod tests {
             directory: directory.clone(),
             terminal_eof: false,
             state: RunState::Running,
+            notes: Vec::new(),
             recording_error: None,
             execution: None,
             analysis: None,
@@ -386,6 +413,7 @@ mod tests {
             directory: directory.clone(),
             terminal_eof: false,
             state: RunState::Running,
+            notes: Vec::new(),
             recording_error: None,
             execution: Some(execution),
             analysis: None,
@@ -448,6 +476,7 @@ mod tests {
             directory: directory.clone(),
             terminal_eof: false,
             state: RunState::Running,
+            notes: Vec::new(),
             recording_error: None,
             execution: None,
             analysis: None,
@@ -486,6 +515,7 @@ mod tests {
             directory: directory.clone(),
             terminal_eof: false,
             state: RunState::Running,
+            notes: Vec::new(),
             recording_error: None,
             execution: None,
             analysis: None,
@@ -528,6 +558,100 @@ mod tests {
             journal_len
         );
         assert_eq!(recording.terminal_replay(0, 3).unwrap().records.len(), 3);
+        crate::storage::settle_json_under(&directory);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    fn open_run(name: &str) -> (ProgramRun, std::path::PathBuf) {
+        let directory = std::env::temp_dir().join(format!("{name}-{}", storage::unique_id()));
+        let summary = RunSummary {
+            started_ms: None,
+            clock_anchor: None,
+            id: "run".into(),
+            vm_id: "vm".into(),
+            boot_id: "boot".into(),
+            session_id: 1,
+            root_task_cookie: 2,
+            pid: 3,
+            request: ExecRequest::default(),
+            directory: directory.clone(),
+            terminal_eof: false,
+            state: RunState::Running,
+            notes: Vec::new(),
+            recording_error: None,
+            execution: None,
+            analysis: None,
+        };
+        (ProgramRun::new(summary, 65536).unwrap(), directory)
+    }
+    #[test]
+    fn notes_are_information_and_never_stop_terminal_saving() {
+        let (mut run, directory) = open_run("ant-run-notes");
+        run.add_note("3 telemetry packets could not be assigned to this run");
+        run.add_note("3 telemetry packets could not be assigned to this run");
+        for n in 0..40 {
+            run.add_note(format!("note {n}"));
+        }
+        assert_eq!(run.summary.notes.len(), MAX_NOTES);
+        assert!(run.summary.recording_error.is_none());
+        run.output(b"journal still works", 65536).unwrap();
+        run.eof(65536).unwrap();
+        run.finalize(65536, "clean", &Health::default()).unwrap();
+        let journal = std::fs::metadata(directory.join("terminal.journal")).unwrap();
+        assert!(journal.len() > 0);
+        let saved: RunSummary =
+            serde_json::from_reader(File::open(directory.join("run.json")).unwrap()).unwrap();
+        assert_eq!(saved.notes.len(), MAX_NOTES);
+        assert!(saved.recording_error.is_none());
+        drop(run);
+        crate::storage::settle_json_under(&directory);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn summaries_saved_before_notes_existed_still_load_and_omit_empty_notes() {
+        let (run, directory) = open_run("ant-run-compat");
+        let mut value = serde_json::to_value(&run.summary).unwrap();
+        assert!(value.get("notes").is_none(), "empty notes are not written");
+        let loaded: RunSummary = serde_json::from_value(value.clone()).unwrap();
+        assert!(loaded.notes.is_empty());
+        value["notes"] = serde_json::json!(["kept"]);
+        let loaded: RunSummary = serde_json::from_value(value).unwrap();
+        assert_eq!(loaded.notes, ["kept"]);
+        drop(run);
+        crate::storage::settle_json_under(&directory);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn a_refused_end_mark_still_saves_the_closed_terminal_and_names_the_cause() {
+        let (mut run, directory) = open_run("ant-run-eof");
+        run.storage_error("capture quota exhausted; terminal saving stopped");
+        let error = run.eof(65536).unwrap_err();
+        assert!(error.contains("capture quota exhausted"), "{error}");
+        storage::flush_json();
+        let saved: RunSummary =
+            serde_json::from_reader(File::open(directory.join("run.json")).unwrap()).unwrap();
+        assert!(
+            saved.terminal_eof,
+            "the summary records the closed terminal"
+        );
+        assert_eq!(
+            run.save_screen(65536).unwrap_err().matches("quota").count(),
+            1
+        );
+        drop(run);
+        crate::storage::settle_json_under(&directory);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn only_an_ended_run_with_a_closed_terminal_is_complete() {
+        let (mut run, directory) = open_run("ant-run-complete");
+        assert!(!run.recording_complete());
+        run.summary.state = RunState::Finished;
+        assert!(!run.recording_complete());
+        run.summary.terminal_eof = true;
+        assert!(run.recording_complete());
+        run.summary.state = RunState::TerminalClosed;
+        assert!(!run.recording_complete());
+        drop(run);
         crate::storage::settle_json_under(&directory);
         std::fs::remove_dir_all(directory).unwrap();
     }

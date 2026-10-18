@@ -47,6 +47,10 @@ impl CaptureSession {
             .bytes
             .saturating_add(self.assembler.stored_len())
     }
+    /// False once this archive has stopped saving (quota, write failure).
+    pub fn can_save(&self) -> bool {
+        self.capture.error.is_none() && self.summary.recording_error.is_none()
+    }
     pub fn observe_identity(&mut self, cookie: u64, stream_id: u64) -> Result<(), String> {
         if cookie == 0
             || stream_id == 0

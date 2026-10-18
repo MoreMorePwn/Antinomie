@@ -221,6 +221,7 @@ impl Worker {
                     terminal_eof: false,
                     state: RunState::Unknown,
                     recording_error: Some("execution has not been acknowledged".into()),
+                    notes: Vec::new(),
                     execution: None,
                     analysis: selected.then(|| {
                         crate::analysis::jobs::new_report(&request.path, &request.analysis)
@@ -241,37 +242,41 @@ impl Worker {
                 if let Err(error) = prepared {
                     return Err(session.failed_run_launch(&mut run, artifacts, error));
                 }
+                // Every error text below is final: a guest rejection says the launch
+                // did not happen, only an unanswered or malformed one leaves it unknown.
                 let acknowledged = (|| -> Result<(Vec<u8>, u64, u64, u32), String> {
-                    let reply = session.request(
-                        control::EXEC,
-                        &args,
-                        &mut self.snapshot,
-                        &self.sender,
-                        timeout,
-                    )?;
-                    if reply.len()
-                        != 24
-                            + usize::from(inline_acquisition) * 24
-                            + usize::from(request.core_dump_on_exit) * 24
-                        || u32_at(&reply, 20).map_err(|e| e.to_string())? != 0
-                    {
-                        return Err("invalid execution reply".into());
-                    }
-                    let id = u64_at(&reply, 0).map_err(|e| e.to_string())?;
-                    let cookie = u64_at(&reply, 8).map_err(|e| e.to_string())?;
-                    let pid = u32_at(&reply, 16).map_err(|e| e.to_string())?;
-                    if cookie == 0 || session.runs.contains_key(&cookie) {
-                        return Err(
-                            "invalid or reused execution root identity; launch outcome unknown"
-                                .into(),
-                        );
-                    }
-                    Ok((reply, id, cookie, pid))
+                    let reply = session
+                        .request_typed(
+                            control::EXEC,
+                            &args,
+                            &mut self.snapshot,
+                            &self.sender,
+                            timeout,
+                        )
+                        .map_err(|error| launch_failure(error, &request.path, &request.cwd))?;
+                    (|| {
+                        if reply.len()
+                            != 24
+                                + usize::from(inline_acquisition) * 24
+                                + usize::from(request.core_dump_on_exit) * 24
+                            || u32_at(&reply, 20).map_err(|e| e.to_string())? != 0
+                        {
+                            return Err("invalid execution reply".to_string());
+                        }
+                        let id = u64_at(&reply, 0).map_err(|e| e.to_string())?;
+                        let cookie = u64_at(&reply, 8).map_err(|e| e.to_string())?;
+                        let pid = u32_at(&reply, 16).map_err(|e| e.to_string())?;
+                        if cookie == 0 || session.runs.contains_key(&cookie) {
+                            return Err("invalid or reused execution root identity".to_string());
+                        }
+                        Ok((id, cookie, pid))
+                    })()
+                    .map(|(id, cookie, pid)| (reply, id, cookie, pid))
+                    .map_err(|error| launch_unknown(&error))
                 })();
                 let (reply, id, cookie, pid) = match acknowledged {
                     Ok(acknowledged) => acknowledged,
-                    Err(error) => return Err(session.failed_run_launch(&mut run, artifacts,
-                        format!("execution acknowledgement failed: {error}; launch outcome may be unknown"))),
+                    Err(error) => return Err(session.failed_run_launch(&mut run, artifacts, error)),
                 };
                 run.summary.session_id = id;
                 run.summary.root_task_cookie = cookie;
@@ -336,46 +341,40 @@ impl Worker {
                     run.capture.error = Some(error.clone());
                     run.storage_error(error);
                 }
-                let mut remaining = VecDeque::new();
-                while let Some(packet) = session.pending.pop_front() {
-                    let root = crate::parser::parse_packet(&packet)
-                        .map(|(h, _)| h.root_task_cookie)
-                        .unwrap_or(0);
-                    if root == cookie {
-                        if let Ok((header, _)) = crate::parser::parse_packet(&packet) {
-                            run.observe_clock(header.timestamp_ns);
-                        }
-                        session.pending_len -= packet.len();
-                        let reserved = session.stored_len() + run.stored_len() - run.capture.bytes;
-                        if !run.capture.append_with_reserved(&packet, reserved) {
-                            let error = run
-                                .capture
-                                .error
-                                .clone()
-                                .unwrap_or_else(|| "pending raw saving failed".into());
-                            run.storage_error(error.clone());
-                            session.stop_saving(error);
-                        }
-                        run.assembler.set_storage_limit(
-                            run.assembler.stored_len().saturating_add(
-                                session.available().saturating_sub(run.stored_len()),
-                            ),
-                        );
-                        if let Err(error) = run.assembler.ingest(&packet) {
-                            self.snapshot.last_error = Some(error.to_string());
-                        }
-                        if let Some(error) = run.assembler.saving_error().map(str::to_owned) {
-                            run.capture.error.get_or_insert(error.clone());
-                            run.storage_error(error.clone());
-                            session.stop_saving(error);
-                        }
-                    } else {
-                        remaining.push_back(packet);
+                // Telemetry that arrived before this launch was acknowledged.
+                let claim = session.pre_ack.claim(cookie, Instant::now());
+                for packet in claim.packets {
+                    if let Ok((header, _)) = crate::parser::parse_packet(&packet) {
+                        run.observe_clock(header.timestamp_ns);
+                    }
+                    let reserved = session.stored_len() + run.stored_len() - run.capture.bytes;
+                    if !run.capture.append_with_reserved(&packet, reserved) {
+                        let error = run
+                            .capture
+                            .error
+                            .clone()
+                            .unwrap_or_else(|| "pending raw saving failed".into());
+                        run.storage_error(error.clone());
+                        session.saving_refused(cookie, error);
+                    }
+                    run.assembler.set_storage_limit(
+                        run.assembler
+                            .stored_len()
+                            .saturating_add(session.available().saturating_sub(run.stored_len())),
+                    );
+                    if let Err(error) = run.assembler.ingest(&packet) {
+                        self.snapshot.last_error = Some(error.to_string());
+                    }
+                    if let Some(error) = run.assembler.saving_error().map(str::to_owned) {
+                        run.capture.error.get_or_insert(error.clone());
+                        run.storage_error(error.clone());
+                        session.saving_refused(cookie, error);
                     }
                 }
-                session.pending = remaining;
-                if session.pending_overflow {
-                    run.summary.recording_error.get_or_insert("pre-reply assignment buffer exceeded limit; earlier packets remain in boot unassigned raw archive".into());
+                // A note, not a saving failure: the run keeps recording and the
+                // lost packets are still in the boot's raw archives.
+                if let Some(note) = claim.lost.note() {
+                    run.add_note(note);
                 }
                 if let Err(error) = run.persist_summary() {
                     run.storage_error(format!("run metadata persistence failed: {error}"));

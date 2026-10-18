@@ -422,6 +422,7 @@ mod tests {
                 terminal_eof: true,
                 state: RunState::Finalized,
                 recording_error: None,
+                notes: Vec::new(),
                 execution: None,
                 analysis: None,
             };
