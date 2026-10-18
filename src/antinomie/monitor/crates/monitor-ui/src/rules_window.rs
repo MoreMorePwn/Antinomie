@@ -81,7 +81,7 @@ impl Model {
     }
 
     fn ensure(&mut self, data_dir: &Path) {
-        if self.loaded || self.job.is_some() {
+        if self.loaded || self.job.is_some() || self.status_error.is_some() {
             return;
         }
         if self.engine.is_empty() {
@@ -108,8 +108,29 @@ impl Model {
     pub(crate) fn profile(&self) -> String {
         if self.loaded {
             ruleset::profile_label_of(&self.registry)
+        } else if self.status_error.is_some() {
+            "Rules registry unavailable".into()
         } else {
             "Loading rules…".into()
+        }
+    }
+
+    /// Load and poll local state even when the manager window is closed.
+    /// No catalog fetch or rule download is admitted by this operation.
+    pub(crate) fn tick(&mut self, ctx: &egui::Context, data_dir: &Path) {
+        let previous = self.status_error.clone();
+        self.ensure(data_dir);
+        self.poll();
+        if let Some(error) = self
+            .status_error
+            .as_ref()
+            .filter(|_| self.status_error != previous)
+        {
+            self.changed |= !self.loaded;
+            crate::activity::report(ctx, crate::activity::Level::Error, error);
+        }
+        if self.job.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
 
@@ -127,11 +148,7 @@ impl Model {
         if self.tools != *tools {
             self.tools = tools.clone();
         }
-        self.ensure(data_dir);
-        self.poll();
-        if self.job.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(100));
-        }
+        self.tick(ctx, data_dir);
         let mut window_open = *open;
         egui::Window::new("Rule manager")
             .id(egui::Id::new(WINDOW_ID))
@@ -156,7 +173,13 @@ impl Model {
     }
 
     fn poll(&mut self) {
-        let finished = self.job.as_ref().and_then(|job| job.rx.try_recv().ok());
+        let finished = self.job.as_ref().and_then(|job| match job.rx.try_recv() {
+            Ok(result) => Some(result),
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Some(Err("Rules worker ended without a result".into()))
+            }
+        });
         if let Some(result) = finished {
             self.job = None;
             match result {
@@ -194,6 +217,7 @@ impl Model {
                 }
                 Ok(Done::Status(text)) => self.status = text,
                 Err(error) => {
+                    self.changed |= !self.loaded;
                     self.status_error = Some(error.clone());
                     self.status = error;
                 }
@@ -339,6 +363,14 @@ impl Model {
         self.options(ui, data_dir, detection);
         ui.horizontal_wrapped(|ui| {
             let busy = self.job.is_some();
+            if ui
+                .add_enabled(!busy, egui::Button::new("Reload local rules"))
+                .clicked()
+            {
+                self.loaded = false;
+                self.status_error = None;
+                self.ensure(data_dir);
+            }
             if ui
                 .add_enabled(!busy, egui::Button::new("Check for updates"))
                 .clicked()
