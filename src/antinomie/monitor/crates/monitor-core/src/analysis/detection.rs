@@ -288,6 +288,10 @@ pub struct Report {
     /// Events skipped because a field this rule uses was absent in this run.
     #[serde(default)]
     pub missing_field_events: u64,
+    /// What the rules were run against. None on results saved before this
+    /// was recorded.
+    #[serde(default)]
+    pub inputs: Option<Vec<ScannedInput>>,
 }
 
 impl Report {
@@ -312,6 +316,7 @@ impl Report {
             category_rejected: 0,
             backend_rejected: 0,
             missing_field_events: 0,
+            inputs: Some(Vec::new()),
         }
     }
     pub fn unavailable(engine: Engine, identity: Identity, reason: impl Into<String>) -> Self {
@@ -323,8 +328,10 @@ impl Report {
 }
 
 mod ids;
+mod inputs;
 mod runner;
 mod yara;
+pub use inputs::{InputKind, InputOutcome, ScannedInput};
 pub use runner::{
     FrozenSelection, Request, load, read_evidence, result_directory, run, run_with_progress,
     worker_main_if_requested,

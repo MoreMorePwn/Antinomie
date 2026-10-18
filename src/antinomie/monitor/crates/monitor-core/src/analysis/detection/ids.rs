@@ -269,20 +269,50 @@ fn suricata_config(classification: &Path, reference: &Path, threshold: &Path) ->
     )
 }
 
+/// Lists every staged segment as skipped for `reason`, with those staging
+/// could not prepare.
+fn unscanned(report: &mut Report, staged: &Staged, reason: &str) {
+    for capture in &staged.captures {
+        report.input(capture_input(capture).skipped(reason));
+    }
+    for input in &staged.skipped_inputs {
+        report.input(input.clone());
+    }
+}
+
+fn capture_input(capture: &super::runner::Capture) -> ScannedInput {
+    let input = ScannedInput::new(InputKind::Capture, &capture.original).detail(format!(
+        "{} {}",
+        group_digits(capture.packets),
+        if capture.packets == 1 {
+            "packet"
+        } else {
+            "packets"
+        }
+    ));
+    match fs::metadata(&capture.path) {
+        Ok(metadata) => input.size(metadata.len()),
+        Err(_) => input,
+    }
+}
+
 pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
     if staged.no_rules || staged.ids_sources.is_empty() && staged.warnings.is_empty() {
         let mut report = Report::empty(Engine::Ids, staged.request.identity.clone());
         report.state = State::NoRules;
         report.selection = staged.selection.clone();
         report.warnings.push("No rules enabled".into());
+        unscanned(&mut report, staged, "no rules enabled");
         return Ok(report);
     }
     let Some(tool) = suricata_tool() else {
-        return Ok(Report::unavailable(
+        let mut report = Report::unavailable(
             Engine::Ids,
             staged.request.identity.clone(),
             "Local Suricata is not installed. No packets were evaluated.",
-        ));
+        );
+        unscanned(&mut report, staged, "Suricata is not installed");
+        return Ok(report);
     };
     let libs = std::env::var("ANTINOMIE_SURICATA_LIBS").unwrap_or_default();
     let pair = [("LD_LIBRARY_PATH", libs.as_str())];
@@ -341,7 +371,11 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
         report
             .warnings
             .push("No compatible IDS rules were evaluated.".into());
+        unscanned(&mut report, staged, "no compatible rules");
         return Ok(report);
+    }
+    for input in &staged.skipped_inputs {
+        report.input(input.clone());
     }
     report.source_digest = Some(crate::storage::sha256_hex(&rules));
     let rule_text = String::from_utf8_lossy(&rules).into_owned();
@@ -382,6 +416,9 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
     let deadline = Instant::now() + Duration::from_secs(100);
     let mut successful = 0;
     let capture_total = staged.captures.len() as u64;
+    // Segments evaluated so far, and why the rest were not.
+    let mut evaluated = 0;
+    let mut stopped = "the scan stopped early";
     for (index, capture) in staged.captures.iter().enumerate() {
         progress.stage(ScanTarget::CaptureSegment {
             index: index as u64 + 1,
@@ -392,8 +429,10 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
             report
                 .warnings
                 .push("IDS scan reached its 100 second budget".into());
+            stopped = "the scan reached its 100 second budget";
             break;
         };
+        let mut row = capture_input(capture);
         let output = work.join(format!("ids-{index}"));
         crate::storage::private_dir(&output).map_err(|error| error.to_string())?;
         let strings = [&config, &capture.path, &rule_path, &output]
@@ -454,12 +493,16 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
                 index + 1,
                 result.stdout.chars().take(1024).collect::<String>()
             ));
+            row = row.partial("Suricata failed or timed out; alerts are partial");
         } else {
             successful += 1;
             report.scanned_objects += capture.packets;
         }
         if !capture.complete {
             report.state = State::Partial;
+            if row.outcome == InputOutcome::Scanned {
+                row = row.partial("still being captured; the complete prefix was scanned");
+            }
         }
         if let Err(error) = read_eve(
             &output.join("eve.json"),
@@ -472,7 +515,10 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
             report
                 .warnings
                 .push(format!("Segment {}: {error}", index + 1));
+            row = row.partial(format!("alerts could not be read: {error}"));
         }
+        report.input(row);
+        evaluated += 1;
         // Bound peak scratch across segments; structured evidence and the
         // bounded worker log survive outside this directory.
         if let Err(error) = fs::remove_dir_all(&output) {
@@ -486,6 +532,9 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
             report.state = State::Partial;
             break;
         }
+    }
+    for capture in &staged.captures[evaluated..] {
+        report.input(capture_input(capture).skipped(stopped));
     }
     if successful == 0 {
         report.state = State::Unavailable;
@@ -814,6 +863,15 @@ mod tests {
             "positive alert has no source packet: {:?}",
             finding.evidence
         );
+        let inputs = positive_report.inputs.as_deref().unwrap_or_default();
+        assert!(
+            matches!(inputs, [input] if input.kind == InputKind::Capture
+                && input.path == positive
+                && input.outcome == InputOutcome::Scanned
+                && input.detail == "4 packets"
+                && input.size.is_some()),
+            "{inputs:?}"
+        );
         assert!(
             positive_report
                 .warnings
@@ -874,6 +932,7 @@ mod tests {
                 packets,
             }],
             journal: None,
+            skipped_inputs: vec![],
             warnings: vec![],
             selection: "et-test".into(),
             no_rules: false,

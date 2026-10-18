@@ -44,7 +44,7 @@ fn record(
     sources: &[String],
     budget: &mut super::RuleTextBudget,
     report: &mut Report,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let results = scanner.scan(data).map_err(|error| error.to_string())?;
     let block = ByteSource {
         offset: target.offset,
@@ -169,9 +169,10 @@ fn record(
             }
         }
     }
-    Ok(())
+    Ok(block.sha256)
 }
 
+/// Scans one recovered file whole; returns its size and SHA-256.
 fn scan_file(
     scanner: &mut yara_x::Scanner<'_>,
     path: &Path,
@@ -179,7 +180,7 @@ fn scan_file(
     budget: &mut super::RuleTextBudget,
     report: &mut Report,
     total: &mut u64,
-) -> Result<(), String> {
+) -> Result<(u64, String), String> {
     let parent = path.parent().ok_or("target has no parent")?;
     let mut file =
         crate::archive_io::open_regular(parent, path).map_err(|error| error.to_string())?;
@@ -201,7 +202,7 @@ fn scan_file(
         return Err("recovered file changed during scan".into());
     }
     *total += data.len() as u64;
-    record(
+    let sha256 = record(
         scanner,
         &data,
         Target {
@@ -213,7 +214,8 @@ fn scan_file(
         sources,
         budget,
         report,
-    )
+    )?;
+    Ok((data.len() as u64, sha256))
 }
 
 fn memory_blocks(path: &Path) -> u64 {
@@ -242,6 +244,8 @@ struct MemoryPass<'a> {
     progress: &'a mut super::runner::ProgressWriter,
     block_index: u64,
     block_total: u64,
+    /// Mapped ranges of the current dump that were not captured.
+    gaps: u64,
 }
 
 impl MemoryPass<'_> {
@@ -290,6 +294,7 @@ fn scan_core(
         let available = mapping.available_size.min(mapping.captured_size);
         if available < mapping.memory_size {
             report.state = State::Partial;
+            pass.gaps += 1;
         }
         let mut consumed = 0;
         while consumed < available {
@@ -388,13 +393,19 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
     scanner.set_timeout(Duration::from_secs(15));
     let deadline = Instant::now() + Duration::from_secs(100);
     let mut total = 0;
+    let analysis = request.directory.join("analysis");
+    let mut executable = ScannedInput::new(InputKind::Executable, &analysis);
     let specimen = (|| {
-        let directory = request.directory.join("analysis");
-        let saved = super::super::jobs::open_report(&directory)?;
-        let (saved, data) = super::super::specimen::read_all(&directory, &saved.id)?;
+        let directory = &analysis;
+        let saved = super::super::jobs::open_report(directory)?;
+        let (saved, data) = super::super::specimen::read_all(directory, &saved.id)?;
         report.source_digest = saved.specimen_sha256.clone();
+        executable.name = Path::new(&saved.source_path)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
         total += data.len() as u64;
-        record(
+        let sha256 = record(
             &mut scanner,
             &data,
             Target {
@@ -406,20 +417,61 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
             &sources,
             &mut budget,
             &mut report,
-        )
+        )?;
+        Ok::<_, String>((data.len() as u64, saved.specimen_sha256.unwrap_or(sha256)))
     })();
-    if let Err(error) = specimen {
-        report.warnings.push(format!("Executable: {error}"));
-        report.state = State::Partial;
+    match specimen {
+        Ok((size, sha256)) => report.input(executable.size(size).sha256(sha256)),
+        Err(error) => {
+            report.warnings.push(format!("Executable: {error}"));
+            report.state = State::Partial;
+            report.input(executable.skipped(error));
+        }
     }
-    if request.settings.scan_memory || request.settings.scan_recovered {
-        let artifacts = match super::runner::owned_artifacts(request) {
+    let scanning = request.settings.scan_memory || request.settings.scan_recovered;
+    let artifacts = if scanning {
+        match super::runner::owned_artifacts(request) {
             Ok(value) => value,
             Err(error) => {
                 progress.flush();
                 return Err(error);
             }
-        };
+        }
+    } else {
+        super::runner::owned_artifacts(request).ok().flatten()
+    };
+    if let Some(artifacts) = &artifacts {
+        // What this run has but the scan options left out.
+        if !request.settings.scan_memory {
+            for (kind, path) in [
+                (InputKind::CoreDump, artifacts.core_dump.clone()),
+                (
+                    InputKind::MemoryDump,
+                    artifacts
+                        .memory_dump
+                        .as_ref()
+                        .map(|dir| dir.join("memory.elf")),
+                ),
+            ] {
+                if let Some(path) = path {
+                    report.input(
+                        ScannedInput::new(kind, path)
+                            .sized()
+                            .skipped("memory scanning is off"),
+                    );
+                }
+            }
+        }
+        if !request.settings.scan_recovered
+            && let Some(directory) = &artifacts.memory_dump
+        {
+            report.input(
+                ScannedInput::new(InputKind::RecoveredFile, directory.join("files"))
+                    .skipped("recovered-file scanning is off"),
+            );
+        }
+    }
+    if scanning {
         if let Some(artifacts) = artifacts {
             if request.settings.scan_memory {
                 let mut block_total = 0u64;
@@ -437,24 +489,44 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
                     progress: &mut progress,
                     block_index: 0,
                     block_total,
+                    gaps: 0,
                 };
-                if let Some(path) = artifacts.core_dump.as_deref()
-                    && let Err(error) = scan_core(&mut scanner, path, true, &mut report, &mut pass)
-                {
-                    report.warnings.push(format!("Core: {error}"));
-                    report.state = State::Partial;
-                }
-                if let Some(directory) = artifacts.memory_dump.as_deref()
-                    && let Err(error) = scan_core(
-                        &mut scanner,
-                        &directory.join("memory.elf"),
+                let dumps = [
+                    (
+                        InputKind::CoreDump,
+                        artifacts.core_dump.clone(),
+                        true,
+                        "Core",
+                    ),
+                    (
+                        InputKind::MemoryDump,
+                        artifacts
+                            .memory_dump
+                            .as_ref()
+                            .map(|dir| dir.join("memory.elf")),
                         false,
+                        "RAM",
+                    ),
+                ];
+                for (kind, path, virtual_addresses, label) in dumps {
+                    let Some(path) = path else { continue };
+                    let first = pass.block_index;
+                    pass.gaps = 0;
+                    let result = scan_core(
+                        &mut scanner,
+                        &path,
+                        virtual_addresses,
                         &mut report,
                         &mut pass,
-                    )
-                {
-                    report.warnings.push(format!("RAM: {error}"));
-                    report.state = State::Partial;
+                    );
+                    if let Err(error) = &result {
+                        report.warnings.push(format!("{label}: {error}"));
+                        report.state = State::Partial;
+                    }
+                    let blocks = pass.block_index - first;
+                    report.input(inputs::memory_input(
+                        kind, &path, &result, blocks, pass.gaps,
+                    ));
                 }
                 report.warnings.push("Memory rules run on captured contiguous blocks up to 64 MiB. Missing pages are excluded; matches spanning blocks and whole-file conditions are not complete memory coverage.".into());
                 report.state = State::Partial;
@@ -462,6 +534,7 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
             if request.settings.scan_recovered {
                 let mut pending = artifacts
                     .memory_dump
+                    .clone()
                     .into_iter()
                     .map(|directory| (directory, false, 0))
                     .collect::<Vec<_>>();
@@ -501,6 +574,14 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
                     }
                 }
                 let file_total = files.len() as u64;
+                if files.is_empty()
+                    && let Some(directory) = &artifacts.memory_dump
+                {
+                    report.input(
+                        ScannedInput::new(InputKind::RecoveredFile, directory.join("files"))
+                            .skipped("the memory dump has no recovered files"),
+                    );
+                }
                 for (index, path) in files.iter().enumerate() {
                     let seen = index as u64 + 1;
                     if seen == 1 {
@@ -514,7 +595,8 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
                             total: file_total,
                         });
                     }
-                    if let Err(error) = scan_file(
+                    let input = ScannedInput::new(InputKind::RecoveredFile, path);
+                    match scan_file(
                         &mut scanner,
                         path,
                         &sources,
@@ -522,9 +604,13 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
                         &mut report,
                         &mut total,
                     ) {
-                        report.state = State::Partial;
-                        if report.warnings.len() < 64 {
-                            report.warnings.push(format!("{}: {error}", path.display()));
+                        Ok((size, sha256)) => report.input(input.size(size).sha256(sha256)),
+                        Err(error) => {
+                            report.state = State::Partial;
+                            if report.warnings.len() < 64 {
+                                report.warnings.push(format!("{}: {error}", path.display()));
+                            }
+                            report.input(input.sized().skipped(error));
                         }
                     }
                 }
@@ -600,6 +686,90 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn scans_list_each_input_with_its_outcome() {
+        let directory =
+            std::env::temp_dir().join(format!("ant-yara-inputs-{}", crate::storage::unique_id()));
+        let memory = directory.join("memory");
+        crate::storage::private_dir(&memory.join("files")).unwrap();
+        crate::storage::private_dir(&directory.join("analysis")).unwrap();
+        crate::storage::private_dir(&directory.join("work")).unwrap();
+        fs::write(memory.join("memory.elf"), b"not scanned").unwrap();
+        fs::write(
+            memory.join("files/recovered.txt"),
+            b"recovered FIXTURE_MARKER",
+        )
+        .unwrap();
+        let specimen = b"xxxFIXTURE_MARKER";
+        fs::write(directory.join("analysis/specimen"), specimen).unwrap();
+        crate::storage::atomic_json(&directory.join("analysis/report.json"), &serde_json::json!({"id":"fixture-artifact","state":"complete","source_path":"/fixture/sample","specimen_sha256":crate::storage::sha256_hex(specimen),"specimen_len":specimen.len(),"reason":null,"sections":[]})).unwrap();
+        crate::storage::atomic_json(&directory.join("artifacts.json"), &serde_json::json!({"run_id":"r","vm_id":"v","boot_id":"b","network_captures":[],"network_state":"complete","memory_dump":memory,"memory_state":"complete","core_dump":null,"core_state":"complete","issues":[]})).unwrap();
+        let rules = directory.join("fixture.yar");
+        fs::write(
+            &rules,
+            "rule fixture { strings: $a = \"FIXTURE_MARKER\" condition: $a }",
+        )
+        .unwrap();
+        let staged = Staged {
+            request: super::super::runner::Request {
+                engine: Engine::Yara,
+                identity: Identity {
+                    vm_id: "v".into(),
+                    boot_id: "b".into(),
+                    run_id: "r".into(),
+                    root_cookie: 1,
+                },
+                directory: directory.clone(),
+                settings: Settings {
+                    scan_recovered: true,
+                    ..Settings::default()
+                },
+                source_digest: None,
+                frozen: None,
+            },
+            sigma_sources: vec![],
+            yara_sources: vec![super::super::runner::RuleFile {
+                path: rules,
+                name: "fixture.yar".into(),
+                sha256: "0".repeat(64),
+            }],
+            ids_sources: vec![],
+            captures: vec![],
+            journal: None,
+            warnings: vec![],
+            selection: String::new(),
+            no_rules: false,
+            include_dir: None,
+            skipped_inputs: vec![],
+        };
+        let report = scan(&staged, &directory.join("work")).unwrap();
+        let inputs = report.inputs.clone().unwrap();
+        let kinds: Vec<_> = inputs
+            .iter()
+            .map(|input| (input.kind, input.outcome))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                (InputKind::Executable, InputOutcome::Scanned),
+                (InputKind::MemoryDump, InputOutcome::Skipped),
+                (InputKind::RecoveredFile, InputOutcome::Scanned),
+            ],
+            "{inputs:?}"
+        );
+        assert_eq!(inputs[0].name, "sample");
+        assert_eq!(
+            inputs[0].sha256.as_deref(),
+            Some(crate::storage::sha256_hex(specimen).as_str())
+        );
+        assert_eq!(inputs[0].size, Some(specimen.len() as u64));
+        assert_eq!(inputs[1].reason, "memory scanning is off");
+        assert_eq!(inputs[2].path, memory.join("files/recovered.txt"));
+        assert_eq!(inputs[2].size, Some(24));
+        assert_eq!(report.findings[0].count, 2);
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

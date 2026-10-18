@@ -84,7 +84,34 @@ impl MonitorApp {
             self.details_follow.chose(&Panel::Triage);
             self.focus_panel = Some(Panel::Details);
         }
+        if let Some(input) = self.triage.take_open_input(ui.ctx()) {
+            self.open_scanned_input(input);
+        }
         self.apply_triage_navigation(jump);
+    }
+
+    /// Opens a scanned input where it is viewed best.
+    pub(super) fn open_scanned_input(&mut self, input: crate::triage::OpenInput) {
+        use crate::triage::OpenInput;
+        match input {
+            OpenInput::StaticAnalysis => {
+                self.selected_analysis = None;
+                self.focus_panel = Some(Panel::StaticAnalysis);
+            }
+            OpenInput::Capture(path) => {
+                self.network_view.open(Some(path));
+                self.focus_panel = Some(Panel::Network);
+            }
+            OpenInput::Core(path) => {
+                self.core_view.open(&path);
+                self.focus_panel = Some(Panel::CoreDump);
+            }
+            OpenInput::Memory(directory) => {
+                self.memory_view.open_dump(&directory);
+                self.focus_panel = Some(Panel::Memory);
+            }
+            OpenInput::Folder(directory) => super::widgets::open_directory(&directory),
+        }
     }
 
     pub(super) fn show_triage_details(&mut self, ui: &mut egui::Ui) {

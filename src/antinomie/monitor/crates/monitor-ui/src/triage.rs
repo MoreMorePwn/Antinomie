@@ -16,6 +16,20 @@ use crate::{
 use antinomie_monitor_core::network::NetworkPacket;
 use antinomie_monitor_core::{EventSummary, InvocationSummary};
 use eframe::egui::{self, RichText};
+/// Where a row of Detection > Scanned inputs opens.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum OpenInput {
+    StaticAnalysis,
+    Capture(std::path::PathBuf),
+    Core(std::path::PathBuf),
+    /// A memory dump directory.
+    Memory(std::path::PathBuf),
+    Folder(std::path::PathBuf),
+}
+
+/// Temp-data key a clicked input is left under for the app.
+pub(crate) const OPEN_INPUT: &str = "triage-open-input";
+
 mod archive_scan;
 mod bpf_notes;
 mod descriptors;
@@ -399,6 +413,16 @@ impl TriageView {
         self.mark_shown(ui.ctx());
         details::show(self, ui);
         self.take_navigation(ui.ctx())
+    }
+
+    /// The scanned input whose row was clicked in Detection, if any.
+    pub(crate) fn take_open_input(&self, ctx: &egui::Context) -> Option<OpenInput> {
+        let id = egui::Id::new(OPEN_INPUT);
+        ctx.data_mut(|data| {
+            let input = data.get_temp::<OpenInput>(id);
+            data.remove::<OpenInput>(id);
+            input
+        })
     }
 
     pub(crate) fn take_details_focus(&self, ctx: &egui::Context) -> bool {

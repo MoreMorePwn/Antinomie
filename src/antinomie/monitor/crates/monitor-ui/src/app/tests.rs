@@ -17,6 +17,7 @@ mod network;
 mod pending;
 mod run_kill;
 mod run_selection;
+mod scanned_inputs;
 mod startup;
 mod stealth;
 mod terminal_windows;

@@ -194,6 +194,30 @@ card with a `3c:fd:fe` address, Intel ICH9 USB controllers (8086:2934-2936,
 293a), the host's 16 MiB L3 and a `LENOVO` ACPI OEM ID, and records a
 guest-run without loss (3,456 packets, none dropped).
 
+## Detection scanned inputs (0.6.2)
+
+Every detection report records `inputs` (`analysis/detection/inputs.rs`):
+one `ScannedInput` per thing the rules were run against, with its kind,
+path, display name, size, SHA-256 when known, outcome (`scanned`, `partial`,
+`skipped`), the reason for a partial or skipped outcome, and a coverage
+detail. The field is `Option`: reports saved before it load as `None` and the
+Detection panel says the list was not recorded. At most 10,000 rows are kept
+(further inputs count as omitted evidence); the panel draws the first 200.
+
+| Engine | Rows | Detail | Partial or skipped when |
+| --- | --- | --- | --- |
+| YARA | The executable (the specimen static analysis kept, named after the sample) | — | Its report or bytes cannot be read |
+| YARA | The process core and the guest memory dump | Blocks of up to 64 MiB scanned; mapped ranges not captured | Memory scanning is off; the dump cannot be parsed; the time or 512 MiB budget was reached; mapped ranges are missing |
+| YARA | Each recovered file under the memory dump's `files/` | — | Recovered-file scanning is off; there are none; the file exceeds 64 MiB / 512 MiB total; it changed during the scan |
+| IDS | Each run-owned PCAP segment (its original path, not the scan's snapshot) | Packets | Staging failed; Suricata failed or timed out; the segment was still being captured; the 100 s budget was reached |
+| Sigma | The normalized event journal | Events per category | The journal is not ready, has no end record, omits oversized events, does not cover every call, or the scan used a live prefix |
+
+A row's outcome is about the data, while the report's state also covers the
+rules: an IDS result is Partial when rules are skipped even if every segment
+was scanned. Clicking a row opens the executable in Static Analysis, a PCAP
+in Network, the core in Core dumps, the memory dump in Memory, or a
+recovered file's folder.
+
 ## Accepted ANT-T0091 run triage (0.6.2)
 
 ANT-T0101 reorganizes triage presentation around section navigation,

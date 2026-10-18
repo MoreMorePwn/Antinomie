@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 mod cards;
 mod finding;
 mod header;
+mod inputs;
 
 use cards::{card_summary, match_cards, severity_color};
 use finding::{byte_preview, evidence_list, evidence_values, WindowKey};
@@ -219,6 +220,8 @@ pub(super) struct View {
     sets: [Vec<antinomie_monitor_core::ruleset::EngineSet>; 3],
     /// Whether each engine's rule-set list is expanded.
     sets_open: [bool; 3],
+    /// Whether each engine's scanned-input list is expanded.
+    inputs_open: [bool; 3],
     /// Findings whose Details window is open.
     windows: Vec<WindowKey>,
 }
@@ -1006,6 +1009,7 @@ impl View {
             .position(|engine| *engine == self.selected)
             .unwrap_or(0);
         self.rule_sets(ui, index);
+        self.scanned_inputs(ui, index);
         let scanning = self.is_scanning(index);
         self.scan_controls(ui, index, scan, scanning);
         if scanning {
