@@ -6,6 +6,11 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Executable capture status.** Triage Properties shows acquisition, captured,
+  verification and unavailable states separately from computing properties.
+  A failed property attempt can recover when its analysis report advances;
+  missing capture data and a mismatched saved analysis now have distinct reasons.
+
 - **Concurrent archive reads.** Archive indexing waits cooperatively for a busy
   SQLite cache and serializes append cursors before indexing new packets. Run
   changes can cancel the wait. Acquired executable metadata is saved before

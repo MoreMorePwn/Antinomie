@@ -195,6 +195,8 @@ pub(crate) struct TriageInput<'a> {
     pub started_ms: Option<u64>,
     pub root_cookie: u64,
     pub run_finished: bool,
+    /// The selected recording belongs to the currently running VM boot.
+    pub current_boot: bool,
 }
 
 impl<'a> TriageInput<'a> {
@@ -216,6 +218,7 @@ impl<'a> TriageInput<'a> {
             started_ms: None,
             root_cookie: 0,
             run_finished: false,
+            current_boot: false,
         }
     }
     #[cfg(test)]
@@ -235,6 +238,7 @@ impl<'a> TriageInput<'a> {
             started_ms: None,
             root_cookie: 0,
             run_finished: false,
+            current_boot: false,
         }
     }
 }

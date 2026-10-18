@@ -340,9 +340,7 @@ pub fn run(
         .canonicalize()
         .map_err(|error| error.to_string())?;
     let expected = jobs::open_report(&directory)?;
-    if expected.id != report_id || expected.specimen_sha256.is_none() {
-        return Err("complete retained specimen unavailable".into());
-    }
+    require_specimen(&expected, report_id)?;
     let work = std::env::temp_dir().join(format!("ant-properties-{}", crate::storage::unique_id()));
     crate::storage::private_dir(&work).map_err(|error| error.to_string())?;
     let result = (|| {
@@ -396,6 +394,41 @@ pub fn run(
         (Err(error), Err(cleanup)) => Err(format!("{error}; temporary output cleanup: {cleanup}")),
         (result, Ok(())) => result,
     }
+}
+
+fn require_specimen(report: &AnalysisReport, report_id: &str) -> Result<(), String> {
+    use super::AnalysisState;
+    if report.id != report_id {
+        return Err(format!(
+            "Executable properties selected analysis {report_id}, but the saved report belongs to {}. Reopen the selected run.",
+            report.id
+        ));
+    }
+    if report.state == AnalysisState::Acquiring {
+        return Err(format!(
+            "Executable capture is still in progress for {}. Wait for acquisition to finish.",
+            report.source_path
+        ));
+    }
+    if report.specimen_sha256.is_some() && report.specimen_len.is_some() {
+        return Ok(());
+    }
+    let state = match report.state {
+        AnalysisState::Queued | AnalysisState::Running => {
+            "Waiting for captured executable metadata"
+        }
+        AnalysisState::Cancelled => "Executable capture was cancelled",
+        AnalysisState::Partial => "Executable capture is incomplete",
+        _ => "No complete executable was retained",
+    };
+    let reason = report.reason.as_deref().unwrap_or(
+        if matches!(report.state, AnalysisState::Queued | AnalysisState::Running) {
+            "Wait for capture to be saved, then refresh properties."
+        } else {
+            "Start a new run with static analysis enabled."
+        },
+    );
+    Err(format!("{state} for {}. {reason}", report.source_path))
 }
 
 /// Internal process entry point; never starts a desktop or contacts a provider.
@@ -482,6 +515,45 @@ mod tests {
             reason: None,
             sections: vec![],
         }
+    }
+
+    #[test]
+    fn property_preflight_distinguishes_capture_progress_failure_and_identity() {
+        use super::super::AnalysisState;
+        let mut report = fixture_report(b"abc");
+        assert!(require_specimen(&report, "fixture").is_ok());
+        let error = require_specimen(&report, "another-run").unwrap_err();
+        assert!(
+            error.contains("another-run") && error.contains("fixture") && error.contains("Reopen")
+        );
+        report.specimen_sha256 = None;
+        report.specimen_len = None;
+        report.state = AnalysisState::Acquiring;
+        assert!(
+            require_specimen(&report, "fixture")
+                .unwrap_err()
+                .contains("still in progress")
+        );
+        report.state = AnalysisState::Running;
+        assert!(
+            require_specimen(&report, "fixture")
+                .unwrap_err()
+                .contains("Waiting for captured")
+        );
+        report.state = AnalysisState::Cancelled;
+        assert!(
+            require_specimen(&report, "fixture")
+                .unwrap_err()
+                .contains("was cancelled")
+        );
+        report.state = AnalysisState::Unavailable;
+        report.reason = Some("guest executable could not be opened".into());
+        let error = require_specimen(&report, "fixture").unwrap_err();
+        assert!(
+            error.contains("No complete executable")
+                && error.contains("guest executable could not be opened")
+                && error.contains("/guest/fixture")
+        );
     }
 
     #[test]
