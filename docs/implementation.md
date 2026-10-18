@@ -138,6 +138,47 @@ durable, so host disk work does not use up the guest's shutdown time. A
 graphical guest gets at least 30 s to shut down (`shutdown_timeout` applies
 as configured to console guests) before the VM is forced off.
 
+## VM stealth profiles (0.6.2)
+
+`VmConfig.stealth` (`monitor-core/src/stealth.rs`) holds the identity a VM
+shows its guest. A configuration without the field is Transparent, which adds
+no launch options, so VMs saved before 0.6.2 launch exactly as they did. New
+VMs default to Realistic desktop.
+
+| Entry | QEMU option | Transparent | Realistic |
+| --- | --- | --- | --- |
+| Machine identity | `-smbios type=0,1,2,4,17`, `-smbios file=` (type 3 chassis table written to the runtime directory), `-machine smbios-entry-point-type=64` | QEMU strings, chassis Other | One of eight built-in vendor machines (Dell, HP, Lenovo, Supermicro; Intel and AMD) with random serials and UUID |
+| ACPI OEM IDs | `-machine x-oem-id=,x-oem-table-id=` | `BOCHS` / `BXPC` | The machine's vendor IDs |
+| CPU | `-cpu host,-hypervisor,kvm=off,pmu=on` (without KVM: `max,model-id=<host CPU name>,-hypervisor`); passthrough replaces the VM's CPU model setting | QEMU model, hypervisor bit, KVM signature | Passthrough, hidden hypervisor bit and KVM signature, performance counters |
+| Topology | `-smp N,sockets=1,cores=N,threads=1` | `-smp N` | One socket of N cores |
+| Network card | `-device e1000e\|e1000\|rtl8139\|virtio-net-pci,mac=` | virtio-net, `52:54:00:12:34:56` | e1000e with a random Intel (`3c:fd:fe`) address |
+| Disk and CD-ROM | `-global virtio-blk-pci.serial=`, `-global ide-cd.model=` | QEMU defaults | A Samsung-style disk serial, an LG DVD model |
+| Devices | `-machine vmport=off,hpet=off` | VMware port and HPET present | No VMware port; HPET kept |
+| Clock | `-rtc base=localtime` | UTC | UTC (local time is offered for Windows-like guests) |
+
+Hiding the KVM signature makes the guest use its TSC instead of kvm-clock.
+On AMD hosts the topology stays cores only (QEMU warns about SMT threads).
+The profile is validated before a VM is created, saved or launched: MAC
+addresses are six hex pairs and not multicast, identity strings have no
+control characters and are at most 64 bytes, ACPI IDs fit their 6 and 8
+bytes, and the UUID is in 8-4-4-4-12 form.
+
+**What a profile cannot change.** The root disk stays virtio-blk: the bases'
+kernels build AHCI and NVMe as modules and the bootstrap initrd loads none.
+The firmware stays SeaBIOS. The fw_cfg device, the q35 chipset layout, the
+virtio display, the Antinomie options and build string of the guest kernel,
+and VM-exit timing are outside launch options. The rating in the dialog
+("certain", "possible", "unlikely") is what common checks would conclude
+(systemd-detect-virt, DMI strings, the CPUID hypervisor bit, MAC prefixes),
+not a guarantee against a determined sample. A snapshot taken with other
+hardware may not restore after the profile changes.
+
+**Verified** on QEMU 11 with KVM (AMD host): a Realistic desktop BusyBox
+guest reads `LENOVO` / `11JN0047US` / chassis 35 from DMI, has no
+hypervisor CPU flag, uses the `tsc` clocksource, sees an Intel 0x8086 e1000e
+card with a `3c:fd:fe` address and a `LENOVO` ACPI OEM ID, and records a
+guest-run without loss.
+
 ## Accepted ANT-T0091 run triage (0.6.2)
 
 ANT-T0101 reorganizes triage presentation around section navigation,

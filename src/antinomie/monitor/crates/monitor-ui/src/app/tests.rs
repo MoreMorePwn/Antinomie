@@ -16,6 +16,7 @@ mod network;
 mod pending;
 mod run_selection;
 mod startup;
+mod stealth;
 mod terminal_windows;
 mod terminals;
 mod trace_filters;
@@ -77,6 +78,7 @@ pub(crate) fn app() -> MonitorApp {
         selected_capture: None,
         selected_process: None,
         transport_open: false,
+        stealth_open: false,
         network_view: Default::default(),
         memory_view: Default::default(),
         core_view: Default::default(),

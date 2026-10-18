@@ -101,6 +101,7 @@ fn tool_dialogs_do_not_keep_growing_after_their_initial_layout() {
         Dialog::Import,
         Dialog::Download,
         Dialog::Transport,
+        Dialog::Stealth,
         Dialog::About,
     ] {
         for (size, font_size) in [
@@ -118,6 +119,10 @@ fn tool_dialogs_do_not_keep_growing_after_their_initial_layout() {
                 Dialog::Transport => {
                     app.new_image();
                     app.transport_open = true;
+                }
+                Dialog::Stealth => {
+                    app.new_image();
+                    app.stealth_open = true;
                 }
                 Dialog::About => app.about_open = true,
                 _ => unreachable!(),

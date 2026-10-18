@@ -286,6 +286,10 @@ pub struct VmConfig {
     pub launch: VmLaunchOptions,
     #[serde(default)]
     pub transport: TransportSettings,
+    /// What the VM's hardware says about itself. Saved configurations
+    /// without one keep QEMU's own identity, as they were launched before.
+    #[serde(default)]
+    pub stealth: crate::stealth::StealthProfile,
 }
 impl Default for VmConfig {
     fn default() -> Self {
@@ -302,6 +306,7 @@ impl Default for VmConfig {
             base_identity: None,
             launch: VmLaunchOptions::default(),
             transport: TransportSettings::default(),
+            stealth: crate::stealth::StealthProfile::default(),
         }
     }
 }
