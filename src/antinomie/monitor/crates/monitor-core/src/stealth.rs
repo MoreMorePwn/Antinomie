@@ -398,6 +398,23 @@ pub fn random_mac(prefix: [u8; 3]) -> String {
     )
 }
 
+/// SMBIOS chassis types a profile offers, with their names.
+pub const CHASSIS: &[(u8, &str)] = &[
+    (3, "Desktop"),
+    (7, "Tower"),
+    (35, "Mini PC"),
+    (9, "Laptop"),
+    (10, "Notebook"),
+    (23, "Rack mount chassis"),
+];
+
+pub fn chassis_label(kind: u8) -> &'static str {
+    CHASSIS
+        .iter()
+        .find(|(known, _)| *known == kind)
+        .map_or("Other", |(_, label)| label)
+}
+
 /// The host CPU's vendor ID, as passthrough shows it to the guest.
 pub fn host_cpu_vendor() -> String {
     host_cpuinfo("vendor_id").unwrap_or_default()

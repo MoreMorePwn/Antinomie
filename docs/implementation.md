@@ -176,11 +176,16 @@ absolute pointer, and the USB tablet is named QEMU as well). The RTC stays in
 UTC by default because Linux guests read it as UTC; local time would shift
 the guest clock and every recorded timestamp. The fw_cfg device, the q35 chipset layout, the
 virtio display, the Antinomie options and build string of the guest kernel,
-and VM-exit timing are outside launch options. The rating in the dialog
-("certain", "possible", "unlikely") is what common checks would conclude
-(systemd-detect-virt, DMI strings, the CPUID hypervisor bit, MAC prefixes),
-not a guarantee against a determined sample. A snapshot taken with other
+and VM-exit timing are outside launch options; the Stealth profile window
+and the Summary list them under "Still visible". A snapshot taken with other
 hardware may not restore after the profile changes.
+
+**Summary.** The VM configuration section of the Summary shows Compute,
+Storage and display, and Network and transport cards, and a Stealth profile
+card with the preset, the machine identity (machine, chassis, serial,
+firmware, ACPI OEM), the CPU, network card and MAC, devices and clock, and
+what is still visible. Configure… opens the VM dialog while the VM is
+stopped.
 
 **Verified** on QEMU 11 with KVM (AMD host): a Realistic desktop BusyBox
 guest reads `LENOVO` / `11JN0047US` / chassis 35 from DMI, has no

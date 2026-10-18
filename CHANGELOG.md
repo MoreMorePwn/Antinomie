@@ -33,7 +33,9 @@ it runs.
   pick a machine whose CPU vendor matches the host. Every entry can be
   changed (the profile then reads Custom), and the window lists what still
   gives the VM away. VMs saved before keep QEMU's own identity (Transparent).
-  The guest-run plan takes `"vm": {"stealth": "desktop"}`. The disk stays
+  The Summary shows the VM configuration as cards, including the stealth
+  profile, with a Configure… button. The guest-run plan takes
+  `"vm": {"stealth": "desktop"}`. The disk stays
   virtio and the firmware SeaBIOS, and the guest kernel's command line still
   names Antinomie.
 

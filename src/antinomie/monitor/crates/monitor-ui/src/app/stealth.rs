@@ -3,25 +3,9 @@
 //! guest. A preset fills every entry; editing one makes the profile Custom.
 use super::*;
 use antinomie_monitor_core::stealth::{
-    host_cpu_vendor, MachineIdentity, NicModel, StealthPreset, StealthProfile, MACHINES,
+    chassis_label, host_cpu_vendor, MachineIdentity, NicModel, StealthPreset, StealthProfile,
+    CHASSIS, MACHINES,
 };
-
-const CHASSIS: &[(u8, &str)] = &[
-    (3, "Desktop"),
-    (7, "Tower"),
-    (35, "Mini PC"),
-    (9, "Laptop"),
-    (10, "Notebook"),
-    (23, "Rack mount chassis"),
-];
-
-fn rating_color(rating: &str) -> egui::Color32 {
-    match rating {
-        "unlikely" => theme::good(),
-        "possible" => theme::muted(),
-        _ => theme::warn(),
-    }
-}
 
 /// Picks a preset, applying it to every entry.
 fn preset_combo(ui: &mut egui::Ui, profile: &mut StealthProfile, id: &str) {
@@ -39,7 +23,7 @@ fn preset_combo(ui: &mut egui::Ui, profile: &mut StealthProfile, id: &str) {
     }
 }
 
-/// The rows in the VM dialog: the preset, the window, and the rating.
+/// The row in the VM dialog: the preset and the window.
 pub(super) fn preset_row(ui: &mut egui::Ui, profile: &mut StealthProfile, open: &mut bool) {
     ui.label("Stealth");
     ui.horizontal(|ui| {
@@ -52,17 +36,6 @@ pub(super) fn preset_row(ui: &mut egui::Ui, profile: &mut StealthProfile, open: 
             *open = !*open;
         }
     });
-    ui.end_row();
-    ui.label("");
-    let rating = profile.rating();
-    ui.label(
-        RichText::new(format!("Detected as a VM by common checks: {rating}"))
-            .color(rating_color(rating)),
-    )
-    .on_hover_text(format!(
-        "Still visible:\n• {}",
-        profile.giveaways().join("\n• ")
-    ));
     ui.end_row();
 }
 
@@ -145,10 +118,7 @@ fn hardware(ui: &mut egui::Ui, profile: &mut StealthProfile) {
             ui.end_row();
             if profile.identity_enabled {
                 ui.label("Chassis");
-                let chassis = CHASSIS
-                    .iter()
-                    .find(|(kind, _)| *kind == profile.identity.chassis_type)
-                    .map_or("Other", |(_, label)| label);
+                let chassis = chassis_label(profile.identity.chassis_type);
                 egui::ComboBox::from_id_salt("vm_stealth_chassis")
                     .selected_text(chassis)
                     .width(260.0)
@@ -346,11 +316,6 @@ pub(super) fn window(
                     ui.label("Preset");
                     preset_combo(ui, profile, "vm_stealth_window_preset");
                 });
-                let rating = profile.rating();
-                ui.label(
-                    RichText::new(format!("Detected as a VM by common checks: {rating}"))
-                        .color(rating_color(rating)),
-                );
                 egui::ScrollArea::vertical()
                     .id_salt("vm_stealth_scroll")
                     .max_height((ctx.screen_rect().height() - 260.0).max(120.0))
