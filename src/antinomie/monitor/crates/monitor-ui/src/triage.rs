@@ -54,6 +54,8 @@ mod sorting;
 mod summary;
 mod table;
 #[cfg(test)]
+mod torture_qa;
+#[cfg(test)]
 mod traffic;
 #[cfg(test)]
 use self::traffic::*;
