@@ -73,7 +73,7 @@ impl Session {
                 .iter()
                 .find(|run| run.id == run_id)
                 .ok_or("run disappeared before evidence completion")?;
-            let artifacts = RunArtifacts::load(&run.directory)?;
+            let artifacts = read_artifacts(&run.directory)?;
             let analysis_pending = run.request.analysis.enabled
                 && run.analysis.as_ref().is_none_or(|report| {
                     matches!(
@@ -239,6 +239,23 @@ fn artifact_pending(state: RunArtifactState) -> bool {
             | RunArtifactState::Queued
             | RunArtifactState::InProgress
     )
+}
+
+/// A progress sidecar can be atomically replaced between stat and open. Retry
+/// that exact race a bounded number of times, retaining archive validation on
+/// every attempt. Other read errors fail immediately.
+fn read_artifacts(directory: &std::path::Path) -> Result<Option<RunArtifacts>, String> {
+    for attempt in 0..4 {
+        match RunArtifacts::load(directory) {
+            Err(error)
+                if attempt < 3 && error == "run artifacts: archive member changed during open" =>
+            {
+                thread::sleep(Duration::from_millis(10));
+            }
+            result => return result,
+        }
+    }
+    Err("artifact read retry exhausted".into())
 }
 
 fn run() -> Result<Value, String> {
@@ -537,7 +554,7 @@ fn run() -> Result<Value, String> {
                 .iter()
                 .find(|run| run.id == run_id)
                 .ok_or("diagnostic run missing")?;
-            RunArtifacts::load(&run.directory)?
+            read_artifacts(&run.directory)?
         };
         let summary = session
             .snapshot
