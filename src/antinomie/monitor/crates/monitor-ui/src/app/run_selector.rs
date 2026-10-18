@@ -22,7 +22,34 @@ impl MonitorApp {
     /// Program runs of the selected VM, newest first. These are listing
     /// copies without analysis rows (see `history::listed`); the dropdowns
     /// draw every frame. `selected_triage_run` returns the complete run.
-    pub(super) fn triage_runs(&self) -> Vec<RunSummary> {
+    /// The list is rebuilt only when the selected VM's runs change.
+    pub(super) fn triage_runs(&self) -> Arc<Vec<RunSummary>> {
+        let key = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            self.selected.hash(&mut hasher);
+            for run in self.snapshot.runs.iter().chain(&self.history) {
+                if Some(&run.vm_id) == self.selected.as_ref() && run.root_task_cookie != 0 {
+                    run.id.hash(&mut hasher);
+                    run.started_ms.hash(&mut hasher);
+                    run.request.path.hash(&mut hasher);
+                    std::mem::discriminant(&run.state).hash(&mut hasher);
+                }
+            }
+            hasher.finish()
+        };
+        let mut cache = self.run_selector_cache.borrow_mut();
+        if let Some((cached, runs)) = cache.as_ref() {
+            if *cached == key {
+                return Arc::clone(runs);
+            }
+        }
+        let runs = Arc::new(self.list_triage_runs());
+        *cache = Some((key, Arc::clone(&runs)));
+        runs
+    }
+
+    fn list_triage_runs(&self) -> Vec<RunSummary> {
         let mut runs = BTreeMap::new();
         for run in self.snapshot.runs.iter().chain(&self.history) {
             if Some(&run.vm_id) == self.selected.as_ref() && run.root_task_cookie != 0 {

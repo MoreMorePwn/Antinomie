@@ -162,7 +162,12 @@ impl MonitorApp {
 
     pub(super) fn offline_run(&self) -> Option<&RunSummary> {
         let run = self.selected_vm_run()?;
-        (self.archive_selected || !run_in_live_session(&self.snapshot, run)).then_some(run)
+        // A run whose tree ended and whose terminal closed is read from its
+        // archive: the backend drops its live events once it is complete.
+        (self.archive_selected
+            || !run_in_live_session(&self.snapshot, run)
+            || run_recording_complete(run))
+        .then_some(run)
     }
 
     pub(super) fn capture(&self, id: &str) -> Option<&CaptureSummary> {

@@ -6,6 +6,15 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Long sessions stay small.** A run whose program tree ended and whose
+  terminal closed no longer keeps its event table in memory until the VM
+  stops (about 55 MiB per run before); its trace is read from the saved
+  archive. The archive index cache drops indexes unused for 30 days and keeps
+  itself under 2 GiB, least recently used first. Run History and the run
+  dropdowns rebuild their lists only when the runs change (3,000 runs: from
+  about 11 ms to under 0.5 ms a frame), and terminals no longer copy every
+  run's analysis report on each update.
+
 - **Responsive while recording.** Run, Upload, Stop and snapshots no longer
   wait behind the disk while a heavy run is being saved: small JSON files are
   published by a background writer and the transport thread never syncs to

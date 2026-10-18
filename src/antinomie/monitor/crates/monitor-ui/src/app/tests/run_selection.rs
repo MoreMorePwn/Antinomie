@@ -151,7 +151,7 @@ fn runs_of_a_stopped_boot_stay_in_history_and_dropdowns_when_the_vm_restarts() {
     let next = boot_two(&app);
     deliver(&mut app, next);
     app.drain();
-    let ids: Vec<_> = app.triage_runs().into_iter().map(|run| run.id).collect();
+    let ids: Vec<_> = app.triage_runs().iter().map(|run| run.id.clone()).collect();
     assert!(ids.contains(&"ran-in-boot-1".to_owned()), "{ids:?}");
     assert!(ids.contains(&"older".to_owned()), "{ids:?}");
     assert_eq!(app.selected_run.as_deref(), Some("ran-in-boot-1"));
@@ -830,4 +830,46 @@ fn select_run_ends_a_queued_process_tree_read_of_the_old_run() {
     app.run_tree_pending = Some("old".into());
     app.select_run(None);
     assert!(app.pending_archive.is_none() && app.run_tree_pending.is_none());
+}
+
+#[test]
+fn a_finished_run_of_the_live_session_is_read_from_its_archive() {
+    let mut app = live_app();
+    assert!(
+        app.offline_run().is_none(),
+        "a running program shows its live events"
+    );
+    let run = app
+        .snapshot
+        .runs
+        .iter_mut()
+        .find(|run| run.id == "r1")
+        .unwrap();
+    run.state = RunState::Finished;
+    run.terminal_eof = true;
+    assert_eq!(
+        app.offline_run().map(|run| run.id.as_str()),
+        Some("r1"),
+        "the backend drops a complete run's live events, so its archive is read"
+    );
+}
+
+#[test]
+fn the_cached_run_lists_follow_new_and_changed_runs() {
+    let mut app = live_app();
+    let ctx = context();
+    let text = shown(&mut app, &ctx, Panel::RunHistory);
+    assert!(mentions(&text, "1 of 1 runs"), "{text:?}");
+    let before: Vec<_> = app.triage_runs().iter().map(|run| run.id.clone()).collect();
+    assert_eq!(before, ["r1"]);
+    let mut second = run("r2");
+    second.started_ms = Some(u64::MAX);
+    app.snapshot.runs.push(second);
+    let after: Vec<_> = app.triage_runs().iter().map(|run| run.id.clone()).collect();
+    assert_eq!(after, ["r2", "r1"], "a new run appears, newest first");
+    let text = shown(&mut app, &ctx, Panel::RunHistory);
+    assert!(
+        mentions(&text, "2 of 2 runs"),
+        "Run History lists the new run: {text:?}"
+    );
 }

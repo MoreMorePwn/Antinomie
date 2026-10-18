@@ -367,6 +367,11 @@ pub struct MonitorApp {
     /// The status text when the current backend error arrived. The error shows
     /// on the status line until a newer status message replaces that text.
     error_status_mark: Option<String>,
+    /// Run History's listing of the selected VM's runs before the text filter,
+    /// with the key of the runs it was built from.
+    run_list_cache: Option<(u64, Arc<Vec<RunSummary>>)>,
+    /// The run dropdowns' listing, with the key of the runs it was built from.
+    run_selector_cache: std::cell::RefCell<Option<(u64, Arc<Vec<RunSummary>>)>>,
     started: Instant,
     smoke: Option<Duration>,
     closing: bool,
@@ -530,6 +535,8 @@ impl MonitorApp {
             stale_command_ids: VecDeque::new(),
             backend_disconnected: false,
             error_status_mark: None,
+            run_list_cache: None,
+            run_selector_cache: Default::default(),
             started: Instant::now(),
             smoke,
             closing: false,
@@ -570,19 +577,31 @@ impl eframe::App for MonitorApp {
         self.drain_archive();
         self.resync_terminals();
         // Triage belongs to one explicit program run, including its saved prefix.
-        let triage_run = self
+        // The run is borrowed field by field, not cloned with its analysis
+        // report every frame.
+        let triage_run_id = self
             .selected_run
             .as_deref()
             .and_then(|id| self.run(id))
-            .cloned()
             .filter(|run| {
                 self.selected.as_ref() == Some(&run.vm_id)
                     && run.root_task_cookie != 0
                     && self.selected_capture.is_none()
-            });
-        let triage_pcap = triage_run.as_ref().and_then(|_| self.owned_triage_pcap());
+            })
+            .map(|run| run.id.clone());
+        let (triage_pcap, run_finished) = match triage_run_id.as_deref().and_then(|id| self.run(id))
+        {
+            Some(run) => (self.owned_triage_pcap(), !self.live_history_run(run)),
+            None => (None, true),
+        };
+        let triage_run = triage_run_id.as_deref().and_then(|id| {
+            self.snapshot
+                .runs
+                .iter()
+                .find(|run| run.id == id)
+                .or_else(|| self.history.iter().find(|run| run.id == id))
+        });
         let input = triage_run
-            .as_ref()
             .map(|run| crate::triage::TriageInput {
                 analysis: run.analysis.as_ref(),
                 invocations: &[],
@@ -595,7 +614,7 @@ impl eframe::App for MonitorApp {
                 clock_anchor: run.clock_anchor,
                 started_ms: run.started_ms,
                 root_cookie: run.root_task_cookie,
-                run_finished: !self.live_history_run(run),
+                run_finished,
                 #[cfg(test)]
                 packets: &[],
                 #[cfg(test)]

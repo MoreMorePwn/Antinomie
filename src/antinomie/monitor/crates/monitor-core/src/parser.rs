@@ -864,6 +864,18 @@ impl Assembler {
     }
     /// The newest `limit` events (table and recently retired), oldest first,
     /// without summarizing the whole table.
+    /// Forget the in-memory event table. Everything stays in the archive on
+    /// disk; a run whose recording is complete is read from there.
+    pub fn release_tables(&mut self) {
+        self.events = BTreeMap::new();
+        self.order = VecDeque::new();
+        self.evicted = VecDeque::new();
+        self.finished = VecDeque::new();
+    }
+    /// Whether the in-memory event table holds anything.
+    pub fn holds_tables(&self) -> bool {
+        !self.events.is_empty() || !self.evicted.is_empty() || !self.order.is_empty()
+    }
     pub fn recent(&self, limit: usize) -> Vec<EventSummary> {
         let mut seen = std::collections::HashSet::new();
         let mut newest: Vec<EventSummary> = self
@@ -945,6 +957,26 @@ mod tests {
         for len in 0..128 {
             assert!(parse_packet(&p[..len]).is_err());
         }
+    }
+
+    #[test]
+    fn releasing_tables_forgets_live_events_and_keeps_saved_counts() {
+        let path = std::env::temp_dir().join(format!(
+            "ant-release-tables-{}",
+            crate::storage::unique_id()
+        ));
+        let mut assembler = Assembler::new(path.clone(), 1024 * 1024).unwrap();
+        for seq in 1..=8 {
+            assembler.ingest(&packet(1, 0, 0, &[0; 120], seq)).unwrap();
+        }
+        assert!(assembler.holds_tables());
+        assert!(!assembler.recent(64).is_empty());
+        let stored = assembler.stored_len();
+        assembler.release_tables();
+        assert!(!assembler.holds_tables());
+        assert!(assembler.recent(64).is_empty());
+        assert_eq!(assembler.stored_len(), stored);
+        std::fs::remove_dir_all(path).unwrap();
     }
 
     #[test]
