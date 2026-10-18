@@ -64,6 +64,8 @@ impl From<serde_json::Error> for RecordingError {
 pub const PROCESS_TREE_LIMIT: usize = 262_144;
 
 mod index_cache;
+mod issues;
+use issues::push_issue;
 mod matching;
 pub use matching::{ArchiveStamp, MatchTotals, MatchingPage};
 
@@ -263,7 +265,7 @@ pub fn open_recording_cancellable(
     let events: Vec<EventSummary> = serde_json::from_reader(events_file)?;
     if events.len() > 2112
         || events.iter().any(|e| {
-            e.fields.len() > 256
+            e.fields.len() > parser::MAX_RETAINED_FIELDS
                 || e.fields
                     .iter()
                     .any(|f| f.preview.len() > 256 || f.ranges.len() > 4096)
@@ -596,8 +598,7 @@ impl Recording {
                 match assembler.ingest(&packet) {
                     Ok(Some(event)) => tracker.event(&event),
                     Ok(None) => {}
-                    Err(e) if issues.len() < 32 => issues.push(e.to_string()),
-                    Err(_) => {}
+                    Err(e) => push_issue(&mut issues, e.to_string()),
                 }
             }
         }
@@ -720,9 +721,7 @@ impl Recording {
                     }
                     Ok(None) => {}
                     Err(error) => {
-                        if issues.len() < 32 {
-                            issues.push(error.to_string());
-                        }
+                        push_issue(&mut issues, error.to_string());
                     }
                 }
             }
