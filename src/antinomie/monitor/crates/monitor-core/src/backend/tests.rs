@@ -1765,4 +1765,3 @@ fn stopping_ends_a_pending_reconnection_of_the_boot() {
     );
     let _ = std::fs::remove_dir_all(root);
 }
-
