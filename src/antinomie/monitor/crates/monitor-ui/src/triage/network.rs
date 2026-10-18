@@ -313,7 +313,12 @@ fn lookup_public(ip: &str) -> Result<(String, String), String> {
         }
     }
     if country.is_empty() && organization.is_empty() {
-        return Err(whois.unwrap_or_else(|error| error));
+        let message =
+            format!("WHOIS lookup unavailable for {canonical}; country/organization unknown");
+        return Err(match whois {
+            Ok(_) => message,
+            Err(error) => format!("{message}: {error}"),
+        });
     }
     Ok((country, organization))
 }
