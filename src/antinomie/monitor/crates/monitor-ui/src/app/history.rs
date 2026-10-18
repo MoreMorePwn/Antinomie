@@ -291,11 +291,11 @@ impl MonitorApp {
                                             run.state,
                                             RunState::Running | RunState::TerminalClosed
                                         )
-                                        && !self.closing,
+                                        && !self.closing
+                                        && self.running()
+                                        && self.pending_kill.is_none(),
                                 ) {
-                                    self.send(Command::StopRun {
-                                        run_id: run.id.clone(),
-                                    });
+                                    self.request_kill(Some(&run.id));
                                 }
                             });
                             let response = row.response();

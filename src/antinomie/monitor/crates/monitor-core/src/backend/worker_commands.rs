@@ -29,12 +29,29 @@ impl Worker {
         Ok(GuestTransition(self.guest_epoch.clone()))
     }
     pub(super) fn command(&mut self, command: Command) -> Result<String, String> {
+        if matches!(
+            command,
+            Command::Stop
+                | Command::DumpMemory
+                | Command::CreateVmSnapshot { .. }
+                | Command::RestoreVmSnapshot { .. }
+                | Command::ReconnectTransport
+        ) && let Some(job) = self.keyboard.take()
+        {
+            let result = job.cancel_and_join();
+            self.emit(Notification::CommandResult {
+                id: 0,
+                success: result.is_ok(),
+                message: result.unwrap_or_else(|error| error),
+            });
+        }
         // QEMU keeps the guest paused while it writes a memory dump: a guest
         // command would only time out.
         if self.snapshot.memory_dump.is_some()
             && matches!(
                 command,
                 Command::Execute(_)
+                    | Command::TypeClipboard { .. }
                     | Command::CancelProcessCore { .. }
                     | Command::DumpProcessCore { .. }
                     | Command::CancelCoreCapture { .. }
@@ -60,6 +77,34 @@ impl Worker {
             );
         }
         match command {
+            Command::TypeClipboard {
+                vm_id,
+                boot_id,
+                text,
+            } => {
+                if self.keyboard.is_some() {
+                    return Err("Clipboard typing is already active".into());
+                }
+                if self.snapshot.state != VmState::Running
+                    || self.snapshot.active_vm.as_ref() != Some(&vm_id)
+                    || self.snapshot.boot_id.as_ref() != Some(&boot_id)
+                {
+                    return Err("Clipboard target VM or boot changed; request it again".into());
+                }
+                let text = crate::clipboard::Text::prepare(&text)?;
+                if text.skipped_count != 0 {
+                    return Err("Clipboard contains unsupported keyboard characters".into());
+                }
+                let session = self.session.as_ref().ok_or("no running VM")?;
+                self.keyboard = Some(crate::vm::keyboard::Job::start(
+                    session.process.qmp_path.clone(),
+                    boot_id,
+                    text,
+                    self.guest_epoch.clone(),
+                    self.stopping.clone(),
+                )?);
+                Ok("Clipboard typing started (US layout)".into())
+            }
             Command::RefreshVmSnapshots { vm_id } => {
                 self.refresh_vm_snapshots(&vm_id)?;
                 Ok("Snapshots refreshed".into())

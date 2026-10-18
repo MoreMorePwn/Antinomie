@@ -62,7 +62,11 @@ impl MonitorApp {
             || network
             || matches!(
                 &command,
-                Command::Upload { .. } | Command::UploadSample { .. } | Command::ReconnectTransport
+                Command::Upload { .. }
+                    | Command::UploadSample { .. }
+                    | Command::ReconnectTransport
+                    | Command::TypeClipboard { .. }
+                    | Command::StopRun { .. }
             );
         let has_pending_binding = bind_to_session || vm_snapshot_target.is_some();
         if has_pending_binding && self.pending_sessions.len() >= PENDING_SESSION_LIMIT {
@@ -306,6 +310,9 @@ impl MonitorApp {
                     success,
                     message,
                 } => {
+                    if self.pending_kill == Some(id) {
+                        self.pending_kill = None;
+                    }
                     if self.consume_stale_command_id(id) {
                         continue;
                     }
@@ -522,6 +529,9 @@ impl MonitorApp {
         if self.pending_network == Some(id) {
             self.pending_network = None;
         }
+        if self.pending_kill == Some(id) {
+            self.pending_kill = None;
+        }
         if self.process_picker.pending == Some(id) {
             self.process_picker.pending = None;
         }
@@ -604,6 +614,7 @@ impl MonitorApp {
         self.pending_observer = None;
         self.pending_core = None;
         self.pending_network = None;
+        self.pending_kill = None;
         self.process_picker.pending = None;
         for terminal in self.terminals.values_mut() {
             if terminal.snapshot_request.take().is_some() {

@@ -31,6 +31,9 @@ impl MonitorApp {
         if pressed(keys::UPLOAD) && self.running() {
             self.open_upload();
         }
+        if pressed(keys::TYPE_CLIPBOARD) && self.clipboard_enabled() {
+            self.request_clipboard(ctx);
+        }
         if pressed(keys::SETTINGS) {
             self.settings_open = true;
         }
@@ -140,6 +143,14 @@ impl MonitorApp {
                             ui.close_menu();
                         }
                         let vm = self.selected_vm().cloned();
+                        if ui.add_enabled(self.clipboard_enabled(),
+                            item("Type host clipboard into VM", Some(keys::TYPE_CLIPBOARD)))
+                            .on_hover_text("Types into the guest's focused input using a US keyboard layout; Caps Lock should be off. Newlines press Enter. Maximum 4 KiB.")
+                            .clicked()
+                        {
+                            self.request_clipboard(ctx);
+                            ui.close_menu();
+                        }
                         if ui
                             .add_enabled(vm.is_some() && !self.closing, item("Rename…", None))
                             .clicked()
@@ -414,6 +425,20 @@ impl MonitorApp {
                                 self.open_snapshots();
                             }
                             ui.separator();
+                            if tool_button(
+                                ui,
+                                ToolButton {
+                                    icon: egui_phosphor::regular::X_CIRCLE,
+                                    label: "Kill",
+                                    tooltip: "Terminate the selected active run and descendants; keep the VM running. Select a live run in Run history when several are active.",
+                                    enabled: self.kill_target().is_some(),
+                                    tone: theme::error(),
+                                    strong: false,
+                                    active: false,
+                                },
+                            ) {
+                                self.request_kill(None);
+                            }
                             if tool_button(
                                 ui,
                                 ToolButton {

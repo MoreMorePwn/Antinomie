@@ -293,6 +293,8 @@ fn qemu_log_hint(runtime_dir: &Path) -> String {
 }
 
 /// A QMP connection, past the greeting and capability negotiation.
+pub(crate) mod keyboard;
+
 struct Qmp {
     writer: UnixStream,
     reader: std::io::BufReader<UnixStream>,

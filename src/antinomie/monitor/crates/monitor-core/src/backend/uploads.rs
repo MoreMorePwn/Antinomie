@@ -110,6 +110,7 @@ pub(super) fn guest_scoped_command(command: &Command) -> bool {
     matches!(
         command,
         Command::Upload { .. }
+            | Command::TypeClipboard { .. }
             | Command::UploadSample { .. }
             | Command::Execute(_)
             | Command::CancelProcessCore { .. }

@@ -6,6 +6,22 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Host clipboard typing.** VM → Type host clipboard into VM, or Ctrl+Shift+Y
+  outside an editor, types into the guest's focused input through QMP. It uses
+  a US keyboard layout with Caps Lock off, accepts up to 4 KiB, confirms long
+  or multiline text, and reports characters it cannot type. Typing stops at
+  VM lifecycle boundaries; terminal paste keeps its existing behavior.
+
+- **Kill a program run.** The toolbar's Kill button, directly left of Run
+  program, confirms termination of the selected active run and its descendants
+  while the VM keeps running. With several active runs, select one in Run
+  history first. Finished runs and stale confirmations cannot target a new boot.
+
+- **MalShare downloads and metadata.** Sample downloads follow HTTPS redirects
+  and retain SHA-256 verification and encrypted storage. HTTP refusals and
+  malformed result rows now produce errors rather than a misleading empty list.
+  Details retain file sizes, and duplicate rows no longer consume the result limit.
+
 - **Stealth profiles.** VM configuration has a Stealth row and a Stealth
   profile window that choose the hardware a VM shows its guest. New VMs start
   as a realistic desktop: a real vendor's SMBIOS identity (BIOS, system,

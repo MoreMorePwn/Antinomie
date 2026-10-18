@@ -1091,6 +1091,12 @@ pub enum Command {
         confirmed: bool,
     },
     ReconnectTransport,
+    /// Type bounded US-layout text into this exact running VM boot over QMP.
+    TypeClipboard {
+        vm_id: String,
+        boot_id: String,
+        text: String,
+    },
     Create(VmConfig),
     /// Hashing has a 15-second tool deadline; offline provisioning has 180 seconds.
     /// Failure cleans unpublished state and never reports credential tool output.

@@ -53,7 +53,23 @@ fn get(curl: &Path, key: &str, params: &[(&str, &str)], max: u64) -> Result<Vec<
         url.push_str(&format!("&{name}={}", encode(value)));
     }
     let mut child = Command::new(curl)
-        .args(["-sS", "--proto", "=https", "--max-time", "300", "-K", "-"])
+        .args([
+            "--disable",
+            "-sS",
+            "--proto",
+            "=https",
+            "--location",
+            "--proto-redir",
+            "=https",
+            "--max-redirs",
+            "3",
+            "--max-time",
+            "300",
+            "-K",
+            "-",
+            "--write-out",
+            "\n%{http_code}",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -61,31 +77,61 @@ fn get(curl: &Path, key: &str, params: &[(&str, &str)], max: u64) -> Result<Vec<
         .map_err(|e| format!("curl: {e}"))?;
     if let Some(mut stdin) = child.stdin.take() {
         // curl's config syntax: the value quoted, with \ and " escaped.
-        let _ = writeln!(
+        if let Err(error) = writeln!(
             stdin,
             "url = \"{}\"",
             url.replace('\\', "\\\\").replace('"', "\\\"")
-        );
+        ) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("MalShare request configuration: {error}"));
+        }
     }
     let mut body = Vec::new();
-    if let Some(stdout) = child.stdout.take() {
-        stdout
-            .take(max + 1)
-            .read_to_end(&mut body)
-            .map_err(|e| format!("curl: {e}"))?;
+    if let Some(stdout) = child.stdout.take()
+        && let Err(error) = stdout.take(max + 6).read_to_end(&mut body)
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("MalShare response read: {error}"));
     }
-    if body.len() as u64 > max {
+    if body.len() as u64 > max + 4 {
         let _ = child.kill();
         let _ = child.wait();
         return Err(format!("MalShare's reply is larger than {} MiB", max >> 20));
     }
     let done = child.wait_with_output().map_err(|e| format!("curl: {e}"))?;
     if !done.status.success() {
-        let message = String::from_utf8_lossy(&done.stderr);
+        let message = String::from_utf8_lossy(&done.stderr).replace(key, "[redacted]");
         return Err(format!(
             "MalShare: {}",
             message.lines().last().unwrap_or("request failed").trim()
         ));
+    }
+    let at = body
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .ok_or("MalShare request did not report an HTTP status")?;
+    let status = std::str::from_utf8(&body[at + 1..])
+        .ok()
+        .and_then(|code| code.parse::<u16>().ok())
+        .ok_or("MalShare request reported an invalid HTTP status")?;
+    body.truncate(at);
+    if !(200..300).contains(&status) {
+        return Err(match status {
+            400 | 401 => format!("MalShare HTTP {status}: API request or key refused"),
+            403 => "MalShare HTTP 403: access refused by the service or its edge protection".into(),
+            404 => "MalShare HTTP 404: requested sample or endpoint unavailable".into(),
+            429 => "MalShare HTTP 429: request quota exceeded; try later".into(),
+            _ => format!("MalShare HTTP {status}: request failed; try later"),
+        });
+    }
+    if !params
+        .iter()
+        .any(|(name, value)| *name == "action" && *value == "getfile")
+        && let Some(message) = refusal(&body)
+    {
+        return Err(message.replace(key, "[redacted]"));
     }
     Ok(body)
 }
@@ -226,8 +272,11 @@ fn info(value: &Value, file_type: Option<&str>) -> Option<SampleInfo> {
             .or_else(|| file_type.map(str::to_owned))
             .unwrap_or_default()
             .to_ascii_lowercase(),
+        file_size: field(value, "size")
+            .and_then(|size| size.as_u64().or_else(|| size.as_str()?.parse().ok()))
+            .unwrap_or_default(),
         first_seen: field(value, "added")
-            .and_then(Value::as_i64)
+            .and_then(|time| time.as_i64().or_else(|| time.as_str()?.parse().ok()))
             .map(utc)
             .unwrap_or_default(),
         reporter: "MalShare".into(),
@@ -318,7 +367,8 @@ fn infos(body: &[u8], file_type: Option<&str>, limit: u32) -> Result<Vec<SampleI
         return Err(refused);
     }
     let mut found = Vec::new();
-    for value in objects(body)? {
+    for (row, value) in objects(body)?.into_iter().enumerate() {
+        let before = found.len();
         match &value {
             Value::String(hash) => remember(&mut found, hash_sample(hash, file_type)),
             Value::Object(object) => {
@@ -326,10 +376,19 @@ fn infos(body: &[u8], file_type: Option<&str>, limit: u32) -> Result<Vec<SampleI
                     .iter()
                     .find_map(|(key, value)| key.eq_ignore_ascii_case("hashes").then_some(value))
                 {
-                    for item in items {
-                        if let Some(hash) = item.as_str() {
-                            remember(&mut found, hash_sample(hash, file_type));
+                    for (index, item) in items.iter().enumerate() {
+                        let sample = item
+                            .as_str()
+                            .and_then(|hash| hash_sample(hash, file_type))
+                            .or_else(|| info(item, file_type));
+                        if sample.is_none() {
+                            return Err(format!(
+                                "MalShare reply row {}, hash {}: invalid sample identity",
+                                row + 1,
+                                index + 1
+                            ));
                         }
+                        remember(&mut found, sample);
                     }
                     continue;
                 }
@@ -337,12 +396,16 @@ fn infos(body: &[u8], file_type: Option<&str>, limit: u32) -> Result<Vec<SampleI
             }
             _ => {}
         }
-        if found.len() >= limit as usize {
-            break;
+        if found.len() == before {
+            return Err(format!(
+                "MalShare reply row {}: expected a sample with a valid hash; response was not treated as an empty catalog",
+                row + 1
+            ));
         }
     }
+    let mut found = dedupe(found);
     found.truncate(limit as usize);
-    Ok(dedupe(found))
+    Ok(found)
 }
 
 /// The samples of one file type MalShare received in the last 24 hours. Its
@@ -357,19 +420,28 @@ fn of_type(
     if let Some(refused) = refusal(&types) {
         return Err(refused);
     }
-    let name = objects(&types)?
-        .iter()
-        .flat_map(|value| match value {
-            Value::String(name) => vec![name.clone()],
-            Value::Object(types) => types.keys().cloned().collect(),
-            _ => Vec::new(),
-        })
-        .find(|name| name.eq_ignore_ascii_case(wanted));
+    let name = type_name(&types, wanted)?;
     let Some(name) = name else {
         return Ok(None);
     };
     let body = get(curl, key, &[("action", "type"), ("type", &name)], MAX_REPLY)?;
     Ok(Some((name.clone(), infos(&body, Some(&name), limit)?)))
+}
+
+fn type_name(body: &[u8], wanted: &str) -> Result<Option<String>, String> {
+    let mut names = Vec::new();
+    for value in objects(body)? {
+        match value {
+            Value::String(name) => names.push(name),
+            Value::Object(types) if types.values().all(|v| v.as_u64().is_some()) => {
+                names.extend(types.into_iter().map(|(name, _)| name));
+            }
+            _ => return Err("MalShare file-type reply has an unsupported format".into()),
+        }
+    }
+    Ok(names
+        .into_iter()
+        .find(|name| name.eq_ignore_ascii_case(wanted)))
 }
 
 /// One search box, as for MalwareBazaar: empty lists the newest ELF samples
@@ -1027,13 +1099,15 @@ pub fn download(
             .flatten()
             .unwrap_or_else(|| "MalShare sent a file that does not match its SHA-256".into());
         bytes.fill(0);
-        return Err(reason);
+        return Err(reason.replace(key.trim(), "[redacted]"));
     }
     let stored = samples::store_bytes(data_dir, info, &bytes, "MalShare");
     bytes.fill(0);
     stored
 }
 
+#[cfg(test)]
+mod reply_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1351,7 +1425,7 @@ mod tests {
             ),
             Err("MalShare: Over Request Limit.  Please wait until tomorrow".into())
         );
-        assert!(infos(br#"[{"sha256":"zz"}]"#, None, 10).unwrap().is_empty());
+        assert!(infos(br#"[{"sha256":"zz"}]"#, None, 10).is_err());
         let hashes = format!(r#"["{}","{}"]"#, "f".repeat(32), "ab".repeat(32));
         let found = infos(hashes.as_bytes(), Some("ELF"), 10).unwrap();
         assert_eq!(found.len(), 2);

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! MalwareBazaar end to end with a real API key: the searches the Malware
-//! samples window makes, one small x86-64 ELF sample downloaded into
+//! samples window makes, one small ELF sample downloaded into
 //! NEW_DATA_DIR, its archive opened in memory and its hash checked, and, with
 //! BUNDLE (a BusyBox base), the sample sent into a VM and hashed there. The
 //! sample is never run, on the host or in the guest.
@@ -122,8 +122,8 @@ fn run() -> Result<(), String> {
         Ok("malshare") => Source::MalShare,
         _ => Source::MalwareBazaar,
     };
-    samples::save_source_key(&data, source, key.trim())?;
-    let key = samples::source_key(&data, source);
+    // Host-only checks need the key only in memory, not in a test data folder.
+    let key = key.trim().to_owned();
     let curl = Path::new(CURL);
     println!("source {}", source.label());
 
@@ -152,7 +152,8 @@ fn run() -> Result<(), String> {
     candidates.retain(|s| s.is_elf() && s.file_size < 2 * 1024 * 1024);
     // MalShare lists no sizes (0): those keep its order.
     candidates.sort_by_key(|s| s.file_size);
-    // The first x86-64 one, as found by download.
+    // A host-only encrypted round-trip can use any ELF architecture. Guest
+    // upload checks need an x86-64 candidate for the supported guest platform.
     let mut chosen = None;
     for info in candidates.iter().take(15) {
         let stored = source.download(curl, &key, &data, info)?;
@@ -168,7 +169,7 @@ fn run() -> Result<(), String> {
         if fs::read(&archive).is_ok_and(|zip| !zip.starts_with(b"PK")) {
             return Err("the stored archive is not a zip".into());
         }
-        if bytes.len() < 2 * 1024 * 1024 && arch == Some("x86_64") {
+        if bytes.len() < 2 * 1024 * 1024 && (bundle.is_none() || arch == Some("x86_64")) {
             chosen = Some((stored, bytes));
             break;
         }
@@ -190,6 +191,7 @@ fn run() -> Result<(), String> {
     println!("hash lookup returns the sample");
 
     if let Some(bundle) = bundle {
+        samples::save_source_key(&data, source, &key)?;
         let mut test = Harness {
             backend: Backend::new(BackendOptions {
                 data_dir: data.clone(),

@@ -322,6 +322,12 @@ impl MonitorApp {
         }
         if let Some(confirm) = &self.confirm {
             let (title, text, button, destructive) = match confirm {
+                Confirm::KillRun(_) => (
+                    "Kill program run",
+                    "Terminate the selected run and its descendants? Recording remains active while termination is collected. The VM keeps running.",
+                    "Kill run",
+                    true,
+                ),
                 Confirm::Reset(_) => (
                     "Reset disk",
                     "Reset this VM's disk to the base image? All VM disk changes will be lost.",
@@ -345,6 +351,12 @@ impl MonitorApp {
                     "Overwrite the chosen guest path with this host file?",
                     "Overwrite",
                     true,
+                ),
+                Confirm::Clipboard { .. } => (
+                    "Type clipboard into VM",
+                    "Type this long or multiline clipboard into the guest's focused input? US keyboard layout is required, with Caps Lock off. Newlines press Enter and may execute commands. Maximum 4 KiB; typing may take up to two minutes.",
+                    "Type into VM",
+                    false,
                 ),
                 Confirm::Nat { .. } => (
                     "Enable NAT",
@@ -375,8 +387,21 @@ impl MonitorApp {
                 });
                 ui.add_space(4.0);
                 ui.label(text);
+                if let Confirm::KillRun(target) = confirm {
+                    ui.add(egui::Label::new(target.label(&self.snapshot)).wrap());
+                }
+                if let Confirm::Clipboard { text, .. } = confirm {
+                    ui.label(format!("{} keys to type", text.key_count));
+                }
                 let enabled = !self.closing
                     && match confirm {
+                        Confirm::KillRun(target) => {
+                            target.current(&self.snapshot)
+                                && self.running()
+                                && self.pending_kill.is_none()
+                                && self.snapshot.memory_dump.is_none()
+                                && self.vm_snapshots.pending.is_none()
+                        }
                         Confirm::Reset(_) | Confirm::Delete(_) | Confirm::DeleteBase(_) => {
                             self.snapshot.active_vm.is_none()
                         }
@@ -384,6 +409,11 @@ impl MonitorApp {
                             intent.same_session(&self.snapshot)
                                 && self.snapshot.state == VmState::Running
                                 && self.pending_upload.is_none()
+                        }
+                        Confirm::Clipboard { intent, .. } => {
+                            intent.current(&self.snapshot)
+                                && self.running()
+                                && self.snapshot.memory_dump.is_none()
                         }
                         Confirm::Nat { vm, creating } => {
                             if *creating {
@@ -413,6 +443,7 @@ impl MonitorApp {
             if yes {
                 if let Some(confirm) = self.confirm.take() {
                     match confirm {
+                        Confirm::KillRun(target) => self.submit_kill(target),
                         Confirm::Reset(vm_id) => self.send(Command::Reset {
                             vm_id,
                             confirmed: true,
@@ -426,6 +457,7 @@ impl MonitorApp {
                             confirmed: true,
                         }),
                         Confirm::Upload(intent) => self.submit_upload(intent, true),
+                        Confirm::Clipboard { intent, text } => self.submit_clipboard(intent, text),
                         Confirm::Nat { mut vm, creating } => {
                             vm.nat = true;
                             vm.isolated_network = false;
