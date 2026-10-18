@@ -139,14 +139,21 @@ impl MonitorApp {
         ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
         self.details_follow.drawn(ui, panel);
         match panel {
-            Panel::Summary => crate::summary::show(
-                ui,
-                &self.snapshot,
-                &self.history,
-                self.selected.as_deref(),
-                self.settings.quota_gib,
-                &self.cpu_history,
-            ),
+            Panel::Summary => {
+                crate::summary::show(
+                    ui,
+                    &self.snapshot,
+                    &self.history,
+                    self.selected.as_deref(),
+                    self.settings.quota_gib,
+                    &self.cpu_history,
+                );
+                let id = egui::Id::new(crate::summary::configuration::CONFIGURE);
+                let configure = ui.ctx().data_mut(|data| data.remove_temp::<bool>(id));
+                if configure == Some(true) && self.can_configure_vm() {
+                    self.configure_vm();
+                }
+            }
             Panel::Trace => self.events(ui),
             Panel::Network => {
                 let vm = self.selected.clone();

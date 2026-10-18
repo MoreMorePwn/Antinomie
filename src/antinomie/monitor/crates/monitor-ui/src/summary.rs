@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Native per-VM operational dashboard. Host observations never imply guest utilization.
 use crate::theme;
-mod configuration;
+pub(crate) mod configuration;
 use antinomie_monitor_core::{Snapshot, VmConfig, VmResources, VmState};
 use eframe::egui::{self, Color32, RichText};
 use std::collections::{BTreeMap, VecDeque};
@@ -1633,7 +1633,7 @@ mod tests {
             .1;
         let health = texts.iter().find(|(text, _)| text == "Health").unwrap().1;
         assert!(configuration.bottom() < health.top());
-        for expected in ["6 vCPU · host", "3072 MiB", "24 GiB"] {
+        for expected in ["6 vCPU", "host", "3 GiB", "24 GiB disk"] {
             assert!(
                 texts.iter().any(|(text, _)| text == expected),
                 "missing {expected}"
@@ -1718,8 +1718,8 @@ mod tests {
                         .collect();
                     assert_eq!(
                         cards.len(),
-                        6,
-                        "five resource cards plus capture storage must remain visible"
+                        10,
+                        "five resource cards, capture storage and four configuration cards must remain visible"
                     );
                     cards.sort_by(|a, b| {
                         a.top()
@@ -1736,7 +1736,10 @@ mod tests {
                                     && (card.bottom() - row[0].bottom()).abs() < 0.5,
                                 "uneven row at {width}px / {font}pt, mode {mode}: {row:?}"
                             );
-                            assert!(card.right() <= width + 1.0);
+                            assert!(
+                                card.right() <= width + 1.0,
+                                "card {card:?} past {width}px at {font}pt, mode {mode}"
+                            );
                         }
                     }
                 }

@@ -81,9 +81,7 @@ fn dialog_shows_the_preset_and_the_window_its_sections() {
         texts.iter().any(|text| text == "Realistic desktop"),
         "{texts:?}"
     );
-    assert!(texts
-        .iter()
-        .any(|text| text.starts_with("Detected as a VM by common checks:")));
+    assert!(!texts.iter().any(|text| text.contains("Detected as a VM")));
 
     app.stealth_open = true;
     let texts = shown(&mut app, size);
@@ -125,4 +123,36 @@ fn a_running_vm_shows_its_profile_read_only() {
         .iter()
         .any(|text| text == "Stop the VM to change its hardware."));
     assert_eq!(app.draft.stealth, StealthProfile::transparent());
+}
+
+#[test]
+fn summary_configure_opens_the_vm_dialog_for_a_stopped_vm() {
+    let size = egui::vec2(1280.0, 900.0);
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut app = app();
+    let vm = VmConfig {
+        id: "vm".into(),
+        name: "VM".into(),
+        ..VmConfig::default()
+    };
+    app.snapshot.vms.push(vm.clone());
+    app.selected = Some(vm.id.clone());
+    app.focus_panel = Some(Panel::Summary);
+    for _ in 0..3 {
+        render(&mut app, &ctx, size);
+    }
+    let flag = egui::Id::new(crate::summary::configuration::CONFIGURE);
+    ctx.data_mut(|data| data.insert_temp(flag, true));
+    render(&mut app, &ctx, size);
+    assert!(app.config_open);
+    assert_eq!(app.draft.id, "vm");
+
+    // A running VM keeps its dialog closed; the flag is consumed either way.
+    app.config_open = false;
+    app.snapshot.active_vm = Some(vm.id);
+    ctx.data_mut(|data| data.insert_temp(flag, true));
+    render(&mut app, &ctx, size);
+    assert!(!app.config_open);
+    assert_eq!(ctx.data_mut(|data| data.get_temp::<bool>(flag)), None);
 }
