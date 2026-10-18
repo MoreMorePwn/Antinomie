@@ -10,6 +10,9 @@
 # glibc dynamically and stops if a binary would need a newer glibc than the
 # Debian trixie guest has (2.41); --static links the samples statically (the
 # BusyBox guests need this).
+#
+# What each sample does with its options is documented in idk-docs:
+# "Stress Samples - Arguments and Walkthrough.md".
 set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source_dir="$here/torture"
