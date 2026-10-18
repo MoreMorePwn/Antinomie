@@ -3,6 +3,7 @@
 //! VM, and the session that owns one transport client.
 mod core_sink;
 mod guest_resource_control;
+mod launch_failure;
 mod manual_core;
 mod process_core;
 mod run_network;
@@ -18,8 +19,8 @@ mod worker_loop;
 mod worker_vm;
 
 use self::{
-    run_network::*, saving::*, session_transport::*, uploads::*, worker_artifacts::*,
-    worker_loop::*, worker_vm::*,
+    launch_failure::*, run_network::*, saving::*, session_transport::*, uploads::*,
+    worker_artifacts::*, worker_loop::*, worker_vm::*,
 };
 use crate::{
     api::*,
@@ -319,9 +320,10 @@ struct Session {
     captures: BTreeMap<String, CaptureSession>,
     pending_capture_id: Option<String>,
     boot_id: String,
-    pending: VecDeque<Vec<u8>>,
-    pending_len: usize,
-    pending_overflow: bool,
+    /// Telemetry of root tasks whose launch the host has not been told about yet.
+    pre_ack: crate::pre_ack::PreAckBuffer,
+    /// Set once the recording quota is reached; see `crate::quota`.
+    quota: crate::quota::QuotaState,
     terminal_cursor: usize,
     /// Terminal READ requests whose deadline passed before their reply arrived,
     /// keyed by request id. The guest answers commands in submission order and

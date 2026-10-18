@@ -39,6 +39,8 @@ impl Worker {
         require_supported(bundle.antinomie_revision, bundle.min_app_version.as_deref())?;
         self.snapshot.state = VmState::Starting;
         self.snapshot.active_vm = Some(id.into());
+        // An error of an earlier boot (a crash, a late reply) says nothing about this one.
+        self.snapshot.last_error = None;
         self.snapshot.health = Health::default();
         self.snapshot.guest_kernel = None;
         self.snapshot.events.clear();
@@ -115,9 +117,8 @@ impl Worker {
                 captures: BTreeMap::new(),
                 pending_capture_id: None,
                 boot_id,
-                pending: VecDeque::new(),
-                pending_len: 0,
-                pending_overflow: false,
+                pre_ack: crate::pre_ack::PreAckBuffer::new(self.options.pre_ack),
+                quota: crate::quota::QuotaState::default(),
                 terminal_cursor: 0,
                 late_reads: BTreeMap::new(),
                 run_status_poll: RunStatusPoll::default(),
@@ -219,6 +220,9 @@ impl Worker {
             }
             Err(e) => issues.push(format!("final recorder stats unavailable: {e}")),
         }
+        // A guest that powers off on SHUTDOWN can end QEMU before its
+        // acknowledgement is read; the exit status then decides, not the race.
+        let mut exited_before_ack = false;
         let shutdown_ack = match session.request(
             control::SHUTDOWN,
             &control::header(0),
@@ -234,6 +238,10 @@ impl Worker {
                     false
                 }
             }
+            Err(e) if e == VM_EXITED_WAITING_REPLY => {
+                exited_before_ack = true;
+                false
+            }
             Err(e) => {
                 issues.push(e);
                 false
@@ -246,6 +254,9 @@ impl Worker {
                 Ok(Some(status)) => {
                     exit_success = status.success();
                     if !exit_success {
+                        if exited_before_ack {
+                            issues.push(VM_EXITED_WAITING_REPLY.into());
+                        }
                         issues.push(format!("QEMU exited with {status}"));
                     }
                     break;
@@ -292,13 +303,7 @@ impl Worker {
         {
             issues.push(format!("final bounded drain unavailable: {e}"));
         }
-        let final_state = if forced {
-            "forced"
-        } else if shutdown_ack && exit_success {
-            "clean"
-        } else {
-            "unexpected-exit"
-        };
+        let final_state = final_state(forced, shutdown_ack, exited_before_ack, exit_success);
         if let Err(e) = session.finalize(final_state, &mut self.snapshot) {
             issues.push(e);
         }
@@ -321,8 +326,44 @@ impl Worker {
     }
 }
 
+/// How a Stop ended, as recorded in the boot manifest. Only a forced power-off
+/// or an exit that was not a successful shutdown is unexpected.
+pub(super) fn final_state(
+    forced: bool,
+    shutdown_acknowledged: bool,
+    exited_before_acknowledgement: bool,
+    exit_success: bool,
+) -> &'static str {
+    if forced {
+        "forced"
+    } else if (shutdown_acknowledged || exited_before_acknowledgement) && exit_success {
+        "clean"
+    } else {
+        "unexpected-exit"
+    }
+}
+
 pub(super) fn qmp_outcome_unknown(error: &str) -> bool {
     // QMP protocol errors prove command rejection. Transport/read failures
     // may happen after the command executed and cannot authorize deletion.
     !error.starts_with("QMP error:")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_normal_stop_is_clean_whether_or_not_the_acknowledgement_won_the_race() {
+        assert_eq!(final_state(false, true, false, true), "clean");
+        assert_eq!(final_state(false, false, true, true), "clean");
+    }
+
+    #[test]
+    fn only_forced_or_failed_exits_are_not_clean() {
+        assert_eq!(final_state(true, true, false, true), "forced");
+        assert_eq!(final_state(false, false, true, false), "unexpected-exit");
+        assert_eq!(final_state(false, true, false, false), "unexpected-exit");
+        assert_eq!(final_state(false, false, false, true), "unexpected-exit");
+    }
 }

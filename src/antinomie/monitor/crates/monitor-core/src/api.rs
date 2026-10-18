@@ -371,6 +371,8 @@ pub struct BackendOptions {
     /// Product repository checkout used for local base builds (host Linux).
     /// Shared quota for raw packets, assembled fields and terminal artifacts, in bytes.
     pub capture_quota_size: u64,
+    /// Bounds of the buffer for telemetry that arrives before its launch is acknowledged.
+    pub pre_ack: crate::PreAckLimits,
     pub shutdown_timeout: Duration,
     pub bootstrap_gpa: Option<u64>,
     pub force_tcg: bool,
@@ -389,6 +391,7 @@ impl Default for BackendOptions {
             curl: "curl".into(),
             remote_base: crate::distribution::DEFAULT_REMOTE_BASE.to_string(),
             capture_quota_size: 4 * 1024 * 1024 * 1024,
+            pre_ack: crate::PreAckLimits::default(),
             shutdown_timeout: Duration::from_secs(10),
             bootstrap_gpa: None,
             force_tcg: false,
@@ -627,6 +630,11 @@ pub struct RunSummary {
     pub execution: Option<RunExecution>,
     #[serde(default)]
     pub analysis: Option<crate::analysis::AnalysisReport>,
+    /// Facts about the recording that do not mean saving failed, for example
+    /// telemetry sent before the launch was acknowledged that the host could
+    /// not keep. Unlike `recording_error` they never stop saving.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 /// Maps one guest monotonic timeline to host wall time without changing the wire.

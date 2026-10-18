@@ -106,6 +106,8 @@ impl Session {
         }
         self.guest_resources.pid = pid;
         self.guest_resources.cookie = cookie;
+        // Packets of the collector that arrived before its reply will never be claimed.
+        self.pre_ack.discard(cookie);
         self.guest_resources.started(terminal);
         Ok(())
     }

@@ -57,6 +57,58 @@ No guest, image, shared-memory ABI, dependency or release-tag change is needed.
 - V7 no snapshot/reconnect. No next transport version. Existing transport API
   is opaque; frontend/backend never manage CPU rings.
 
+## Recording quota and pre-acknowledgement telemetry (0.6.2)
+
+The recording quota (Settings, 4 GiB by default) bounds what one VM boot may
+save: raw telemetry, assembled objects, terminal journals and screens, analysis
+metadata, cores and network captures. The limit is read when the VM starts.
+
+**Reaching the quota** is a boot-wide, permanent condition that stops *new*
+data; it never rewrites what is already complete.
+
+| Recording | State when the quota is reached |
+| --- | --- |
+| Run whose program tree ended and whose terminal is closed | Untouched: no `recording_error`, finalizes normally. A packet of such a run that still arrives is counted and noted once in the run's `notes`. |
+| Run still open | Stops saving telemetry, objects and terminal output, keeps everything saved so far, `recording_error` is the quota message. |
+| Capture still open | Same as an open run. |
+| Closed capture archive | Untouched. |
+| Boot unassigned archive | Stops growing; `health.persistence_error` is the quota message. |
+| Run or capture started after the quota was reached | Born stopped with the quota message. |
+
+The message names the limit and says that everything saved before is intact.
+The frontend reads it in `health.persistence_error`; `storage_dropped_packets`
+counts the packets that were not saved. A quota failure of one terminal write
+is the same event: it stops every open recording, not only that run. Any other
+terminal write failure stops saving for that run only, and the run's first
+recorded cause stays the reported one. Raising the quota applies to the next
+VM start; a running boot is not resumed.
+
+**One copy of a packet nobody owns.** While a capture that can still save
+observes a packet no run owns, that capture's archive is the packet's only
+raw copy; the boot's unassigned raw archive skips it. Run-owned packets are
+still written to the run archive and, under Capture All, to the capture
+archive, because each archive must be readable on its own; the capture's
+object store also keeps its own objects. Capture All therefore still costs up
+to twice the run's own telemetry while a run is active.
+
+**Pre-acknowledgement buffer.** Telemetry of a launched program can arrive
+before the reply to its EXEC command. Such packets wait in a buffer keyed by
+root cookie until the reply claims them.
+
+| Rule | Value |
+| --- | --- |
+| Per-cookie size | 16 MiB (`PreAckLimits::cookie_size`) |
+| Size for all cookies | 32 MiB (`PreAckLimits::total_size`) |
+| Age limit | 5 s (`PreAckLimits::max_age`); older packets are dropped |
+| Cookies tracked | 64; the one quiet longest is forgotten first |
+| Never buffered | Cookie 0 and the app's own resource collector |
+| On claim | The cookie's entry is removed, so an overflow never outlives it |
+
+A cookie that overflows or ages out only counts its own loss. When that cookie
+is claimed the loss becomes an entry in the run's `notes` (a field separate
+from `recording_error`, which gates terminal journaling); the lost packets
+remain in the boot's raw archives. A cookie nobody claims disappears.
+
 ## Accepted ANT-T0091 run triage (0.6.2)
 
 ANT-T0101 reorganizes triage presentation around section navigation,

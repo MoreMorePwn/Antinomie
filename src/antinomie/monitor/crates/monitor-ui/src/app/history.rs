@@ -748,6 +748,7 @@ pub(super) fn listed(run: &RunSummary) -> RunSummary {
         directory: run.directory.clone(),
         terminal_eof: run.terminal_eof,
         state: run.state.clone(),
+        notes: run.notes.clone(),
         recording_error: run.recording_error.clone(),
         execution: run.execution.clone(),
         analysis: run
