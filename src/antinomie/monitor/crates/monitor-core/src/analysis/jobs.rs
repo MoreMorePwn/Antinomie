@@ -188,7 +188,7 @@ impl Jobs {
                 total_len,
                 received_len: 0,
                 file: Some(file),
-                deadline: Instant::now() + Duration::from_secs(120),
+                deadline: Instant::now() + TRANSFER_DEADLINE,
                 child: None,
                 cleanup_reason: None,
                 reserved_len,
@@ -300,7 +300,12 @@ impl Jobs {
             return Some(Action::Release(id));
         }
         if self.active.is_none() {
-            self.active = self.queue.pop_front();
+            self.active = self.queue.pop_front().map(|mut job| {
+                // The transfer deadline counts from when the job starts, not
+                // from when it was queued behind another job.
+                job.deadline = Instant::now() + TRANSFER_DEADLINE;
+                job
+            });
         }
         let mut job = self.active.take()?;
         job.worker_len = ["worker.log", "output/report.json"]
@@ -583,6 +588,9 @@ impl Drop for Jobs {
     }
 }
 /// Wall-clock budget of one worker: decompilers analyze the whole program.
+/// Time a job has to receive its specimen once it starts.
+const TRANSFER_DEADLINE: Duration = Duration::from_secs(120);
+
 pub(crate) fn worker_deadline(report: &AnalysisReport) -> Duration {
     let has = |kind| report.sections.iter().any(|s| s.kind == kind);
     Duration::from_secs(if has(AnalysisKind::Decompilation) {
@@ -1150,6 +1158,49 @@ mod tests {
             0o600
         );
         (path, bytes)
+    }
+
+    #[test]
+    fn a_queued_job_gets_its_full_transfer_time_when_it_starts() {
+        let root = std::env::temp_dir().join(format!("ant-analysis-qdl-{}", storage::unique_id()));
+        let selection = AnalysisSelection {
+            enabled: true,
+            checks: vec![AnalysisKind::Metadata],
+        };
+        let mut jobs = Jobs::default();
+        let first = new_report("/tmp/first", &selection);
+        let first_id = first.id.clone();
+        jobs.submit(
+            Some("a".into()),
+            first,
+            root.join("a"),
+            Ok((1, 3)),
+            512 * 1024 * 1024,
+        );
+        jobs.submit(
+            Some("b".into()),
+            new_report("/tmp/second", &selection),
+            root.join("b"),
+            Ok((2, 3)),
+            512 * 1024 * 1024,
+        );
+        // The second job waits behind the first for a while.
+        std::thread::sleep(Duration::from_millis(1500));
+        jobs.cancel(&first_id).unwrap();
+        assert!(matches!(jobs.next(), Some(Action::Release(1))));
+        assert!(matches!(jobs.next(), Some(Action::Read { id: 2, .. })));
+        let left = jobs
+            .active
+            .as_ref()
+            .unwrap()
+            .deadline
+            .saturating_duration_since(Instant::now());
+        assert!(
+            left > TRANSFER_DEADLINE - Duration::from_secs(1),
+            "{left:?} left"
+        );
+        drop(jobs);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

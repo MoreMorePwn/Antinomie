@@ -186,7 +186,7 @@ impl Session {
             }
             let source_run_id = summary.id.clone();
             summary.id = storage::unique_id();
-            restored_run_ids.insert(source_run_id, summary.id.clone());
+            restored_run_ids.insert(source_run_id.clone(), summary.id.clone());
             summary.vm_id = vm.id.clone();
             summary.boot_id = boot_id.clone();
             summary.directory = boot_dir.join("runs").join(&summary.id);
@@ -207,6 +207,10 @@ impl Session {
             // RUN_STATUS can authorize post-restore exit actions.
             summary.execution = None;
             let mut run = ProgramRun::new(summary, options.capture_quota_size)?;
+            // Run History lists both records; this one says which it continues.
+            run.add_note(format!(
+                "Continues run {source_run_id} after the guest was reconnected or restored"
+            ));
             run.boot_bundle_identity = bundle.base_identity.clone();
             run.disk_base_identity = disk_bundle.base_identity.clone();
             run.execution_generation = execution_generation;

@@ -5,7 +5,7 @@ use crate::{
 use rustix::fs::MemfdFlags;
 use std::{
     fs::{File, OpenOptions},
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     os::{
         fd::{AsFd, AsRawFd, OwnedFd},
         unix::{fs::OpenOptionsExt, net::UnixStream},
@@ -257,6 +257,37 @@ pub(crate) struct VmProcess {
     pub ram_size: u64,
     pub qmp_path: PathBuf,
 }
+/// The QEMU command. Through util-linux `setpriv`, when installed, QEMU gets
+/// SIGKILL if the app dies, instead of running on with the VM's disk locked
+/// (the next Start would then fail on that lock).
+fn qemu_command(qemu: &Path) -> Command {
+    match crate::dependencies::executable(Path::new("setpriv")) {
+        Some(setpriv) => {
+            let mut command = Command::new(setpriv);
+            command.args(["--pdeathsig", "KILL", "--"]).arg(qemu);
+            command
+        }
+        None => Command::new(qemu),
+    }
+}
+
+/// The end of `qemu.log`, where QEMU says why it stopped (for example that
+/// another process holds the disk's write lock).
+fn qemu_log_hint(runtime_dir: &Path) -> String {
+    const TAIL: u64 = 2048;
+    let Ok(mut file) = File::open(runtime_dir.join("qemu.log")) else {
+        return String::new();
+    };
+    let len = file.metadata().map_or(0, |metadata| metadata.len());
+    let _ = file.seek(SeekFrom::Start(len.saturating_sub(TAIL)));
+    let mut tail = String::new();
+    let _ = file.take(TAIL).read_to_string(&mut tail);
+    match tail.lines().rev().find(|line| !line.trim().is_empty()) {
+        Some(line) => format!("; QEMU said: {}", line.trim()),
+        None => String::new(),
+    }
+}
+
 /// A QMP connection, past the greeting and capability negotiation.
 struct Qmp {
     writer: UnixStream,
@@ -421,7 +452,7 @@ impl VmProcess {
         }
         let serial = File::create(runtime_dir.join("serial.log")).map_err(|e| e.to_string())?;
         let stderr = File::create(runtime_dir.join("qemu.log")).map_err(|e| e.to_string())?;
-        let mut cmd = Command::new(&options.qemu);
+        let mut cmd = qemu_command(&options.qemu);
         cmd.arg("-name")
             .arg(&vm.name)
             .args(["-machine", "q35,memory-backend=shared,max-ram-below-4g=4G"])
@@ -522,8 +553,12 @@ impl VmProcess {
         // The socket is created before machine and display setup. On a busy
         // host that work runs well past a few seconds, so the greeting wait
         // has to cover startup rather than only the listen backlog.
-        let mut qmp = Qmp::connect(&self.qmp_path, Duration::from_secs(60))
-            .map_err(|error| format!("QMP connect for RAM layout: {error}"))?;
+        let mut qmp = Qmp::connect(&self.qmp_path, Duration::from_secs(60)).map_err(|error| {
+            format!(
+                "QMP connect for RAM layout: {error}{}",
+                qemu_log_hint(&self.runtime_dir)
+            )
+        })?;
         let mtree = qmp.reply(
             "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info mtree\"}}\n",
         )?;

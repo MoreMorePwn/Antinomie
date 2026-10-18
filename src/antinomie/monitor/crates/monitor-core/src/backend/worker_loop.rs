@@ -496,6 +496,10 @@ impl Worker {
                     }
                 }
             }
+            if exited {
+                // The boot is over; its reconnection attempts end with it.
+                self.reconnect = (0, None);
+            }
             if !exited
                 && self.session.is_some()
                 && self.reconnect.1.is_some_and(|at| Instant::now() >= at)

@@ -827,58 +827,44 @@ pub fn list_vm_runs(
     let location = crate::locations::locations(options, vm_id)
         .map_err(|error| RecordingError::Io(std::io::Error::other(error)))?;
     let mut runs = Vec::new();
+    let mut scanned = 0usize;
     for directory in location.recording_directories {
         if !directory.exists() {
             continue;
         }
         let root = fs::canonicalize(&directory)?;
-        let run_directory = root.join("runs");
-        if !run_directory.exists() {
-            continue;
+        // Launched runs live in `runs/`; a run continued after a reconnect or a
+        // snapshot restore lives under its new boot in `boots/<boot>/runs/`.
+        let mut run_directories = vec![root.join("runs")];
+        if let Ok(boots) = fs::read_dir(root.join("boots")) {
+            for boot in boots.flatten() {
+                if boot.file_type().is_ok_and(|kind| kind.is_dir()) {
+                    run_directories.push(boot.path().join("runs"));
+                }
+            }
         }
-        for entry in fs::read_dir(run_directory)? {
-            let entry = entry?;
-            if !entry.file_type()?.is_dir() {
+        for run_directory in run_directories {
+            let Ok(entries) = fs::read_dir(&run_directory) else {
                 continue;
-            }
-            let path = entry.path().join("run.json");
-            if !path.exists() {
-                continue;
-            }
-            let file = archive_io::open_regular(&root, &path)?;
-            if file.metadata()?.len() > 1024 * 1024 {
-                return Err(RecordingError::Limit("run metadata exceeds limit"));
-            }
-            let mut run: RunSummary = serde_json::from_reader(file)?;
-            if let Some(report) = &run.analysis {
-                crate::analysis::validation::validate_report(report).map_err(|_| {
-                    RecordingError::Limit("archived analysis report violates bounds")
-                })?;
-            }
-            if run.vm_id != vm_id {
-                continue;
-            }
-            run.directory = entry.path();
-            if run.started_ms.is_none() {
-                run.started_ms =
-                    run_filter_facts(&run.directory, &run.id, &run.vm_id, &run.boot_id)
-                        .ok()
-                        .and_then(|facts| facts.started_ms);
-            }
-            reopen_analysis_sidecar(&root, &mut run)?;
-            if matches!(run.state, RunState::Running | RunState::StopRequested) {
-                run.state = RunState::Unknown;
-            }
-            if !runs
-                .iter()
-                .any(|existing: &RunSummary| existing.id == run.id)
-            {
-                runs.push(run);
-            }
-            if runs.len() > 1024 {
-                return Err(RecordingError::Limit(
-                    "VM history exceeds 1024 runs; open archive directly",
-                ));
+            };
+            for entry in entries.flatten() {
+                if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                    continue;
+                }
+                scanned += 1;
+                if scanned > MAX_HISTORY_SCAN {
+                    return Ok(newest_runs(runs));
+                }
+                // One damaged run must not hide the others.
+                let Ok(Some(run)) = saved_run(&root, &entry.path(), vm_id) else {
+                    continue;
+                };
+                if !runs
+                    .iter()
+                    .any(|existing: &RunSummary| existing.id == run.id)
+                {
+                    runs.push(run);
+                }
             }
         }
     }
@@ -891,19 +877,60 @@ pub fn list_vm_runs(
             if !runs.iter().any(|existing| existing.id == run.id) {
                 runs.push(run);
             }
-            if runs.len() > 1024 {
-                return Err(RecordingError::Limit(
-                    "VM history exceeds 1024 runs; open archive directly",
-                ));
-            }
         }
     }
+    Ok(newest_runs(runs))
+}
+
+/// Runs a VM's history lists; the newest are kept.
+const MAX_HISTORY_RUNS: usize = 1024;
+/// Run directories looked at for one listing.
+const MAX_HISTORY_SCAN: usize = 16 * 1024;
+
+/// Newest first, at most [`MAX_HISTORY_RUNS`].
+fn newest_runs(mut runs: Vec<RunSummary>) -> Vec<RunSummary> {
     runs.sort_by(|a, b| {
         b.started_ms
             .cmp(&a.started_ms)
             .then_with(|| b.id.cmp(&a.id))
     });
-    Ok(runs)
+    runs.truncate(MAX_HISTORY_RUNS);
+    runs
+}
+
+/// The run saved in `directory` under `root`, if it belongs to `vm_id`.
+fn saved_run(
+    root: &Path,
+    directory: &Path,
+    vm_id: &str,
+) -> Result<Option<RunSummary>, RecordingError> {
+    let path = directory.join("run.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let file = archive_io::open_regular(root, &path)?;
+    if file.metadata()?.len() > 1024 * 1024 {
+        return Err(RecordingError::Limit("run metadata exceeds limit"));
+    }
+    let mut run: RunSummary = serde_json::from_reader(file)?;
+    if let Some(report) = &run.analysis {
+        crate::analysis::validation::validate_report(report)
+            .map_err(|_| RecordingError::Limit("archived analysis report violates bounds"))?;
+    }
+    if run.vm_id != vm_id {
+        return Ok(None);
+    }
+    run.directory = directory.to_path_buf();
+    if run.started_ms.is_none() {
+        run.started_ms = run_filter_facts(&run.directory, &run.id, &run.vm_id, &run.boot_id)
+            .ok()
+            .and_then(|facts| facts.started_ms);
+    }
+    reopen_analysis_sidecar(root, &mut run)?;
+    if matches!(run.state, RunState::Running | RunState::StopRequested) {
+        run.state = RunState::Unknown;
+    }
+    Ok(Some(run))
 }
 
 pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
