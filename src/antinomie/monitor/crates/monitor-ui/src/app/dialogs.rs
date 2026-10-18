@@ -64,7 +64,7 @@ impl MonitorApp {
                                 generation: 0,
                                 kind: FolderKind::BaseImport,
                             }) {
-                                self.status = error;
+                                self.report_error(error);
                             }
                         }
                     });
@@ -435,7 +435,7 @@ impl MonitorApp {
                             }
                             if !creating {
                                 if let Err(error) = self.save_vm(vm) {
-                                    self.status = error;
+                                    self.report_error(error);
                                 }
                             }
                         }
@@ -609,7 +609,7 @@ impl MonitorApp {
                         });
                     });
                     if self.snapshot.active_vm.is_some() {
-                        ui.colored_label(theme::warn(), "Stop the running VM to change these.");
+                        crate::activity::warning(ui, "Stop the running VM to change these.");
                     }
                     dialog_footer(ui, |ui| {
                         save = ui
@@ -763,6 +763,7 @@ pub(super) fn directory_input(
         ) {
             if let Err(error) = picker.choose(target) {
                 *status = format!("Host folder: {error}");
+                crate::activity::error(ui, &*status);
             }
         }
     });

@@ -194,15 +194,15 @@ impl View {
             self.start(ui.ctx());
         }
         if input.analysis.is_none() {
-            ui.colored_label(theme::warn(), "This run has no retained executable. Enable static analysis before starting a new run.");
+            crate::activity::warning(ui, "This run has no retained executable. Enable static analysis before starting a new run.");
         }
         match &self.result {
             Some(Err(error)) => {
-                ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
+                crate::activity::warning(ui, error);
             }
             Some(Ok(result)) => {
                 for warning in &result.warnings {
-                    ui.add(egui::Label::new(RichText::new(warning).color(theme::warn())).wrap());
+                    crate::activity::warning(ui, warning);
                 }
             }
             _ if !ready && input.analysis.is_some() => {

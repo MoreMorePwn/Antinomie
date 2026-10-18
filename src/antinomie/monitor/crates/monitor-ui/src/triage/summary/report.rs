@@ -334,7 +334,7 @@ pub(super) fn content(
         .auto_shrink([false, false])
         .show(ui, |ui| {
             if let Some(error) = &view.scan_error {
-                ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
+                crate::activity::warning(ui, error);
             }
             let Some(scan) = &view.scan else {
                 presentation::frame().show(ui, |ui| {
@@ -355,7 +355,7 @@ pub(super) fn content(
                 ui.add_space(8.0);
             }
             if let Some(error) = &scan.event_error {
-                ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
+                crate::activity::warning(ui, error);
             }
             presentation::heading(
                 ui,
@@ -414,7 +414,7 @@ pub(super) fn content(
             );
             destination = left.or(right).or(destination);
             if let Some(warning) = &scan.network_warning {
-                ui.add(egui::Label::new(RichText::new(warning).color(theme::warn())).wrap());
+                crate::activity::warning(ui, warning);
             }
             ui.add_space(14.0);
             if observations(ui, scan) {

@@ -125,7 +125,7 @@ impl DependenciesWindow {
                     ui.horizontal(|ui| { ui.spinner(); ui.label("Checking this system…"); });
                 }
                 if let Some(error) = &self.error {
-                    ui.colored_label(theme::error(), error);
+                    crate::activity::error(ui, error);
                 }
                 if let Some(report) = &self.report {
                     egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {

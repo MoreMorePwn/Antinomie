@@ -42,11 +42,10 @@ impl NetworkView {
             return;
         }
         if let Some(error) = &self.list.error {
-            ui.colored_label(theme::warn(), error);
+            crate::activity::warning(ui, error);
         }
         if self.list.truncated && self.display_index.is_none() {
-            ui.colored_label(
-                theme::warn(),
+            crate::activity::warning(ui,
                 format!(
                     "Showing the first {MAX_PACKETS} packets; open the capture in Wireshark for all."
                 ),
@@ -370,7 +369,7 @@ impl NetworkView {
         let bytes = match self.list.frame.as_ref().map(|(_, frame)| frame) {
             Some(Ok(bytes)) => bytes.clone(),
             Some(Err(error)) => {
-                ui.colored_label(theme::warn(), error);
+                crate::activity::warning(ui, error);
                 return;
             }
             None => return,

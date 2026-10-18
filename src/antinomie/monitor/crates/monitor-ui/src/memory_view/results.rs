@@ -176,8 +176,8 @@ impl MemoryView {
                 );
                 let compiled = crate::query::compile_table(&self.filter, &fields);
                 if let Some(error) = compiled.error {
-                    ui.colored_label(
-                        theme::warn(),
+                    crate::activity::warning(
+                        ui,
                         format!("{error} · showing the last valid filter"),
                     );
                 } else {
@@ -243,8 +243,8 @@ impl MemoryView {
                     });
                 }
                 if result.skipped_lines > 0 {
-                    ui.colored_label(
-                        theme::warn(),
+                    crate::activity::warning(
+                        ui,
                         format!(
                             "{} incomplete or invalid saved lines were unavailable",
                             result.skipped_lines
@@ -285,7 +285,7 @@ impl MemoryView {
             return;
         };
         if let Some(error) = &result.filter_error {
-            ui.colored_label(theme::warn(), error);
+            crate::activity::warning(ui, error);
         }
         let mut status = None;
         // The controls keep their size; the title takes what is left.
@@ -364,12 +364,9 @@ impl MemoryView {
             self.status = Some((error, true));
         }
         if result.run.state == RunState::Failed {
-            ui.add(
-                egui::Label::new(
-                    RichText::new(result.run.error.as_deref().unwrap_or("Volatility failed"))
-                        .color(theme::error()),
-                )
-                .wrap(),
+            crate::activity::error(
+                ui,
+                result.run.error.as_deref().unwrap_or("Volatility failed"),
             );
             self.show_log = true;
         }
@@ -400,7 +397,7 @@ impl MemoryView {
             Err(error) => {
                 // A failed run's reason is shown above.
                 if result.run.state != RunState::Failed {
-                    ui.colored_label(theme::muted(), format!("No result saved: {error}"));
+                    crate::activity::warning(ui, format!("No result saved: {error}"));
                 }
                 return;
             }

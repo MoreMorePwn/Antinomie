@@ -4,6 +4,11 @@ use super::*;
 
 impl MonitorApp {
     pub(super) fn draw(&mut self, ctx: &egui::Context) {
+        if self.activity_notices_due {
+            self.collect_notices(ctx);
+            self.activity_notices_due = false;
+        }
+        self.activity.ingest(ctx);
         self.escape(ctx);
         self.performance.show(ctx, &self.options.data_dir);
         if self.settings.show_fps {
@@ -27,6 +32,7 @@ impl MonitorApp {
         self.dialogs(ctx);
         self.data_windows.show(ctx);
         self.file_drop_overlay(ctx);
+        self.activity.ingest(ctx);
         let enabled = if self.process_picker.purpose == captures::ProcessPurpose::Core {
             self.manual_core_unavailable().is_none()
         } else {
@@ -90,6 +96,10 @@ impl MonitorApp {
         if let Some(terminal) = self.terminals.get_mut(id) {
             terminal.close_view();
         }
+    }
+
+    pub(crate) fn activity_title(&self) -> egui::WidgetText {
+        self.activity.title(self.settings.font_size)
     }
 
     pub(crate) fn panel_title(&self, panel: &Panel) -> String {
@@ -453,7 +463,7 @@ impl MonitorApp {
                             .as_ref()
                             .or(terminal.replay_error.as_ref())
                         {
-                            ui.colored_label(theme::warn(), error);
+                            crate::activity::warning(ui, error);
                         }
                     });
                     terminal.last_paint = Some(Instant::now());

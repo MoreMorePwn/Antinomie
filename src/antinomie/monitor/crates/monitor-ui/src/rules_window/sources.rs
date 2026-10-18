@@ -46,7 +46,14 @@ fn size_text(bytes: u64) -> String {
 }
 
 fn note(ui: &mut egui::Ui, text: impl Into<String>, color: egui::Color32) {
-    ui.add(egui::Label::new(RichText::new(text.into()).small().color(color)).wrap());
+    let text = text.into();
+    if color == theme::warn() {
+        crate::activity::warning(ui, text);
+    } else if color == theme::error() {
+        crate::activity::error(ui, text);
+    } else {
+        ui.add(egui::Label::new(RichText::new(text).small().color(color)).wrap());
+    }
 }
 
 impl Model {
@@ -307,13 +314,13 @@ impl Model {
         {
             let options: BTreeSet<String> = source.options.iter().cloned().collect();
             ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    RichText::new(format!(
+                crate::activity::warning(
+                    ui,
+                    format!(
                         "Update available: {} {}",
                         entry.revision_kind,
                         short_revision(&entry.revision_kind, &entry.revision)
-                    ))
-                    .color(theme::warn()),
+                    ),
                 );
                 if ui.button("Update").clicked() {
                     self.install_source_pack(data_dir, outbound, entry.clone(), options);

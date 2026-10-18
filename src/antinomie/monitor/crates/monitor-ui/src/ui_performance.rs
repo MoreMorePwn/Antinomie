@@ -182,7 +182,7 @@ impl Performance {
                 ui.add(egui::Label::new(format!("Vendor: {}", self.vendor)).wrap());
                 ui.add(egui::Label::new(format!("OpenGL: {}", self.version)).wrap());
                 if software_renderer(&self.renderer) {
-                    ui.add(egui::Label::new(egui::RichText::new("Software rendering uses the CPU and can slow the whole window.").color(theme::warn())).wrap());
+                    crate::activity::warning(ui, "Software rendering uses the CPU and can slow the whole window.");
                 }
                 if ui.button("Copy WSL D3D12 launch command").clicked() {
                     match std::env::current_exe().and_then(|exe| std::path::absolute(data_dir).map(|data| (exe, data))) {
@@ -194,7 +194,7 @@ impl Performance {
                     }
                 }
                 ui.add(egui::Label::new("For WSLg with a compatible GPU driver. Close Antinomie normally before using the command. It applies only to that launch.").wrap());
-                if let Some(error) = &self.error { ui.colored_label(theme::error(), error); }
+                if let Some(error) = &self.error { crate::activity::error(ui, error); }
                 ui.separator();
                 ui.strong("UI update CPU time");
                 let mut sorted: Vec<_> = self.samples.iter().copied().collect();

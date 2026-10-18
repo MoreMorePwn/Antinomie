@@ -195,7 +195,7 @@ pub(super) fn show(
                 });
         }
         Some(Err(reason)) => {
-            ui.colored_label(crate::theme::error(), reason);
+            crate::activity::error(ui, reason);
         }
         _ => {
             ui.horizontal(|ui| {

@@ -386,7 +386,7 @@ impl TriageView {
                 );
                 let indexed = self.scan.as_ref().map(|scan| scan.bpf.as_slice());
                 if self.scan.as_ref().is_some_and(|scan| scan.bpf_omitted > 0) {
-                    ui.colored_label(theme::warn(), "Some BPF observations exceed the preview limit; original syscall evidence remains available.");
+                    crate::activity::warning(ui, "Some BPF observations exceed the preview limit; original syscall evidence remains available.");
                 }
                 bpf_view(ui, &input, indexed);
                 None
@@ -610,7 +610,7 @@ impl TriageView {
             return;
         };
         if let Some(warning) = &scan.network_warning {
-            ui.colored_label(theme::warn(), warning);
+            crate::activity::warning(ui, warning);
         }
         match self.network {
             NetTab::Ips => {
@@ -664,8 +664,8 @@ impl TriageView {
             "A row is a rule match with its source. It is not a verdict that the sample is malicious.",
         );
         if omitted > 0 {
-            ui.colored_label(
-                theme::warn(),
+            crate::activity::warning(
+                ui,
                 format!("{omitted} rule matches are available on other query pages."),
             );
         }
@@ -763,10 +763,7 @@ impl TriageView {
             .data_mut(|data| data.insert_temp(draft_id, self.filter_drafts[index].clone()));
         let compiled = query::compile_table(&self.filter_drafts[index], fields);
         if let Some(error) = compiled.error {
-            ui.colored_label(
-                theme::warn(),
-                format!("{error}; showing the last valid filter"),
-            );
+            crate::activity::warning(ui, format!("{error}; showing the last valid filter"));
         } else if self.scan_request.filters[index] != self.filter_drafts[index] {
             self.scan_request.filters[index] = self.filter_drafts[index].clone();
             self.scan_request.offsets[index] = 0;

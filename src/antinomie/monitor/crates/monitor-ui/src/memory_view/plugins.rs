@@ -46,11 +46,8 @@ impl MemoryView {
                     .inner_margin(8.0)
                     .show(ui, |ui| {
                         ui.horizontal_wrapped(|ui| {
-                            ui.label(
-                                RichText::new(egui_phosphor::regular::WARNING).color(theme::warn()),
-                            );
+                            crate::activity::error(ui, &error);
                             if cx.volatility_installed {
-                                ui.label(error.as_str());
                                 if ui.button("Try again").clicked() {
                                     self.catalog = Catalog::Unknown;
                                 }
@@ -81,26 +78,22 @@ impl MemoryView {
         }
         if !dump.complete() {
             ui.add_space(8.0);
-            ui.colored_label(
-                theme::muted(),
-                dump.error
-                    .as_deref()
-                    .unwrap_or("This dump is still being written."),
-            );
+            if let Some(error) = &dump.error {
+                crate::activity::error(ui, error);
+            } else {
+                ui.colored_label(theme::muted(), "This dump is still being written.");
+            }
             return action;
         }
         if let Some(next) = self.plugin_bar(ui, &dump, cx) {
             action = Some(next);
         }
         if let Some((message, error)) = &self.status {
-            ui.colored_label(
-                if *error {
-                    theme::error()
-                } else {
-                    theme::muted()
-                },
-                message,
-            );
+            if *error {
+                crate::activity::error(ui, message);
+            } else {
+                ui.colored_label(theme::muted(), message);
+            };
         }
         ui.add_space(4.0);
         egui::SidePanel::left("memory_runs")
@@ -131,6 +124,16 @@ impl MemoryView {
         let mut action = None;
         let plugins = &catalog.plugins;
         let failures = &catalog.failures;
+        for failure in failures {
+            crate::activity::report(
+                ui.ctx(),
+                crate::activity::Level::Error,
+                format!(
+                    "Failed to load Volatility plugin: {}",
+                    failure.trim_start_matches("volatility3.plugins.")
+                ),
+            );
+        }
         let mut reload = false;
         let list_os = match &self.list_os {
             Some((id, os)) if id == &dump.id => *os,
@@ -187,12 +190,14 @@ impl MemoryView {
                 }
             }
             if list_os != dump.os {
-                ui.label(RichText::new(egui_phosphor::regular::WARNING).color(theme::warn()))
-                    .on_hover_text(format!(
+                crate::activity::warning(
+                    ui,
+                    format!(
                         "This dump is {}: {} plugins will not find what they look for",
                         dump.os.label(),
                         list_os.label()
-                    ));
+                    ),
+                );
             }
             ui.separator();
             ui.label(RichText::new("Plugin").color(theme::muted()));
@@ -309,12 +314,13 @@ impl MemoryView {
             ui.menu_button(label, |ui| {
                 ui.set_max_width(420.0);
                 if !failures.is_empty() {
-                    ui.colored_label(theme::error(), "Failed to load:");
                     for failure in failures {
-                        ui.label(
-                            RichText::new(failure.trim_start_matches("volatility3.plugins."))
-                                .font(theme::mono(font_size - 2.0))
-                                .color(theme::error()),
+                        crate::activity::error(
+                            ui,
+                            format!(
+                                "Failed to load Volatility plugin: {}",
+                                failure.trim_start_matches("volatility3.plugins.")
+                            ),
                         );
                     }
                 }

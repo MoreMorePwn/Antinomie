@@ -92,10 +92,7 @@ pub(super) fn show(
     });
     let compiled = crate::query::compile_table(&state.query, &fields);
     if let Some(error) = compiled.error.as_ref() {
-        ui.colored_label(
-            theme::warn(),
-            format!("{error} · showing the last valid filter"),
-        );
+        crate::activity::warning(ui, format!("{error} · showing the last valid filter"));
     } else {
         state.applied_query = state.query.clone();
         crate::query::remember_valid_filter(ui, &state.applied_query);
@@ -121,7 +118,7 @@ pub(super) fn show(
     let page = match page {
         Some(Ok(page)) if page.kind == kind && page.query == query => page,
         Some(Err(error)) => {
-            ui.colored_label(theme::error(), error);
+            crate::activity::error(ui, error);
             if ui.button("Retry").clicked() {
                 action = request(0, query);
             }

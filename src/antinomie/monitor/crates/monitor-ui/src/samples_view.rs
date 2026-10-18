@@ -622,6 +622,12 @@ impl SamplesView {
         cx: &SamplesContext<'_>,
     ) -> Option<SamplesAction> {
         self.poll(ctx);
+        for error in &self.catalog_errors {
+            crate::activity::report(ctx, crate::activity::Level::Warn, error);
+        }
+        if let Some((message, true)) = &self.status {
+            crate::activity::report(ctx, crate::activity::Level::Error, message);
+        }
         if !self.open {
             return None;
         }
@@ -734,13 +740,13 @@ impl SamplesView {
                 for point in FIRST_USE_POINTS {
                     // Wrapped lines hang under the text, not the bullet.
                     ui.horizontal_top(|ui| {
-                        ui.label(RichText::new("•").color(theme::warn()));
+                        crate::activity::warning(ui, "•");
                         ui.add(egui::Label::new(*point).wrap());
                     });
                     ui.add_space(2.0);
                 }
                 if let Some((message, _)) = &self.status {
-                    ui.colored_label(theme::error(), message);
+                    crate::activity::error(ui, message);
                 }
                 ui.add_space(8.0);
                 ui.checkbox(
@@ -782,34 +788,21 @@ impl SamplesView {
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal_top(|ui| {
-                    ui.label(RichText::new(egui_phosphor::regular::BIOHAZARD).color(theme::warn()));
-                    ui.add(
-                        egui::Label::new(
-                            "Live malware. Samples stay in encrypted archives in the data \
+                    ui.colored_label(theme::warn(), egui_phosphor::regular::BIOHAZARD);
+                    crate::activity::warning(ui, "Live malware. Samples stay in encrypted archives in the data \
                              folder and are decrypted only in memory, to be sent into the VM. Nothing is run on this computer. Use a VM you can throw \
-                             away, or take a snapshot first.",
-                        )
-                        .wrap(),
-                    );
+                             away, or take a snapshot first.",);
                 });
                 if cx.nat {
                     ui.add_space(4.0);
-                    ui.colored_label(
-                        theme::warn(),
+                    crate::activity::warning(ui,
                         "NAT is on for this VM: a sample run there can reach your network and \
                          the Internet.",
                     );
                 }
                 if let Some((message, error)) = &self.status {
                     ui.add_space(4.0);
-                    ui.colored_label(
-                        if *error {
-                            theme::error()
-                        } else {
-                            theme::good()
-                        },
-                        message,
-                    );
+                    if *error { crate::activity::error(ui, message); } else { ui.colored_label(theme::good(), message); };
                 }
             });
     }
@@ -1067,7 +1060,7 @@ impl SamplesView {
             if !self.catalog_errors.is_empty() {
                 egui::CollapsingHeader::new("Unavailable days / retry details").show(ui, |ui| {
                     for error in &self.catalog_errors {
-                        ui.label(error);
+                        crate::activity::warning(ui, error);
                     }
                     ui.label("Retry the range to resume. Successfully cached days are reused.");
                 });
@@ -1433,7 +1426,7 @@ impl SamplesView {
                 ui.colored_label(theme::muted(), format!("VM: {name}"));
             }
             if !cx.running {
-                ui.colored_label(theme::warn(), "· start the VM to send samples into it");
+                crate::activity::warning(ui, "· start the VM to send samples into it");
             }
         });
         ui.add_space(6.0);

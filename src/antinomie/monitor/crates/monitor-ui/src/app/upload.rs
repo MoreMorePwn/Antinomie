@@ -56,7 +56,7 @@ impl MonitorApp {
                     generation: self.upload_browser.generation,
                     kind: FolderKind::UploadFile,
                 }) {
-                    self.status = format!("Host file: {error}");
+                    self.report_error(format!("Host file: {error}"));
                 }
             }
             if self.folder_picker.checking() {
@@ -145,11 +145,11 @@ impl MonitorApp {
             return;
         }
         let Some(source) = path.to_str() else {
-            self.status = "The selected file path is not valid UTF-8".into();
+            self.report_warning("The selected file path is not valid UTF-8".into());
             return;
         };
         if !path.is_file() {
-            self.status = "Choose a regular file to upload".into();
+            self.report_warning("Choose a regular file to upload".into());
             return;
         }
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
@@ -166,7 +166,9 @@ impl MonitorApp {
 
     pub(super) fn request_upload(&mut self, run_after: bool) {
         if !self.running() || self.pending_upload.is_some() {
-            self.status = "Upload requires the selected running VM and no pending upload".into();
+            self.report_warning(
+                "Upload requires the selected running VM and no pending upload".into(),
+            );
             return;
         }
         let Some(vm_id) = self.snapshot.active_vm.clone() else {
@@ -195,8 +197,9 @@ impl MonitorApp {
     pub(super) fn submit_upload(&mut self, intent: Intent, overwrite: bool) {
         if !intent.same_session(&self.snapshot) || !self.running() || self.pending_upload.is_some()
         {
-            self.status =
-                "Upload cancelled: the selected VM session changed or an upload is pending".into();
+            self.report_warning(
+                "Upload cancelled: the selected VM session changed or an upload is pending".into(),
+            );
             return;
         }
         let command = Command::Upload {
@@ -225,7 +228,7 @@ impl MonitorApp {
             return;
         }
         if !upload.intent.same_session(&self.snapshot) || !self.running() || self.closing {
-            self.status = "Upload completed; Run program was not opened because the selected VM session changed".into();
+            self.report_warning("Upload completed; Run program was not opened because the selected VM session changed".into());
             return;
         }
         self.exec.path = upload.intent.destination;

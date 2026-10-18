@@ -923,7 +923,7 @@ impl Inspector {
             self.open_selected_data(invocation, field);
         }
         if let Some(error) = &self.error {
-            ui.colored_label(theme::warn(), error);
+            crate::activity::warning(ui, error);
         }
         if self.pending {
             ui.colored_label(theme::muted(), "Reading capture...");
@@ -1237,13 +1237,7 @@ fn field_tree(
 }
 
 fn warning_line(ui: &mut egui::Ui, text: &str) {
-    ui.add(
-        egui::Label::new(
-            RichText::new(format!("{} {text}", egui_phosphor::regular::WARNING))
-                .color(theme::warn()),
-        )
-        .wrap(),
-    );
+    crate::activity::warning(ui, format!("{} {text}", egui_phosphor::regular::WARNING));
 }
 
 /// A value large, in its syntax color, with its number when it is a name.

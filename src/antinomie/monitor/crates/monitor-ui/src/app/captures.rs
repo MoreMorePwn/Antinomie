@@ -201,7 +201,7 @@ impl ProcessPicker {
                     .on_hover_text(format!("Boot {}", identity.boot_id));
                 }
                 if !enabled {
-                    ui.colored_label(theme::warn(), if core { "Core capture unavailable" } else { "Process attachment unavailable" });
+                    crate::activity::warning(ui, if core { "Core capture unavailable" } else { "Process attachment unavailable" });
                 }
                 ui.horizontal_wrapped(|ui| {
                     if ui
@@ -585,7 +585,7 @@ pub(super) fn detail(ui: &mut egui::Ui, capture: &CaptureSummary) {
                 .into_iter()
                 .flatten()
             {
-                ui.label(RichText::new(warning).color(theme::warn()));
+                crate::activity::warning(ui, warning);
             }
         });
 }
@@ -617,8 +617,8 @@ pub(super) fn process_tree(
         }
     };
     if layout.detached {
-        ui.colored_label(
-            theme::warn(),
+        crate::activity::warning(
+            ui,
             "PID reuse or incomplete ancestry: cyclic components shown as detached roots",
         );
     }

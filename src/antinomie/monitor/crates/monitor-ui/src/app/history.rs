@@ -125,10 +125,7 @@ impl MonitorApp {
         let draft = crate::query::compile_table(&self.run_query, &fields);
         if let Some(error) = draft.error.as_ref() {
             self.run_query_error = Some(error.clone());
-            ui.colored_label(
-                theme::error(),
-                format!("{error} · showing last valid filter"),
-            );
+            crate::activity::error(ui, format!("{error} · showing last valid filter"));
         } else {
             self.applied_run_query.clone_from(&self.run_query);
             self.run_query_error = None;
@@ -440,7 +437,7 @@ impl MonitorApp {
         };
         let selection = match selection {
             Some(Err(error)) => {
-                ui.colored_label(theme::warn(), format!("Process tree unavailable: {error}"));
+                crate::activity::warning(ui, format!("Process tree unavailable: {error}"));
                 None
             }
             None | Some(Ok([])) => {
@@ -551,18 +548,15 @@ impl MonitorApp {
                     }
                 });
                 for issue in &artifacts.issues {
-                    ui.colored_label(theme::warn(), issue);
+                    crate::activity::warning(ui, issue);
                 }
             }
             Ok(Some(_)) => {
-                ui.colored_label(
-                    theme::warn(),
-                    "Artifact metadata identity does not match this run",
-                );
+                crate::activity::warning(ui, "Artifact metadata identity does not match this run");
             }
             Ok(None) => {}
             Err(error) => {
-                ui.colored_label(theme::warn(), error);
+                crate::activity::warning(ui, error);
             }
         }
     }
@@ -599,7 +593,7 @@ impl MonitorApp {
         match self.run_tree.as_ref().filter(|(id, _)| id == &run.id) {
             Some((_, Ok((processes, issues)))) => {
                 for issue in issues {
-                    ui.colored_label(theme::warn(), issue);
+                    crate::activity::warning(ui, issue);
                 }
                 ui.allocate_ui_with_layout(
                     egui::vec2(ui.available_width(), ui.available_height().min(220.0)),
@@ -610,7 +604,7 @@ impl MonitorApp {
                 );
             }
             Some((_, Err(error))) => {
-                ui.colored_label(theme::warn(), error);
+                crate::activity::warning(ui, error);
             }
             None => {
                 ui.spinner();

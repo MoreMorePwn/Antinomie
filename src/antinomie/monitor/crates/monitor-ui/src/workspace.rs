@@ -721,7 +721,11 @@ struct Viewer<'a> {
 impl TabViewer for Viewer<'_> {
     type Tab = Panel;
     fn title(&mut self, tab: &mut Panel) -> egui::WidgetText {
-        theme::tab_title(&self.app.panel_title(tab)).into()
+        if *tab == Panel::Activity {
+            self.app.activity_title()
+        } else {
+            theme::tab_title(&self.app.panel_title(tab)).into()
+        }
     }
     fn id(&mut self, tab: &mut Panel) -> egui::Id {
         egui::Id::new(format!("{tab:?}"))

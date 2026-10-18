@@ -35,7 +35,7 @@ impl CoreView {
             })
             .is_err()
         {
-            self.status = "Could not refresh the core list".into();
+            self.fail("Could not refresh the core list".into());
             return;
         }
         self.catalog_job = Some(receiver);
@@ -71,7 +71,7 @@ impl CoreView {
                     self.catalog_stamp = reply.stamp;
                 }
             }
-            Err(error) => self.status = error,
+            Err(error) => self.fail(error),
         }
         if let Some(refresh) = reply.selected {
             self.apply_selected_refresh(refresh);
@@ -128,7 +128,7 @@ impl CoreView {
                 self.page = None;
             }
             Ok(None) => self.selected_stamp = refresh.stamp,
-            Err(error) => self.status = format!("Core metadata refresh: {error}"),
+            Err(error) => self.fail(format!("Core metadata refresh: {error}")),
         }
     }
 

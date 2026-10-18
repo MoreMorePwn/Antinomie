@@ -66,8 +66,9 @@ impl MonitorApp {
             );
         let has_pending_binding = bind_to_session || vm_snapshot_target.is_some();
         if has_pending_binding && self.pending_sessions.len() >= PENDING_SESSION_LIMIT {
-            self.status =
-                "Too many pending VM operations; wait for existing requests to settle".into();
+            self.report_warning(
+                "Too many pending VM operations; wait for existing requests to settle".into(),
+            );
             return None;
         }
         let admission = if launch {
@@ -171,6 +172,7 @@ impl MonitorApp {
         snapshot: Snapshot,
         activity: &mut Vec<(&'static str, String)>,
     ) {
+        self.activity_notices_due = true;
         let launch_confirmed = self.pending_launch_context.as_ref().is_some_and(|pending| {
             snapshot.runs.iter().any(|run| {
                 snapshot
@@ -366,6 +368,7 @@ impl MonitorApp {
                     self.accept_run_started(run, &mut activity);
                 }
                 Notification::AnalysisUpdated { run_id, report } => {
+                    self.activity_notices_due = true;
                     if let Some(current) = self.analysis_windows.get_mut(&report.id) {
                         current.clone_from(&report);
                     }
@@ -618,6 +621,7 @@ impl MonitorApp {
     }
 
     pub(super) fn resync_terminals(&mut self) {
+        let mut notices = Vec::new();
         if let Some(backend) = &self.backend {
             for terminal in self.terminals.values_mut() {
                 if terminal
@@ -638,6 +642,7 @@ impl MonitorApp {
                         Some("Terminal screen reply timed out; reopen to retry".into());
                     self.status =
                         format!("Terminal screen reply timed out for {}", terminal.run.id);
+                    notices.push(("WARN", self.status.clone()));
                 }
                 if terminal.dirty
                     && terminal.snapshot_request.is_none()
@@ -663,10 +668,14 @@ impl MonitorApp {
                         Err(error) => {
                             terminal.snapshot_error = Some(error.clone());
                             self.status = format!("Terminal resync: {error}");
+                            notices.push(("ERROR", self.status.clone()));
                         }
                     }
                 }
             }
+        }
+        for (level, message) in notices {
+            self.log(level, message);
         }
     }
 

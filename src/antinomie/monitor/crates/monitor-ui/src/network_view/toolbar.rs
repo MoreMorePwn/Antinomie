@@ -186,15 +186,15 @@ impl NetworkView {
                 ui.colored_label(theme::muted(), "Loading installed TShark fields…");
             }
             Some(FieldRegistry::Unavailable(error)) => {
-                ui.colored_label(theme::warn(), error);
+                crate::activity::warning(ui, error);
             }
             _ => {}
         }
         if let Some(error) = &self.display_worker_error {
-            ui.colored_label(theme::warn(), error);
+            crate::activity::warning(ui, error);
         }
         if let Some(error) = &self.display_error {
-            ui.colored_label(theme::warn(), error);
+            crate::activity::warning(ui, error);
         }
         if let Some(note) = &self.display_jump_note {
             ui.colored_label(theme::muted(), note);
@@ -244,7 +244,7 @@ impl NetworkView {
             }
         }
         if let Some(error) = &self.filter_error {
-            ui.colored_label(theme::warn(), error);
+            crate::activity::warning(ui, error);
         }
         let shown_filter = if self.filter_error.is_some() {
             self.applied_filter.trim().to_owned()

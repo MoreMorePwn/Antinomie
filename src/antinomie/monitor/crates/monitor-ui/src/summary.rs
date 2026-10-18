@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Native per-VM operational dashboard. Host observations never imply guest utilization.
 use crate::theme;
+mod configuration;
 use antinomie_monitor_core::{Snapshot, VmConfig, VmResources, VmState};
 use eframe::egui::{self, Color32, RichText};
 use std::collections::{BTreeMap, VecDeque};
@@ -397,7 +398,7 @@ pub(crate) fn show(
                 );
             }
             if let Some(error) = guest.and_then(|guest| guest.error.as_ref()) {
-                ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
+                crate::activity::warning(ui, error);
             }
             ui.add_space(10.0);
             egui::Frame::new()
@@ -428,6 +429,8 @@ pub(crate) fn show(
                     }
                 });
             ui.add_space(10.0);
+            configuration::show(ui, vm, snapshot);
+            ui.add_space(10.0);
             ui.horizontal_wrapped(|ui| {
                 ui.strong("Health");
                 if active {
@@ -455,14 +458,9 @@ pub(crate) fn show(
                     }
                 });
                 if snapshot.health.shedding {
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(
-                                "Active — telemetry is being dropped by Capture All shedding",
-                            )
-                            .color(theme::warn()),
-                        )
-                        .wrap(),
+                    crate::activity::warning(
+                        ui,
+                        "Active — telemetry is being dropped by Capture All shedding",
                     );
                 }
                 crate::run_recording::health_errors(ui, snapshot);
@@ -470,10 +468,11 @@ pub(crate) fn show(
                     .show(ui, |ui| health(ui, snapshot));
             }
             if let Some(error) = resources.and_then(|sample| sample.sample_error.as_ref()) {
-                ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
+                crate::activity::warning(ui, error);
             }
         });
 }
+
 fn summary_resource(
     ui: &mut egui::Ui,
     slot: usize,
@@ -1612,6 +1611,34 @@ mod tests {
             .collect();
         assert!(text.contains("QEMU host CPU") && text.contains("Unavailable"));
         assert!(!text.contains("0.0% (100% = one host CPU core)"));
+    }
+
+    #[test]
+    fn selected_vm_configuration_is_above_health() {
+        let mut snapshot = fixture();
+        let vm = snapshot
+            .vms
+            .iter_mut()
+            .find(|vm| vm.id == "active")
+            .unwrap();
+        vm.cpus = 6;
+        vm.ram_mib = 3072;
+        vm.disk_gib = 24;
+        vm.launch.cpu_model = antinomie_monitor_core::VmCpuModel::Host;
+        let texts = render(&snapshot, Some("active"), 900.0, 16.0);
+        let configuration = texts
+            .iter()
+            .find(|(text, _)| text == "VM configuration")
+            .unwrap()
+            .1;
+        let health = texts.iter().find(|(text, _)| text == "Health").unwrap().1;
+        assert!(configuration.bottom() < health.top());
+        for expected in ["6 vCPU · host", "3072 MiB", "24 GiB"] {
+            assert!(
+                texts.iter().any(|(text, _)| text == expected),
+                "missing {expected}"
+            );
+        }
     }
 
     #[test]

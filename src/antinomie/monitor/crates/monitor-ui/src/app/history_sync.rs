@@ -103,6 +103,7 @@ impl MonitorApp {
         checked: Vec<String>,
         retained: Vec<String>,
     ) {
+        self.activity_notices_due = true;
         let sync = &mut self.history_sync;
         let listed_ids: HashSet<_> = listed.iter().map(|run| run.id.as_str()).collect();
         let checked: HashSet<_> = checked.into_iter().collect();

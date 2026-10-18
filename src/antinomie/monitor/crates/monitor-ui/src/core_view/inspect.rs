@@ -5,16 +5,13 @@ use super::*;
 impl CoreView {
     pub(super) fn analysis(&mut self, ui: &mut egui::Ui) {
         if !self.status.is_empty() {
-            ui.add(egui::Label::new(&self.status).wrap());
+            self.show_status(ui);
         }
         if !self.catalog_issues.is_empty() {
             egui::CollapsingHeader::new(format!("Capture issues ({})", self.catalog_issues.len()))
                 .show(ui, |ui| {
                     for issue in &self.catalog_issues {
-                        ui.add(
-                            egui::Label::new(RichText::new(issue).color(crate::theme::warn()))
-                                .wrap(),
-                        );
+                        crate::activity::warning(ui, issue);
                     }
                 });
         }
@@ -44,9 +41,7 @@ impl CoreView {
                     None => "Capture pause status unknown",
                 });
                 if let Some(issue) = &core.issue {
-                    ui.add(
-                        egui::Label::new(RichText::new(issue).color(crate::theme::warn())).wrap(),
-                    );
+                    crate::activity::warning(ui, issue);
                 }
                 if core.file.is_some() {
                     ui.label("Select this capture to open its retained data.");
@@ -100,10 +95,7 @@ impl CoreView {
             egui::CollapsingHeader::new(format!("Core warnings ({})", record.core.warnings.len()))
                 .show(ui, |ui| {
                     for warning in &record.core.warnings {
-                        ui.add(
-                            egui::Label::new(RichText::new(warning).color(crate::theme::warn()))
-                                .wrap(),
-                        );
+                        crate::activity::warning(ui, warning);
                     }
                 });
         }
@@ -161,7 +153,7 @@ impl CoreView {
                     self.page = None;
                     self.tab = Tab::Mappings;
                 } else {
-                    self.status = "Register points to an unmapped address.".into();
+                    self.warning("Register points to an unmapped address.".into());
                 }
             }
         });
@@ -447,7 +439,7 @@ impl CoreView {
                         self.window_offset = offset / 16 * 16;
                         self.page = None;
                     }
-                    _ => self.status = "Offset must lie inside the selected mapping.".into(),
+                    _ => self.warning("Offset must lie inside the selected mapping.".into()),
                 }
             }
         });

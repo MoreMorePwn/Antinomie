@@ -59,6 +59,7 @@ pub(crate) struct Model {
     pack_id: String,
     group_id: String,
     status: String,
+    status_error: Option<String>,
     detail: Option<usize>,
     page: usize,
     job: Option<Job>,
@@ -192,7 +193,10 @@ impl Model {
                     self.changed = true;
                 }
                 Ok(Done::Status(text)) => self.status = text,
-                Err(error) => self.status = error,
+                Err(error) => {
+                    self.status_error = Some(error.clone());
+                    self.status = error;
+                }
             }
         }
     }
@@ -256,8 +260,8 @@ impl Model {
                     );
                 }
                 ("ids", probe, _) => {
-                    ui.colored_label(
-                        theme::warn(),
+                    crate::activity::warning(
+                        ui,
                         match probe {
                             ToolProbe::Absent(_) => {
                                 "Suricata is not installed, so IDS scans are unavailable. \
@@ -282,8 +286,8 @@ impl Model {
                     );
                 }
                 (_, _, probe) => {
-                    ui.colored_label(
-                        theme::warn(),
+                    crate::activity::warning(
+                        ui,
                         format!(
                             "Sigma cannot scan with {}: {}",
                             facts.sigma_python.display(),
@@ -354,8 +358,8 @@ impl Model {
         });
         if !*outbound {
             ui.horizontal_wrapped(|ui| {
-                ui.colored_label(
-                    theme::warn(),
+                crate::activity::warning(
+                    ui,
                     "Downloads are off: Antinomie contacts no server unless you allow it.",
                 );
                 if ui
@@ -373,7 +377,11 @@ impl Model {
             });
             ui.add(egui::Label::new(RichText::new(self.hosts_line()).color(theme::text())).wrap());
         }
-        ui.label(RichText::new(&self.status).color(theme::text()));
+        if self.status_error.as_deref() == Some(self.status.as_str()) {
+            crate::activity::error(ui, &self.status);
+        } else {
+            ui.label(RichText::new(&self.status).color(theme::text()));
+        }
         if self.job.is_some() {
             let progress = self
                 .job
@@ -489,10 +497,7 @@ impl Model {
                     if entry.version != pack.version {
                         let newer = entry.version.clone();
                         ui.horizontal_wrapped(|ui| {
-                            ui.label(
-                                RichText::new(format!("Update available: {newer}"))
-                                    .color(theme::warn()),
-                            );
+                            crate::activity::warning(ui, format!("Update available: {newer}"));
                             if ui.button("Update").clicked() {
                                 self.install(data_dir, *outbound, entry.clone());
                             }
@@ -981,6 +986,7 @@ impl Model {
                 let _ = tx.send(message);
             })
         {
+            self.status_error = Some(error.to_string());
             self.status = error.to_string();
             return;
         }

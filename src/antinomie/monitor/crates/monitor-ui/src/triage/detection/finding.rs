@@ -304,7 +304,7 @@ pub(super) fn byte_preview(
             }
         }
         Some(Err(error)) => {
-            ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
+            crate::activity::warning(ui, error);
         }
         _ => {}
     }

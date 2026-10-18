@@ -31,13 +31,7 @@ pub(crate) fn tooltip(run: &RunSummary) -> String {
 /// note as muted text. Draws nothing for a run with neither.
 pub(crate) fn show(ui: &mut egui::Ui, run: &RunSummary) {
     if let Some(error) = &run.recording_error {
-        ui.add(
-            egui::Label::new(
-                RichText::new(format!("Recording incomplete: saving stopped: {error}"))
-                    .color(theme::warn()),
-            )
-            .wrap(),
-        );
+        crate::activity::warning(ui, format!("Recording incomplete: saving stopped: {error}"));
     }
     for note in &run.notes {
         ui.add(
@@ -69,21 +63,18 @@ pub(crate) fn summary(ui: &mut egui::Ui, snapshot: &Snapshot, history: &[RunSumm
     }
     for run in stopped {
         let id: String = run.id.chars().take(8).collect();
-        ui.add(
-            egui::Label::new(
-                RichText::new(format!(
-                    "Recording incomplete for {} [{id}]: saving stopped: {}",
-                    run.request.path,
-                    run.recording_error.as_deref().unwrap_or_default()
-                ))
-                .color(theme::warn()),
-            )
-            .wrap(),
+        crate::activity::warning(
+            ui,
+            format!(
+                "Recording incomplete for {} [{id}]: saving stopped: {}",
+                run.request.path,
+                run.recording_error.as_deref().unwrap_or_default()
+            ),
         );
     }
     if stopped_count > SUMMARY_RUN_LIMIT {
-        ui.colored_label(
-            theme::warn(),
+        crate::activity::warning(
+            ui,
             format!(
                 "{} more runs stopped saving",
                 stopped_count - SUMMARY_RUN_LIMIT
@@ -104,6 +95,6 @@ pub(crate) fn health_errors(ui: &mut egui::Ui, snapshot: &Snapshot) {
         .into_iter()
         .flatten()
     {
-        ui.add(egui::Label::new(RichText::new(error).color(theme::error())).wrap());
+        crate::activity::error(ui, error);
     }
 }

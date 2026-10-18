@@ -302,15 +302,7 @@ impl View {
         if short.is_empty() {
             return;
         }
-        ui.add(
-            egui::Label::new(
-                RichText::new(short.join(" · "))
-                    .small()
-                    .color(theme::warn()),
-            )
-            .truncate(),
-        )
-        .on_hover_text(long.join("\n"));
+        crate::activity::warning_details(ui, short.join(" · "), long.join("\n"));
     }
 }
 

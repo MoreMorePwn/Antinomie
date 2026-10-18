@@ -302,6 +302,14 @@ pub(super) fn status_value_rtl(
 
 /// A status bar message line: an icon and the text in `color`, cut to fit.
 pub(super) fn status_line(ui: &mut egui::Ui, icon: &str, text: &str, color: egui::Color32) {
+    if color == theme::error() {
+        crate::activity::compact(ui, crate::activity::Level::Error, text);
+        return;
+    }
+    if color == theme::warn() {
+        crate::activity::compact(ui, crate::activity::Level::Warn, text);
+        return;
+    }
     ui.horizontal(|ui| {
         ui.colored_label(color, icon);
         ui.add(egui::Label::new(RichText::new(text).color(color)).truncate());
