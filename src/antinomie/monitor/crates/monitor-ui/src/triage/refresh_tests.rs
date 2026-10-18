@@ -20,6 +20,7 @@ fn input<'a>(archive: &'a Path, finished: bool) -> TriageInput<'a> {
         started_ms: None,
         root_cookie: 0,
         run_finished: finished,
+        current_boot: false,
     }
 }
 

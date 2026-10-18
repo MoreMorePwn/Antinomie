@@ -637,6 +637,7 @@ fn hidden_tick_indexes_once_a_shown_pane_refreshes_growth_preserves_selection_an
             started_ms: None,
             root_cookie: 0,
             run_finished: false,
+            current_boot: false,
         }
     }
     fn wait(view: &mut TriageView, ctx: &egui::Context, archive: &Path, run: &str, count: usize) {

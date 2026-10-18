@@ -634,6 +634,8 @@ impl eframe::App for MonitorApp {
                 started_ms: run.started_ms,
                 root_cookie: run.root_task_cookie,
                 run_finished,
+                current_boot: self.snapshot.active_vm.as_deref() == Some(run.vm_id.as_str())
+                    && self.snapshot.boot_id.as_deref() == Some(run.boot_id.as_str()),
                 #[cfg(test)]
                 packets: &[],
                 #[cfg(test)]

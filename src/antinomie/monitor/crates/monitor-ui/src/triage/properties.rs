@@ -5,6 +5,46 @@ use antinomie_monitor_core::analysis::properties::{self as engine, FilePropertie
 
 type Identity = (std::path::PathBuf, String, Option<String>);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SpecimenStatus {
+    NotRecorded,
+    Acquiring,
+    Waiting,
+    Captured,
+    Cancelled,
+    Incomplete,
+    Unavailable,
+}
+
+impl SpecimenStatus {
+    fn from_report(
+        report: Option<&antinomie_monitor_core::AnalysisReport>,
+        current_boot: bool,
+    ) -> Self {
+        use antinomie_monitor_core::AnalysisState;
+        let Some(report) = report else {
+            return Self::NotRecorded;
+        };
+        if report.state == AnalysisState::Acquiring {
+            return if current_boot {
+                Self::Acquiring
+            } else {
+                Self::Incomplete
+            };
+        }
+        if report.specimen_sha256.is_some() && report.specimen_len.is_some() {
+            return Self::Captured;
+        }
+        match report.state {
+            AnalysisState::Queued | AnalysisState::Running if !current_boot => Self::Incomplete,
+            AnalysisState::Queued | AnalysisState::Running => Self::Waiting,
+            AnalysisState::Cancelled => Self::Cancelled,
+            AnalysisState::Partial => Self::Incomplete,
+            _ => Self::Unavailable,
+        }
+    }
+}
+
 fn saved_properties(report: &antinomie_monitor_core::AnalysisReport) -> FileProperties {
     use antinomie_monitor_core::AnalysisKind;
     let metadata = report
@@ -81,6 +121,8 @@ fn saved_properties(report: &antinomie_monitor_core::AnalysisReport) -> FileProp
 #[derive(Default)]
 pub(super) struct View {
     identity: Option<Identity>,
+    report_state: Option<antinomie_monitor_core::AnalysisState>,
+    attempt_state: Option<antinomie_monitor_core::AnalysisState>,
     result: Option<Result<FileProperties, String>>,
     rx: Option<Receiver<Result<FileProperties, String>>>,
     cancel: Option<Arc<AtomicBool>>,
@@ -104,6 +146,8 @@ impl View {
         self.rx = None;
         self.result = None;
         self.identity = None;
+        self.report_state = None;
+        self.attempt_state = None;
     }
 
     pub fn tick(&mut self, ctx: &egui::Context, input: &TriageInput<'_>) {
@@ -133,6 +177,16 @@ impl View {
             self.rx = None;
             self.cancel = None;
         }
+        self.report_state = input.analysis.map(|report| report.state);
+        // A reply can arrive after static analysis published a newer report.
+        // Retry a failed attempt once for that new state, never every frame.
+        if self.result.as_ref().is_some_and(Result::is_err)
+            && self.attempt_state != self.report_state
+            && SpecimenStatus::from_report(input.analysis, input.current_boot)
+                == SpecimenStatus::Captured
+        {
+            self.result = None;
+        }
         if self.rx.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
@@ -143,6 +197,7 @@ impl View {
             return;
         };
         let tools_dir = self.tools_dir.clone();
+        self.attempt_state = self.report_state;
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = Arc::clone(&cancel);
         let (tx, rx) = mpsc::sync_channel(1);
@@ -166,10 +221,12 @@ impl View {
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, input: &TriageInput<'_>) {
-        let ready = self
-            .identity
-            .as_ref()
-            .is_some_and(|identity| identity.2.is_some());
+        let status = SpecimenStatus::from_report(input.analysis, input.current_boot);
+        let ready = status == SpecimenStatus::Captured && self.identity.is_some();
+        if ready && self.result.is_none() && self.rx.is_none() {
+            self.start(ui.ctx());
+        }
+        self.show_specimen_status(ui, input, status);
         ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(
@@ -179,34 +236,31 @@ impl View {
                 .clicked()
             {
                 self.result = None;
+                self.start(ui.ctx());
             }
             if let Some(directory) = input.archive.map(|directory| directory.join("analysis")) {
                 if ui.button("Open result directory").clicked() {
                     crate::evidence::reveal(ui.ctx(), &directory);
                 }
             }
-            if self.rx.is_some() {
-                ui.spinner();
-                ui.label("Computing properties…");
-            }
         });
-        if ready && self.result.is_none() && self.rx.is_none() {
-            self.start(ui.ctx());
-        }
         if input.analysis.is_none() {
-            crate::activity::warning(ui, "This run has no retained executable. Enable static analysis before starting a new run.");
+            crate::activity::warning(ui, "This run has no executable capture record. Enable static analysis before starting a new run.");
+        } else if matches!(
+            status,
+            SpecimenStatus::Cancelled | SpecimenStatus::Incomplete | SpecimenStatus::Unavailable
+        ) {
+            let reason = input.analysis.and_then(|report| report.reason.as_deref()).unwrap_or("No complete executable was retained for this run. Start a new run with static analysis enabled.");
+            crate::activity::warning(ui, reason);
         }
         match &self.result {
-            Some(Err(error)) => {
+            Some(Err(error)) if ready => {
                 crate::activity::warning(ui, error);
             }
             Some(Ok(result)) => {
                 for warning in &result.warnings {
                     crate::activity::warning(ui, warning);
                 }
-            }
-            _ if !ready && input.analysis.is_some() => {
-                ui.weak("Waiting for complete executable acquisition.");
             }
             _ => {}
         }
@@ -313,6 +367,42 @@ impl View {
                 }
             });
     }
+
+    fn show_specimen_status(
+        &self,
+        ui: &mut egui::Ui,
+        input: &TriageInput<'_>,
+        status: SpecimenStatus,
+    ) {
+        let verified = self.result.as_ref().is_some_and(Result::is_ok);
+        let (label, color, pending) = match status {
+            SpecimenStatus::NotRecorded => ("Not recorded", theme::muted(), false),
+            SpecimenStatus::Acquiring => ("Acquiring from guest…", theme::blue(), true),
+            SpecimenStatus::Waiting => ("Waiting for metadata…", theme::blue(), true),
+            SpecimenStatus::Captured if verified => ("Verified", theme::good(), false),
+            SpecimenStatus::Captured => ("Captured", theme::text(), false),
+            SpecimenStatus::Cancelled => ("Capture cancelled", theme::warn(), false),
+            SpecimenStatus::Incomplete => ("Capture incomplete", theme::warn(), false),
+            SpecimenStatus::Unavailable => ("Unavailable", theme::warn(), false),
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Executable").strong());
+            if pending || self.rx.is_some() {
+                ui.spinner();
+            }
+            presentation::badge(ui, label, color);
+            if status == SpecimenStatus::Captured {
+                if let Some(size) = input.analysis.and_then(|report| report.specimen_len) {
+                    ui.weak(crate::values::file_size(size));
+                }
+                if self.rx.is_some() {
+                    ui.label("Computing properties…");
+                } else if self.result.as_ref().is_some_and(Result::is_err) {
+                    ui.colored_label(theme::warn(), "Properties unavailable");
+                }
+            }
+        });
+    }
 }
 
 impl Drop for View {
@@ -358,6 +448,177 @@ mod tests {
             warnings: vec![],
         };
         (report, result)
+    }
+
+    #[test]
+    fn acquisition_status_separates_capture_from_static_analysis_state() {
+        use antinomie_monitor_core::AnalysisState;
+        assert_eq!(
+            SpecimenStatus::from_report(None, false),
+            SpecimenStatus::NotRecorded
+        );
+        let (mut report, _) = fixture_properties();
+        for state in [
+            AnalysisState::Queued,
+            AnalysisState::Running,
+            AnalysisState::Complete,
+            AnalysisState::Partial,
+            AnalysisState::Unavailable,
+            AnalysisState::Cancelled,
+        ] {
+            report.state = state;
+            assert_eq!(
+                SpecimenStatus::from_report(Some(&report), false),
+                SpecimenStatus::Captured
+            );
+        }
+        report.specimen_sha256 = None;
+        report.specimen_len = None;
+        for (state, status) in [
+            (AnalysisState::Acquiring, SpecimenStatus::Acquiring),
+            (AnalysisState::Queued, SpecimenStatus::Waiting),
+            (AnalysisState::Running, SpecimenStatus::Waiting),
+            (AnalysisState::Complete, SpecimenStatus::Unavailable),
+            (AnalysisState::Partial, SpecimenStatus::Incomplete),
+            (AnalysisState::Unavailable, SpecimenStatus::Unavailable),
+            (AnalysisState::Cancelled, SpecimenStatus::Cancelled),
+        ] {
+            report.state = state;
+            assert_eq!(SpecimenStatus::from_report(Some(&report), true), status);
+            if matches!(
+                state,
+                AnalysisState::Acquiring | AnalysisState::Queued | AnalysisState::Running
+            ) {
+                assert_eq!(
+                    SpecimenStatus::from_report(Some(&report), false),
+                    SpecimenStatus::Incomplete
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn late_property_error_retries_only_after_its_report_advances() {
+        use antinomie_monitor_core::AnalysisState;
+        let ctx = egui::Context::default();
+        let (mut report, result) = fixture_properties();
+        report.state = AnalysisState::Running;
+        let input = TriageInput {
+            analysis: Some(&report),
+            archive: Some(Path::new("/fixture/run")),
+            ..TriageInput::empty()
+        };
+        let mut view = View::default();
+        view.tick(&ctx, &input);
+        view.attempt_state = Some(AnalysisState::Running);
+        let (tx, rx) = mpsc::sync_channel(1);
+        view.rx = Some(rx);
+        report.state = AnalysisState::Complete;
+        let input = TriageInput {
+            analysis: Some(&report),
+            archive: Some(Path::new("/fixture/run")),
+            ..TriageInput::empty()
+        };
+        view.tick(&ctx, &input);
+        tx.send(Err("old acquisition result".into())).unwrap();
+        view.tick(&ctx, &input);
+        assert!(view.rx.is_none() && view.result.is_none());
+        view.attempt_state = Some(AnalysisState::Complete);
+        view.result = Some(Err("actual sandbox failure".into()));
+        view.tick(&ctx, &input);
+        assert!(matches!(&view.result, Some(Err(error)) if error == "actual sandbox failure"));
+        view.result = Some(Ok(result));
+        report.state = AnalysisState::Partial;
+        view.tick(
+            &ctx,
+            &TriageInput {
+                analysis: Some(&report),
+                archive: Some(Path::new("/fixture/run")),
+                ..TriageInput::empty()
+            },
+        );
+        assert!(matches!(view.result, Some(Ok(_))));
+    }
+
+    #[test]
+    fn specimen_status_row_wraps_at_narrow_and_large_text_widths() {
+        for width in [320.0, 760.0] {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            theme::text_size(&ctx, 24.0);
+            let (report, result) = fixture_properties();
+            for (status, expected, verified, pending) in [
+                (
+                    SpecimenStatus::Acquiring,
+                    "Acquiring from guest…",
+                    false,
+                    false,
+                ),
+                (
+                    SpecimenStatus::Waiting,
+                    "Waiting for metadata…",
+                    false,
+                    false,
+                ),
+                (SpecimenStatus::Captured, "Captured", false, true),
+                (SpecimenStatus::Captured, "Verified", true, false),
+                (SpecimenStatus::Unavailable, "Unavailable", false, false),
+                (SpecimenStatus::Cancelled, "Capture cancelled", false, false),
+            ] {
+                let mut view = View::default();
+                if verified {
+                    view.result = Some(Ok(result.clone()));
+                }
+                let (_tx, rx) = mpsc::sync_channel(1);
+                if pending {
+                    view.rx = Some(rx);
+                }
+                for _ in 0..2 {
+                    let mut bounds = egui::Rect::NOTHING;
+                    let output = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 600.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                view.show_specimen_status(
+                                    ui,
+                                    &TriageInput {
+                                        analysis: Some(&report),
+                                        ..TriageInput::empty()
+                                    },
+                                    status,
+                                );
+                                bounds = ui.min_rect();
+                            });
+                        },
+                    );
+                    assert!(bounds.max.x <= width + 1.0, "{width}: {bounds:?}");
+                    let mut text = String::new();
+                    for shape in output.shapes {
+                        if let egui::epaint::Shape::Text(shape) = shape.shape {
+                            assert!(
+                                shape.pos.x + shape.galley.size().x <= width + 3.0,
+                                "{width}: {}",
+                                shape.galley.job.text
+                            );
+                            text.push_str(&shape.galley.job.text);
+                        }
+                    }
+                    assert!(
+                        text.contains("Executable") && text.contains(expected),
+                        "{text}"
+                    );
+                    if pending {
+                        assert!(text.contains("Computing properties"));
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -601,8 +862,9 @@ mod tests {
             ),
         ] {
             let y = |wanted: &str| {
+                // The captured size is also in the header; the table is drawn last.
                 rows.iter()
-                    .find(|(text, _)| text == wanted)
+                    .rfind(|(text, _)| text == wanted)
                     .unwrap_or_else(|| panic!("{wanted} not drawn: {texts:?}"))
                     .1
             };
