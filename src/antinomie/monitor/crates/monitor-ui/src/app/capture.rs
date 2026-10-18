@@ -196,48 +196,6 @@ impl MonitorApp {
             })
     }
 
-    /// A pcap this selection recorded. An observation directory with no pcap
-    /// file stays empty; the loaded preview is not substituted.
-    pub(super) fn owned_triage_pcap(&self) -> Option<(std::path::PathBuf, bool)> {
-        if let Some(capture) = self.selected_capture_summary() {
-            return capture_pcap_file(capture).map(|file| (file, false));
-        }
-        let id = self.selected_run.clone()?;
-        let run = self.run(&id)?.clone();
-        if let Some(artifacts) = antinomie_monitor_core::RunArtifacts::load(&run.directory)
-            .ok()
-            .flatten()
-        {
-            if artifacts.run_id != run.id
-                || artifacts.vm_id != run.vm_id
-                || artifacts.boot_id != run.boot_id
-            {
-                return None;
-            }
-            if let Some(file) = artifacts
-                .network_captures
-                .into_iter()
-                .find(|file| file.is_file() && pcap_magic(file))
-            {
-                return Some((
-                    file,
-                    self.live_history_run(&run)
-                        || artifacts.network_state
-                            != antinomie_monitor_core::RunArtifactState::Complete,
-                ));
-            }
-        }
-        self.snapshot
-            .network_capture
-            .as_ref()
-            .filter(|capture| {
-                capture.boot_id == run.boot_id
-                    && capture.file.is_file()
-                    && pcap_magic(&capture.file)
-            })
-            .map(|capture| (capture.file.clone(), capture.stopped_ms.is_none()))
-    }
-
     #[cfg(test)]
     fn selected_capture_owns_loaded_pcap(&self) -> bool {
         let Some(loaded) = self
@@ -255,7 +213,7 @@ impl MonitorApp {
 
 /// A file in the observation directory whose first four bytes are a classic
 /// pcap magic. A directory with no such file is not a packet capture.
-fn capture_pcap_file(capture: &CaptureSummary) -> Option<std::path::PathBuf> {
+pub(super) fn capture_pcap_file(capture: &CaptureSummary) -> Option<std::path::PathBuf> {
     let entries = std::fs::read_dir(&capture.directory).ok()?;
     for entry in entries.flatten() {
         let path = entry.path();
@@ -266,7 +224,7 @@ fn capture_pcap_file(capture: &CaptureSummary) -> Option<std::path::PathBuf> {
     None
 }
 
-fn pcap_magic(path: &std::path::Path) -> bool {
+pub(super) fn pcap_magic(path: &std::path::Path) -> bool {
     let Ok(mut file) = std::fs::File::open(path) else {
         return false;
     };

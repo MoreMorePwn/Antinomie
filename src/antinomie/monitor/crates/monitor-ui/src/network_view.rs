@@ -221,7 +221,11 @@ impl PacketList {
             return;
         };
         let due = self.last_read.is_none_or(|last| {
-            last.elapsed() >= Duration::from_secs(1) || (!live && self.more_on_disk(&path))
+            // A complete file is looked at four times a second, not every frame.
+            last.elapsed() >= Duration::from_secs(1)
+                || (!live
+                    && last.elapsed() >= Duration::from_millis(250)
+                    && self.more_on_disk(&path))
         });
         if !due || self.truncated {
             return;

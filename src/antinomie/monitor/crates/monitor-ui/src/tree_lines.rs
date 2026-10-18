@@ -47,6 +47,11 @@ pub(crate) struct Prefix {
 }
 
 impl Prefix {
+    /// The prefix of one row from its cells, level 0 first.
+    pub(crate) fn from_glyphs(glyphs: Vec<Glyph>) -> Self {
+        Self { glyphs }
+    }
+
     /// How many levels deep the row is; 0 for a root.
     pub(crate) fn levels(&self) -> usize {
         self.glyphs.len()
@@ -96,7 +101,17 @@ impl Prefix {
     pub(crate) fn paint(&self, painter: &Painter, rect: Rect, char_width: f32) {
         let cell_width = CELL_CHARS as f32 * char_width;
         let middle = painter.round_to_pixel_center(rect.center().y);
-        for (level, glyph) in self.glyphs.iter().enumerate() {
+        // Only the cells inside the clip: a very deep row costs what shows.
+        let clip = painter.clip_rect();
+        let first = ((clip.left() - rect.left()) / cell_width).floor().max(0.0) as usize;
+        let past = ((clip.right() - rect.left()) / cell_width).ceil().max(0.0) as usize + 1;
+        for (level, glyph) in self
+            .glyphs
+            .iter()
+            .enumerate()
+            .skip(first)
+            .take(past.saturating_sub(first))
+        {
             if *glyph == Glyph::Blank {
                 continue;
             }

@@ -319,7 +319,7 @@ pub(super) fn content(
             .add_enabled(input.archive.is_some(), egui::Button::new("Refresh"))
             .clicked()
         {
-            view.refresh_requested = true;
+            view.request_refresh();
         }
         if view.scan_rx.is_some() {
             ui.spinner();

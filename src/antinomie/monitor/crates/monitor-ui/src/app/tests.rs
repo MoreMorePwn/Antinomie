@@ -8,6 +8,7 @@ mod chrome;
 mod file_drop;
 mod fps_counter;
 mod history;
+mod large_runs;
 mod launch;
 mod layout;
 mod memory_probe;
@@ -79,6 +80,7 @@ pub(crate) fn app() -> MonitorApp {
         core_view: Default::default(),
         triage: Default::default(),
         cpu_history: Default::default(),
+        triage_pcap: Default::default(),
         run_tree: None,
         run_tree_pending: None,
         archive_total: None,

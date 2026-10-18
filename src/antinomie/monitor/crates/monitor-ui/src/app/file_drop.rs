@@ -140,10 +140,27 @@ impl MonitorApp {
         if hovered.is_empty() {
             return;
         }
-        let items: Vec<Option<&Path>> = hovered.iter().map(|path| path.as_deref()).collect();
-        let refusal = classify(&items, true)
-            .err()
-            .or_else(|| self.drop_unavailable());
+        // The same file hovers for many frames: ask the disk about it twice a second.
+        let id = egui::Id::new("file_drop_hover");
+        let cached =
+            ctx.data(|data| data.get_temp::<(Vec<Option<PathBuf>>, Instant, Option<Refusal>)>(id));
+        let hover_refusal = match cached {
+            Some((paths, at, refusal))
+                if paths == hovered && at.elapsed() < Duration::from_millis(500) =>
+            {
+                refusal
+            }
+            _ => {
+                let items: Vec<Option<&Path>> =
+                    hovered.iter().map(|path| path.as_deref()).collect();
+                let refusal = classify(&items, true).err();
+                ctx.data_mut(|data| {
+                    data.insert_temp(id, (hovered.clone(), Instant::now(), refusal))
+                });
+                refusal
+            }
+        };
+        let refusal = hover_refusal.or_else(|| self.drop_unavailable());
         let (title, detail, title_color) = match refusal {
             Some(refusal) => (refusal.title().to_owned(), refusal.detail(), theme::warn()),
             None => {

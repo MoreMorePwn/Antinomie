@@ -33,6 +33,9 @@ mod pcap_scan;
 mod presentation;
 mod process_tree;
 mod properties;
+mod refresh;
+#[cfg(test)]
+mod refresh_tests;
 mod sorting;
 mod summary;
 mod table;
@@ -42,7 +45,7 @@ mod traffic;
 use self::traffic::*;
 use self::{
     archive_scan::*, bpf_notes::*, descriptors::*, file_events::*, findings::*, pcap_scan::*,
-    process_tree::*, table::*,
+    process_tree::*, refresh::*, table::*,
 };
 pub(crate) use network::AddressLookup;
 
@@ -102,6 +105,12 @@ pub(crate) struct TriageView {
     refresh_requested: bool,
     /// A refresh arrived while an index was already running.
     refresh_queued: bool,
+    /// The pending refresh comes from the timer, not from the user.
+    timer_refresh: bool,
+    /// The last index began after the run ended.
+    scan_began_finished: bool,
+    /// Pass of the last frame that drew a pane using the index.
+    shown_pass: Option<u64>,
     refresh_seconds: u64,
     bpf_export_status: String,
     scan_request: ScanRequest,
@@ -133,6 +142,9 @@ impl Default for TriageView {
             next_refresh: None,
             refresh_requested: false,
             refresh_queued: false,
+            timer_refresh: false,
+            scan_began_finished: false,
+            shown_pass: None,
             refresh_seconds: 5,
             bpf_export_status: String::new(),
             scan_request: ScanRequest::default(),
@@ -217,7 +229,7 @@ impl TriageView {
     pub(crate) fn set_address_lookup(&mut self, mode: AddressLookup) {
         if self.scan_request.address_lookup != mode {
             self.scan_request.address_lookup = mode;
-            self.refresh_requested = true;
+            self.request_refresh();
         }
     }
 
@@ -250,11 +262,7 @@ impl TriageView {
             .zip(input.run_id)
             .map(|((vm, boot), run)| (vm.into(), boot.into(), run.into()));
         if input.archive.is_some() {
-            if self.next_refresh.is_some_and(|due| Instant::now() >= due) {
-                self.refresh_requested = true;
-                self.next_refresh = None;
-            }
-            ctx.request_repaint_after(Duration::from_secs(self.refresh_seconds));
+            self.schedule_refresh(ctx, input.run_finished);
         }
         self.ensure_scan(
             input.archive,
@@ -294,6 +302,7 @@ impl TriageView {
             ui.weak("Select a program run to view triage.");
             return None;
         }
+        self.mark_shown(ui.ctx());
         presentation::navigation(self, ui);
         self.tick(ui.ctx(), input);
         if self.section == Section::Summary {
@@ -323,7 +332,7 @@ impl TriageView {
                 .on_disabled_hover_text("A whole-run index starts after the recording is saved")
                 .clicked()
             {
-                self.refresh_requested = true;
+                self.request_refresh();
                 self.ensure_scan(
                     input.archive,
                     input.pcap,
@@ -387,6 +396,7 @@ impl TriageView {
     }
 
     pub(crate) fn details(&mut self, ui: &mut egui::Ui) -> Option<trace::InvocationKey> {
+        self.mark_shown(ui.ctx());
         details::show(self, ui);
         self.take_navigation(ui.ctx())
     }
@@ -796,188 +806,6 @@ impl TriageView {
             });
         }
     }
-
-    fn request_query_refresh(&mut self) {
-        if let Some(cancel) = &self.scan_cancel {
-            cancel.store(true, Ordering::Relaxed);
-        }
-        self.pending_generation = None;
-        self.refresh_requested = true;
-    }
-
-    fn refresh_status(&self, input: &TriageInput<'_>) -> String {
-        if self.scan_rx.is_some() {
-            return self.last_refresh.map_or_else(
-                || "Indexing the saved recording".into(),
-                |when| {
-                    format!(
-                        "Refreshing; showing index from {} s ago",
-                        when.elapsed().as_secs()
-                    )
-                },
-            );
-        }
-        if let Some(error) = &self.scan_error {
-            return format!("Refresh failed: {error}");
-        }
-        if let Some(when) = self.last_refresh {
-            return format!(
-                "Refreshed {} s ago{}",
-                when.elapsed().as_secs(),
-                if self.scan.as_ref().is_some_and(|scan| scan.partial) {
-                    "; partial evidence"
-                } else {
-                    ""
-                }
-            );
-        }
-        if input.archive.is_some() {
-            "Waiting to index the saved recording".into()
-        } else {
-            "Waiting for recorded evidence".into()
-        }
-    }
-
-    fn ensure_scan(
-        &mut self,
-        archive: Option<&Path>,
-        pcap: Option<&Path>,
-        pcap_open: bool,
-        vm_id: Option<&str>,
-        boot_id: Option<&str>,
-        run_id: Option<&str>,
-    ) {
-        let Some(path) = archive else {
-            if self.scan_key.is_some() || self.scan_rx.is_some() {
-                self.stop_scan();
-            }
-            return;
-        };
-        let key = format!(
-            "{}\n{}\n{}\n{}\n{}",
-            path.display(),
-            pcap.map(|file| file.display().to_string())
-                .unwrap_or_default(),
-            vm_id.unwrap_or(""),
-            boot_id.unwrap_or(""),
-            run_id.unwrap_or("")
-        );
-        if self.scan_key.as_deref() != Some(key.as_str()) {
-            self.stop_scan();
-            self.scan_key = Some(key);
-            self.refresh_requested = true;
-        }
-        if self.scan_rx.is_some() {
-            if self.refresh_requested {
-                self.refresh_queued = true;
-                self.refresh_requested = false;
-            }
-            return;
-        }
-        if !self.refresh_requested {
-            return;
-        }
-        self.refresh_requested = false;
-        self.refresh_queued = false;
-        let cancel = Arc::new(AtomicBool::new(false));
-        let (tx, rx) = mpsc::channel();
-        let directory = path.to_path_buf();
-        let pcap = pcap.map(Path::to_path_buf);
-        let cancel_thread = Arc::clone(&cancel);
-        let mut request = self.scan_request.clone();
-        request.event_cache = self.scan.as_ref().and_then(|scan| scan.event_cache.clone());
-        self.scan_generation = self.scan_generation.saturating_add(1);
-        let generation = self.scan_generation;
-        if std::thread::Builder::new()
-            .name("triage-index".into())
-            .spawn(move || {
-                let _ = tx.send((
-                    generation,
-                    scan_archive_query(
-                        &directory,
-                        pcap.as_deref(),
-                        pcap_open,
-                        &cancel_thread,
-                        &request,
-                    ),
-                ));
-            })
-            .is_err()
-        {
-            self.scan_error = Some("could not start the saved-recording index".into());
-            return;
-        }
-        self.pending_generation = Some(generation);
-        self.scan_cancel = Some(cancel);
-        self.scan_rx = Some(rx);
-        self.next_refresh = Some(Instant::now() + Duration::from_secs(self.refresh_seconds));
-    }
-
-    fn poll_scan(&mut self, ctx: &egui::Context) {
-        let Some(rx) = &self.scan_rx else {
-            return;
-        };
-        match rx.try_recv() {
-            Ok((generation, result)) => {
-                self.scan_rx = None;
-                self.scan_cancel = None;
-                if self.pending_generation == Some(generation) {
-                    match result {
-                        Ok(scan) => {
-                            if self.selected_call_id.is_some_and(|call_id| {
-                                !scan.findings.iter().any(|finding| finding.key == call_id)
-                            }) {
-                                self.selected_call_id = None;
-                            }
-                            self.scan = Some(scan);
-                            self.scan_error = None;
-                            self.last_refresh = Some(Instant::now());
-                        }
-                        Err(error) if error == "cancelled" => {}
-                        Err(error) => self.scan_error = Some(error),
-                    }
-                }
-                if self.refresh_queued {
-                    self.refresh_queued = false;
-                    self.refresh_requested = true;
-                }
-            }
-            Err(mpsc::TryRecvError::Empty) => {
-                ctx.request_repaint_after(Duration::from_millis(200));
-            }
-            Err(mpsc::TryRecvError::Disconnected) => {
-                self.scan_error =
-                    Some("saved-recording index stopped before reporting a result".into());
-                self.scan_rx = None;
-                if self.refresh_queued {
-                    self.refresh_queued = false;
-                    self.refresh_requested = true;
-                }
-            }
-        }
-    }
-
-    fn stop_scan(&mut self) {
-        if let Some(cancel) = &self.scan_cancel {
-            cancel.store(true, Ordering::Relaxed);
-        }
-        self.scan_generation = self.scan_generation.saturating_add(1);
-        self.pending_generation = None;
-        self.scan_key = None;
-        self.scan_cancel = None;
-        self.scan_rx = None;
-        self.scan = None;
-        self.scan_error = None;
-        self.last_refresh = None;
-        self.next_refresh = None;
-        self.refresh_requested = false;
-        self.refresh_queued = false;
-        self.selected_call_id = None;
-        self.bpf_export_status.clear();
-        self.packet_jump = None;
-        self.packet_capture = None;
-        self.scan_request.offsets = [0; 8];
-    }
 }
 
 impl Drop for TriageView {
@@ -1213,6 +1041,8 @@ struct ScanRequest {
     root_cookie: u64,
     address_lookup: AddressLookup,
     run_finished: bool,
+    /// Stamp of the index on screen; a recording with the same stamp is not read again.
+    unchanged_since: Option<String>,
     identity: Option<(String, String, String)>,
     offsets: [usize; 8],
     filters: [String; 8],
@@ -1228,6 +1058,8 @@ struct FindingJournal {
 }
 
 struct ArchiveScan {
+    /// [`source_stamp`] of the recording when this index began.
+    stamp: String,
     event_cache: Option<normalized::Cache>,
     counts: normalized::Counts,
     network_counts: Option<(u64, u64, u64)>,

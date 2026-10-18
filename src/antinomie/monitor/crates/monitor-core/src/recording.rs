@@ -59,6 +59,13 @@ impl From<serde_json::Error> for RecordingError {
     }
 }
 
+/// Most processes a recorded tree lists. A busier recording lists the first
+/// ones and reports that the rest were left out.
+pub const PROCESS_TREE_LIMIT: usize = 262_144;
+
+mod matching;
+pub use matching::{ArchiveStamp, MatchTotals, MatchingPage};
+
 pub struct Recording {
     pub directory: PathBuf,
     pub manifest: serde_json::Value,
@@ -270,12 +277,18 @@ pub fn open_recording_cancellable(
 
 type InvocationKey = (u64, u64, u64);
 fn invocation_key(packet: &[u8]) -> Option<InvocationKey> {
+    packet_key(packet).map(|(_, key)| key)
+}
+
+/// The packet's header and the invocation it belongs to, if it belongs to one.
+fn packet_key(packet: &[u8]) -> Option<(parser::Header, InvocationKey)> {
     let (header, _) = parser::parse_packet(packet).ok()?;
-    (header.record_type == 1 && matches!(header.phase, 1..=3)).then_some((
+    let key = (header.record_type == 1 && matches!(header.phase, 1..=3)).then_some((
         header.stream_id,
         header.task_cookie,
         header.call_id,
-    ))
+    ))?;
+    Some((header, key))
 }
 
 fn next_packet(reader: &mut BufReader<File>) -> Result<Option<(u64, Vec<u8>)>, RecordingError> {
@@ -361,13 +374,12 @@ fn archive_index(
         let transaction = connection.transaction()?;
         if resume.is_none() {
             // Rebuilt from scratch: an index from an older version has another schema.
+            // The secondary indexes are built once the rows are in: faster than
+            // keeping them current for every packet of a first pass.
             transaction.execute_batch(
                 "DROP TABLE IF EXISTS metadata; DROP TABLE IF EXISTS invocations; DROP TABLE IF EXISTS packets; \
                  CREATE TABLE invocations(key BLOB PRIMARY KEY, first_offset INTEGER NOT NULL, pid INTEGER NOT NULL); \
-                 CREATE INDEX invocation_order ON invocations(first_offset); \
-                 CREATE INDEX invocation_process ON invocations(pid, first_offset); \
-                 CREATE TABLE packets(key BLOB NOT NULL, offset INTEGER NOT NULL); \
-                 CREATE INDEX packet_keys ON packets(key,offset);",
+                 CREATE TABLE packets(key BLOB NOT NULL, offset INTEGER NOT NULL);",
             )?;
         }
         let mut indexed = resume.unwrap_or(0);
@@ -401,13 +413,11 @@ fn archive_index(
                     break;
                 }
                 indexed = reader.stream_position()?;
-                if let Some(key) = invocation_key(&packet) {
+                if let Some((header, key)) = packet_key(&packet) {
                     let key = key_blob(key);
                     let offset = i64::try_from(offset).map_err(|_| {
                         RecordingError::Limit("raw archive offset exceeds index range")
                     })?;
-                    let (header, _) = parser::parse_packet(&packet)
-                        .map_err(|_| RecordingError::Limit("invalid indexed packet"))?;
                     // Index candidates even when all identifying fields were lost.
                     // Assembly/pairing excludes known lifecycle-only observations.
                     let async_parent = header.phase == 3 && header.call_id != 0;
@@ -418,6 +428,11 @@ fn archive_index(
                 }
             }
         }
+        transaction.execute_batch(
+            "CREATE INDEX IF NOT EXISTS invocation_order ON invocations(first_offset); \
+             CREATE INDEX IF NOT EXISTS invocation_process ON invocations(pid, first_offset); \
+             CREATE INDEX IF NOT EXISTS packet_keys ON packets(key,offset);",
+        )?;
         if raw_identity(&raw)?.0 != identity {
             return Err(RecordingError::Limit(
                 "raw archive was replaced while being indexed; open it again",
@@ -457,166 +472,13 @@ impl Recording {
         cancel: &AtomicBool,
         mut keep: impl FnMut(&InvocationSummary) -> bool,
     ) -> Result<FilteredInvocationPage, RecordingError> {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(RecordingError::Limit("archive read cancelled"));
-        }
-        if !(1..=256).contains(&limit) {
-            return Err(RecordingError::Limit("page size must be 1..256"));
-        }
-        let path = self.directory.join("telemetry.raw");
-        let (connection, identity) = archive_index(&self.directory, cancel)?;
-        let boundary: i64 =
-            connection.query_row("SELECT length FROM indexed LIMIT 1", [], |row| row.get(0))?;
-        let boundary = u64::try_from(boundary)
-            .map_err(|_| RecordingError::Limit("negative indexed boundary"))?;
-        if offset > raw_identity(&path)?.1 {
-            return Err(RecordingError::Limit("cursor beyond raw archive"));
-        }
-        let mut reader = BufReader::new(archive_io::open_regular(&self.directory, &path)?);
-        let mut query = connection.prepare(
-            "SELECT key,first_offset FROM invocations WHERE first_offset<?1 \
-             AND (?2 IS NULL OR pid=?2) ORDER BY first_offset",
-        )?;
-        let mut rows = query.query(rusqlite::params![boundary as i64, pid])?;
-        let mut packet_query = connection
-            .prepare("SELECT offset FROM packets WHERE key=?1 AND offset<?2 ORDER BY offset")?;
-        let mut invocations = Vec::with_capacity(limit);
-        let mut total = 0_u64;
-        let mut source_total = 0_u64;
-        let mut next_offset = None;
-        let mut issues = Vec::new();
-        let mut page_preview_size = 0_usize;
-        while let Some(row) = rows.next()? {
-            if cancel.load(Ordering::Relaxed) {
-                return Err(RecordingError::Limit("archive read cancelled"));
-            }
-            let key: Vec<u8> = row.get(0)?;
-            let first_offset = u64::try_from(row.get::<_, i64>(1)?)
-                .map_err(|_| RecordingError::Limit("negative cached invocation offset"))?;
-            let mut assembler = Assembler::open_archive(self.directory.join("objects"))
-                .map_err(|_| RecordingError::Limit("cannot open archived objects"))?;
-            let mut latest = std::collections::BTreeMap::new();
-            let mut invocation_preview_size = 0_usize;
-            let packets = packet_query
-                .query_map(rusqlite::params![key, boundary as i64], |row| {
-                    row.get::<_, i64>(0)
-                })?;
-            for packet_offset in packets {
-                if cancel.load(Ordering::Relaxed) {
-                    return Err(RecordingError::Limit("archive read cancelled"));
-                }
-                let packet_offset = u64::try_from(packet_offset?)
-                    .map_err(|_| RecordingError::Limit("negative cached packet offset"))?;
-                reader.seek(SeekFrom::Start(packet_offset))?;
-                let (_, packet) = next_packet(&mut reader)?
-                    .ok_or(RecordingError::Limit("indexed packet is missing"))?;
-                if reader.stream_position()? > boundary {
-                    return Err(RecordingError::Limit(
-                        "indexed packet exceeds retained boundary",
-                    ));
-                }
-                if invocation_key(&packet).map(key_blob).as_ref() != Some(&key) {
-                    return Err(RecordingError::Limit("indexed packet identity changed"));
-                }
-                match assembler.ingest(&packet) {
-                    Ok(Some(event)) => {
-                        let event_key = (
-                            event.phase,
-                            if event.phase == 3 { event.event_seq } else { 0 },
-                        );
-                        let event_size = event_preview_size(&event);
-                        let previous = latest.insert(event_key, event);
-                        invocation_preview_size = invocation_preview_size
-                            .saturating_sub(previous.as_ref().map_or(0, event_preview_size))
-                            .saturating_add(event_size);
-                        if latest.len() > 2048 {
-                            // Preserve entry/exit and task-exit evidence; ordinary
-                            // async summaries retain their existing bounded preview.
-                            let remove = latest
-                                .iter()
-                                .rev()
-                                .find(|(key, event)| {
-                                    key.0 == 3
-                                        && !event
-                                            .fields
-                                            .iter()
-                                            .any(|field| field.key == "lifecycle.task_exit")
-                                })
-                                .map(|(key, _)| *key)
-                                .or_else(|| latest.keys().next().copied());
-                            if let Some(remove) = remove
-                                && let Some(removed) = latest.remove(&remove)
-                            {
-                                invocation_preview_size = invocation_preview_size
-                                    .saturating_sub(event_preview_size(&removed));
-                            }
-                            if issues.len() < 32 && !issues.iter().any(|issue| issue == "additional archive event previews omitted; raw records retained") {
-                                issues.push("additional archive event previews omitted; raw records retained".into());
-                            }
-                        }
-                        if invocation_preview_size > 32 * 1024 * 1024 {
-                            return Err(RecordingError::Limit(
-                                "archive invocation previews exceed 32 MiB; raw records retained",
-                            ));
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(error) if issues.len() < 32 => issues.push(error.to_string()),
-                    Err(_) => {}
-                }
-            }
-            let events: Vec<_> = latest.into_values().collect();
-            let Some(invocation) = pair_events(&events).into_iter().next() else {
-                continue;
-            };
-            source_total = source_total
-                .checked_add(1)
-                .ok_or(RecordingError::Limit("invocation count overflow"))?;
-            if keep(&invocation) {
-                total = total
-                    .checked_add(1)
-                    .ok_or(RecordingError::Limit("matching invocation count overflow"))?;
-                if first_offset >= offset {
-                    if invocations.len() < limit {
-                        let size = invocation
-                            .entry
-                            .iter()
-                            .chain(invocation.exit.iter())
-                            .chain(&invocation.async_events)
-                            .chain(invocation.task_exit.iter())
-                            .fold(0_usize, |size, event| {
-                                size.saturating_add(event_preview_size(event))
-                            });
-                        page_preview_size = page_preview_size.saturating_add(size);
-                        if page_preview_size > 64 * 1024 * 1024 {
-                            return Err(RecordingError::Limit(
-                                "archive page previews exceed 64 MiB; raw records retained",
-                            ));
-                        }
-                        invocations.push(invocation);
-                    } else if next_offset.is_none() {
-                        next_offset = Some(first_offset);
-                    }
-                }
-            }
-        }
-        if cancel.load(Ordering::Relaxed) {
-            return Err(RecordingError::Limit("archive read cancelled"));
-        }
-        let (after_identity, after_size) = raw_identity(&path)?;
-        if after_identity != identity || after_size < boundary {
-            return Err(RecordingError::Limit(
-                "raw archive was replaced or shrunk while being read; open it again",
-            ));
-        }
+        let MatchingPage { page, .. } =
+            self.matching_page_cancellable(offset, limit, pid, cancel, &mut keep)?;
+        let totals = self.matching_totals_cancellable(pid, cancel, keep)?;
         Ok(FilteredInvocationPage {
-            page: InvocationPage {
-                invocations,
-                next_offset,
-                issues,
-            },
-            total,
-            source_total,
+            page,
+            total: totals.total,
+            source_total: totals.source_total,
         })
     }
 
@@ -643,10 +505,20 @@ impl Recording {
         path: &str,
         cancel: &AtomicBool,
     ) -> Result<(Vec<crate::capture_processes::CaptureProcess>, Vec<String>), RecordingError> {
+        self.process_tree_within(root_pid, path, cancel, PROCESS_TREE_LIMIT)
+    }
+
+    fn process_tree_within(
+        &self,
+        root_pid: u32,
+        path: &str,
+        cancel: &AtomicBool,
+        limit: usize,
+    ) -> Result<(Vec<crate::capture_processes::CaptureProcess>, Vec<String>), RecordingError> {
         let mut tracker = crate::capture_processes::ProcessTracker::default();
         tracker.name_launched(root_pid, path);
         let mut issues = Vec::new();
-        let mut seen = std::collections::BTreeSet::new();
+        let mut truncated = false;
         let mut reader = BufReader::new(archive_io::open_regular(
             &self.directory,
             Path::new("telemetry.raw"),
@@ -672,11 +544,10 @@ impl Recording {
             };
             let (header, _) = parser::parse_packet(&packet)
                 .map_err(|_| RecordingError::Limit("invalid process-tree packet"))?;
-            seen.insert(header.pid);
-            if seen.len() > 65536 {
-                return Err(RecordingError::Limit(
-                    "process tree exceeds 65536 processes",
-                ));
+            if tracker.tracked_count() >= limit && !tracker.tracks(header.pid) {
+                // Later processes are left out, not an error: the rest still reads.
+                truncated = true;
+                continue;
             }
             tracker.packet(&header);
             // Only exec names and lifecycle records need object assembly.
@@ -689,10 +560,14 @@ impl Recording {
                 }
             }
         }
-        let list = tracker.list();
-        if list.len() > 65536 {
-            return Err(RecordingError::Limit(
-                "process tree exceeds 65536 processes",
+        let mut list = tracker.list();
+        if list.len() > limit {
+            list.truncate(limit);
+            truncated = true;
+        }
+        if truncated {
+            issues.push(format!(
+                "Process tree limited to {limit} processes; later processes are not listed"
             ));
         }
         Ok((list, issues))
@@ -1370,6 +1245,112 @@ mod tests {
             .unwrap();
         assert_eq!((grown.total, grown.source_total), (1, 351));
         assert_eq!(grown.page.invocations[0].call_id, 350);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_page_reads_only_its_own_calls_and_the_totals_follow_separately() {
+        let directory =
+            std::env::temp_dir().join(format!("ant-page-cost-{}", storage::unique_id()));
+        storage::private_dir(&directory).unwrap();
+        let mut raw = File::create(directory.join("telemetry.raw")).unwrap();
+        let write_call = |raw: &mut File, call: u64| {
+            for (fragment, sequence) in [(1, 1), (5, 2)] {
+                let packet = event_packet(call, 1, fragment, sequence);
+                raw.write_all(&(packet.len() as u32).to_le_bytes()).unwrap();
+                raw.write_all(&packet).unwrap();
+            }
+        };
+        for call in 0..1000_u64 {
+            write_call(&mut raw, call);
+        }
+        raw.sync_all().unwrap();
+        storage::atomic_json(&directory.join("manifest.json"), &serde_json::json!({})).unwrap();
+        let recording = open_recording(&directory).unwrap();
+        let cancel = AtomicBool::new(false);
+        // The predicate sees the page and one call past it, not the other 899.
+        let mut seen = 0;
+        let first = recording
+            .matching_page_cancellable(0, 100, None, &cancel, |_| {
+                seen += 1;
+                true
+            })
+            .unwrap();
+        assert_eq!((first.page.invocations.len(), seen), (100, 101));
+        // A later page starts at its cursor and does not read the calls before it.
+        let mut seen_calls = Vec::new();
+        let second = recording
+            .matching_page_cancellable(
+                first.page.next_offset.unwrap(),
+                100,
+                None,
+                &cancel,
+                |call| {
+                    seen_calls.push(call.call_id);
+                    true
+                },
+            )
+            .unwrap();
+        assert_eq!(seen_calls.first(), Some(&100));
+        assert_eq!(second.page.invocations.first().unwrap().call_id, 100);
+        assert_eq!(second.stamp, first.stamp);
+        let totals = recording
+            .matching_totals_cancellable(None, &cancel, |call| call.call_id % 2 == 0)
+            .unwrap();
+        assert_eq!((totals.total, totals.source_total), (500, 1000));
+        assert_eq!(totals.stamp, first.stamp);
+        // A recording that grew is another prefix of the same file.
+        write_call(&mut raw, 1000);
+        raw.sync_all().unwrap();
+        let grown = recording
+            .matching_totals_cancellable(None, &cancel, |_| true)
+            .unwrap();
+        assert_eq!(grown.total, 1001);
+        assert_eq!(grown.stamp.identity, first.stamp.identity);
+        assert!(grown.stamp.length > first.stamp.length);
+        cancel.store(true, Ordering::Relaxed);
+        assert!(
+            recording
+                .matching_totals_cancellable(None, &cancel, |_| true)
+                .is_err()
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_busy_recording_lists_the_first_processes_and_says_so() {
+        let directory =
+            std::env::temp_dir().join(format!("ant-many-pids-{}", storage::unique_id()));
+        storage::private_dir(&directory).unwrap();
+        let mut raw = File::create(directory.join("telemetry.raw")).unwrap();
+        for pid in 1..=10_u32 {
+            let mut packet = event_packet(u64::from(pid), 1, 1, 1);
+            packet[72..76].copy_from_slice(&pid.to_le_bytes());
+            raw.write_all(&(packet.len() as u32).to_le_bytes()).unwrap();
+            raw.write_all(&packet).unwrap();
+        }
+        raw.sync_all().unwrap();
+        storage::atomic_json(&directory.join("manifest.json"), &serde_json::json!({})).unwrap();
+        let recording = open_recording(&directory).unwrap();
+        let cancel = AtomicBool::new(false);
+        let (all, issues) = recording
+            .process_tree_within(1, "/bin/first", &cancel, 100)
+            .unwrap();
+        assert_eq!(all.len(), 10);
+        assert!(issues.is_empty());
+        let (some, issues) = recording
+            .process_tree_within(1, "/bin/first", &cancel, 4)
+            .unwrap();
+        assert_eq!(
+            some.len(),
+            4,
+            "a cap lists the first processes, not an error"
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("limited to 4 processes"))
+        );
         fs::remove_dir_all(directory).unwrap();
     }
 
