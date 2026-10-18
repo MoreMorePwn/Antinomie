@@ -238,6 +238,10 @@ pub(crate) enum RowValue {
 }
 
 impl Compiled {
+    /// An empty filter: every row is kept without looking at it.
+    pub(crate) fn keeps_everything(&self) -> bool {
+        self.error.is_none() && matches!(self.mode, Mode::All)
+    }
     pub(crate) fn keep_table(&self, row: &[(&str, RowValue)]) -> bool {
         if self.error.is_some() {
             return false;

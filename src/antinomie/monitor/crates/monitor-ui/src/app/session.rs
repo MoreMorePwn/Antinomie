@@ -701,10 +701,13 @@ fn requests_match(left: &ExecRequest, right: &ExecRequest) -> bool {
         && left.core_dump_on_exit == right.core_dump_on_exit
 }
 
+/// Terminals keep a listing copy of their run: the analysis report is read
+/// from the snapshot and history, so copying its rows for every terminal on
+/// every snapshot would only cost time.
 pub(super) fn sync_runs(terminals: &mut BTreeMap<String, RunTerminal>, snapshot: &Snapshot) {
     for run in &snapshot.runs {
         if let Some(terminal) = terminals.get_mut(&run.id) {
-            terminal.run = run.clone();
+            terminal.run = super::history::listed(run);
         } else if run_in_live_session(snapshot, run) {
             if terminals.len() >= TERMINAL_VIEW_LIMIT {
                 let reclaim = terminals
@@ -718,7 +721,7 @@ pub(super) fn sync_runs(terminals: &mut BTreeMap<String, RunTerminal>, snapshot:
                 }
             }
             if terminals.len() < TERMINAL_VIEW_LIMIT {
-                let mut terminal = RunTerminal::new(run.clone());
+                let mut terminal = RunTerminal::new(super::history::listed(run));
                 terminal.dirty = true;
                 terminals.insert(run.id.clone(), terminal);
             }

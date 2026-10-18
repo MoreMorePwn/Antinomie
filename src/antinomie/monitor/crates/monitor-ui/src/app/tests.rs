@@ -144,6 +144,8 @@ pub(crate) fn app() -> MonitorApp {
         stale_command_ids: VecDeque::new(),
         backend_disconnected: false,
         error_status_mark: None,
+        run_list_cache: None,
+        run_selector_cache: Default::default(),
         started: Instant::now(),
         smoke: None,
         closing: false,

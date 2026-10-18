@@ -63,6 +63,7 @@ impl From<serde_json::Error> for RecordingError {
 /// ones and reports that the rest were left out.
 pub const PROCESS_TREE_LIMIT: usize = 262_144;
 
+mod index_cache;
 mod matching;
 pub use matching::{ArchiveStamp, MatchTotals, MatchingPage};
 
@@ -486,6 +487,7 @@ fn open_archive_index(
         )?;
         transaction.commit()?;
     }
+    index_cache::used(&index_path);
     Ok((connection, identity))
 }
 

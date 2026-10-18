@@ -204,6 +204,7 @@ impl Session {
                 .map(|capture| capture.assembler.evicted_count)
                 .sum::<u64>(),
         );
+        self.release_completed_runs();
         self.update_captures(snapshot);
         let _ = sender;
         Ok(())

@@ -471,6 +471,17 @@ impl Session {
             .recovered(owner.cookie, &owner.run_id, &mut snapshot.last_error);
         Ok(())
     }
+    /// A run whose program tree ended and whose terminal is closed expects no
+    /// more telemetry: its event table is dropped, so memory does not grow
+    /// with every run of the boot and the live history skips it. Its archive
+    /// on disk is complete and is what views read.
+    pub(super) fn release_completed_runs(&mut self) {
+        for run in self.runs.values_mut() {
+            if run.recording_complete() && run.assembler.holds_tables() {
+                run.assembler.release_tables();
+            }
+        }
+    }
     pub(super) fn history(&self) -> Vec<EventSummary> {
         canonical_live_history(
             self.assembler.recent(LIVE_HISTORY),

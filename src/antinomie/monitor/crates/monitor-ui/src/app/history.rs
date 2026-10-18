@@ -98,35 +98,28 @@ impl MonitorApp {
             &[],
         );
         // Copies for drawing only: they keep whether a report exists, not the
-        // report's rows, so this list does not duplicate every retained run's
-        // analysis each frame.
-        let mut runs: Vec<_> = self
-            .snapshot
-            .runs
-            .iter()
-            .filter(|run| run.vm_id == vm_id)
-            .map(listed)
-            .collect();
-        let live: std::collections::HashSet<_> = runs.iter().map(|run| run.id.clone()).collect();
-        runs.extend(
-            self.history
-                .iter()
-                .filter(|run| run.vm_id == vm_id && !live.contains(&run.id))
-                .map(listed),
-        );
-        let selected_listed = self
-            .selected_run
+        // report's rows. The listing is rebuilt only when the runs it shows
+        // change, not every frame.
+        let key = self.run_list_key(&vm_id);
+        if self
+            .run_list_cache
             .as_ref()
-            .is_some_and(|id| runs.iter().any(|run| &run.id == id));
-        runs.retain(|run| match self.run_filter {
-            RunFilter::All => true,
-            RunFilter::Live => self.live_history_run(run),
-            RunFilter::Past => !self.live_history_run(run),
-        });
-        runs.sort_by(|a, b| {
-            b.started_ms
-                .cmp(&a.started_ms)
-                .then_with(|| b.id.cmp(&a.id))
+            .is_none_or(|(cached, _)| *cached != key)
+        {
+            let listing = self.run_listing(&vm_id);
+            self.run_list_cache = Some((key, Arc::new(listing)));
+        }
+        let mut runs = self
+            .run_list_cache
+            .as_ref()
+            .map(|(_, listing)| Arc::clone(listing))
+            .unwrap_or_default();
+        let selected_listed = self.selected_run.as_ref().is_some_and(|id| {
+            self.snapshot
+                .runs
+                .iter()
+                .chain(&self.history)
+                .any(|run| &run.id == id && run.vm_id == vm_id)
         });
         let unfiltered_count = runs.len();
         let draft = crate::query::compile_table(&self.run_query, &fields);
@@ -142,13 +135,18 @@ impl MonitorApp {
             crate::query::remember_valid_filter(ui, &self.run_query);
         }
         let compiled = crate::query::compile_table(&self.applied_run_query, &fields);
-        crate::run_filter::refresh_facts(ui, &runs);
-        runs.retain(|run| {
-            let annotation = crate::evidence::annotation(ui, &run.directory);
-            let mut row = crate::run_filter::row(run, annotation.as_ref(), run_status(run));
-            crate::run_filter::append_facts(ui, run, &mut row);
-            compiled.keep_table(&row)
-        });
+        // An empty filter keeps every run without building its filter row.
+        if !compiled.keeps_everything() {
+            crate::run_filter::refresh_facts(ui, &runs);
+            let mut kept = (*runs).clone();
+            kept.retain(|run| {
+                let annotation = crate::evidence::annotation(ui, &run.directory);
+                let mut row = crate::run_filter::row(run, annotation.as_ref(), run_status(run));
+                crate::run_filter::append_facts(ui, run, &mut row);
+                compiled.keep_table(&row)
+            });
+            runs = Arc::new(kept);
+        }
         ui.weak(format!("{} of {unfiltered_count} runs", runs.len()));
         // The selection is shared with the Triage and trace dropdowns, so a
         // list filter may hide the selected run but never deselects it.
@@ -752,6 +750,73 @@ impl MonitorApp {
         }
     }
 
+    /// What Run History's listing depends on: the selected VM, the Live/Past
+    /// filter, and each of that VM's runs as far as a row shows it.
+    fn run_list_key(&self, vm_id: &str) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        vm_id.hash(&mut hasher);
+        std::mem::discriminant(&self.run_filter).hash(&mut hasher);
+        for (live, run) in self
+            .snapshot
+            .runs
+            .iter()
+            .map(|run| (true, run))
+            .chain(self.history.iter().map(|run| (false, run)))
+            .filter(|(_, run)| run.vm_id == vm_id)
+        {
+            live.hash(&mut hasher);
+            run.id.hash(&mut hasher);
+            run.boot_id.hash(&mut hasher);
+            std::mem::discriminant(&run.state).hash(&mut hasher);
+            run.terminal_eof.hash(&mut hasher);
+            run.started_ms.hash(&mut hasher);
+            run.pid.hash(&mut hasher);
+            run.request.path.hash(&mut hasher);
+            run.recording_error.hash(&mut hasher);
+            run.notes.hash(&mut hasher);
+            run.analysis
+                .as_ref()
+                .map(|report| (&report.id, std::mem::discriminant(&report.state)))
+                .hash(&mut hasher);
+        }
+        // Which runs count as live depends on the session as well.
+        std::mem::discriminant(&self.snapshot.state).hash(&mut hasher);
+        self.snapshot.active_vm.hash(&mut hasher);
+        self.snapshot.boot_id.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// The selected VM's runs, live ones first and then saved ones, under the
+    /// Live/Past filter, newest first.
+    fn run_listing(&self, vm_id: &str) -> Vec<RunSummary> {
+        let mut runs: Vec<_> = self
+            .snapshot
+            .runs
+            .iter()
+            .filter(|run| run.vm_id == vm_id)
+            .map(listed)
+            .collect();
+        let live: std::collections::HashSet<_> = runs.iter().map(|run| run.id.clone()).collect();
+        runs.extend(
+            self.history
+                .iter()
+                .filter(|run| run.vm_id == vm_id && !live.contains(&run.id))
+                .map(listed),
+        );
+        runs.retain(|run| match self.run_filter {
+            RunFilter::All => true,
+            RunFilter::Live => self.live_history_run(run),
+            RunFilter::Past => !self.live_history_run(run),
+        });
+        runs.sort_by(|a, b| {
+            b.started_ms
+                .cmp(&a.started_ms)
+                .then_with(|| b.id.cmp(&a.id))
+        });
+        runs
+    }
+
     pub(super) fn live_history_run(&self, run: &RunSummary) -> bool {
         self.snapshot.runs.iter().any(|live| live.id == run.id)
             && matches!(
@@ -842,6 +907,16 @@ pub(super) fn execution_detail(run: &RunSummary) -> String {
             run_status(run)
         ),
     }
+}
+
+/// The run's program tree ended and its terminal is closed: its archive is
+/// complete and no more live events arrive for it.
+pub(super) fn run_recording_complete(run: &RunSummary) -> bool {
+    run.terminal_eof
+        && matches!(
+            run.state,
+            RunState::Finished | RunState::Stopped | RunState::Finalized
+        )
 }
 
 pub(super) fn run_in_live_session(snapshot: &Snapshot, run: &RunSummary) -> bool {
