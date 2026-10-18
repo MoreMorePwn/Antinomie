@@ -50,15 +50,20 @@ fn matched_text(data: &[u8]) -> String {
 }
 
 pub(super) fn scan(section: &mut AnalysisSection, specimen: &[u8]) {
+    scan_at(section, specimen, Path::new("/input/rules"));
+}
+
+/// Scan one explicitly selected rule directory; the sandbox entry uses `/input/rules`.
+pub(super) fn scan_at(section: &mut AnalysisSection, specimen: &[u8], directory: &Path) {
     section.state = AnalysisSectionState::Complete;
-    let sources = selected_sources(Path::new("/input/rules"));
+    let sources = selected_sources(directory);
     if sources.is_empty() {
         section.state = AnalysisSectionState::Unavailable;
         section.summary = "No rules enabled".into();
         section.tools = vec![ENGINE.into()];
         return;
     }
-    let rules = match compile_sources(&sources, Some(Path::new("/input/rules"))) {
+    let rules = match compile_sources(&sources, Some(directory)) {
         Ok(rules) => rules,
         Err(error) => {
             section.state = AnalysisSectionState::Unavailable;

@@ -1278,11 +1278,31 @@ mod tests {
             assert_eq!(result.state, AnalysisSectionState::Complete);
             assert!(!result.entries.is_empty());
         }
-        // Rules scan any bytes; harmless text matches nothing.
+        // Use an isolated, explicitly selected test rule. Host tests do not
+        // have the worker sandbox's /input/rules mount or a default ruleset.
+        let directory = std::env::temp_dir().join(format!(
+            "ant-analysis-unknown-rules-{}",
+            crate::storage::unique_id()
+        ));
+        fs::create_dir(&directory).unwrap();
+        fs::write(
+            directory.join("test-only.yar"),
+            "rule TestOnlyUnknownBytes { strings: $a = \"test-only-marker\" condition: $a }",
+        )
+        .unwrap();
         let mut rules = section(AnalysisKind::Rules);
-        analyze_section(&mut rules, specimen, &listings());
+        super::super::rules::scan_at(&mut rules, specimen, &directory);
         assert_eq!(rules.state, AnalysisSectionState::Complete);
         assert!(rules.entries.is_empty());
+        super::super::rules::scan_at(&mut rules, b"test-only-marker", &directory);
+        assert_eq!(rules.state, AnalysisSectionState::Complete);
+        assert_eq!(rules.entries.len(), 1);
+        fs::remove_dir_all(&directory).unwrap();
+        let mut missing = section(AnalysisKind::Rules);
+        super::super::rules::scan_at(&mut missing, specimen, &directory);
+        assert_eq!(missing.state, AnalysisSectionState::Unavailable);
+        assert_eq!(missing.summary, "No rules enabled");
+        assert!(missing.entries.is_empty());
         for kind in [
             AnalysisKind::Structures,
             AnalysisKind::Hardening,
