@@ -7,6 +7,7 @@ mod analysis_windows;
 mod bases;
 mod capture;
 mod captures;
+mod clipboard;
 mod dialogs;
 mod explorer;
 mod file_drop;
@@ -16,6 +17,7 @@ mod menus;
 mod notices;
 mod panels;
 mod recording;
+mod run_kill;
 mod run_selector;
 mod session;
 mod sidebar;
@@ -152,11 +154,19 @@ impl Default for Settings {
 }
 
 enum Confirm {
+    KillRun(run_kill::Target),
     Reset(String),
     Delete(String),
     DeleteBase(String),
     Upload(upload::Intent),
-    Nat { vm: Box<VmConfig>, creating: bool },
+    Clipboard {
+        intent: clipboard::Intent,
+        text: antinomie_monitor_core::clipboard::Text,
+    },
+    Nat {
+        vm: Box<VmConfig>,
+        creating: bool,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -272,6 +282,8 @@ pub struct MonitorApp {
     show_older_bases: bool,
     build_wizard: build_wizard::BuildWizard,
     confirm: Option<Confirm>,
+    clipboard_request: Option<clipboard::Intent>,
+    pending_kill: Option<u64>,
     name_action: Option<(String, bool, String)>,
     status: String,
     filter: String,
@@ -452,6 +464,8 @@ impl MonitorApp {
             show_older_bases: false,
             build_wizard: build_wizard::BuildWizard::default(),
             confirm: None,
+            clipboard_request: None,
+            pending_kill: None,
             name_action: None,
             status,
             filter: String::new(),
@@ -573,6 +587,7 @@ impl eframe::App for MonitorApp {
         let frame_started = Instant::now();
         self.dependencies.poll();
         self.drain();
+        self.receive_clipboard(ctx);
         self.cpu_history
             .observe(&self.snapshot, self.selected.as_deref());
         self.flush_archive();
@@ -810,6 +825,8 @@ mod keys {
     pub const STOP_VM: KeyboardShortcut = KeyboardShortcut::new(Modifiers::SHIFT, Key::F5);
     pub const RUN_PROGRAM: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::R);
     pub const UPLOAD: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::U);
+    pub const TYPE_CLIPBOARD: KeyboardShortcut =
+        KeyboardShortcut::new(Modifiers::CTRL.plus(Modifiers::SHIFT), Key::Y);
     pub const SETTINGS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
     pub const QUIT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
 }

@@ -159,6 +159,7 @@ impl Backend {
                     stopping: worker_stopping,
                     owner_failed: worker_owner_failed,
                     session: None,
+                    keyboard: None,
                     catalog: distribution::Catalog::default(),
                     refresh: None,
                     download: None,
@@ -212,6 +213,11 @@ impl Backend {
             return Err("terminal input exceeds bounded command size".into());
         }
         validate_snapshot_command(&command)?;
+        if let Command::TypeClipboard { ref text, .. } = command
+            && text.len() > crate::clipboard::MAX_TEXT_SIZE
+        {
+            return Err("clipboard input exceeds bounded command size".into());
+        }
         if !self.completion_credits.reserve() {
             return Err("backend command completion capacity full".into());
         }
@@ -684,6 +690,7 @@ struct Worker {
     stopping: Arc<AtomicBool>,
     owner_failed: Arc<AtomicBool>,
     session: Option<Session>,
+    keyboard: Option<crate::vm::keyboard::Job>,
     /// Last successful remote catalog (full entries for downloads).
     catalog: distribution::Catalog,
     /// In-flight catalog fetch.

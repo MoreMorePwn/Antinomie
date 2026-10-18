@@ -5,6 +5,7 @@ mod analysis_sections;
 mod bases;
 mod capture;
 mod chrome;
+mod clipboard;
 mod file_drop;
 mod fps_counter;
 mod history;
@@ -14,6 +15,7 @@ mod layout;
 mod memory_probe;
 mod network;
 mod pending;
+mod run_kill;
 mod run_selection;
 mod startup;
 mod stealth;
@@ -49,6 +51,8 @@ pub(crate) fn app() -> MonitorApp {
         upload_open: false,
         draft: VmConfig::default(),
         confirm: None,
+        clipboard_request: None,
+        pending_kill: None,
         draft_generation: 0,
         folder_picker: FolderPicker::new(),
         status: String::new(),

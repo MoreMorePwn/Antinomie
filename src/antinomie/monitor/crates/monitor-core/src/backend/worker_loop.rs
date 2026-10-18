@@ -595,6 +595,26 @@ impl Worker {
             {
                 self.snapshot.last_error = Some(error);
             }
+            if let Some(job) = &mut self.keyboard {
+                if self.snapshot.boot_id.as_ref() != Some(&job.boot_id)
+                    || self.snapshot.state != VmState::Running
+                {
+                    job.cancel();
+                }
+                if let Some(result) = job.poll() {
+                    self.keyboard = None;
+                    let success = result.is_ok();
+                    let message = result.unwrap_or_else(|error| error);
+                    if !success {
+                        self.snapshot.last_error = Some(message.clone());
+                    }
+                    self.emit(Notification::CommandResult {
+                        id: 0,
+                        success,
+                        message,
+                    });
+                }
+            }
             self.poll_remote();
             self.poll_build();
             self.poll_tool();

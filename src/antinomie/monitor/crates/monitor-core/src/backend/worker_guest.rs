@@ -602,6 +602,13 @@ impl Worker {
             }
             Command::StopRun { run_id } => {
                 let cookie = session.run_cookie(&run_id)?;
+                let run = session.runs.get(&cookie).ok_or("unknown run")?;
+                if !matches!(
+                    run.summary.state,
+                    RunState::Running | RunState::TerminalClosed
+                ) {
+                    return Err("run is no longer available for termination".into());
+                }
                 let mut args = control::header(0);
                 args.extend(cookie.to_le_bytes());
                 let reply =

@@ -185,6 +185,14 @@ impl Worker {
         self.publish();
     }
     pub(super) fn stop(&mut self) -> Result<(), String> {
+        if let Some(job) = self.keyboard.take() {
+            let result = job.cancel_and_join();
+            self.emit(Notification::CommandResult {
+                id: 0,
+                success: result.is_ok(),
+                message: result.unwrap_or_else(|error| error),
+            });
+        }
         // A reconnection pending for this boot must not run against the next.
         self.reconnect = (0, None);
         let Some(mut session) = self.session.take() else {
