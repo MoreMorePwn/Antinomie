@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Session orchestration: the frontend handle, the worker thread that owns the
 //! VM, and the session that owns one transport client.
+mod completions;
 mod core_sink;
 mod guest_resource_control;
 mod launch_failure;
@@ -19,7 +20,7 @@ mod worker_loop;
 mod worker_vm;
 
 use self::{
-    launch_failure::*, run_network::*, saving::*, session_transport::*, uploads::*,
+    completions::*, launch_failure::*, run_network::*, saving::*, session_transport::*, uploads::*,
     worker_artifacts::*, worker_loop::*, worker_vm::*,
 };
 use crate::{
@@ -44,8 +45,8 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc::{self, Receiver, SyncSender, TrySendError},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -55,16 +56,29 @@ use std::{
 pub struct Backend {
     commands: SyncSender<(u64, u64, Command)>,
     notifications: Receiver<Notification>,
+    completions: Receiver<Notification>,
+    completion_credits: Arc<CompletionCredits>,
+    admission: Mutex<()>,
+    receive_cursor: AtomicUsize,
     thread: Option<JoinHandle<()>>,
     /// Exclusive lifetime ownership protects snapshot journals from another app.
     data_owner: Option<File>,
     closing: Arc<AtomicBool>,
     stopping: Arc<AtomicBool>,
+    owner_failed: Arc<AtomicBool>,
     sequence: AtomicU64,
     guest_epoch: Arc<AtomicU64>,
     latest_snapshot: Arc<Mutex<Option<Snapshot>>>,
 }
 impl Backend {
+    fn release_unaccepted_credit(&self) {
+        if !self.completion_credits.release() {
+            self.owner_failed.store(true, Ordering::Release);
+            self.closing.store(true, Ordering::Release);
+            self.stopping.store(true, Ordering::Release);
+        }
+    }
+
     pub fn new(options: BackendOptions) -> Result<Self, String> {
         Self::start(options, None)
     }
@@ -110,9 +124,14 @@ impl Backend {
         // during a long disk backpressure wait) from being refused.
         let (commands, receiver) = mpsc::sync_channel(1024);
         let (sender, notifications) = mpsc::sync_channel(64);
+        let (completion_sender, completions) = mpsc::sync_channel(COMMAND_COMPLETION_CAPACITY);
+        let completion_credits = Arc::new(CompletionCredits::default());
         let closing = Arc::new(AtomicBool::new(false));
         let stopping = Arc::new(AtomicBool::new(false));
+        let owner_failed = Arc::new(AtomicBool::new(false));
         let (worker_closing, worker_stopping) = (closing.clone(), stopping.clone());
+        let worker_owner_failed = owner_failed.clone();
+        let worker_completion_credits = completion_credits.clone();
         let latest_snapshot = Arc::new(Mutex::new(None));
         let worker_snapshot = latest_snapshot.clone();
         let guest_epoch = Arc::new(AtomicU64::new(0));
@@ -132,8 +151,11 @@ impl Backend {
                     },
                     receiver,
                     sender,
+                    completion_sender,
+                    completion_credits: worker_completion_credits,
                     closing: worker_closing,
                     stopping: worker_stopping,
+                    owner_failed: worker_owner_failed,
                     session: None,
                     catalog: distribution::Catalog::default(),
                     refresh: None,
@@ -152,24 +174,33 @@ impl Backend {
         Ok(Self {
             commands,
             notifications,
+            completions,
+            completion_credits,
+            admission: Mutex::new(()),
+            receive_cursor: AtomicUsize::new(0),
             thread: Some(thread),
             data_owner: Some(data_owner),
             closing,
             stopping,
+            owner_failed,
             sequence: AtomicU64::new(0),
             guest_epoch,
             latest_snapshot,
         })
     }
     pub fn send(&self, command: Command) -> Result<u64, String> {
+        let _admission = self
+            .admission
+            .lock()
+            .map_err(|_| "backend admission gate is unavailable")?;
         if self.thread.is_none() {
             return Err("backend is closed".into());
         }
-        if matches!(command, Command::Stop | Command::Close) {
-            self.stopping.store(true, Ordering::Relaxed);
+        if self.owner_failed.load(Ordering::Acquire) {
+            return Err("backend owner failed; accepted operation outcomes may be unknown".into());
         }
-        if matches!(command, Command::Close) {
-            self.closing.store(true, Ordering::Relaxed);
+        if self.closing.load(Ordering::Acquire) {
+            return Err("backend is closing".into());
         }
         if let Command::TerminalInput { ref data, .. } = command
             && data.len() > 1024 * 1024
@@ -177,33 +208,95 @@ impl Backend {
             return Err("terminal input exceeds bounded command size".into());
         }
         validate_snapshot_command(&command)?;
+        if !self.completion_credits.reserve() {
+            return Err("backend command completion capacity full".into());
+        }
         let epoch = self.guest_epoch.load(Ordering::Acquire);
         if guest_scoped_command(&command) && !epoch.is_multiple_of(2) {
+            self.release_unaccepted_credit();
             return Err(
                 "guest transition in progress; submit the command after recovery completes".into(),
             );
         }
-        let id = self
+        let id = match self
             .sequence
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
-            .map_err(|_| "command id exhausted")?
-            + 1;
-        self.commands
-            .try_send((id, epoch, command))
-            .map_err(|e| match e {
+        {
+            Ok(sequence) => sequence + 1,
+            Err(_) => {
+                self.release_unaccepted_credit();
+                return Err("command id exhausted".into());
+            }
+        };
+        let is_stop = matches!(&command, Command::Stop | Command::Close);
+        let is_close = matches!(&command, Command::Close);
+        if let Err(error) = self.commands.try_send((id, epoch, command)) {
+            self.release_unaccepted_credit();
+            return Err(match error {
                 TrySendError::Full(_) => String::from("backend command queue full"),
                 TrySendError::Disconnected(_) => String::from("backend owner disconnected"),
-            })?;
+            });
+        }
+        if is_stop {
+            self.stopping.store(true, Ordering::Release);
+        }
+        if is_close {
+            self.closing.store(true, Ordering::Release);
+        }
         Ok(id)
     }
     pub fn try_recv(&self) -> Option<Notification> {
-        self.notifications.try_recv().ok().or_else(|| {
-            self.latest_snapshot
-                .lock()
-                .ok()?
-                .take()
-                .map(Notification::Snapshot)
-        })
+        self.try_recv_status().ok().flatten()
+    }
+
+    /// Poll all notification lanes fairly and report when the sole owner has
+    /// exited after its queued results and final snapshot have been drained.
+    pub fn try_recv_status(&self) -> Result<Option<Notification>, String> {
+        const LANES: usize = 3;
+        let first = self.receive_cursor.fetch_add(1, Ordering::Relaxed) % LANES;
+        let mut both_channels_disconnected = true;
+        for offset in 0..LANES {
+            match (first + offset) % LANES {
+                0 => match self.completions.try_recv() {
+                    Ok(notification) => {
+                        if matches!(notification, Notification::CommandResult { id, .. } if id > 0)
+                            && !self.completion_credits.release()
+                        {
+                            self.owner_failed.store(true, Ordering::Release);
+                            self.closing.store(true, Ordering::Release);
+                            self.stopping.store(true, Ordering::Release);
+                        }
+                        return Ok(Some(notification));
+                    }
+                    Err(TryRecvError::Disconnected) => {}
+                    Err(TryRecvError::Empty) => both_channels_disconnected = false,
+                },
+                1 => match self.notifications.try_recv() {
+                    Ok(notification) => return Ok(Some(notification)),
+                    Err(TryRecvError::Disconnected) => {}
+                    Err(TryRecvError::Empty) => both_channels_disconnected = false,
+                },
+                _ => {
+                    if let Some(snapshot) = self
+                        .latest_snapshot
+                        .lock()
+                        .ok()
+                        .and_then(|mut latest| latest.take())
+                    {
+                        return Ok(Some(Notification::Snapshot(snapshot)));
+                    }
+                }
+            }
+        }
+        if both_channels_disconnected {
+            Err(if self.owner_failed.load(Ordering::Acquire) {
+                "backend owner failed while publishing command results; remaining outcomes are unknown".into()
+            } else {
+                "backend owner disconnected".into()
+            })
+        } else {
+            Ok(None)
+        }
     }
     /// Wait for a notification without treating a quiet, still-running owner as failed.
     ///
@@ -214,28 +307,35 @@ impl Backend {
     /// | `Ok(None)` | Wait elapsed without a notification. |
     /// | `Err(...)` | Backend owner disconnected and no final snapshot remains to deliver. |
     pub fn recv_timeout(&self, timeout: Duration) -> Result<Option<Notification>, String> {
-        if let Some(notification) = self.try_recv() {
-            return Ok(Some(notification));
-        }
-        match self.notifications.recv_timeout(timeout) {
-            Ok(notification) => Ok(Some(notification)),
-            Err(mpsc::RecvTimeoutError::Timeout) => Ok(self.try_recv()),
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                // The final coalesced snapshot can be published during this wait.
-                // Deliver it once; the following receive reports disconnection.
-                self.latest_snapshot
-                    .lock()
-                    .ok()
-                    .and_then(|mut latest| latest.take())
-                    .map(|snapshot| Some(Notification::Snapshot(snapshot)))
-                    .ok_or_else(|| "backend owner disconnected".into())
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(notification) = self.try_recv_status()? {
+                return Ok(Some(notification));
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return self.try_recv_status();
+            }
+            // Direct session senders still use the typed preview channel. Short
+            // slices let completion-only traffic wake a waiter without changing
+            // that public sender API.
+            let wait = remaining.min(Duration::from_millis(10));
+            match self.notifications.recv_timeout(wait) {
+                Ok(notification) => return Ok(Some(notification)),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => thread::sleep(wait),
             }
         }
     }
 
     pub fn shutdown(&mut self) -> Result<(), String> {
-        self.closing.store(true, Ordering::Relaxed);
-        self.stopping.store(true, Ordering::Relaxed);
+        if let Ok(_admission) = self.admission.lock() {
+            self.closing.store(true, Ordering::Release);
+            self.stopping.store(true, Ordering::Release);
+        } else {
+            self.closing.store(true, Ordering::Release);
+            self.stopping.store(true, Ordering::Release);
+        }
         let result = if let Some(thread) = self.thread.take() {
             thread
                 .join()
@@ -568,8 +668,11 @@ struct Worker {
     snapshot: Snapshot,
     receiver: Receiver<(u64, u64, Command)>,
     sender: SyncSender<Notification>,
+    completion_sender: SyncSender<Notification>,
+    completion_credits: Arc<CompletionCredits>,
     closing: Arc<AtomicBool>,
     stopping: Arc<AtomicBool>,
+    owner_failed: Arc<AtomicBool>,
     session: Option<Session>,
     /// Last successful remote catalog (full entries for downloads).
     catalog: distribution::Catalog,

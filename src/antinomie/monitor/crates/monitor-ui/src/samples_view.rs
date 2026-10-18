@@ -1,6 +1,8 @@
 //! Tools → Malware samples: search MalwareBazaar or MalShare, download samples (kept in
 //! their encrypted archives) and send them into the running VM, optionally
 //! running them there. Nothing is run or unpacked on the host.
+mod pending;
+
 use crate::query::{self, FieldSpec, RowValue};
 use crate::theme::{self, ValueKind};
 use antinomie_monitor_core::{
@@ -450,31 +452,6 @@ fn choice(
 }
 
 impl SamplesView {
-    /// The app sent the upload as request `id`.
-    pub(crate) fn sent(&mut self, id: u64) {
-        if let Some(run) = self.awaiting.take() {
-            self.pending = Some((id, run));
-        }
-    }
-
-    /// A request finished; returns the run to start after a successful push.
-    pub(crate) fn complete(
-        &mut self,
-        id: u64,
-        success: bool,
-        message: &str,
-    ) -> Option<ExecRequest> {
-        let (pending, run) = self.pending.take_if(|(pending, _)| *pending == id)?;
-        let _ = pending;
-        self.stored = None;
-        self.status = Some(if success {
-            (format!("Sent into the VM: {message}"), false)
-        } else {
-            (format!("Could not send the sample: {message}"), true)
-        });
-        run.filter(|_| success)
-    }
-
     fn poll(&mut self, ctx: &egui::Context) {
         loop {
             let update = self.searching.as_ref().map(|r| r.try_recv());
@@ -1641,6 +1618,19 @@ mod tests {
             file_size: size,
             ..SampleInfo::default()
         }
+    }
+
+    #[test]
+    fn unresolved_sample_push_can_be_cleared_without_treating_it_as_rejected() {
+        let mut view = SamplesView::default();
+        view.awaiting = Some(None);
+        view.sent(12);
+        assert!(view.pending.is_some());
+        assert!(view.cancel_pending(12, "outcome unknown"));
+        assert!(view.pending.is_none());
+        assert_eq!(view.status.as_ref().unwrap().0, "outcome unknown");
+        assert!(view.complete(12, false, "late failure").is_none());
+        assert_eq!(view.status.as_ref().unwrap().0, "outcome unknown");
     }
 
     #[test]

@@ -453,7 +453,13 @@ impl MonitorApp {
                 let quota = self.settings.quota_gib;
                 let shedding = self.snapshot.health.shedding;
                 let persistence = self.snapshot.health.persistence_error.clone();
-                let last_error = self.snapshot.last_error.clone();
+                // A backend error is news until a later status message
+                // replaces the status text it arrived with.
+                let last_error = self
+                    .snapshot
+                    .last_error
+                    .clone()
+                    .filter(|_| self.error_status_mark.as_ref() == Some(&self.status));
                 let status = self.status.clone();
                 let closing = self.closing;
                 let loss = |count: u64| if count == 0 { theme::good() } else { theme::warn() };

@@ -233,7 +233,10 @@ impl MonitorApp {
     }
 
     pub(super) fn launch_form(&mut self, ui: &mut egui::Ui) {
-        ui.add_enabled_ui(self.running() && self.pending_launch.is_none(), |ui| {
+        // Cancel stays usable when the VM stops or a launch is pending; only
+        // the form and its actions wait for a running VM.
+        let ready = self.running() && self.pending_launch.is_none();
+        {
             let selection_error = self.exec.analysis.validate().err();
             let graphical = self.selected_vm_graphical();
             let core_on_exit = self
@@ -248,25 +251,27 @@ impl MonitorApp {
                 } else {
                     0.0
                 };
-            egui::ScrollArea::vertical()
-                .id_salt("run-setup")
-                .max_height((ui.available_height() - footer).max(80.0))
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    if crate::analysis::launch_fields(
-                        ui,
-                        &mut self.exec,
-                        &mut self.args,
-                        &mut self.env,
-                        &self.snapshot.analysis_tools,
-                        crate::analysis::LaunchCapabilities {
-                            graphical,
-                            core_on_exit,
-                        },
-                    ) {
-                        self.tools_open = true;
-                    }
-                });
+            ui.add_enabled_ui(ready, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("run-setup")
+                    .max_height((ui.available_height() - footer).max(80.0))
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if crate::analysis::launch_fields(
+                            ui,
+                            &mut self.exec,
+                            &mut self.args,
+                            &mut self.env,
+                            &self.snapshot.analysis_tools,
+                            crate::analysis::LaunchCapabilities {
+                                graphical,
+                                core_on_exit,
+                            },
+                        ) {
+                            self.tools_open = true;
+                        }
+                    });
+            });
             ui.separator();
             if let Some(reason) = selection_error {
                 ui.colored_label(theme::error(), reason);
@@ -274,7 +279,9 @@ impl MonitorApp {
             ui.horizontal(|ui| {
                 let run = ui
                     .add_enabled(
-                        !self.exec.path.trim().is_empty() && self.exec.analysis.validate().is_ok(),
+                        ready
+                            && !self.exec.path.trim().is_empty()
+                            && self.exec.analysis.validate().is_ok(),
                         primary_button(&format!("{} Run", egui_phosphor::regular::PLAY)),
                     )
                     .on_disabled_hover_text("Enter the executable to run");
@@ -288,7 +295,8 @@ impl MonitorApp {
                     }
                 }
                 let analyze = ui.add_enabled(
-                    self.exec.analysis.enabled
+                    ready
+                        && self.exec.analysis.enabled
                         && !self.exec.path.trim().is_empty()
                         && self.exec.analysis.validate().is_ok(),
                     egui::Button::new("Analyze Only"),
@@ -310,7 +318,7 @@ impl MonitorApp {
                     self.launch_action_rects = Some((run.rect, analyze.rect));
                 }
             });
-        });
+        }
     }
 
     /// New VM / VM configuration: the machine, display and emulation on the
