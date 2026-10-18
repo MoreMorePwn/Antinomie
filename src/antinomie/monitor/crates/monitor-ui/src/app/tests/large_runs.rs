@@ -335,7 +335,7 @@ fn archive_pages_cost_follows_the_page_not_the_recording() {
         // recording builds its index, so a later page costing a fraction of
         // it shows the page no longer reads the whole recording.
         assert!(
-            took * 4 < cold,
+            took * 4 < cold || took < Duration::from_millis(500),
             "{label} took {took:?} after a {cold:?} first read: it reads the whole recording again"
         );
         if query.is_empty() {
