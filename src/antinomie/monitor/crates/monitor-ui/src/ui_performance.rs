@@ -185,7 +185,13 @@ impl Performance {
                     crate::activity::warning(ui, "Software rendering uses the CPU and can slow the whole window.");
                 }
                 if ui.button("Copy WSL D3D12 launch command").clicked() {
-                    match std::env::current_exe().and_then(|exe| std::path::absolute(data_dir).map(|data| (exe, data))) {
+                    // After a rebuild the running image is " (deleted)"; the
+                    // command should start the new build at the same path.
+                    let exe = std::env::current_exe().map(|exe| {
+                        let text = exe.to_string_lossy();
+                        text.strip_suffix(" (deleted)").map_or(exe.clone(), std::path::PathBuf::from)
+                    });
+                    match exe.and_then(|exe| std::path::absolute(data_dir).map(|data| (exe, data))) {
                         Ok((exe, data)) => match launch_command(&exe, &data) {
                             Ok(command) => ctx.copy_text(command),
                             Err(error) => self.error = Some(error.into()),

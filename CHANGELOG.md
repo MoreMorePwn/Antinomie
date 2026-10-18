@@ -6,6 +6,13 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Analysis keeps working after a rebuild.** Rebuilding Antinomie while it
+  ran made every sandboxed worker (file properties, detection, static
+  analysis) fail with exit status 127, because the running program's file was
+  gone. Workers now run a private copy of the running program in that case,
+  and a failed worker names the program that failed instead of always saying
+  Ghidra.
+
 - **Rules stay active after reopening.** The local rule selection loads at
   startup without opening Rule manager. Changing runs keeps the enabled-set
   list with its cached registry. Local registry failures are reported and can

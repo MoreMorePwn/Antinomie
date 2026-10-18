@@ -181,9 +181,11 @@ pub(crate) fn run_sandboxed_with(
             {
                 Some(status) if status.success() => return Ok(()),
                 Some(status) => {
-                    return Err(format!(
-                        "sandboxed Ghidra exited with {status}. sparse-plan.txt is not a load result."
-                    ));
+                    let name = program.file_name().map_or_else(
+                        || program.display().to_string(),
+                        |name| name.to_string_lossy().into_owned(),
+                    );
+                    return Err(format!("sandboxed {name} exited with {status}."));
                 }
                 None => std::thread::sleep(Duration::from_millis(20)),
             }

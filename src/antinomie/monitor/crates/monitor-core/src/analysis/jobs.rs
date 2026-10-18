@@ -24,7 +24,9 @@ use std::{
 };
 
 mod sandbox_run;
+mod worker_exe;
 pub(crate) use sandbox_run::{Mounts, run_sandboxed, run_sandboxed_with};
+pub(crate) use worker_exe::worker_executable;
 
 static CLEANUP_PENDING: AtomicBool = AtomicBool::new(false);
 static CLEANUP_CHILD: Mutex<Option<CleanupOwner>> = Mutex::new(None);
@@ -674,7 +676,7 @@ fn stage_static_rules(job_dir: &Path) -> Result<(), String> {
 }
 
 fn spawn_worker(job: &Job, tools: Option<&Path>) -> Result<SandboxProcess, String> {
-    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+    let executable = worker_executable()?;
     spawn_worker_binary(job, &executable, tools)
 }
 fn spawn_worker_binary(
