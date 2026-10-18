@@ -5,6 +5,7 @@ use crate::{
     parser::{self, Assembler},
     storage,
 };
+use rusqlite::OptionalExtension;
 use sha2::{Digest, Sha256};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -342,19 +343,47 @@ fn archive_index(
     directory: &Path,
     cancel: &AtomicBool,
 ) -> Result<(rusqlite::Connection, String), RecordingError> {
-    match open_archive_index(directory, cancel) {
-        // The cache is written without syncing; one damaged by a crash or
-        // power loss is discarded and built again from the recording.
-        Err(RecordingError::Index(error)) if index_damaged(&error) => {
-            let index_path = archive_index_path(directory)?;
-            for suffix in ["", "-journal"] {
-                let mut path = index_path.clone().into_os_string();
-                path.push(suffix);
-                let _ = fs::remove_file(PathBuf::from(path));
+    let mut repaired = false;
+    retry_index_busy(cancel, || {
+        match open_archive_index(directory, cancel) {
+            // The cache is written without syncing; one damaged by a crash or
+            // power loss is discarded and built again from the recording.
+            Err(RecordingError::Index(error)) if !repaired && index_damaged(&error) => {
+                let index_path = archive_index_path(directory)?;
+                for suffix in ["", "-journal"] {
+                    let mut path = index_path.clone().into_os_string();
+                    path.push(suffix);
+                    let _ = fs::remove_file(PathBuf::from(path));
+                }
+                repaired = true;
+                open_archive_index(directory, cancel)
             }
-            open_archive_index(directory, cancel)
+            result => result,
         }
-        result => result,
+    })
+}
+
+fn retry_index_busy<T>(
+    cancel: &AtomicBool,
+    mut read: impl FnMut() -> Result<T, RecordingError>,
+) -> Result<T, RecordingError> {
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(RecordingError::Limit("archive read cancelled"));
+        }
+        match read() {
+            Err(RecordingError::Index(error))
+                if matches!(
+                    error.sqlite_error_code(),
+                    Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+                ) =>
+            {
+                // Index builds and queries share this cache. Only lock contention
+                // is transient; retain real I/O, corruption and quota failures.
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            result => return result,
+        }
     }
 }
 
@@ -387,33 +416,36 @@ fn open_archive_index(
     cancel: &AtomicBool,
 ) -> Result<(rusqlite::Connection, String), RecordingError> {
     let raw = directory.join("telemetry.raw");
-    let (identity, length) = raw_identity(&raw)?;
     let index_path = archive_index_path(directory)?;
     let mut connection = rusqlite::Connection::open(&index_path)?;
     fs::set_permissions(&index_path, fs::Permissions::from_mode(0o600))?;
-    connection.busy_timeout(std::time::Duration::from_secs(1))?;
+    connection.busy_timeout(std::time::Duration::from_millis(50))?;
     // The index is a cache rebuilt from the recording when it is missing or
     // stale, so its writes are not synced to disk: building it must not wait
     // for the disk behind a recording that is being saved.
     connection.execute_batch("PRAGMA trusted_schema=OFF; PRAGMA page_size=4096; PRAGMA cache_size=-2048; PRAGMA temp_store=FILE; PRAGMA synchronous=OFF; CREATE TABLE IF NOT EXISTS indexed(identity TEXT NOT NULL, length INTEGER NOT NULL);")?;
+    // Own the writer reservation before reading the resume cursor. A builder
+    // that waited for another builder must not append the same packets again.
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let (identity, length) = raw_identity(&raw)?;
     let budget = length
         .checked_mul(2)
         .and_then(|size| size.checked_add(1024 * 1024))
         .ok_or(RecordingError::Limit("archive index budget overflow"))?
         .min(16 * 1024 * 1024 * 1024);
-    connection.pragma_update(None, "max_page_count", (budget / 4096) as i64)?;
-    let cached: Option<(String, i64)> = connection
+    transaction.pragma_update(None, "max_page_count", (budget / 4096) as i64)?;
+    let cached: Option<(String, i64)> = transaction
         .query_row("SELECT identity,length FROM indexed LIMIT 1", [], |row| {
             Ok((row.get(0)?, row.get(1)?))
         })
-        .ok();
+        .optional()?;
     // Go on from where the index stopped, unless the archive is another file
     // (or, impossibly for an append-only archive, shorter).
     let resume = cached
         .filter(|(cached, indexed)| *cached == identity && *indexed as u64 <= length)
         .map(|(_, indexed)| indexed as u64);
     if resume != Some(length) {
-        let transaction = connection.transaction()?;
         if resume.is_none() {
             // Rebuilt from scratch: an index from an older version has another schema.
             // The secondary indexes are built once the rows are in: faster than
@@ -487,8 +519,8 @@ fn open_archive_index(
             "INSERT INTO indexed(identity,length) VALUES(?1,?2)",
             rusqlite::params![identity, indexed],
         )?;
-        transaction.commit()?;
     }
+    transaction.commit()?;
     index_cache::used(&index_path);
     Ok((connection, identity))
 }
@@ -531,13 +563,15 @@ impl Recording {
         pid: Option<u32>,
         cancel: &AtomicBool,
     ) -> Result<u64, RecordingError> {
-        let (connection, _) = archive_index(&self.directory, cancel)?;
-        let count: i64 = connection.query_row(
-            "SELECT COUNT(*) FROM invocations WHERE (?1 IS NULL OR pid=?1)",
-            rusqlite::params![pid],
-            |row| row.get(0),
-        )?;
-        u64::try_from(count).map_err(|_| RecordingError::Limit("negative invocation count"))
+        retry_index_busy(cancel, || {
+            let (connection, _) = archive_index(&self.directory, cancel)?;
+            let count: i64 = connection.query_row(
+                "SELECT COUNT(*) FROM invocations WHERE (?1 IS NULL OR pid=?1)",
+                rusqlite::params![pid],
+                |row| row.get(0),
+            )?;
+            u64::try_from(count).map_err(|_| RecordingError::Limit("negative invocation count"))
+        })
     }
 
     /// Reconstruct the descriptive process tree up to a fixed raw-file boundary.
@@ -636,6 +670,18 @@ impl Recording {
     /// Like [`Self::invocation_page_cancellable`], limited to one guest process
     /// (thread group ID) when `pid` is set.
     pub fn process_page_cancellable(
+        &self,
+        offset: u64,
+        limit: usize,
+        pid: Option<u32>,
+        cancel: &AtomicBool,
+    ) -> Result<InvocationPage, RecordingError> {
+        retry_index_busy(cancel, || {
+            self.process_page_once(offset, limit, pid, cancel)
+        })
+    }
+
+    fn process_page_once(
         &self,
         offset: u64,
         limit: usize,
@@ -1141,6 +1187,7 @@ pub fn read_captured_range(
 mod tests {
     use super::*;
     use std::io::Write;
+    mod index_concurrency;
     fn facts_for_health(
         health: serde_json::Value,
         recording_error: serde_json::Value,

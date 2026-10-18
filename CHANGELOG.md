@@ -6,6 +6,11 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Concurrent archive reads.** Archive indexing waits cooperatively for a busy
+  SQLite cache and serializes append cursors before indexing new packets. Run
+  changes can cancel the wait. Acquired executable metadata is saved before
+  the UI announces readiness, so Properties can read it during static analysis.
+
 - **Clear address-lookup warnings.** Unavailable WHOIS enrichment names the
   affected IP and reports unknown country/organization instead of forwarding
   the tool's ambiguous "Please upgrade this program" message.
