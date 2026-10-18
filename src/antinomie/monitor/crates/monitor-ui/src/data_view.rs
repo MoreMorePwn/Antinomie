@@ -650,8 +650,8 @@ impl DataWindow {
             }
         });
         if !self.field.complete {
-            ui.colored_label(
-                theme::warn(),
+            crate::activity::warning(
+                ui,
                 format!("Partial capture: {}", trace::incomplete_reason(&self.field)),
             );
         }
@@ -667,8 +667,8 @@ impl DataWindow {
             return;
         }
         if self.truncated {
-            ui.colored_label(
-                theme::warn(),
+            crate::activity::warning(
+                ui,
                 format!(
                     "Showing the first {} MiB ({} bytes) of {} captured bytes",
                     DATA_WINDOW_CAP / (1024 * 1024),
@@ -687,7 +687,7 @@ impl DataWindow {
             ui.colored_label(theme::muted(), note);
         }
         if let Some(error) = &self.error {
-            ui.colored_label(theme::error(), error);
+            crate::activity::error(ui, error);
         }
         ui.horizontal_wrapped(|ui| {
             let label = ui.label("Format");

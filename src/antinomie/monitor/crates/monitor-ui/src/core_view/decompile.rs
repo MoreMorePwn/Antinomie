@@ -37,7 +37,7 @@ impl CoreView {
             return;
         }
         if let Err(error) = write_ghidra_mappings(&record.dir, &record.core.mappings) {
-            self.status = error;
+            self.fail(error);
             return;
         }
         self.ghidra_cancel.store(false, Ordering::SeqCst);

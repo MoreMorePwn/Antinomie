@@ -1015,7 +1015,7 @@ impl View {
 
         if self.selected == Engine::Sigma {
             if let Some(error) = scan.and_then(|scan| scan.event_error.as_ref()) {
-                ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
+                crate::activity::warning(ui, error);
             }
         }
         let Some(result) = &self.results[index] else {
@@ -1027,7 +1027,7 @@ impl View {
         let report = match result {
             Ok(report) => report,
             Err(error) => {
-                ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
+                crate::activity::warning(ui, error);
                 return;
             }
         };
@@ -1038,8 +1038,8 @@ impl View {
                 .zip(scan.and_then(|scan| scan.event_journal.as_ref()))
                 .is_some_and(|(digest, journal)| *digest != journal.sha256)
         {
-            ui.colored_label(
-                theme::warn(),
+            crate::activity::warning(
+                ui,
                 "Recorded events changed after this result. Scan again to update it.",
             );
         }

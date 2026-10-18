@@ -86,7 +86,7 @@ pub(super) fn show(browser: &mut Browser, ui: &mut egui::Ui, view: View) -> Opti
         browser.request(&path, ui.ctx());
     }
     if let Some(error) = &browser.error {
-        ui.add(egui::Label::new(egui::RichText::new(error).color(theme::error())).wrap());
+        crate::activity::error(ui, error);
     }
     let mut selected = None;
     let mut toggle = None;

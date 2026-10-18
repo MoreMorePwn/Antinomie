@@ -87,19 +87,20 @@ impl MonitorApp {
                 generation: self.explorer_browser.generation,
                 kind: FolderKind::ExplorerRoot,
             }) {
-                self.status = format!("Explorer folder: {error}");
+                self.report_error(format!("Explorer folder: {error}"));
             }
         }
     }
 
     pub(super) fn send_explorer_file(&mut self, path: PathBuf) {
         if !self.running() || self.pending_upload.is_some() || self.closing {
-            self.status =
-                "Start the selected VM and wait for any pending upload before Send and Run".into();
+            self.report_warning(
+                "Start the selected VM and wait for any pending upload before Send and Run".into(),
+            );
             return;
         }
         let Some(source) = path.to_str() else {
-            self.status = "The selected file path is not valid UTF-8".into();
+            self.report_warning("The selected file path is not valid UTF-8".into());
             return;
         };
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {

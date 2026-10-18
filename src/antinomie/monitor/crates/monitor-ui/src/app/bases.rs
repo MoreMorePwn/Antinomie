@@ -69,7 +69,7 @@ impl MonitorApp {
                     });
                 });
                 if let Some(error) = &self.snapshot.remote_error {
-                    ui.colored_label(theme::error(), error);
+                    crate::activity::error(ui, error);
                 }
                 if let Some(status) = download.as_ref().filter(|status| !status.finished) {
                     ui.separator();
@@ -110,7 +110,7 @@ impl MonitorApp {
                             );
                         }
                         Some(error) => {
-                            ui.colored_label(theme::error(), format!("{}: {error}", status.label));
+                            crate::activity::error(ui, format!("{}: {error}", status.label));
                         }
                         None => {
                             ui.colored_label(theme::good(), format!("{} installed", status.label));

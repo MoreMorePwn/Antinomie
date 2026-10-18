@@ -406,9 +406,9 @@ impl NetworkView {
             && cx.active.is_none()
             && (cx.running || cx.recordings.is_some() || self.list.path.is_some())
         {
-            ui.add(egui::Label::new(RichText::new(
+            crate::activity::warning(ui,
                 "Disconnected: network capture is unavailable. Choose Isolated or NAT in VM settings. Saved captures can still be inspected.",
-            ).color(theme::warn())).wrap());
+            );
         }
         if !self.hide_list {
             egui::SidePanel::left("network_captures")

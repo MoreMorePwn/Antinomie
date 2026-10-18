@@ -167,7 +167,7 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
             if let Some(change) = view.scan.as_ref().and_then(|scan| scan.file_changes.iter().find(|change| change.evidence_key() == selected.key)) {
                 change.show(ui, view.scan.as_ref().and_then(|scan| scan.clock_anchor));
             } else {
-                ui.colored_label(theme::warn(), "This file's retained differences are no longer available in the current index.");
+                crate::activity::warning(ui, "This file's retained differences are no longer available in the current index.");
             }
         } else if selected.table == "triage-bpf" {
             if let Some(note) = view.scan.as_ref().and_then(|scan| scan.bpf.iter().find(|note| evidence_key(&bpf_row(note, scan_clock(view))) == selected.key)) {

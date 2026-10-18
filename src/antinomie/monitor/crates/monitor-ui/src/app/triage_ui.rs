@@ -22,20 +22,17 @@ impl MonitorApp {
         };
         let owned_pcap = self.owned_triage_pcap();
         if !run.request.capture_network {
-            ui.colored_label(
-                theme::warn(),
+            crate::activity::warning(
+                ui,
                 "Capture network was disabled for this run; network evidence may be unavailable.",
             );
         }
         if owned_pcap.is_none() {
-            ui.colored_label(
-                theme::warn(),
-                "No network capture is available for this run.",
-            );
+            crate::activity::warning(ui, "No network capture is available for this run.");
         }
         crate::run_recording::show(ui, &run);
         if let Some(error) = &self.archive_error {
-            ui.colored_label(theme::warn(), error);
+            crate::activity::warning(ui, error);
         }
         let live = self.invocations();
         // A loaded archive page can be from an observation capture or a query;

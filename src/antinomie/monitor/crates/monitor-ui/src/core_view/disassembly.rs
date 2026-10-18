@@ -51,7 +51,7 @@ impl CoreView {
                         Ok(path) => {
                             self.status = format!("Exported functions to {}", path.display());
                         }
-                        Err(error) => self.status = error,
+                        Err(error) => self.fail(error),
                     }
                 }
                 if self.functions.is_empty() {
@@ -119,12 +119,7 @@ impl CoreView {
                                 });
                             });
                         } else if !self.status.is_empty() {
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(&self.status).color(crate::theme::warn()),
-                                )
-                                .wrap(),
-                            );
+                            self.show_status(ui);
                         }
                         if ui
                             .add_enabled(
@@ -288,7 +283,7 @@ impl CoreView {
                     Ok(Reply::Code(text))
                 });
             }
-            Err(error) => self.status = error,
+            Err(error) => self.fail(error),
         }
     }
 }

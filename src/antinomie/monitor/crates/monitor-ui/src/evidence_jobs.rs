@@ -180,7 +180,7 @@ impl EvidenceJobs {
                                 ui.label(text);
                             }
                             Err(error) => {
-                                ui.colored_label(crate::theme::error(), error);
+                                crate::activity::error(ui, error);
                             }
                         }
                     }

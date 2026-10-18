@@ -431,7 +431,7 @@ impl CoreView {
                     ui.label("Select a VM with a recording folder first.");
                 }
                 if !self.status.is_empty() {
-                    ui.add(egui::Label::new(&self.status).wrap());
+                    self.show_status(ui);
                 }
                 if self.job.is_some() {
                     ui.spinner();

@@ -158,8 +158,7 @@ impl Change {
                 .color(theme::text()),
         );
         if self.deleted {
-            ui.colored_label(
-                theme::warn(),
+            crate::activity::warning(ui,
                 "File was deleted or unlinked; open descriptors may still refer to its contents.",
             );
         }
@@ -170,7 +169,7 @@ impl Change {
             ui.weak("Final size/contents were not fully captured.");
         }
         for gap in &self.gaps {
-            ui.colored_label(theme::warn(), *gap);
+            crate::activity::warning(ui, *gap);
         }
             let offsets = self.original.keys().chain(self.final_data.keys()).copied().collect::<BTreeSet<_>>();
             let mut shown = 0;

@@ -192,12 +192,11 @@ impl MonitorApp {
             crate::run_recording::show(ui, run);
         }
         if let Some(error) = &self.archive_error {
-            ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).truncate())
-                .on_hover_text(error);
+            crate::activity::warning(ui, error).on_hover_text(error);
         }
         let draft = self.commit_trace_filter();
         if let Some(error) = &draft.error {
-            ui.colored_label(theme::warn(), error);
+            crate::activity::warning(ui, error);
         }
         let filter = if draft.error.is_none() {
             draft

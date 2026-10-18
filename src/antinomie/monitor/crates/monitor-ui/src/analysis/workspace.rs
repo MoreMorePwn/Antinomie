@@ -407,7 +407,7 @@ fn results(
         .labelled_by(label.id);
     });
     if let Some(error) = &view.query_error {
-        ui.colored_label(crate::theme::error(), error);
+        crate::activity::error(ui, error);
     }
     let indices = visible(section, filter, view, &record_context);
     if view.query_error.is_none() {
@@ -476,9 +476,7 @@ fn identity(ui: &mut egui::Ui, report: &AnalysisReport) {
         AnalysisState::Partial | AnalysisState::Unavailable | AnalysisState::Cancelled
     ) {
         if let Some(reason) = &report.reason {
-            ui.add(
-                egui::Label::new(egui::RichText::new(reason).color(crate::theme::warn())).wrap(),
-            );
+            crate::activity::warning(ui, reason);
         }
     }
     let mut rows = vec![

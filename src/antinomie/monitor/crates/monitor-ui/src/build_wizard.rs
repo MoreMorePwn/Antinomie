@@ -245,8 +245,8 @@ impl BuildWizard {
             if mode != BuildMode::Automatic {
                 let missing = build::missing(kind, mode);
                 if !missing.is_empty() {
-                    ui.colored_label(
-                        theme::warn(),
+                    crate::activity::warning(
+                        ui,
                         format!(
                             "    missing: {}",
                             missing
@@ -260,7 +260,7 @@ impl BuildWizard {
                 } else if let Some(obstacle) =
                     build::native_obstacle(kind).filter(|_| mode == BuildMode::Native)
                 {
-                    ui.colored_label(theme::warn(), format!("    {obstacle}"));
+                    crate::activity::warning(ui, format!("    {obstacle}"));
                 }
             }
         }
@@ -273,15 +273,14 @@ impl BuildWizard {
             Ok(_) => {
                 ui.colored_label(theme::good(), "The build will run in the QEMU builder VM.");
                 if !std::path::Path::new("/dev/kvm").exists() {
-                    ui.colored_label(
-                        theme::warn(),
+                    crate::activity::warning(ui,
                         "No KVM: the builder VM runs without hardware acceleration and can take many hours.",
                     );
                 }
                 true
             }
             Err(error) => {
-                ui.colored_label(theme::error(), error);
+                crate::activity::error(ui, error);
                 false
             }
         }
@@ -377,7 +376,7 @@ impl BuildWizard {
         match build::valid_hostname(&options.hostname) {
             Ok(()) => true,
             Err(error) => {
-                ui.colored_label(theme::error(), error);
+                crate::activity::error(ui, error);
                 false
             }
         }
@@ -427,7 +426,7 @@ impl BuildWizard {
         match probe.validate(Kind::DebianXfce) {
             Ok(()) => true,
             Err(error) if error.contains("mirror") || error.contains("proxy") => {
-                ui.colored_label(theme::error(), error);
+                crate::activity::error(ui, error);
                 false
             }
             Err(_) => true,
@@ -535,7 +534,7 @@ impl BuildWizard {
         match options.validate(kind) {
             Ok(()) => true,
             Err(error) => {
-                ui.colored_label(theme::error(), error);
+                crate::activity::error(ui, error);
                 false
             }
         }
@@ -599,7 +598,7 @@ impl BuildWizard {
             }
         });
         if let Some(error) = &status.error {
-            ui.colored_label(theme::error(), error);
+            crate::activity::error(ui, error);
         } else if status.finished {
             ui.colored_label(theme::good(), "Base built and installed.");
         } else if let Some((_, label)) = stages.get(current) {

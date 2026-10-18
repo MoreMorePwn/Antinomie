@@ -110,7 +110,7 @@ pub(crate) fn show(
                 if let Some(install) = install.filter(|install| install.id == tool.id) {
                     if install.finished {
                         if let Some(error) = &install.error {
-                            ui.colored_label(theme::error(), error);
+                            crate::activity::error(ui, error);
                         }
                     } else {
                         let fraction = if install.total > 0 {

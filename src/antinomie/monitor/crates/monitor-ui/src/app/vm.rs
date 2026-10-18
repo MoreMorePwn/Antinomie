@@ -233,7 +233,7 @@ impl MonitorApp {
             .find(|location| location.vm_id == vm_id)
         {
             Some(location) => open_directory(&location.disk_directory),
-            None => self.status = "VM directory unavailable".into(),
+            None => self.report_error("VM directory unavailable".into()),
         }
     }
 
@@ -279,7 +279,7 @@ impl MonitorApp {
             });
             ui.separator();
             if let Some(reason) = selection_error {
-                ui.colored_label(theme::error(), reason);
+                crate::activity::error(ui, reason);
             }
             ui.horizontal(|ui| {
                 let run = ui
@@ -293,7 +293,7 @@ impl MonitorApp {
                 if run.clicked() {
                     match crate::analysis::snapshot(&self.exec, &self.args, &self.env, graphical) {
                         Ok(request) => self.send(Command::Execute(request)),
-                        Err(reason) => self.status = reason,
+                        Err(reason) => self.report_error(reason),
                     }
                     if self.pending_launch.is_some() {
                         self.launch_open = false;
@@ -573,11 +573,10 @@ impl MonitorApp {
                                 ui.colored_label(theme::muted(), "Working interface with host/LAN/Internet forwarding blocked. Packet capture remains available.");
                             }
                             if !app.draft.nat && !app.draft.isolated_network {
-                                ui.add(egui::Label::new(RichText::new("Disconnected: network capture is unavailable. Choose Isolated or NAT to capture packets.").color(theme::warn())).wrap());
+                                crate::activity::warning(ui, "Disconnected: network capture is unavailable. Choose Isolated or NAT to capture packets.");
                             }
                             if app.draft.nat {
-                                ui.colored_label(
-                                    theme::warn(),
+                                crate::activity::warning(ui,
                                     "NAT permits guest access to the host network and Internet.",
                                 );
                             }
@@ -601,7 +600,7 @@ impl MonitorApp {
             ui.separator();
             // Above the buttons, so it stays in view.
             if let Some(error) = &form_error {
-                ui.add(egui::Label::new(RichText::new(error).color(theme::warn())).wrap());
+                crate::activity::warning(ui, error);
             }
             ui.horizontal(|ui| {
                 save = ui
@@ -670,11 +669,11 @@ impl MonitorApp {
         if save {
             if creating {
                 if let Err(error) = self.create_vm() {
-                    self.status = error;
+                    self.report_error(error);
                     return;
                 }
             } else if let Err(error) = self.save_vm(self.draft.clone()) {
-                self.status = error;
+                self.report_error(error);
                 return;
             }
             self.create_open = false;
@@ -748,7 +747,7 @@ fn transport_window(
                 transport_options(ui, transport, cpus, tunable)
             });
             if !editable {
-                ui.colored_label(theme::warn(), "Stop the VM to change these settings.");
+                crate::activity::warning(ui, "Stop the VM to change these settings.");
             }
             let mut close = false;
             dialog_footer(ui, |ui| {
@@ -773,8 +772,8 @@ fn transport_options(
     tunable: bool,
 ) {
     if !tunable {
-        ui.colored_label(
-            theme::warn(),
+        crate::activity::warning(
+            ui,
             "This base predates Antinomie 0.3.0: it always uses 256 KiB buffers \
              and drops telemetry when they are full. These settings apply to \
              newer bases.",

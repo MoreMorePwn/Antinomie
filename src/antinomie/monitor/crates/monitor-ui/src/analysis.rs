@@ -238,7 +238,7 @@ pub(crate) fn selection(
         });
     }
     if let Err(reason) = selection.validate() {
-        ui.colored_label(crate::theme::error(), reason);
+        crate::activity::error(ui, reason);
     }
     master.inner
 }
@@ -268,7 +268,7 @@ fn needs_tool(
         return;
     }
     crate::tree_lines::row(ui, &parent.child(true), char_width, |ui| {
-        ui.colored_label(crate::theme::warn(), format!("Needs {name}, not installed"));
+        crate::activity::warning(ui, format!("Needs {name}, not installed"));
         if ui.small_button("Install…").clicked() {
             *install = true;
         }

@@ -336,13 +336,8 @@ impl MonitorApp {
                                 };
                                 ui.horizontal(|ui| {
                                     ui.add_space(30.0);
-                                    if ui
-                                        .add(
-                                            egui::Label::new(
-                                                RichText::new(hint).small().color(theme::warn()),
-                                            )
-                                            .sense(egui::Sense::click()),
-                                        )
+                                    if crate::activity::warning(ui, format!("{}: {hint}", base.label))
+                                        .interact(egui::Sense::click())
                                         .on_hover_text(
                                             "Open Add base > Download base for the base made for this version",
                                         )
@@ -461,6 +456,7 @@ impl MonitorApp {
                     .clone()
                     .filter(|_| self.error_status_mark.as_ref() == Some(&self.status));
                 let status = self.status.clone();
+                let notice = self.status_notice.as_ref().filter(|(_, message)| message == &status).map(|(level, _)| *level);
                 let closing = self.closing;
                 let loss = |count: u64| if count == 0 { theme::good() } else { theme::warn() };
                 let saved = persisted as f64 / 1_073_741_824.0;
@@ -516,7 +512,8 @@ impl MonitorApp {
                             ui.add(egui::Label::new(RichText::new(message).color(theme::warn())).truncate())
                                 .on_hover_text(message);
                         } else if !status.is_empty() {
-                            status_line(ui, egui_phosphor::regular::INFO, &status, theme::info());
+                            if let Some(level) = notice { crate::activity::compact(ui, level, &status); }
+                            else { status_line(ui, egui_phosphor::regular::INFO, &status, theme::info()); }
                         }
                     });
                 });
@@ -525,69 +522,31 @@ impl MonitorApp {
     }
 
     pub(super) fn log(&mut self, level: &'static str, message: String) {
-        let time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-            % 86400;
-        if self.activity.len() == ACTIVITY_LIMIT {
-            self.activity.pop_front();
+        if message == self.status && matches!(level, "WARN" | "ERROR") {
+            self.status_notice = Some((
+                if level == "ERROR" {
+                    crate::activity::Level::Error
+                } else {
+                    crate::activity::Level::Warn
+                },
+                message.clone(),
+            ));
         }
-        self.activity.push_back(Activity {
-            time: format!(
-                "{:02}:{:02}:{:02}",
-                time / 3600,
-                (time / 60) % 60,
-                time % 60
-            ),
-            level,
-            message,
-        });
+        self.activity.log(level, message);
+    }
+
+    pub(super) fn report_warning(&mut self, message: String) {
+        self.status = message.clone();
+        self.log("WARN", message);
+    }
+
+    pub(super) fn report_error(&mut self, message: String) {
+        self.status = message.clone();
+        self.log("ERROR", message);
     }
 
     pub(super) fn activity(&mut self, ui: &mut egui::Ui) {
-        if self.activity.is_empty() {
-            ui.label(RichText::new("No activity").color(theme::muted()));
-            return;
-        }
-        let height = (ui.available_height() - 30.0).max(0.0);
-        TableBuilder::new(ui)
-            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::exact(84.0))
-            .column(Column::exact(60.0))
-            .column(Column::remainder())
-            .min_scrolled_height(0.0)
-            .max_scroll_height(height)
-            .auto_shrink([false, false])
-            .stick_to_bottom(true)
-            .header(30.0, |mut header| {
-                for text in ["Time", "Level", "Message"] {
-                    header.col(|ui| {
-                        ui.label(RichText::new(text).color(theme::muted()));
-                    });
-                }
-            })
-            .body(|body| {
-                body.rows(30.0, self.activity.len(), |mut row| {
-                    let activity = &self.activity[row.index()];
-                    row.col(|ui| {
-                        ui.monospace(&activity.time).on_hover_text("UTC");
-                    });
-                    row.col(|ui| {
-                        ui.colored_label(
-                            if activity.level == "ERROR" {
-                                theme::error()
-                            } else {
-                                theme::muted()
-                            },
-                            activity.level,
-                        );
-                    });
-                    row.col(|ui| {
-                        ui.add(egui::Label::new(&activity.message).truncate())
-                            .on_hover_text(&activity.message);
-                    });
-                });
-            });
+        self.activity.ingest(ui.ctx());
+        self.activity.show(ui);
     }
 }

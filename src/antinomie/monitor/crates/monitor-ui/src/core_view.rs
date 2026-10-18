@@ -141,6 +141,7 @@ pub(crate) struct CoreView {
     import_open: bool,
     job: Option<Receiver<InspectionReply>>,
     status: String,
+    status_notice: Option<(crate::activity::Level, String)>,
     source_path: String,
     destination: usize,
     thread_index: usize,
@@ -173,6 +174,27 @@ pub(crate) struct CoreView {
     notes_query: String,
 }
 impl CoreView {
+    fn fail(&mut self, message: String) {
+        self.status_notice = Some((crate::activity::Level::Error, message.clone()));
+        self.status = message;
+    }
+    fn warning(&mut self, message: String) {
+        self.status_notice = Some((crate::activity::Level::Warn, message.clone()));
+        self.status = message;
+    }
+    fn show_status(&self, ui: &mut egui::Ui) {
+        if self.status.is_empty() {
+            return;
+        }
+        if let Some((level, message)) = &self.status_notice {
+            if message == &self.status {
+                crate::activity::notice(ui, *level, message);
+                return;
+            }
+        }
+        ui.add(egui::Label::new(&self.status).wrap());
+    }
+
     pub(crate) fn set_tools_dir(&mut self, dir: PathBuf) {
         self.tools_dir = dir;
     }
@@ -255,7 +277,7 @@ impl CoreView {
                 }
             }) {
             Ok(_) => self.job = Some(receiver),
-            Err(error) => self.status = error.to_string(),
+            Err(error) => self.fail(error.to_string()),
         }
     }
     fn poll(&mut self) {
@@ -301,7 +323,7 @@ impl CoreView {
             return;
         }
         match result.result {
-            Err(error) => self.status = error,
+            Err(error) => self.fail(error),
             Ok(Reply::Chosen(path)) => {
                 if let Some(path) = path {
                     self.source_path = path.display().to_string();
@@ -388,6 +410,9 @@ impl CoreView {
         self.set_catalog_scope(recording_roots, vm_id);
         self.poll();
         self.poll_catalog();
+        for issue in &self.catalog_issues {
+            crate::activity::report(ui.ctx(), crate::activity::Level::Warn, issue);
+        }
         for capture in controls
             .captures
             .iter()

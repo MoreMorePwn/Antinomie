@@ -225,14 +225,11 @@ impl SnapshotManager {
                 });
             }
             if let Some((success, message)) = &self.result {
-                ui.colored_label(
-                    if *success {
-                        theme::good()
-                    } else {
-                        theme::error()
-                    },
-                    message,
-                );
+                if !*success {
+                    crate::activity::error(ui, message);
+                } else {
+                    ui.colored_label(theme::good(), message);
+                };
             }
             let Some(tree) = tree else {
                 ui.label("Loading snapshots…");
@@ -244,7 +241,7 @@ impl SnapshotManager {
                 return;
             };
             if let Some(note) = &tree.recovery_note {
-                ui.colored_label(theme::warn(), note);
+                crate::activity::warning(ui, note);
             }
             if let Some(reason) = &tree.capabilities.reason {
                 ui.weak(reason);
@@ -548,7 +545,7 @@ impl SnapshotManager {
             ui.label(value);
         }
         if let Some(note) = &node.compatibility_note {
-            ui.colored_label(theme::warn(), note);
+            crate::activity::warning(ui, note);
         }
         ui.separator();
         let restore = enabled && tree.capabilities.can_restore && !node.deleted;

@@ -13,6 +13,7 @@ mod file_drop;
 mod history;
 mod history_sync;
 mod menus;
+mod notices;
 mod panels;
 mod recording;
 mod run_selector;
@@ -164,13 +165,6 @@ enum RunFilter {
     Past,
 }
 
-struct Activity {
-    time: String,
-    level: &'static str,
-    message: String,
-}
-
-const ACTIVITY_LIMIT: usize = 256;
 const TERMINAL_VIEW_LIMIT: usize = 128;
 const PENDING_SESSION_LIMIT: usize = 256;
 const STALE_COMMAND_LIMIT: usize = 1024;
@@ -348,7 +342,9 @@ pub struct MonitorApp {
     data_windows: crate::data_view::DataWindows,
     layout: WorkspaceLayout,
     focus_panel: Option<Panel>,
-    activity: VecDeque<Activity>,
+    activity: crate::activity::Journal,
+    activity_notices_due: bool,
+    status_notice: Option<(crate::activity::Level, String)>,
     exec: ExecRequest,
     args: String,
     env: String,
@@ -517,7 +513,9 @@ impl MonitorApp {
                     .and_then(|storage| eframe::get_value(storage, "workspace_layout")),
             ),
             focus_panel: None,
-            activity: VecDeque::new(),
+            activity: crate::activity::Journal::restore(cc.storage),
+            activity_notices_due: true,
+            status_notice: None,
             exec,
             args: String::new(),
             env,
@@ -651,6 +649,7 @@ impl eframe::App for MonitorApp {
         self.settings.triage_detection = self.triage.detection_settings().clone();
         eframe::set_value(storage, "settings", &self.settings);
         eframe::set_value(storage, "workspace_layout", &self.layout);
+        self.activity.save(storage);
     }
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         if let Some(backend) = &mut self.backend {

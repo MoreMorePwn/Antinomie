@@ -198,7 +198,7 @@ pub(crate) fn dialogs(ctx: &egui::Context) {
         egui::Window::new("Evidence action failed")
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.colored_label(crate::theme::error(), &error);
+                crate::activity::error(ui, &error);
             });
         if open {
             shared.lock().unwrap_or_else(|e| e.into_inner()).error = Some(error);

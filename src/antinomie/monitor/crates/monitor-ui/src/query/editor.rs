@@ -249,7 +249,7 @@ fn filter_edit_iter<'a>(
             let rows: Vec<_> = fields.clone().map(|field| serde_json::json!({"name": field.name, "type": field.kind, "meaning": field.detail})).collect();
             match serde_json::to_string_pretty(&rows) {
                 Ok(json) => ui.ctx().copy_text(json),
-                Err(error) => { ui.colored_label(crate::theme::error(), error.to_string()); }
+                Err(error) => { crate::activity::error(ui, error.to_string()); }
             }
             ui.close_menu();
         }

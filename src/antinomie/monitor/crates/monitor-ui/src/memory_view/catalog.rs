@@ -116,7 +116,7 @@ impl MemoryView {
                     },
                 );
                 if let Some(error) = &import.error {
-                    ui.colored_label(theme::error(), error);
+                    crate::activity::error(ui, error);
                 }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
@@ -209,20 +209,17 @@ impl MemoryView {
                     .wrap(),
                 );
                 if let Some((message, error)) = &self.catalog_status {
-                    ui.colored_label(
-                        if *error {
-                            theme::error()
-                        } else {
-                            theme::good()
-                        },
-                        message,
-                    );
+                    if *error {
+                        crate::activity::error(ui, message);
+                    } else {
+                        ui.colored_label(theme::good(), message);
+                    };
                 }
                 ui.add_space(6.0);
                 let entries = match &entries {
                     Ok(entries) => entries,
                     Err(error) => {
-                        ui.colored_label(theme::error(), error);
+                        crate::activity::error(ui, error);
                         return;
                     }
                 };
@@ -270,24 +267,13 @@ impl MemoryView {
                                         .color(theme::muted()),
                                     );
                                     for caveat in &plugin.caveats {
-                                        ui.add(
-                                            egui::Label::new(
-                                                RichText::new(format!(
-                                                    "{} {caveat}",
-                                                    egui_phosphor::regular::WARNING
-                                                ))
-                                                .small()
-                                                .color(theme::warn()),
-                                            )
-                                            .wrap(),
+                                        crate::activity::warning(
+                                            ui,
+                                            format!("{} {caveat}", egui_phosphor::regular::WARNING),
                                         );
                                     }
                                     for need in &plugin.requires {
-                                        ui.label(
-                                            RichText::new(format!("Needs {need}"))
-                                                .small()
-                                                .color(theme::warn()),
-                                        );
+                                        crate::activity::warning(ui, format!("Needs {need}"));
                                     }
                                     for file in &plugin.files {
                                         for edit in &file.edits {

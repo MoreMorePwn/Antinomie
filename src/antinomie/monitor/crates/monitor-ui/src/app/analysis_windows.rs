@@ -142,14 +142,14 @@ impl MonitorApp {
                     self.evidence_jobs
                         .export(directory, report_id, kind, format);
                 } else {
-                    self.status = "Retained result directory is unavailable".into();
+                    self.report_error("Retained result directory is unavailable".into());
                 }
             }
             Some(crate::analysis::ReportAction::ShowDirectory { report_id }) => {
                 if let Some(directory) = self.analysis_directory(&report_id) {
                     self.evidence_jobs.reveal(directory);
                 } else {
-                    self.status = "Retained result directory is unavailable".into();
+                    self.report_error("Retained result directory is unavailable".into());
                 }
             }
             Some(crate::analysis::ReportAction::OpenGhidra { report_id }) => {
@@ -160,7 +160,7 @@ impl MonitorApp {
                         self.options.data_dir.join("tools"),
                     );
                 } else {
-                    self.status = "Retained result directory is unavailable".into();
+                    self.report_error("Retained result directory is unavailable".into());
                 }
             }
             Some(crate::analysis::ReportAction::Cancel(analysis_id)) => {
@@ -169,7 +169,7 @@ impl MonitorApp {
             Some(crate::analysis::ReportAction::OpenAnalysisTools) => self.tools_open = true,
             Some(crate::analysis::ReportAction::OpenSection { report_id, kind }) => {
                 if let Err(reason) = self.open_analysis_section(report_id, kind) {
-                    self.status = reason;
+                    self.report_error(reason);
                 }
             }
             Some(crate::analysis::ReportAction::ReadSpecimen {
