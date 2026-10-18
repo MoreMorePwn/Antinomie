@@ -24,6 +24,7 @@ use std::{
 };
 
 mod sandbox_run;
+mod specimen_publication;
 mod worker_exe;
 pub(crate) use sandbox_run::{Mounts, run_sandboxed, run_sandboxed_with};
 pub(crate) use worker_exe::worker_executable;
@@ -54,6 +55,7 @@ pub(crate) struct Job {
     disk_len: u64,
     worker_len: u64,
     report_len: u64,
+    specimen_publication: Option<storage::JsonReceipt>,
 }
 #[derive(Default)]
 pub(crate) struct Jobs {
@@ -198,6 +200,7 @@ impl Jobs {
                 disk_len: 0,
                 worker_len: 0,
                 report_len: 0,
+                specimen_publication: None,
             };
             self.queue.push_back(job);
             Ok(())
@@ -404,6 +407,18 @@ impl Jobs {
         job.report.state = AnalysisState::Queued;
         job.report.specimen_len = Some(job.total_len);
         job.report.specimen_sha256 = Some(format!("{:x}", job.digest.clone().finalize()));
+        match job.publish_specimen_report() {
+            Ok(false) => {
+                self.active = Some(job);
+                return None;
+            }
+            Err(error) => {
+                fail(&mut job.report, AnalysisState::Unavailable, error);
+                self.finish(job);
+                return None;
+            }
+            Ok(true) => {}
+        }
         match spawn_worker(&job, self.tools_dir.as_deref()) {
             Ok(child) => {
                 job.disk_len = job.disk_len.saturating_add(
@@ -1251,6 +1266,7 @@ mod tests {
                     disk_len: 0,
                     worker_len: 0,
                     report_len: 0,
+                    specimen_publication: None,
                 }),
                 queue: VecDeque::new(),
                 release: VecDeque::new(),
@@ -1558,6 +1574,7 @@ time.sleep(30)
             disk_len: 0,
             worker_len: 0,
             report_len: 0,
+            specimen_publication: None,
         };
         let started = Instant::now();
         let mut child = spawn_worker_binary(
@@ -1695,6 +1712,7 @@ time.sleep(30)
             disk_len: 0,
             worker_len: 0,
             report_len: 0,
+            specimen_publication: None,
         };
         let mut child = spawn_worker_binary(
             &job,
