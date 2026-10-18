@@ -13,6 +13,8 @@ fn history_answers_from_another_vm_cannot_replace_selected_vm() {
         vm_id: "other".into(),
         generation: app.history_generation,
         result: Ok(vec![run("stale")]),
+        checked: Vec::new(),
+        retained: Vec::new(),
     });
     assert_eq!(app.history[0].id, "current");
     app.refresh_history();
@@ -25,6 +27,8 @@ fn history_answers_from_another_vm_cannot_replace_selected_vm() {
         vm_id: "selected".into(),
         generation: old_generation,
         result: Ok(vec![run("outdated-roots")]),
+        checked: Vec::new(),
+        retained: Vec::new(),
     });
     assert_eq!(app.history[0].id, "current");
 }
@@ -340,6 +344,7 @@ fn details_values_copy_in_many_forms_and_captured_fields_open_data_windows() {
 #[test]
 fn saved_trace_selection_never_replaces_live_collector_or_terminal() {
     let mut app = app();
+    app.selected = Some("vm".into());
     let live = run("live");
     app.snapshot.active_vm = Some("vm".into());
     app.snapshot.state = VmState::Running;
@@ -454,6 +459,7 @@ fn past_boot_finished_and_stopped_terminals_reclaim_closed_slots() {
 fn ended_boot_finished_and_stopped_runs_reopen_from_archive() {
     for state in [RunState::Finished, RunState::Stopped] {
         let mut app = app();
+        app.selected = Some("vm".into());
         let mut past = run("past");
         past.state = state;
         app.snapshot.runs = vec![past.clone()];
@@ -629,6 +635,7 @@ fn paired_selection_uses_task_call_stream_despite_cpu_migration() {
 #[test]
 fn history_selection_keeps_live_snapshot_and_stale_answers_are_ignored() {
     let mut app = app();
+    app.selected = Some("vm".into());
     app.snapshot.active_vm = Some("vm".into());
     app.snapshot.state = VmState::Running;
     app.snapshot.events = vec![event(1, 0)];

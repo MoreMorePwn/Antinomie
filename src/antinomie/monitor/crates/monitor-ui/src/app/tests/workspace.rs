@@ -33,6 +33,7 @@ fn all_live_capture_reads_use_the_invocation_owner_directory() {
 #[test]
 fn imported_archive_selection_survives_run_list_refresh() {
     let mut app = app();
+    app.selected = Some("vm".into());
     let mut imported = run("archive:/legacy");
     imported.state = RunState::Finalized;
     app.history.push(imported);

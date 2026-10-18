@@ -16,6 +16,7 @@ mod network_view;
 mod query;
 mod rules_window;
 mod run_filter;
+mod run_recording;
 mod runs;
 mod samples_view;
 mod snapshots;

@@ -13,6 +13,7 @@ mod launch;
 mod layout;
 mod memory_probe;
 mod network;
+mod run_selection;
 mod startup;
 mod terminal_windows;
 mod terminals;
@@ -110,6 +111,7 @@ pub(crate) fn app() -> MonitorApp {
         archive: None,
         pending_archive: None,
         history: Vec::new(),
+        history_sync: Default::default(),
         archive_generation: 0,
         archive_page_generation: 0,
         archive_page: Vec::new(),

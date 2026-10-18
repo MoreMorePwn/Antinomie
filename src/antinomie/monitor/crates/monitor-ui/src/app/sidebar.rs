@@ -403,7 +403,7 @@ impl MonitorApp {
         if let Some(vm_id) = selected_vm {
             if self.selected.as_ref() != Some(&vm_id) {
                 self.selected = Some(vm_id);
-                self.history.clear();
+                self.clear_history();
                 self.select_run(None);
                 self.refresh_history();
             }

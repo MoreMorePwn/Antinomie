@@ -417,6 +417,16 @@ pub(super) fn matches_capture_filter(ui: &egui::Ui, capture: &CaptureSummary) ->
     crate::query::compile_table(&query, &fields).keep_table(&capture_row(ui, capture))
 }
 
+/// Empties the capture history filter, so every capture is listed again.
+pub(super) fn clear_capture_filter(ui: &egui::Ui) {
+    let filter_id = ui.id().with(("table-filter", "capture-history"));
+    let applied_id = ui.id().with(("applied-table-filter", filter_id));
+    ui.data_mut(|data| {
+        data.insert_temp(filter_id, String::new());
+        data.insert_temp(applied_id, String::new());
+    });
+}
+
 fn capture_fields() -> Vec<crate::query::FieldSpec<'static>> {
     use crate::query::FieldSpec;
     let mut fields = crate::query::LABEL_FIELDS.to_vec();

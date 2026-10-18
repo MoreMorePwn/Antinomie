@@ -132,6 +132,7 @@ impl MonitorApp {
             Panel::Summary => crate::summary::show(
                 ui,
                 &self.snapshot,
+                &self.history,
                 self.selected.as_deref(),
                 self.settings.quota_gib,
                 &self.cpu_history,

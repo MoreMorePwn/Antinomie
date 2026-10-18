@@ -154,9 +154,14 @@ impl MonitorApp {
             .or_else(|| self.history.iter().find(|run| run.id == id))
     }
 
+    /// The selected run, when it belongs to the selected VM.
+    pub(super) fn selected_vm_run(&self) -> Option<&RunSummary> {
+        let run = self.run(self.selected_run.as_ref()?)?;
+        (Some(&run.vm_id) == self.selected.as_ref()).then_some(run)
+    }
+
     pub(super) fn offline_run(&self) -> Option<&RunSummary> {
-        let id = self.selected_run.as_ref()?;
-        let run = self.run(id)?;
+        let run = self.selected_vm_run()?;
         (self.archive_selected || !run_in_live_session(&self.snapshot, run)).then_some(run)
     }
 

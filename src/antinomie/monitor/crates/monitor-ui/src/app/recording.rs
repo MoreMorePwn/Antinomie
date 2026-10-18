@@ -2,41 +2,83 @@
 //! Reading saved recordings through the archive worker.
 use super::*;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ListingKind {
+    Runs,
+    Captures,
+}
+
 impl MonitorApp {
     pub(super) fn queue_archive(&mut self, request: Request) {
+        let listing_kind = |request: &Request| match request {
+            Request::ListVm { .. } => Some(ListingKind::Runs),
+            Request::ListCaptures { .. } => Some(ListingKind::Captures),
+            _ => None,
+        };
+        let newer_listing = listing_kind(&request);
         if let Some(old) = self.pending_archive.replace(request) {
-            match old {
-                Request::ProcessTree { run_id, .. }
-                    if self.run_tree_pending.as_ref() == Some(&run_id) =>
-                {
-                    self.run_tree_pending = None;
-                }
-                Request::Invocations {
-                    generation, cancel, ..
-                } => {
-                    cancel.store(true, Ordering::Relaxed);
-                    if generation == self.archive_generation {
-                        self.archive_pending = false;
-                        self.archive_error = Some("Read superseded".into());
-                    }
-                }
-                Request::Captured { generation, .. } if generation == self.inspector.generation => {
-                    self.inspector.pending = false;
-                    self.inspector.error = Some("Read superseded".into());
-                }
-                Request::Specimen {
-                    view_key,
-                    generation,
-                    ..
-                } => self.fail_analysis_read(&view_key, generation, "Read superseded"),
-                // A superseded listing read is simply asked for again.
-                Request::Listing { view_key, .. } => {
-                    if let Some(view) = self.analysis_views.get_mut(&view_key) {
-                        view.listing_pending = None;
-                    }
-                }
-                _ => {}
+            // Only a newer request for the same list makes the old one redundant.
+            if newer_listing.is_none() || newer_listing != listing_kind(&old) {
+                self.supersede(old);
             }
+        }
+    }
+
+    /// A queued read that will not run: whoever waits on it is told, or the
+    /// read is asked for again.
+    fn supersede(&mut self, old: Request) {
+        match old {
+            Request::ProcessTree { run_id, .. }
+                if self.run_tree_pending.as_ref() == Some(&run_id) =>
+            {
+                self.run_tree_pending = None;
+            }
+            Request::Invocations {
+                generation, cancel, ..
+            } => {
+                cancel.store(true, Ordering::Relaxed);
+                if generation == self.archive_generation {
+                    self.archive_pending = false;
+                    self.archive_error = Some("Read superseded".into());
+                }
+            }
+            Request::Captured { generation, .. } if generation == self.inspector.generation => {
+                self.inspector.pending = false;
+                self.inspector.error = Some("Read superseded".into());
+            }
+            Request::Specimen {
+                view_key,
+                generation,
+                ..
+            } => self.fail_analysis_read(&view_key, generation, "Read superseded"),
+            // A superseded listing read is simply asked for again.
+            Request::Listing { view_key, .. } => {
+                if let Some(view) = self.analysis_views.get_mut(&view_key) {
+                    view.listing_pending = None;
+                }
+            }
+            // A run or capture list that is replaced is asked for again.
+            Request::ListVm { .. } => self.history_sync.refresh_due = true,
+            Request::ListCaptures { .. } => self.history_sync.captures_refresh_due = true,
+            _ => {}
+        }
+    }
+
+    /// The selection changed: reads made for the old selection end. A read a
+    /// view still waits on (an analysis preview or listing, a run list) stays
+    /// queued, because the new selection does not change its answer.
+    fn end_selection_reads(&mut self) {
+        let Some(request) = self.pending_archive.take() else {
+            return;
+        };
+        match request {
+            Request::Invocations { .. }
+            | Request::Captured { .. }
+            | Request::ProcessTree { .. } => self.supersede(request),
+            // The view that asked is gone, so nothing waits for the answer.
+            Request::Specimen { ref view_key, .. } | Request::Listing { ref view_key, .. }
+                if !self.analysis_views.contains_key(view_key) => {}
+            keep => self.pending_archive = Some(keep),
         }
     }
 
@@ -115,8 +157,8 @@ impl MonitorApp {
         self.analysis_views.remove("workspace");
         self.selected_run = id;
         self.run_tree = None;
+        self.end_selection_reads();
         self.run_tree_pending = None;
-        self.pending_archive = None;
         self.reset_trace_selection();
         if self.offline_run().is_some() {
             self.request_page(0);
@@ -134,7 +176,9 @@ impl MonitorApp {
             self.pending_archive,
             Some(Request::Invocations { .. } | Request::Captured { .. })
         ) {
-            self.pending_archive = None;
+            if let Some(old) = self.pending_archive.take() {
+                self.supersede(old);
+            }
         }
         self.archive_generation = self.archive_generation.wrapping_add(1);
         self.archive_page.clear();
@@ -278,7 +322,11 @@ impl MonitorApp {
                 generation,
                 result,
             } => {
-                if self.selected.as_ref() != Some(&vm_id) || generation != self.history_generation {
+                if self.selected.as_ref() != Some(&vm_id) {
+                    return;
+                }
+                if generation != self.history_generation {
+                    self.history_sync.captures_refresh_due = true;
                     return;
                 }
                 match result {
@@ -342,12 +390,18 @@ impl MonitorApp {
                 vm_id,
                 generation,
                 result,
+                checked,
+                retained,
             } => {
-                if self.selected.as_ref() != Some(&vm_id) || generation != self.history_generation {
+                if self.selected.as_ref() != Some(&vm_id) {
+                    return;
+                }
+                if generation != self.history_generation {
+                    self.history_sync.refresh_due = true;
                     return;
                 }
                 match result {
-                    Ok(runs) => self.history = runs,
+                    Ok(runs) => self.accept_run_listing(runs, checked, retained),
                     Err(error) => {
                         self.status = format!("History: {error}");
                         self.log("ERROR", self.status.clone());
@@ -498,6 +552,7 @@ impl MonitorApp {
             };
             self.handle_archive_answer(answer);
         }
+        self.refresh_history_when_idle();
         // At most one disk request is queued; closed history views pause their replay.
         if self.pending_archive.is_some() {
             return;

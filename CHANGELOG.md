@@ -41,6 +41,18 @@ it runs.
   a note instead of failing. The capture lookup, evidence file checks and
   drop-hover checks no longer touch the disk every frame.
 
+- **Run selection and run health.** Runs of an earlier boot stay in Run
+  History, Triage and the trace dropdown after the VM restarts: the list is
+  read again when a boot starts or ends and when a run ends, and a run that
+  leaves the live session is kept until the saved list has it. A Run History
+  filter no longer deselects the run chosen in a dropdown; it says the run is
+  hidden and offers "Clear filter". Deleting the selected VM clears its run,
+  capture, process and archive selections. Choosing another run no longer
+  drops a queued read that a view waits on. A run whose saving stopped says so
+  in the trace, Run History, Details, Triage and Summary, with the facts the
+  recording notes hold shown as muted notes. Dropped on-screen previews (UIL)
+  no longer mark a complete recording incomplete.
+
 - **Triage layout.** Section navigation and
   grouped report surfaces distinguish detection results, behavior, files and
   network evidence. Wide behavior/network sections share their height; narrow

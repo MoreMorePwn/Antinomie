@@ -240,6 +240,7 @@ fn cpu_load_color(percent: f64, cpus: u16) -> Color32 {
 pub(crate) fn show(
     ui: &mut egui::Ui,
     snapshot: &Snapshot,
+    run_history: &[antinomie_monitor_core::RunSummary],
     selected: Option<&str>,
     quota_gib: u32,
     history: &CpuHistory,
@@ -290,6 +291,7 @@ pub(crate) fn show(
                         .wrap(),
                 );
             }
+            crate::run_recording::summary(ui, snapshot, run_history, &vm.id);
             let series = history.for_vm(&vm.id);
             let live = active
                 .then_some(snapshot.vm_resources.as_ref())
@@ -463,12 +465,7 @@ pub(crate) fn show(
                         .wrap(),
                     );
                 }
-                if let Some(error) = &snapshot.health.persistence_error {
-                    ui.add(egui::Label::new(RichText::new(error).color(theme::error())).wrap());
-                }
-                if let Some(error) = &snapshot.last_error {
-                    ui.add(egui::Label::new(RichText::new(error).color(theme::error())).wrap());
-                }
+                crate::run_recording::health_errors(ui, snapshot);
                 egui::CollapsingHeader::new("More health details")
                     .show(ui, |ui| health(ui, snapshot));
             }
@@ -1446,7 +1443,7 @@ mod tests {
                 },
                 |ctx| {
                     egui::CentralPanel::default()
-                        .show(ctx, |ui| show(ui, snapshot, selected, 4, &history));
+                        .show(ctx, |ui| show(ui, snapshot, &[], selected, 4, &history));
                 },
             );
         }
@@ -1672,8 +1669,9 @@ mod tests {
                             ..Default::default()
                         },
                         |ctx| {
-                            egui::CentralPanel::default()
-                                .show(ctx, |ui| show(ui, &snapshot, Some("active"), 4, &history));
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                show(ui, &snapshot, &[], Some("active"), 4, &history)
+                            });
                         },
                     );
                     let mut cards: Vec<_> = output
@@ -1737,7 +1735,7 @@ mod tests {
             fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
                 self.history.observe(&self.snapshot, Some("active"));
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    show(ui, &self.snapshot, Some("active"), 4, &self.history)
+                    show(ui, &self.snapshot, &[], Some("active"), 4, &self.history)
                 });
                 if Instant::now() >= self.deadline {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1772,7 +1770,9 @@ mod tests {
             .unwrap_or(if wide { 1280 } else { 520 })
             .clamp(320, 1920);
         let size = [width as f32, if width >= 960 { 860.0 } else { 900.0 }];
-        println!("Summary native fixture: state={state}, width={width}, font={font}, duration={seconds}s");
+        println!(
+            "Summary native fixture: state={state}, width={width}, font={font}, duration={seconds}s"
+        );
         eframe::run_native(
             "Antinomie Summary QA",
             eframe::NativeOptions {

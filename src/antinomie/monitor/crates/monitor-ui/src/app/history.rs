@@ -3,7 +3,7 @@
 use super::*;
 
 impl MonitorApp {
-    fn refresh_captures(&mut self) {
+    pub(super) fn refresh_captures(&mut self) {
         if let Some(vm_id) = self.selected.clone() {
             self.history_generation = self.history_generation.wrapping_add(1);
             self.queue_archive(Request::ListCaptures {
@@ -19,14 +19,28 @@ impl MonitorApp {
             self.refresh_captures();
             return;
         }
+        self.refresh_run_history();
+    }
+
+    pub(super) fn refresh_run_history(&mut self) {
         if let Some(vm_id) = self.selected.clone() {
             self.history_generation = self.history_generation.wrapping_add(1);
+            let carried = self.carried_run_directories();
             self.queue_archive(Request::ListVm {
                 options: self.options.clone(),
                 vm_id,
                 generation: self.history_generation,
+                carried,
             });
         }
+    }
+
+    /// Shows every run again: the state tabs and the typed filter.
+    pub(super) fn clear_run_filter(&mut self) {
+        self.run_filter = RunFilter::All;
+        self.run_query.clear();
+        self.applied_run_query.clear();
+        self.run_query_error = None;
     }
 
     pub(super) fn run_history(&mut self, ui: &mut egui::Ui) {
@@ -100,6 +114,10 @@ impl MonitorApp {
                 .filter(|run| run.vm_id == vm_id && !live.contains(&run.id))
                 .map(listed),
         );
+        let selected_listed = self
+            .selected_run
+            .as_ref()
+            .is_some_and(|id| runs.iter().any(|run| &run.id == id));
         runs.retain(|run| match self.run_filter {
             RunFilter::All => true,
             RunFilter::Live => self.live_history_run(run),
@@ -132,13 +150,18 @@ impl MonitorApp {
             compiled.keep_table(&row)
         });
         ui.weak(format!("{} of {unfiltered_count} runs", runs.len()));
-        if self
-            .selected_run
-            .as_ref()
-            .is_some_and(|id| !runs.iter().any(|run| &run.id == id))
+        // The selection is shared with the Triage and trace dropdowns, so a
+        // list filter may hide the selected run but never deselects it.
+        if selected_listed
+            && self
+                .selected_run
+                .as_ref()
+                .is_some_and(|id| !runs.iter().any(|run| &run.id == id))
         {
-            self.select_run(None);
-            ui.weak("The selected run is hidden by this filter.");
+            ui.colored_label(theme::muted(), "The selected run is hidden by this filter.");
+            if ui.link("Clear filter").clicked() {
+                self.clear_run_filter();
+            }
         }
         let pane_id = ui.id().with("run-history-focus");
         let pane = ui.interact(
@@ -184,7 +207,7 @@ impl MonitorApp {
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                     .column(Column::remainder().at_least(120.0))
                     .column(Column::initial(180.0).range(90.0..=400.0))
-                    .column(Column::initial(110.0).range(70.0..=220.0))
+                    .column(Column::initial(190.0).range(90.0..=320.0))
                     .column(Column::initial(110.0).range(70.0..=220.0))
                     .column(Column::exact(72.0))
                     .resizable(true)
@@ -224,12 +247,16 @@ impl MonitorApp {
                                 .on_hover_text(run.request.args.join("\n"));
                             });
                             row.col(|ui| {
+                                let detail = [execution_detail(run), crate::run_recording::tooltip(run)];
                                 ui.add(
                                     egui::Label::new(run_status(run))
                                         .selectable(false)
                                         .sense(egui::Sense::hover()),
                                 )
-                                .on_hover_text(execution_detail(run));
+                                .on_hover_text(detail.join("\n"));
+                                if let Some(badge) = crate::run_recording::badge(run) {
+                                    ui.colored_label(theme::warn(), badge);
+                                }
                             });
                             row.col(|ui| {
                                 ui.add(
@@ -338,6 +365,7 @@ impl MonitorApp {
             ui.colored_label(theme::muted(), "Select a run in Run History.");
             return;
         };
+        crate::run_recording::show(ui, &run);
         ui.horizontal_wrapped(|ui| {
             if run.analysis.is_some() && ui.button("Open static analysis").clicked() {
                 self.selected_analysis = None;
@@ -642,12 +670,18 @@ impl MonitorApp {
             self.select_capture(id, archive);
         }
         if self.selected_capture.as_ref().is_some_and(|id| {
-            !items
-                .iter()
-                .any(|capture| &capture.id == id && captures::matches_capture_filter(ui, capture))
+            items.iter().any(|capture| &capture.id == id)
+                && !items.iter().any(|capture| {
+                    &capture.id == id && captures::matches_capture_filter(ui, capture)
+                })
         }) {
-            self.select_run(None);
-            ui.weak("The selected capture is hidden by this filter.");
+            ui.colored_label(
+                theme::muted(),
+                "The selected capture is hidden by this filter.",
+            );
+            if ui.link("Clear filter").clicked() {
+                captures::clear_capture_filter(ui);
+            }
         }
         if self.selected_capture.is_some() {
             ui.colored_label(
