@@ -19,7 +19,7 @@ report() {
 }
 report "$(git grep -nIE "/home/[A-Za-z0-9._-]+" -- . ':!scripts/check-privacy.sh' |
     grep -vE "/home/($allowed)([/\"': ]|\$)" || true)"
-report "$(git grep -nIE '/mnt/[a-z]/|\b[C-Z]:\\\\|\.claude\b|\.codex\b|antinomie-work' \
+report "$(git grep -nIE '/mnt/[a-z]/|\b[C-Z]:\\\\|\.claude\b|\.codex\b|antinomie-work\b' \
     -- . ':!scripts/check-privacy.sh' ':!.gitignore' \
     ':!src/antinomie/monitor/crates/monitor-core/assets/rules' || true)"
 if [[ $found == 1 ]]; then
