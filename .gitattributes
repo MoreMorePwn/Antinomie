@@ -1,0 +1,2 @@
+# Third-party community YARA rules; keep them out of GitHub language statistics.
+src/antinomie/monitor/crates/monitor-core/assets/rules/*.yar linguist-vendored
