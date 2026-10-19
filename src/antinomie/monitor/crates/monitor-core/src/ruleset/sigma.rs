@@ -24,6 +24,12 @@ pub(super) fn parse_sigma(text: &str) -> Vec<IndexedRule> {
             let product = meta_line(doc, "product").unwrap_or_default();
             let service = logsource_of(doc).2;
             let (compatible, reason) = sigma_support(&product, &category, &service, doc);
+            // auditd rules read the auditd-style records, journal category `auditd`.
+            let category = if is_auditd(&category, &service) {
+                "auditd".to_owned()
+            } else {
+                category
+            };
             IndexedRule {
                 id: id.clone(),
                 name: meta_line(doc, "title").unwrap_or_else(|| id.clone()),
@@ -45,14 +51,20 @@ pub(super) fn parse_sigma(text: &str) -> Vec<IndexedRule> {
         .collect()
 }
 
+/// `service: auditd` without a category: evaluated against auditd-style records.
+fn is_auditd(category: &str, service: &str) -> bool {
+    category.is_empty() && service.eq_ignore_ascii_case("auditd")
+}
+
 fn sigma_support(product: &str, category: &str, service: &str, doc: &str) -> (bool, String) {
+    let audit = is_auditd(category, service);
     if !product.is_empty() && product != "linux" {
         return (
             false,
             format!("product {product} is not a captured Linux event"),
         );
     }
-    if category.is_empty() && !service.is_empty() {
+    if category.is_empty() && !service.is_empty() && !audit {
         return (
             false,
             format!(
@@ -60,7 +72,7 @@ fn sigma_support(product: &str, category: &str, service: &str, doc: &str) -> (bo
             ),
         );
     }
-    if !SIGMA_CATEGORIES.contains(&category) {
+    if !audit && !SIGMA_CATEGORIES.contains(&category) {
         return (
             false,
             format!("category {category} is not a captured event category"),
@@ -72,7 +84,7 @@ fn sigma_support(product: &str, category: &str, service: &str, doc: &str) -> (bo
             "correlation rules are not a single journal query".into(),
         );
     }
-    let unknown = sigma_unknown_fields(doc);
+    let unknown = sigma_unknown_fields(doc, audit);
     if !unknown.is_empty() {
         return (
             false,
@@ -88,7 +100,7 @@ fn sigma_support(product: &str, category: &str, service: &str, doc: &str) -> (bo
     (true, String::new())
 }
 
-fn sigma_unknown_fields(doc: &str) -> Vec<String> {
+fn sigma_unknown_fields(doc: &str, audit: bool) -> Vec<String> {
     const KNOWN: &[&str] = &[
         "Image",
         "CommandLine",
@@ -112,6 +124,21 @@ fn sigma_unknown_fields(doc: &str) -> Vec<String> {
         "Mode",
         "Setuid",
         "Initiated",
+        "ParentImage",
+        "ParentCommandLine",
+        "ParentProcessId",
+        "CurrentDirectory",
+        "DestinationHostname",
+        "SourceIp",
+        "SourcePort",
+        "Protocol",
+        "IsNewFile",
+    ];
+    // auditd fields the recording cannot supply: credentials, audit rule keys,
+    // file ownership and mode. A rule that needs one is not evaluated.
+    const AUDITD_ABSENT: &[&str] = &[
+        "key", "auid", "uid", "euid", "gid", "egid", "suid", "fsuid", "sgid", "fsgid", "ses",
+        "tty", "mode", "inode", "ouid", "ogid", "unit",
     ];
     let mut unknown = Vec::new();
     let mut detection = false;
@@ -131,10 +158,11 @@ fn sigma_unknown_fields(doc: &str) -> Vec<String> {
             continue;
         };
         let field = key.split('|').next().unwrap_or(key).trim();
-        if field.chars().next().is_some_and(|c| c.is_ascii_uppercase())
-            && !KNOWN.contains(&field)
-            && !unknown.iter().any(|seen| seen == field)
-        {
+        let uppercase = field.chars().next().is_some_and(|c| c.is_ascii_uppercase());
+        // Field names are case-insensitive: auditd rules write `SYSCALL`.
+        let missing = (uppercase && !KNOWN.iter().any(|known| known.eq_ignore_ascii_case(field)))
+            || (audit && AUDITD_ABSENT.contains(&field));
+        if missing && !unknown.iter().any(|seen| seen == field) {
             unknown.push(field.to_owned());
         }
     }
@@ -223,4 +251,40 @@ fn sigma_refs(doc: &str) -> Vec<String> {
         }
     }
     refs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rule(logsource: &str, detection: &str) -> IndexedRule {
+        let doc = format!(
+            "title: t\nid: 11111111-1111-4111-8111-111111111111\nlogsource:\n{logsource}\ndetection:\n{detection}\n    condition: selection\nlevel: low\n"
+        );
+        parse_sigma(&doc).remove(0)
+    }
+
+    #[test]
+    fn auditd_rules_need_fields_the_trace_can_supply() {
+        let audit = "    product: linux\n    service: auditd";
+        let known = rule(
+            audit,
+            "    selection:\n        type: 'SYSCALL'\n        SYSCALL: 'personality'\n        a0: 40000\n        exe|endswith: '/x'",
+        );
+        assert!(known.compatible, "{}", known.reason);
+        assert_eq!(known.evidence, ["auditd"]);
+        for field in ["key", "euid", "auid"] {
+            let absent = rule(
+                audit,
+                &format!("    selection:\n        type: 'SYSCALL'\n        {field}: 'x'"),
+            );
+            assert!(!absent.compatible, "{field}");
+            assert!(absent.reason.contains(field), "{}", absent.reason);
+        }
+        let other = rule(
+            "    product: linux\n    service: syslog",
+            "    selection:\n        a0: 'x'",
+        );
+        assert!(!other.compatible && other.reason.contains("syslog"));
+    }
 }

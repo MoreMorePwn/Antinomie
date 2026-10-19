@@ -499,7 +499,14 @@ impl Viewer {
                         ui.label(time_detail(row.event.time, clock));
                         ui.end_row();
                         for (name, value) in &row.event.fields {
-                            ui.label(RichText::new(name).color(theme::muted()));
+                            // A value from tracking or correlation, not one recorded call.
+                            let inferred = row.event.inferred.contains(name);
+                            let heading = if inferred {
+                                format!("{name} (inferred)")
+                            } else {
+                                name.clone()
+                            };
+                            ui.label(RichText::new(heading).color(theme::muted()));
                             ui.add(
                                 egui::Label::new(RichText::new(value_text(value)).monospace())
                                     .wrap(),

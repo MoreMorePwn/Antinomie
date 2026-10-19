@@ -41,6 +41,7 @@ fn fixture() -> (PacketSpool, String) {
                 fields: [("Image".to_owned(), image.into())].into(),
                 evidence: call(number),
                 time: Some(Moment::GuestNs(1_000 * number)),
+                inferred: Vec::new(),
             })
             .unwrap();
     }

@@ -208,6 +208,9 @@ pub(super) fn scan_archive_query(
         Err(error) => (None, Some(error)),
     };
     let mut files = FdState::default();
+    files.journal.launch_cwd = facts.as_ref().and_then(|facts| facts.launch_cwd.clone());
+    files.journal.root_cookie = request.root_cookie;
+    let mut pending = Vec::new();
     let mut open_page = sorting::Page::new(request, 1, cancel);
     let mut change_page = sorting::Page::new(request, 2, cancel);
     let mut file_index = files::FileIndex::default();
@@ -258,13 +261,16 @@ pub(super) fn scan_archive_query(
                     finding_page.push(finding)?;
                 }
             }
+            sigma_events::seed_launch_cwd(&mut files, event);
             remember_cwd(&mut files, invocation, event);
             remember_open(&mut files, invocation, event);
             apply_dup(&mut files, invocation, event);
             forget_closed(&mut files, invocation, event);
             inherit_open_fds(&mut files, invocation, event, &cookies);
             if let Some(writer) = &mut event_journal {
-                if let Err(error) = normalized::call(writer, &files, invocation, event) {
+                if let Err(error) =
+                    normalized::call(writer, &mut pending, &mut files, invocation, event)
+                {
                     event_error = Some(error);
                     event_journal = None;
                 }
@@ -376,6 +382,9 @@ pub(super) fn scan_archive_query(
                 } else {
                     counts.dns += 1;
                 }
+                if !http {
+                    files.journal.learn_dns(row);
+                }
                 if let Some(writer) = &mut event_journal {
                     if let Err(error) =
                         normalized::packet(writer, path, row, http, destination, port)
@@ -415,6 +424,13 @@ pub(super) fn scan_archive_query(
             network_warning: Some("No network capture is available for this run.".into()),
         },
     };
+    if let Some(writer) = &mut event_journal {
+        let held = std::mem::take(&mut pending);
+        if let Err(error) = normalized::flush_connections(writer, held, &files, clock_anchor) {
+            event_error = Some(error);
+            event_journal = None;
+        }
+    }
     if estimated_end && network.network_warning.is_none() {
         network.network_warning =
             Some("Network end time is estimated from this run’s last retained syscall.".into());

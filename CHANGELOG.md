@@ -6,6 +6,32 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **Sigma rules can match more of what a run did.** Host-only; nothing changes
+  in the guest. The event journal Sigma reads now has the process's parent
+  (`ParentImage`, `ParentCommandLine`, `ParentProcessId`, from the fork result
+  and the parent's last exec), its working directory (`CurrentDirectory`,
+  from the launch directory followed through `chdir`/`fchdir`), and the name
+  a destination address was looked up under in the run's capture
+  (`DestinationHostname`). `file_event` now also covers `O_CREAT|O_TRUNC`
+  opens, `creat`, `mkdir`, `link`/`symlink`, `mknod` and `O_TMPFILE`, and
+  `network_connection` covers accepted connections and UDP peers, with
+  `Initiated` true or false and `Protocol`. Rules marked `service: auditd` are
+  now evaluated against auditd-style `SYSCALL`, `EXECVE`, `PATH` and
+  `SOCKADDR` records built from the same trace. Against the installed SigmaHQ
+  Linux pack, 174 of 210 rules can run on a journal with every field the trace
+  can supply, up from 119 (process creation 109 to 120, network
+  connection 2 to 5, auditd 0 to 41); rules that need a user, an audit key, a
+  file mode or a keyword search stay not evaluated, and say so.
+- **Inferred values are labelled.** A value that comes from tracking state or
+  from matching two sources, not from one recorded call, is listed in the
+  event's `_inferred` field: a new file judged by the path not having been seen
+  before, a working directory reached by `chdir`, a hostname matched from DNS,
+  a path joined from the working directory, auditd's `exe` and `comm`. The
+  event journal is now format 2; format 1 journals still open and scan. A
+  Sigma finding says how many of its matched events rely on an inferred field,
+  and the warning that Sigma events are converted from the syscall trace and
+  may not cover everything a Sysmon or auditd log would hold stays.
+
 ## 0.6.2 — 2026-10-19
 
 - **Detection says what happened to each input, and never "partial".** Scanned

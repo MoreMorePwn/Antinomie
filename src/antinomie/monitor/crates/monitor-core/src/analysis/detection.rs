@@ -11,6 +11,11 @@ use std::{
 };
 
 pub const JOURNAL_FILE: &str = "triage-events.jsonl";
+/// Format of a journal written now. Version 2 adds the per-event `_inferred`
+/// list; version 1 journals have none and still load and scan.
+pub const JOURNAL_VERSION: u64 = 2;
+/// Oldest journal format the reader and the Sigma adapter accept.
+pub const JOURNAL_VERSION_MIN: u64 = 1;
 pub const REPORT_LIMIT: usize = 32 * 1024 * 1024;
 pub const MATCH_LIMIT: usize = 10_000;
 
@@ -110,6 +115,11 @@ pub struct Event {
     /// source had no timestamp.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time: Option<Moment>,
+    /// Names of fields in `fields` that were derived by correlation or by
+    /// tracking state, not read from one call: the value may be wrong where
+    /// the correlation was. Absent in version 1 journals, meaning none.
+    #[serde(default, rename = "_inferred", skip_serializing_if = "Vec::is_empty")]
+    pub inferred: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -158,7 +168,7 @@ impl EventJournal {
             omitted: 0,
         };
         journal
-            .line(&serde_json::json!({"kind":"header", "format_version":1, "identity":identity}))?;
+            .line(&serde_json::json!({"kind":"header", "format_version":JOURNAL_VERSION, "identity":identity}))?;
         Ok(journal)
     }
     fn line(&mut self, value: &impl Serialize) -> Result<(), String> {
@@ -175,6 +185,8 @@ impl EventJournal {
     pub fn push(&mut self, event: Event) -> Result<(), String> {
         let oversized = event.category.len() > 64
             || event.fields.len() > 64
+            || event.inferred.len() > 64
+            || event.inferred.iter().any(|name| name.len() > 64)
             || event
                 .fields
                 .iter()
@@ -616,6 +628,7 @@ mod tests {
                     call: u64::MAX,
                 },
                 time: None,
+                inferred: Vec::new(),
             })
             .unwrap();
         assert!(!directory.join(JOURNAL_FILE).exists());
@@ -629,6 +642,7 @@ mod tests {
                     call: 2,
                 },
                 time: None,
+                inferred: Vec::new(),
             })
             .unwrap();
         let result = journal.finish(true).unwrap();

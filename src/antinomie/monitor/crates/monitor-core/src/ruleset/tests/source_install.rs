@@ -492,10 +492,7 @@ fn sigma_keeps_the_listed_log_sources_and_marks_unevaluated_ones_with_a_reason()
                 ids[5],
                 "    product: linux\n    category: network_connection",
             )
-            .replace(
-                "Image|endswith: '/bin/sh'",
-                "DestinationHostname|endswith: '.example'",
-            ),
+            .replace("Image|endswith: '/bin/sh'", "User|endswith: 'root'"),
         ),
         (
             "rules/linux/auditd/d.yml",
@@ -578,20 +575,16 @@ fn sigma_keeps_the_listed_log_sources_and_marks_unevaluated_ones_with_a_reason()
     let by_name = |name: &str| rules.iter().find(|rule| rule.name == name).unwrap();
     assert!(by_name("Proc").compatible);
     // Connections are recorded with an address and port, so these are evaluated;
-    // a rule that needs a hostname is not, and says which field is missing.
+    // a rule that needs a user is not, and says which field is missing.
     assert!(by_name("Net").compatible, "{}", by_name("Net").reason);
     assert!(!by_name("NetHost").compatible);
     assert!(
-        by_name("NetHost").reason.contains("DestinationHostname"),
+        by_name("NetHost").reason.contains("User"),
         "{}",
         by_name("NetHost").reason
     );
-    assert!(!by_name("Audit").compatible);
-    assert!(
-        by_name("Audit").reason.contains("auditd"),
-        "{}",
-        by_name("Audit").reason
-    );
+    // auditd rules are evaluated against auditd-style records built from the trace.
+    assert!(by_name("Audit").compatible, "{}", by_name("Audit").reason);
     assert!(
         installed
             .provenance

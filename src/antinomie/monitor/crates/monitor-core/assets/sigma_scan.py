@@ -13,12 +13,38 @@ MAX_EVENTS = 1_000_000
 MAX_FINDINGS = 10_000
 MAX_EVIDENCE = 10_000
 MAX_RULE_SIZE = 1024 * 1024
-SUPPORTED_CATEGORIES = {"process_creation", "file_event", "file_delete", "file_rename", "file_access", "dns_query", "http_request", "network_connection", "antinomie_bpf", "antinomie_file_metadata"}
-SCHEMA = {"Image", "CommandLine", "ProcessId", "ThreadId", "TargetFilename", "SourceFilename", "QueryName", "QueryType", "ResponseCode", "DestinationIp", "DestinationPort", "HttpMethod", "HttpHost", "HttpUri", "Syscall", "Operation", "Result", "TransferredSize", "BpfCommand", "Mode", "Setuid", "Initiated"}
+SUPPORTED_CATEGORIES = {"process_creation", "file_event", "file_delete", "file_rename", "file_access", "dns_query", "http_request", "network_connection", "antinomie_bpf", "antinomie_file_metadata", "auditd"}
+# Journal format versions this adapter reads. Version 2 added the per-event `_inferred` list.
+JOURNAL_VERSIONS = {1, 2}
+# `service: auditd` rules evaluate the auditd-style records, stored under this one category.
+AUDITD_SERVICE = "auditd"
+SUPPORTED_SERVICES = {"", "antinomie", AUDITD_SERVICE}
+# Field names auditd uses. Stored as TEXT so a rule's number (`a0: 40000`) equals the recorded text.
+# `Syscall` is shared with the Sysmon-style events: auditd rules write it `SYSCALL`, and names are case-insensitive.
+AUDITD_FIELDS = {"type", "exe", "comm", "name", "nametype", "key", "exit", "success", "pid", "ppid", "saddr", "argc"} | {"a" + str(index) for index in range(16)}
+SCHEMA = {"Image", "CommandLine", "ProcessId", "ThreadId", "TargetFilename", "SourceFilename", "QueryName", "QueryType", "ResponseCode", "DestinationIp", "DestinationPort", "HttpMethod", "HttpHost", "HttpUri", "Syscall", "Operation", "Result", "TransferredSize", "BpfCommand", "Mode", "Setuid", "Initiated", "ParentImage", "ParentCommandLine", "ParentProcessId", "CurrentDirectory", "DestinationHostname", "SourceIp", "SourcePort", "Protocol", "IsNewFile"} | AUDITD_FIELDS
+MAX_INFERRED = 64
 
 
 def quoted(name):
     return '"' + name.replace('"', '""') + '"'
+
+
+def create_logs(connection):
+    columns = ",".join(quoted(name) + (" TEXT" if name in AUDITD_FIELDS else "") + " COLLATE NOCASE" for name in sorted(SCHEMA))
+    connection.execute("CREATE TABLE logs(_event_id INTEGER PRIMARY KEY, _category TEXT NOT NULL, _evidence TEXT NOT NULL, _inferred TEXT," + columns + ")")
+
+
+def logsource_category(logsource):
+    """The journal category a rule's logsource reads, or None when this adapter has no events for it."""
+    category = (logsource.category or "").lower()
+    product = (logsource.product or "").lower()
+    service = (logsource.service or "").lower()
+    if product not in {"", "linux"} or service not in SUPPORTED_SERVICES:
+        return None
+    if service == AUDITD_SERVICE:
+        return AUDITD_SERVICE if category in {"", AUDITD_SERVICE} else None
+    return category if category in SUPPORTED_CATEGORIES and category != AUDITD_SERVICE else None
 
 
 def load_events(connection, path, expected):
@@ -26,13 +52,12 @@ def load_events(connection, path, expected):
     connection.execute("PRAGMA cache_size=-2048")
     connection.execute("PRAGMA temp_store=FILE")
     connection.execute("PRAGMA max_page_count=65536")
-    columns = ",".join(quoted(name) + " COLLATE NOCASE" for name in sorted(SCHEMA))
-    connection.execute("CREATE TABLE logs(_event_id INTEGER PRIMARY KEY, _category TEXT NOT NULL, _evidence TEXT NOT NULL," + columns + ")")
+    create_logs(connection)
     count = 0
     footer = None
     with Path(path).open("rb") as source:
         header = json.loads(source.readline(65537))
-        if header.get("format_version") != 1 or header.get("identity") != expected:
+        if header.get("format_version") not in JOURNAL_VERSIONS or header.get("identity") != expected:
             raise ValueError("normalized event identity mismatch")
         for line in iter(lambda: source.readline(65537), b""):
             if len(line) > 65536:
@@ -57,8 +82,11 @@ def load_events(connection, path, expected):
                     continue
                 names.append(name)
                 values.append(value)
-            columns = ["_category", "_evidence"] + names
-            connection.execute("INSERT INTO logs(" + ",".join(quoted(name) for name in columns) + ") VALUES(" + ",".join("?" for _ in columns) + ")", [event["category"], json.dumps(event["evidence"])] + values)
+            inferred = event.get("_inferred") or []
+            if not isinstance(inferred, list) or len(inferred) > MAX_INFERRED or not all(isinstance(name, str) for name in inferred):
+                raise ValueError("normalized event _inferred is not a bounded list of field names")
+            columns = ["_category", "_evidence", "_inferred"] + names
+            connection.execute("INSERT INTO logs(" + ",".join(quoted(name) for name in columns) + ") VALUES(" + ",".join("?" for _ in columns) + ")", [event["category"], json.dumps(event["evidence"]), json.dumps(inferred) if inferred else None] + values)
             count += 1
     if footer is None or footer.get("events") != count:
         raise ValueError("normalized event index is unfinished or inconsistent")
@@ -87,7 +115,7 @@ def select_query(connection, query):
 
     def authorize(action, first, second, _database, _trigger):
         if action == sqlite3.SQLITE_READ and first == "logs":
-            if second not in SCHEMA and second not in {"_event_id", "_category", "_evidence"}:
+            if second not in SCHEMA and second not in {"_event_id", "_category", "_evidence", "_inferred"}:
                 return sqlite3.SQLITE_DENY
             if second in SCHEMA:
                 fields.add(second)
@@ -101,6 +129,18 @@ def select_query(connection, query):
     return query, fields
 
 
+def inferred_note(connection, selection, parameters, fields):
+    """Matched events whose rule fields include a value the journal marks inferred, and which fields."""
+    wanted = {name.lower() for name in fields}
+    events, names = 0, set()
+    for inferred, count in connection.execute("SELECT _inferred, COUNT(*) FROM (" + selection + ") WHERE _inferred IS NOT NULL GROUP BY _inferred", parameters):
+        used = wanted & {name.lower() for name in json.loads(inferred)}
+        if used:
+            events += count
+            names |= used
+    return events, sorted(names)
+
+
 def matching_rows(connection, queries, category):
     converted = [select_query(connection, query) for query in queries]
     fields = set().union(*(fields for _, fields in converted))
@@ -110,11 +150,12 @@ def matching_rows(connection, queries, category):
     union = " UNION ".join(query for query, _ in converted)
     eligible = connection.execute("SELECT COUNT(*) FROM logs WHERE _category=? AND (" + guard + ")", (category,)).fetchone()[0]
     observed = connection.execute("SELECT COUNT(*) FROM logs WHERE _category=?", (category,)).fetchone()[0]
-    selection = "SELECT _event_id, _evidence FROM logs WHERE _category=? AND (" + guard + ") AND _event_id IN (" + union + ")"
+    selection = "SELECT _event_id, _evidence, _inferred FROM logs WHERE _category=? AND (" + guard + ") AND _event_id IN (" + union + ")"
     total = connection.execute("SELECT COUNT(*) FROM (" + selection + ")", (category,)).fetchone()[0]
     # `_event_id` is the one-based position in the journal, so a finding can name the exact event it matched.
     rows = connection.execute(selection + " ORDER BY _event_id LIMIT ?", (category, min(total, MAX_EVIDENCE))).fetchall()
-    return total, [json.loads(row[1]) for row in rows], eligible, observed - eligible, [row[0] for row in rows]
+    inferred = inferred_note(connection, selection, (category,), fields) if total else (0, [])
+    return total, [json.loads(row[1]) for row in rows], eligible, observed - eligible, [row[0] for row in rows], inferred
 
 
 def attack_tags(tags):
@@ -217,7 +258,7 @@ def scan(request, events_path):
             if len(data) > MAX_RULE_SIZE:
                 raise ValueError("Sigma rule exceeds 1 MiB")
             sha256 = hashlib.sha256(data).hexdigest()
-            report["sources"].append({"name": source["name"], "version": "sha256:" + sha256 + "; pySigma " + version + "; SQLite backend " + backend_version, "license": "Per-rule license; local rules are not redistributed", "sha256": sha256, "data": "Captured Linux exec/file operations, DNS/HTTP and BPF observations; missing fields excluded"})
+            report["sources"].append({"name": source["name"], "version": "sha256:" + sha256 + "; pySigma " + version + "; SQLite backend " + backend_version, "license": "Per-rule license; local rules are not redistributed", "sha256": sha256, "data": "Captured Linux exec/file/network operations, auditd-style records, DNS/HTTP and BPF observations; missing and inferred fields are not hidden"})
             try:
                 collection = SigmaCollection.from_yaml(data.decode("utf-8"))
             except Exception as error:
@@ -243,10 +284,8 @@ def scan(request, events_path):
                     raise TimeoutError("Sigma rule evaluation reached its 90 second budget")
                 try:
                     logsource = rule.logsource
-                    category = (logsource.category or "").lower()
-                    product = (logsource.product or "").lower()
-                    service = (logsource.service or "").lower()
-                    if product not in {"", "linux"} or service not in {"", "antinomie"} or category not in SUPPORTED_CATEGORIES:
+                    category = logsource_category(logsource)
+                    if category is None:
                         report["category_rejected"] += 1
                         raise ValueError("unsupported logsource: " + str(logsource))
                     report["category_accepted"] += 1
@@ -258,7 +297,7 @@ def scan(request, events_path):
                     if not queries:
                         report["backend_rejected"] += 1
                         raise ValueError("rule produced no supported query")
-                    total, evidence, evaluated, missing, event_ids = matching_rows(connection, queries, category)
+                    total, evidence, evaluated, missing, event_ids, inferred = matching_rows(connection, queries, category)
                     if missing:
                         report["missing_field_events"] += int(missing)
                         if len(report["skipped"]) < 1000:
@@ -279,6 +318,8 @@ def scan(request, events_path):
                         ref_text = "; ".join(str(item) for item in refs if str(item).strip())
                         description = " ".join(str(getattr(rule, "description", None) or "").split())[:2000]
                         details = (description + " " if description else "") + "Evaluated against normalized captured Linux events; joined argv is not original shell quoting."
+                        if inferred[0]:
+                            details += f" {inferred[0]} of {total} matching events rely on inferred fields ({', '.join(inferred[1])}); an inferred value comes from tracking state or correlation, not from one captured call."
                         if ref_text:
                             details += " References: " + ref_text
                         details = details.encode("utf-8")[:8000].decode("utf-8", errors="ignore")
@@ -312,8 +353,7 @@ def classify_rules(paths):
     counts = {"files": 0, "syntax_rejected": 0, "rules": 0, "category_rejected": 0, "category_accepted": 0, "backend_rejected": 0, "backend_converted": 0, "schema_rejected": 0, "schema_accepted": 0}
     reasons = {key: [] for key in ("syntax", "logsource", "backend", "schema")}
     connection = sqlite3.connect(":memory:")
-    columns = ",".join(quoted(name) + " COLLATE NOCASE" for name in sorted(SCHEMA))
-    connection.execute("CREATE TABLE logs(_event_id INTEGER PRIMARY KEY, _category TEXT NOT NULL, _evidence TEXT NOT NULL," + columns + ")")
+    create_logs(connection)
     try:
         import re2
         connection.create_function("regexp", 2, lambda pattern, value: value is not None and re2.search(pattern, str(value)) is not None)
@@ -331,10 +371,7 @@ def classify_rules(paths):
         for rule in collection.rules:
             counts["rules"] += 1
             logsource = rule.logsource
-            category = (logsource.category or "").lower()
-            product = (logsource.product or "").lower()
-            service = (logsource.service or "").lower()
-            if product not in {"", "linux"} or service not in {"", "antinomie"} or category not in SUPPORTED_CATEGORIES:
+            if logsource_category(logsource) is None:
                 counts["category_rejected"] += 1
                 if len(reasons["logsource"]) < 30:
                     reasons["logsource"].append(str(rule.title) + ": " + str(logsource))

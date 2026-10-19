@@ -5,7 +5,7 @@
 //! sees one fixed file. Each page is a full bounded pass over it: the pass
 //! also yields the whole-journal counts, end record and SHA-256, which is how
 //! a page is tied to the digest a scan recorded.
-use super::{Event, Evidence, Identity, JOURNAL_FILE};
+use super::{Event, Evidence, Identity, JOURNAL_FILE, JOURNAL_VERSION, JOURNAL_VERSION_MIN};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
@@ -138,6 +138,8 @@ fn contains_text(event: &Event, needle: &str) -> bool {
 fn within_schema(event: &Event, categories: &BTreeMap<String, u64>) -> bool {
     event.category.len() <= 64
         && event.fields.len() <= 64
+        && event.inferred.len() <= 64
+        && event.inferred.iter().all(|name| name.len() <= 64)
         && matches!(
             event.evidence,
             Evidence::Call { .. } | Evidence::Packet { .. }
@@ -186,6 +188,7 @@ pub fn read_page(query: &Query, cancel: &AtomicBool) -> Result<Page, String> {
     let mut line = Vec::with_capacity(MAX_LINE as usize + 1);
     let mut size = 0_u64;
     let mut headed = false;
+    let mut format_version = 0;
     let mut end = None;
     let mut ended = false;
     let mut stopped = false;
@@ -242,8 +245,9 @@ pub fn read_page(query: &Query, cancel: &AtomicBool) -> Result<Page, String> {
         };
         if !headed {
             let identity = serde_json::from_value::<Identity>(value["identity"].clone()).ok();
+            format_version = value["format_version"].as_u64().unwrap_or(0);
             if value["kind"] != "header"
-                || value["format_version"] != 1
+                || !(JOURNAL_VERSION_MIN..=JOURNAL_VERSION).contains(&format_version)
                 || identity.as_ref() != Some(&query.identity)
             {
                 return Err("the event journal belongs to another run or format".into());
@@ -337,7 +341,7 @@ pub fn read_page(query: &Query, cancel: &AtomicBool) -> Result<Page, String> {
         matching,
         events,
         categories,
-        format_version: 1,
+        format_version,
         end,
         warnings,
         sha256,

@@ -330,10 +330,31 @@ file, counts rules, verifies repository licenses and writes `catalog.json`,
 schema 2 catalog has no archives to upload.
 
 Sigma `network_connection` rules are evaluated from `connect()` calls the
-kernel accepted (`DestinationIp`, `DestinationPort`, `Initiated`); there is no
-`DestinationHostname`, so rules that use it are listed as not evaluated. Sigma
-`auditd` rules need auditd log records, which a recording does not hold, so they
-are imported and marked not evaluated with that reason. Suricata is an optional system
+kernel accepted, `accept()` calls (`Initiated` false, the peer as `SourceIp`)
+and each UDP peer a socket first sends to (`sendto` with a captured address, or
+`connect` on a datagram socket), whose type comes from tracking `socket()`
+descriptors. `DestinationHostname` is the name of a DNS answer in the run's
+capture for that address, matched by address and, when several names share
+one, by time; it is marked inferred. `process_creation` carries
+`ParentImage`, `ParentCommandLine` and `ParentProcessId` from the fork or clone
+result and the parent's last committed exec, and `CurrentDirectory` from the
+launch directory followed through `chdir`/`fchdir` (inferred once a `chdir` has
+run, because the join is lexical). `file_event` covers `O_CREAT|O_EXCL`,
+`O_CREAT|O_TRUNC` and `creat()` opens, `O_TMPFILE`, `mkdir*`, `mknod*`,
+`link*` and `symlink*`; a truncating create counts as new only when the path
+was not seen to exist earlier in the run, which is inferred and marked so.
+Sigma `service: auditd` rules are evaluated against auditd-style records under
+the journal category `auditd`: `SYSCALL` (`Syscall`, `a0`..`a3` as hex, `exit`,
+`success`, `pid`, `ppid`, `exe`, `comm`), `EXECVE` (`argc`, `a0`..`a15` from
+the captured argument vector), `PATH` (`name`, `nametype`) and `SOCKADDR`
+(`saddr`). The trace has no audit keys, credentials, file modes or inodes, so
+those fields are absent and a rule that needs one is reported as not
+evaluated. An event's `_inferred` list (event journal format 2; format 1
+journals still load) names the fields that came from tracking or correlation,
+and a finding says how many of its matched events rely on one. Rules that need
+a field the journal lacks, and keyword rules, are still reported as not
+evaluated; other services (`syslog`, `sshd`, `cron` and similar) have no events.
+Suricata is an optional system
 package, listed in App dependencies. pySigma 2.x with its SQLite backend is
 the Sigma analysis tool: Tools > Analysis tools creates
 `<data-dir>/tools/sigma/venv` with the system Python and installs a
