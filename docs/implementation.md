@@ -33,6 +33,50 @@ marks invalid are unavailable, never zero. Kernels of revision 11 to 16 keep
 the temporary collector described below, unchanged, until their bases are
 outdated; a revision-17 kernel never receives the collector upload or exec.
 
+### Accepted debugger, phases 0 and 1 (0.7.0)
+
+The debugger is a ptrace-free, process-scoped engine in the guest kernel
+(`kernel/antinomie/debug.c`, one file per architecture, x86-64 first) driven by
+control opcodes `0x1080..0x108c` and served to gdb, IDA, Ghidra and radare2 by a
+host RSP server (`gdbstub 0.7.10`, MIT/Apache-2.0) on a loopback Unix socket and
+an ephemeral 127.0.0.1 port. Contract revision 17 is unchanged: the opcodes are
+additive and an older guest answers `-EOPNOTSUPP`. Layouts are in
+`protocol/control.h`, semantics, measurements and limits in `protocol/debugger.md`.
+
+* **Stealth.** No helper in the guest and no ptrace: `TracerPid` stays 0, the
+  sample's own `PTRACE_TRACEME` succeeds, engine breakpoints and steps raise no
+  `SIGTRAP`, the trap flag is hidden, and reads of the sample's own memory through
+  `/proc/self/mem` show original bytes while breakpoints are in. A direct load of
+  its own code can still see the engine's `0xCC`; hardware breakpoints (phase 2)
+  are the stealth tier.
+* **Multi-architecture.** Messages carry the ELF `e_machine`; registers travel as
+  regset blobs tagged with their ELF note type; `CAPS` reports breakpoint lengths,
+  hardware breakpoint and watchpoint counts and hardware single-step; the host
+  `DebugBackend` trait is implemented by the kernel engine and is the seam for a
+  QEMU-gdbstub backend; the GDB register image, the target description and any UI
+  register view are built from one `TargetDescription`.
+* **Host.** `Command::DebugAttach { identity }` opens the guest session and the
+  server; `Snapshot::debug` carries the endpoints and a ready-to-paste
+  `gdb -ex 'target remote 127.0.0.1:PORT'`. The server thread never touches the
+  transport: it sends requests, limited to the debug opcodes, to the transport
+  thread. A VM snapshot is refused while a debugger is attached; the VM stopping
+  or the app closing ends the session and resumes the process.
+* **Phase 0 evidence** (real BusyBox VM, KVM, one vCPU): a three-thread process
+  stopped without ptrace in 44-55 ms with memory provably frozen; registers (216 B
+  general, 512 B FXSAVE) and memory read and written; an `INT3` planted by the
+  engine caught 8 of 8 times before the task saw `SIGTRAP` with the instruction
+  pointer rewound; single-step advanced `hot+3`, `+7`, `+14` with TF clear in every
+  stop and in the word a stepped `PUSHF` stored. Go for phase 1.
+* **Phase 1 evidence**: a real `gdb` (17.2) connected, read registers
+  (including `fs_base` and `orig_rax`) and memory, set a breakpoint, continued to
+  it, stepped, and detached, and the sample then ran to its own exit. Also
+  verified with gdb: exit under the debugger reported as "exited normally", `kill`
+  ending the process, gdb killed mid-run (the process kept running, a new gdb
+  attached, no `SIGTRAP`), and Ctrl-C.
+* **Not yet** (later phases): debug on start, threads stepping while others run,
+  hardware breakpoints and watchpoints, signals, fork/vfork/exec following,
+  non-stop, the in-app debugger views, reconnect that re-adopts a session.
+
 ### Accepted guest credential and file-hash records (0.7.0)
 
 Revision 17 also gives the tracer two lifecycle records (layouts in
