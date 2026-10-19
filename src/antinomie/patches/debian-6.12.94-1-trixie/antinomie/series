@@ -31,3 +31,5 @@
 0027-antinomie-do-not-mark-the-command-worker-as-memory-reclaim.patch
 0028-antinomie-sample-guest-ram-and-root-filesystem-usage-in-the-kernel.patch
 0029-antinomie-record-task-credentials-and-hash-executed-and-deleted-files.patch
+0030-antinomie-define-the-debugger-control-opcodes-and-make-room-for-them.patch
+0031-antinomie-add-a-ptrace-free-process-debug-engine.patch

@@ -1,0 +1,144 @@
+Description: antinomie: define the debugger control opcodes and make room for them
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-20
+
+Additive control opcodes for the debugger and a larger command table; contract revision 17 unchanged.
+
+---
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index ceba5bb7c..0bbd13c6b 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -81,6 +81,58 @@
+ #define ANTC_RESOURCES_MEMORY_VALID 1
+ #define ANTC_RESOURCES_FILESYSTEM_VALID 2
+ #define ANTC_RESOURCES_REFRESHING 4
++/* Debugger (revision 17, additive): ptrace-free process debug sessions. */
++#define ANTC_DEBUG_CAPS 0x1080
++#define ANTC_DEBUG_ATTACH 0x1081
++#define ANTC_DEBUG_DETACH 0x1082
++#define ANTC_DEBUG_STATUS 0x1083
++#define ANTC_DEBUG_STOP 0x1084
++#define ANTC_DEBUG_CONT 0x1085
++#define ANTC_DEBUG_THREADS 0x1086
++#define ANTC_DEBUG_REGS_READ 0x1087
++#define ANTC_DEBUG_REGS_WRITE 0x1088
++#define ANTC_DEBUG_MEM_READ 0x1089
++#define ANTC_DEBUG_MEM_WRITE 0x108a
++#define ANTC_DEBUG_BP_SET 0x108b
++#define ANTC_DEBUG_BP_CLEAR 0x108c
++#define ANTC_DEBUG_ABI 1
++#define ANTC_DEBUG_CAPS_SIZE 48
++#define ANTC_DEBUG_REGSET_SIZE 16
++#define ANTC_DEBUG_REGSET_MAX 8
++#define ANTC_DEBUG_STATUS_SIZE 96
++#define ANTC_DEBUG_THREAD_SIZE 32
++#define ANTC_DEBUG_TRANSFER_MAX 16000
++#define ANTC_DEBUG_ATTACH_STOP 1
++#define ANTC_DEBUG_DETACH_KILL 1
++#define ANTC_DEBUG_CONT_STEP 1
++/* capability flags */
++#define ANTC_DEBUG_CAP_SW_BREAKPOINT 1
++#define ANTC_DEBUG_CAP_HW_SINGLE_STEP 2
++#define ANTC_DEBUG_CAP_SHADOW_READS 4
++#define ANTC_DEBUG_CAP_MULTI_THREAD 8
++#define ANTC_DEBUG_CAP_HW_BREAKPOINT 16
++#define ANTC_DEBUG_CAP_HW_WATCHPOINT 32
++/* session states */
++#define ANTC_DEBUG_RUNNING 1
++#define ANTC_DEBUG_STOPPING 2
++#define ANTC_DEBUG_STOPPED 3
++#define ANTC_DEBUG_RESUMING 4
++#define ANTC_DEBUG_EXITED 5
++#define ANTC_DEBUG_EXEC 6
++#define ANTC_DEBUG_DETACHING 7
++/* stop events */
++#define ANTC_DEBUG_EVENT_NONE 0
++#define ANTC_DEBUG_EVENT_INTERRUPT 1
++#define ANTC_DEBUG_EVENT_BREAKPOINT 2
++#define ANTC_DEBUG_EVENT_STEP 3
++#define ANTC_DEBUG_EVENT_EXIT 4
++#define ANTC_DEBUG_EVENT_EXEC 5
++/* per-thread states */
++#define ANTC_DEBUG_THREAD_RUNNING 1
++#define ANTC_DEBUG_THREAD_STOPPED 2
++#define ANTC_DEBUG_THREAD_GONE 3
++/* breakpoint kinds */
++#define ANTC_DEBUG_BP_SOFTWARE 1
+ /* Telemetry lifecycle records (no control command): phase-3 events whose one
+  * field is a fixed little-endian structure. Layout names are versioned.
+  * lifecycle.creds, layout "antinomie.creds/1", 72 bytes: u32 uid, euid, suid,
+@@ -282,6 +334,58 @@
+  * unprivileged), u32 fs_dev at 64 (new_encode_dev), u32 fs_type at 68,
+  * u64 fs_id at 72, u64 refresh_pending_ms at 80 (0 when idle), s32 mem_error
+  * at 88, zero at 92. A value is meaningful only when its VALID flag is set.
++ *
++ * Debugger (ptrace-free; the target sees no TracerPid, PTRACE_TRACEME still works,
++ * and no signal is raised for engine breakpoints or steps). One session at a
++ * time. Every request is header (version 1, header_len 8, flags) then the fields
++ * below. Replies are little endian. Registers travel as the kernel's regset
++ * blobs tagged with their ELF note type (NT_PRSTATUS=1 user_regs_struct,
++ * NT_PRFPREG=2 FXSAVE image, NT_X86_XSTATE=0x202), so another architecture adds
++ * a per-arch file and no wire change. All memory/register access needs the
++ * session STOPPED (else -EBUSY); a stale generation is -ESTALE.
++ * CAPS: header only. Reply 48 bytes + regset table: u32 abi(1) at 0, u32 arch
++ * (ELF e_machine) at 4, u32 flags at 8, u32 swbp_len_mask at 12 (bit n-1 means
++ * a length-n software breakpoint), u32 hw_breakpoints at 16, u32 hw_watchpoints
++ * at 20, u32 hw_watch_len_mask at 24, u32 max_threads at 28, u32 max_transfer at
++ * 32, u32 regset_count (0..8) at 36, zero at 40; then 16-byte regset entries
++ * {u32 nt_type, u32 max_size (0 = query), u32 flags (bit0 writable), u32 0}.
++ * ATTACH: flags bit0 STOP_NOW, u64 task_cookie at 8, u64 start_boot_ns at 16,
++ * u32 tgid at 24, u32 arch at 28 (must equal CAPS arch), u64 nonce_lo at 32,
++ * u64 nonce_hi at 40 (nonzero); 48 bytes. Reply: u64 session_id, u64 generation,
++ * u32 thread_count, u32 arch (24 bytes). The same nonce and identity returns the
++ * existing session; another request while one exists is -EBUSY (an EXITED or
++ * EXEC session is replaced). Mutations are never replayed by the guest.
++ * DETACH: flags bit0 KILL, u64 session_id at 8 (16 bytes). Asynchronous: it
++ * stops the group, removes breakpoints and resumes (or SIGKILLs); STATUS shows
++ * DETACHING until the session is gone (-ESRCH). A group that cannot be stopped
++ * stays attached with last_error set.
++ * STATUS: u64 session_id at 8 (16 bytes). Reply 96 bytes: u64 session_id at 0,
++ * u64 generation at 8, u32 state at 16, u32 flags at 20, u32 live threads at 24,
++ * u32 stopped threads at 28, u32 event kind at 32, u32 event tid at 36, u64
++ * event pc at 40, u64 event address at 48, u32 wait status (EXITED) at 56,
++ * s32 last_error at 60, u32 event sequence at 64, u32 breakpoints at 68, zero.
++ * STOP: session_id at 8; asynchronous group stop, reply u64 generation. A
++ * breakpoint, step or exit stops the group by itself (all-stop).
++ * CONT: flags bit0 STEP, u64 session_id at 8, u64 tid at 16 (STEP: the thread to
++ * step, others stay stopped; 0 continue), u32 signal at 24 (must be 0), u32 0 at
++ * 28, u64 generation at 32 (40 bytes). Asynchronous; reply u64 generation. A
++ * breakpoint under a thread is stepped over with the group stopped.
++ * THREADS: session_id at 8. Reply u32 count at 0, u32 total at 4, then 32-byte
++ * entries {u32 tid, u32 state, u32 stop reason, u32 0, u64 pc, u64 0}.
++ * REGS_READ: session_id at 8, u32 tid at 16, u32 nt_type at 20, u64 generation
++ * at 24 (32 bytes). Reply u32 nt_type, u32 length, u64 0, then the blob.
++ * REGS_WRITE: the same 32 bytes, u32 length at 32, u32 0 at 36, blob at 40.
++ * The kernel validates the blob like its own regset writer. Empty reply.
++ * MEM_READ: session_id at 8, u64 address at 16, u32 length (1..16000) at 24,
++ * u32 0 at 28, u64 generation at 32 (40 bytes). Reply u32 count, u32 0, bytes at
++ * 8. Short reads end at the first unreadable byte; none readable is -EFAULT.
++ * MEM_WRITE: the same 40 bytes with the length at 24, bytes at 40. Reply u32
++ * count, u32 0. Writes break copy-on-write like a debugger's poke.
++ * BP_SET / BP_CLEAR: session_id at 8, u32 kind (1 software) at 16, u32 length
++ * at 20, u64 address at 24, u64 generation at 32 (40 bytes), empty reply. A
++ * software breakpoint is written only while the group runs and removed at every
++ * stop; the sample's own reads through /proc/self/mem see the original bytes.
++ * A direct load from its own code can still see the engine's breakpoint byte.
+  * SHUTDOWN: header only; empty success reply, delayed kernel_power_off.
+  */
+ #endif
+diff --git a/kernel/antinomie/guest.c b/kernel/antinomie/guest.c
+index de445d3fd..591ece178 100644
+--- a/kernel/antinomie/guest.c
++++ b/kernel/antinomie/guest.c
+@@ -44,7 +44,7 @@ struct ant_handler {
+ 	ant_command_handler fn;
+ 	void *context;
+ };
+-static struct ant_handler handlers[32];
++static struct ant_handler handlers[64];
+ static DECLARE_RWSEM(handler_lock);
+ static u8 command_args[ANT_MAX_COMMAND_LEN], command_result[ANT_MAX_RESULT_LEN];
+ static u64 last_request_id;
