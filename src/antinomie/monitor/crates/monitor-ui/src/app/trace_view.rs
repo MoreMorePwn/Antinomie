@@ -790,6 +790,21 @@ impl MonitorApp {
         for request in std::mem::take(&mut self.inspector.open_data) {
             self.data_windows.open(ui.ctx(), request, directory.clone());
         }
+        if let Some(wanted) = self.inspector.take_async_read() {
+            match directory.clone() {
+                Some(directory) => self.queue_archive(Request::AsyncObservations {
+                    generation: wanted.generation,
+                    directory,
+                    capture: self.selected_capture.is_some(),
+                    call: wanted.call,
+                    from: wanted.from,
+                    cancel: wanted.cancel,
+                }),
+                None => self
+                    .inspector
+                    .fail_async(wanted.generation, "No saved recording to read from"),
+            }
+        }
         if let Some((field, offset, data_len)) = read {
             if let Some(directory) = directory {
                 self.inspector.generation = self.inspector.generation.wrapping_add(1);

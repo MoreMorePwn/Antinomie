@@ -64,6 +64,8 @@ impl From<serde_json::Error> for RecordingError {
 /// ones and reports that the rest were left out.
 pub const PROCESS_TREE_LIMIT: usize = 262_144;
 
+mod async_page;
+mod call_reader;
 mod index_cache;
 mod issues;
 use issues::push_issue;
@@ -334,7 +336,7 @@ fn raw_identity(path: &Path) -> Result<(String, u64), RecordingError> {
         path,
     )?
     .metadata()?;
-    Ok((format!("index-v7:{}:{}", m.dev(), m.ino()), m.len()))
+    Ok((format!("index-v8:{}:{}", m.dev(), m.ino()), m.len()))
 }
 /// The packet index of a recording, kept in the user's cache. A recording
 /// still being written (a run whose programs live on, a running capture) is
@@ -451,9 +453,10 @@ fn open_archive_index(
             // The secondary indexes are built once the rows are in: faster than
             // keeping them current for every packet of a first pass.
             transaction.execute_batch(
-                "DROP TABLE IF EXISTS metadata; DROP TABLE IF EXISTS invocations; DROP TABLE IF EXISTS packets; \
+                "DROP TABLE IF EXISTS metadata; DROP TABLE IF EXISTS invocations; DROP TABLE IF EXISTS packets; DROP TABLE IF EXISTS lifecycle; \
                  CREATE TABLE invocations(key BLOB PRIMARY KEY, first_offset INTEGER NOT NULL, pid INTEGER NOT NULL); \
-                 CREATE TABLE packets(key BLOB NOT NULL, offset INTEGER NOT NULL);",
+                 CREATE TABLE packets(key BLOB NOT NULL, offset INTEGER NOT NULL, phase INTEGER NOT NULL, seq INTEGER NOT NULL); \
+                 CREATE TABLE lifecycle(key BLOB NOT NULL, seq INTEGER NOT NULL, task_exit INTEGER NOT NULL, PRIMARY KEY(key, seq)) WITHOUT ROWID;",
             )?;
         }
         let mut indexed = resume.unwrap_or(0);
@@ -461,8 +464,12 @@ fn open_archive_index(
             let mut invocation = transaction.prepare(
                 "INSERT OR IGNORE INTO invocations(key,first_offset,pid) VALUES(?1,?2,?3)",
             )?;
-            let mut packets =
-                transaction.prepare("INSERT INTO packets(key,offset) VALUES(?1,?2)")?;
+            let mut packets = transaction
+                .prepare("INSERT INTO packets(key,offset,phase,seq) VALUES(?1,?2,?3,?4)")?;
+            let mut lifecycle = transaction.prepare(
+                "INSERT INTO lifecycle(key,seq,task_exit) VALUES(?1,?2,?3) \
+                 ON CONFLICT(key,seq) DO UPDATE SET task_exit=MAX(task_exit,excluded.task_exit)",
+            )?;
             let mut reader = BufReader::new(archive_io::open_regular(directory, &raw)?);
             reader.seek(SeekFrom::Start(indexed))?;
             loop {
@@ -498,14 +505,18 @@ fn open_archive_index(
                     if matches!(header.phase, 1 | 2) || async_parent {
                         invocation.execute(rusqlite::params![key, offset, header.pid])?;
                     }
-                    packets.execute(rusqlite::params![key, offset])?;
+                    let seq = async_page::seq_index(header.event_seq);
+                    packets.execute(rusqlite::params![key, offset, header.phase, seq])?;
+                    if let Some(task_exit) = async_page::lifecycle_field(&header, &packet) {
+                        lifecycle.execute(rusqlite::params![key, seq, task_exit])?;
+                    }
                 }
             }
         }
         transaction.execute_batch(
             "CREATE INDEX IF NOT EXISTS invocation_order ON invocations(first_offset); \
              CREATE INDEX IF NOT EXISTS invocation_process ON invocations(pid, first_offset); \
-             CREATE INDEX IF NOT EXISTS packet_keys ON packets(key,offset);",
+             CREATE INDEX IF NOT EXISTS packet_events ON packets(key,phase,seq,offset);",
         )?;
         if raw_identity(&raw)?.0 != identity {
             return Err(RecordingError::Limit(
@@ -688,108 +699,12 @@ impl Recording {
         pid: Option<u32>,
         cancel: &AtomicBool,
     ) -> Result<InvocationPage, RecordingError> {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(RecordingError::Limit("archive read cancelled"));
-        }
-        if !(1..=256).contains(&limit) {
-            return Err(RecordingError::Limit("page size must be 1..256"));
-        }
-        let path = self.directory.join("telemetry.raw");
-        if offset > fs::metadata(&path)?.len() {
-            return Err(RecordingError::Limit("cursor beyond raw archive"));
-        }
-        let (connection, identity) = archive_index(&self.directory, cancel)?;
-        let mut query = connection.prepare(
-            "SELECT key,first_offset FROM invocations WHERE first_offset>=?1 \
-             AND (?3 IS NULL OR pid=?3) ORDER BY first_offset LIMIT ?2",
-        )?;
-        let selected = query
-            .query_map(
-                rusqlite::params![
-                    i64::try_from(offset).map_err(|_| RecordingError::Limit("cursor too large"))?,
-                    (limit + 1) as i64,
-                    pid
-                ],
-                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?)),
-            )?
-            .collect::<Result<Vec<_>, _>>()?;
-        let next_offset = selected
-            .get(limit)
-            .map(|row| u64::try_from(row.1))
-            .transpose()
-            .map_err(|_| RecordingError::Limit("negative cached offset"))?;
-        let selected = &selected[..selected.len().min(limit)];
-        let keys: Vec<_> = selected.iter().map(|row| row.0.clone()).collect();
-        let mut assembler = Assembler::open_archive(self.directory.join("objects"))
-            .map_err(|_| RecordingError::Limit("cannot open archived objects"))?;
-        let mut latest = std::collections::BTreeMap::new();
-        let mut issues = Vec::new();
-        let mut reader = BufReader::new(archive_io::open_regular(&self.directory, &path)?);
-        let mut packet_query =
-            connection.prepare("SELECT offset FROM packets WHERE key=?1 ORDER BY offset")?;
-        for key in &keys {
-            let offsets = packet_query.query_map([key], |row| row.get::<_, i64>(0))?;
-            for offset in offsets {
-                if cancel.load(Ordering::Relaxed) {
-                    return Err(RecordingError::Limit("archive read cancelled"));
-                }
-                reader.seek(SeekFrom::Start(u64::try_from(offset?).map_err(|_| {
-                    RecordingError::Limit("negative cached packet offset")
-                })?))?;
-                let (_, packet) = next_packet(&mut reader)?
-                    .ok_or(RecordingError::Limit("indexed packet is missing"))?;
-                if invocation_key(&packet).map(key_blob).as_ref() != Some(key) {
-                    return Err(RecordingError::Limit("indexed packet identity changed"));
-                }
-                match assembler.ingest(&packet) {
-                    Ok(Some(event)) => {
-                        latest.insert(
-                            (
-                                event.stream_id,
-                                event.task_cookie,
-                                event.call_id,
-                                event.phase,
-                                if event.phase == 3 { event.event_seq } else { 0 },
-                            ),
-                            event,
-                        );
-                        if latest.len() > 2048 {
-                            let key = latest
-                                .keys()
-                                .next()
-                                .cloned()
-                                .ok_or(RecordingError::Limit("missing event index"))?;
-                            latest.remove(&key);
-                            if issues.len() < 32 {
-                                issues.push("archive page exceeds 2048 event preview limit; raw records retained".into());
-                            }
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        push_issue(&mut issues, error.to_string());
-                    }
-                }
-            }
-        }
-        // Growing is fine (indexed packets do not move); another file is not.
-        if raw_identity(&path)?.0 != identity {
-            return Err(RecordingError::Limit(
-                "raw archive was replaced while being read; open it again",
-            ));
-        }
-        let events: Vec<_> = latest.into_values().collect();
-        let mut invocations = pair_events(&events);
-        invocations.sort_by_key(|row| {
-            keys.iter()
-                .position(|key| *key == key_blob((row.stream_id, row.task_cookie, row.call_id)))
-                .unwrap_or(usize::MAX)
-        });
-        Ok(InvocationPage {
-            invocations,
-            next_offset,
-            issues,
-        })
+        // The same bounded reconstruction the filtered pages use: entry, exit
+        // and task end are kept, and async observations beyond the preview
+        // are counted, not dropped.
+        Ok(self
+            .matching_page_cancellable(offset, limit, pid, cancel, |_| true)?
+            .page)
     }
 
     /// Journal cursor is a byte offset; output and resize order are preserved.
@@ -1187,6 +1102,7 @@ pub fn read_captured_range(
 mod tests {
     use super::*;
     use std::io::Write;
+    mod async_browse;
     mod index_concurrency;
     fn facts_for_health(
         health: serde_json::Value,

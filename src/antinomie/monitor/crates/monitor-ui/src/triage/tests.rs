@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 
+mod async_previews;
+
 #[test]
 #[ignore = "requires X11 native rendering; synthetic triage evidence fixture"]
 fn native_triage_fixture() {
@@ -1115,6 +1117,7 @@ pub(super) fn call(pid: u32, nr: u64, name: &str, result: i64) -> InvocationSumm
             fields: Vec::new(),
         }),
         async_events: Vec::new(),
+        async_saved: 0,
         task_exit: None,
     }
 }

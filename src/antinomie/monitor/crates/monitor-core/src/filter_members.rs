@@ -490,6 +490,7 @@ mod tests {
             }),
             exit: None,
             async_events: Vec::new(),
+            async_saved: 0,
             task_exit: None,
         }
     }

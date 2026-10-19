@@ -6,6 +6,13 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Browse every saved async observation of a call.** Heavy io_uring runs no
+  longer lose entry, exit or task-end facts when thousands of completions land on
+  one syscall. A call row previews its first 256 observations, says how many were
+  saved and how many are not shown, and Trace pages through the rest from the
+  archive without reading the whole call. Triage reports the calls it only
+  previewed. The packet index cache is rebuilt once; recordings are unchanged.
+
 - **Inspect the Sigma event journal.** The Event journal row under Detection →
   Scanned inputs, and a Sigma finding's evidence, open a read-only viewer of the
   normalized events the rules were matched against: category, time, process and

@@ -46,6 +46,12 @@ impl MonitorApp {
                 self.inspector.pending = false;
                 self.inspector.error = Some("Read superseded".into());
             }
+            Request::AsyncObservations {
+                generation, cancel, ..
+            } => {
+                cancel.store(true, Ordering::Relaxed);
+                self.inspector.fail_async(generation, "Read superseded");
+            }
             Request::Specimen {
                 view_key,
                 generation,
@@ -74,6 +80,7 @@ impl MonitorApp {
         match request {
             Request::Invocations { .. }
             | Request::Captured { .. }
+            | Request::AsyncObservations { .. }
             | Request::ProcessTree { .. } => self.supersede(request),
             // The view that asked is gone, so nothing waits for the answer.
             Request::Specimen { ref view_key, .. } | Request::Listing { ref view_key, .. }
@@ -103,6 +110,9 @@ impl MonitorApp {
                 Request::Listing { view_key, .. } => {
                     self.fail_listing_read(&view_key, "Archive worker unavailable")
                 }
+                Request::AsyncObservations { generation, .. } => self
+                    .inspector
+                    .fail_async(generation, "Archive worker unavailable"),
                 _ => {}
             }
             return;
@@ -135,6 +145,9 @@ impl MonitorApp {
                         Request::Listing { view_key, .. } => {
                             self.fail_listing_read(&view_key, "Archive worker disconnected")
                         }
+                        Request::AsyncObservations { generation, .. } => self
+                            .inspector
+                            .fail_async(generation, "Archive worker disconnected"),
                         _ => {}
                     }
                 }
@@ -172,9 +185,14 @@ impl MonitorApp {
         self.selected_event = None;
         self.trace_evidence = None;
         self.inspector.clear();
+        self.inspector.end_async();
         if matches!(
             self.pending_archive,
-            Some(Request::Invocations { .. } | Request::Captured { .. })
+            Some(
+                Request::Invocations { .. }
+                    | Request::Captured { .. }
+                    | Request::AsyncObservations { .. }
+            )
         ) {
             if let Some(old) = self.pending_archive.take() {
                 self.supersede(old);
@@ -505,6 +523,11 @@ impl MonitorApp {
                     Err(error) => self.inspector.error = Some(error),
                 }
             }
+            Answer::AsyncObservations {
+                generation,
+                call,
+                result,
+            } => self.inspector.async_answer(generation, call, result),
             Answer::Terminal {
                 run_id,
                 generation,

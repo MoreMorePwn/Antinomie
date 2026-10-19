@@ -2,6 +2,7 @@
 use super::{session::*, trace_view::*, *};
 mod analysis;
 mod analysis_sections;
+mod async_browse;
 mod bases;
 mod capture;
 mod chrome;

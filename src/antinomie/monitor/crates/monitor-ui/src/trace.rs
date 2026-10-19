@@ -8,6 +8,7 @@ use crate::{
 use antinomie_monitor_core::{syscalls, FieldSummary, InvocationSummary, WaitStatus};
 use eframe::egui::{self, Color32, RichText};
 
+pub(crate) mod async_browse;
 mod tree_row;
 use tree_row::{note_row, section_row, tree_row, Row};
 
@@ -51,6 +52,8 @@ pub(crate) struct Inspector {
     numeric_width: usize,
     /// Fields the user asked to see in a data window; the app opens them.
     pub(crate) open_data: Vec<OpenData>,
+    /// The saved async observations past a call's preview, a page at a time.
+    pub(crate) observations: async_browse::State,
 }
 
 impl Inspector {
@@ -123,10 +126,7 @@ impl Inspector {
                 format!("p{phase}"),
             ),
             Some(Selection::AsyncCaptured { event_seq, .. }) => (
-                invocation
-                    .async_events
-                    .iter()
-                    .find(|event| event.event_seq == *event_seq)
+                self.find_async(invocation, *event_seq)
                     .map_or(0, |event| event.syscall_nr),
                 format!("async{event_seq}"),
             ),
@@ -183,6 +183,7 @@ impl Inspector {
         if self.selection.is_none() {
             self.select_first(invocation);
         }
+        self.observations.allow_reads(can_read);
         let width = ui.available_width();
         egui::SidePanel::left("argument_tree")
             .default_width((width * 0.5).clamp(220.0, 640.0))
@@ -604,25 +605,7 @@ impl Inspector {
             }
         }
 
-        if section_row(
-            ui,
-            ui.id().with((salt, "async")),
-            &format!("Async ({})", invocation.async_events.len()),
-            false,
-        ) {
-            if invocation.async_events.is_empty() {
-                note_row(
-                    ui,
-                    &root.child(true),
-                    "No correlated async observations",
-                    theme::muted(),
-                );
-            }
-            let count = invocation.async_events.len();
-            for (index, event) in invocation.async_events.iter().enumerate() {
-                self.async_event(ui, invocation, event, root.child(index + 1 == count));
-            }
-        }
+        self.async_section(ui, invocation, &root);
     }
 
     /// Captured fields of one argument or of the call, under "At entry" and
@@ -847,7 +830,8 @@ impl Inspector {
                 None
             }
             Some(Selection::Captured { .. } | Selection::AsyncCaptured { .. }) => {
-                let Some(field) = self.field(invocation) else {
+                let browsed = self.browsed_field(invocation);
+                let Some(field) = self.field(invocation).or(browsed.as_ref()) else {
                     ui.colored_label(theme::muted(), "Captured field unavailable");
                     return None;
                 };
@@ -1719,6 +1703,7 @@ pub(crate) fn info_parts(invocation: &InvocationSummary) -> Vec<(String, Tone)> 
                 .join(", ")
         ));
     }
+    notes.extend(async_browse::partial_note(invocation));
     for event in invocation.entry.iter().chain(invocation.exit.iter()) {
         if !event.complete || !event.issues.is_empty() {
             let mut note = format!(
@@ -2010,6 +1995,7 @@ mod tests {
             entry: Some(entry),
             exit: Some(event(2)),
             async_events: Vec::new(),
+            async_saved: 0,
             task_exit: None,
         }
     }

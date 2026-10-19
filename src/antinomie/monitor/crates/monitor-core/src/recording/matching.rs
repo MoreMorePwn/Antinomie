@@ -4,6 +4,7 @@
 //! it shows, so its cost follows the page, not the recording. The totals walk
 //! every call once; callers run them off the interactive path and keep the
 //! answer for the same recording, filter and indexed length.
+use super::call_reader::{ASYNC_PARTIAL, CallReader};
 use super::*;
 
 /// The prefix of a raw archive a read covered. An append-only archive that
@@ -39,132 +40,15 @@ pub struct MatchTotals {
     pub stamp: ArchiveStamp,
 }
 
-/// Assembles one indexed call at a time from its packets.
-struct CallReader<'a> {
-    objects: PathBuf,
-    reader: BufReader<File>,
-    packets: rusqlite::Statement<'a>,
-    boundary: u64,
-    issues: Vec<String>,
-}
-
-impl<'a> CallReader<'a> {
-    fn open(
-        directory: &Path,
-        connection: &'a rusqlite::Connection,
-        boundary: u64,
-    ) -> Result<Self, RecordingError> {
-        let objects = directory.join("objects");
-        // One check of the objects directory for the whole read.
-        Assembler::open_archive(objects.clone())
-            .map_err(|_| RecordingError::Limit("cannot open archived objects"))?;
-        let file = archive_io::open_regular(directory, &directory.join("telemetry.raw"))?;
-        Ok(Self {
-            objects,
-            // Packets are read at scattered offsets: a small buffer.
-            reader: BufReader::with_capacity(1024, file),
-            packets: connection
-                .prepare("SELECT offset FROM packets WHERE key=?1 AND offset<?2 ORDER BY offset")?,
-            boundary,
-            issues: Vec::new(),
-        })
-    }
-
-    /// The call under `key` as the ordinary archive page shows it; `None`
-    /// when its packets pair into no call (lifecycle-only observations).
-    fn call(
-        &mut self,
-        key: &[u8],
-        cancel: &AtomicBool,
-    ) -> Result<Option<InvocationSummary>, RecordingError> {
-        let mut assembler = Assembler::archive_checked(self.objects.clone());
-        let mut latest = std::collections::BTreeMap::new();
-        let mut preview_size = 0_usize;
-        let offsets = self
-            .packets
-            .query_map(rusqlite::params![key, self.boundary as i64], |row| {
-                row.get::<_, i64>(0)
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        for packet_offset in offsets {
-            if cancel.load(Ordering::Relaxed) {
-                return Err(RecordingError::Limit("archive read cancelled"));
-            }
-            let packet_offset = u64::try_from(packet_offset)
-                .map_err(|_| RecordingError::Limit("negative cached packet offset"))?;
-            self.reader.seek(SeekFrom::Start(packet_offset))?;
-            let (_, packet) = next_packet(&mut self.reader)?
-                .ok_or(RecordingError::Limit("indexed packet is missing"))?;
-            if self.reader.stream_position()? > self.boundary {
-                return Err(RecordingError::Limit(
-                    "indexed packet exceeds retained boundary",
-                ));
-            }
-            if invocation_key(&packet).map(key_blob).as_deref() != Some(key) {
-                return Err(RecordingError::Limit("indexed packet identity changed"));
-            }
-            match assembler.ingest(&packet) {
-                Ok(Some(event)) => {
-                    let event_key = (
-                        event.phase,
-                        if event.phase == 3 { event.event_seq } else { 0 },
-                    );
-                    let event_size = event_preview_size(&event);
-                    let previous = latest.insert(event_key, event);
-                    preview_size = preview_size
-                        .saturating_sub(previous.as_ref().map_or(0, event_preview_size))
-                        .saturating_add(event_size);
-                    if latest.len() > 2048 {
-                        // Preserve entry/exit and task-exit evidence; ordinary
-                        // async summaries retain their existing bounded preview.
-                        let remove = latest
-                            .iter()
-                            .rev()
-                            .find(|(key, event)| {
-                                key.0 == 3
-                                    && !event
-                                        .fields
-                                        .iter()
-                                        .any(|field| field.key == "lifecycle.task_exit")
-                            })
-                            .map(|(key, _)| *key)
-                            .or_else(|| latest.keys().next().copied());
-                        if let Some(remove) = remove
-                            && let Some(removed) = latest.remove(&remove)
-                        {
-                            preview_size =
-                                preview_size.saturating_sub(event_preview_size(&removed));
-                        }
-                        let omitted =
-                            "additional archive event previews omitted; raw records retained";
-                        if self.issues.len() < 32
-                            && !self.issues.iter().any(|issue| issue == omitted)
-                        {
-                            self.issues.push(omitted.into());
-                        }
-                    }
-                    if preview_size > 32 * 1024 * 1024 {
-                        return Err(RecordingError::Limit(
-                            "archive invocation previews exceed 32 MiB; raw records retained",
-                        ));
-                    }
-                }
-                Ok(None) => {}
-                Err(error) => push_issue(&mut self.issues, error.to_string()),
-            }
-        }
-        let events: Vec<_> = latest.into_values().collect();
-        Ok(pair_events(&events).into_iter().next())
-    }
-}
-
-fn indexed_boundary(connection: &rusqlite::Connection) -> Result<u64, RecordingError> {
+pub(super) fn indexed_boundary(connection: &rusqlite::Connection) -> Result<u64, RecordingError> {
     let boundary: i64 =
         connection.query_row("SELECT length FROM indexed LIMIT 1", [], |row| row.get(0))?;
     u64::try_from(boundary).map_err(|_| RecordingError::Limit("negative indexed boundary"))
 }
 
-fn call_rows(connection: &rusqlite::Connection) -> Result<rusqlite::Statement<'_>, RecordingError> {
+pub(super) fn call_rows(
+    connection: &rusqlite::Connection,
+) -> Result<rusqlite::Statement<'_>, RecordingError> {
     Ok(connection.prepare(
         "SELECT key,first_offset FROM invocations WHERE first_offset>=?1 AND first_offset<?2 \
          AND (?3 IS NULL OR pid=?3) ORDER BY first_offset",
@@ -248,7 +132,10 @@ impl Recording {
             }
             invocations.push(invocation);
         }
-        let issues = std::mem::take(&mut reader.issues);
+        let mut issues = reader.take_issues();
+        if invocations.iter().any(|call| call.async_omitted() > 0) {
+            push_issue(&mut issues, ASYNC_PARTIAL.into());
+        }
         drop(rows);
         let (after_identity, after_size) = raw_identity(&path)?;
         if after_identity != identity || after_size < boundary {

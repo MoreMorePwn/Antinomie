@@ -75,7 +75,14 @@ fn main() {
                 if call.async_events.is_empty() {
                     String::new()
                 } else {
-                    format!(" (+{} async)", call.async_events.len())
+                    format!(
+                        " (+{} async{})",
+                        call.async_events.len(),
+                        match call.async_omitted() {
+                            0 => String::new(),
+                            omitted => format!(", {omitted} more saved"),
+                        }
+                    )
                 }
             );
             shown += 1;

@@ -1,0 +1,102 @@
+// SPDX-License-Identifier: MIT
+//! Continuation pages for the async observations of one saved call.
+//!
+//! An archive page carries at most [`ASYNC_PREVIEW_LIMIT`] observations per
+//! call and says how many more were saved. This reads the rest, a bounded
+//! page at a time, from the same packet index and raw archive.
+use super::call_reader::CallReader;
+use super::matching::indexed_boundary;
+use super::*;
+
+/// Index form of an event sequence. SQLite integers are signed; flipping the
+/// top bit keeps the order of the unsigned sequences.
+pub(super) fn seq_index(seq: u64) -> i64 {
+    (seq ^ (1 << 63)) as i64
+}
+
+fn seq_from_index(value: i64) -> u64 {
+    (value as u64) ^ (1 << 63)
+}
+
+/// Whether the field-begin `packet` names a lifecycle record, and if so
+/// whether that record is the end of the task.
+pub(super) fn lifecycle_field(header: &parser::Header, packet: &[u8]) -> Option<bool> {
+    if header.phase != 3 || header.fragment != 2 {
+        return None;
+    }
+    let (_, body) = parser::parse_packet(packet).ok()?;
+    let length = usize::from(u16::from_le_bytes(body.get(32..34)?.try_into().ok()?));
+    let name = body.get(40..40usize.checked_add(length)?)?;
+    name.starts_with(b"lifecycle.")
+        .then_some(name == b"lifecycle.task_exit")
+}
+
+impl Recording {
+    /// Read one page of the async observations saved for a call.
+    ///
+    /// | Argument | Meaning |
+    /// | --- | --- |
+    /// | `call` | Stream, task cookie and call ID of an invocation from an archive page |
+    /// | `from_event_seq` | Inclusive cursor: `0` for the first page, then a page's `next_event_seq` |
+    /// | `limit` | Maximum observations, in `1..=`[`ASYNC_PREVIEW_LIMIT`] |
+    /// | `cancel` | Cooperative cancellation, checked while indexing and reading packets |
+    ///
+    /// Lifecycle records (task end, exec commit) are not async observations;
+    /// the call row carries the task end. Every other observation the index
+    /// holds for the call is returned once, in event order, even when some of
+    /// its packets are missing: it then reads as incomplete. Only the
+    /// packets of the page are read.
+    pub fn async_page_cancellable(
+        &self,
+        call: (u64, u64, u64),
+        from_event_seq: u64,
+        limit: usize,
+        cancel: &AtomicBool,
+    ) -> Result<AsyncPage, RecordingError> {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(RecordingError::Limit("archive read cancelled"));
+        }
+        if !(1..=ASYNC_PREVIEW_LIMIT).contains(&limit) {
+            return Err(RecordingError::Limit("async page size must be 1..256"));
+        }
+        retry_index_busy(cancel, || {
+            self.async_page_once(call, from_event_seq, limit, cancel)
+        })
+    }
+
+    fn async_page_once(
+        &self,
+        call: (u64, u64, u64),
+        from_event_seq: u64,
+        limit: usize,
+        cancel: &AtomicBool,
+    ) -> Result<AsyncPage, RecordingError> {
+        let path = self.directory.join("telemetry.raw");
+        let (connection, identity) = archive_index(&self.directory, cancel)?;
+        let boundary = indexed_boundary(&connection)?;
+        let key = key_blob(call);
+        let known = connection
+            .query_row("SELECT 1 FROM invocations WHERE key=?1", [&key], |_| Ok(()))
+            .optional()?;
+        if known.is_none() {
+            return Err(RecordingError::Limit("call is not in the archive index"));
+        }
+        let mut reader = CallReader::open(&self.directory, &connection, boundary)?;
+        let mut preview = reader.preview();
+        let window = reader.window(&key, seq_index(from_event_seq), limit, &mut preview, cancel)?;
+        let total = reader.saved(&key)?;
+        let issues = reader.take_issues();
+        let (after_identity, after_size) = raw_identity(&path)?;
+        if after_identity != identity || after_size < boundary {
+            return Err(RecordingError::Limit(
+                "raw archive was replaced or shrunk while being read; open it again",
+            ));
+        }
+        Ok(AsyncPage {
+            events: preview.latest.into_values().collect(),
+            next_event_seq: window.next.map(seq_from_index),
+            total,
+            issues,
+        })
+    }
+}
