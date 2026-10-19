@@ -180,6 +180,17 @@ are selected; original notices are retained in
 [rustix-COPYRIGHT.txt](LICENSES/third-party/rustix-COPYRIGHT.txt), copied from
 the locked crate distributions. This does not complete the transitive audit.
 
+The Disks tab reads a stopped VM's guest filesystem in process with
+`ext4-view 1.0.0` (Nicholas Bishop, Google LLC; MIT OR Apache-2.0, with the MIT
+option selected; read-only, `forbid(unsafe_code)`). The reader runs only in the
+sandboxed `antinomie-monitor --disk-reader` worker. Its notice is retained
+unmodified from the locked crate distribution in
+[ext4-view-MIT.txt](LICENSES/third-party/ext4-view-MIT.txt). Its dependencies
+`bitflags` and `crc` were already locked (MIT OR Apache-2.0 each) and are
+covered by the shared inventory above. `qemu-img` (QEMU, GPL-2.0-or-later and
+other terms), bubblewrap and util-linux `prlimit` are external tools the tab
+runs; none is bundled or linked.
+
 Rust crates, linked system libraries and external tools retain their own terms.
 Use the locked Cargo metadata and actual packaged artifacts, not just the
 application manifest, to inventory a release. The source workspace's MIT
