@@ -31,6 +31,17 @@ pub(crate) enum Panel {
 }
 
 impl Panel {
+    pub(crate) const MAIN: [Self; 8] = [
+        Self::Summary,
+        Self::RunHistory,
+        Self::Triage,
+        Self::Trace,
+        Self::Network,
+        Self::Memory,
+        Self::CoreDump,
+        Self::StaticAnalysis,
+    ];
+
     pub(crate) fn title(&self) -> &str {
         match self {
             Self::Trace => "Syscall Trace",
@@ -136,8 +147,8 @@ impl DetailsFollow {
 }
 
 /// Arrangement compatibility. Versions before 3 reset obsolete flattened
-/// layouts; version 4 adds Summary while preserving the version-3 dock tree.
-const LAYOUT_VERSION: u32 = 5;
+/// layouts; version 6 migrates only the untouched version-5 tab order.
+const LAYOUT_VERSION: u32 = 6;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct WorkspaceLayout {
@@ -170,16 +181,7 @@ pub(crate) struct WorkspaceLayout {
 impl Default for WorkspaceLayout {
     fn default() -> Self {
         // Summary opens first, immediately to the left of Run History.
-        let mut dock = DockState::new(vec![
-            Panel::Summary,
-            Panel::RunHistory,
-            Panel::Trace,
-            Panel::Network,
-            Panel::Memory,
-            Panel::CoreDump,
-            Panel::Triage,
-            Panel::StaticAnalysis,
-        ]);
+        let mut dock = DockState::new(Panel::MAIN.to_vec());
         dock.set_active_tab((SurfaceIndex::main(), NodeIndex::root(), TabIndex(0)));
         // The work area gets most of the height; details sit below.
         dock.main_surface_mut().split_below(
@@ -211,6 +213,9 @@ impl WorkspaceLayout {
             return Self::default();
         };
         if layout.version < LAYOUT_VERSION {
+            if layout.version == 5 {
+                layout.migrate_default_order();
+            }
             // Keep the user's splits and native windows from 0.5.0. Place the
             // new tab beside Run History in whichever surface owns it.
             if layout.dock.find_tab(&Panel::Summary).is_none() {
@@ -227,7 +232,9 @@ impl WorkspaceLayout {
                     layout.return_home(Panel::Triage);
                 }
             }
-            layout.focus(Panel::Summary);
+            if layout.version < 5 {
+                layout.focus(Panel::Summary);
+            }
             layout.version = LAYOUT_VERSION;
         }
         layout
@@ -252,18 +259,10 @@ impl WorkspaceLayout {
             }
         }
         self.remove_empty_windows();
-        for panel in [
-            Panel::Summary,
-            Panel::RunHistory,
-            Panel::Trace,
-            Panel::Network,
-            Panel::Memory,
-            Panel::CoreDump,
-            Panel::Triage,
-            Panel::StaticAnalysis,
-            Panel::Details,
-            Panel::Activity,
-        ] {
+        for panel in Panel::MAIN
+            .into_iter()
+            .chain([Panel::Details, Panel::Activity])
+        {
             if self.dock.find_tab(&panel).is_none() {
                 self.return_home(panel);
             }
@@ -635,55 +634,29 @@ impl WorkspaceLayout {
     /// recreating that split when the other group is all that is left.
     fn return_home(&mut self, panel: Panel) {
         let lower = matches!(panel, Panel::Details | Panel::Activity);
+        let upper = Panel::MAIN.to_vec();
+        let bottom = vec![Panel::Details, Panel::Activity];
         let (own, other) = if lower {
-            (
-                vec![Panel::Details, Panel::Activity],
-                vec![
-                    Panel::Summary,
-                    Panel::RunHistory,
-                    Panel::Trace,
-                    Panel::Network,
-                    Panel::Memory,
-                    Panel::CoreDump,
-                    Panel::Triage,
-                    Panel::StaticAnalysis,
-                ],
-            )
+            (bottom, upper)
         } else {
-            (
-                vec![
-                    Panel::Summary,
-                    Panel::RunHistory,
-                    Panel::Trace,
-                    Panel::Network,
-                    Panel::Memory,
-                    Panel::CoreDump,
-                    Panel::Triage,
-                    Panel::StaticAnalysis,
-                ],
-                vec![Panel::Details, Panel::Activity],
-            )
+            (upper, bottom)
         };
-        // The first panel of each group goes before its sibling.
-        let first = panel == own[0];
         let tree = self.dock.main_surface_mut();
-        let beside = match panel {
-            Panel::Summary => Some((Panel::RunHistory, false)),
-            Panel::RunHistory => Some((Panel::Summary, true)),
-            _ => None,
+        let Some(rank) = own.iter().position(|sibling| *sibling == panel) else {
+            tree.push_to_first_leaf(panel);
+            return;
         };
-        if let Some((sibling, after)) = beside {
-            if let Some((node, tab)) = tree.find_tab(&sibling) {
-                tree[node].insert_tab(TabIndex(tab.0 + usize::from(after)), panel);
-                return;
-            }
-        }
-        if let Some((node, _)) = own.iter().find_map(|sibling| tree.find_tab(sibling)) {
-            if first {
-                tree[node].insert_tab(TabIndex(0), panel);
-            } else {
-                tree[node].append_tab(panel);
-            }
+        if let Some((node, tab)) = own[..rank]
+            .iter()
+            .rev()
+            .find_map(|sibling| tree.find_tab(sibling))
+        {
+            tree[node].insert_tab(TabIndex(tab.0 + 1), panel);
+        } else if let Some((node, tab)) = own[rank + 1..]
+            .iter()
+            .find_map(|sibling| tree.find_tab(sibling))
+        {
+            tree[node].insert_tab(tab, panel);
         } else if let Some((node, _)) = other.iter().find_map(|sibling| tree.find_tab(sibling)) {
             if lower {
                 tree.split_below(node, 0.63, vec![panel]);
@@ -692,6 +665,51 @@ impl WorkspaceLayout {
             }
         } else {
             tree.push_to_first_leaf(panel);
+        }
+    }
+
+    /// Reorder only the old, unchanged two-pane default; preserve selected tabs.
+    fn migrate_default_order(&mut self) {
+        use egui_dock::Node;
+        let tree = self.dock.main_surface();
+        if tree.len() != 3
+            || !self.geometry.is_empty()
+            || (1..self.dock.surfaces_count())
+                .any(|index| self.dock.is_surface_valid(SurfaceIndex(index)))
+        {
+            return;
+        }
+        if !matches!(&tree[NodeIndex::root()], Node::Vertical { fraction, .. } if (*fraction - 0.72).abs() < f32::EPSILON)
+        {
+            return;
+        }
+        let top = NodeIndex::root().left();
+        let old = [
+            Panel::Summary,
+            Panel::RunHistory,
+            Panel::Trace,
+            Panel::Network,
+            Panel::Memory,
+            Panel::CoreDump,
+            Panel::Triage,
+            Panel::StaticAnalysis,
+        ];
+        let Node::Leaf { tabs, active, .. } = &tree[top] else {
+            return;
+        };
+        if tabs.as_slice() != old
+            || !matches!(&tree[NodeIndex::root().right()], Node::Leaf { tabs, .. } if tabs.as_slice() == [Panel::Details, Panel::Activity])
+        {
+            return;
+        }
+        let selected = tabs.get(active.0).cloned();
+        if let Node::Leaf { tabs, active, .. } = &mut self.dock.main_surface_mut()[top] {
+            *tabs = Panel::MAIN.to_vec();
+            if let Some(index) =
+                selected.and_then(|panel| tabs.iter().position(|tab| *tab == panel))
+            {
+                *active = TabIndex(index);
+            }
         }
     }
 
@@ -1682,6 +1700,111 @@ mod tests {
     }
 
     #[test]
+    fn version_five_default_reorders_triage_and_preserves_selected_tabs() {
+        let mut layout = WorkspaceLayout {
+            version: 5,
+            ..Default::default()
+        };
+        let top = NodeIndex::root().left();
+        if let egui_dock::Node::Leaf { tabs, active, .. } = &mut layout.dock.main_surface_mut()[top]
+        {
+            *tabs = vec![
+                Panel::Summary,
+                Panel::RunHistory,
+                Panel::Trace,
+                Panel::Network,
+                Panel::Memory,
+                Panel::CoreDump,
+                Panel::Triage,
+                Panel::StaticAnalysis,
+            ];
+            *active = TabIndex(3);
+        }
+        let bottom = NodeIndex::root().right();
+        layout
+            .dock
+            .set_active_tab((SurfaceIndex::main(), bottom, TabIndex(1)));
+        let restored = WorkspaceLayout::restore(Some(layout));
+        assert_eq!(leaf_tabs(&restored, top), Panel::MAIN);
+        let egui_dock::Node::Leaf { tabs, active, .. } = &restored.dock.main_surface()[top] else {
+            panic!("top")
+        };
+        assert_eq!(tabs[active.0], Panel::Network);
+        let egui_dock::Node::Leaf { tabs, active, .. } = &restored.dock.main_surface()[bottom]
+        else {
+            panic!("bottom")
+        };
+        assert_eq!(tabs[active.0], Panel::Activity);
+        assert_eq!(restored.version, LAYOUT_VERSION);
+    }
+
+    #[test]
+    fn version_five_custom_arrangements_are_not_reordered_or_refocused() {
+        for case in 0..3 {
+            let mut layout = WorkspaceLayout {
+                version: 5,
+                ..Default::default()
+            };
+            let top = NodeIndex::root().left();
+            if let egui_dock::Node::Leaf { tabs, .. } = &mut layout.dock.main_surface_mut()[top] {
+                *tabs = vec![
+                    Panel::Summary,
+                    Panel::RunHistory,
+                    Panel::Trace,
+                    Panel::Network,
+                    Panel::Memory,
+                    Panel::CoreDump,
+                    Panel::Triage,
+                    Panel::StaticAnalysis,
+                ];
+            }
+            match case {
+                0 => {
+                    if let egui_dock::Node::Leaf { tabs, active, .. } =
+                        &mut layout.dock.main_surface_mut()[top]
+                    {
+                        tabs.swap(0, 3);
+                        *active = TabIndex(3);
+                    }
+                }
+                1 => {
+                    if let egui_dock::Node::Vertical { fraction, .. } =
+                        &mut layout.dock.main_surface_mut()[NodeIndex::root()]
+                    {
+                        *fraction = 0.6;
+                    }
+                }
+                2 => {
+                    let location = layout.dock.find_tab(&Panel::Trace).unwrap();
+                    layout.dock.detach_tab(
+                        location,
+                        Rect::from_min_size(egui::pos2(40.0, 40.0), egui::vec2(800.0, 500.0)),
+                    );
+                }
+                _ => unreachable!(),
+            }
+            let saved = serde_json::to_value(&layout.dock).unwrap();
+            let restored = WorkspaceLayout::restore(Some(layout));
+            assert_eq!(
+                serde_json::to_value(&restored.dock).unwrap(),
+                saved,
+                "case {case}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_main_panel_returns_between_its_canonical_neighbors() {
+        for panel in Panel::MAIN {
+            let mut layout = WorkspaceLayout::default();
+            let location = layout.dock.find_tab(&panel).unwrap();
+            layout.dock.remove_tab(location);
+            layout.return_home(panel);
+            assert_eq!(leaf_tabs(&layout, NodeIndex::root().left()), Panel::MAIN);
+        }
+    }
+
+    #[test]
     fn default_layout_opens_summary_immediately_before_run_history() {
         let layout = WorkspaceLayout::default();
         let top = NodeIndex::root().left();
@@ -1690,11 +1813,11 @@ mod tests {
             [
                 Panel::Summary,
                 Panel::RunHistory,
+                Panel::Triage,
                 Panel::Trace,
                 Panel::Network,
                 Panel::Memory,
                 Panel::CoreDump,
-                Panel::Triage,
                 Panel::StaticAnalysis
             ]
         );
@@ -1722,11 +1845,11 @@ mod tests {
             [
                 Panel::Summary,
                 Panel::RunHistory,
+                Panel::Triage,
                 Panel::Trace,
                 Panel::Network,
                 Panel::Memory,
                 Panel::CoreDump,
-                Panel::Triage,
                 Panel::StaticAnalysis
             ]
         );
@@ -1822,11 +1945,11 @@ mod tests {
             [
                 Panel::Summary,
                 Panel::RunHistory,
+                Panel::Triage,
                 Panel::Trace,
                 Panel::Network,
                 Panel::Memory,
                 Panel::CoreDump,
-                Panel::Triage,
                 Panel::StaticAnalysis
             ]
         );
@@ -1852,11 +1975,11 @@ mod tests {
             [
                 Panel::Summary,
                 Panel::RunHistory,
+                Panel::Triage,
                 Panel::Trace,
                 Panel::Network,
                 Panel::Memory,
                 Panel::CoreDump,
-                Panel::Triage,
                 Panel::StaticAnalysis
             ]
         );
@@ -1881,11 +2004,11 @@ mod tests {
             [
                 Panel::Summary,
                 Panel::RunHistory,
+                Panel::Triage,
                 Panel::Trace,
                 Panel::Network,
                 Panel::Memory,
                 Panel::CoreDump,
-                Panel::Triage,
                 Panel::StaticAnalysis
             ]
         );

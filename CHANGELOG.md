@@ -6,6 +6,10 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Triage sits beside Run History.** Default tabs, restored tabs and the View
+  menu share their order. Untouched old defaults migrate while custom layouts
+  and the selected tab are preserved.
+
 - **Simpler storage cards.** Summary omits the extra reserved-free-space line;
   available space, used space and underlying measurements keep their meaning.
 
