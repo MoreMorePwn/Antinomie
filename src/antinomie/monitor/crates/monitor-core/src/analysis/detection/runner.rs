@@ -606,10 +606,7 @@ fn run_program(
         let mut report: Report =
             serde_json::from_slice(&data).map_err(|error| error.to_string())?;
         validate_report(&report, &request)?;
-        if !staged.warnings.is_empty() && report.state == State::Complete {
-            report.state = State::Partial;
-        }
-        report.warnings.extend(staged.warnings);
+        merge_staged_warnings(&mut report, &staged.warnings);
         Ok(report)
     })();
     let directory = result_directory(&request.directory, request.engine);
@@ -1070,11 +1067,7 @@ pub fn worker_main_if_requested() -> Option<i32> {
                 .warnings
                 .push("Partial: this scan used evidence that was still being captured.".into());
         }
-        for warning in &staged.warnings {
-            if !report.warnings.contains(warning) {
-                report.warnings.push(warning.clone());
-            }
-        }
+        merge_staged_warnings(&mut report, &staged.warnings);
         validate_report(&report, &staged.request)?;
         let data = serde_json::to_vec(&report).map_err(|error| error.to_string())?;
         if data.len() > REPORT_LIMIT {
@@ -1088,9 +1081,55 @@ pub fn worker_main_if_requested() -> Option<i32> {
     Some(i32::from(result.is_err()))
 }
 
+/// Worker and parent may see the same selection diagnostics; merge idempotently.
+fn merge_staged_warnings(report: &mut Report, warnings: &[String]) {
+    if !warnings.is_empty() && report.state == State::Complete {
+        report.state = State::Partial;
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    report
+        .warnings
+        .retain(|warning| seen.insert(warning.clone()));
+    for warning in warnings {
+        if seen.insert(warning.clone()) {
+            report.warnings.push(warning.clone());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn selection_warnings_are_not_duplicated_between_worker_and_parent() {
+        let mut report = Report::empty(
+            Engine::Ids,
+            Identity {
+                vm_id: "v".into(),
+                boot_id: "b".into(),
+                run_id: "r".into(),
+                root_cookie: 1,
+            },
+        );
+        report.skipped_rules = 26;
+        report.warnings = vec!["engine warning".into(), "engine warning".into()];
+        let staged: Vec<_> = (1..=26)
+            .map(|sid| format!("sid {sid}: requires a TLS fingerprint keyword"))
+            .collect();
+        merge_staged_warnings(&mut report, &staged);
+        let worker = report.warnings.clone();
+        merge_staged_warnings(&mut report, &staged);
+        assert_eq!(report.warnings, worker);
+        assert_eq!(report.warnings.len(), 27);
+        assert_eq!(report.warnings[0], "engine warning");
+        assert_eq!(report.warnings[1], staged[0]);
+        assert_eq!(report.warnings[26], staged[25]);
+        assert_eq!(report.skipped_rules, 26);
+        assert_eq!(report.state, State::Partial);
+        merge_staged_warnings(&mut report, &["different capture warning".into()]);
+        assert_eq!(report.warnings.len(), 28);
+    }
+
     #[test]
     fn a_cancelled_progress_watch_publishes_nothing() {
         let cancel = Arc::new(AtomicBool::new(true));
