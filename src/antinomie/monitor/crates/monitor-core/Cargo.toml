@@ -25,6 +25,7 @@ zip = { version = "8.6", default-features = false, features = ["deflate", "aes-c
 flate2 = "1"
 tar = "0.4"
 lzma-rs = "0.3"
+ext4-view = { version = "1.0.0", default-features = false, features = ["std"] }
 
 [build-dependencies]
 cc = "1"

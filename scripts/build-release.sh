@@ -105,6 +105,10 @@ Static analysis runs in a bubblewrap sandbox (bwrap). Disassembly, rules
 capabilities (capa) and Detect It Easy use the system's copy when installed;
 otherwise Tools > Analysis tools downloads them for Antinomie.
 
+The Disks tab flattens a stopped VM's disk with qemu-img (qemu-utils) and
+reads it in a bubblewrap sandbox bounded by prlimit (bubblewrap, util-linux);
+the ext4 reader is built into antinomie-monitor.
+
 Packet display filters and HTTP/DNS triage use installed TShark, with
 Bubblewrap and Prlimit isolation/resource limits. On Debian/Ubuntu install
 tshark bubblewrap util-linux. These tools are not bundled in this archive.
