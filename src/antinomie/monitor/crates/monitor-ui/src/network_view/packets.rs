@@ -281,6 +281,7 @@ impl NetworkView {
         }
         if let Some(packet) = clicked {
             self.list.selected = Some(packet);
+            self.capture_details = None;
         }
         if let Some(set) = filter {
             self.filter = set;
@@ -303,6 +304,10 @@ impl NetworkView {
     /// The selected packet for the Details panel: its decoded layers on the
     /// left, its bytes on the right with the chosen field's bytes marked.
     pub(crate) fn details(&mut self, ui: &mut egui::Ui, font_size: f32) {
+        if let Some((capture, live)) = self.capture_details.clone() {
+            self.capture_record_details(ui, &capture, live);
+            return;
+        }
         let Some(packet) = self.list.selected.clone() else {
             if let Some(note) = &self.display_jump_note {
                 ui.colored_label(theme::muted(), note);

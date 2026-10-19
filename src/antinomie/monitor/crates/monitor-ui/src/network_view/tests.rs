@@ -553,3 +553,200 @@ fn memory_probe_packet_list_at_its_cap() {
     drop(list);
     std::fs::remove_file(path).unwrap();
 }
+
+fn fixture_capture() -> NetworkCapture {
+    NetworkCapture {
+        id: "cap-1".into(),
+        boot_id: "boot-9".into(),
+        file: PathBuf::from("/fixture/net/cap-1.pcap"),
+        started_ms: 1_700_000_000_000,
+        stopped_ms: Some(1_700_000_061_000),
+        packets: Some(1234),
+        bytes: Some(16_080),
+        whole_boot: false,
+    }
+}
+
+/// Runs one frame of the panel at `time`, feeding `events`.
+fn network_frame(
+    ctx: &egui::Context,
+    view: &mut NetworkView,
+    time: f64,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
+    ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 700.0),
+            )),
+            time: Some(time),
+            events,
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                view.show(
+                    ui,
+                    NetworkContext {
+                        active: None,
+                        recordings: None,
+                        recording_roots: &[],
+                        nat: true,
+                        running: true,
+                        pending: false,
+                        font_size: 16.0,
+                    },
+                );
+            });
+        },
+    )
+}
+
+fn view_with_capture() -> (egui::Context, NetworkView) {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let view = NetworkView {
+        captures_for: Some((None, vec![])),
+        captures: vec![fixture_capture()],
+        ..Default::default()
+    };
+    (ctx, view)
+}
+
+fn text_rect(output: &egui::FullOutput, needle: &str) -> Option<egui::Rect> {
+    crate::app::tests::texts(output)
+        .into_iter()
+        .find(|(text, _)| text.contains(needle))
+        .map(|(_, rect)| rect)
+}
+
+#[test]
+fn filters_share_one_section_in_order_with_gray_example_placeholders() {
+    let (ctx, mut view) = view_with_capture();
+    let mut output = egui::FullOutput::default();
+    for frame in 0..3 {
+        output = network_frame(&ctx, &mut view, f64::from(frame) * 0.1, vec![]);
+    }
+    let section = text_rect(&output, "Filters").expect("Filters section");
+    let quick = text_rect(&output, "Quick Search").expect("quick label");
+    let display = text_rect(&output, "Display Filter").expect("display label");
+    let record = text_rect(&output, "Record Filter").expect("record label");
+    assert!(section.top() < quick.top() && quick.top() < display.top());
+    assert!(display.top() < record.top());
+    assert!((quick.left() - display.left()).abs() < 2.0);
+    assert!((display.left() - record.left()).abs() < 2.0);
+    let (first, last) = (
+        text_rect(&output, "filter e.g. port 443").unwrap(),
+        text_rect(&output, "filter e.g. packets > 100").unwrap(),
+    );
+    assert!(
+        (first.left() - last.left()).abs() < 0.5,
+        "boxes start together"
+    );
+    for (needle, row) in [
+        ("filter e.g. port 443", &quick),
+        ("filter e.g. packets > 100", &record),
+    ] {
+        let hint = text_rect(&output, needle).expect(needle);
+        assert!(
+            hint.left() > row.right(),
+            "{needle} sits right of its label"
+        );
+    }
+    // Without TShark the display box is disabled and says why.
+    assert!(
+        text_rect(&output, "filter e.g. tcp.port == 443").is_some()
+            || text_rect(&output, "filter e.g. tcp.port == 443 (needs tshark)").is_some()
+    );
+    // The hint color is the grayish theme token, not the typed-text color.
+    let mut hint_colors = Vec::new();
+    for clipped in &output.shapes {
+        collect_text_colors(&clipped.shape, "filter e.g. port 443", &mut hint_colors);
+    }
+    assert!(!hint_colors.is_empty());
+    assert!(hint_colors.iter().all(|color| *color == theme::hint()));
+    assert_ne!(theme::hint(), theme::text());
+    assert_ne!(theme::hint(), theme::muted());
+}
+
+fn collect_text_colors(shape: &egui::Shape, needle: &str, out: &mut Vec<egui::Color32>) {
+    match shape {
+        egui::Shape::Text(text) if text.galley.text().contains(needle) => {
+            if let Some(section) = text.galley.job.sections.first() {
+                out.push(section.format.color);
+            }
+        }
+        egui::Shape::Vec(shapes) => shapes
+            .iter()
+            .for_each(|shape| collect_text_colors(shape, needle, out)),
+        _ => {}
+    }
+}
+
+#[test]
+fn clicking_a_capture_shows_its_record_in_details_and_hover_shows_no_tooltip() {
+    let (ctx, mut view) = view_with_capture();
+    let mut output = egui::FullOutput::default();
+    for frame in 0..3 {
+        output = network_frame(&ctx, &mut view, f64::from(frame) * 0.1, vec![]);
+    }
+    assert!(
+        text_rect(&output, &crate::time_format::local_seconds(1_700_000_000)).is_some(),
+        "entry title is local time with its offset"
+    );
+    let row = text_rect(&output, "1234 packets").expect("capture row detail");
+    let point = row.center();
+    // Hover for a while: no tooltip with the path or boot appears.
+    for frame in 0..8 {
+        output = network_frame(
+            &ctx,
+            &mut view,
+            1.0 + f64::from(frame) * 0.3,
+            vec![egui::Event::PointerMoved(point)],
+        );
+    }
+    assert!(text_rect(&output, "/fixture/net/cap-1.pcap").is_none());
+    assert!(text_rect(&output, "boot-9").is_none());
+    let click = |pressed| egui::Event::PointerButton {
+        pos: point,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    network_frame(&ctx, &mut view, 4.0, vec![click(true)]);
+    network_frame(&ctx, &mut view, 4.1, vec![click(false)]);
+    assert!(view.capture_details.is_some());
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| view.details(ui, 16.0));
+        },
+    );
+    for needle in [
+        "cap-1",
+        "boot-9",
+        "1234",
+        "/fixture/net/cap-1.pcap",
+        "16080 bytes (15.7 KB)",
+        "Completed",
+    ] {
+        assert!(
+            text_rect(&output, needle).is_some(),
+            "Details shows {needle}"
+        );
+    }
+}
+
+#[test]
+fn network_toolbar_has_no_colors_button() {
+    let (ctx, mut view) = view_with_capture();
+    let output = network_frame(&ctx, &mut view, 0.0, vec![]);
+    assert!(text_rect(&output, "Colors").is_none());
+}

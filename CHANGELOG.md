@@ -6,6 +6,14 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Network filters in one place, with Details for captures.** Quick Search,
+  Display Filter and Record Filter now sit in one collapsible Filters section,
+  one labelled row each, and every box shows a gray `filter e.g. …` example.
+  Clicking a capture in the list shows its record (name, ID, tags, state, boot,
+  times, packets, size and files) in Details instead of a hover tooltip.
+  Capture times show local time with a `(UTC+x)` offset. The Colors legend
+  button is gone (rows stay colored like Wireshark), and Open in Wireshark is a
+  bright blue button.
 - **Filter suggestions no longer scroll back up.** In a filter box the
   suggestion list jumped back to the highlighted entry on every frame, so
   scrolling it with the wheel or scrollbar was undone. It now follows the

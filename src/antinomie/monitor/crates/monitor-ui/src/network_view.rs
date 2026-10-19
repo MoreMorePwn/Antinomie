@@ -119,6 +119,8 @@ pub(crate) struct NetworkView {
     /// The running capture (id, file) last seen, to notice a start or stop.
     seen_active: Option<(String, PathBuf)>,
     hide_list: bool,
+    /// Details shows the clicked capture's record, until a packet is chosen.
+    capture_details: Option<(NetworkCapture, bool)>,
     /// Payload bytes for the packets currently loaded. `None` when a record
     /// could not be read; an empty capture is not treated as reconstructed HTTP.
     payloads: Option<PayloadCache>,

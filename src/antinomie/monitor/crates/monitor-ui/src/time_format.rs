@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Host wall-clock presentation shared by histories and triage.
 use antinomie_monitor_core::HostClockAnchor;
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, FixedOffset, Local, Utc};
 
 pub(crate) fn unix_us(value: u64) -> String {
     i64::try_from(value)
@@ -11,6 +11,31 @@ pub(crate) fn unix_us(value: u64) -> String {
             time.with_timezone(&Local)
                 .format("%Y-%m-%d %H:%M:%S%.3f (UTC%:z)")
                 .to_string()
+        })
+        .unwrap_or_else(|| "Unavailable".into())
+}
+
+/// Whole seconds in the host zone, the offset compact: `2026-10-19 14:05:12
+/// (UTC+7)`, `(UTC+5:30)`, `(UTC+0)`.
+pub(crate) fn local_seconds(seconds: u64) -> String {
+    local_seconds_at(seconds, |time| time.with_timezone(&Local).fixed_offset())
+}
+
+/// [`local_seconds`] with the zone chosen by `zone`, so tests can fix it.
+fn local_seconds_at(seconds: u64, zone: impl Fn(DateTime<Utc>) -> DateTime<FixedOffset>) -> String {
+    i64::try_from(seconds)
+        .ok()
+        .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0))
+        .map(|time| {
+            let time = zone(time);
+            let offset = time.offset().local_minus_utc();
+            let (sign, minutes) = (if offset < 0 { '-' } else { '+' }, offset.abs() / 60);
+            let zone = if minutes % 60 == 0 {
+                format!("{sign}{}", minutes / 60)
+            } else {
+                format!("{sign}{}:{:02}", minutes / 60, minutes % 60)
+            };
+            format!("{} (UTC{zone})", time.format("%Y-%m-%d %H:%M:%S"))
         })
         .unwrap_or_else(|| "Unavailable".into())
 }
@@ -64,5 +89,18 @@ mod tests {
             None
         );
         assert_eq!(unix_ms(Some(u64::MAX)), "Unavailable");
+    }
+
+    #[test]
+    fn local_seconds_append_a_compact_utc_offset() {
+        let at = |minutes: i32| {
+            local_seconds_at(1_700_000_000, |time| {
+                time.with_timezone(&FixedOffset::east_opt(minutes * 60).unwrap())
+            })
+        };
+        assert_eq!(at(420), "2023-11-15 05:13:20 (UTC+7)");
+        assert_eq!(at(330), "2023-11-15 03:43:20 (UTC+5:30)");
+        assert_eq!(at(0), "2023-11-14 22:13:20 (UTC+0)");
+        assert_eq!(at(-180), "2023-11-14 19:13:20 (UTC-3)");
     }
 }
