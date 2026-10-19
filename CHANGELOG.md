@@ -69,6 +69,26 @@ it runs.
     invented for TShark or Suricata. The dnf and zypper package names were
     checked against the Fedora and openSUSE package indexes, except as noted
     in `dependencies/install.rs`.
+- **A debugger for guest processes, without ptrace and without anything in
+  the guest.** Run > Attach debugger… (or the process picker) attaches to a
+  running program and shows a ready-to-paste command, for example
+  `gdb -ex 'target remote 127.0.0.1:PORT'`; gdb, IDA, Ghidra and radare2 connect
+  to the same local RSP server (a private Unix socket and a loopback port, only
+  for processes of your user). The guest kernel does the work: it stops every
+  thread of the process, reads and writes registers and memory, plants engine
+  breakpoints and single-steps. The program sees no tracer: `TracerPid` stays 0,
+  its own `PTRACE_TRACEME` still succeeds, breakpoints and steps raise no
+  `SIGTRAP`, the trap flag is hidden, and reading its own code through
+  `/proc/self/mem` shows the original bytes (a direct load of its own code can
+  still see an engine breakpoint). The program keeps running until a debugger
+  connects; a debugger that detaches or dies leaves it running with its
+  breakpoints removed. First release: all-stop, one process, software
+  breakpoints, single-step of one thread, x86-64. Guest contract revision 17
+  (unchanged; older bases say the debugger is unavailable). Debug on start,
+  hardware breakpoints, signals, fork/exec following and the in-app views come
+  next. New dependency: `gdbstub 0.7.10` (MIT OR Apache-2.0) for the protocol.
+  Every guest request costs about one 10 ms control poll, so registers take
+  about 44 ms and a step about 44 ms; see `protocol/debugger.md`.
 - **The guest tracer records who a task ran as and what a file contained.**
   Guest contract revision 17 (no new revision) adds two records to the
   syscall trace. Credentials: every traced task's uid, euid, suid, fsuid, the
