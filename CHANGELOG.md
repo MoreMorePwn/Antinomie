@@ -6,6 +6,10 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Retry unavailable properties in place.** Property sections with missing
+  values have a refresh control and busy indicator. Already computed values
+  remain visible during a retry and survive a failed retry.
+
 - **Recording warnings follow the selected run.** Full saving-stopped causes
   appear in that run's details, Trace and Triage with a dismiss control. Summary
   no longer lists unrelated run warnings; Activity retains run-specific entries.
