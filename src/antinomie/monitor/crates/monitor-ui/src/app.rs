@@ -11,6 +11,7 @@ mod clipboard;
 mod dialogs;
 mod explorer;
 mod file_drop;
+mod getting_started;
 mod history;
 mod history_sync;
 mod menus;
@@ -118,6 +119,8 @@ struct Settings {
     /// Sidebar host-file explorer; no guest paths or upload intent are persisted.
     explorer_collapsed: bool,
     explorer_root: Option<PathBuf>,
+    /// Help > Getting started: skipped steps and whether it has been shown.
+    getting_started: crate::getting_started::Progress,
     /// The latest program each VM ran, for the sidebar.
     last_runs: BTreeMap<String, LastRun>,
 }
@@ -154,6 +157,7 @@ impl Default for Settings {
             bases_collapsed: false,
             explorer_collapsed: false,
             explorer_root: None,
+            getting_started: Default::default(),
             last_runs: BTreeMap::new(),
         }
     }
@@ -284,6 +288,7 @@ pub struct MonitorApp {
     vm_snapshots: crate::snapshots::SnapshotManager,
     samples: crate::samples_view::SamplesView,
     dependencies: crate::dependencies_window::DependenciesWindow,
+    getting_started: crate::getting_started::GettingStarted,
     /// Download base: also list bases for earlier Antinomie versions.
     show_older_bases: bool,
     build_wizard: build_wizard::BuildWizard,
@@ -467,6 +472,7 @@ impl MonitorApp {
             vm_snapshots: crate::snapshots::SnapshotManager::default(),
             samples: crate::samples_view::SamplesView::default(),
             dependencies,
+            getting_started: Default::default(),
             show_older_bases: false,
             build_wizard: build_wizard::BuildWizard::default(),
             confirm: None,
@@ -593,6 +599,7 @@ impl eframe::App for MonitorApp {
         let frame_started = Instant::now();
         self.dependencies.poll();
         self.drain();
+        self.getting_started_tick();
         self.poll_rules(ctx);
         self.receive_clipboard(ctx);
         self.cpu_history
@@ -770,6 +777,7 @@ enum Dialog {
     Snapshots,
     SnapshotDecision,
     Dependencies,
+    GettingStarted,
     Performance,
     About,
     Build,
@@ -777,7 +785,7 @@ enum Dialog {
 }
 
 impl Dialog {
-    const ALL: [Dialog; 20] = [
+    const ALL: [Dialog; 21] = [
         Dialog::Confirm,
         Dialog::Name,
         Dialog::Transport,
@@ -794,6 +802,7 @@ impl Dialog {
         Dialog::Snapshots,
         Dialog::SnapshotDecision,
         Dialog::Dependencies,
+        Dialog::GettingStarted,
         Dialog::Performance,
         Dialog::About,
         Dialog::Build,
@@ -819,6 +828,7 @@ impl Dialog {
             Dialog::Snapshots => crate::snapshots::WINDOW_ID,
             Dialog::SnapshotDecision => "snapshot_decision",
             Dialog::Dependencies => crate::dependencies_window::WINDOW_ID,
+            Dialog::GettingStarted => crate::getting_started::WINDOW_ID,
             Dialog::Performance => "ui-performance",
             Dialog::About => "about",
             Dialog::Build => "build_base",

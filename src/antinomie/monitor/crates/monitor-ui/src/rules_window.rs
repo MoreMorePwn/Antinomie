@@ -15,6 +15,7 @@ use std::{
     time::Duration,
 };
 
+pub(crate) mod first_run;
 #[cfg(test)]
 mod source_tests;
 mod sources;

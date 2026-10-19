@@ -10,6 +10,7 @@ mod clipboard;
 mod details_scroll;
 mod file_drop;
 mod fps_counter;
+mod getting_started;
 mod history;
 mod large_runs;
 mod launch;
@@ -75,6 +76,7 @@ pub(crate) fn app() -> MonitorApp {
         vm_snapshots: crate::snapshots::SnapshotManager::default(),
         samples: crate::samples_view::SamplesView::default(),
         dependencies: crate::dependencies_window::DependenciesWindow::ready_for_test(),
+        getting_started: Default::default(),
         show_older_bases: false,
         build_wizard: build_wizard::BuildWizard::default(),
         name_action: None,

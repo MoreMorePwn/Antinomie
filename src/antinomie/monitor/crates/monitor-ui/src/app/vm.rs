@@ -24,17 +24,24 @@ impl MonitorApp {
         Ok(())
     }
 
+    /// The settings a new VM starts with, shared by New VM and Getting started.
+    pub(super) fn fresh_draft(&self) -> VmConfig {
+        VmConfig {
+            name: "New VM".into(),
+            // New VMs look like an ordinary PC; saved ones keep what they had.
+            stealth: antinomie_monitor_core::stealth::StealthProfile::realistic(
+                antinomie_monitor_core::stealth::StealthPreset::RealisticDesktop,
+                &antinomie_monitor_core::stealth::host_cpu_vendor(),
+            ),
+            base_identity: preferred_new_base(&self.snapshot, &self.settings.bundle)
+                .map(|base| base.id.clone()),
+            ..VmConfig::default()
+        }
+    }
+
     pub(super) fn new_image(&mut self) {
         self.draft_generation = self.draft_generation.wrapping_add(1);
-        self.draft = VmConfig::default();
-        self.draft.name = "New VM".into();
-        // New VMs look like an ordinary PC; saved ones keep what they had.
-        self.draft.stealth = antinomie_monitor_core::stealth::StealthProfile::realistic(
-            antinomie_monitor_core::stealth::StealthPreset::RealisticDesktop,
-            &antinomie_monitor_core::stealth::host_cpu_vendor(),
-        );
-        self.draft.base_identity =
-            preferred_new_base(&self.snapshot, &self.settings.bundle).map(|base| base.id.clone());
+        self.draft = self.fresh_draft();
         self.credentials.reset();
         self.create_open = true;
     }

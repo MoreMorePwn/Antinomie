@@ -161,6 +161,7 @@ impl MonitorApp {
                 });
             }
         }
+        self.getting_started_window(ctx);
         if self.about_open {
             let mut open = true;
             egui::Window::new("About Antinomie")
@@ -675,6 +676,7 @@ impl MonitorApp {
             Dialog::Snapshots => self.vm_snapshots.open,
             Dialog::SnapshotDecision => self.vm_snapshots.decision_open(),
             Dialog::Dependencies => self.dependencies.open,
+            Dialog::GettingStarted => self.getting_started.open,
             Dialog::Performance => self.performance.open,
             Dialog::About => self.about_open,
             Dialog::Build => self.build_open,
@@ -705,6 +707,7 @@ impl MonitorApp {
             Dialog::Samples => self.samples.open = false,
             Dialog::Snapshots | Dialog::SnapshotDecision => self.vm_snapshots.close(),
             Dialog::Dependencies => self.dependencies.open = false,
+            Dialog::GettingStarted => self.getting_started.open = false,
             Dialog::Performance => self.performance.open = false,
             Dialog::About => self.about_open = false,
             Dialog::Build => self.build_open = false,

@@ -6,6 +6,33 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **A Getting started window walks a new user through the first setup.** It
+  opens by itself the first time Antinomie starts with no VM and no base
+  (once; "Don't show again" and finishing keep it closed), and Help >
+  Getting started opens it any time. Steps: pick and download a base from
+  the catalog (the same rows, progress and Cancel as Download base); create the
+  first VM from it with the New VM defaults (vCPU, RAM and disk within the
+  base's minimums, the realistic stealth profile on); check the host
+  dependencies; install the missing managed analysis tools one after another
+  ("Install all missing"); and download the default YARA, IDS and Sigma rule
+  packs through the Rule manager's catalog (downloads stay off until allowed;
+  untick a pack to skip it). Every step can be skipped or left, the window can
+  be closed at any time, what was skipped is remembered, and each opening
+  checks the computer again so what is already installed shows as done. The
+  last page summarises what is ready and what was skipped and links to the
+  "Your first run" documentation. Long work runs off the UI thread with the
+  usual spinner and Cancel.
+
+- **One command installs every missing host dependency.** Tools > App
+  dependencies and the Getting started window now detect the distribution
+  from `/etc/os-release` (apt, dnf, pacman or zypper) and show a single
+  copyable command for only the missing packages, plus
+  `sudo usermod -aG kvm $USER` when `/dev/kvm` exists but you are not in the
+  `kvm` group (a note to sign in again when you already are). The package
+  names are one table in the code with tests for each package manager.
+  Tools > App dependencies also lists the Explorer and Upload file chooser
+  (Zenity) and Wireshark, both optional.
+
 - **The guest kernel now measures its own RAM and disk use.** Guest contract
   revision 17 adds a `RESOURCES` control command: the kernel reports MemTotal
   and MemAvailable (the same accounting as `/proc/meminfo`) and the statfs
