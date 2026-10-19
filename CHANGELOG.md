@@ -19,7 +19,8 @@ it runs.
   live capture and a capture or core still being written are disabled with a
   tooltip (and refused by the backend). The boot's recording quota gets the
   freed bytes back. Runs that listed the capture or core now read it as
-  deleted (Run History and Triage counts refresh, Detection says "Evidence
+  deleted (recorded in new `network_deleted` / `core_deleted` fields that
+  0.6.x ignores, so the data directory stays readable by older builds) (Run History and Triage counts refresh, Detection says "Evidence
   missing" instead of failing), a selected deleted item is deselected and
   Details cleared, and each deletion is an Activity log entry.
 

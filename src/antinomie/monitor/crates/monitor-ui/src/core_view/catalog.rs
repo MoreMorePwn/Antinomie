@@ -430,11 +430,8 @@ pub(super) fn catalog(roots: &[PathBuf], vm_id: Option<&str>) -> Result<CoreCata
                 }
             };
             if artifacts.vm_id != vm_id
-                || matches!(
-                    artifacts.core_state,
-                    antinomie_monitor_core::RunArtifactState::Disabled
-                        | antinomie_monitor_core::RunArtifactState::Deleted
-                )
+                || artifacts.core_deleted
+                || artifacts.core_state == antinomie_monitor_core::RunArtifactState::Disabled
             {
                 continue;
             }

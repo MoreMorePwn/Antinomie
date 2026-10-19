@@ -242,7 +242,7 @@ pub(crate) fn remove_network_capture(roots: &[PathBuf], file: &Path) -> Result<R
             && !artifacts.network_state.in_progress()
             && artifacts.network_state != RunArtifactState::Disabled
         {
-            artifacts.network_state = RunArtifactState::Deleted;
+            artifacts.network_deleted = true;
         }
         changed
     })?;
@@ -302,7 +302,8 @@ pub(crate) fn remove_process_core(roots: &[PathBuf], directory: &Path) -> Result
         && artifacts.core_state != RunArtifactState::Disabled
     {
         artifacts.core_dump = None;
-        artifacts.core_state = RunArtifactState::Deleted;
+        artifacts.core_state = RunArtifactState::Disabled;
+        artifacts.core_deleted = true;
         crate::storage::atomic_json(&run.join("artifacts.json"), &artifacts).map_err(|error| {
             format!("the core was deleted but its run record could not be updated: {error}")
         })?;
@@ -379,7 +380,9 @@ mod tests {
         assert_eq!(removed.boot_id.as_deref(), Some("b1"));
         let artifacts = RunArtifacts::load(&run_dir).unwrap().unwrap();
         assert!(artifacts.network_captures.is_empty());
-        assert_eq!(artifacts.network_state, RunArtifactState::Deleted);
+        assert_eq!(artifacts.network_state, RunArtifactState::Complete);
+        assert!(artifacts.network_deleted);
+        assert_eq!(artifacts.network_label(), "Deleted");
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -431,7 +434,9 @@ mod tests {
         );
         assert_eq!(removed.boot_id.as_deref(), Some("b1"));
         let artifacts = RunArtifacts::load(&run_dir).unwrap().unwrap();
-        assert_eq!(artifacts.core_state, RunArtifactState::Deleted);
+        assert_eq!(artifacts.core_state, RunArtifactState::Disabled);
+        assert!(artifacts.core_deleted);
+        assert_eq!(artifacts.core_label(), "Deleted");
         assert_eq!(artifacts.core_dump, None);
         assert_eq!(remove_process_core(roots, &manual).unwrap().counted, 64);
         assert_eq!(remove_process_core(roots, &imported).unwrap().counted, 0);
@@ -497,5 +502,63 @@ mod tests {
         assert!(outside.join("network/x.pcap").exists());
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(outside).unwrap();
+    }
+
+    /// The `RunArtifacts` and `RunArtifactState` of 0.6.2, byte for byte.
+    #[derive(serde::Deserialize, Debug, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    enum OldState {
+        Disabled,
+        WaitingForTreeExit,
+        WaitingForRootExit,
+        Recording,
+        Queued,
+        InProgress,
+        Complete,
+        Partial,
+        Interrupted,
+        Failed,
+    }
+
+    #[derive(serde::Deserialize, Debug)]
+    #[allow(dead_code)]
+    struct OldArtifacts {
+        run_id: String,
+        vm_id: String,
+        boot_id: String,
+        network_captures: Vec<PathBuf>,
+        network_state: OldState,
+        memory_dump: Option<PathBuf>,
+        memory_state: OldState,
+        core_dump: Option<PathBuf>,
+        core_state: OldState,
+        issues: Vec<String>,
+    }
+
+    #[test]
+    fn a_record_written_after_a_delete_still_parses_as_0_6_2_and_new_code_says_deleted() {
+        let root = temp_root();
+        let file = capture(&root, "b1", "abc");
+        let run_dir = run(&root, "r1", vec![file.clone()]);
+        fs::create_dir_all(run_dir.join("core")).unwrap();
+        fs::write(run_dir.join("core/process.elf"), b"elf").unwrap();
+        let roots = std::slice::from_ref(&root);
+        remove_network_capture(roots, &file).unwrap();
+        remove_process_core(roots, &run_dir.join("core")).unwrap();
+        let text = fs::read_to_string(run_dir.join("artifacts.json")).unwrap();
+        let old: OldArtifacts = serde_json::from_str(&text).unwrap();
+        assert!(old.network_captures.is_empty());
+        assert_eq!(old.network_state, OldState::Complete);
+        assert_eq!(old.core_state, OldState::Disabled);
+        assert_eq!(old.core_dump, None);
+        let new = RunArtifacts::load(&run_dir).unwrap().unwrap();
+        assert_eq!(
+            (new.network_label(), new.core_label()),
+            ("Deleted", "Deleted")
+        );
+        // A record that never saw a delete writes neither field.
+        let fresh = serde_json::to_string(&RunArtifacts::default()).unwrap();
+        assert!(!fresh.contains("deleted"), "{fresh}");
+        fs::remove_dir_all(root).unwrap();
     }
 }
