@@ -1000,49 +1000,51 @@ fn run_process<T: Send + 'static>(
     // code in the host. These limits apply to the external decoder only.
     let mut bounded = Command::new("prlimit");
     let profile = Scratch::new()?;
-    let personal = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute() && path != Path::new("/"))
-        .ok_or("a non-root absolute personal directory is required for TShark isolation")?;
+    // The analysis workers' minimal mount profile: /usr, a private /etc/passwd
+    // and /tmp, no host sockets, no home or data directory, every namespace
+    // (network included) unshared. Wireshark's own data, plug-ins and libraries
+    // live under /usr; /etc/wireshark is the system configuration.
+    let account = profile.path.join("passwd");
+    fs::write(&account, "nobody:x:65534:65534::/tmp:/bin/false\n")
+        .map_err(|e| format!("packet sandbox account: {e}"))?;
     bounded
         .args(["--as=2147483648", "--core=0", "--nofile=128", "--"])
-        .arg("bwrap")
-        .args([
-            "--ro-bind",
-            "/",
-            "/",
-            "--proc",
-            "/proc",
-            "--dev",
-            "/dev",
-            "--unshare-net",
-            "--unshare-pid",
-            "--unshare-user",
-            "--uid",
-            "65534",
-            "--gid",
-            "65534",
-            "--cap-drop",
-            "ALL",
-            "--die-with-parent",
-            "--new-session",
-            "--tmpfs",
-        ])
-        .arg(&personal)
+        .arg("bwrap");
+    crate::sandbox_profile::apply(
+        &mut bounded,
+        &account,
+        &["/etc/wireshark", "/etc/localtime"],
+        67_108_864,
+    );
+    bounded
+        .args(["--uid", "65534", "--gid", "65534"])
         .arg("--bind")
         .arg(&profile.path)
         .arg(&profile.path);
-    // The private namespace masks personal plug-ins without changing HOME.
-    // A PCAP below that directory is the only personal file exposed again.
+    // The capture is the only input exposed, read-only, wherever it lives.
     let mut arguments = command.get_args();
     while let Some(argument) = arguments.next() {
         if argument == "-r"
             && let Some(capture) = arguments.next()
         {
             let capture = Path::new(capture);
-            if capture.starts_with(&personal) {
-                bounded.arg("--ro-bind").arg(capture).arg(capture);
-            }
+            bounded.arg("--ro-bind").arg(capture).arg(capture);
+        }
+    }
+    bounded.args(["--remount-ro", "/", "--setenv", "PATH", "/usr/bin:/bin"]);
+    bounded.args(["--setenv", "LC_ALL", "C"]);
+    for key in [
+        "WIRESHARK_CONFIG_DIR",
+        "WIRESHARK_PLUGIN_DIR",
+        "WIRESHARK_EXTCAP_DIR",
+        "TMPDIR",
+        "HOME",
+    ] {
+        bounded.arg("--setenv").arg(key).arg(&profile.path);
+    }
+    for (name, value) in command.get_envs() {
+        if let Some(value) = value {
+            bounded.arg("--setenv").arg(name).arg(value);
         }
     }
     let launch = crate::sandbox_process::prepare(&mut bounded)?;
@@ -1050,29 +1052,11 @@ fn run_process<T: Send + 'static>(
         .arg("--")
         .arg(command.get_program())
         .args(command.get_args());
-    for (name, value) in command.get_envs() {
-        if let Some(value) = value {
-            bounded.env(name, value);
-        } else {
-            bounded.env_remove(name);
-        }
-    }
     if let Some(directory) = command.get_current_dir() {
         bounded.current_dir(directory);
     } else {
         bounded.current_dir(&profile.path);
     }
-    for key in [
-        "WIRESHARK_CONFIG_DIR",
-        "WIRESHARK_PLUGIN_DIR",
-        "WIRESHARK_EXTCAP_DIR",
-        "TMPDIR",
-    ] {
-        bounded.env(key, &profile.path);
-    }
-    bounded
-        .env_remove("WIRESHARK_DATA_DIR")
-        .env_remove("WIRESHARK_RUN_FROM_BUILD_DIRECTORY");
     let child = bounded
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1579,6 +1563,40 @@ mod tests {
         assert_eq!(output, "isolated");
         assert_eq!(fs::read_to_string(&capture).unwrap(), "capture");
         assert_eq!(fs::read_to_string(&private).unwrap(), "private");
+    }
+
+    #[test]
+    fn packet_filter_sandbox_hides_session_sockets_and_the_data_directory() {
+        // A stand-in for the data directory: another private directory next to
+        // the snapshot scratch, which must not be mounted.
+        let data = Scratch::new().unwrap();
+        let secret = data.path.join("secret");
+        fs::write(&secret, "secret").unwrap();
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "for p in /run/user /run/dbus /tmp/.X11-unix /dev/shm /var /home /mnt \"$1\"; do \
+                 test ! -e \"$p\" || { echo \"visible: $p\"; exit 1; }; done; \
+             test -r /usr/share/wireshark || exit 2; printf hidden",
+                "packet-test",
+            ])
+            .arg(&secret);
+        let output = run_process(
+            command,
+            &shared(),
+            Some(0),
+            Duration::from_secs(10),
+            |mut reader| {
+                let mut output = String::new();
+                reader
+                    .read_to_string(&mut output)
+                    .map_err(|error| error.to_string())?;
+                Ok(output)
+            },
+        )
+        .unwrap();
+        assert_eq!(output, "hidden");
     }
 
     #[test]

@@ -45,6 +45,7 @@ pub mod ruleset;
 mod run;
 pub mod samples;
 mod sandbox_process;
+mod sandbox_profile;
 pub mod snapshots;
 pub mod stealth;
 pub mod storage;
