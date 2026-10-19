@@ -897,3 +897,29 @@ fn a_deleted_capture_leaves_the_list_and_clears_its_selection() {
     let (output, _) = delete_frame(&ctx, &mut view, 0.0, vec![], None);
     assert!(text_rect(&output, "1234 packets").is_none());
 }
+
+#[test]
+fn the_capture_size_is_not_looked_up_on_every_frame() {
+    let dir = std::env::temp_dir().join(format!("ant-size-check-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("c.pcap");
+    std::fs::write(&file, b"").unwrap();
+    let mut list = PacketList::new(Some(file.clone()));
+    assert!(!list.more_on_disk(&file));
+    // The file grows, but the answer within the same quarter second is the
+    // remembered one: no second `stat` on the render thread.
+    std::fs::write(&file, b"more").unwrap();
+    assert!(!list.more_on_disk(&file));
+    list.size_checked = Some((Instant::now() - Duration::from_millis(300), false));
+    assert!(list.more_on_disk(&file));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_launched_wireshark_does_not_stay_a_zombie() {
+    let child = std::process::Command::new("true").spawn().unwrap();
+    let pid = child.id();
+    toolbar::reap(child).join().unwrap();
+    // Waited for: the process table has no entry left for it.
+    assert!(!Path::new(&format!("/proc/{pid}")).exists());
+}

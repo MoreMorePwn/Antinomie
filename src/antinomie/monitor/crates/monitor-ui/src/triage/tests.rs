@@ -643,9 +643,11 @@ fn hidden_tick_indexes_once_a_shown_pane_refreshes_growth_preserves_selection_an
         }
     }
     fn wait(view: &mut TriageView, ctx: &egui::Context, archive: &Path, run: &str, count: usize) {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // Only a bound on a hang; the refresh timer runs on the view's clock.
+        let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             // Intentionally never call show: another panel owns the workspace.
+            view.clock.advance(Duration::from_secs(1));
             view.tick(ctx, input(archive, run));
             if view
                 .scan
@@ -683,10 +685,9 @@ fn hidden_tick_indexes_once_a_shown_pane_refreshes_growth_preserves_selection_an
     raw.sync_all().unwrap();
     // Hidden, a live run keeps the index it has: the pane refreshes it when shown.
     let generation = view.scan_generation;
-    let hidden_until = Instant::now() + Duration::from_millis(2300);
-    while Instant::now() < hidden_until {
+    for _ in 0..3 {
+        view.clock.advance(Duration::from_secs(1));
         view.tick(&ctx, input(&first.directory, "first"));
-        std::thread::sleep(Duration::from_millis(20));
     }
     assert_eq!(view.scan_generation, generation, "re-indexed while hidden");
     view.mark_shown(&ctx);
@@ -718,7 +719,7 @@ fn hidden_tick_indexes_once_a_shown_pane_refreshes_growth_preserves_selection_an
     }
     assert!(view.refresh_queued);
     held_tx
-        .send(actual.recv_timeout(Duration::from_secs(5)).unwrap())
+        .send(actual.recv_timeout(Duration::from_secs(60)).unwrap())
         .unwrap();
     view.tick(&ctx, input(&first.directory, "first"));
     assert_eq!(view.scan_generation, generation + 1);
