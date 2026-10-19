@@ -137,6 +137,7 @@ pub fn chain_info(qemu_img: &Path, vm_dir: &Path, top: &Path) -> Result<ChainInf
             modified_ms: metadata
                 .as_ref()
                 .map_or(0, |metadata| (metadata.mtime().max(0) as u64) * 1000),
+            sha256: None,
         });
         info.actual_size = info.actual_size.saturating_add(
             layer

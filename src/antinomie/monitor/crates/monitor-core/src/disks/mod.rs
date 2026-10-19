@@ -10,9 +10,13 @@
 //! the chain; the backend refuses every command that would change the chain
 //! meanwhile, and closes the view when the chain changes or the VM starts.
 //!
-//! Phase 1 builds the view. Dumps (`disks/<id>/dump.json`), checkpoint sources,
-//! imports and partition carving are later phases: [`DiskJobPurpose`] and
-//! [`DiskSourceKind`] are the seams they extend.
+//! A view can be kept: **Dump disk** flattens the chain straight into
+//! `disks/<id>/root.ext4`, and **Keep as dump** promotes an open view's scratch
+//! folder by rename. A dump is a standalone image with a `dump.json` sidecar
+//! ([`dump`]), listed newest first and browsable while the VM runs; raw ext4
+//! images made elsewhere can be imported, and a dump exported as a sparse raw
+//! or qcow2 file ([`export`]). Checkpoint sources, partition carving and
+//! qcow2 import are a later phase: [`DiskSourceKind`] is the seam.
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
@@ -21,6 +25,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+pub mod dump;
+pub mod export;
 pub mod extract;
 pub mod job;
 pub mod measure;
@@ -136,6 +142,8 @@ pub enum DiskSourceKind {
     /// The VM's current disk, VM off.
     #[default]
     Current,
+    /// A raw ext4 image made elsewhere.
+    Imported,
     // Phase 3: Checkpoint { id, name } (a saved snapshot's frozen layer).
 }
 
@@ -146,6 +154,8 @@ pub struct DiskLayerRef {
     pub filename: String,
     pub size: u64,
     pub modified_ms: u64,
+    /// SHA-256 of the layer file, when the per-layer digest setting was on.
+    pub sha256: Option<String>,
 }
 
 /// Where an image came from: identity only, never a path the UI opens.
@@ -174,6 +184,8 @@ pub struct CurrentDiskView {
     pub fs_state: Ext4State,
     pub logical_size: u64,
     pub allocated_size: u64,
+    /// The dump this view was kept as; the view then reads the dump's image.
+    pub kept_as: Option<String>,
 }
 
 /// What measuring found; shown before Open.
@@ -190,6 +202,9 @@ pub struct DiskMeasure {
     pub measured_ms: u64,
     /// The directory the view is written to.
     pub directory: PathBuf,
+    /// The recording quota figure: the most a single dump may allocate. A
+    /// view is not bounded by it.
+    pub quota: u64,
     pub error: Option<String>,
 }
 
@@ -223,22 +238,53 @@ impl DiskMeasure {
     }
 }
 
+impl DiskMeasure {
+    /// The reason a dump is refused: its estimated allocation is over the
+    /// recording quota (a per-dump ceiling). Views are not bounded by it.
+    pub fn quota_error(&self) -> Option<String> {
+        quota_error(self.allocated_estimate, self.quota)
+    }
+}
+
+/// The refusal of a dump of about `size` bytes under the quota `ceiling`.
+pub fn quota_error(size: u64, ceiling: u64) -> Option<String> {
+    (ceiling > 0 && size > ceiling).then(|| {
+        format!(
+            "a disk dump of about {} exceeds the recording quota of {}; raise the quota in \
+             Settings to dump this disk",
+            format_size(size),
+            format_size(ceiling)
+        )
+    })
+}
+
 /// Free space left over after an image (the memory dump preflight's margin).
 pub(crate) const SPACE_MARGIN: u64 = 64 * 1024 * 1024;
 
-/// What a disk job does. Dumps and "keep as dump" are Phase 2.
+/// What a disk job does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiskJobPurpose {
     /// `qemu-img map`: the allocation estimate.
     Measure,
     /// Flatten the chain into a scratch image and open it.
     View,
+    /// Flatten the chain into a new dump.
+    Dump,
+    /// Promote the open view's scratch image to a dump.
+    Keep,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum DiskJobStage {
     Measuring,
-    Converting { percent: f32 },
+    Converting {
+        percent: f32,
+    },
+    /// SHA-256 of the image (and, if asked, of the chain's layers).
+    Hashing {
+        done: u64,
+        total: u64,
+    },
     Finalizing,
 }
 

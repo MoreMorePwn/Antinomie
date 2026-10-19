@@ -1200,6 +1200,9 @@ pub enum EvidenceItem {
     /// The directory of a manual core, a run's on-exit core or an imported
     /// core's results.
     ProcessCore { directory: PathBuf },
+    /// The folder `disks/<id>` of a saved disk dump. An imported image's own
+    /// file is left where it is.
+    DiskDump { directory: PathBuf },
 }
 
 #[derive(Clone, Debug)]
@@ -1405,7 +1408,23 @@ pub enum Command {
     CloseCurrentDisk {
         vm_id: String,
     },
-    /// Cancel the running disk job (measuring or flattening).
+    /// Dump the VM's current disk (VM off) into a standalone sparse
+    /// `root.ext4` of its recordings, with a `dump.json` sidecar. `hash` adds
+    /// the image's SHA-256, `layer_digests` the SHA-256 of every layer of the
+    /// source chain.
+    DumpDisk {
+        vm_id: String,
+        hash: bool,
+        layer_digests: bool,
+    },
+    /// Promote the open view to a dump by renaming its scratch folder: no
+    /// second conversion.
+    KeepCurrentDiskAsDump {
+        vm_id: String,
+        hash: bool,
+        layer_digests: bool,
+    },
+    /// Cancel the running disk job (measuring, flattening, dumping or keeping).
     CancelDiskJob {
         vm_id: String,
     },

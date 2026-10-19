@@ -4,7 +4,8 @@
 //! The recording folder is the only place anything is removed from, and only
 //! at the places the recorder itself writes these items:
 //! `boots/<boot>/network.pcap`, `boots/<boot>/network/<capture>.pcap`,
-//! `core-captures/<id>`, `runs/<run>/core` and `core-dumps/<id>`. A path is
+//! `core-captures/<id>`, `runs/<run>/core`, `core-dumps/<id>` and
+//! `disks/<id>`. A path is
 //! canonicalized, refused when it climbs with `..`, is a symbolic link or
 //! resolves outside the folder, and must match one of those places. The
 //! run records that name a removed item are updated so they read as deleted
@@ -366,6 +367,28 @@ pub(crate) fn remove_process_core(roots: &[PathBuf], directory: &Path) -> Result
         counted,
         bytes: measured.bytes,
         entries: measured.entries,
+    })
+}
+
+/// Delete a disk dump's folder `disks/<id>` with its extractions. An
+/// imported dump's original image is not inside it and stays. The folder must
+/// hold a `dump.json` (a dump, not a view or a leftover); the sidecar is
+/// removed first so a deletion cut short never leaves a listed dump whose
+/// image is gone. No other record names a dump, so nothing else is rewritten
+/// and an older version, which ignores `disks/`, is unaffected.
+pub(crate) fn remove_disk_dump(roots: &[PathBuf], directory: &Path) -> Result<Removed, String> {
+    let (item, parts) = confine(roots, directory)?;
+    let id = match parts.as_slice() {
+        [folder, id] if folder == crate::disks::DISKS_DIR && !id.starts_with('.') => id.clone(),
+        _ => return Err("this is not a disk dump of the recording".into()),
+    };
+    let measured = measure(&item);
+    crate::disks::dump::remove_dump_dir(&item)?;
+    Ok(Removed {
+        name: id,
+        bytes: measured.bytes,
+        entries: measured.entries,
+        ..Removed::default()
     })
 }
 

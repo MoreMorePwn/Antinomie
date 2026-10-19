@@ -56,6 +56,9 @@ impl EvidenceDeleter {
                             EvidenceItem::ProcessCore { directory } => {
                                 files::remove_process_core(&roots, directory)
                             }
+                            EvidenceItem::DiskDump { directory } => {
+                                files::remove_disk_dump(&roots, directory)
+                            }
                         });
                         let result = std::panic::catch_unwind(work)
                             .unwrap_or_else(|_| Err("evidence deletion panicked".into()));
@@ -109,6 +112,7 @@ impl Worker {
         match &item {
             EvidenceItem::NetworkCapture { file } => self.network_capture_busy(file)?,
             EvidenceItem::ProcessCore { directory } => self.core_busy(directory)?,
+            EvidenceItem::DiskDump { directory } => self.disk_dump_busy(directory)?,
         }
         self.evidence.submit(DeleteJob { id, roots, item })
     }
@@ -185,6 +189,27 @@ impl Worker {
                     removed.entries
                 )
             }
+            EvidenceItem::DiskDump { .. } => format!(
+                "Deleted disk dump {} ({}, {} file(s))",
+                removed.name,
+                crate::byte_size::file_size(removed.bytes),
+                removed.entries
+            ),
+        }
+    }
+
+    /// A dump the open Current disk view (kept as that dump) still reads.
+    fn disk_dump_busy(&self, directory: &Path) -> Result<(), String> {
+        let folder = fs::canonicalize(directory).unwrap_or_else(|_| directory.to_path_buf());
+        let reads = self.snapshot.current_disk.as_ref().is_some_and(|view| {
+            fs::canonicalize(&view.image)
+                .unwrap_or_else(|_| view.image.clone())
+                .starts_with(&folder)
+        });
+        if reads {
+            Err("the open Current disk view reads this dump; close the view first".into())
+        } else {
+            Ok(())
         }
     }
 

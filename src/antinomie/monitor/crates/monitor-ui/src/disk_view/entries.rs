@@ -64,6 +64,7 @@ impl DiskView {
             match &job.stage {
                 DiskJobStage::Measuring => "measuring…".to_string(),
                 DiskJobStage::Converting { percent } => format!("reading… {percent:.0} %"),
+                DiskJobStage::Hashing { .. } => "hashing…".to_string(),
                 DiskJobStage::Finalizing => "finishing…".to_string(),
             }
         } else if let Some(view) = cx.current_disk {

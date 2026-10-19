@@ -46,6 +46,7 @@ fn measure() -> DiskMeasure {
         sparse_supported: true,
         measured_ms: 1,
         directory: PathBuf::from("/home/user/rec/disks"),
+        quota: 4 * 1024 * 1024 * 1024,
         error: None,
     }
 }
@@ -65,6 +66,7 @@ fn open_view(state: Ext4State) -> CurrentDiskView {
         fs_state: state,
         logical_size: 16 * 1024 * 1024 * 1024,
         allocated_size: 812 * 1024 * 1024,
+        kept_as: None,
     }
 }
 

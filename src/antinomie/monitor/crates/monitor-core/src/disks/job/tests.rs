@@ -5,7 +5,11 @@ use crate::disks::{
     fixture::{Fixture, require_tools},
     reader::{DiskAnswer, DiskRequest, image::Image},
 };
-use std::{os::unix::fs::PermissionsExt, process::Command, time::Instant};
+use std::{
+    os::unix::fs::{MetadataExt, PermissionsExt},
+    process::Command,
+    time::Instant,
+};
 
 fn spec(fixture: &Fixture, top: &Path) -> JobSpec {
     JobSpec {
@@ -15,7 +19,64 @@ fn spec(fixture: &Fixture, top: &Path) -> JobSpec {
         top: top.to_path_buf(),
         source: DiskSourceRecord::default(),
         disks_dir: disks_dir(&fixture.root),
+        quota: 0,
     }
+}
+
+fn plan(hash: bool, layer_digests: bool) -> DumpPlan {
+    DumpPlan {
+        vm_name: "Fixture".into(),
+        system: "Linux 6.12.94 · Test".into(),
+        hash,
+        layer_digests,
+    }
+}
+
+fn sha256sum(path: &Path) -> String {
+    let output = Command::new("sha256sum").arg(path).output().unwrap();
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+fn dumped(result: Result<JobResult, String>) -> DiskDump {
+    match result.unwrap() {
+        JobResult::Dumped(dump) => *dump,
+        other => panic!("{other:?}"),
+    }
+}
+
+fn folders(fixture: &Fixture) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(disks_dir(&fixture.root))
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// A one-layer qcow2 of an image whose superblock says it was not unmounted.
+fn forced_off_disk(fixture: &Fixture) -> PathBuf {
+    let tree = fixture.standard_tree("forced-tree");
+    let raw = fixture.ext4("forced.ext4", &tree, &["ssv state 0"]);
+    let top = fixture.path("forced.qcow2");
+    assert!(
+        Command::new("qemu-img")
+            .args(["convert", "-f", "raw", "-O", "qcow2"])
+            .arg(&raw)
+            .arg(&top)
+            .status()
+            .unwrap()
+            .success()
+    );
+    top
 }
 
 fn wait(job: &mut Job) -> Result<JobResult, String> {
@@ -406,4 +467,478 @@ fn the_converter_dies_with_the_thread_that_started_it() {
     }
     // Killed by the signal: reap it.
     assert!(!child.wait().unwrap().success());
+}
+
+#[test]
+fn a_dump_job_writes_a_finished_standalone_image_and_its_sidecar() {
+    require_tools!();
+    let fixture = Fixture::new();
+    let top = fixture.chain();
+    let mut job = Job::dump(spec(&fixture, &top), plan(true, false)).unwrap();
+    assert_eq!(job.purpose, DiskJobPurpose::Dump);
+    let dump = dumped(wait(&mut job));
+    assert_eq!(dump.vm_id, "vm-1");
+    assert_eq!(dump.vm_name, "Fixture");
+    assert_eq!(dump.system, "Linux 6.12.94 · Test");
+    assert_eq!(dump.fs_state, Ext4State::Clean);
+    assert!(dump.complete() && dump.browsable() && !dump.imported);
+    assert_eq!(dump.logical_size, 32 * 1024 * 1024);
+    assert_eq!(dump.source.layers.len(), 3);
+    assert!(
+        dump.source
+            .layers
+            .iter()
+            .all(|layer| layer.sha256.is_none())
+    );
+    // The folder holds the image and the sidecar, nothing partial, 0700.
+    assert_eq!(folders(&fixture), [dump.id.as_str()]);
+    let mut names: Vec<_> = fs::read_dir(&dump.dir)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["dump.json", "root.ext4"]);
+    assert_eq!(
+        fs::metadata(&dump.dir).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    // Standalone, sparse, byte for byte what the chain flattens to.
+    let image = dump.path();
+    assert_eq!(fs::metadata(&image).unwrap().len(), dump.logical_size);
+    assert!(dump.allocated_size.unwrap() < dump.logical_size / 2);
+    let reference = fixture.path("reference.raw");
+    assert!(
+        Command::new("qemu-img")
+            .args(["convert", "-f", "qcow2", "-O", "raw"])
+            .arg(&top)
+            .arg(&reference)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert_eq!(fs::read(&image).unwrap(), fs::read(&reference).unwrap());
+    // SHA-256 agrees with sha256sum and the sidecar round-trips through list.
+    assert_eq!(dump.sha256.as_deref(), Some(sha256sum(&image).as_str()));
+    let listed = crate::disks::dump::list(std::slice::from_ref(&fixture.root));
+    assert_eq!(listed, std::slice::from_ref(&dump));
+    // It opens in the reader, and host tools read it.
+    assert_eq!(read_state(&image).unwrap(), Ext4State::Clean);
+    let debugfs = Command::new("/sbin/debugfs")
+        .args(["-R", "cat /etc/layer-2"])
+        .arg(&image)
+        .output();
+    if let Ok(output) = debugfs {
+        assert_eq!(output.stdout, b"written in layer 2\n");
+    }
+    // A dump leaves no view behind and the chain untouched.
+    assert!(scratch_folders(&fixture).is_empty());
+    assert!(
+        Command::new("qemu-img")
+            .arg("check")
+            .arg(&top)
+            .status()
+            .unwrap()
+            .success()
+    );
+}
+
+#[test]
+fn a_forced_off_disk_dumps_as_not_cleanly_unmounted() {
+    require_tools!();
+    let fixture = Fixture::new();
+    let top = forced_off_disk(&fixture);
+    let mut job = Job::dump(spec(&fixture, &top), plan(false, false)).unwrap();
+    let dump = dumped(wait(&mut job));
+    assert_eq!(dump.fs_state, Ext4State::NotClean);
+    // Hashing is optional: none was asked for.
+    assert_eq!(dump.sha256, None);
+    assert_eq!(read_state(&dump.path()).unwrap(), Ext4State::NotClean);
+}
+
+#[test]
+fn layer_digests_are_recorded_only_when_asked_for() {
+    require_tools!();
+    let fixture = Fixture::new();
+    let top = fixture.chain();
+    let mut job = Job::dump(spec(&fixture, &top), plan(true, true)).unwrap();
+    let dump = dumped(wait(&mut job));
+    assert_eq!(dump.source.layers.len(), 3);
+    for layer in &dump.source.layers {
+        let file = fixture.root.join(&layer.filename);
+        assert_eq!(layer.sha256.as_deref(), Some(sha256sum(&file).as_str()));
+        assert_eq!(layer.size, fs::metadata(&file).unwrap().len());
+    }
+    assert_ne!(dump.source.layers[0].sha256, dump.source.layers[2].sha256);
+}
+
+#[test]
+fn a_dump_over_the_quota_is_refused_before_anything_is_written() {
+    require_tools!();
+    let fixture = Fixture::new();
+    let top = fixture.chain();
+    let mut limited = spec(&fixture, &top);
+    limited.quota = 64 * 1024;
+    let mut job = Job::dump(limited.clone(), plan(true, false)).unwrap();
+    let error = wait(&mut job).unwrap_err();
+    assert!(error.contains("recording quota"), "{error}");
+    assert!(crate::quota::is_quota_error(&error), "{error}");
+    assert!(error.contains("Settings"), "{error}");
+    assert!(
+        folders(&fixture).is_empty(),
+        "nothing written: {:?}",
+        folders(&fixture)
+    );
+    // The quota is only a ceiling on dumps: a view of the same disk opens,
+    // and a quota above the estimate lets the dump through.
+    let mut job = Job::view(limited).unwrap();
+    assert!(matches!(wait(&mut job), Ok(JobResult::Opened(_))));
+    let mut roomy = spec(&fixture, &top);
+    roomy.quota = 4 * 1024 * 1024 * 1024;
+    let mut job = Job::dump(roomy, plan(false, false)).unwrap();
+    dumped(wait(&mut job));
+}
+
+#[test]
+fn a_measure_carries_the_quota_and_explains_a_refusal() {
+    require_tools!();
+    let fixture = Fixture::new();
+    let top = fixture.chain();
+    let mut limited = spec(&fixture, &top);
+    limited.quota = 64 * 1024;
+    let mut job = Job::measure(limited).unwrap();
+    let JobResult::Measured(measured) = wait(&mut job).unwrap() else {
+        panic!()
+    };
+    assert_eq!(measured.quota, 64 * 1024);
+    // Open is not blocked, the dump is.
+    assert_eq!(measured.error, None);
+    assert!(measured.quota_error().unwrap().contains("recording quota"));
+    let none = DiskMeasure {
+        allocated_estimate: 1 << 40,
+        quota: 0,
+        ..DiskMeasure::default()
+    };
+    assert_eq!(none.quota_error(), None);
+}
+
+#[test]
+fn a_dump_that_does_not_fit_the_free_space_is_refused_naming_the_folder() {
+    let measure = DiskMeasure {
+        allocated_estimate: 3 << 30,
+        logical_size: 16 << 30,
+        free_space: 1 << 30,
+        sparse_supported: true,
+        directory: PathBuf::from("/recordings/vm/disks"),
+        ..DiskMeasure::default()
+    };
+    let error = measure.space_error().unwrap();
+    assert!(error.contains("/recordings/vm/disks"), "{error}");
+    assert!(
+        error.contains("3.1 GiB") && error.contains("1.0 GiB"),
+        "{error}"
+    );
+    // Without hole support the whole logical size must fit.
+    let dense = DiskMeasure {
+        sparse_supported: false,
+        free_space: 8 << 30,
+        ..measure
+    };
+    assert!(dense.space_error().unwrap().contains("sparse"));
+}
+
+#[test]
+fn cancelling_a_dump_removes_its_folder_and_leaves_no_record() {
+    let fixture = Fixture::new();
+    let mut spec = spec(&fixture, &fixture.path("top.qcow2"));
+    spec.qemu_img = slow_qemu_img(&fixture, "54545");
+    let mut job = Job::dump(spec, plan(true, false)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !running("54545") {
+        assert!(Instant::now() < deadline, "converter never started");
+        thread::sleep(Duration::from_millis(20));
+    }
+    // While converting, the folder exists but is not a listed dump.
+    assert_eq!(folders(&fixture).len(), 1);
+    assert!(crate::disks::dump::list(std::slice::from_ref(&fixture.root)).is_empty());
+    job.cancel();
+    assert_eq!(wait(&mut job).unwrap_err(), "cancelled");
+    thread::sleep(Duration::from_millis(100));
+    assert!(!running("54545"));
+    assert!(folders(&fixture).is_empty());
+}
+
+#[test]
+fn dropping_a_running_dump_leaves_no_folder() {
+    let fixture = Fixture::new();
+    let mut spec = spec(&fixture, &fixture.path("top.qcow2"));
+    spec.qemu_img = slow_qemu_img(&fixture, "55555");
+    let job = Job::dump(spec, plan(true, false)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !running("55555") {
+        assert!(Instant::now() < deadline, "converter never started");
+        thread::sleep(Duration::from_millis(20));
+    }
+    drop(job);
+    thread::sleep(Duration::from_millis(100));
+    assert!(!running("55555"));
+    assert!(folders(&fixture).is_empty());
+}
+
+#[test]
+fn a_failed_dump_removes_its_folder() {
+    require_tools!();
+    let fixture = Fixture::new();
+    let raw = fixture.path("blank.raw");
+    fs::write(&raw, vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let top = fixture.path("blank.qcow2");
+    assert!(
+        Command::new("qemu-img")
+            .args(["convert", "-f", "raw", "-O", "qcow2"])
+            .arg(&raw)
+            .arg(&top)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let mut job = Job::dump(spec(&fixture, &top), plan(true, false)).unwrap();
+    let error = wait(&mut job).unwrap_err();
+    assert!(
+        error.contains("ext2/3/4") || error.contains("unsupported"),
+        "{error}"
+    );
+    assert!(folders(&fixture).is_empty());
+}
+
+#[test]
+fn a_crash_mid_dump_leaves_a_folder_that_is_never_listed_and_is_swept() {
+    require_tools!();
+    let fixture = Fixture::new();
+    let top = fixture.chain();
+    // What a killed app leaves: an image being written, no dump.json.
+    let crashed = disks_dir(&fixture.root).join("crashed");
+    fs::create_dir_all(&crashed).unwrap();
+    fs::write(crashed.join("root.ext4.part"), vec![7u8; 8192]).unwrap();
+    assert!(crate::disks::dump::list(std::slice::from_ref(&fixture.root)).is_empty());
+    let mut job = Job::dump(spec(&fixture, &top), plan(false, false)).unwrap();
+    let dump = dumped(wait(&mut job));
+    assert!(!crashed.exists());
+    assert_eq!(folders(&fixture), [dump.id]);
+}
+
+fn open_view(fixture: &Fixture, top: &Path) -> CurrentDiskView {
+    let mut job = Job::view(spec(fixture, top)).unwrap();
+    match wait(&mut job).unwrap() {
+        JobResult::Opened(view) => view,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A `qemu-img` that fails every conversion, to show a step runs none.
+fn no_convert_qemu_img(fixture: &Fixture) -> PathBuf {
+    let path = fixture.path("qemu-img-no-convert");
+    fs::write(
+        &path,
+        "#!/bin/sh\ncase \"$1\" in convert) echo 'a second conversion ran' >&2; exit 1 ;; esac\nexec qemu-img \"$@\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+#[test]
+fn keeping_a_view_renames_it_without_a_second_conversion() {
+    require_tools!();
+    let fixture = Fixture::new();
+    let top = fixture.chain();
+    let view = open_view(&fixture, &top);
+    let before = fs::metadata(&view.image).unwrap();
+    let old_folder = view.image.parent().unwrap().to_path_buf();
+    let mut keep_spec = spec(&fixture, &top);
+    keep_spec.qemu_img = no_convert_qemu_img(&fixture);
+    let mut job = Job::keep(keep_spec, plan(true, false), view.clone()).unwrap();
+    assert_eq!(job.purpose, DiskJobPurpose::Keep);
+    let JobResult::Kept(dump, kept) = wait(&mut job).unwrap() else {
+        panic!("kept")
+    };
+    // Same inode: renamed, not copied. The scratch folder is gone.
+    let after = fs::metadata(dump.path()).unwrap();
+    assert_eq!((before.dev(), before.ino()), (after.dev(), after.ino()));
+    assert!(!old_folder.exists());
+    assert_eq!(kept.image, dump.path());
+    let (dump, kept) = (*dump, *kept);
+    assert_eq!(kept.kept_as.as_deref(), Some(dump.id.as_str()));
+    assert_eq!(kept.view_id, view.view_id);
+    assert_eq!(kept.extract_dir, view.extract_dir);
+    assert!(dump.complete() && dump.browsable());
+    assert_eq!(dump.fs_state, Ext4State::Clean);
+    assert_eq!(
+        dump.sha256.as_deref(),
+        Some(sha256sum(&dump.path()).as_str())
+    );
+    assert_eq!(dump.source, view.source);
+    assert_eq!(dump.logical_size, view.logical_size);
+    assert_eq!(
+        crate::disks::dump::list(std::slice::from_ref(&fixture.root)),
+        std::slice::from_ref(&dump)
+    );
+    assert_eq!(folders(&fixture), [dump.id.as_str()]);
+    // The kept image still reads, and closing the view keeps the dump.
+    assert!(
+        Image::open(&kept.image, &fixture.path("o"))
+            .handle(1, DiskRequest::Probe)
+            .is_ok()
+    );
+    crate::disks::remove_scratch(&kept);
+    assert!(dump.path().is_file());
+    // Keeping again is refused.
+    let mut again = Job::keep(spec(&fixture, &top), plan(true, false), kept).unwrap();
+    assert!(wait(&mut again).unwrap_err().contains("already kept"));
+    assert_eq!(folders(&fixture), [dump.id]);
+}
+
+#[test]
+fn keeping_applies_the_quota_ceiling_to_the_views_allocation() {
+    require_tools!();
+    let fixture = Fixture::new();
+    let top = fixture.chain();
+    let view = open_view(&fixture, &top);
+    let mut limited = spec(&fixture, &top);
+    limited.quota = 64 * 1024;
+    let mut job = Job::keep(limited, plan(true, false), view.clone()).unwrap();
+    let error = wait(&mut job).unwrap_err();
+    assert!(error.contains("recording quota"), "{error}");
+    // The view is untouched.
+    assert!(view.image.is_file());
+    assert_eq!(folders(&fixture), [format!(".scratch-{}", view.view_id)]);
+}
+
+#[test]
+fn keeping_refuses_an_image_that_is_not_a_scratch_view_of_these_recordings() {
+    require_tools!();
+    let fixture = Fixture::new();
+    let top = fixture.chain();
+    let mut view = open_view(&fixture, &top);
+    let elsewhere = fixture.path("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    fs::copy(&view.image, elsewhere.join("root.ext4")).unwrap();
+    view.image = elsewhere.join("root.ext4");
+    let mut job = Job::keep(spec(&fixture, &top), plan(false, false), view).unwrap();
+    assert!(wait(&mut job).unwrap_err().contains("scratch image"));
+    assert!(elsewhere.join("root.ext4").exists());
+    // A scratch folder that is not directly under this VM's disks folder.
+    let mut view = open_view(&fixture, &top);
+    let nested = disks_dir(&fixture.root).join("nested/.scratch-x");
+    fs::create_dir_all(&nested).unwrap();
+    fs::copy(&view.image, nested.join("root.ext4")).unwrap();
+    view.image = nested.join("root.ext4");
+    let mut job = Job::keep(spec(&fixture, &top), plan(false, false), view).unwrap();
+    assert!(wait(&mut job).unwrap_err().contains("scratch image"));
+}
+
+fn idle_run(cancelled: bool) -> Run {
+    Run {
+        estimate: Arc::new(AtomicU64::new(0)),
+        stage: Arc::new(Mutex::new(DiskJobStage::Measuring)),
+        cancel: Arc::new(AtomicBool::new(cancelled)),
+    }
+}
+
+#[test]
+fn cancelling_a_keep_abandons_the_hash_and_leaves_the_view_open() {
+    require_tools!();
+    let fixture = Fixture::new();
+    let top = fixture.chain();
+    let view = open_view(&fixture, &top);
+    let result = idle_run(true).keep(&spec(&fixture, &top), &plan(true, false), &view);
+    assert_eq!(result.unwrap_err(), "cancelled");
+    assert!(view.image.is_file());
+    assert_eq!(folders(&fixture), [format!(".scratch-{}", view.view_id)]);
+    // Without the hash stage the cancel is still honoured before the rename.
+    let result = idle_run(true).keep(&spec(&fixture, &top), &plan(false, false), &view);
+    assert_eq!(result.unwrap_err(), "cancelled");
+    assert!(view.image.is_file());
+    assert!(crate::disks::dump::list(std::slice::from_ref(&fixture.root)).is_empty());
+}
+
+#[test]
+fn promotion_falls_back_to_a_copy_when_the_rename_crosses_filesystems() {
+    let fixture = Fixture::new();
+    let from = fixture.path("from");
+    let to = fixture.path("to");
+    fs::create_dir_all(&from).unwrap();
+    let exdev = || io::Error::from_raw_os_error(rustix::io::Errno::XDEV.raw_os_error());
+    let copied = promote(
+        &from,
+        &to,
+        |_, _| Err(exdev()),
+        |to| fs::write(to.join("root.ext4"), b"copied").map_err(|e| e.to_string()),
+    )
+    .unwrap();
+    // Copied, not renamed: the source folder stays, the new one is private.
+    assert!(!copied && from.exists());
+    assert_eq!(fs::read(to.join("root.ext4")).unwrap(), b"copied");
+    assert_eq!(
+        fs::metadata(&to).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    // A failed copy removes the half-made folder.
+    let other = fixture.path("other");
+    let error = promote(
+        &from,
+        &other,
+        |_, _| Err(exdev()),
+        |_| Err("disk full".into()),
+    );
+    assert_eq!(error.unwrap_err(), "disk full");
+    assert!(!other.exists() && from.exists());
+    // Any other rename error is reported, and nothing is copied.
+    let denied = promote(
+        &from,
+        &fixture.path("denied"),
+        |_, _| Err(io::Error::from_raw_os_error(13)),
+        |_| panic!("no copy"),
+    );
+    assert!(denied.is_err());
+    // A real rename moves the folder.
+    let moved = fixture.path("moved");
+    assert!(
+        promote(
+            &from,
+            &moved,
+            |a, b| fs::rename(a, b),
+            |_| panic!("no copy")
+        )
+        .unwrap()
+    );
+    assert!(moved.exists() && !from.exists());
+}
+
+#[test]
+fn the_copy_fallback_makes_a_sparse_identical_raw_image() {
+    require_tools!();
+    let fixture = Fixture::new();
+    let top = fixture.chain();
+    let view = open_view(&fixture, &top);
+    let target = fixture.path("copy");
+    fs::create_dir_all(&target).unwrap();
+    idle_run(false)
+        .copy_raw(
+            &spec(&fixture, &top),
+            &view.image,
+            &target,
+            view.logical_size,
+        )
+        .unwrap();
+    let copy = target.join("root.ext4");
+    assert_eq!(fs::read(&copy).unwrap(), fs::read(&view.image).unwrap());
+    assert!(fs::metadata(&copy).unwrap().blocks() * 512 < view.logical_size / 2);
+    assert!(!target.join("root.ext4.part").exists());
+    // A size mismatch is caught.
+    let short = fixture.path("short");
+    fs::create_dir_all(&short).unwrap();
+    let error = idle_run(false)
+        .copy_raw(&spec(&fixture, &top), &view.image, &short, 1234)
+        .unwrap_err();
+    assert!(error.contains("bytes"), "{error}");
 }

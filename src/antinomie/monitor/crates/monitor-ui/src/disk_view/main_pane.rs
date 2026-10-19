@@ -99,6 +99,7 @@ impl DiskView {
                     DiskJobStage::Converting { percent } => {
                         format!("Reading the current disk… {percent:.0} %")
                     }
+                    DiskJobStage::Hashing { .. } => "Computing the SHA-256…".to_string(),
                     DiskJobStage::Finalizing => "Checking the image…".to_string(),
                 })
                 .strong()
