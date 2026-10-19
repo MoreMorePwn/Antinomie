@@ -29,10 +29,26 @@ fn symbol(kind: InputKind) -> &'static str {
 
 fn outcome(outcome: InputOutcome) -> (&'static str, egui::Color32) {
     match outcome {
-        InputOutcome::Scanned => ("Scanned", theme::good()),
-        InputOutcome::Partial => ("Partial", theme::warn()),
+        InputOutcome::Succeeded => ("Succeeded", theme::good()),
+        InputOutcome::Failed => ("Failed", theme::error()),
         InputOutcome::Skipped => ("Skipped", theme::muted()),
     }
+}
+
+/// "2 succeeded, 1 failed, 1 skipped"; outcomes nobody had are left out.
+pub(super) fn outcome_counts(inputs: &[ScannedInput]) -> String {
+    [
+        (InputOutcome::Succeeded, "succeeded"),
+        (InputOutcome::Failed, "failed"),
+        (InputOutcome::Skipped, "skipped"),
+    ]
+    .into_iter()
+    .filter_map(|(kind, word)| {
+        let count = inputs.iter().filter(|input| input.outcome == kind).count();
+        (count > 0).then(|| format!("{count} {word}"))
+    })
+    .collect::<Vec<_>>()
+    .join(", ")
 }
 
 /// Where a click on the row goes.
@@ -48,6 +64,8 @@ pub(super) fn target(input: &ScannedInput) -> Option<Route> {
     let parent = || input.path.parent().map(Path::to_path_buf);
     let open = match input.kind {
         InputKind::Executable => OpenInput::StaticAnalysis,
+        // A run without captures lists a placeholder with no file to open.
+        InputKind::Capture if input.path.extension().is_none() => return None,
         InputKind::Capture => OpenInput::Capture(input.path.clone()),
         InputKind::CoreDump => OpenInput::Core(input.path.clone()),
         InputKind::MemoryDump => OpenInput::Memory(parent()?),
@@ -72,10 +90,32 @@ fn hover(input: &ScannedInput, target: Option<&Route>) -> String {
     text
 }
 
-/// One input; returns where to go when its name was clicked.
-fn row(ui: &mut egui::Ui, input: &ScannedInput) -> Option<Route> {
+/// What a click on a row asked for.
+#[derive(Default)]
+struct RowAction {
+    /// Where the name leads.
+    route: Option<Route>,
+    /// The row's Scan button: run this engine again.
+    scan: bool,
+    /// The row's Show log button.
+    log: bool,
+}
+
+/// What the row's button says, and whether an engine scan is running.
+#[derive(Clone, Copy)]
+struct ScanState {
+    /// A scan of this engine runs now; show the spinner instead of the button.
+    running: bool,
+    /// A scan can start (a run is selected and none is in progress).
+    ready: bool,
+}
+
+/// One input. Failed and Skipped rows offer a Scan button, and Failed rows the
+/// log; the engine scans every one of its inputs together, so Scan runs the
+/// whole engine again.
+fn row(ui: &mut egui::Ui, input: &ScannedInput, engine: &str, scan: ScanState) -> RowAction {
     let target = target(input);
-    let mut clicked = false;
+    let mut action = RowAction::default();
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(symbol(input.kind)).color(theme::blue()));
         ui.label(RichText::new(input.kind.label()).color(theme::muted()));
@@ -93,9 +133,12 @@ fn row(ui: &mut egui::Ui, input: &ScannedInput) -> Option<Route> {
         } else {
             ui.label(RichText::new(name).color(theme::text()))
         };
-        clicked = response
+        if response
             .on_hover_text(hover(input, target.as_ref()))
-            .clicked();
+            .clicked()
+        {
+            action.route = target;
+        }
         if let Some(size) = input.size {
             ui.label(RichText::new(crate::network_view::format_bytes(size)).color(theme::muted()));
         }
@@ -110,23 +153,62 @@ fn row(ui: &mut egui::Ui, input: &ScannedInput) -> Option<Route> {
         }
         let (text, color) = outcome(input.outcome);
         ui.label(RichText::new(text).color(color));
-        if !input.reason.is_empty() {
+        if input.outcome == InputOutcome::Skipped && !input.reason.is_empty() {
             ui.label(RichText::new(&input.reason).small().color(theme::muted()));
         }
+        if input.outcome == InputOutcome::Succeeded {
+            if !input.reason.is_empty() {
+                ui.label(RichText::new(&input.reason).small().color(theme::muted()));
+            }
+            return;
+        }
+        if scan.running {
+            theme::loading_weak(ui, "Scanning…");
+            return;
+        }
+        let label = if input.outcome == InputOutcome::Failed {
+            "Scan again"
+        } else {
+            "Scan"
+        };
+        action.scan = ui
+            .add_enabled(scan.ready, egui::Button::new(RichText::new(label).small()))
+            .on_hover_text(format!(
+                "Run the {engine} scan again for this run. It scans every {engine} input, not only this one."
+            ))
+            .clicked();
+        if input.outcome == InputOutcome::Failed {
+            action.log = ui
+                .small_button("Show log")
+                .on_hover_text("Open the result directory, which holds the detector log")
+                .clicked();
+        }
     });
-    if !input.detail.is_empty() {
-        ui.indent(("scanned-input-detail", &input.path), |ui| {
-            ui.add(
-                egui::Label::new(RichText::new(&input.detail).small().color(theme::muted())).wrap(),
-            );
+    let wrapped = |ui: &mut egui::Ui, text: &str, color: egui::Color32| {
+        ui.indent(("scanned-input-detail", &input.path, text), |ui| {
+            ui.add(egui::Label::new(RichText::new(text).small().color(color)).wrap());
         });
+    };
+    if input.outcome == InputOutcome::Failed && !input.reason.is_empty() {
+        wrapped(ui, &input.reason, theme::error());
     }
-    clicked.then_some(target).flatten()
+    if !input.detail.is_empty() {
+        wrapped(ui, &input.detail, theme::muted());
+    }
+    if !input.warning.is_empty() {
+        wrapped(ui, &input.warning, theme::warn());
+    }
+    action
 }
 
 impl View {
     /// The collapsible list below the rule sets, for the shown result.
-    pub(super) fn scanned_inputs(&mut self, ui: &mut egui::Ui, index: usize) {
+    pub(super) fn scanned_inputs(
+        &mut self,
+        ui: &mut egui::Ui,
+        index: usize,
+        scan: Option<&ArchiveScan>,
+    ) {
         let Some(Ok(report)) = &self.results[index] else {
             return;
         };
@@ -154,6 +236,13 @@ impl View {
             return;
         }
         let mut chosen = None;
+        let mut rescan = false;
+        let mut log = false;
+        let state = ScanState {
+            running: self.is_scanning(index),
+            ready: self.rx.is_none() && self.identity.is_some(),
+        };
+        let engine = name(self.selected);
         ui.indent(("detector-scanned-inputs", index), |ui| {
             let Some(inputs) = inputs else {
                 ui.weak("This result was saved before scanned inputs were recorded. Scan again to list them.");
@@ -163,21 +252,18 @@ impl View {
                 ui.weak("Nothing was passed to the rules.");
                 return;
             }
-            let count = |kind| inputs.iter().filter(|input| input.outcome == kind).count();
             ui.label(
-                RichText::new(format!(
-                    "{} scanned · {} partial · {} skipped",
-                    count(InputOutcome::Scanned),
-                    count(InputOutcome::Partial),
-                    count(InputOutcome::Skipped)
-                ))
-                .small()
-                .color(theme::muted()),
+                RichText::new(outcome_counts(inputs))
+                    .small()
+                    .color(theme::muted()),
             );
             for input in inputs.iter().take(SHOWN) {
-                if let Some(target) = row(ui, input) {
-                    chosen = Some(target);
+                let action = row(ui, input, engine, state);
+                if chosen.is_none() {
+                    chosen = action.route;
                 }
+                rescan |= action.scan;
+                log |= action.log;
             }
             if inputs.len() > SHOWN {
                 ui.weak(format!(
@@ -186,6 +272,15 @@ impl View {
                 ));
             }
         });
+        if rescan {
+            self.scan_now(ui.ctx(), index, scan);
+        }
+        if log {
+            if let Some((directory, _)) = &self.identity {
+                let result = engine::result_directory(directory, self.selected);
+                crate::evidence::reveal(ui.ctx(), &result);
+            }
+        }
         match chosen {
             Some(Route::Open(target)) => ui
                 .ctx()
@@ -213,8 +308,10 @@ mod tests {
             ScannedInput {
                 kind: InputKind::MemoryDump,
                 path: PathBuf::from("/runs/r/memory/memory.elf"),
-                outcome: InputOutcome::Partial,
-                reason: "mapped ranges missing from the dump were excluded".into(),
+                outcome: InputOutcome::Failed,
+                reason:
+                    "stopped after 3 blocks: memory scan reached its time / 512 MiB input budget"
+                        .into(),
                 detail: "3 blocks of up to 64 MiB · 2 ranges not captured".into(),
                 ..ScannedInput::default()
             },
@@ -238,7 +335,7 @@ mod tests {
 
     fn shown(view: &mut View, ctx: &egui::Context) -> String {
         rendered_text(&frames(ctx, 2, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0));
+            egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0, None));
         }))
     }
 
@@ -252,14 +349,15 @@ mod tests {
         view.inputs_open[0] = true;
         let text = shown(&mut view, &ctx);
         for expected in [
-            "1 scanned · 1 partial · 1 skipped",
+            "1 succeeded, 1 failed, 1 skipped",
             "Executable",
             "sample",
             "2.0 KiB",
             "abababababab",
-            "Scanned",
+            "Succeeded",
             "memory.elf",
-            "Partial",
+            "Failed",
+            "stopped after 3 blocks: memory scan reached its time / 512 MiB input budget",
             "3 blocks of up to 64 MiB · 2 ranges not captured",
             "Skipped",
             "recovered-file scanning is off",
@@ -316,7 +414,7 @@ mod tests {
         view.inputs_open[0] = true;
         let mut position = None;
         for shape in frames(&ctx, 2, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0));
+            egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0, None));
         }) {
             super::super::tests::each_galley_rect(&shape.shape, &mut |text, rect| {
                 if text == "sample" {
@@ -344,7 +442,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0));
+                    egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0, None));
                 },
             );
         }
@@ -375,7 +473,7 @@ mod tests {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0));
+                egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0, None));
             },
         );
         let text = rendered_text(&output.shapes);
@@ -388,5 +486,142 @@ mod tests {
             "{text}"
         );
         assert_eq!(text.matches("Recovered file").count(), SHOWN);
+    }
+
+    /// Presses the primary button on the first text equal to `label`.
+    fn click(view: &mut View, ctx: &egui::Context, label: &str) {
+        let mut position = None;
+        for shape in frames(ctx, 2, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0, None));
+        }) {
+            super::super::tests::each_galley_rect(&shape.shape, &mut |text, rect| {
+                if text == label && position.is_none() {
+                    position = Some(rect.center());
+                }
+            });
+        }
+        let position = position.unwrap_or_else(|| panic!("{label} is not painted"));
+        for pressed in [true, false] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000.0, 800.0),
+                    )),
+                    events: vec![
+                        egui::Event::PointerMoved(position),
+                        egui::Event::PointerButton {
+                            pos: position,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0, None));
+                },
+            );
+        }
+    }
+
+    fn run_view() -> View {
+        let mut view = view_without_run();
+        view.identity = Some((
+            PathBuf::from("/nonexistent/run"),
+            antinomie_monitor_core::analysis::detection::Identity {
+                vm_id: "v".into(),
+                boot_id: "b".into(),
+                run_id: "r".into(),
+                root_cookie: 1,
+            },
+        ));
+        view
+    }
+
+    fn view_without_run() -> View {
+        let mut view = view(Some(inputs()));
+        view.inputs_open[0] = true;
+        view
+    }
+
+    #[test]
+    fn failed_and_skipped_rows_offer_scan_and_succeeded_rows_do_not() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut view = run_view();
+        let output = frames(&ctx, 2, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0, None));
+        });
+        let (mut again, mut scan, mut log) = (0, 0, 0);
+        for shape in &output {
+            super::super::tests::each_galley_rect(&shape.shape, &mut |text, _| {
+                again += usize::from(text == "Scan again");
+                scan += usize::from(text == "Scan");
+                log += usize::from(text == "Show log");
+            });
+        }
+        // Three rows: the Failed one has both buttons, the Skipped one Scan,
+        // and the Succeeded sample none.
+        assert_eq!((again, scan, log), (1, 1, 1), "{}", rendered_text(&output));
+    }
+
+    #[test]
+    fn the_scan_button_starts_the_engine_and_shows_the_spinner_while_it_runs() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut view = run_view();
+        assert!(view.busy.is_none());
+        click(&mut view, &ctx, "Scan again");
+        assert_eq!(view.busy, Some(0), "the YARA scan started");
+        assert_eq!(view.phase[0], "running");
+        // While it runs the rows show a spinner and no Scan button.
+        let output = frames(&ctx, 2, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0, None));
+        });
+        let text = rendered_text(&output);
+        assert!(text.contains("Scanning…"), "{text}");
+        assert!(!text.contains("Scan again"), "{text}");
+        assert_eq!(
+            theme::spinners_in(&output),
+            2,
+            "one per Failed or Skipped row"
+        );
+        // With no run selected the button is disabled and starts nothing.
+        let mut idle = view_without_run();
+        click(&mut idle, &ctx, "Scan again");
+        assert!(idle.busy.is_none());
+    }
+
+    #[test]
+    fn rows_say_why_and_the_sigma_row_carries_the_coverage_warning() {
+        let ctx = egui::Context::default();
+        let rows = vec![
+            ScannedInput {
+                kind: InputKind::EventJournal,
+                path: PathBuf::from("/runs/r/triage-events.jsonl"),
+                detail: "3 events · unmapped_thing 3".into(),
+                warning: antinomie_monitor_core::analysis::detection::SIGMA_COVERAGE_WARNING.into(),
+                ..ScannedInput::default()
+            },
+            ScannedInput {
+                kind: InputKind::Capture,
+                path: PathBuf::from("/runs/r/net.pcap"),
+                outcome: InputOutcome::Skipped,
+                reason: "no packets captured".into(),
+                ..ScannedInput::default()
+            },
+        ];
+        let mut view = view(Some(rows));
+        view.inputs_open[0] = true;
+        let text = shown(&mut view, &ctx);
+        assert!(text.contains("1 succeeded, 1 skipped"), "{text}");
+        assert!(
+            text.contains("may not cover everything a Sysmon or auditd log would contain"),
+            "{text}"
+        );
+        assert!(text.contains("no packets captured"), "{text}");
+        assert!(!text.to_lowercase().contains("partial"), "{text}");
     }
 }

@@ -38,19 +38,34 @@ pub(super) fn state(state: &State) -> &'static str {
     }
 }
 
-/// "3 matched rules" and the colored state of the scan that produced them.
-fn matched_summary(count: usize, state_value: &State) -> (String, egui::Color32) {
+/// "3 matched rules · 2 succeeded, 1 failed, 1 skipped": the matches and what
+/// happened to each input, which is what the scan result is made of.
+fn matched_summary(report: &Report) -> String {
+    let count = report.findings.len();
     let label = if count == 1 {
         "matched rule"
     } else {
         "matched rules"
     };
-    let tone = match state_value {
+    let outcomes = report
+        .inputs
+        .as_deref()
+        .map(super::inputs::outcome_counts)
+        .unwrap_or_default();
+    if outcomes.is_empty() {
+        format!("{count} {label}")
+    } else {
+        format!("{count} {label} · {outcomes}")
+    }
+}
+
+/// The color of an engine state badge.
+fn state_tone(state_value: &State) -> egui::Color32 {
+    match state_value {
         State::Complete => theme::blue(),
         State::Partial | State::NoRules | State::Missing => theme::warn(),
         State::Unavailable => theme::muted(),
-    };
-    (format!("{count} {label}"), tone)
+    }
 }
 
 impl View {
@@ -202,14 +217,7 @@ impl View {
     fn scan_buttons(&mut self, ui: &mut egui::Ui, index: usize, scan: Option<&ArchiveScan>) {
         let ready = self.rx.is_none() && self.identity.is_some();
         if ui.add_enabled(ready, egui::Button::new("Scan")).clicked() {
-            let partial = !self.notes[index].is_empty();
-            self.auto_key[index].clear();
-            self.start(
-                ui.ctx(),
-                scan.and_then(|scan| scan.event_journal.as_ref())
-                    .map(|summary| summary.sha256.clone()),
-                partial,
-            );
+            self.scan_now(ui.ctx(), index, scan);
         }
         if self.rx.is_some() {
             ui.spinner();
@@ -236,6 +244,24 @@ impl View {
         }
     }
 
+    /// What the Scan button and the Scan buttons of the scanned inputs start:
+    /// the selected engine, over every one of its inputs.
+    pub(super) fn scan_now(
+        &mut self,
+        ctx: &egui::Context,
+        index: usize,
+        scan: Option<&ArchiveScan>,
+    ) {
+        let partial = !self.notes[index].is_empty();
+        self.auto_key[index].clear();
+        self.start(
+            ctx,
+            scan.and_then(|scan| scan.event_journal.as_ref())
+                .map(|summary| summary.sha256.clone()),
+            partial,
+        );
+    }
+
     pub(super) fn is_scanning(&self, index: usize) -> bool {
         self.busy == Some(index)
             || matches!(
@@ -258,9 +284,15 @@ impl View {
             }
         }
         if let Some(Ok(report)) = self.results[index].as_ref() {
-            let (text, tone) = matched_summary(report.findings.len(), &report.state);
-            parts.push(StatusPart::Count(text));
-            parts.push(StatusPart::Badge(state(&report.state), tone));
+            parts.push(StatusPart::Count(matched_summary(report)));
+            // Input outcomes speak for a complete scan; only a limit of the
+            // engine itself (or a result saved without inputs) gets a badge.
+            if report.state != State::Complete || report.inputs.is_none() {
+                parts.push(StatusPart::Badge(
+                    state(&report.state),
+                    state_tone(&report.state),
+                ));
+            }
             let (short, long) = evaluated_text(report);
             parts.push(StatusPart::Evaluated(short, long));
         }
@@ -380,6 +412,7 @@ fn evaluated_text(report: &Report) -> (String, String) {
 mod tests {
     use super::super::tests::{finding, frames, rendered_text, report};
     use super::*;
+    use antinomie_monitor_core::analysis::detection::{InputOutcome, ScannedInput};
 
     #[test]
     fn engine_tab_badges_use_all_findings_and_show_pending_and_zero() {
@@ -463,7 +496,15 @@ mod tests {
         }))
     }
 
-    fn partial_view() -> View {
+    fn input(outcome: InputOutcome) -> ScannedInput {
+        ScannedInput {
+            outcome,
+            reason: "reason".into(),
+            ..ScannedInput::default()
+        }
+    }
+
+    fn scanned_view() -> View {
         let mut view = View::default();
         view.sets[0] = vec![EngineSet {
             name: "YARA-Forge Core".into(),
@@ -483,7 +524,11 @@ mod tests {
                 block: None,
             }],
         )]);
-        report.state = State::Partial;
+        report.inputs = Some(vec![
+            input(InputOutcome::Succeeded),
+            input(InputOutcome::Failed),
+            input(InputOutcome::Skipped),
+        ]);
         report.scanned_objects = 1;
         report.scanned_rules = Some(2094);
         view.results[0] = Some(Ok(report));
@@ -529,7 +574,7 @@ mod tests {
 
     #[test]
     fn detection_panel_drops_the_old_sections_and_keeps_rule_sets() {
-        let mut view = partial_view();
+        let mut view = scanned_view();
         view.phase[0] = "idle".into();
         let joined = panel_text(&mut view);
         assert!(
@@ -537,10 +582,6 @@ mod tests {
             "{joined}"
         );
         assert!(joined.contains("1 matched rule"), "{joined}");
-        assert!(
-            joined.contains("Limited: coverage is incomplete."),
-            "{joined}"
-        );
         assert!(joined.contains("Scan: idle"), "{joined}");
         assert!(!joined.contains("Local rules and data sources"), "{joined}");
         assert!(!joined.contains("Coverage and provenance"), "{joined}");
@@ -550,14 +591,49 @@ mod tests {
 
     #[test]
     fn the_status_line_is_hidden_while_scanning_and_the_bar_carries_the_text() {
-        let mut view = partial_view();
+        let mut view = scanned_view();
         view.phase[0] = "running".into();
         let joined = panel_text(&mut view);
         assert!(!joined.contains("Scan: running"), "{joined}");
         // The bar shows the progress text; the result summary sits beside it.
         assert!(joined.contains("running"), "{joined}");
-        assert!(joined.contains("1 matched rule"), "{joined}");
-        assert!(joined.contains("Partial"), "{joined}");
+        assert!(
+            joined.contains("1 matched rule · 1 succeeded, 1 failed, 1 skipped"),
+            "{joined}"
+        );
+    }
+
+    #[test]
+    fn the_scan_result_shows_outcome_counts_and_never_partial_for_input_problems() {
+        let mut view = scanned_view();
+        view.phase[0] = "idle".into();
+        let joined = panel_text(&mut view);
+        assert!(
+            joined.contains("1 matched rule · 1 succeeded, 1 failed, 1 skipped"),
+            "{joined}"
+        );
+        let lower = joined.to_lowercase();
+        for word in ["partial", "complete", "limited"] {
+            assert!(!lower.contains(word), "{word}: {joined}");
+        }
+        // A real engine limit still has its badge; results saved without
+        // inputs keep the state badge they always had.
+        let Some(Ok(report)) = view.results[0].as_mut() else {
+            unreachable!()
+        };
+        report.state = State::Partial;
+        assert!(panel_text(&mut view).contains("Partial"));
+        let Some(Ok(report)) = view.results[0].as_mut() else {
+            unreachable!()
+        };
+        report.state = State::Complete;
+        report.inputs = None;
+        let old = panel_text(&mut view);
+        assert!(
+            old.contains("1 matched rule") && old.contains("Complete"),
+            "{old}"
+        );
+        assert!(!old.contains("succeeded"), "{old}");
     }
 
     /// Every painted text of a pane of the given size, in paint order.
@@ -603,7 +679,7 @@ mod tests {
 
     #[test]
     fn first_match_card_is_visible_in_a_docked_pane() {
-        let mut view = partial_view();
+        let mut view = scanned_view();
         view.phase[0] = "canceled".into();
         let size = egui::vec2(900.0, 600.0);
         // Triage's run selector and section tabs take about 120 points.
@@ -619,14 +695,13 @@ mod tests {
 
     #[test]
     fn status_and_counts_sit_right_of_the_scan_button_on_one_row() {
-        let mut view = partial_view();
+        let mut view = scanned_view();
         view.phase[0] = "canceled".into();
         let texts = pane_texts(&mut view, egui::vec2(900.0, 600.0), 0.0);
         let scan = rect_of(&texts, "Scan");
         for needle in [
             "Scan: canceled",
-            "1 matched rule",
-            "Partial",
+            "1 matched rule · 1 succeeded, 1 failed, 1 skipped",
             "1 object · 2,094 rules evaluated",
         ] {
             let item = rect_of(&texts, needle);
@@ -637,7 +712,7 @@ mod tests {
             );
         }
         // Counts are the rightmost item; the separate counts block is gone.
-        assert!(rect_of(&texts, "rules evaluated").min.x > rect_of(&texts, "Partial").max.x);
+        assert!(rect_of(&texts, "rules evaluated").min.x > rect_of(&texts, "1 matched rule").max.x);
         assert!(!texts
             .iter()
             .any(|(text, _)| text.contains("objects evaluated")));
@@ -649,7 +724,7 @@ mod tests {
 
     #[test]
     fn a_narrow_pane_wraps_the_status_below_the_scan_buttons() {
-        let mut view = partial_view();
+        let mut view = scanned_view();
         view.phase[0] = "canceled".into();
         let size = egui::vec2(420.0, 600.0);
         let texts = pane_texts(&mut view, size, 0.0);

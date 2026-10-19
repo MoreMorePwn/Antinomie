@@ -121,7 +121,7 @@ fn the_event_journal_row_routes_to_the_viewer() {
 
     let ctx = egui::Context::default();
     click(&ctx, "triage-events.jsonl", &mut |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0));
+        egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0, None));
     });
     assert!(view.journal.is_open(), "clicking the row opens the viewer");
     assert_eq!(view.journal.scanned.as_deref(), Some(digest.as_str()));

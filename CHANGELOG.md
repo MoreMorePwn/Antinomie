@@ -6,6 +6,23 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Detection says what happened to each input, and never "partial".** Scanned
+  inputs now end in exactly one of Succeeded, Failed or Skipped. A Suricata
+  failure reads like `Suricata exited with code 1: Error: pcap: failed to get
+  first packet timestamp…` (or `timed out after 100 s`, or the signal that
+  ended it) with the engine's own error lines instead of its startup notices,
+  and Show log opens the detector log. A capture with no packets, such as a
+  header-only PCAP or pcapng, is Skipped as `no packets captured` and Suricata
+  is not started on it; a run with no capture says so too. YARA (sample,
+  memory dump, core, recovered files) and Sigma follow the same rules. Failed
+  and Skipped rows have a Scan button that re-runs that engine, and the scan
+  line reads `3 matched rules · 2 succeeded, 1 failed, 1 skipped` instead of
+  `complete` or `partial`; a failed or skipped input no longer makes the whole
+  result partial. The Sigma event journal counts as Succeeded whenever the
+  adapter ran, with a note that Sigma events are converted from the syscall
+  trace and may not cover everything a Sysmon or auditd log would contain.
+  Saved results that say `partial` still open: a row whose reason describes a
+  failure shows as Failed, any other as Succeeded with its old note.
 - **Loading and in-progress text shows a spinning icon.** Everywhere the app
   says it is loading, reading, checking, indexing, uploading or waiting for
   something that is still running, a small spinner now sits left of the text,

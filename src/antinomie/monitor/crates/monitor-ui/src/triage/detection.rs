@@ -1018,7 +1018,7 @@ impl View {
             .position(|engine| *engine == self.selected)
             .unwrap_or(0);
         self.rule_sets(ui, index);
-        self.scanned_inputs(ui, index);
+        self.scanned_inputs(ui, index, scan);
         let scanning = self.is_scanning(index);
         self.scan_controls(ui, index, scan, scanning);
         if scanning {
@@ -1056,8 +1056,27 @@ impl View {
                 "Recorded events changed after this result. Scan again to update it.",
             );
         }
+        // The journal row carries the same words; this keeps them in view.
+        if let Some(warning) = report
+            .inputs
+            .iter()
+            .flatten()
+            .map(|input| input.warning.as_str())
+            .find(|warning| !warning.is_empty())
+        {
+            crate::activity::warning(ui, warning);
+        }
         if report.findings.is_empty() {
             ui.weak(match report.state {
+                State::Complete
+                    if report.inputs.as_ref().is_some_and(|inputs| {
+                        inputs
+                            .iter()
+                            .any(|input| input.outcome != engine::InputOutcome::Succeeded)
+                    }) =>
+                {
+                    "No rule matched the inputs that were scanned. Some inputs were not; see Scanned inputs."
+                }
                 State::Complete => "No rule matched the evaluated data.",
                 State::NoRules => "No rules enabled. This is not a clean scan.",
                 State::Missing => "Evidence missing. This is not a clean scan.",

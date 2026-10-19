@@ -350,7 +350,7 @@ mod inputs;
 pub mod journal;
 mod runner;
 mod yara;
-pub use inputs::{InputKind, InputOutcome, ScannedInput};
+pub use inputs::{InputKind, InputOutcome, SIGMA_COVERAGE_WARNING, ScannedInput};
 pub use runner::{
     FrozenSelection, Request, load, read_evidence, result_directory, run, run_with_progress,
     worker_main_if_requested,
