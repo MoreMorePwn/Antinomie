@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! The reader's sandbox: what a compromised worker could reach, probed with a
 //! shell run in the same bubblewrap command line, and the worker's lifecycle.
-use super::{client::sandbox_base, *};
-use crate::disks::fixture::Fixture;
+use super::{
+    client::{sandbox_base, sandbox_command},
+    *,
+};
+use crate::disks::{fixture::Fixture, sandbox::Account};
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, time::Duration};
 
 fn sandbox_available() -> bool {
@@ -14,7 +17,8 @@ fn sandbox_available() -> bool {
     let out = fixture.path("probe-out");
     fs::write(&image, b"x").unwrap();
     fs::create_dir(&out).unwrap();
-    let mut command = sandbox_base(Path::new("/usr/bin/true"), &image, &out);
+    let account = Account::new().unwrap();
+    let mut command = sandbox_base(Path::new("/usr/bin/true"), &image, &out, account.passwd());
     command.arg("/usr/bin/true");
     command.output().is_ok_and(|output| output.status.success())
 }
@@ -26,6 +30,57 @@ macro_rules! require_sandbox {
             return;
         }
     };
+}
+
+#[test]
+fn the_command_line_uses_the_shared_profile_with_the_reader_binds() {
+    let args: Vec<String> = sandbox_command(
+        Path::new("/opt/antinomie-monitor"),
+        Path::new("/data/root.ext4"),
+        Path::new("/data/out"),
+        Path::new("/run/account/passwd"),
+    )
+    .get_args()
+    .map(|arg| arg.to_string_lossy().into_owned())
+    .collect();
+    for flag in [
+        "--unshare-all",
+        "--unshare-user",
+        "--disable-userns",
+        "--die-with-parent",
+        "--new-session",
+        "--clearenv",
+    ] {
+        assert!(args.iter().any(|arg| arg == flag), "{flag}");
+    }
+    let has = |window: &[&str]| args.windows(window.len()).any(|found| found == window);
+    // The shared profile: /usr read-only, an empty account, a bounded /tmp.
+    assert!(has(&["--ro-bind", "/usr", "/usr"]));
+    assert!(has(&["--ro-bind", "/run/account/passwd", "/etc/passwd"]));
+    assert!(has(&["--tmpfs", "/tmp"]));
+    // The reader's own binds: the image read-only, `/out` the only writable.
+    assert!(has(&["--ro-bind", "/data/root.ext4", "/image"]));
+    assert!(has(&["--ro-bind", "/opt/antinomie-monitor", "/worker"]));
+    assert!(has(&["--bind", "/data/out", "/out"]));
+    let writable: Vec<_> = args
+        .windows(3)
+        .filter(|window| window[0] == "--bind" || window[0] == "--dev-bind")
+        .map(|window| window[2].as_str())
+        .collect();
+    assert!(
+        writable
+            .iter()
+            .all(|path| path.starts_with("/dev/") || *path == "/out"),
+        "{writable:?}"
+    );
+    // The mounts are made read-only before the worker runs, under prlimit.
+    let position = |needle: &str| args.iter().position(|arg| arg == needle).unwrap();
+    assert!(position("--remount-ro") > position("/out"));
+    assert!(position("/usr/bin/prlimit") > position("--remount-ro"));
+    assert!(has(&["--core=0", "--", "/worker", "--disk-reader"]));
+    assert!(args.iter().any(|arg| arg.starts_with("--as=")));
+    assert!(args.iter().any(|arg| arg == "--nofile=64"));
+    assert!(has(&["--setenv", "ANTINOMIE_ISOLATED_WORKER", "1"]));
 }
 
 #[test]
@@ -51,13 +106,16 @@ echo "secret:$(/usr/bin/cat '{secret}' 2>/dev/null || echo hidden)"
 echo "home:$(/usr/bin/ls /home 2>/dev/null | /usr/bin/wc -l)"
 echo "interfaces:$(/usr/bin/tail -n +3 /proc/net/dev | /usr/bin/cut -d: -f1 | /usr/bin/tr -d ' ' | /usr/bin/tr '\n' ,)"
 echo "processes:$(/usr/bin/ls /proc | /usr/bin/grep -c '^[0-9][0-9]*$')"
+echo "account:$(/usr/bin/cat /etc/passwd)"
+echo "shm:$(/usr/bin/ls /dev/shm 2>/dev/null && echo VISIBLE || echo hidden)"
 echo "env:$(/usr/bin/env | /usr/bin/sort | /usr/bin/tr '\n' ' ')"
 echo "capabilities:$(/usr/bin/grep CapEff /proc/self/status)"
 echo "limits:$(/usr/bin/grep -E '^(Max address space|Max open files|Max core file size)' /proc/self/limits | /usr/bin/tr -s ' ' | /usr/bin/tr '\n' ';')"
 "#,
         secret = secret.display()
     );
-    let mut command = sandbox_base(Path::new("/usr/bin/true"), &image, &out);
+    let account = Account::new().unwrap();
+    let mut command = sandbox_base(Path::new("/usr/bin/true"), &image, &out, account.passwd());
     command.args(["/usr/bin/sh", "-c", &script]);
     let output = command.output().unwrap();
     let report = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -85,6 +143,8 @@ echo "limits:$(/usr/bin/grep -E '^(Max address space|Max open files|Max core fil
     assert_eq!(fact("tmp-write"), "writable");
     assert_eq!(fact("secret"), "hidden");
     assert_eq!(fact("home"), "0");
+    assert_eq!(fact("account"), "nobody:x:65534:65534::/tmp:/bin/false");
+    assert_eq!(fact("shm"), "hidden");
     // Only a loopback device in a private network namespace.
     assert!(matches!(fact("interfaces"), "" | "lo,"), "{report}");
     // A private PID namespace: the shell, its helpers.
