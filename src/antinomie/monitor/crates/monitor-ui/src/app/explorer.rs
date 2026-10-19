@@ -63,7 +63,7 @@ impl MonitorApp {
                     .clicked();
             }
             if self.folder_picker.checking() {
-                ui.weak("Checking file chooser…");
+                theme::loading_weak(ui, "Checking file chooser…");
             } else if !self.folder_picker.installed() {
                 ui.colored_label(theme::muted(), "Install Zenity to choose a folder.");
             }

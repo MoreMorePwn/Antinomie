@@ -110,11 +110,17 @@ pub(super) fn show(
     let current = page
         .and_then(|page| page.as_ref().ok())
         .filter(|page| page.kind == kind && page.query == query);
-    ui.label(match (current, listing) {
-        (Some(page), Some(listing)) => format!("{} / {} rows", page.total, listing.rows),
-        (Some(page), _) => format!("{} matching rows", page.total),
-        _ => "Reading…".into(),
-    });
+    match (current, listing) {
+        (Some(page), Some(listing)) => {
+            ui.label(format!("{} / {} rows", page.total, listing.rows));
+        }
+        (Some(page), _) => {
+            ui.label(format!("{} matching rows", page.total));
+        }
+        _ => {
+            crate::theme::loading(ui, "Reading…");
+        }
+    }
     let page = match page {
         Some(Ok(page)) if page.kind == kind && page.query == query => page,
         Some(Err(error)) => {
@@ -125,7 +131,7 @@ pub(super) fn show(
             return action;
         }
         _ => {
-            ui.label("Reading the listing…");
+            crate::theme::loading(ui, "Reading the listing…");
             return request(0, query);
         }
     };

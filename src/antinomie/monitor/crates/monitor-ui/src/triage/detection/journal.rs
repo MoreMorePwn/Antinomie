@@ -239,8 +239,7 @@ impl Viewer {
                 self.restart(self.offset);
             }
             if self.job.is_some() {
-                ui.spinner();
-                ui.weak("Reading…");
+                crate::theme::loading_weak(ui, "Reading…");
             }
         });
         if let Some(error) = &self.error {

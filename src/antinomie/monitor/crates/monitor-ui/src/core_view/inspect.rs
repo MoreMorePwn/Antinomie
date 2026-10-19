@@ -73,7 +73,7 @@ impl CoreView {
                 };
                 ui.add(egui::Label::new(explanation).wrap());
             } else if self.job.is_some() {
-                ui.label("Opening core…");
+                crate::theme::loading(ui, "Opening core…");
             } else {
                 crate::theme::section(ui, "Process core");
                 ui.add(egui::Label::new("Select a core from the list to inspect its threads, memory mappings, disassembly and recovered notes.").wrap());

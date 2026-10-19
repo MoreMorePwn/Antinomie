@@ -153,10 +153,13 @@ impl MonitorApp {
                     && self.archive_page_generation == self.archive_generation
                     && self.archive_error.is_none()
                 {
-                    ui.label(format!(
-                        "Page {} · counting matches...",
-                        self.archive_previous.len() + 1
-                    ));
+                    ui.horizontal(|ui| {
+                        theme::spinner(ui);
+                        ui.label(format!(
+                            "Page {} · counting matches…",
+                            self.archive_previous.len() + 1
+                        ));
+                    });
                 }
                 if let Some(total) = self.archive_total {
                     if self.archive_page_generation == self.archive_generation {
@@ -174,9 +177,12 @@ impl MonitorApp {
                         ));
                     }
                 }
+                if self.archive_pending {
+                    theme::spinner(ui);
+                }
                 ui.label(if self.archive_pending {
                     if self.archive_page.is_empty() {
-                        "Reading archive matches..."
+                        "Reading archive matches…"
                     } else {
                         "Reading matches · previous results shown"
                     }

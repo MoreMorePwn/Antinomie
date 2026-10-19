@@ -910,7 +910,7 @@ impl Inspector {
             crate::activity::warning(ui, error);
         }
         if self.pending {
-            ui.colored_label(theme::muted(), "Reading capture...");
+            theme::loading_colored(ui, theme::muted(), "Reading capture…");
         }
         ui.add_space(4.0);
         if self.data.is_empty() {

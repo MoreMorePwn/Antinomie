@@ -455,8 +455,9 @@ impl View {
         };
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Executable").strong());
-            if pending || self.rx.is_some() {
-                ui.spinner();
+            // Captured shows its own spinner beside "Computing properties…".
+            if pending || (self.rx.is_some() && status != SpecimenStatus::Captured) {
+                theme::spinner(ui);
             }
             presentation::badge(ui, label, color);
             if status == SpecimenStatus::Captured {
@@ -464,6 +465,7 @@ impl View {
                     ui.weak(crate::values::file_size(size));
                 }
                 if self.rx.is_some() {
+                    theme::spinner(ui);
                     ui.label("Computing properties…");
                 } else if self.result.as_ref().is_some_and(Result::is_err) {
                     ui.colored_label(theme::warn(), "Properties unavailable");
@@ -818,6 +820,40 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn computing_properties_shows_one_spinner_until_the_result_arrives() {
+        let ctx = egui::Context::default();
+        let (report, _) = fixture_properties();
+        let mut view = View::default();
+        let (_tx, rx) = mpsc::sync_channel(1);
+        view.rx = Some(rx);
+        let show = |view: &mut View| {
+            let mut shapes = Vec::new();
+            for _ in 0..2 {
+                shapes = ctx
+                    .run(egui::RawInput::default(), |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            view.show_specimen_status(
+                                ui,
+                                &TriageInput {
+                                    analysis: Some(&report),
+                                    ..TriageInput::empty()
+                                },
+                                SpecimenStatus::Captured,
+                            );
+                        });
+                    })
+                    .shapes;
+            }
+            shapes
+        };
+        let pending = show(&mut view);
+        assert_eq!(theme::spinners_in(&pending), 1);
+        view.rx = None;
+        let done = show(&mut view);
+        assert_eq!(theme::spinners_in(&done), 0);
     }
 
     #[test]

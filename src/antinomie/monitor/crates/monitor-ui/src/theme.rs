@@ -302,6 +302,43 @@ pub fn section(ui: &mut egui::Ui, title: &str) -> egui::Response {
     ui.label(egui::RichText::new(title).strong().color(heading()))
 }
 
+/// A spinner as tall as the body text, for rows whose work is still pending.
+/// Show it only while the work runs; egui repaints a visible spinner, so an
+/// idle screen must not draw one.
+pub fn spinner(ui: &mut egui::Ui) -> egui::Response {
+    let size = ui.text_style_height(&TextStyle::Body);
+    ui.add(egui::Spinner::new().size(size))
+}
+
+/// `text` on one row with a spinner just left of it, in the default text color.
+pub fn loading(ui: &mut egui::Ui, text: impl Into<egui::RichText>) -> egui::Response {
+    ui.horizontal(|ui| {
+        spinner(ui);
+        ui.label(text.into());
+    })
+    .response
+}
+
+/// `loading` in the weak text color, like `Ui::weak`.
+pub fn loading_weak(ui: &mut egui::Ui, text: impl Into<egui::RichText>) -> egui::Response {
+    let color = ui.visuals().weak_text_color();
+    loading_colored(ui, color, text)
+}
+
+/// `loading` with the text and the spinner in `color`, such as `muted()`.
+pub fn loading_colored(
+    ui: &mut egui::Ui,
+    color: Color32,
+    text: impl Into<egui::RichText>,
+) -> egui::Response {
+    ui.horizontal(|ui| {
+        let size = ui.text_style_height(&TextStyle::Body);
+        ui.add(egui::Spinner::new().size(size).color(color));
+        ui.colored_label(color, text);
+    })
+    .response
+}
+
 fn fonts() -> egui::FontDefinitions {
     let mut fonts = egui::FontDefinitions::default();
     // DejaVu covers arrows, box drawing and most symbols the defaults lack;
@@ -520,6 +557,19 @@ pub fn frame(fill: Color32) -> egui::Frame {
         .inner_margin(egui::Margin::symmetric(12, 0))
 }
 
+/// Spinners drawn in `shapes`: egui paints each one as a single path.
+#[cfg(test)]
+pub(crate) fn spinners_in(shapes: &[egui::epaint::ClippedShape]) -> usize {
+    fn count(shape: &egui::Shape) -> usize {
+        match shape {
+            egui::Shape::Path(_) => 1,
+            egui::Shape::Vec(shapes) => shapes.iter().map(count).sum(),
+            _ => 0,
+        }
+    }
+    shapes.iter().map(|clipped| count(&clipped.shape)).sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -538,6 +588,51 @@ mod tests {
         // Dark enough that TEXT stays readable on every tint.
         for tint in tints {
             assert!(tint.r().max(tint.g()).max(tint.b()) <= 120, "{tint:?}");
+        }
+    }
+
+    #[test]
+    fn loading_draws_a_spinner_left_of_the_text_on_one_row() {
+        let ctx = egui::Context::default();
+        let mut rows = None;
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let response = loading(ui, "Reading…");
+                rows = Some(response.rect);
+            });
+        });
+        let rect = rows.unwrap();
+        let mut text = None;
+        let mut spinner = None;
+        for clipped in &output.shapes {
+            collect_shapes(&clipped.shape, &mut text, &mut spinner);
+        }
+        let (text_rect, spinner_rect) = (text.expect("label"), spinner.expect("spinner"));
+        assert!(
+            spinner_rect.max.x <= text_rect.min.x + 0.5,
+            "{spinner_rect:?} {text_rect:?}"
+        );
+        assert!((spinner_rect.center().y - text_rect.center().y).abs() < 4.0);
+        assert!(rect.contains_rect(text_rect));
+    }
+
+    fn collect_shapes(
+        shape: &egui::Shape,
+        text: &mut Option<egui::Rect>,
+        spinner: &mut Option<egui::Rect>,
+    ) {
+        match shape {
+            egui::Shape::Vec(shapes) => {
+                shapes.iter().for_each(|s| collect_shapes(s, text, spinner))
+            }
+            egui::Shape::Text(t) if t.galley.text() == "Reading…" => {
+                *text = Some(t.visual_bounding_rect());
+            }
+            egui::Shape::Path(path) => {
+                let rect = egui::Rect::from_points(&path.points);
+                *spinner = Some(spinner.map_or(rect, |old| old.union(rect)));
+            }
+            _ => {}
         }
     }
 

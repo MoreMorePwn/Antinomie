@@ -376,6 +376,9 @@ impl TriageView {
                 self.next_refresh =
                     Some(Instant::now() + Duration::from_secs(self.refresh_seconds));
             }
+            if self.scan_rx.is_some() {
+                theme::spinner(ui);
+            }
             ui.colored_label(theme::muted(), self.refresh_status(&input));
             if self.section == Section::Network {
                 ui.weak("PCAP time").on_hover_text("Packet timestamps use QEMU's capture clock, displayed in the host timezone. They may differ from the host run clock; capture ownership determines which run is indexed.");
@@ -529,7 +532,7 @@ impl TriageView {
             total,
         );
         let Some(scan) = &self.scan else {
-            ui.weak("Indexing this run’s files…");
+            theme::loading_weak(ui, "Indexing this run’s files…");
             return;
         };
         let clock = scan.clock_anchor.or(input.clock_anchor);
@@ -634,7 +637,7 @@ impl TriageView {
             });
         self.query_controls(ui, index, fields, example, count, count as u64 + omitted);
         let Some(scan) = &self.scan else {
-            ui.weak("Indexing this run’s capture…");
+            theme::loading_weak(ui, "Indexing this run’s capture…");
             return;
         };
         if let Some(warning) = &scan.network_warning {

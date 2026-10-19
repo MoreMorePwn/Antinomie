@@ -54,8 +54,7 @@ impl MonitorApp {
                         command = Some(Command::RefreshRemoteBases);
                     }
                     if self.snapshot.remote_refreshing {
-                        ui.spinner();
-                        ui.label("Fetching catalog…");
+                        crate::theme::loading(ui, "Fetching catalog…");
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_enabled(
@@ -255,11 +254,13 @@ fn download_row(
                     format!("{} Installed", egui_phosphor::regular::CHECK),
                 );
             } else if running.is_some() {
+                // Right to left: the label first puts the spinner on its left.
                 ui.label(if running.is_some_and(|status| status.installing) {
                     "Installing…"
                 } else {
                     "Downloading…"
                 });
+                crate::theme::spinner(ui);
             } else if status == RevisionStatus::NeedsNewerApp {
                 ui.add_enabled(false, egui::Button::new("Download"))
                     .on_disabled_hover_text(format!(

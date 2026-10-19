@@ -22,13 +22,24 @@ pub(super) fn badge(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
 }
 
 pub(super) fn heading(ui: &mut egui::Ui, title: &str, subtitle: &str) {
+    heading_busy(ui, title, subtitle, false);
+}
+
+/// `heading` with a spinner left of the title while `busy`.
+pub(super) fn heading_busy(ui: &mut egui::Ui, title: &str, subtitle: &str, busy: bool) {
     // `.strong()` alone uses the active-widget color, which is white in both palettes.
-    ui.label(
-        RichText::new(title)
-            .strong()
-            .color(theme::heading())
-            .size(ui.text_style_height(&egui::TextStyle::Body) + 1.0),
-    );
+    let title = RichText::new(title)
+        .strong()
+        .color(theme::heading())
+        .size(ui.text_style_height(&egui::TextStyle::Body) + 1.0);
+    if busy {
+        ui.horizontal(|ui| {
+            theme::spinner(ui);
+            ui.label(title);
+        });
+    } else {
+        ui.label(title);
+    }
     if !subtitle.is_empty() {
         ui.add(egui::Label::new(RichText::new(subtitle).small().color(theme::muted())).wrap());
     }

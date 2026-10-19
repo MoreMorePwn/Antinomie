@@ -278,7 +278,7 @@ fn bytes(
     let mut action = None;
     if window.requested.is_none() {
         if !idle {
-            ui.weak("Waiting to read the specimen…");
+            crate::theme::loading_weak(ui, "Waiting to read the specimen…");
             return None;
         }
         let (page, next) = read(range.offset);

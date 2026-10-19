@@ -195,6 +195,9 @@ pub(super) fn show(browser: &mut Browser, ui: &mut egui::Ui, view: View) -> Opti
                                 });
                             }
                             Row::Loading(..) | Row::Message(..) => {
+                                if matches!(browser.rows[index], Row::Loading(..)) {
+                                    theme::spinner(ui);
+                                }
                                 let text = match &browser.rows[index] {
                                     Row::Message(text, _) => text.as_str(),
                                     _ => "Reading folder…",

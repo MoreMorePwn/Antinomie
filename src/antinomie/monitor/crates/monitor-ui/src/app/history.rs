@@ -466,8 +466,7 @@ impl MonitorApp {
                 crate::activity::warning(ui, error);
             }
             None => {
-                ui.spinner();
-                ui.label("Reading saved lifecycle records…");
+                crate::theme::loading(ui, "Reading saved lifecycle records…");
             }
         }
         if let Some(selection) = selection {

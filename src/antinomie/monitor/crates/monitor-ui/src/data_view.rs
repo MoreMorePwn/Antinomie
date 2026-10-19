@@ -656,14 +656,14 @@ impl DataWindow {
             );
         }
         if let Some(loader) = &self.loader {
-            ui.horizontal(|ui| {
-                ui.add(egui::Spinner::new());
-                ui.label(format!(
+            crate::theme::loading(
+                ui,
+                format!(
                     "Loading captured bytes: {} of {}",
                     loader.progress.load(Ordering::Relaxed),
                     loader.total
-                ));
-            });
+                ),
+            );
             return;
         }
         if self.truncated {
