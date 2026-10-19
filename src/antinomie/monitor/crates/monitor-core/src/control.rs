@@ -13,8 +13,10 @@ pub(crate) const STATS: u32 = 0x1020;
 pub(crate) const INFO: u32 = 0x1021;
 pub(crate) const INFO_SIZE: usize = 160;
 pub(crate) const SHUTDOWN: u32 = 0x1030;
+pub(crate) const RESOURCES: u32 = 0x1070;
+pub(crate) const RESOURCES_SIZE: usize = 96;
 /// Guest contract revision this host implements (`ANTC_REVISION`).
-pub const REVISION: u32 = 16;
+pub const REVISION: u32 = 17;
 pub(crate) const PROCESS_LIST: u32 = 0x1050;
 pub(crate) const CAPTURE_ATTACH: u32 = 0x1051;
 pub(crate) const CAPTURE_ALL: u32 = 0x1052;
@@ -494,6 +496,8 @@ mod tests {
             ("ANTC_INFO", INFO),
             ("ANTC_INFO_SIZE", INFO_SIZE as u32),
             ("ANTC_SHUTDOWN", SHUTDOWN),
+            ("ANTC_RESOURCES", RESOURCES),
+            ("ANTC_RESOURCES_SIZE", RESOURCES_SIZE as u32),
             ("ANTC_REVISION", REVISION),
             ("ANTC_PROCESS_LIST", PROCESS_LIST),
             ("ANTC_CAPTURE_ATTACH", CAPTURE_ATTACH),

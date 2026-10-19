@@ -12,7 +12,8 @@
 #define ANTC_VERSION 1
 /* Contract revision of the guest's observable behaviour (native-schema-slices). */
 /* Revision 15: opt-in root-process ELF core acquisition at exit; ABI 9. */
-#define ANTC_REVISION 16
+/* Revision 17: kernel-native guest resource sample (RESOURCES). */
+#define ANTC_REVISION 17
 #define ANTC_HEADER_SIZE 8
 #define ANTC_UPLOAD_BEGIN 0x1001
 #define ANTC_UPLOAD_CHUNK 0x1002
@@ -74,6 +75,11 @@
 #define ANTC_CORE_MANUAL 0x10
 #define ANTC_CORE_PAUSE_RELEASED 0x20
 #define ANTC_CORE_RESIDENT_ONLY 0x40
+#define ANTC_RESOURCES 0x1070
+#define ANTC_RESOURCES_SIZE 96
+#define ANTC_RESOURCES_MEMORY_VALID 1
+#define ANTC_RESOURCES_FILESYSTEM_VALID 2
+#define ANTC_RESOURCES_REFRESHING 4
 #define ANTC_UPLOAD_OVERWRITE 1
 #define ANTC_UPLOAD_EXECUTABLE 2
 
@@ -216,6 +222,17 @@
  * STOPPED|TAILS_POSSIBLE does not promise delivery/drain or complete capture.
  * ANTT minor 2 / 144-byte header adds capture_cookie at offset 136, preserving
  * launched root cookie at 128. Capture attribution is frozen on admission.
+ * RESOURCES: header only (8 bytes). Non-blocking: returns the latest completed
+ * sample and, if it is older than 500 ms and no refresh runs, queues one on a
+ * dedicated worker (at most one in flight). Reply (96 bytes): u64 sequence at 0
+ * (0 = no sample yet), u64 age_ms at 8 (U64_MAX if none), u32 flags at 16
+ * (MEMORY_VALID, FILESYSTEM_VALID, REFRESHING), s32 fs_error at 20,
+ * u64 memory total/available bytes at 24/32 (MemTotal, MemAvailable as in
+ * /proc/meminfo), u64 filesystem total/free/available bytes at 40/48/56
+ * (statfs of PID 1's root, f_frsize units, free = privileged-free, available =
+ * unprivileged), u32 fs_dev at 64 (new_encode_dev), u32 fs_type at 68,
+ * u64 fs_id at 72, u64 refresh_pending_ms at 80 (0 when idle), s32 mem_error
+ * at 88, zero at 92. A value is meaningful only when its VALID flag is set.
  * SHUTDOWN: header only; empty success reply, delayed kernel_power_off.
  */
 #endif

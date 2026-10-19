@@ -22,6 +22,7 @@ pub mod filter_members;
 mod guest_account;
 mod guest_desktop;
 mod guest_resources;
+mod kernel_resources;
 mod kit;
 mod locations;
 pub mod malshare;

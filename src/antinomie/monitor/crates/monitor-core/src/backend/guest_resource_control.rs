@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
-//! Temporary guest collector controls on the single backend transport owner.
+//! Guest resource producers on the single backend transport owner: the kernel's
+//! RESOURCES command (revision 17 and later) or, for older bases, the temporary
+//! guest collector controls.
 use super::*;
 
 impl Session {
@@ -118,6 +120,7 @@ impl Session {
         snapshot: &mut Snapshot,
         sender: &SyncSender<Notification>,
     ) -> Result<(), String> {
+        self.kernel_resources.reset_timeline();
         if let Some(terminal) = self.guest_resources.terminal {
             self.guest_resources
                 .fail("guest resource collector stopping at timeline boundary".into());
@@ -208,6 +211,10 @@ impl Worker {
         let Some(kernel) = self.snapshot.guest_kernel.as_ref() else {
             return;
         };
+        if crate::kernel_resources::kernel_produces(Some(kernel)) {
+            self.poll_kernel_resources();
+            return;
+        }
         if !kernel.revision.is_some_and(|revision| revision >= 11) {
             session.guest_resources.attempted = true;
             session.guest_resources.fail(
@@ -241,6 +248,30 @@ impl Worker {
                 Err(error) => session
                     .guest_resources
                     .fail(format!("guest resource submit: {error}")),
+            }
+        }
+    }
+}
+
+impl Worker {
+    /// Kernel-native path: no guest process, upload or terminal is involved.
+    fn poll_kernel_resources(&mut self) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        if let Err(error) = session.drain_replies(&mut self.snapshot, &self.sender) {
+            session
+                .kernel_resources
+                .submit_failed(format!("guest resource transport: {error}"), Instant::now());
+            return;
+        }
+        let now = Instant::now();
+        if let Some((opcode, args)) = session.kernel_resources.command(now) {
+            match session.transport.send(opcode, &args) {
+                Ok(id) => session.kernel_resources.submitted(id, now),
+                Err(error) => session
+                    .kernel_resources
+                    .submit_failed(format!("guest resource submit: {error}"), now),
             }
         }
     }

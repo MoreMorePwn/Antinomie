@@ -105,6 +105,7 @@ impl Worker {
             Ok(Session {
                 resources: crate::resources::ResourceSampler::default(),
                 guest_resources: crate::guest_resources::Collector::default(),
+                kernel_resources: crate::kernel_resources::KernelResources::default(),
                 last_resource_check: None,
                 analysis: crate::analysis::jobs::Jobs::with_tools(
                     crate::analysis_tools::tools_dir(&self.options.data_dir),
@@ -176,12 +177,20 @@ impl Worker {
             &session.vm.id,
             &self.options.data_dir,
         );
-        sample.guest = Some(session.guest_resources.sample(
-            &session.boot_id,
-            self.reconnect.1.is_some()
-                || self.snapshot.memory_dump.is_some()
-                || self.snapshot.state != VmState::Running,
-        ));
+        let unavailable = self.reconnect.1.is_some()
+            || self.snapshot.memory_dump.is_some()
+            || self.snapshot.state != VmState::Running;
+        sample.guest = Some(
+            if crate::kernel_resources::kernel_produces(self.snapshot.guest_kernel.as_ref()) {
+                session
+                    .kernel_resources
+                    .sample(&session.boot_id, unavailable)
+            } else {
+                session
+                    .guest_resources
+                    .sample(&session.boot_id, unavailable)
+            },
+        );
         self.snapshot.vm_resources = Some(sample);
         self.publish();
     }

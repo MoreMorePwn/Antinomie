@@ -6,6 +6,21 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **The guest kernel now measures its own RAM and disk use.** Guest contract
+  revision 17 adds a `RESOURCES` control command: the kernel reports MemTotal
+  and MemAvailable (the same accounting as `/proc/meminfo`) and the statfs
+  counters of the root filesystem seen by PID 1 (total, privileged-free and
+  user-available space, plus the filesystem's device, type and id), from a
+  dedicated worker that never blocks the control channel. Summary asks about
+  once a second and keeps its live, stale and unavailable states: a reply that
+  is late, an invalid frame, a refresh stuck in the filesystem, a paused VM or
+  a snapshot boundary all show the last reading as stale rather than live. No
+  helper is uploaded or started in the guest any more on a revision-17 base, so
+  no extra process appears there. Bases built before this release (revision 16
+  and older) are outdated and keep the temporary bundled collector until you
+  rebuild them. This needs a base built with 0.7.0; later 0.7.0 guest changes
+  reuse revision 17.
+
 - **The Details panel scrolls, and the process tree has room.** Long Run
   History details and Network capture records are no longer clipped: the
   panel scrolls vertically, keeps its place while the same run or capture
