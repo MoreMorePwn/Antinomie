@@ -13,6 +13,9 @@ MAX_EVENTS = 1_000_000
 MAX_FINDINGS = 10_000
 MAX_EVIDENCE = 10_000
 MAX_RULE_SIZE = 1024 * 1024
+# Evaluation budget: rules and seconds. Reaching either leaves the scan partial.
+MAX_RULES = 4096
+EVALUATION_SECONDS = 90
 SUPPORTED_CATEGORIES = {"process_creation", "file_event", "file_delete", "file_rename", "file_access", "dns_query", "http_request", "network_connection", "antinomie_bpf", "antinomie_file_metadata", "auditd"}
 # Journal format versions this adapter reads. Version 2 added the per-event `_inferred` list.
 JOURNAL_VERSIONS = {1, 2}
@@ -24,6 +27,36 @@ SUPPORTED_SERVICES = {"", "antinomie", AUDITD_SERVICE}
 AUDITD_FIELDS = {"type", "exe", "comm", "name", "nametype", "key", "exit", "success", "pid", "ppid", "saddr", "argc"} | {"a" + str(index) for index in range(16)}
 SCHEMA = {"Image", "CommandLine", "ProcessId", "ThreadId", "TargetFilename", "SourceFilename", "QueryName", "QueryType", "ResponseCode", "DestinationIp", "DestinationPort", "HttpMethod", "HttpHost", "HttpUri", "Syscall", "Operation", "Result", "TransferredSize", "BpfCommand", "Mode", "Setuid", "Initiated", "ParentImage", "ParentCommandLine", "ParentProcessId", "CurrentDirectory", "DestinationHostname", "SourceIp", "SourcePort", "Protocol", "IsNewFile"} | AUDITD_FIELDS
 MAX_INFERRED = 64
+# Individual rules named in `coverage.listed`; the counts cover all of them.
+COVERAGE_LIST_LIMIT = 200
+# Report format 1 adds `coverage`: rules that do not apply to this run are counted there and do not make the scan partial.
+REPORT_FORMAT_VERSION = 1
+
+
+class NotApplicable(Exception):
+    """A rule this run cannot use. A coverage limit, not an incomplete scan."""
+
+    def __init__(self, reason, message):
+        super().__init__(message)
+        self.reason = reason
+
+
+class PartialLimit(Exception):
+    """A limit that drops matches this scan would otherwise have reported."""
+
+
+def new_coverage():
+    return {"evaluated": 0, "no_matching_events": 0, "unsupported_category": 0, "backend": 0, "syntax": 0, "listed": [], "unlisted": 0, "evidence_preview_limit": None}
+
+
+def note_not_applicable(report, reason, rule, detail):
+    """Count one rule that did not apply, and list it while the list has room."""
+    coverage = report["coverage"]
+    coverage[reason] += 1
+    if len(coverage["listed"]) < COVERAGE_LIST_LIMIT:
+        coverage["listed"].append({"reason": reason, "rule": str(rule)[:512], "detail": str(detail)[:1024]})
+    else:
+        coverage["unlisted"] += 1
 
 
 def quoted(name):
@@ -223,7 +256,7 @@ def rule_yaml(data, rule):
 
 
 def scan(request, events_path):
-    report = {"engine": "sigma", "identity": request["identity"], "state": "complete", "sources": [], "findings": [], "scanned_rules": 0, "skipped_rules": 0, "skipped": [], "omitted_evidence": 0, "warnings": ["Category acceptance is not full compatibility. Syntax, backend conversion, logsource, and per-run evidence are counted separately."], "source_digest": request.get("source_digest"), "category_accepted": 0, "backend_rejected": 0, "missing_field_events": 0, "category_rejected": 0, "syntax_rejected": 0, "evidence_rejected": 0}
+    report = {"format_version": REPORT_FORMAT_VERSION, "coverage": new_coverage(), "engine": "sigma", "identity": request["identity"], "state": "complete", "sources": [], "findings": [], "scanned_rules": 0, "skipped_rules": 0, "skipped": [], "omitted_evidence": 0, "warnings": ["Category acceptance is not full compatibility. Syntax, backend conversion, logsource, and per-run evidence are counted separately."], "source_digest": request.get("source_digest"), "category_accepted": 0, "backend_rejected": 0, "missing_field_events": 0, "category_rejected": 0, "syntax_rejected": 0, "evidence_rejected": 0}
     try:
         from sigma.collection import SigmaCollection
         from sigma.backends.sqlite import sqliteBackend
@@ -236,7 +269,7 @@ def scan(request, events_path):
         report["warnings"] = ["Local pySigma 2.x and its SQLite backend are required: " + str(error)]
         return report
     connection = sqlite3.connect(str(Path(events_path).with_suffix(".sqlite")), cached_statements=0)
-    deadline = time.monotonic() + 90
+    deadline = time.monotonic() + EVALUATION_SECONDS
     connection.set_progress_handler(lambda: time.monotonic() > deadline, 10000)
     evidence_count = 0
     try:
@@ -264,9 +297,9 @@ def scan(request, events_path):
             except Exception as error:
                 report["syntax_rejected"] += 1
                 report["skipped_rules"] += 1
+                note_not_applicable(report, "syntax", source["name"], str(error)[:400])
                 if len(report["skipped"]) < 1000:
                     report["skipped"].append(source["name"] + ": syntax: " + str(error)[:400])
-                report["state"] = "partial"
                 continue
             rules = list(collection.rules)
             rule_total += len(rules)
@@ -276,9 +309,9 @@ def scan(request, events_path):
             for rule in rules:
                 seen += 1
                 note_sigma(events_path, seen, rule_total, getattr(rule, "title", "") or "")
-                if report["scanned_rules"] + report["skipped_rules"] >= 4096:
+                if report["scanned_rules"] + report["skipped_rules"] >= MAX_RULES:
                     report["state"] = "partial"
-                    report["warnings"].append("Rule evaluation reached the 4096-rule budget.")
+                    report["warnings"].append("Rule evaluation reached the " + str(MAX_RULES) + "-rule budget.")
                     return report
                 if time.monotonic() > deadline:
                     raise TimeoutError("Sigma rule evaluation reached its 90 second budget")
@@ -287,32 +320,45 @@ def scan(request, events_path):
                     category = logsource_category(logsource)
                     if category is None:
                         report["category_rejected"] += 1
-                        raise ValueError("unsupported logsource: " + str(logsource))
+                        raise NotApplicable("unsupported_category", "unsupported logsource: " + str(logsource))
                     report["category_accepted"] += 1
                     try:
                         queries = backend.convert(SigmaCollection([rule]))
                     except Exception as error:
                         report["backend_rejected"] += 1
-                        raise ValueError("backend rejected the rule: " + str(error)[:300]) from error
+                        raise NotApplicable("backend", "backend rejected the rule: " + str(error)[:300]) from error
                     if not queries:
                         report["backend_rejected"] += 1
-                        raise ValueError("rule produced no supported query")
-                    total, evidence, evaluated, missing, event_ids, inferred = matching_rows(connection, queries, category)
+                        raise NotApplicable("backend", "rule produced no supported query")
+                    try:
+                        total, evidence, evaluated, missing, event_ids, inferred = matching_rows(connection, queries, category)
+                    except sqlite3.OperationalError as error:
+                        if "interrupted" in str(error):
+                            raise TimeoutError("Sigma rule evaluation reached its 90 second budget") from error
+                        report["backend_rejected"] += 1
+                        raise NotApplicable("backend", str(error)) from error
+                    except (ValueError, sqlite3.Error) as error:
+                        # Correlation or custom output, non-ASCII literals, a field outside the captured schema.
+                        report["backend_rejected"] += 1
+                        raise NotApplicable("backend", str(error)) from error
                     if missing:
                         report["missing_field_events"] += int(missing)
                         if len(report["skipped"]) < 1000:
                             report["skipped"].append(str(rule.id or rule.title) + f": {missing} events lack fields used by this rule; missing values were not invented")
                     if not evaluated:
                         report["evidence_rejected"] += 1
-                        raise ValueError("no captured events with all required fields")
+                        raise NotApplicable("no_matching_events", "no captured events with all required fields")
                     report["scanned_rules"] += 1
+                    report["coverage"]["evaluated"] += 1
                     if total:
                         room = max(0, MAX_EVIDENCE - evidence_count)
                         retained = evidence[:room]
                         evidence_count += len(retained)
                         report["omitted_evidence"] += total - len(retained)
+                        if total > len(retained):
+                            report["coverage"]["evidence_preview_limit"] = MAX_EVIDENCE
                         if len(report["findings"]) >= MAX_FINDINGS:
-                            raise ValueError("matched-rule preview limit reached")
+                            raise PartialLimit("matched-rule preview limit reached")
                         level = getattr(rule.level, "name", "informational").lower()
                         refs = getattr(rule, "references", None) or []
                         ref_text = "; ".join(str(item) for item in refs if str(item).strip())
@@ -324,19 +370,26 @@ def scan(request, events_path):
                             details += " References: " + ref_text
                         details = details.encode("utf-8")[:8000].decode("utf-8", errors="ignore")
                         report["findings"].append({"rule_id": str(rule.id or (source["name"] + ":" + rule.title)), "title": rule.title, "severity": level, "source": source["name"] + " sha256:" + sha256, "license": str(getattr(rule, "license", None) or "Not supplied by rule"), "author": supplied_authors(rule), "mitre": attack_tags(rule.tags or []), "count": total, "evidence": retained, "events": event_ids[:room], "details": details, "rule_text": rule_yaml(data, rule)})
+                except TimeoutError:
+                    raise
                 except Exception as error:
-                    if "no such column" in str(error):
-                        report["backend_rejected"] += 1
+                    title = str(getattr(rule, "title", source["name"]))
                     report["skipped_rules"] += 1
-                    report["state"] = "partial"
+                    if isinstance(error, NotApplicable):
+                        note_not_applicable(report, error.reason, title, str(error)[:400])
+                    elif isinstance(error, PartialLimit):
+                        # A match this scan found cannot be reported: that is incomplete.
+                        report["state"] = "partial"
+                    else:
+                        # Not a reason a rule may be set aside: the scan did not finish evaluating it.
+                        report["state"] = "partial"
                     if len(report["skipped"]) < 1000:
-                        report["skipped"].append(str(getattr(rule, "title", source["name"])) + ": " + str(error)[:400])
+                        report["skipped"].append(title + ": " + str(error)[:400])
         if not report["scanned_rules"]:
             report["state"] = "unavailable"
             report["warnings"].append("No compatible rule could evaluate captured fields.")
-        if report["omitted_evidence"]:
-            report["state"] = "partial"
-            report["warnings"].append("Evidence preview is bounded; occurrence counts retain all matched events.")
+        if report["coverage"]["evidence_preview_limit"]:
+            report["warnings"].append("Evidence preview limited to " + str(MAX_EVIDENCE) + " locations; match counts are complete.")
     except Exception as error:
         report["state"] = "partial" if report["scanned_rules"] else "unavailable"
         report["warnings"].append("Sigma evaluation stopped: " + str(error)[:512])

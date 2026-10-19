@@ -260,6 +260,7 @@ fn upstream_kobalos_rule_matches_ram_in_the_complete_scan_pipeline() {
         no_rules: false,
         include_dir: None,
         skipped_inputs: vec![],
+        unstaged: vec![],
     };
     let report = scan(&staged, &fixture.0).unwrap();
     assert_eq!(report.findings.len(), 1, "{report:?}");

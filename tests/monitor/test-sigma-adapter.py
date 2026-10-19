@@ -8,6 +8,7 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("sigma_adapter", ROOT / "src/antinomie/monitor/crates/monitor-core/assets/sigma_scan.py")
@@ -137,15 +138,121 @@ class AdapterTests(unittest.TestCase):
         _, path, identity = self.fixture()
         rules = ROOT / "tests/monitor/fixtures/sigma-sample.yml"
         report = adapter.scan({"identity": identity, "sigma_sources": [{"path": str(rules), "name": "Antinomie Sigma / MIT"}]}, path)
-        self.assertEqual(report["state"], "partial", report)
+        # The two other rules have no matching events in this run; that is a coverage limit.
+        self.assertEqual(report["state"], "complete", report)
         self.assertEqual(report["scanned_rules"], 1, report)
         self.assertEqual(report["skipped_rules"], 2, report)
+        self.assertEqual(report["coverage"]["evaluated"], 1)
+        self.assertEqual(report["coverage"]["no_matching_events"], 2)
         self.assertEqual(report["findings"][0]["title"], "Shell Execution Observed")
         self.assertEqual(report["findings"][0]["count"], 2)
         self.assertEqual(report["findings"][0]["events"], [1, 2])
         self.assertEqual(report["findings"][0]["mitre"], ["T1059.004"])
         self.assertTrue(report["sources"][0]["sha256"])
         self.assertIn("not full compatibility", report["warnings"][0])
+
+    RULE = """title: {title}
+id: {ident}
+logsource:
+  category: {category}
+  product: linux
+detection:
+  selection:
+    {field}|endswith: /sh
+  condition: selection
+level: low
+"""
+
+    def scan(self, rules, events=None, complete=True, **limits):
+        """Run the adapter over a journal and rule documents (a list of YAML texts)."""
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        identity = {"vm_id": "vm", "boot_id": "boot", "run_id": "run", "root_cookie": 7}
+        events = [("process_creation", {"Image": "/bin/sh"})] * 3 if events is None else events
+        records = [{"kind": "header", "format_version": 2, "identity": identity}]
+        for index, (category, fields) in enumerate(events):
+            records.append({"kind": "event", "event": {"category": category, "fields": fields, "evidence": {"kind": "call", "stream": 1, "cookie": 7, "call": index + 1}}})
+        records.append({"kind": "end", "events": len(events), "omitted": 0, "complete": complete})
+        path = Path(directory.name) / "events.jsonl"
+        path.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+        sources = []
+        for index, text in enumerate(rules):
+            source = Path(directory.name) / f"rules-{index}.yml"
+            source.write_text(text)
+            sources.append({"path": str(source), "name": f"rules-{index}.yml"})
+        saved = {name: getattr(adapter, name) for name in limits}
+        try:
+            for name, value in limits.items():
+                setattr(adapter, name, value)
+            return adapter.scan({"identity": identity, "sigma_sources": sources}, path)
+        finally:
+            for name, value in saved.items():
+                setattr(adapter, name, value)
+
+    def rule(self, title="Shell", category="process_creation", field="Image", ident=None):
+        return self.RULE.format(title=title, ident=ident or uuid.uuid5(uuid.NAMESPACE_DNS, title), category=category, field=field)
+
+    def counts(self, report):
+        coverage = report["coverage"]
+        return tuple(coverage[key] for key in ("evaluated", "no_matching_events", "unsupported_category", "backend", "syntax"))
+
+    def test_coverage_helper_counts_every_rule_and_lists_a_bounded_number(self):
+        report = {"coverage": adapter.new_coverage()}
+        for index in range(adapter.COVERAGE_LIST_LIMIT + 5):
+            adapter.note_not_applicable(report, "syntax", f"file-{index}", "bad")
+        coverage = report["coverage"]
+        self.assertEqual(coverage["syntax"], adapter.COVERAGE_LIST_LIMIT + 5)
+        self.assertEqual((len(coverage["listed"]), coverage["unlisted"]), (adapter.COVERAGE_LIST_LIMIT, 5))
+        self.assertEqual(coverage["listed"][0], {"reason": "syntax", "rule": "file-0", "detail": "bad"})
+
+    @unittest.skipUnless(importlib.util.find_spec("sigma"), "optional local pySigma integration")
+    def test_rules_that_do_not_apply_are_counted_and_the_scan_stays_complete(self):
+        report = self.scan([
+            self.rule("Matches"),
+            self.rule("No events", category="dns_query", field="QueryName"),
+            self.rule("Registry", category="registry_set"),
+            "title: [unterminated\n",
+            self.rule("Bad field", field="UncapturedField"),
+        ])
+        self.assertEqual(report["state"], "complete", report)
+        self.assertEqual(self.counts(report), (1, 1, 1, 1, 1), report["coverage"])
+        self.assertEqual(report["scanned_rules"], 1)
+        self.assertEqual(report["findings"][0]["count"], 3)
+        reasons = sorted(item["reason"] for item in report["coverage"]["listed"])
+        self.assertEqual(reasons, ["backend", "no_matching_events", "syntax", "unsupported_category"])
+        self.assertIsNone(report["coverage"]["evidence_preview_limit"])
+        self.assertEqual(report["format_version"], adapter.REPORT_FORMAT_VERSION)
+        self.assertIn("not full compatibility", report["warnings"][0], "the coverage warning stays")
+
+    @unittest.skipUnless(importlib.util.find_spec("sigma"), "optional local pySigma integration")
+    def test_no_events_with_the_required_fields_is_not_a_conversion_failure(self):
+        report = self.scan([self.rule("Needs a command line", field="CommandLine")], events=[("process_creation", {"Image": "/bin/sh"})])
+        coverage = report["coverage"]
+        self.assertEqual((coverage["no_matching_events"], coverage["backend"], coverage["syntax"], coverage["unsupported_category"]), (1, 0, 0, 0))
+        self.assertNotIn("partial", report["state"])
+
+    @unittest.skipUnless(importlib.util.find_spec("sigma"), "optional local pySigma integration")
+    def test_the_evidence_preview_cap_is_a_note_and_counts_stay_complete(self):
+        report = self.scan([self.rule()], events=[("process_creation", {"Image": "/bin/sh"})] * 5, MAX_EVIDENCE=2)
+        self.assertEqual(report["state"], "complete", report)
+        self.assertEqual(report["findings"][0]["count"], 5)
+        self.assertEqual(len(report["findings"][0]["evidence"]), 2)
+        self.assertEqual(report["omitted_evidence"], 3)
+        self.assertEqual(report["coverage"]["evidence_preview_limit"], 2)
+        self.assertTrue(any("match counts are complete" in warning for warning in report["warnings"]), report["warnings"])
+
+    @unittest.skipUnless(importlib.util.find_spec("sigma"), "optional local pySigma integration")
+    def test_real_incompleteness_is_still_partial(self):
+        incomplete = self.scan([self.rule()], complete=False)
+        self.assertEqual(incomplete["state"], "partial", "the journal is truncated or incomplete")
+        budget = self.scan([self.rule("First"), self.rule("Second")], MAX_RULES=1)
+        self.assertEqual(budget["state"], "partial", "the rule budget is exhausted")
+        self.assertEqual(budget["scanned_rules"], 1)
+        timed_out = self.scan([self.rule()], EVALUATION_SECONDS=-1)
+        self.assertIn("stopped", " ".join(timed_out["warnings"]), "the time budget ends the evaluation")
+        self.assertNotEqual(timed_out["state"], "complete")
+        late = self.scan([self.rule("First"), self.rule("Second")], MAX_FINDINGS=1)
+        self.assertEqual(late["state"], "partial", "a match that cannot be reported is incomplete")
 
     @unittest.skipUnless(os.environ.get("ANTINOMIE_SIGMA_RULES"), "community Sigma tree not selected")
     def test_community_candidates_reconcile_backend_conversion(self):
