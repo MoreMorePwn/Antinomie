@@ -117,6 +117,88 @@ No guest, image, shared-memory ABI, dependency or release-tag change is needed.
 - V7 no snapshot/reconnect. No next transport version. Existing transport API
   is opaque; frontend/backend never manage CPU rings.
 
+## Disks tab: the current disk of a stopped VM (0.7.0, phase 1)
+
+Accepted design: the documentation checkout's "Disks Tab - Implementation
+Design" v2, phase 1. Host only; no guest kernel change. Dumps, imports,
+checkpoint sources, partition carving, diff and content search are later phases
+and have seams only (`DiskJobPurpose`, `DiskSourceKind`, the entries list).
+
+**Mechanism.** The VM's qcow2 chain (`snapshots::active_disk`) is flattened by
+`qemu-img convert -p -f qcow2 -O raw` into a sparse raw ext4 image,
+`<recording dir>/disks/.scratch-<id>/root.ext4` (a scratch image). Progress is
+the `(NN.NN/100%)` lines of `-p`; the converter runs under `setpriv
+--pdeathsig KILL` so an app crash cannot leave it attached to the chain, and
+without `-U`, so QEMU's own image lock is the backstop. After conversion the
+size must equal the chain's virtual size and the ext4 magic must be at offset
+1080; the superblock `s_state` gives `clean` or `not cleanly unmounted`.
+`qemu-img map` (output capped at 64 MiB, falling back to the layers' allocated
+sizes) gives the estimate: the sum of extents that are data and not zero, an
+upper bound of the sparse output. Free space is `statvfs` of the `disks`
+folder against estimate + 64 MiB (the whole logical size when a one-megabyte
+probe file shows the folder cannot hold holes).
+
+**Backend (`backend/worker_disks.rs`, `disks/{measure,job}.rs`).** One disk job
+at a time (`Worker.disk_job`) holds the lease on its VM's image while
+`qemu-img` reads the chain. `Worker::command` first runs `disk_lease_gate`
+(`lease()` is a pure function with a test over every command).
+
+| Command | While a job holds this VM's image | While a view of this VM is open |
+| --- | --- | --- |
+| `Start` | Refused ("being read for the Disks tab") | Allowed; the view is closed after the start |
+| `Reset`, `RestoreVmSnapshot`, `CreateVmSnapshot`, `Delete` | Refused | Allowed; the view is closed after success |
+| `Duplicate`, `Save` that resizes | Refused | Allowed; the view stays |
+| `MeasureDisk`, `OpenCurrentDisk` | Refused ("another disk inspection or dump is still running") | `Open` replaces the view |
+| Either, while this VM runs | Refused ("stop the VM before inspecting or dumping its disk") | n/a |
+
+Another VM running does not matter. Scratch folders are swept when the backend
+starts and before a new materialization; closing the backend deletes the open
+view. `Snapshot` gains `current_disk`, `disk_measure` and `disk_job`; commands
+are `MeasureDisk`, `OpenCurrentDisk`, `CloseCurrentDisk`, `CancelDiskJob`.
+
+**Reader (`disks/reader/`).** A second mode of this program, `--disk-reader`
+(`worker_main_if_requested`, before CLI parsing like the analysis workers),
+under the `sandbox_run` bubblewrap recipe: `--unshare-all --unshare-user
+--disable-userns --die-with-parent --new-session --clearenv --cap-drop ALL`,
+`--ro-bind /usr`, `--proc`, a 16 MiB `/tmp`, the program at `/worker`, the image
+`--ro-bind` at `/image`, the extraction folder `--bind` at `/out`,
+`--remount-ro /`, and `prlimit --as=2147483648 --nofile=64 --core=0`. The
+protocol is JSON lines (`Probe`, `List`, `Info`, `Find`, `Extract`), one
+request in flight, each answer echoing its id, bounded line sizes, typed
+`ReadError`. The parent (`Reader`) starts the worker lazily, kills it on a
+timeout, an abort or drop, and starts a new one with the next request. Guest
+paths are labels: a path must be absolute without `..`, every parent must be a
+real directory (a path through a link is refused), links are reported with their
+target text and never followed, extraction of a link writes its target as data.
+The worker writes `/out/<request id>`; `disks::extract::place` then (in the
+parent, after the answer) checks it is a regular file, names it `<n>-<leaf>` with
+`host_leaf` (controls, separators and direction overrides replaced, leading dots
+dropped, 100 bytes) and seals it with `openat2(NO_SYMLINKS)` and `fchmod 0600`.
+Bounds: listing pages of 256 (a directory is read up to 65,536 entries), Find
+at most 5,000 matches, 1,000,000 entries, depth 64 and 15 s, hashes up to the
+setting (64 MiB), extraction up to the setting (256 MiB; 4 GiB after the user
+confirms, with a free-space check), the viewer up to 16 MiB.
+
+**Interface (`disk_view/`).** `Panel::Disks` after Memory (layout version 7 puts
+the tab after Memory in saved layouts without changing which tab shows);
+`DetailsOf::DiskEntry` for the shared Details dock. The tab keeps two reader
+threads (browse; find and extract) so a long find does not block the tree. The
+tree is the host explorer's cached-flatten design (shared `PAGE_LEN`,
+`DIRECTORY_LIMIT`, `DEPTH_LIMIT`, `tree_lines`, viewport-only rows) over reader
+listings. Extract to view uses `DataWindows::open_bytes` (the data viewer);
+Static Analysis uses the new `AnalyzeHostFile` command, because `AnalyzeOnly`
+reads a guest path from a running VM: `Jobs::submit_host_file` copies the
+extracted file into the report's specimen slot and the ordinary isolated
+worker, report and quota accounting follow, with its own `Jobs` in the backend
+worker so it needs no VM. Settings: `disks.{extract_cap_mib, hash_cap_mib,
+hide_dotfiles, numeric_modes}`.
+
+**Limits of this phase.** `ext4-view` 1.0.0 exposes no inode numbers or link
+counts, so neither is shown and a directory cycle is bounded by the Find depth
+and entry limits instead of a visited-inode set. Whole-disk ext4 only: any
+other content gives "the disk does not hold an ext2/3/4 filesystem". The lease
+is held by one job per backend; the view itself holds nothing.
+
 ## Recording quota and pre-acknowledgement telemetry (0.6.2)
 
 The recording quota (Settings, 4 GiB by default) bounds what one VM boot may
