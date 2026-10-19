@@ -32,6 +32,7 @@ pub(crate) const OPEN_INPUT: &str = "triage-open-input";
 
 mod archive_scan;
 mod bpf_notes;
+mod counts;
 mod descriptors;
 mod details;
 mod detection;
@@ -484,14 +485,7 @@ impl TriageView {
         ui: &mut egui::Ui,
         input: &TriageInput<'_>,
     ) -> Option<trace::InvocationKey> {
-        ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.process, ProcessTab::Tree, "Process tree");
-            ui.selectable_value(
-                &mut self.process,
-                ProcessTab::Suspicious,
-                "Suspicious activity",
-            );
-        });
+        self.process_tabs(ui);
         match self.process {
             ProcessTab::Tree => {
                 if let Some(scan) = &self.scan {
@@ -512,11 +506,7 @@ impl TriageView {
     }
 
     fn files(&mut self, ui: &mut egui::Ui, input: &TriageInput<'_>) {
-        ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.files, FileTab::Opened, "Opened files");
-            ui.selectable_value(&mut self.files, FileTab::Read, "Read files");
-            ui.selectable_value(&mut self.files, FileTab::Changed, "Changed files");
-        });
+        self.file_tabs(ui);
         let index = match self.files {
             FileTab::Opened => 1,
             FileTab::Read => 5,
@@ -607,12 +597,7 @@ impl TriageView {
     }
 
     fn network(&mut self, ui: &mut egui::Ui, input: &TriageInput<'_>) {
-        ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.network, NetTab::Ips, "IPs");
-            ui.selectable_value(&mut self.network, NetTab::Hosts, "Hosts");
-            ui.selectable_value(&mut self.network, NetTab::Http, "HTTP");
-            ui.selectable_value(&mut self.network, NetTab::Dns, "DNS");
-        });
+        self.network_tabs(ui);
         let index = match self.network {
             NetTab::Ips => 6,
             NetTab::Hosts => 7,

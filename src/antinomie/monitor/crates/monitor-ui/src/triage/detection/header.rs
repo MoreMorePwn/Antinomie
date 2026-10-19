@@ -54,23 +54,34 @@ fn matched_summary(count: usize, state_value: &State) -> (String, egui::Color32)
 }
 
 impl View {
+    fn tab_count(&self, index: usize) -> super::super::counts::Count {
+        use super::super::counts::Count;
+        if self.is_scanning(index) || (self.rx.is_some() && self.busy.is_none()) {
+            return Count::Pending;
+        }
+        if self.results[index]
+            .as_ref()
+            .is_some_and(|result| match result {
+                Err(_) => true,
+                Ok(report) => matches!(
+                    report.state,
+                    State::Unavailable | State::Missing | State::NoRules
+                ),
+            })
+        {
+            return Count::Unavailable;
+        }
+        self.counts[index]
+            .as_ref()
+            .map_or(Count::Unavailable, |counts| Count::Ready(counts.rules))
+    }
+
     pub(super) fn engine_tabs(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            for engine in ENGINES {
+            for (index, engine) in ENGINES.into_iter().enumerate() {
                 let selected = self.selected == engine;
-                let label = if selected {
-                    theme::palette().primary_text
-                } else {
-                    theme::text()
-                };
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new(name(engine)).strong().color(label))
-                            .selected(selected)
-                            .min_size(egui::vec2(80.0, 32.0)),
-                    )
-                    .clicked()
-                {
+                let count = self.tab_count(index);
+                if super::super::counts::tab(ui, selected, name(engine), count, true) {
                     self.selected = engine;
                 }
             }
@@ -366,6 +377,40 @@ fn evaluated_text(report: &Report) -> (String, String) {
 mod tests {
     use super::super::tests::{finding, frames, rendered_text, report};
     use super::*;
+
+    #[test]
+    fn engine_tab_badges_use_all_findings_and_show_pending_and_zero() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut view = View::default();
+        view.counts[0] = Some(Counts {
+            rules: 1234,
+            occurrences: 9999,
+            references: Default::default(),
+        });
+        view.counts[1] = Some(Counts {
+            rules: 0,
+            occurrences: 0,
+            references: Default::default(),
+        });
+        view.phase[2] = "running".into();
+        let output = frames(&ctx, 3, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| view.engine_tabs(ui));
+        });
+        let texts = rendered_text(&output);
+        for label in ["YARA", "IDS", "Sigma", "1,234", "0", "…"] {
+            assert!(texts.contains(label), "{texts}");
+        }
+        for state in [State::Missing, State::Unavailable, State::NoRules] {
+            let mut missing = report(Vec::new());
+            missing.state = state;
+            view.results[1] = Some(Ok(missing));
+            assert_eq!(
+                view.tab_count(1),
+                super::super::super::counts::Count::Unavailable
+            );
+        }
+    }
 
     fn panel_text(view: &mut View) -> String {
         let ctx = egui::Context::default();

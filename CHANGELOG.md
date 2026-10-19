@@ -6,6 +6,10 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Whole-run counts on Triage sections.** Detection, suspicious activity, file
+  and network tabs show count badges independent of filters and current pages.
+  Pending work and unavailable evidence are distinct from an evaluated zero.
+
 - **Retry unavailable properties in place.** Property sections with missing
   values have a refresh control and busy indicator. Already computed values
   remain visible during a retry and survive a failed retry.
