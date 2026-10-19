@@ -219,7 +219,7 @@ pub fn check(options: &BackendOptions) -> Report {
         tool(
             QemuImg,
             "QEMU image tools",
-            "Create and reset VM disks",
+            "Create, reset, inspect and dump VM disks",
             &options.qemu_img,
             "On Debian/Ubuntu: sudo apt install qemu-utils",
         ),
@@ -240,7 +240,7 @@ pub fn check(options: &BackendOptions) -> Report {
         tool(
             Bubblewrap,
             "bubblewrap",
-            "Run static analysis",
+            "Run static analysis and read guest filesystems in the Disks tab",
             Path::new("/usr/bin/bwrap"),
             "On Debian/Ubuntu: sudo apt install bubblewrap",
         ),
@@ -254,7 +254,7 @@ pub fn check(options: &BackendOptions) -> Report {
         tool(
             Prlimit,
             "prlimit",
-            "Bound packet-filter and network-triage engine resources",
+            "Bound packet-filter, network-triage and Disks reader resources",
             Path::new("prlimit"),
             "On Debian/Ubuntu: sudo apt install util-linux",
         ),

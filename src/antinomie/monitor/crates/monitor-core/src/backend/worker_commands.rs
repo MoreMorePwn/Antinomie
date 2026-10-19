@@ -28,7 +28,23 @@ impl Worker {
             .map_err(|_| "guest command epoch exhausted")?;
         Ok(GuestTransition(self.guest_epoch.clone()))
     }
+    /// Run one command behind the disk-job lease: refused while a disk job
+    /// reads the VM's chain, and a view of a chain the command changed is
+    /// closed once it succeeded.
     pub(super) fn command(&mut self, command: Command) -> Result<String, String> {
+        self.disk_lease_gate(&command)?;
+        let after = super::worker_disks::effect(&command)
+            .is_some()
+            .then(|| command.clone());
+        let result = self.run_command(command);
+        if result.is_ok()
+            && let Some(command) = after
+        {
+            self.close_disk_view_after(&command);
+        }
+        result
+    }
+    fn run_command(&mut self, command: Command) -> Result<String, String> {
         if matches!(
             command,
             Command::Stop
@@ -662,6 +678,21 @@ impl Worker {
             Command::StartNetworkCapture => self.start_network_capture(),
             Command::StopNetworkCapture => self.stop_network_capture(),
             Command::DumpMemory => self.start_memory_dump(),
+            Command::MeasureDisk { vm_id } => self.measure_disk(&vm_id),
+            Command::OpenCurrentDisk { vm_id } => self.open_current_disk(&vm_id),
+            Command::CloseCurrentDisk { vm_id } => self.close_current_disk(&vm_id),
+            Command::CancelDiskJob { vm_id } => self.cancel_disk_job(&vm_id),
+            Command::AnalyzeHostFile {
+                vm_id,
+                path,
+                analysis,
+            } => self.analyze_host_file(&vm_id, &path, analysis),
+            Command::CancelAnalysis { analysis_id }
+                if self.host_analysis.cancel(&analysis_id).is_ok() =>
+            {
+                self.host_analysis_tick();
+                Ok("analysis cancelled".into())
+            }
             Command::Stop => {
                 self.stop()?;
                 Ok("VM stopped; recordings are being saved in the background".into())
