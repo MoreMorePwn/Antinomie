@@ -6,6 +6,33 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **A Disks tab shows what is on a stopped VM's disk.** The new tab sits
+  between Memory and Core dumps. Its **Current disk (VM off)** entry is
+  disabled while the VM runs, with a **Stop VM** button that does what the
+  toolbar's Stop does. With the VM off it measures the disk (logical size, an
+  allocation estimate from `qemu-img map`, free space and whether the folder
+  holds sparse files) and **Open** copies the allocated data into a temporary
+  sparse image under the VM's recordings (`disks/.scratch-…`) with a progress
+  bar and Cancel. Nothing is written to the VM's disk; the image is deleted
+  when you close the view or start the VM, and leftovers of a crash are
+  removed at the next start. While the disk is being read, Start, Reset,
+  Restore, taking a snapshot, Delete and Duplicate are refused with a message,
+  and Open is refused while the VM runs. The view says whether the guest shut
+  down cleanly or was forced off ("not cleanly unmounted": committed journal
+  transactions are applied while reading). The filesystem tree is lazy and
+  paged, shows modes and owners, links with their target (never followed) and
+  special files, and has Find by name, path or glob. Details show a file's
+  type, size, mode, owner, times and, on request, SHA-256 and MD5 (up to
+  64 MiB). **Extract to view** opens a file up to 16 MiB in the data viewer,
+  **Save to host…** and **Open with…** extract up to 256 MiB (more after a
+  confirmation) into a private, never executable copy, and **Hand to Static
+  Analysis** analyzes an extracted ELF file offline. Nothing from the guest is
+  ever run on the host. All parsing of the guest's filesystem happens in a
+  sandboxed worker (`antinomie-monitor --disk-reader`: bubblewrap with no
+  network, the image mounted read-only, one writable extraction folder and
+  `prlimit` bounds) using the new `ext4-view` crate. Whole-disk ext4 only;
+  saved disk dumps, imports, snapshot sources and partitions come later.
+
 - **Audit fixes (host).** A feature-completeness audit of 0.6.2 and 0.7.0
   found these; all are host-side.
   - Detection > Scanned inputs no longer reads the file system while drawing:
