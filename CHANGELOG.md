@@ -6,6 +6,10 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Late forks preserve recorded child exits.** The host process tracker uses
+  guest time and leader identity to distinguish delayed CPU-stream delivery from
+  PID reuse. Old lifetime and exec records cannot erase newer terminal facts.
+
 - **Whole-run counts on Triage sections.** Detection, suspicious activity, file
   and network tabs show count badges independent of filters and current pages.
   Pending work and unavailable evidence are distinct from an evaluated zero.
