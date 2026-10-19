@@ -119,7 +119,7 @@ pub(super) fn show(
         }
         let field = ui.add(
             egui::TextEdit::singleline(&mut state.go_to)
-                .hint_text("Offset, e.g. 0x1f00")
+                .hint_text(crate::theme::hint_text("Offset, e.g. 0x1f00"))
                 .desired_width(190.0),
         );
         let entered = field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));

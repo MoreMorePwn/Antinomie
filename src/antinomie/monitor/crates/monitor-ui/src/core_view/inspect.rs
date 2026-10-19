@@ -243,7 +243,7 @@ impl CoreView {
         let filter = crate::query::table_filter(
             ui,
             ("core-mappings", &record.dir),
-            "Filter memory mappings",
+            "memory.size > 4096",
             MAPPING_FIELDS,
             &[],
         );
@@ -608,7 +608,7 @@ fn notes_table(ui: &mut egui::Ui, record: &CoreRecord, query: &mut String) {
     crate::query::filter_edit(
         ui,
         query,
-        "Filter recovered notes",
+        "note.name == CORE",
         ui.available_width(),
         crate::query::FilterScope::Table(NOTE_FIELDS),
     );

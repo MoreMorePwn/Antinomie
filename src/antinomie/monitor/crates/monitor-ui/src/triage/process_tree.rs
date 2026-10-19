@@ -105,7 +105,7 @@ pub(super) fn process_tree_nodes(
     let compiled = query::table_filter(
         ui,
         "triage-process",
-        "Filter process identity, executable or state",
+        "process.exe contains bash",
         PROCESS_FIELDS,
         &[],
     );

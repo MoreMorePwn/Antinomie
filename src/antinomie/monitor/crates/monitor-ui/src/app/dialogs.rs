@@ -52,7 +52,7 @@ impl MonitorApp {
                             text_field(&mut self.import_directory)
                                 .desired_width(path_width)
                                 .font(egui::TextStyle::Monospace)
-                                .hint_text(RichText::new("Bundle directory").color(theme::muted())),
+                                .hint_text(theme::hint_text("Bundle directory")),
                         );
                         if icon(
                             ui,

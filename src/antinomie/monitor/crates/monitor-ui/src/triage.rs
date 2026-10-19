@@ -520,7 +520,14 @@ impl TriageView {
             };
             (rows.len(), rows.len() as u64 + omitted)
         });
-        self.query_controls(ui, index, FILE_FIELDS, retained, total);
+        self.query_controls(
+            ui,
+            index,
+            FILE_FIELDS,
+            "file.path contains \"/etc\"",
+            retained,
+            total,
+        );
         let Some(scan) = &self.scan else {
             ui.weak("Indexing this run’s files…");
             return;
@@ -610,6 +617,12 @@ impl TriageView {
             NetTab::Http => HTTP_FIELDS,
             NetTab::Dns => DNS_FIELDS,
         };
+        let example = match self.network {
+            NetTab::Ips => "network.country == US",
+            NetTab::Hosts => "network.hostname contains update",
+            NetTab::Http => "http.method == GET",
+            NetTab::Dns => "dns.name contains example",
+        };
         let (count, omitted) = self
             .scan
             .as_ref()
@@ -619,7 +632,7 @@ impl TriageView {
                 NetTab::Http => (scan.http.len(), scan.http_omitted),
                 NetTab::Dns => (scan.dns.len(), scan.dns_omitted),
             });
-        self.query_controls(ui, index, fields, count, count as u64 + omitted);
+        self.query_controls(ui, index, fields, example, count, count as u64 + omitted);
         let Some(scan) = &self.scan else {
             ui.weak("Indexing this run’s capture…");
             return;
@@ -688,6 +701,7 @@ impl TriageView {
             ui,
             0,
             FINDING_FIELDS,
+            "finding.severity == high",
             findings.len(),
             findings.len() as u64 + omitted,
         );
@@ -736,6 +750,7 @@ impl TriageView {
         ui: &mut egui::Ui,
         index: usize,
         fields: &[FieldSpec<'_>],
+        example: &str,
         retained: usize,
         total: u64,
     ) {
@@ -768,7 +783,7 @@ impl TriageView {
             query::filter_edit_fields(
                 ui,
                 &mut self.filter_drafts[index],
-                "Filter observed fields",
+                example,
                 ui.available_width(),
                 fields,
                 &[],

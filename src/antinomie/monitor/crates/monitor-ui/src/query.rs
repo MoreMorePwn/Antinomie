@@ -268,8 +268,6 @@ pub(crate) const LABEL_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::text("entry.name", "Annotation name"),
     FieldSpec::text("entry.path", "Evidence path"),
     FieldSpec::tags("tag", "Stored annotation tags"),
-    FieldSpec::tags("tags", "Stored annotation tags"),
-    FieldSpec::tags("entry.tag", "Stored annotation tags"),
     FieldSpec::text("entry.state", "Recorded outcome"),
     FieldSpec::boolean("entry.complete", "Evidence completeness"),
     FieldSpec::number("entry.time_ms", "Unix timestamp in milliseconds"),

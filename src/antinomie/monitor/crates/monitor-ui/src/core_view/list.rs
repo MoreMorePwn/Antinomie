@@ -139,8 +139,13 @@ impl CoreView {
             .filter_map(|directory| crate::evidence::annotation(ui, directory))
             .flat_map(|annotation| annotation.tags)
             .collect();
-        let filter =
-            crate::query::table_filter(ui, "core-history", "Filter core dumps", &fields, &tags);
+        let filter = crate::query::table_filter(
+            ui,
+            "core-history",
+            "entry.name contains crash",
+            &fields,
+            &tags,
+        );
         let filter_id = ui.id().with(("table-filter", "core-history"));
         let manual_shown: Vec<_> = self
             .manual

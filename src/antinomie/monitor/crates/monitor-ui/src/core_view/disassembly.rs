@@ -17,7 +17,7 @@ impl CoreView {
                 let filter = crate::query::table_filter(
                     ui,
                     ("core-function-filter", &record.dir),
-                    "Filter functions",
+                    "function.name == main",
                     FUNCTION_FIELDS,
                     &[],
                 );

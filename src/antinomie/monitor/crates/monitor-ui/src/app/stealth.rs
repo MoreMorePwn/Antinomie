@@ -231,7 +231,7 @@ fn network(ui: &mut egui::Ui, profile: &mut StealthProfile) {
                 ui.add(
                     egui::TextEdit::singleline(&mut profile.mac)
                         .desired_width(150.0)
-                        .hint_text("52:54:00:12:34:56"),
+                        .hint_text(crate::theme::hint_text("52:54:00:12:34:56")),
                 );
                 if ui
                     .button("Random")

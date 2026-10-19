@@ -169,7 +169,7 @@ impl MemoryView {
                 crate::query::filter_edit_fields(
                     ui,
                     &mut self.filter,
-                    "Filter result fields",
+                    "tag == malware",
                     ui.available_width(),
                     &fields,
                     tags,

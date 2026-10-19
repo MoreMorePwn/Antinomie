@@ -80,9 +80,9 @@ pub(super) fn show(
             ui,
             &mut state.query,
             match kind {
-                AnalysisKind::Disassembly => "Search instructions, functions or addresses",
-                AnalysisKind::Decompilation => "Search decompiled code",
-                _ => "Search all rows",
+                AnalysisKind::Disassembly => "mnemonic == call",
+                AnalysisKind::Decompilation => "function contains main",
+                _ => "value contains http",
             },
             ui.available_width(),
             &fields,

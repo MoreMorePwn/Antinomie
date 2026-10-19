@@ -76,7 +76,7 @@ impl MonitorApp {
                     .add(
                         text_field(&mut self.source)
                             .font(egui::TextStyle::Monospace)
-                            .hint_text("Choose a file or enter its path")
+                            .hint_text(crate::theme::hint_text("Choose a file or enter its path"))
                             .desired_width(400.0),
                     )
                     .changed()

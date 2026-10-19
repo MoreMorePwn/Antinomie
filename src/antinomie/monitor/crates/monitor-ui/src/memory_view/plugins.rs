@@ -208,7 +208,7 @@ impl MemoryView {
                 .show_ui(ui, |ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.search)
-                            .hint_text("Search plugins")
+                            .hint_text(crate::theme::hint_text("Search plugins"))
                             .desired_width(f32::INFINITY),
                     )
                     .request_focus();
@@ -415,7 +415,7 @@ impl MemoryView {
                             };
                             ui.add(
                                 egui::TextEdit::singleline(value)
-                                    .hint_text(hint)
+                                    .hint_text(crate::theme::hint_text(hint))
                                     .font(egui::TextStyle::Monospace)
                                     .margin(theme::TEXT_EDIT_MARGIN)
                                     .desired_width(if option.kind == OptionKind::Int {
@@ -485,7 +485,7 @@ impl MemoryView {
         let filter = crate::query::table_filter(
             ui,
             "memory-plugin-history",
-            "Filter plugin results",
+            "entry.name contains pslist",
             &fields,
             &tags,
         );

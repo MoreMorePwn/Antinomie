@@ -183,7 +183,7 @@ impl MemoryView {
         let filter = crate::query::table_filter(
             ui,
             "memory-dump-history",
-            "Filter memory dumps",
+            "entry.name contains win10",
             &fields,
             &tags,
         );
