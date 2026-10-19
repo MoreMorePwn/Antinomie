@@ -128,6 +128,8 @@ pub(super) fn guest_scoped_command(command: &Command) -> bool {
             | Command::AttachProcess { .. }
             | Command::CaptureAll
             | Command::StopCapture { .. }
+            | Command::DebugAttach { .. }
+            | Command::DebugDetach { .. }
             | Command::StartNetworkCapture
             | Command::StopNetworkCapture
     )

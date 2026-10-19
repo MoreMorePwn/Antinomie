@@ -346,6 +346,7 @@ impl Worker {
         self.publish();
         loop {
             if self.closing.load(Ordering::Relaxed) {
+                self.end_debug();
                 self.cancel_queued_commands();
                 if let Some(job) = self.download.as_ref() {
                     job.cancel.store(true, Ordering::Relaxed);
@@ -374,6 +375,8 @@ impl Worker {
             }
             // While telemetry is flowing, take waiting commands without
             // sleeping so the next drain pass follows at once.
+            self.serve_debug_requests();
+            // A debugger's round trips each wait for this loop: poll it closely.
             let mut received = if self
                 .session
                 .as_ref()
@@ -383,6 +386,8 @@ impl Worker {
                     mpsc::TryRecvError::Empty => mpsc::RecvTimeoutError::Timeout,
                     mpsc::TryRecvError::Disconnected => mpsc::RecvTimeoutError::Disconnected,
                 })
+            } else if self.debug.is_active() {
+                self.receiver.recv_timeout(Duration::from_millis(1))
             } else {
                 self.receiver.recv_timeout(Duration::from_millis(10))
             };
@@ -456,6 +461,12 @@ impl Worker {
             }
             if handled > 0 {
                 self.publish();
+            }
+            if self.session.is_none() && self.debug.is_active() {
+                self.end_debug();
+            }
+            if self.debug.is_active() {
+                self.refresh_debug_info();
             }
             if self.closing.load(Ordering::Acquire) {
                 continue;

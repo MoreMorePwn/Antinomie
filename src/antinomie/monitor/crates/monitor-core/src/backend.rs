@@ -3,6 +3,7 @@
 //! VM, and the session that owns one transport client.
 mod completions;
 mod core_sink;
+mod debug_service;
 mod evidence_delete;
 mod guest_resource_control;
 mod launch_failure;
@@ -23,9 +24,11 @@ mod worker_guest;
 mod worker_loop;
 mod worker_vm;
 
+pub use self::debug_service::DebugLink;
 use self::{
-    completions::*, launch_failure::*, run_network::*, saving::*, session_transport::*,
-    terminal_drain::*, uploads::*, worker_artifacts::*, worker_loop::*, worker_vm::*,
+    completions::*, debug_service::DebugService, launch_failure::*, run_network::*, saving::*,
+    session_transport::*, terminal_drain::*, uploads::*, worker_artifacts::*, worker_loop::*,
+    worker_vm::*,
 };
 use crate::{
     api::*,
@@ -73,8 +76,14 @@ pub struct Backend {
     sequence: AtomicU64,
     guest_epoch: Arc<AtomicU64>,
     latest_snapshot: Arc<Mutex<Option<Snapshot>>>,
+    debug_link: DebugLink,
 }
 impl Backend {
+    /// The path a debug server thread uses to reach the guest through this
+    /// backend's transport thread. Only the debug opcodes pass.
+    pub fn debug_link(&self) -> DebugLink {
+        self.debug_link.clone()
+    }
     fn release_unaccepted_credit(&self) {
         if !self.completion_credits.release() {
             self.owner_failed.store(true, Ordering::Release);
@@ -141,6 +150,7 @@ impl Backend {
         let guest_epoch = Arc::new(AtomicU64::new(0));
         let worker_epoch = guest_epoch.clone();
         let flusher = crate::recording_flush::Flusher::new()?;
+        let (debug_service, debug_link) = DebugService::new();
         let analysis_tools = crate::analysis_tools::statuses(&options.data_dir);
         let host_tools_dir = crate::analysis_tools::tools_dir(&options.data_dir);
         let thread = thread::Builder::new()
@@ -177,6 +187,7 @@ impl Backend {
                     flusher,
                     disk_job: None,
                     host_analysis: crate::analysis::jobs::Jobs::with_tools(host_tools_dir),
+                    debug: debug_service,
                     wake,
                 }
                 .run();
@@ -197,6 +208,7 @@ impl Backend {
             sequence: AtomicU64::new(0),
             guest_epoch,
             latest_snapshot,
+            debug_link,
         })
     }
     pub fn send(&self, command: Command) -> Result<u64, String> {
@@ -723,6 +735,8 @@ struct Worker {
     disk_job: Option<crate::disks::job::Job>,
     /// Static analysis of host files, which needs no VM.
     host_analysis: crate::analysis::jobs::Jobs,
+    /// The guest debugger and the server thread's request queue.
+    debug: DebugService,
 }
 
 /// Attempts at reconnecting a guest that stopped answering, before the VM is

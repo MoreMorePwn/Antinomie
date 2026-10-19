@@ -227,6 +227,19 @@ impl MonitorApp {
                             ui.close_menu();
                         }
                         if ui
+                            .add_enabled(
+                                self.debugger_unavailable().is_none(),
+                                item("Attach debugger…", None),
+                            )
+                            .on_disabled_hover_text(
+                                self.debugger_unavailable().unwrap_or_default(),
+                            )
+                            .clicked()
+                        {
+                            self.open_debug_picker();
+                            ui.close_menu();
+                        }
+                        if ui
                             .add_enabled(self.observer_start_enabled(), item("Capture all", None))
                             .clicked()
                         {

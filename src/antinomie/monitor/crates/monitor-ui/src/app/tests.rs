@@ -7,6 +7,7 @@ mod bases;
 mod capture;
 mod chrome;
 mod clipboard;
+mod debugger;
 mod details_scroll;
 mod disks;
 mod evidence_delete;

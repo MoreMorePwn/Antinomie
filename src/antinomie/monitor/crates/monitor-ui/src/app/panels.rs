@@ -33,11 +33,12 @@ impl MonitorApp {
         self.data_windows.show(ctx);
         self.file_drop_overlay(ctx);
         self.activity.ingest(ctx);
-        let enabled = if self.process_picker.purpose == captures::ProcessPurpose::Core {
-            self.manual_core_unavailable().is_none()
-        } else {
-            self.observer_start_enabled()
+        let enabled = match self.process_picker.purpose {
+            captures::ProcessPurpose::Core => self.manual_core_unavailable().is_none(),
+            captures::ProcessPurpose::Debug => self.debugger_unavailable().is_none(),
+            captures::ProcessPurpose::Attach => self.observer_start_enabled(),
         };
+        self.debugger_window(ctx);
         if self
             .process_picker
             .selected
@@ -63,6 +64,12 @@ impl MonitorApp {
                     if self.snapshot.boot_id.as_ref() == Some(&identity.boot_id) && enabled {
                         self.process_picker.open = false;
                         self.send(Command::AttachProcess { identity });
+                    }
+                }
+                captures::ProcessAction::Debug(identity) => {
+                    if self.snapshot.boot_id.as_ref() == Some(&identity.boot_id) && enabled {
+                        self.process_picker.open = false;
+                        self.send(Command::DebugAttach { identity });
                     }
                 }
                 captures::ProcessAction::DumpCore(identity) => {

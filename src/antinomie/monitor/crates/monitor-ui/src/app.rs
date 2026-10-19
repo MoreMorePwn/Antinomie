@@ -8,6 +8,7 @@ mod bases;
 mod capture;
 mod captures;
 mod clipboard;
+mod debugger;
 mod dialogs;
 mod disks;
 mod evidence_delete;
