@@ -372,6 +372,7 @@ impl MonitorApp {
         self.run_tree_view(ui, &run);
         ui.add_space(6.0);
         enabled_features(ui, &run);
+        launch_details(ui, &run);
     }
 
     fn capture_detail(&mut self, ui: &mut egui::Ui) {
@@ -814,4 +815,38 @@ fn enabled_features(ui: &mut egui::Ui, run: &RunSummary) {
     for feature in &features {
         ui.label(format!("{}  {feature}", egui_phosphor::regular::CHECK));
     }
+}
+
+/// How the run was launched and where it is recorded, folded away by default.
+fn launch_details(ui: &mut egui::Ui, run: &RunSummary) {
+    egui::CollapsingHeader::new("Launch")
+        .id_salt("run_launch_details")
+        .default_open(false)
+        .show(ui, |ui| {
+            egui::ScrollArea::both()
+                .id_salt("launch_metadata")
+                .show(ui, |ui| {
+                    egui::Grid::new("run_metadata")
+                        .num_columns(2)
+                        .show(ui, |ui| {
+                            for (label, value) in [
+                                ("Executable", run.request.path.clone()),
+                                ("Arguments", format!("{:?}", run.request.args)),
+                                ("Working directory", run.request.cwd.clone()),
+                                ("Environment", run.request.env.join("\n")),
+                                (
+                                    "UID / GID",
+                                    format!("{} / {}", run.request.uid, run.request.gid),
+                                ),
+                                ("Boot", run.boot_id.clone()),
+                                ("Session", run.session_id.to_string()),
+                                ("Recording", run.directory.display().to_string()),
+                            ] {
+                                ui.label(label);
+                                ui.add(egui::Label::new(value).selectable(true));
+                                ui.end_row();
+                            }
+                        });
+                });
+        });
 }

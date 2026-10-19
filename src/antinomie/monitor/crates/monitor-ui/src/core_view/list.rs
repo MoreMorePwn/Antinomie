@@ -41,11 +41,70 @@ impl CoreView {
         });
     }
 
+    /// One "Cancel process core" button per capture still in progress in the
+    /// running boot, manual or on exit; none while nothing is being captured.
+    fn cancel_buttons(
+        &self,
+        ui: &mut egui::Ui,
+        can_cancel: bool,
+        boot_id: Option<&str>,
+    ) -> Option<CoreAction> {
+        use antinomie_monitor_core::RunArtifactState::{InProgress, WaitingForRootExit};
+        if !can_cancel {
+            return None;
+        }
+        let mut pending: Vec<(String, CoreAction)> = self
+            .manual
+            .iter()
+            .filter(|core| {
+                core.phase != ProcessCorePhase::Finished && Some(core.boot_id.as_str()) == boot_id
+            })
+            .map(|core| {
+                (
+                    format!("PID {}", core.target.tgid),
+                    CoreAction::Cancel(core.id.clone()),
+                )
+            })
+            .chain(
+                self.acquired
+                    .iter()
+                    .filter(|core| {
+                        matches!(core.state, WaitingForRootExit | InProgress)
+                            && Some(core.boot_id.as_str()) == boot_id
+                    })
+                    .map(|core| {
+                        (
+                            format!("run {}", core.run_id),
+                            CoreAction::CancelRun(core.run_id.clone()),
+                        )
+                    }),
+            )
+            .collect();
+        let several = pending.len() > 1;
+        let mut action = None;
+        for (what, cancel) in pending.drain(..) {
+            let label = if several {
+                format!("Cancel process core ({what})")
+            } else {
+                "Cancel process core".to_owned()
+            };
+            if ui
+                .button(label)
+                .on_hover_text("Stop this capture and let the process continue")
+                .clicked()
+            {
+                action = Some(cancel);
+            }
+        }
+        action
+    }
+
     pub(super) fn dump_list(
         &mut self,
         ui: &mut egui::Ui,
         unavailable: Option<&str>,
         can_cancel: bool,
+        boot_id: Option<&str>,
     ) -> Option<CoreAction> {
         let mut action = None;
         ui.horizontal(|ui| {
@@ -76,6 +135,9 @@ impl CoreView {
             ui.add(
                 egui::Label::new(RichText::new(reason).small().color(crate::theme::muted())).wrap(),
             );
+        }
+        if let Some(cancel) = self.cancel_buttons(ui, can_cancel, boot_id) {
+            action = Some(cancel);
         }
         if ui
             .add_enabled(

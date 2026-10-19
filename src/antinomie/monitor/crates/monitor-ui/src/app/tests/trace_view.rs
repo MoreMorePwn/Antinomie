@@ -271,19 +271,25 @@ fn run_history_details_show_the_process_tree_then_the_enabled_analysis_only() {
     app.history = vec![saved];
     app.select_run(Some("saved".into()));
     app.run_tree = Some(("saved".into(), Ok((Vec::new(), Vec::new()))));
-    let output = ctx.run(
-        egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(900.0, 700.0),
-            )),
-            ..Default::default()
-        },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| app.history_detail(ui));
-        },
-    );
-    let shown = texts(&output);
+    let mut time = 0.0;
+    let mut draw = |app: &mut MonitorApp, events: Vec<egui::Event>| {
+        time += 0.05;
+        texts(&ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                events,
+                time: Some(time),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.history_detail(ui));
+            },
+        ))
+    };
+    let shown = draw(&mut app, Vec::new());
     let top = |needle: &str| {
         shown
             .iter()
@@ -297,6 +303,9 @@ fn run_history_details_show_the_process_tree_then_the_enabled_analysis_only() {
     top("Memory dump on exit");
     top("Network capture");
     assert!(!shown.iter().any(|(label, _)| label.contains("Core dump")));
+    // The Launch fold comes last and starts closed.
+    assert!(top("Network capture") < top("Launch"));
+    assert!(!shown.iter().any(|(label, _)| label == "Executable"));
     for removed in [
         "Launch details",
         "Open static analysis",
@@ -309,6 +318,44 @@ fn run_history_details_show_the_process_tree_then_the_enabled_analysis_only() {
             "{removed} should not be in the run details"
         );
     }
+    let header = top_center(&shown, "Launch");
+    draw(&mut app, vec![egui::Event::PointerMoved(header)]);
+    for pressed in [true, false] {
+        draw(
+            &mut app,
+            vec![egui::Event::PointerButton {
+                pos: header,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+    }
+    let opened = draw(&mut app, Vec::new());
+    for label in [
+        "Executable",
+        "Arguments",
+        "Working directory",
+        "Environment",
+        "UID / GID",
+        "Boot",
+        "Session",
+        "Recording",
+    ] {
+        assert!(
+            opened.iter().any(|(text, _)| text == label),
+            "{label} missing from the opened Launch fold: {opened:?}"
+        );
+    }
+}
+
+fn top_center(shown: &[(String, egui::Rect)], label: &str) -> egui::Pos2 {
+    shown
+        .iter()
+        .find(|(text, _)| text == label)
+        .unwrap_or_else(|| panic!("{label} missing from {shown:?}"))
+        .1
+        .center()
 }
 
 #[test]

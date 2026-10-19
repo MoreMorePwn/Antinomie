@@ -217,6 +217,7 @@ impl MonitorApp {
                     crate::core_view::CoreControls {
                         unavailable,
                         captures: &self.snapshot.process_cores,
+                        boot_id: self.snapshot.boot_id.as_deref(),
                         can_cancel: self.running()
                             && !self.closing
                             && self.snapshot.memory_dump.is_none()
@@ -227,6 +228,9 @@ impl MonitorApp {
                     Some(crate::core_view::CoreAction::Dump) => self.open_core_picker(),
                     Some(crate::core_view::CoreAction::Cancel(capture_id)) => {
                         self.send(Command::CancelCoreCapture { capture_id })
+                    }
+                    Some(crate::core_view::CoreAction::CancelRun(run_id)) => {
+                        self.send(Command::CancelProcessCore { run_id })
                     }
                     None => {}
                 }

@@ -628,6 +628,7 @@ fn render(
                         unavailable: Some("Start a supported VM to dump a process core."),
                         captures: &[],
                         can_cancel: false,
+                        boot_id: None,
                     },
                 )
             });
@@ -1240,6 +1241,7 @@ fn native_core_view_fixture() {
                         unavailable: Some("Preview"),
                         captures: &[],
                         can_cancel: false,
+                        boot_id: None,
                     },
                 )
             });
@@ -1352,6 +1354,7 @@ fn native_genuine_core_disassemble() {
                         unavailable: Some("Preview does not capture a live process"),
                         captures: &[],
                         can_cancel: false,
+                        boot_id: None,
                     },
                 );
             });
@@ -1425,4 +1428,107 @@ fn native_genuine_core_disassemble() {
         }),
     )
     .unwrap();
+}
+
+/// One frame with the given cancel controls; returns the text rectangles and
+/// the action the panel asks for.
+fn frame_with_cancel(
+    ctx: &egui::Context,
+    view: &mut CoreView,
+    events: Vec<egui::Event>,
+    can_cancel: bool,
+    boot_id: Option<&str>,
+) -> (Vec<(String, egui::Rect)>, Option<CoreAction>) {
+    let roots = view.roots.clone();
+    let vm_id = view.vm_id.clone();
+    let mut action = None;
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 800.0),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                action = view.show(
+                    ui,
+                    &roots,
+                    vm_id.as_deref(),
+                    false,
+                    CoreControls {
+                        unavailable: None,
+                        captures: &[],
+                        can_cancel,
+                        boot_id,
+                    },
+                );
+            });
+        },
+    );
+    (texts(&output), action)
+}
+
+#[test]
+fn cancel_process_core_shows_only_while_a_capture_is_in_progress_and_cancels_that_run() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let mut fixture = Fixture::new();
+    let mut view = std::mem::take(&mut fixture.view);
+    let core = |state| AcquiredCore {
+        vm_id: "fixture-vm".into(),
+        boot_id: "fixture-boot".into(),
+        run_id: "waiting".into(),
+        directory: fixture.directory.join("runs/waiting/core"),
+        file: None,
+        state,
+    };
+    let button = |texts: &[(String, egui::Rect)]| {
+        texts
+            .iter()
+            .find(|(text, _)| text == "Cancel process core")
+            .map(|(_, rect)| *rect)
+    };
+    let boot = Some("fixture-boot");
+    // Nothing captured, then a finished core: no button.
+    for _ in 0..2 {
+        assert!(button(&frame_with_cancel(&ctx, &mut view, Vec::new(), true, boot).0).is_none());
+    }
+    view.acquired
+        .push(core(antinomie_monitor_core::RunArtifactState::Complete));
+    for _ in 0..2 {
+        assert!(button(&frame_with_cancel(&ctx, &mut view, Vec::new(), true, boot).0).is_none());
+    }
+    // In progress: the button shows, unless the VM cannot cancel or the core
+    // belongs to another boot.
+    view.acquired[0] = core(antinomie_monitor_core::RunArtifactState::WaitingForRootExit);
+    for _ in 0..2 {
+        frame_with_cancel(&ctx, &mut view, Vec::new(), true, boot);
+    }
+    assert!(button(&frame_with_cancel(&ctx, &mut view, Vec::new(), false, boot).0).is_none());
+    assert!(
+        button(&frame_with_cancel(&ctx, &mut view, Vec::new(), true, Some("other-boot")).0)
+            .is_none()
+    );
+    let position = button(&frame_with_cancel(&ctx, &mut view, Vec::new(), true, boot).0)
+        .expect("a capture is in progress")
+        .center();
+    let mut asked = None;
+    for pressed in [None, Some(true), Some(false)] {
+        let events = match pressed {
+            None => vec![egui::Event::PointerMoved(position)],
+            Some(pressed) => vec![egui::Event::PointerButton {
+                pos: position,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        };
+        asked = frame_with_cancel(&ctx, &mut view, events, true, boot)
+            .1
+            .or(asked);
+    }
+    assert!(matches!(asked, Some(CoreAction::CancelRun(run)) if run == "waiting"));
 }
