@@ -447,6 +447,49 @@ pub struct RunArtifacts {
     pub core_dump: Option<PathBuf>,
     pub core_state: RunArtifactState,
     pub issues: Vec<String>,
+    /// The user deleted the run's captures. Older releases ignore this field
+    /// and read the unchanged state and the now-empty capture list.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub network_deleted: bool,
+    /// The user deleted the run's core. Its state reads as disabled to older
+    /// releases, which list no core for the run.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub core_deleted: bool,
+}
+
+impl RunArtifacts {
+    /// What the capture state reads as: a deleted capture says so.
+    pub fn network_label(&self) -> &'static str {
+        if self.network_deleted {
+            "Deleted"
+        } else {
+            artifact_state_label(self.network_state)
+        }
+    }
+
+    /// What the core state reads as: a deleted core says so.
+    pub fn core_label(&self) -> &'static str {
+        if self.core_deleted {
+            "Deleted"
+        } else {
+            artifact_state_label(self.core_state)
+        }
+    }
+}
+
+fn artifact_state_label(state: RunArtifactState) -> &'static str {
+    match state {
+        RunArtifactState::Disabled => "Disabled",
+        RunArtifactState::WaitingForRootExit => "Waiting for root process exit",
+        RunArtifactState::WaitingForTreeExit => "Waiting for process tree exit",
+        RunArtifactState::Recording => "Recording",
+        RunArtifactState::Queued => "Queued",
+        RunArtifactState::InProgress => "Acquiring",
+        RunArtifactState::Complete => "Complete",
+        RunArtifactState::Partial => "Partial capture",
+        RunArtifactState::Interrupted => "Interrupted",
+        RunArtifactState::Failed => "Failed",
+    }
 }
 
 /// A nonfatal native-process core request; PID alone never selects its owner.
@@ -564,8 +607,6 @@ pub enum RunArtifactState {
     Partial,
     Interrupted,
     Failed,
-    /// The user deleted the evidence after it was recorded.
-    Deleted,
 }
 
 impl RunArtifactState {
