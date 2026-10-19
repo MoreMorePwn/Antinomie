@@ -23,6 +23,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod host_file;
 mod sandbox_run;
 mod specimen_publication;
 mod worker_exe;
