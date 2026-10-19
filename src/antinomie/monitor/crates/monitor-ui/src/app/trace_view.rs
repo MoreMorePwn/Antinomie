@@ -192,7 +192,7 @@ impl MonitorApp {
             crate::query::filter_edit(
                 ui,
                 &mut self.filter,
-                "Filter syscall rows",
+                "syscall == openat",
                 filter_width,
                 crate::query::FilterScope::Syscall,
             )

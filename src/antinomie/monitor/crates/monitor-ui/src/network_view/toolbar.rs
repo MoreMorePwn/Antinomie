@@ -67,30 +67,29 @@ impl NetworkView {
             let width = ui.available_width().max(180.0);
             ui.add(
                 egui::TextEdit::singleline(&mut self.filter)
-                    .hint_text(if self.display_index.is_some() { "Quick search on this page" } else { "Quick search loaded packets" })
+                    .hint_text(crate::theme::hint_text("filter e.g. port 443"))
                     .desired_width(width),
             ).on_hover_text("Native quick search: port N, ip ADDRESS, ADDRESS:PORT, proto NAME, or column text. Quick search affects only the loaded page; use the display filter below for the whole capture.");
         });
         let registry = self.display_worker.as_ref().map(PacketFilterWorker::fields);
         let mut edited = false;
         ui.horizontal(|ui| {
-            ui.label("Display filter");
             let width = ui.available_width().max(100.0);
             match &registry {
                 Some(FieldRegistry::Ready(fields)) => {
-                    ui.data_mut(|data| data.insert_temp(ui.id().with(("filter-edit", "Wireshark expression for the whole capture")).with("history"), self.display_history.clone()));
+                    ui.data_mut(|data| data.insert_temp(ui.id().with(("filter-edit", "tcp.port == 443")).with("history"), self.display_history.clone()));
                     let schema = fields.iter().map(|field| crate::query::FieldSpec {
                         name: &field.name,
                         kind: &field.kind,
                         detail: &field.description,
                     });
                     edited = crate::query::filter_edit_packet_field_iter(
-                        ui, &mut self.display_filter, "Wireshark expression for the whole capture", width, schema, &[],
+                        ui, &mut self.display_filter, "tcp.port == 443", width, schema, &[],
                     ).on_hover_text("Evaluated by installed TShark with two-pass Wireshark display-filter semantics. Field suggestions come from that installation. Example: tcp.port in {80, 443} && ip.addr == 10.0.2.15").changed();
                 }
                 _ => {
                     ui.add_enabled(false, egui::TextEdit::singleline(&mut self.display_filter)
-                        .hint_text("Install tshark to enable display filters").desired_width(width));
+                        .hint_text(crate::theme::hint_text("filter e.g. tcp.port == 443 (needs tshark)")).desired_width(width));
                 }
             }
         });
@@ -134,7 +133,7 @@ impl NetworkView {
                 ui.data_mut(|data| {
                     data.insert_temp(
                         ui.id()
-                            .with(("filter-edit", "Filter capture name, tags and metadata"))
+                            .with(("filter-edit", "name contains boot"))
                             .with("history"),
                         self.record_history.clone(),
                     )
@@ -142,7 +141,7 @@ impl NetworkView {
                 crate::query::filter_edit_fields(
                     ui,
                     &mut self.record_filter,
-                    "Filter capture name, tags and metadata",
+                    "name contains boot",
                     ui.available_width(),
                     &fields,
                     &tags,

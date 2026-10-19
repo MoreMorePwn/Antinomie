@@ -600,17 +600,17 @@ impl Model {
             ui.add(
                 egui::TextEdit::singleline(&mut self.group_name)
                     .desired_width(140.0)
-                    .hint_text("Group name"),
+                    .hint_text(crate::theme::hint_text("Group name")),
             );
             ui.add(
                 egui::TextEdit::singleline(&mut self.tags_text)
                     .desired_width(140.0)
-                    .hint_text("Tags, comma separated"),
+                    .hint_text(crate::theme::hint_text("Tags, comma separated")),
             );
             ui.add(
                 egui::TextEdit::singleline(&mut self.import_path)
                     .desired_width(ui.available_width().min(280.0))
-                    .hint_text("File or folder"),
+                    .hint_text(crate::theme::hint_text("File or folder")),
             );
             if ui.button("Import").clicked() {
                 let dir = data_dir.to_path_buf();
@@ -727,7 +727,7 @@ impl Model {
         let response = ui.add(
             egui::TextEdit::singleline(&mut self.filter)
                 .desired_width(ui.available_width())
-                .hint_text("Filter by id, name, source, tag, severity"),
+                .hint_text(crate::theme::hint_text("filter e.g. credential")),
         );
         if response.changed() || self.applied != self.filter {
             self.apply_filter();
@@ -888,7 +888,7 @@ impl Model {
                         ui.add(
                             egui::TextEdit::singleline(&mut detection.sigma_python)
                                 .desired_width(ui.available_width())
-                                .hint_text("Empty: Antinomie's Sigma tool"),
+                                .hint_text(crate::theme::hint_text("Empty: Antinomie's Sigma tool")),
                         );
                     }
                     _ => {}

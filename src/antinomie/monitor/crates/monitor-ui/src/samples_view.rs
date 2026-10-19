@@ -862,10 +862,10 @@ impl SamplesView {
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.key)
                     .password(true)
-                    .hint_text(match self.source {
+                    .hint_text(crate::theme::hint_text(match self.source {
                         Source::MalwareBazaar => "free key from abuse.ch",
                         Source::MalShare => "free key from malshare.com",
-                    })
+                    }))
                     .margin(theme::TEXT_EDIT_MARGIN)
                     .desired_width(340.0),
             );
@@ -982,7 +982,7 @@ impl SamplesView {
                 let edit = ui.add_sized(
                     egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
                     egui::TextEdit::singleline(&mut self.text)
-                        .hint_text(format!(
+                        .hint_text(crate::theme::hint_text(format!(
                             "{}  {}",
                             egui_phosphor::regular::MAGNIFYING_GLASS,
                             match self.source {
@@ -991,7 +991,7 @@ impl SamplesView {
                                 Source::MalShare =>
                                     "Hash, file type (elf, pe32) or a word in file names and sources",
                             }
-                        ))
+                        )))
                         .margin(theme::TEXT_EDIT_MARGIN),
                 );
                 if ready
@@ -1020,13 +1020,13 @@ impl SamplesView {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.range_start)
                         .desired_width(120.0)
-                        .hint_text("YYYY-MM-DD"),
+                        .hint_text(crate::theme::hint_text("YYYY-MM-DD")),
                 );
                 ui.label("through");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.range_end)
                         .desired_width(120.0)
-                        .hint_text("YYYY-MM-DD"),
+                        .hint_text(crate::theme::hint_text("YYYY-MM-DD")),
                 );
                 ui.checkbox(&mut self.offline, "Offline");
                 if ui
@@ -1194,7 +1194,7 @@ impl SamplesView {
         let compiled = query::table_filter(
             ui,
             "sample-records",
-            "Filter catalog fields",
+            "sample.family == Emotet",
             SAMPLE_FIELDS,
             &[],
         );

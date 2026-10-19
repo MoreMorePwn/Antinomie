@@ -395,16 +395,14 @@ fn results(
         }
     }
     ui.horizontal(|ui| {
-        let label = ui.label("Search");
         crate::query::filter_edit_fields(
             ui,
             &mut view.query,
-            "Filter retained rows",
+            "value contains http",
             ui.available_width(),
             &super::listing_view::listing_fields(kind),
             &record_tags,
-        )
-        .labelled_by(label.id);
+        );
     });
     if let Some(error) = &view.query_error {
         crate::activity::error(ui, error);

@@ -92,7 +92,7 @@ impl MonitorApp {
         crate::query::filter_edit_fields(
             ui,
             &mut self.run_query,
-            "Filter runs: pid == 123 && analysis.available",
+            "process.exe contains \"sample\" && run.has_static",
             ui.available_width(),
             &fields,
             &[],
@@ -122,7 +122,7 @@ impl MonitorApp {
                 .any(|run| &run.id == id && run.vm_id == vm_id)
         });
         let unfiltered_count = runs.len();
-        let draft = crate::query::compile_table(&self.run_query, &fields);
+        let draft = crate::run_filter::compile(&self.run_query, &fields);
         if let Some(error) = draft.error.as_ref() {
             self.run_query_error = Some(error.clone());
             crate::activity::error(ui, format!("{error} · showing last valid filter"));
@@ -131,14 +131,19 @@ impl MonitorApp {
             self.run_query_error = None;
             crate::query::remember_valid_filter(ui, &self.run_query);
         }
-        let compiled = crate::query::compile_table(&self.applied_run_query, &fields);
+        let compiled = crate::run_filter::compile(&self.applied_run_query, &fields);
         // An empty filter keeps every run without building its filter row.
         if !compiled.keeps_everything() {
             crate::run_filter::refresh_facts(ui, &runs);
             let mut kept = (*runs).clone();
             kept.retain(|run| {
                 let annotation = crate::evidence::annotation(ui, &run.directory);
-                let mut row = crate::run_filter::row(run, annotation.as_ref(), run_status(run));
+                let mut row = crate::run_filter::row(
+                    run,
+                    annotation.as_ref(),
+                    run_status(run),
+                    root_exit(run),
+                );
                 crate::run_filter::append_facts(ui, run, &mut row);
                 compiled.keep_table(&row)
             });
@@ -302,7 +307,7 @@ impl MonitorApp {
                             response.context_menu(|ui| {
                                 crate::evidence::menu(ui, &run.directory);
                                 let annotation = crate::evidence::annotation(ui, &run.directory);
-                                for (field, value) in crate::run_filter::row(run, annotation.as_ref(), run_status(run)) {
+                                for (field, value) in crate::run_filter::row(run, annotation.as_ref(), run_status(run), root_exit(run)) {
                                     crate::query::value_menu(ui, field, &value, &mut self.run_query);
                                 }
                             });
@@ -325,10 +330,12 @@ impl MonitorApp {
         }) {
             self.reopen(run);
         }
+        // A click or arrow key only selects the run; a double click opens it.
         if let Some((id, open)) = inspect {
-            let _ = open;
             self.select_run(Some(id));
-            self.focus_panel = Some(Panel::Triage);
+            if open {
+                self.focus_panel = Some(Panel::Triage);
+            }
         }
         if runs.is_empty() {
             ui.colored_label(theme::muted(), "No retained runs for this VM");
@@ -360,54 +367,11 @@ impl MonitorApp {
             ui.colored_label(theme::muted(), "Select a run in Run History.");
             return;
         };
+        // A warning or note about the recording shows only when there is one.
         crate::run_recording::show(ui, &run);
-        ui.horizontal_wrapped(|ui| {
-            if run.analysis.is_some() && ui.button("Open static analysis").clicked() {
-                self.selected_analysis = None;
-                self.focus_panel = Some(Panel::StaticAnalysis);
-            }
-        });
-        self.run_artifacts_view(ui, &run);
         self.run_tree_view(ui, &run);
-        egui::CollapsingHeader::new("Launch details")
-            .default_open(false)
-            .show(ui, |ui| {
-                egui::ScrollArea::both()
-                    .id_salt("launch_metadata")
-                    .show(ui, |ui| {
-                        egui::Grid::new("run_metadata")
-                            .num_columns(2)
-                            .show(ui, |ui| {
-                                for (label, value) in [
-                                    ("Executable", run.request.path.clone()),
-                                    ("Arguments", format!("{:?}", run.request.args)),
-                                    ("Working directory", run.request.cwd.clone()),
-                                    ("Environment", run.request.env.join("\n")),
-                                    ("Run in", run.request.run_in.label().to_owned()),
-                                    (
-                                        "UID / GID",
-                                        format!("{} / {}", run.request.uid, run.request.gid),
-                                    ),
-                                    ("Run", run.id.clone()),
-                                    ("Boot", run.boot_id.clone()),
-                                    (
-                                        "Session / root task / PID",
-                                        format!(
-                                            "{} / {} / {}",
-                                            run.session_id, run.root_task_cookie, run.pid
-                                        ),
-                                    ),
-                                    ("Tree", execution_detail(&run)),
-                                    ("Root exit", root_exit(&run)),
-                                    ("Recording", run.directory.display().to_string()),
-                                ] {
-                                    ui.label(label);
-                                    ui.add(egui::Label::new(value).selectable(true));
-                                    ui.end_row();
-                                }
-                            });
-                    });
-            });
+        ui.add_space(6.0);
+        enabled_features(ui, &run);
     }
 
     fn capture_detail(&mut self, ui: &mut egui::Ui) {
@@ -452,112 +416,6 @@ impl MonitorApp {
         if let Some(selection) = selection {
             self.select_process(selection);
             self.focus_trace();
-        }
-    }
-
-    fn run_artifacts_view(&mut self, ui: &mut egui::Ui, run: &RunSummary) {
-        let manual: Vec<_> = self
-            .snapshot
-            .process_cores
-            .iter()
-            .filter(|capture| {
-                capture.vm_id == run.vm_id
-                    && capture.boot_id == run.boot_id
-                    && capture.source_run_id.as_deref() == Some(run.id.as_str())
-            })
-            .cloned()
-            .collect();
-        if !manual.is_empty() {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(format!("Recent manual process cores: {}", manual.len()));
-                for (index, capture) in manual.into_iter().enumerate() {
-                    if ui.link(format!("Open manual core {}", index + 1)).clicked() {
-                        self.core_view.select_manual(capture);
-                        self.focus_panel = Some(Panel::CoreDump);
-                    }
-                }
-            });
-        }
-        let cache_id = egui::Id::new(("run-artifacts", &run.directory));
-        let cached = ui.ctx().data_mut(|data| {
-            type Cached = (
-                Instant,
-                Result<Option<antinomie_monitor_core::RunArtifacts>, String>,
-            );
-            let cached = data.get_temp_mut_or_insert_with::<Cached>(cache_id, || {
-                (
-                    Instant::now(),
-                    antinomie_monitor_core::RunArtifacts::load(&run.directory),
-                )
-            });
-            if cached.0.elapsed() >= Duration::from_secs(1) {
-                *cached = (
-                    Instant::now(),
-                    antinomie_monitor_core::RunArtifacts::load(&run.directory),
-                );
-            }
-            cached.1.clone()
-        });
-        match cached {
-            Ok(Some(artifacts))
-                if artifacts.run_id == run.id
-                    && artifacts.vm_id == run.vm_id
-                    && artifacts.boot_id == run.boot_id =>
-            {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(format!(
-                        "Network: {:?} · Post-exit RAM: {:?} · Process core: {}",
-                        artifacts.network_state,
-                        artifacts.memory_state,
-                        core_capture_status(artifacts.core_state)
-                    ));
-                    for (index, file) in artifacts.network_captures.iter().enumerate() {
-                        if ui.link(format!("Network segment {}", index + 1)).clicked() {
-                            self.network_view.open(Some(file.clone()));
-                            self.focus_panel = Some(Panel::Network);
-                        }
-                    }
-                    if let Some(directory) = &artifacts.memory_dump {
-                        if ui.link("Open memory dump").clicked() {
-                            self.memory_view.open_dump(directory);
-                            self.focus_panel = Some(Panel::Memory);
-                        }
-                    }
-                    if let Some(file) = &artifacts.core_dump {
-                        if ui.link("Open process core").clicked() {
-                            self.core_view.open(file);
-                            self.focus_panel = Some(Panel::CoreDump);
-                        }
-                        if ui.link("Open core directory").clicked() {
-                            if let Some(directory) = file.parent() {
-                                open_directory(directory);
-                            }
-                        }
-                    }
-                    if matches!(
-                        artifacts.core_state,
-                        antinomie_monitor_core::RunArtifactState::WaitingForRootExit
-                            | antinomie_monitor_core::RunArtifactState::InProgress
-                    ) && self.snapshot.active_vm.as_deref() == Some(run.vm_id.as_str())
-                        && self.snapshot.boot_id.as_deref() == Some(run.boot_id.as_str())
-                        && ui.button("Cancel process core").clicked()
-                    {
-                        self.send(Command::CancelProcessCore {
-                            run_id: run.id.clone(),
-                        });
-                    }
-                });
-                for issue in &artifacts.issues {
-                    crate::activity::warning(ui, issue);
-                }
-            }
-            Ok(Some(_)) => {
-                crate::activity::warning(ui, "Artifact metadata identity does not match this run");
-            }
-            Ok(None) => {}
-            Err(error) => {
-                crate::activity::warning(ui, error);
-            }
         }
     }
 
@@ -921,4 +779,39 @@ pub(super) fn run_in_live_session(snapshot: &Snapshot, run: &RunSummary) -> bool
         && snapshot.runs.iter().any(|current| {
             current.id == run.id && current.vm_id == run.vm_id && current.boot_id == run.boot_id
         })
+}
+
+/// What the run was started with: the static analyses and the capture
+/// options that were switched on, in the order the launch dialog lists them.
+fn enabled_features(ui: &mut egui::Ui, run: &RunSummary) {
+    let request = &run.request;
+    let mut features = Vec::new();
+    if request.analysis.enabled {
+        features.extend(
+            request
+                .analysis
+                .checks
+                .iter()
+                .map(|kind| format!("Static analysis: {}", kind.label())),
+        );
+    }
+    for (on, label) in [
+        (request.memory_dump_on_exit, "Memory dump on exit"),
+        (request.core_dump_on_exit, "Core dump on exit"),
+        (request.capture_network, "Network capture"),
+    ] {
+        if on {
+            features.push(label.to_owned());
+        }
+    }
+    ui.strong("Analysis enabled");
+    if features.is_empty() {
+        ui.colored_label(
+            theme::muted(),
+            "No analysis features were enabled for this run.",
+        );
+    }
+    for feature in &features {
+        ui.label(format!("{}  {feature}", egui_phosphor::regular::CHECK));
+    }
 }

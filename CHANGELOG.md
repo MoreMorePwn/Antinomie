@@ -6,6 +6,31 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Filter suggestions no longer scroll back up.** In a filter box the
+  suggestion list jumped back to the highlighted entry on every frame, so
+  scrolling it with the wheel or scrollbar was undone. It now follows the
+  highlight only when the highlight moves or the suggestions change.
+- **Run History opens Triage on a double click.** A single click, or an arrow
+  key, only selects the run and keeps the top run dropdown and the other panels
+  in sync; a double click selects it and opens Triage.
+- **Run History details show the process tree and the analysis that was on.**
+  The details area is the run's recorded process tree, then the list of enabled
+  analysis features (static analyses, memory dump, core dump and network
+  capture), plus the recording warning when saving stopped. The launch details,
+  artifact links and static-analysis button there are gone.
+- **Filter boxes say `filter e.g. ...`.** Every filter box shows a valid
+  example of its own syntax as a placeholder in a grayer hint color, and the
+  labels that repeated it are gone.
+- **Run History filter has one name per value.** Completion, the Filter guide
+  and the right-click menu offer only `entry.id`, `entry.name`, `tag`,
+  `process.exe`, `process.argv`, `process.cwd`, `process.pid`, `process.cookie`,
+  `process.uid`, `process.gid`, `run.state`, `run.error`, `run.started_ms` and
+  `run.has_static`. The old names (`id`, `path`, `pid`, `status`, `state`,
+  `run.tree_state`, ...) still work in saved filters. `run.state` uses the State
+  column's words (and still accepts `Finalized`, `TerminalClosed`,
+  `StopRequested`), and `run.root_exit` uses the Root exit column's words, such
+  as `Exit 0`. `args` now matches one argument at a time, like `process.argv`.
+
 - **Browse every saved async observation of a call.** Heavy io_uring runs no
   longer lose entry, exit or task-end facts when thousands of completions land on
   one syscall. A call row previews its first 256 observations, says how many were

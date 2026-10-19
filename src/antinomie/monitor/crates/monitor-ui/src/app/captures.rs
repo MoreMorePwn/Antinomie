@@ -115,7 +115,7 @@ impl ProcessPicker {
                     crate::query::filter_edit(
                         ui,
                         &mut self.filter,
-                        "Filter process fields",
+                        "name == sshd",
                         ui.available_width(),
                         crate::query::FilterScope::Table(PROCESS_FIELDS),
                     );
@@ -287,7 +287,7 @@ pub(super) fn history(
         .flat_map(|annotation| annotation.tags.iter().cloned())
         .collect();
     let filter =
-        crate::query::table_filter(ui, "capture-history", "Filter captures", &fields, &tags);
+        crate::query::table_filter(ui, "capture-history", "name contains boot", &fields, &tags);
     let mut shown: Vec<_> = captures
         .iter()
         .filter(|capture| filter.keep_table(&capture_row(ui, capture)))

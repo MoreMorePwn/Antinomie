@@ -650,3 +650,116 @@ fn native_filter_autocomplete() {
     )
     .unwrap();
 }
+
+/// Runs one filter-editor frame at a fixed time and returns the completion
+/// list's scroll offset (`None` while no popup is open).
+fn filter_frame(ctx: &egui::Context, text: &mut String, events: Vec<egui::Event>) -> Option<f32> {
+    let mut raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(600.0, 600.0),
+        )),
+        events,
+        ..Default::default()
+    };
+    let frame = ctx.data_mut(|data| {
+        let frame: &mut u32 = data.get_temp_mut_or_default(egui::Id::new("test-frame"));
+        *frame += 1;
+        *frame
+    });
+    raw.time = Some(f64::from(frame) * 0.05);
+    let mut offset = None;
+    let _ = ctx.run(raw, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let response = filter_edit(ui, text, "Filter", 300.0, FilterScope::Syscall);
+            if !response.has_focus() {
+                response.request_focus();
+            }
+            let id = ui.id().with(("filter-edit", "Filter")).with("offset");
+            offset = ui.data(|data| data.get_temp::<f32>(id));
+        });
+    });
+    offset
+}
+
+#[test]
+fn completion_list_keeps_the_scroll_position_the_user_chose() {
+    let ctx = egui::Context::default();
+    let mut text = String::new();
+    for _ in 0..3 {
+        filter_frame(&ctx, &mut text, Vec::new());
+    }
+    // Hover the popup (just below the editor) and wheel down.
+    let wheel = vec![
+        egui::Event::PointerMoved(egui::pos2(60.0, 80.0)),
+        egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -400.0),
+            modifiers: egui::Modifiers::NONE,
+        },
+    ];
+    filter_frame(&ctx, &mut text, wheel);
+    let mut settled = 0.0;
+    for _ in 0..20 {
+        settled = filter_frame(&ctx, &mut text, Vec::new()).expect("popup is open");
+    }
+    assert!(settled > 5.0, "wheel scrolled the list down: {settled}");
+    for _ in 0..10 {
+        let offset = filter_frame(&ctx, &mut text, Vec::new()).expect("popup is open");
+        assert_eq!(offset, settled, "list jumped back by itself");
+    }
+}
+
+/// The texts and colors of one frame's text shapes.
+fn shown_texts(output: &egui::FullOutput) -> Vec<(String, egui::Color32)> {
+    fn collect(shape: &egui::Shape, texts: &mut Vec<(String, egui::Color32)>) {
+        match shape {
+            egui::Shape::Text(text) => {
+                let color = text
+                    .galley
+                    .job
+                    .sections
+                    .first()
+                    .map_or(egui::Color32::PLACEHOLDER, |section| section.format.color);
+                texts.push((text.galley.text().to_owned(), color));
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, texts)),
+            _ => {}
+        }
+    }
+    let mut texts = Vec::new();
+    for clipped in &output.shapes {
+        collect(&clipped.shape, &mut texts);
+    }
+    texts
+}
+
+#[test]
+fn empty_filter_boxes_show_a_muted_filter_e_g_placeholder() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let mut text = String::new();
+    let mut table = String::new();
+    let output = ctx.run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            filter_edit(
+                ui,
+                &mut text,
+                "syscall == openat",
+                300.0,
+                FilterScope::Syscall,
+            );
+            filter_edit_fields(ui, &mut table, "name == nginx", 300.0, TABLE_FIELDS, &[]);
+        });
+    });
+    let shown = shown_texts(&output);
+    for placeholder in ["filter e.g. syscall == openat", "filter e.g. name == nginx"] {
+        let (_, color) = shown
+            .iter()
+            .find(|(text, _)| text == placeholder)
+            .unwrap_or_else(|| panic!("{placeholder} missing from {shown:?}"));
+        assert_eq!(*color, crate::theme::hint());
+        assert_ne!(*color, crate::theme::muted());
+    }
+    assert!(compile_note("syscall == openat").error.is_none());
+}

@@ -20,6 +20,10 @@ pub(crate) fn filter_edit_with(
     scope: FilterScope,
     known_values: &[String],
 ) -> egui::Response {
+    #[cfg(test)]
+    if let FilterScope::Table(fields) = scope {
+        assert_example_compiles(hint, fields);
+    }
     filter_edit_fields(ui, text, hint, width, &fields_for(scope), known_values)
 }
 
@@ -31,7 +35,20 @@ pub(crate) fn filter_edit_fields(
     fields: &[FieldSpec<'_>],
     known_values: &[String],
 ) -> egui::Response {
+    #[cfg(test)]
+    assert_example_compiles(hint, fields);
     filter_edit_field_iter(ui, text, hint, width, fields.iter().copied(), known_values)
+}
+
+/// A placeholder example must be a filter its own box accepts.
+#[cfg(test)]
+pub(crate) fn assert_example_compiles(example: &str, fields: &[FieldSpec<'_>]) {
+    let compiled = compile_table(example, fields);
+    assert!(
+        compiled.error.is_none() && !compiled.keeps_everything(),
+        "placeholder example {example:?} is not a valid filter: {:?}",
+        compiled.error
+    );
 }
 
 /// Borrow large external field registries without allocating a per-frame adapter vector.
@@ -121,7 +138,7 @@ fn filter_edit_iter<'a>(
         }
     }
     let mut output = egui::TextEdit::singleline(text)
-        .hint_text(hint)
+        .hint_text(crate::theme::hint_text(format!("filter e.g. {hint}")))
         .desired_width(width)
         .margin(crate::theme::TEXT_EDIT_MARGIN)
         .show(ui);
@@ -173,10 +190,16 @@ fn filter_edit_iter<'a>(
                 memory.close_popup();
             }
         });
+        ui.data_mut(|data| data.remove_temp::<Option<usize>>(id.with("scrolled")));
     } else {
         ui.memory_mut(|memory| memory.open_popup(popup_id));
         let shown = items.clone();
         let mut picked = None;
+        // Keep the highlighted entry in view only when it moves (arrow keys
+        // or new items); every frame would undo the wheel and scrollbar.
+        let scrolled_id = id.with("scrolled");
+        let scrolled = ui.data(|data| data.get_temp::<Option<usize>>(scrolled_id));
+        let follow = changed || scrolled != Some(Some(selected));
         egui::popup::popup_below_widget(
             ui,
             popup_id,
@@ -188,14 +211,14 @@ fn filter_edit_iter<'a>(
                     .clamp(80.0, 560.0);
                 ui.set_min_width(popup_width);
                 ui.set_max_width(popup_width);
-                egui::ScrollArea::vertical()
+                let scroll = egui::ScrollArea::vertical()
                     .max_height(240.0)
                     .show(ui, |ui| {
                         for (index, item) in shown.iter().enumerate() {
                             let label = format!("{}  {}", item.insert.trim(), item.detail);
                             let response =
                                 ui.add(egui::Button::new(label).selected(index == selected).wrap());
-                            if index == selected {
+                            if index == selected && follow {
                                 response.scroll_to_me(Some(egui::Align::Center));
                             }
                             if response.clicked() {
@@ -203,8 +226,13 @@ fn filter_edit_iter<'a>(
                             }
                         }
                     });
+                #[cfg(test)]
+                ui.data_mut(|data| data.insert_temp(id.with("offset"), scroll.state.offset.y));
+                #[cfg(not(test))]
+                let _ = scroll;
             },
         );
+        ui.data_mut(|data| data.insert_temp(scrolled_id, Some(selected)));
         if let Some(item) = picked {
             let byte = apply_completion(text, &item);
             let caret = char_index(text, byte);

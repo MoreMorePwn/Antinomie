@@ -17,6 +17,8 @@ pub struct Palette {
     pub line: Color32,
     pub text: Color32,
     pub muted: Color32,
+    /// Placeholder text in empty inputs: grayer than `muted`, still legible.
+    pub hint: Color32,
     pub accent: Color32,
     pub heading: Color32,
     pub primary: Color32,
@@ -48,6 +50,7 @@ pub const DARK: Palette = Palette {
     line: Color32::from_rgb(58, 64, 78),
     text: Color32::from_rgb(222, 226, 234),
     muted: Color32::from_rgb(146, 156, 174),
+    hint: Color32::from_rgb(110, 117, 131),
     accent: Color32::from_rgb(110, 176, 255),
     heading: Color32::from_rgb(130, 196, 255),
     primary: Color32::from_rgb(46, 110, 196),
@@ -81,6 +84,7 @@ pub const LIGHT: Palette = Palette {
     line: Color32::from_rgb(200, 207, 220),
     text: Color32::from_rgb(28, 32, 40),
     muted: Color32::from_rgb(96, 106, 124),
+    hint: Color32::from_rgb(140, 147, 160),
     accent: Color32::from_rgb(20, 104, 204),
     heading: Color32::from_rgb(18, 88, 176),
     primary: Color32::from_rgb(28, 108, 208),
@@ -138,6 +142,14 @@ pub fn text() -> Color32 {
 }
 pub fn muted() -> Color32 {
     palette().muted
+}
+/// `text` styled as the placeholder of an empty input.
+pub fn hint_text(text: impl Into<String>) -> egui::RichText {
+    egui::RichText::new(text).color(hint())
+}
+/// Placeholder (hint) text color of an empty input.
+pub fn hint() -> Color32 {
+    palette().hint
 }
 /// Links, focus and accents.
 pub fn blue() -> Color32 {

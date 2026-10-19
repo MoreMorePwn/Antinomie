@@ -19,7 +19,7 @@ pub(crate) fn guide(ctx: &egui::Context) {
             let mut query = ui.ctx().data(|data| data.get_temp::<String>(query_id).unwrap_or_default());
             ui.add(
                 egui::TextEdit::singleline(&mut query)
-                    .hint_text("Search fields, operators, schema argument names, syscall names")
+                    .hint_text(crate::theme::hint_text("Search fields, operators, schema argument names, syscall names"))
                     .desired_width(f32::INFINITY),
             );
             let needle = query.to_lowercase();

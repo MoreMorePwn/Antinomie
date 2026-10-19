@@ -1064,7 +1064,8 @@ impl View {
                 _ => "No retained matches. Coverage is incomplete or unavailable.",
             });
         }
-        let filter = query::table_filter(ui, TABLES[index], "Filter rule matches", FIELDS, &[]);
+        let filter =
+            query::table_filter(ui, TABLES[index], "finding.severity == high", FIELDS, &[]);
         let draft_id = ui.id().with(("table-filter", TABLES[index]));
         let draft = ui
             .data(|data| data.get_temp::<String>(draft_id))

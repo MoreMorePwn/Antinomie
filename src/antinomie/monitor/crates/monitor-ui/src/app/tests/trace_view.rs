@@ -179,8 +179,8 @@ fn clicking_trace_cell_text_selects_its_invocation() {
     }
 }
 
-#[test]
-fn double_click_history_text_opens_triage_and_metadata_stays_in_panel() {
+/// Clicks the saved run's row `clicks` times and returns the app.
+fn click_history_row(clicks: usize) -> MonitorApp {
     let ctx = egui::Context::default();
     theme::install(&ctx);
     let mut app = app();
@@ -188,7 +188,6 @@ fn double_click_history_text_opens_triage_and_metadata_stays_in_panel() {
     let mut saved = run("saved");
     saved.state = RunState::Finished;
     saved.request.path = "/usr/bin/history-row".into();
-    saved.request.env = vec!["LONG=value with spaces".into()];
     app.history = vec![saved];
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 500.0));
     let draw = |app: &mut MonitorApp, events: Vec<egui::Event>, time: f64| {
@@ -218,34 +217,98 @@ fn double_click_history_text_opens_triage_and_metadata_stays_in_panel() {
         .1
         .center();
     let mut time = 0.04;
-    let mut output = output;
-    for pressed in [true, false, true, false] {
-        output = draw(
-            &mut app,
-            vec![
-                egui::Event::PointerMoved(pos),
-                egui::Event::PointerButton {
-                    pos,
-                    button: egui::PointerButton::Primary,
-                    pressed,
-                    modifiers: egui::Modifiers::NONE,
-                },
-            ],
-            time,
-        );
-        time += 0.05;
+    for _ in 0..clicks {
+        for pressed in [true, false] {
+            let _ = draw(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                time,
+            );
+            time += 0.05;
+        }
     }
+    app
+}
+
+#[test]
+fn single_click_in_run_history_selects_the_run_without_opening_triage() {
+    let app = click_history_row(1);
+    assert_eq!(app.selected_run.as_deref(), Some("saved"));
+    assert_ne!(app.focus_panel, Some(Panel::Triage));
+}
+
+#[test]
+fn double_click_in_run_history_selects_the_run_and_opens_triage() {
+    let app = click_history_row(2);
     assert_eq!(app.selected_run.as_deref(), Some("saved"));
     assert_eq!(app.focus_panel, Some(Panel::Triage));
     assert!(matches!(
         app.pending_archive,
         Some(Request::Invocations { .. })
     ));
-    let metadata = texts(&output)
-        .into_iter()
-        .find(|(label, _)| label == "Launch details")
-        .expect("expandable launch details visible below history rows");
-    assert!(metadata.1.bottom() < screen.bottom());
+}
+
+#[test]
+fn run_history_details_show_the_process_tree_then_the_enabled_analysis_only() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut app = app();
+    app.selected = Some("vm".into());
+    let mut saved = run("saved");
+    saved.state = RunState::Finished;
+    saved.request.capture_network = true;
+    saved.request.memory_dump_on_exit = true;
+    saved.request.analysis.enabled = true;
+    saved.request.analysis.checks = vec![antinomie_monitor_core::AnalysisKind::Capabilities];
+    app.history = vec![saved];
+    app.select_run(Some("saved".into()));
+    app.run_tree = Some(("saved".into(), Ok((Vec::new(), Vec::new()))));
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 700.0),
+            )),
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| app.history_detail(ui));
+        },
+    );
+    let shown = texts(&output);
+    let top = |needle: &str| {
+        shown
+            .iter()
+            .find(|(label, _)| label.contains(needle))
+            .unwrap_or_else(|| panic!("{needle} missing from {shown:?}"))
+            .1
+            .top()
+    };
+    assert!(top("Recorded process tree") < top("Analysis enabled"));
+    assert!(top("Analysis enabled") < top("Static analysis: "));
+    top("Memory dump on exit");
+    top("Network capture");
+    assert!(!shown.iter().any(|(label, _)| label.contains("Core dump")));
+    for removed in [
+        "Launch details",
+        "Open static analysis",
+        "Network segment",
+        "Open memory dump",
+        "Process core",
+    ] {
+        assert!(
+            !shown.iter().any(|(label, _)| label.contains(removed)),
+            "{removed} should not be in the run details"
+        );
+    }
 }
 
 #[test]

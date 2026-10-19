@@ -199,6 +199,7 @@ impl CoreView {
         self.tools_dir = dir;
     }
 
+    #[cfg(test)]
     pub(crate) fn select_manual(&mut self, capture: ProcessCoreCapture) {
         let file = capture.file.clone();
         self.selected_directory = Some(capture.directory.clone());

@@ -418,7 +418,7 @@ impl BuildWizard {
         ui.add(
             egui::TextEdit::singleline(&mut options.proxy)
                 .desired_width(420.0)
-                .hint_text(RichText::new("http://user:password@host:port/").color(theme::muted())),
+                .hint_text(theme::hint_text("http://user:password@host:port/")),
         );
         ui.small("The proxy is used while building and is not kept in the image.");
         let mut probe = options.clone();
@@ -441,7 +441,7 @@ impl BuildWizard {
             ui.add(
                 egui::TextEdit::singleline(&mut self.options[self.profile].name)
                     .desired_width(320.0)
-                    .hint_text(&automatic),
+                    .hint_text(crate::theme::hint_text(&automatic)),
             );
         });
         ui.small("Shown in the base list; leave empty for the automatic name.");

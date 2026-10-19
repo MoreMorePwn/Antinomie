@@ -39,7 +39,7 @@ impl MemoryView {
                         ui.horizontal(|ui| {
                             ui.add(
                                 egui::TextEdit::singleline(&mut import.path)
-                                    .hint_text("/path/to/memory.raw")
+                                    .hint_text(crate::theme::hint_text("/path/to/memory.raw"))
                                     .font(egui::TextStyle::Monospace)
                                     .margin(theme::TEXT_EDIT_MARGIN)
                                     .desired_width(320.0),
