@@ -6,6 +6,28 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **Triage > File activity is split by what the program did to a file.** The
+  tabs are Opened, Created, Read, Written / resized, Deleted, Renamed / moved,
+  Executed, Attributes (chmod and chown, timestamps, extended attributes),
+  Metadata probed, Other (links, copies, executable or shared writable
+  mappings, directory listings, watches and locks) and Changed files, each with
+  a whole-run count. A call can sit in several tabs: an `open` with
+  `O_CREAT|O_TRUNC` that made the file is Opened, Created and Truncated.
+  Created says "(inferred)" when only a path not seen earlier in the run shows
+  the file is new (`O_EXCL`, `mkdir`, `mknod`, `memfd_create` and `O_TMPFILE`
+  prove it). Changed files now has a Lifecycle column telling what happened to
+  each file, such as "created (inferred) → written 3× → chmod +x → executed →
+  deleted", and keeps its original-to-final byte details. Every file row also
+  shows its result, a location class (persistence, credentials, system
+  binary/library, temp/staging, pseudo-fs, the sample itself, hidden) and how
+  the file was reached (by path, by descriptor, or an inherited or unknown
+  descriptor), and the table filter accepts `file.category`, `file.result`,
+  `file.errno`, `file.location`, `file.access_by`, `file.created_inferred`,
+  `file.mode`, `file.mode_flags`, `file.lifecycle` and `file.failed_attempts`.
+  Calls the kernel refused are no longer counted as changes or in the tab
+  counts and are hidden; "Show failed attempts" lists them. io_uring file
+  operations are not mapped into these tabs yet.
+
 - **A Getting started window walks a new user through the first setup.** It
   opens by itself the first time Antinomie starts with no VM and no base
   (once; "Don't show again" and finishing keep it closed), and Help >

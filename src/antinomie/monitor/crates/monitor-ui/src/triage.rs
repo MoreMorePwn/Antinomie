@@ -37,8 +37,13 @@ mod counts;
 mod descriptors;
 mod details;
 mod detection;
+mod file_category;
+#[cfg(test)]
+mod file_category_tests;
 mod file_content;
 mod file_events;
+mod file_location;
+mod file_tabs;
 mod file_visibility;
 mod files;
 mod findings;
@@ -65,8 +70,8 @@ mod traffic;
 #[cfg(test)]
 use self::traffic::*;
 use self::{
-    archive_scan::*, bpf_notes::*, descriptors::*, file_events::*, findings::*, pcap_scan::*,
-    process_tree::*, refresh::*, table::*,
+    archive_scan::*, bpf_notes::*, descriptors::*, file_category::FILE_FIELDS, file_events::*,
+    findings::*, pcap_scan::*, process_tree::*, refresh::*, table::*,
 };
 pub(crate) use network::AddressLookup;
 
@@ -88,9 +93,17 @@ enum ProcessTab {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum FileTab {
+pub(super) enum FileTab {
     Opened,
+    Created,
     Read,
+    Written,
+    Deleted,
+    Renamed,
+    Executed,
+    Attributes,
+    Probed,
+    Other,
     Changed,
 }
 
@@ -135,7 +148,7 @@ pub(crate) struct TriageView {
     refresh_seconds: u64,
     bpf_export_status: String,
     scan_request: ScanRequest,
-    filter_drafts: [String; 8],
+    filter_drafts: [String; SLOTS],
     packet_jump: Option<u64>,
     packet_capture: Option<std::path::PathBuf>,
     context_key: Option<String>,
@@ -345,10 +358,12 @@ impl TriageView {
         ui.horizontal_wrapped(|ui| {
             if self.section == Section::Files {
                 let visibility = &mut self.scan_request.file_visibility;
+                let failed = self.scan.as_ref().map_or(0, |scan| scan.counts.failed_attempts);
                 let changed = ui.checkbox(&mut visibility.hide_standard_io, "Hide stdin, stdout, stderr").changed()
-                    | ui.checkbox(&mut visibility.hide_libraries, "Hide library").changed();
+                    | ui.checkbox(&mut visibility.hide_libraries, "Hide library").changed()
+                    | ui.checkbox(&mut visibility.show_failed, format!("Show failed attempts ({failed})")).on_hover_text("Calls the kernel refused. They are not counted in the tab badges and do not count as changes.").changed();
                 if changed {
-                    for index in [1, 2, 5] { self.scan_request.offsets[index] = 0; }
+                    for index in file_tabs::file_slots() { self.scan_request.offsets[index] = 0; }
                     self.request_query_refresh();
                 }
             }
@@ -508,104 +523,6 @@ impl TriageView {
                 } else {
                     self.suspicious(ui, input.invocations)
                 }
-            }
-        }
-    }
-
-    fn files(&mut self, ui: &mut egui::Ui, input: &TriageInput<'_>) {
-        self.file_tabs(ui);
-        let index = match self.files {
-            FileTab::Opened => 1,
-            FileTab::Read => 5,
-            FileTab::Changed => 2,
-        };
-        let (retained, total) = self.scan.as_ref().map_or((0, 0), |scan| {
-            let (rows, omitted) = match self.files {
-                FileTab::Opened => (&scan.opened, scan.opened_omitted),
-                FileTab::Read => (&scan.read, scan.read_omitted),
-                FileTab::Changed => (&scan.changed, scan.changed_omitted),
-            };
-            (rows.len(), rows.len() as u64 + omitted)
-        });
-        self.query_controls(
-            ui,
-            index,
-            FILE_FIELDS,
-            "file.path contains \"/etc\"",
-            retained,
-            total,
-        );
-        let Some(scan) = &self.scan else {
-            theme::loading_weak(ui, "Indexing this run’s files…");
-            return;
-        };
-        let clock = scan.clock_anchor.or(input.clock_anchor);
-        match self.files {
-            FileTab::Opened => {
-                let rows: Vec<_> = scan
-                    .opened
-                    .iter()
-                    .map(|row| files::opened_row(row, clock))
-                    .collect();
-                table(
-                    ui,
-                    "triage-opened",
-                    &["Time", "Path", "Process (PID / TID)", "Result", "Evidence"],
-                    &rows,
-                );
-            }
-            FileTab::Read => {
-                let mut rows = scan.read.clone();
-                for row in &mut rows {
-                    row[0].text = crate::time_format::guest_ns(
-                        clock,
-                        files::number(&row[0].values, "event.time_ns"),
-                    );
-                }
-                table(
-                    ui,
-                    "triage-read",
-                    &[
-                        "Time",
-                        "Path",
-                        "Process (PID / TID)",
-                        "Transferred / content",
-                        "Result",
-                        "Evidence",
-                    ],
-                    &rows,
-                );
-            }
-            FileTab::Changed => {
-                egui::ScrollArea::horizontal()
-                    .id_salt("changed-file-columns")
-                    .show(ui, |ui| {
-                        ui.set_min_width(930.0);
-                        table_rows(
-                            ui,
-                            "triage-changed",
-                            &[
-                                "Time",
-                                "Path",
-                                "Process (PID / TID)",
-                                "Diff count",
-                                "Evidence",
-                            ],
-                            &scan.changed,
-                        );
-                    });
-                details::refresh(
-                    ui.ctx(),
-                    "triage-changed",
-                    &[
-                        "Time",
-                        "Path",
-                        "Process (PID / TID)",
-                        "Diff count",
-                        "Evidence",
-                    ],
-                    &scan.changed,
-                );
             }
         }
     }
@@ -777,6 +694,14 @@ impl TriageView {
             "triage-read",
             "triage-ips",
             "triage-hosts",
+            "triage-created",
+            "triage-written",
+            "triage-deleted",
+            "triage-renamed",
+            "triage-executed",
+            "triage-attributes",
+            "triage-probed",
+            "triage-other",
         ][index];
         if let Some(sort) = sorting::take_request(ui.ctx(), table_id) {
             self.scan_request.sorts[index] = sort;
@@ -977,60 +902,6 @@ const FINDING_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::tags("entry.tag", "Unavailable without a finding annotation"),
 ];
 
-const FILE_FIELDS: &[FieldSpec<'static>] = &[
-    FieldSpec::text(
-        "process.exe",
-        "Captured executable active at this file operation",
-    ),
-    FieldSpec::boolean(
-        "file.standard_io",
-        "Changed-file group contains only operations on stdin/stdout/stderr",
-    ),
-    FieldSpec::number(
-        "file.diff_count",
-        "Known differing bytes; gaps are separate",
-    ),
-    FieldSpec::boolean(
-        "file.complete",
-        "Original and final contents fully available",
-    ),
-    FieldSpec::number("file.read_size", "Successful read length"),
-    FieldSpec::text("file.content", "Captured transferred content preview"),
-    FieldSpec::text(
-        "file.path",
-        "Path as displayed; inferred names label their uncertainty",
-    ),
-    FieldSpec::text("file.old_path", "Captured old rename path"),
-    FieldSpec::text("file.new_path", "Captured new rename path"),
-    FieldSpec::number(
-        "file.fd",
-        "Observed descriptor; missing without success/provenance",
-    ),
-    FieldSpec::text("file.operation", "Observed syscall operation"),
-    FieldSpec::text("file.access", "Requested access/creation flags"),
-    FieldSpec::boolean(
-        "file.success",
-        "Observed syscall outcome; missing without exit",
-    ),
-    FieldSpec::number(
-        "file.written_size",
-        "Successful written octets, not requested length",
-    ),
-    FieldSpec::number(
-        "file.requested_size",
-        "Requested scalar write length in octets",
-    ),
-    FieldSpec::number("file.offset", "Captured pwrite offset in octets"),
-    FieldSpec::number("file.count", "One observed operation per evidence row"),
-    FieldSpec::number("process.pid", "Observed PID"),
-    FieldSpec::number("process.tid", "Observed TID"),
-    FieldSpec::number("process.cookie", "Stable task cookie"),
-    FieldSpec::number("event.id", "Original invocation ID"),
-    FieldSpec::number("stream.id", "Recorded stream identity"),
-    FieldSpec::number("event.time_ns", "Guest monotonic nanoseconds"),
-    FieldSpec::number("syscall.ret", "Signed observed exit result"),
-];
-
 const HTTP_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::text("capture.path", "Owning capture segment"),
     FieldSpec::number("frame.number", "Original request frame"),
@@ -1068,7 +939,7 @@ const DNS_FIELDS: &[FieldSpec<'static>] = &[
 #[derive(Clone, Default)]
 struct ScanRequest {
     event_cache: Option<normalized::Cache>,
-    sorts: [Option<sorting::Spec>; 8],
+    sorts: [Option<sorting::Spec>; SLOTS],
     file_visibility: file_visibility::FileVisibility,
     owned_pcap: bool,
     clock_anchor: Option<antinomie_monitor_core::HostClockAnchor>,
@@ -1080,17 +951,29 @@ struct ScanRequest {
     /// Stamp of the index on screen; a recording with the same stamp is not read again.
     unchanged_since: Option<String>,
     identity: Option<(String, String, String)>,
-    offsets: [usize; 8],
-    filters: [String; 8],
+    offsets: [usize; SLOTS],
+    filters: [String; SLOTS],
 }
 
 const STORED_ROWS: usize = 2000;
+/// Query tables with their own filter, sort and page: findings 0, opened 1,
+/// changed 2, http 3, dns 4, read 5, ips 6, hosts 7, then the file categories.
+const SLOTS: usize = 16;
+/// Operation tabs with their own slot after the original eight.
+const FILE_TABS: usize = SLOTS - 8;
 
 struct FindingJournal {
     temp: std::path::PathBuf,
     destination: std::path::PathBuf,
     file: std::fs::File,
     size: u64,
+}
+
+/// One file tab's rows kept in memory, and the matches left out of them.
+#[derive(Default)]
+struct FileRows {
+    rows: Vec<Vec<Cell>>,
+    omitted: u64,
 }
 
 struct ArchiveScan {
@@ -1117,6 +1000,8 @@ struct ArchiveScan {
     opened_omitted: u64,
     changed: Vec<Vec<Cell>>,
     changed_omitted: u64,
+    /// Operation tabs after Opened, in [`FileTab::slot`] order from slot 8.
+    file_tabs: [FileRows; FILE_TABS],
     http: Vec<Vec<Cell>>,
     http_omitted: u64,
     dns: Vec<Vec<Cell>>,

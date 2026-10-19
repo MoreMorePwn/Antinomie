@@ -211,7 +211,6 @@ pub(super) fn scan_archive_query(
     files.journal.launch_cwd = facts.as_ref().and_then(|facts| facts.launch_cwd.clone());
     files.journal.root_cookie = request.root_cookie;
     let mut pending = Vec::new();
-    let mut open_page = sorting::Page::new(request, 1, cancel);
     let mut change_page = sorting::Page::new(request, 2, cancel);
     let mut file_index = files::FileIndex::default();
     let mut bpf_calls = Vec::new();
@@ -219,8 +218,8 @@ pub(super) fn scan_archive_query(
     let mut bpf_omitted = 0;
     let mut read_page = sorting::Page::new(request, 5, cancel);
     let read_query = query::compile_table(&request.filters[5], FILE_FIELDS);
-    let open_query = query::compile_table(&request.filters[1], FILE_FIELDS);
     let change_query = query::compile_table(&request.filters[2], FILE_FIELDS);
+    let mut tabs = file_tabs::TabSink::new(request, cancel);
     let (_, files_complete, _) = walk_pages(&recording, cancel, |page| {
         for invocation in page.iter().filter(scoped) {
             observe_processes(&mut files.process_images, std::slice::from_ref(invocation));
@@ -267,6 +266,9 @@ pub(super) fn scan_archive_query(
             apply_dup(&mut files, invocation, event);
             forget_closed(&mut files, invocation, event);
             inherit_open_fds(&mut files, invocation, event, &cookies);
+            // Classified before the call is tracked: "created" means the path
+            // was not seen before this call.
+            let hits = file_category::classify(&files, invocation, event);
             if let Some(writer) = &mut event_journal {
                 if let Err(error) =
                     normalized::call(writer, &mut pending, &mut files, invocation, event)
@@ -275,16 +277,22 @@ pub(super) fn scan_archive_query(
                     event_journal = None;
                 }
             }
-            if let Some(row) = file_event_row(&files, invocation, event, OPEN_NAMES) {
-                counts.opened += 1;
-                if request.file_visibility.keeps(&row) && open_query.keep_table(&row[0].values) {
-                    open_page.push(row)?;
-                }
+            if event_journal.is_none() {
+                // The journal tracks seen paths itself; without it, do it here.
+                sigma_events::track(&mut files, invocation, event);
             }
-            if let Some(row) =
-                file_index.observe(&files, invocation, event, Some(&recording.directory))
-            {
-                counts.reads += 1;
+            let result = file_category::outcome(invocation);
+            tabs.observe(request, &mut counts, &files, invocation, event, &hits)?;
+            if let Some(row) = file_index.observe_with(
+                &files,
+                invocation,
+                event,
+                Some(&recording.directory),
+                &hits,
+            ) {
+                if !result.failed() {
+                    counts.reads += 1;
+                }
                 if request.file_visibility.keeps(&row) && read_query.keep_table(&row[0].values) {
                     read_page.push(row)?;
                 }
@@ -303,7 +311,7 @@ pub(super) fn scan_archive_query(
     });
     let omitted_files = file_index.omitted_files;
     let all_changes = file_index.finish();
-    counts.changed = all_changes.len() as u64;
+    counts.changed = all_changes.iter().filter(|change| change.real()).count() as u64;
     let file_changes: Vec<_> = all_changes
         .into_iter()
         .filter(|change| {
@@ -315,9 +323,13 @@ pub(super) fn scan_archive_query(
         change_page.push(change.row(clock_anchor))?;
     }
     let (findings, findings_omitted, _) = finding_page.finish()?;
-    let (opened, opened_omitted, _) = open_page.finish()?;
     let (read, read_omitted, _) = read_page.finish()?;
     let (changed, changed_omitted, _) = change_page.finish()?;
+    let (opened, file_tabs) = tabs.finish()?;
+    let FileRows {
+        rows: opened,
+        omitted: opened_omitted,
+    } = opened;
     let complete = complete && files_complete;
     if complete && !cancel.load(Ordering::Relaxed) {
         if let Some(writer) = &mut journal {
@@ -503,6 +515,7 @@ pub(super) fn scan_archive_query(
         opened_omitted,
         changed,
         changed_omitted,
+        file_tabs,
         http: network.http,
         http_omitted: network.http_omitted,
         dns: network.dns,

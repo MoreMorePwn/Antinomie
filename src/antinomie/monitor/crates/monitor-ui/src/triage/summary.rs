@@ -340,7 +340,7 @@ mod tests {
         super::super::tests::write_rwx_calls(&mut raw, 0..3);
         raw.sync_all().unwrap();
         let request = ScanRequest {
-            offsets: [20; 8],
+            offsets: [20; SLOTS],
             filters: std::array::from_fn(|_| String::new()),
             ..Default::default()
         };

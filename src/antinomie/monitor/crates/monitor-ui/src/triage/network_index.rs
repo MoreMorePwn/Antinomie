@@ -34,7 +34,7 @@ pub(super) fn collect(
     let dns_query = query::compile_table(&request.filters[4], DNS_FIELDS);
     let mut inventory = network::Inventory::default();
     let mut inner = request.clone();
-    inner.offsets = [0; 8];
+    inner.offsets = [0; SLOTS];
     inner.filters = Default::default();
     inner.sorts = Default::default();
     let mut coverage = Vec::new();
