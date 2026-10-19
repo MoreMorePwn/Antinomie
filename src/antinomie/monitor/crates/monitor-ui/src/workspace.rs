@@ -16,6 +16,7 @@ pub(crate) enum Panel {
     Trace,
     Network,
     Memory,
+    Disks,
     CoreDump,
     Triage,
     StaticAnalysis,
@@ -31,13 +32,14 @@ pub(crate) enum Panel {
 }
 
 impl Panel {
-    pub(crate) const MAIN: [Self; 8] = [
+    pub(crate) const MAIN: [Self; 9] = [
         Self::Summary,
         Self::RunHistory,
         Self::Triage,
         Self::Trace,
         Self::Network,
         Self::Memory,
+        Self::Disks,
         Self::CoreDump,
         Self::StaticAnalysis,
     ];
@@ -47,6 +49,7 @@ impl Panel {
             Self::Trace => "Syscall Trace",
             Self::Network => "Network",
             Self::Memory => "Memory",
+            Self::Disks => "Disks",
             Self::CoreDump => "Core dumps",
             Self::Triage => "Triage",
             Self::StaticAnalysis => "Static Analysis",
@@ -61,13 +64,13 @@ impl Panel {
 }
 
 /// Which main tab the bottom Details panel follows: the syscall trace, the
-/// network, memory, history or triage panel. When only one is on screen it
+/// network, memory, disks, history or triage panel. When only one is on screen it
 /// wins; when several are (split or detached), the one clicked last.
 #[derive(Default)]
 pub(crate) struct DetailsFollow {
     followed: usize,
     /// Pass of the main window in which each followed panel was last drawn.
-    drawn: [Option<u64>; 5],
+    drawn: [Option<u64>; 6],
 }
 
 /// What the Details panel shows.
@@ -78,15 +81,17 @@ pub(crate) enum DetailsOf {
     MemoryRow,
     History,
     Triage,
+    DiskEntry,
 }
 
 impl DetailsFollow {
-    const SIDES: [DetailsOf; 5] = [
+    const SIDES: [DetailsOf; 6] = [
         DetailsOf::Syscall,
         DetailsOf::Packet,
         DetailsOf::MemoryRow,
         DetailsOf::History,
         DetailsOf::Triage,
+        DetailsOf::DiskEntry,
     ];
 
     fn side(panel: &Panel) -> Option<usize> {
@@ -96,6 +101,7 @@ impl DetailsFollow {
             Panel::Memory => Some(2),
             Panel::RunHistory => Some(3),
             Panel::Triage => Some(4),
+            Panel::Disks => Some(5),
             _ => None,
         }
     }
@@ -147,8 +153,9 @@ impl DetailsFollow {
 }
 
 /// Arrangement compatibility. Versions before 3 reset obsolete flattened
-/// layouts; version 6 migrates only the untouched version-5 tab order.
-const LAYOUT_VERSION: u32 = 6;
+/// layouts; version 6 migrates only the untouched version-5 tab order;
+/// version 7 adds the Disks tab after Memory.
+const LAYOUT_VERSION: u32 = 7;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct WorkspaceLayout {
@@ -235,9 +242,39 @@ impl WorkspaceLayout {
             if layout.version < 5 {
                 layout.focus(Panel::Summary);
             }
+            // Disks (0.7.0) sits right after Memory, wherever the user
+            // moved Memory; the rest of the arrangement is kept.
+            if layout.dock.find_tab(&Panel::Disks).is_none() {
+                if let Some((surface, node, tab)) = layout.dock.find_tab(&Panel::Memory) {
+                    layout.insert_keeping_active(surface, node, TabIndex(tab.0 + 1), Panel::Disks);
+                } else {
+                    layout.return_home(Panel::Disks);
+                }
+            }
             layout.version = LAYOUT_VERSION;
         }
         layout
+    }
+
+    /// Insert `panel` at `at` of a tab bar without changing which tab shows
+    /// (a plain insert activates the new tab).
+    fn insert_keeping_active(
+        &mut self,
+        surface: SurfaceIndex,
+        node: NodeIndex,
+        at: TabIndex,
+        panel: Panel,
+    ) {
+        let shown = match &self.dock[surface][node] {
+            egui_dock::Node::Leaf { tabs, active, .. } => tabs.get(active.0).cloned(),
+            _ => None,
+        };
+        self.dock[surface][node].insert_tab(at, panel);
+        if let egui_dock::Node::Leaf { tabs, active, .. } = &mut self.dock[surface][node] {
+            if let Some(index) = shown.and_then(|shown| tabs.iter().position(|tab| *tab == shown)) {
+                *active = TabIndex(index);
+            }
+        }
     }
 
     pub(crate) fn validate(&mut self) {
@@ -1784,7 +1821,19 @@ mod tests {
                 _ => unreachable!(),
             }
             let saved = serde_json::to_value(&layout.dock).unwrap();
-            let restored = WorkspaceLayout::restore(Some(layout));
+            let mut restored = WorkspaceLayout::restore(Some(layout));
+            // The arrangement is kept; the one change is the new Disks tab,
+            // right after Memory, with the same tab showing.
+            let memory = restored.dock.find_tab(&Panel::Memory).unwrap();
+            let disks = restored
+                .dock
+                .find_tab(&Panel::Disks)
+                .expect("Disks was added");
+            assert_eq!(
+                (disks.0, disks.1, disks.2 .0),
+                (memory.0, memory.1, memory.2 .0 + 1)
+            );
+            restored.dock.remove_tab(disks);
             assert_eq!(
                 serde_json::to_value(&restored.dock).unwrap(),
                 saved,
@@ -1817,6 +1866,7 @@ mod tests {
                 Panel::Trace,
                 Panel::Network,
                 Panel::Memory,
+                Panel::Disks,
                 Panel::CoreDump,
                 Panel::StaticAnalysis
             ]
@@ -1849,6 +1899,7 @@ mod tests {
                 Panel::Trace,
                 Panel::Network,
                 Panel::Memory,
+                Panel::Disks,
                 Panel::CoreDump,
                 Panel::StaticAnalysis
             ]
@@ -1949,6 +2000,7 @@ mod tests {
                 Panel::Trace,
                 Panel::Network,
                 Panel::Memory,
+                Panel::Disks,
                 Panel::CoreDump,
                 Panel::StaticAnalysis
             ]
@@ -1979,6 +2031,7 @@ mod tests {
                 Panel::Trace,
                 Panel::Network,
                 Panel::Memory,
+                Panel::Disks,
                 Panel::CoreDump,
                 Panel::StaticAnalysis
             ]
@@ -2008,6 +2061,7 @@ mod tests {
                 Panel::Trace,
                 Panel::Network,
                 Panel::Memory,
+                Panel::Disks,
                 Panel::CoreDump,
                 Panel::StaticAnalysis
             ]
@@ -2141,7 +2195,7 @@ mod tests {
             .dock
             .add_window(vec![Panel::Trace, Panel::Terminal("past".into())]);
         layout.validate();
-        assert_eq!(layout.dock.iter_all_tabs().count(), 10);
+        assert_eq!(layout.dock.iter_all_tabs().count(), 11);
         assert_eq!(
             layout
                 .dock
@@ -2175,7 +2229,7 @@ mod tests {
         assert!(!restored.geometry.contains_key(&stale.0));
         assert_eq!(restored.dock.find_tab(&Panel::Trace).unwrap().0, retained);
         assert_eq!(restored.geometry.get(&retained.0), Some(&rectangle));
-        assert_eq!(restored.dock.iter_all_tabs().count(), 10);
+        assert_eq!(restored.dock.iter_all_tabs().count(), 11);
 
         let ended = restored
             .dock
@@ -2241,5 +2295,93 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn disks_sits_between_memory_and_core_dumps() {
+        let position = |panel: Panel| Panel::MAIN.iter().position(|main| *main == panel).unwrap();
+        assert_eq!(position(Panel::Disks), position(Panel::Memory) + 1);
+        assert_eq!(position(Panel::CoreDump), position(Panel::Disks) + 1);
+        assert_eq!(Panel::Disks.title(), "Disks");
+        assert_eq!(LAYOUT_VERSION, 7);
+    }
+
+    #[test]
+    fn version_six_layouts_gain_disks_after_memory_and_keep_their_arrangement() {
+        // The 0.7.0 default before Disks existed.
+        let mut layout = WorkspaceLayout {
+            version: 6,
+            ..Default::default()
+        };
+        let top = NodeIndex::root().left();
+        let without_disks: Vec<_> = Panel::MAIN
+            .iter()
+            .filter(|panel| **panel != Panel::Disks)
+            .cloned()
+            .collect();
+        if let egui_dock::Node::Leaf { tabs, active, .. } = &mut layout.dock.main_surface_mut()[top]
+        {
+            *tabs = without_disks.clone();
+            *active = TabIndex(5);
+        }
+        let restored = WorkspaceLayout::restore(Some(layout));
+        assert_eq!(restored.version, LAYOUT_VERSION);
+        assert_eq!(leaf_tabs(&restored, top), Panel::MAIN);
+        // The tab that was showing (Memory) still shows.
+        let egui_dock::Node::Leaf { tabs, active, .. } = &restored.dock.main_surface()[top] else {
+            panic!("top")
+        };
+        assert_eq!(tabs[active.0], Panel::Memory);
+        // An already current layout is not touched again.
+        let again = WorkspaceLayout::restore(Some(restored));
+        assert_eq!(leaf_tabs(&again, top), Panel::MAIN);
+    }
+
+    #[test]
+    fn disks_joins_wherever_memory_was_moved_and_has_a_home_without_it() {
+        // Memory in its own window: Disks goes beside it.
+        let mut layout = WorkspaceLayout {
+            version: 6,
+            ..Default::default()
+        };
+        let disks = layout.dock.find_tab(&Panel::Disks).unwrap();
+        layout.dock.remove_tab(disks);
+        let memory = layout.dock.find_tab(&Panel::Memory).unwrap();
+        let rectangle = Rect::from_min_size(egui::pos2(40.0, 40.0), egui::vec2(700.0, 400.0));
+        let window = layout.dock.detach_tab(memory, rectangle);
+        let restored = WorkspaceLayout::restore(Some(layout));
+        let (surface, node, tab) = restored.dock.find_tab(&Panel::Disks).unwrap();
+        assert_eq!(surface, window);
+        let memory = restored.dock.find_tab(&Panel::Memory).unwrap();
+        assert_eq!(
+            (memory.0, memory.1, memory.2 .0 + 1),
+            (surface, node, tab.0)
+        );
+
+        // No Memory tab at all: Disks returns to its canonical place.
+        let mut layout = WorkspaceLayout {
+            version: 6,
+            ..Default::default()
+        };
+        for panel in [Panel::Disks, Panel::Memory] {
+            let location = layout.dock.find_tab(&panel).unwrap();
+            layout.dock.remove_tab(location);
+        }
+        let mut restored = WorkspaceLayout::restore(Some(layout));
+        assert!(restored.dock.find_tab(&Panel::Disks).is_some());
+        restored.validate();
+        assert_eq!(leaf_tabs(&restored, NodeIndex::root().left()), Panel::MAIN);
+    }
+
+    #[test]
+    fn the_details_dock_follows_the_disks_tab() {
+        assert_eq!(DetailsFollow::side(&Panel::Disks), Some(5));
+        assert_eq!(DetailsFollow::SIDES[5], DetailsOf::DiskEntry);
+        let mut follow = DetailsFollow::default();
+        follow.chose(&Panel::Disks);
+        let ctx = egui::Context::default();
+        assert_eq!(follow.of(&ctx), DetailsOf::DiskEntry);
+        follow.chose(&Panel::Memory);
+        assert_eq!(follow.of(&ctx), DetailsOf::MemoryRow);
     }
 }

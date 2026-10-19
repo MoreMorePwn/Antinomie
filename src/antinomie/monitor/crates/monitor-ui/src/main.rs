@@ -8,6 +8,7 @@ mod core_view;
 mod data_view;
 mod dependencies_window;
 mod details_scroll;
+mod disk_view;
 mod evidence;
 mod evidence_delete;
 mod evidence_jobs;
@@ -107,6 +108,9 @@ fn main() -> eframe::Result<()> {
         std::process::exit(code);
     }
     if let Some(code) = antinomie_monitor_core::analysis::worker_main_if_requested() {
+        std::process::exit(code);
+    }
+    if let Some(code) = antinomie_monitor_core::disks::reader::worker_main_if_requested() {
         std::process::exit(code);
     }
     let args = Arguments::parse();

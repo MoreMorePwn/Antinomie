@@ -784,6 +784,32 @@ impl DataWindows {
             .push(DataWindow::new(ctx, key, request, directory));
     }
 
+    /// Open a window on bytes already in memory (a file extracted from a
+    /// disk), or raise the one already showing them.
+    pub(crate) fn open_bytes(
+        &mut self,
+        ctx: &egui::Context,
+        key: String,
+        title: String,
+        bytes: Vec<u8>,
+    ) {
+        let len = bytes.len() as u64;
+        let field = FieldSummary {
+            object_id: 0,
+            key: title.clone(),
+            layout: String::new(),
+            logical_len: Some(len),
+            captured_len: len,
+            status: Some(0),
+            capture_error: 0,
+            complete: true,
+            preview: bytes,
+            raw_path: None,
+            ranges: vec![(0, len)],
+        };
+        self.open(ctx, OpenData { key, title, field }, None);
+    }
+
     pub(crate) fn show(&mut self, ctx: &egui::Context) {
         for window in &mut self.windows {
             window.show(ctx);
@@ -800,6 +826,33 @@ impl DataWindows {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bytes_already_in_memory_open_one_window_per_key() {
+        let ctx = egui::Context::default();
+        let mut windows = DataWindows::default();
+        let bytes = b"guest file".to_vec();
+        windows.open_bytes(&ctx, "a".into(), "Disk file a".into(), bytes.clone());
+        windows.open_bytes(&ctx, "a".into(), "Disk file a".into(), bytes.clone());
+        assert_eq!(windows.len(), 1);
+        windows.open_bytes(&ctx, "b".into(), "Disk file b".into(), Vec::new());
+        assert_eq!(windows.len(), 2);
+        // The whole content is the preview: nothing to load from a recording.
+        let window = windows
+            .windows
+            .iter()
+            .find(|window| window.key == "a")
+            .unwrap();
+        assert!(window.loader.is_none());
+        assert_eq!(window.segments, vec![(0, bytes)]);
+        // An empty file says so.
+        let empty = windows
+            .windows
+            .iter()
+            .find(|window| window.key == "b")
+            .unwrap();
+        assert!(empty.loader.is_none() && empty.note.is_some());
+    }
 
     fn field(data: &[u8]) -> FieldSummary {
         FieldSummary {

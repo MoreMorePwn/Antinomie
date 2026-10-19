@@ -317,6 +317,7 @@ impl MonitorApp {
                     None => {}
                 }
             }
+            Panel::Disks => self.disks_panel(ui),
             Panel::AnalysisSection { report_id, kind } => {
                 let key = format!("section:{report_id}:{kind:?}");
                 let report = self.analysis_windows.get(report_id).cloned();
@@ -465,6 +466,10 @@ impl MonitorApp {
                 }
                 crate::workspace::DetailsOf::MemoryRow => {
                     self.memory_view.details(ui, self.settings.font_size)
+                }
+                crate::workspace::DetailsOf::DiskEntry => {
+                    let action = self.disk_view.details(ui);
+                    self.disk_action(ui.ctx(), action);
                 }
                 crate::workspace::DetailsOf::History => self.history_detail(ui),
                 crate::workspace::DetailsOf::Triage => self.show_triage_details(ui),

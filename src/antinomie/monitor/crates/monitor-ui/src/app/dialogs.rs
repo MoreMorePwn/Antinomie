@@ -636,6 +636,24 @@ impl MonitorApp {
                                     .suffix(" s"),
                             );
                             ui.end_row();
+                            ui.label("Disks: extraction limit");
+                            ui.add(
+                                egui::DragValue::new(&mut self.settings.disks.extract_cap_mib)
+                                    .range(1..=4096)
+                                    .suffix(" MiB"),
+                            )
+                            .on_hover_text(
+                                "Largest guest file the Disks tab extracts without asking",
+                            );
+                            ui.end_row();
+                            ui.label("Disks: hash limit");
+                            ui.add(
+                                egui::DragValue::new(&mut self.settings.disks.hash_cap_mib)
+                                    .range(1..=1024)
+                                    .suffix(" MiB"),
+                            )
+                            .on_hover_text("Largest guest file the Disks tab hashes on request");
+                            ui.end_row();
                             if let Some(path) = &self.snapshot.capture_dir {
                                 ui.label("Recording");
                                 ui.add(
