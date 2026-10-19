@@ -1381,6 +1381,31 @@ pub enum Command {
     /// Dump the running VM's RAM (QEMU pauses the guest while it writes)
     /// into a new memory dump of its recordings, for the Memory tab.
     DumpMemory,
+    /// Measure the VM's current disk (VM off): logical and allocated size,
+    /// free space, for the Disks tab's card.
+    MeasureDisk {
+        vm_id: String,
+    },
+    /// Flatten the VM's current disk (VM off) into a scratch image and open
+    /// it as the Disks tab's read-only "Current disk" view.
+    OpenCurrentDisk {
+        vm_id: String,
+    },
+    /// Close the open view and delete its scratch image.
+    CloseCurrentDisk {
+        vm_id: String,
+    },
+    /// Cancel the running disk job (measuring or flattening).
+    CancelDiskJob {
+        vm_id: String,
+    },
+    /// Run static analysis on a file of the host (one extracted from a disk
+    /// view), without a running VM.
+    AnalyzeHostFile {
+        vm_id: String,
+        path: PathBuf,
+        analysis: crate::analysis::AnalysisSelection,
+    },
     OpenRecording {
         directory: PathBuf,
     },
@@ -1513,6 +1538,12 @@ pub struct Snapshot {
     pub network_capture: Option<crate::network::NetworkCapture>,
     /// The memory dump QEMU is writing, while it writes.
     pub memory_dump: Option<crate::memory::DumpProgress>,
+    /// The open "Current disk (VM off)" view of the Disks tab.
+    pub current_disk: Option<crate::disks::CurrentDiskView>,
+    /// The latest measurement of a VM's current disk.
+    pub disk_measure: Option<crate::disks::DiskMeasure>,
+    /// The disk job that holds a VM's image while `qemu-img` reads it.
+    pub disk_job: Option<crate::disks::DiskJobProgress>,
     /// Process trees of this boot's captures that are still open, by capture id.
     pub capture_processes:
         std::collections::BTreeMap<String, Vec<crate::capture_processes::CaptureProcess>>,

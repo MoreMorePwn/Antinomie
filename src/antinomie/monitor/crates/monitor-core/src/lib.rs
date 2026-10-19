@@ -15,6 +15,7 @@ mod control;
 pub mod core_capture;
 pub mod core_dump;
 pub mod dependencies;
+pub mod disks;
 mod display;
 pub mod distribution;
 pub mod evidence_delete;

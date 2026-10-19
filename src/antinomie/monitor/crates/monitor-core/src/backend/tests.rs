@@ -166,6 +166,8 @@ fn closing_owner_returns_a_result_for_each_accepted_queued_command() {
         wake: None,
         deferred_flush: None,
         flusher: Default::default(),
+        disk_job: None,
+        host_analysis: Default::default(),
     };
     worker.run();
     drop(command_sender);
@@ -311,6 +313,8 @@ fn full_completion_lane_surfaces_terminal_failure_for_an_accepted_command() {
         wake: None,
         deferred_flush: None,
         flusher: Default::default(),
+        disk_job: None,
+        host_analysis: Default::default(),
     };
     completion_sender
         .try_send(Notification::CommandResult {
@@ -745,6 +749,8 @@ fn download_worker(root: PathBuf) -> Worker {
         reconnect: (0, None),
         deferred_flush: None,
         flusher: Default::default(),
+        disk_job: None,
+        host_analysis: Default::default(),
         wake: None,
     }
 }
@@ -1052,6 +1058,8 @@ fn invalid_launch_settings_are_rejected_before_lifecycle_io() {
         reconnect: (0, None),
         deferred_flush: None,
         flusher: Default::default(),
+        disk_job: None,
+        host_analysis: Default::default(),
         wake: None,
     };
     for command in [
@@ -1142,6 +1150,8 @@ fn fixed_display_guards_selected_boot_without_changing_pinned_disk() {
         reconnect: (0, None),
         deferred_flush: None,
         flusher: Default::default(),
+        disk_job: None,
+        host_analysis: Default::default(),
         wake: None,
     };
     worker
@@ -1243,6 +1253,8 @@ fn base_import_and_failed_credential_creation_preserve_published_state() {
         reconnect: (0, None),
         deferred_flush: None,
         flusher: Default::default(),
+        disk_job: None,
+        host_analysis: Default::default(),
         wake: None,
     };
     for guest in [false, true] {
@@ -1395,6 +1407,8 @@ fn running_vm_duplicate_and_delete_guards_preserve_data() {
         reconnect: (0, None),
         deferred_flush: None,
         flusher: Default::default(),
+        disk_job: None,
+        host_analysis: Default::default(),
         wake: None,
     };
     assert!(

@@ -18,6 +18,7 @@ mod terminal_drain;
 mod uploads;
 mod worker_artifacts;
 mod worker_commands;
+mod worker_disks;
 mod worker_guest;
 mod worker_loop;
 mod worker_vm;
@@ -141,6 +142,7 @@ impl Backend {
         let worker_epoch = guest_epoch.clone();
         let flusher = crate::recording_flush::Flusher::new()?;
         let analysis_tools = crate::analysis_tools::statuses(&options.data_dir);
+        let host_tools_dir = crate::analysis_tools::tools_dir(&options.data_dir);
         let thread = thread::Builder::new()
             .name("antinomie-transport".into())
             .spawn(move || {
@@ -173,6 +175,8 @@ impl Backend {
                     reconnect: (0, None),
                     deferred_flush: None,
                     flusher,
+                    disk_job: None,
+                    host_analysis: crate::analysis::jobs::Jobs::with_tools(host_tools_dir),
                     wake,
                 }
                 .run();
@@ -714,6 +718,11 @@ struct Worker {
     /// Disk work of stopped boots, off this thread (see `crate::recording_flush`).
     deferred_flush: Option<crate::recording_flush::RejectedFlushJob>,
     flusher: crate::recording_flush::Flusher,
+    /// The disk job holding a VM's image chain for `qemu-img` (the Disks
+    /// tab's lease; see `worker_disks`).
+    disk_job: Option<crate::disks::job::Job>,
+    /// Static analysis of host files, which needs no VM.
+    host_analysis: crate::analysis::jobs::Jobs,
 }
 
 /// Attempts at reconnecting a guest that stopped answering, before the VM is

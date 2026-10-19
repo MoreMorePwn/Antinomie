@@ -330,6 +330,7 @@ impl Worker {
     pub(super) fn run(mut self) {
         storage::mark_transport_thread();
         self.publish();
+        self.sweep_disk_scratch();
         self.load_bases();
         for id in self
             .snapshot
@@ -356,6 +357,7 @@ impl Worker {
                 if let Err(e) = result {
                     self.snapshot.last_error = Some(e);
                 }
+                self.shutdown_disks();
                 if let Some(job) = self.download.take()
                     && job.thread.join().is_err()
                 {
@@ -627,6 +629,8 @@ impl Worker {
             self.check_process_cores();
             self.check_manual_cores();
             self.check_memory_dump();
+            self.poll_disk_job();
+            self.host_analysis_tick();
             self.check_run_artifacts();
             self.poll_flush();
             if self.last_publish.elapsed() >= Duration::from_millis(250)
@@ -634,7 +638,8 @@ impl Worker {
                     || self.refresh.is_some()
                     || self.download.is_some()
                     || self.build.is_some()
-                    || self.tool.is_some())
+                    || self.tool.is_some()
+                    || self.disk_job.is_some())
             {
                 self.publish();
             }
