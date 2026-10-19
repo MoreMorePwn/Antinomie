@@ -14,9 +14,11 @@ use std::{
     thread,
 };
 
-const PAGE_LEN: usize = 256;
-const DIRECTORY_LIMIT: usize = 32;
-const DEPTH_LIMIT: usize = 16;
+/// Entries of one page, expanded folders kept and tree depth shown: shared by
+/// every lazy tree in the app (the Disks tab uses them too).
+pub(crate) const PAGE_LEN: usize = 256;
+pub(crate) const DIRECTORY_LIMIT: usize = 32;
+pub(crate) const DEPTH_LIMIT: usize = 16;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Action {

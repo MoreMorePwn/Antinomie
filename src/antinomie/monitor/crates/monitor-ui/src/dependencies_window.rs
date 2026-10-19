@@ -290,7 +290,9 @@ fn requirements(
         Command::RefreshRemoteBases
         | Command::DownloadBase { .. }
         | Command::InstallTool { .. } => vec![Curl],
-        Command::AnalyzeOnly { .. } => vec![Bubblewrap],
+        Command::AnalyzeOnly { .. } | Command::AnalyzeHostFile { .. } => vec![Bubblewrap],
+        Command::MeasureDisk { .. } => vec![QemuImg],
+        Command::OpenCurrentDisk { .. } => vec![QemuImg, Bubblewrap, Prlimit],
         Command::Execute(request) if request.analysis.enabled => vec![Bubblewrap],
         _ => Vec::new(),
     }
@@ -318,18 +320,27 @@ impl DependenciesWindow {
         use Dependency::*;
         Self {
             report: Some(Report {
-                checks: [Qemu, QemuImg, Gtk, Kvm, Curl, DebianAccount, Bubblewrap]
-                    .into_iter()
-                    .map(|dependency| dependencies::Check {
-                        dependency,
-                        name: "test tool",
-                        purpose: "test",
-                        problem: None,
-                        hint: "test fix",
-                        optional: false,
-                        wrong_version: false,
-                    })
-                    .collect(),
+                checks: [
+                    Qemu,
+                    QemuImg,
+                    Gtk,
+                    Kvm,
+                    Curl,
+                    DebianAccount,
+                    Bubblewrap,
+                    Prlimit,
+                ]
+                .into_iter()
+                .map(|dependency| dependencies::Check {
+                    dependency,
+                    name: "test tool",
+                    purpose: "test",
+                    problem: None,
+                    hint: "test fix",
+                    optional: false,
+                    wrong_version: false,
+                })
+                .collect(),
                 ..Report::default()
             }),
             open: false,

@@ -9,6 +9,7 @@ mod capture;
 mod captures;
 mod clipboard;
 mod dialogs;
+mod disks;
 mod evidence_delete;
 mod explorer;
 mod file_drop;
@@ -32,6 +33,7 @@ mod triage_pcap;
 mod triage_ui;
 mod upload;
 mod upload_browser;
+pub(crate) use upload_browser::{DEPTH_LIMIT, DIRECTORY_LIMIT, PAGE_LEN};
 mod vm;
 mod widgets;
 
@@ -107,6 +109,8 @@ struct Settings {
     compact: bool,
     /// Memory tab: look up symbol tables online for dumps without one.
     memory_online_symbols: bool,
+    /// Disks tab: extraction and hash limits, tree toggles.
+    disks: crate::disk_view::DiskSettings,
     /// Public destination country and organization. Local addresses are never queried.
     address_lookup: crate::triage::AddressLookup,
     /// Scan retained evidence when it becomes ready. Manual Scan still works.
@@ -151,6 +155,7 @@ impl Default for Settings {
             light_theme: false,
             compact: true,
             memory_online_symbols: true,
+            disks: Default::default(),
             address_lookup: crate::triage::AddressLookup::Tshark,
             automatic_detection: true,
             outbound_catalog: false,
@@ -318,6 +323,7 @@ pub struct MonitorApp {
     stealth_open: bool,
     network_view: crate::network_view::NetworkView,
     memory_view: crate::memory_view::MemoryView,
+    disk_view: crate::disk_view::DiskView,
     core_view: crate::core_view::CoreView,
     triage: crate::triage::TriageView,
     cpu_history: crate::summary::CpuHistory,
@@ -500,6 +506,7 @@ impl MonitorApp {
             stealth_open: false,
             network_view: Default::default(),
             memory_view: Default::default(),
+            disk_view: Default::default(),
             core_view: Default::default(),
             triage: Default::default(),
             cpu_history: Default::default(),

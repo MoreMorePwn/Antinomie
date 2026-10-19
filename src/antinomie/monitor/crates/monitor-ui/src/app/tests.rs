@@ -8,6 +8,7 @@ mod capture;
 mod chrome;
 mod clipboard;
 mod details_scroll;
+mod disks;
 mod evidence_delete;
 mod file_drop;
 mod fps_counter;
@@ -93,6 +94,7 @@ pub(crate) fn app() -> MonitorApp {
         stealth_open: false,
         network_view: Default::default(),
         memory_view: Default::default(),
+        disk_view: Default::default(),
         core_view: Default::default(),
         triage: Default::default(),
         cpu_history: Default::default(),
