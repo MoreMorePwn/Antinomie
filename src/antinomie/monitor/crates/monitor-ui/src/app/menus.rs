@@ -269,17 +269,7 @@ impl MonitorApp {
                     ui.menu_button("View", |ui| {
                         // Room between an item and its shortcut.
                         ui.set_min_width(ui.spacing().menu_width);
-                        for view in [
-                            Panel::Summary,
-                            Panel::Trace,
-                            Panel::Network,
-                            Panel::Memory,
-                            Panel::CoreDump,
-                            Panel::StaticAnalysis,
-                            Panel::RunHistory,
-                            Panel::Details,
-                            Panel::Activity,
-                        ] {
+                        for view in Panel::MAIN.into_iter().chain([Panel::Details, Panel::Activity]) {
                             if ui.button(view.title()).clicked() {
                                 self.focus_panel = Some(view);
                                 ui.close_menu();
