@@ -161,12 +161,13 @@ No guest, image, shared-memory ABI, dependency or release-tag change is needed.
 - V7 no snapshot/reconnect. No next transport version. Existing transport API
   is opaque; frontend/backend never manage CPU rings.
 
-## Disks tab: the current disk of a stopped VM (0.7.0, phase 1)
+## Disks tab: the current disk of a stopped VM (0.7.0, phases 1 and 2)
 
 Accepted design: the documentation checkout's "Disks Tab - Implementation
-Design" v2, phase 1. Host only; no guest kernel change. Dumps, imports,
-checkpoint sources, partition carving, diff and content search are later phases
-and have seams only (`DiskJobPurpose`, `DiskSourceKind`, the entries list).
+Design" v2, phases 1 and 2 (the dumps are described after the limits below).
+Host only; no guest kernel change. Checkpoint sources, partition carving, diff
+and content search are a later phase and have seams only (`DiskSourceKind`, the
+entries list).
 
 **Mechanism.** The VM's qcow2 chain (`snapshots::active_disk`) is flattened by
 `qemu-img convert -p -f qcow2 -O raw` into a sparse raw ext4 image,
@@ -198,7 +199,8 @@ at a time (`Worker.disk_job`) holds the lease on its VM's image while
 Another VM running does not matter. Scratch folders are swept when the backend
 starts and before a new materialization; closing the backend deletes the open
 view. `Snapshot` gains `current_disk`, `disk_measure` and `disk_job`; commands
-are `MeasureDisk`, `OpenCurrentDisk`, `CloseCurrentDisk`, `CancelDiskJob`.
+are `MeasureDisk`, `OpenCurrentDisk`, `CloseCurrentDisk`, `DumpDisk`,
+`KeepCurrentDiskAsDump`, `CancelDiskJob`.
 
 **Reader (`disks/reader/`).** A second mode of this program, `--disk-reader`
 (`worker_main_if_requested`, before CLI parsing like the analysis workers),
@@ -242,6 +244,68 @@ counts, so neither is shown and a directory cycle is bounded by the Find depth
 and entry limits instead of a visited-inode set. Whole-disk ext4 only: any
 other content gives "the disk does not hold an ext2/3/4 filesystem". The lease
 is held by one job per backend; the view itself holds nothing.
+
+### Disk dumps (phase 2)
+
+**Folder and record (`disks/dump.rs`).** `<recording dir>/disks/<id>/` holds
+`root.ext4` and `dump.json` (`DiskDump`: ids, VM, `fs_state`, `started_ms`,
+`finished_ms`, `logical_size`, `allocated_size`, `sha256`, the `source` with
+its layers, `system`, `imported`, `error`); `extracted/` holds files extracted
+from the dump. Every field is `#[serde(default)]`, unknown fields are ignored
+and an image format a later version wrote deserializes as `Unsupported` (listed,
+not opened), so records move between versions. The image name in a sidecar is
+reduced to its last component, so a hand-edited record cannot point outside the
+folder. `list` reads `disks/*/dump.json` of every recording directory (not
+`.scratch-*`, hidden folders or `extracted`; at most 1 MiB per sidecar), newest
+first, one entry per folder.
+
+**Finalization.** `Dump disk` (`Job::dump`): measure, quota and free-space
+checks, `disks/<id>/` (0700), `qemu-img convert` into `root.ext4.part`,
+`fsync`, size and ext4 magic/state check, rename to `root.ext4`, `fsync` of
+the folder, SHA-256 (1 MiB reads of the full logical content, the `Hashing`
+stage, cancelable), optional per-layer digests, then `dump.json` written
+atomically and the folder synced. Any error or Cancel removes the folder;
+a folder without `dump.json` is therefore never a dump. `sweep_partial` (backend
+start and before every dump or view) removes folders without a sidecar that
+hold nothing but `root.ext4`/`root.ext4.part`, and a stale `.part` in a finished
+dump. `Keep as dump` (`Job::keep`) checks the quota ceiling against the view's
+allocation, hashes the scratch image in place, then renames
+`.scratch-<view>/` to `<id>/` (`promote`; on `EXDEV` it copies the scratch image,
+never the chain, with `qemu-img convert -f raw -O raw` and leaves the view on
+the scratch image) and writes the sidecar. The view keeps its id and extraction
+folder and now reads `disks/<id>/root.ext4` (`CurrentDiskView.kept_as`, `image`);
+closing it removes nothing of the dump, and deleting a dump an open view reads
+is refused until the view is closed.
+
+**Quota and space.** `JobSpec.quota` is `capture_quota_size`, applied as a
+per-dump ceiling to the `qemu-img map` estimate (`DiskMeasure.quota_error`,
+shown on the card before the click; the job checks it again). Views are not
+bounded by it. The free-space and sparse-support preflight is the phase 1 one.
+
+**Commands.** `DumpDisk` and `KeepCurrentDiskAsDump` carry the two Settings
+flags (`disks.dump_hash`, default on; `disks.source_digests`, default off) and
+go through the same lease as `OpenCurrentDisk`; `CancelDiskJob` cancels them.
+`EvidenceItem::DiskDump { directory }` deletes through `DeleteEvidence`: the
+path is canonicalized, must not contain `..` or be a link, must be exactly
+`<recording dir>/disks/<id>` of the VM, and must hold a `dump.json`, which is
+removed first. Nothing else records a dump, so no other file is rewritten.
+
+**Import and save (`disks/dump.rs`, `disks/export.rs`).** `import` validates a
+raw ext4 image: regular file, the superblock magic, a sane block size, a block
+count that fits, and a file at least as long as the filesystem; qcow2 and an
+MBR boot signature are named as such. It reads only the superblock, writes a
+sidecar with `imported: true` and the canonical path, and leaves the file where
+it is. `export` runs `qemu-img convert -p -f raw -O raw|qcow2 [-c]` (the source
+format is explicit, so the guest's bytes are never probed) into a temporary
+file beside the destination, then renames it with mode 0600; it refuses the
+image itself, checks free space and can be cancelled.
+
+**Interface.** The entries list is the Current disk row, **Dump disk**,
+**Import image…** and the dumps (record filter `disk-dump-history` over the
+query engine, context menus). The list is scanned when the recording folders,
+a job's presence or `kept_as` change and on Refresh, never per frame. Whether
+an imported image moved is checked in the same scan. Verify and Save run on
+their own threads and are polled. Settings: `disks.{dump_hash, source_digests}`.
 
 ## Recording quota and pre-acknowledgement telemetry (0.6.2)
 
