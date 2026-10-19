@@ -2,6 +2,7 @@
 //! Native per-VM operational dashboard. Host observations never imply guest utilization.
 use crate::theme;
 pub(crate) mod configuration;
+pub(crate) mod health;
 use antinomie_monitor_core::{Snapshot, VmConfig, VmResources, VmState};
 use eframe::egui::{self, Color32, RichText};
 use std::collections::{BTreeMap, VecDeque};
@@ -431,10 +432,11 @@ pub(crate) fn show(
             ui.add_space(10.0);
             configuration::show(ui, vm, snapshot);
             ui.add_space(10.0);
+            let capture_health = health::Facts::new(snapshot, run_history);
             ui.horizontal_wrapped(|ui| {
                 ui.strong("Health");
                 if active {
-                    let (label, color) = health_state(snapshot);
+                    let (label, color) = capture_health.state(&snapshot.health);
                     indicator(ui, label, color);
                 } else {
                     ui.colored_label(theme::muted(), "No live health observation");
@@ -464,8 +466,9 @@ pub(crate) fn show(
                     );
                 }
                 crate::run_recording::health_errors(ui, snapshot);
+                capture_health.show(ui, snapshot);
                 egui::CollapsingHeader::new("More health details")
-                    .show(ui, |ui| health(ui, snapshot));
+                    .show(ui, |ui| health::details(ui, &snapshot.health));
             }
             if let Some(error) = resources.and_then(|sample| sample.sample_error.as_ref()) {
                 crate::activity::warning(ui, error);
@@ -1101,33 +1104,6 @@ fn network_label(vm: &VmConfig) -> &'static str {
         "NAT / external access"
     } else {
         "Disabled"
-    }
-}
-fn health_state(snapshot: &Snapshot) -> (&'static str, Color32) {
-    if snapshot.health.persistence_error.is_some() {
-        ("Recording error", theme::error())
-    } else if snapshot.health.dropped > 0
-        || snapshot.health.ui_dropped > 0
-        || snapshot.health.storage_dropped_packets > 0
-        || snapshot.health.shedding
-    {
-        ("Loss observed", theme::warn())
-    } else {
-        ("No recorded losses", theme::good())
-    }
-}
-fn health(ui: &mut egui::Ui, snapshot: &Snapshot) {
-    let h = &snapshot.health;
-    for (label, value) in [
-        ("Packets persisted", h.persisted_packets.to_string()),
-        ("Write backlog", size(h.write_backlog)),
-        ("Parser errors", h.parser_errors.to_string()),
-        ("Reply stalls", h.reply_stalls.to_string()),
-    ] {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(label);
-            ui.monospace(value);
-        });
     }
 }
 fn age(time: Instant) -> String {

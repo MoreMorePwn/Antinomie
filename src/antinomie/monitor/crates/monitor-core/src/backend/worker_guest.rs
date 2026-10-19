@@ -622,6 +622,7 @@ impl Worker {
                 Ok("termination signals issued; descendant completion is not yet proven".into())
             }
             Command::RecorderStats => {
+                let stats_requested = Instant::now();
                 let reply = session.request(
                     control::STATS,
                     &control::header(0),
@@ -633,7 +634,9 @@ impl Worker {
                     return Err("invalid recorder stats reply".into());
                 }
                 let counters = decode_stats(&reply)?;
-                self.snapshot.health.recorder_stats = Some(counters);
+                session
+                    .recorder_poll
+                    .observe(stats_requested, counters, &mut self.snapshot.health);
                 Ok(format!(
                     "recorder stream {} calls {} packets {} failed {} copy faults {} schema gaps {} context failures {}",
                     counters[0],

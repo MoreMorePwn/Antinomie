@@ -130,6 +130,7 @@ impl Worker {
                 terminal_cursor: 0,
                 late_reads: BTreeMap::new(),
                 run_status_poll: RunStatusPoll::default(),
+                recorder_poll: recorder_health::RecorderPoll::default(),
                 telemetry_busy: false,
                 shed: Shed::default(),
                 last_process_save: Instant::now(),
@@ -230,6 +231,7 @@ impl Worker {
                 issues.push(format!("final terminal drain: {error}"));
             }
         }
+        let stats_requested = Instant::now();
         match session.request(
             control::STATS,
             &control::header(0),
@@ -239,7 +241,11 @@ impl Worker {
         ) {
             Ok(reply) => {
                 if let Ok(counters) = decode_stats(&reply) {
-                    self.snapshot.health.recorder_stats = Some(counters);
+                    session.recorder_poll.observe(
+                        stats_requested,
+                        counters,
+                        &mut self.snapshot.health,
+                    );
                 }
             }
             Err(e) => issues.push(format!("final recorder stats unavailable: {e}")),

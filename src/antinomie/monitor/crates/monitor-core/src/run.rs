@@ -9,7 +9,7 @@ use std::{
     os::unix::fs::OpenOptionsExt,
 };
 
-/// Notes kept per run, and the longest one.
+/// General notes kept per run, plus one reserved async-loss note; maximum note length.
 const MAX_NOTES: usize = 16;
 const NOTE_LEN: usize = 512;
 
@@ -137,6 +137,33 @@ impl ProgramRun {
     pub(crate) fn record_tree_completion(&mut self) {
         if self.summary.state == RunState::Finished {
             self.ended_ms.get_or_insert_with(unix_ms);
+        }
+    }
+    pub(crate) fn record_async_loss(&mut self) {
+        if let Some(status) = self
+            .summary
+            .execution
+            .as_ref()
+            .filter(|status| status.has_async_loss())
+        {
+            let note = format!(
+                "{ASYNC_LOSS_NOTE_PREFIX}: last guest count {}, loss flag {}. Saving may continue, but observation completeness is not proven.",
+                status.async_loss_count,
+                status.flags & 16 != 0
+            );
+            if let Some(saved) = self
+                .summary
+                .notes
+                .iter_mut()
+                .find(|note| note.starts_with(ASYNC_LOSS_NOTE_PREFIX))
+            {
+                *saved = note;
+            } else if self.summary.notes.len() <= MAX_NOTES {
+                // A full general-note budget must not erase a known loss when
+                // a later status query is unavailable. This one reserved note
+                // is bounded by its fixed text and numeric status fields.
+                self.summary.notes.push(note);
+            }
         }
     }
     /// Complete only after EOF with every terminal READ reply received.
@@ -627,6 +654,51 @@ mod tests {
         assert!(saved.recording_error.is_none());
         drop(run);
         crate::storage::settle_json_under(&directory);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn async_loss_note_is_updated_once_persists_and_does_not_stop_saving() {
+        let (mut run, directory) = open_run("ant-run-async-note");
+        run.summary.execution = Some(RunExecution {
+            generation: 1,
+            live_task_count: 0,
+            pending_async_count: 0,
+            flags: 19,
+            root_wait_status: Some(0),
+            root_exit: Some(WaitStatus::Exited { code: 0 }),
+            async_loss_count: 1,
+            total_task_count: 1,
+        });
+        run.record_async_loss();
+        run.summary.execution.as_mut().unwrap().async_loss_count = 9;
+        run.record_async_loss();
+        assert_eq!(run.summary.notes.len(), 1);
+        assert!(run.summary.notes[0].contains("last guest count 9"));
+        run.summary.notes.clear();
+        for n in 0..MAX_NOTES {
+            run.add_note(format!("general note {n}"));
+        }
+        run.record_async_loss();
+        assert_eq!(run.summary.notes.len(), MAX_NOTES + 1);
+        assert!(
+            run.summary
+                .notes
+                .last()
+                .unwrap()
+                .contains("last guest count 9")
+        );
+        run.summary.execution = None;
+        assert!(run.summary.has_async_loss());
+        run.output(b"saving continues", 65536).unwrap();
+        assert!(run.summary.recording_error.is_none());
+        run.persist_summary().unwrap();
+        storage::flush_json().unwrap();
+        let saved: RunSummary =
+            serde_json::from_reader(File::open(directory.join("run.json")).unwrap()).unwrap();
+        assert!(saved.has_async_loss());
+        assert_eq!(saved.notes, run.summary.notes);
+        drop(run);
+        storage::settle_json_under(&directory);
         std::fs::remove_dir_all(directory).unwrap();
     }
     #[test]

@@ -670,6 +670,36 @@ pub struct RunExecution {
     pub total_task_count: u64,
 }
 
+pub(crate) const ASYNC_LOSS_NOTE_PREFIX: &str = "Async observation loss reported";
+
+impl RunSummary {
+    /// Whether current status or a retained loss note reports async capture loss.
+    ///
+    /// | Result | Meaning |
+    /// |---|---|
+    /// | `true` | Loss remains known even if a later status query is unavailable |
+    pub fn has_async_loss(&self) -> bool {
+        self.execution
+            .as_ref()
+            .is_some_and(RunExecution::has_async_loss)
+            || self
+                .notes
+                .iter()
+                .any(|note| note.starts_with(ASYNC_LOSS_NOTE_PREFIX))
+    }
+}
+
+impl RunExecution {
+    /// Whether the guest reported async capture loss, independently of transport drops.
+    ///
+    /// | Result | Meaning |
+    /// |---|---|
+    /// | `true` | A loss count or the guest's async-loss status flag is present |
+    pub fn has_async_loss(&self) -> bool {
+        self.async_loss_count > 0 || self.flags & 16 != 0
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum WaitStatus {
     Exited { code: u8 },
@@ -1261,6 +1291,8 @@ pub struct Health {
     pub persisted_len: u64,
     pub persistence_error: Option<String>,
     pub recorder_stats: Option<[u64; 10]>,
+    /// Failure of the latest recorder statistics query; retained counters may be stale.
+    pub recorder_stats_error: Option<String>,
     /// Guest sends that found their ring full and waited (never-drop mode),
     /// and their total wait.
     #[serde(default)]

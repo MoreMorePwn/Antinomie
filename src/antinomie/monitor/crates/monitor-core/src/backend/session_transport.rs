@@ -327,6 +327,12 @@ impl Session {
         sender: &SyncSender<Notification>,
     ) {
         if self
+            .recorder_poll
+            .reply(reply_id, status, payload, &mut snapshot.health)
+        {
+            return;
+        }
+        if self
             .guest_resources
             .reply(reply_id, status, payload, &self.boot_id, Instant::now())
         {

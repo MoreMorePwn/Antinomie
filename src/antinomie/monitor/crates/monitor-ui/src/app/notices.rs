@@ -6,6 +6,9 @@ use crate::activity::{report, Level};
 impl MonitorApp {
     pub(super) fn collect_notices(&self, ctx: &egui::Context) {
         let snapshot = &self.snapshot;
+        for message in crate::summary::health::notices(snapshot, &self.history) {
+            report(ctx, Level::Warn, message);
+        }
         for error in [
             &snapshot.last_error,
             &snapshot.health.persistence_error,

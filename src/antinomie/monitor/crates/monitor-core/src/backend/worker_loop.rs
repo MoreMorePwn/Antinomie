@@ -542,6 +542,9 @@ impl Worker {
             // requests until it runs again.
             let paused = self.snapshot.memory_dump.is_some();
             if let Some(session) = self.session.as_mut().filter(|_| !exited && !paused) {
+                if self.snapshot.state == VmState::Running {
+                    session.poll_recorder_health(&mut self.snapshot);
+                }
                 if let Err(error) = session.query_run_status(&mut self.snapshot, &self.sender) {
                     self.snapshot.last_error = Some(error);
                 }

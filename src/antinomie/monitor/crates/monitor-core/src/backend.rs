@@ -7,6 +7,7 @@ mod guest_resource_control;
 mod launch_failure;
 mod manual_core;
 mod process_core;
+mod recorder_health;
 mod run_network;
 mod saving;
 mod session_runs;
@@ -441,6 +442,7 @@ struct Session {
     late_reads: BTreeMap<u64, u64>,
     /// At most one timed-out read-only status poll; no uncertain effects are replayed.
     run_status_poll: RunStatusPoll,
+    recorder_poll: recorder_health::RecorderPoll,
     /// When capture process trees were last queued for saving.
     last_process_save: Instant,
     /// Bytes of this boot's network captures (pcaps written by QEMU): the
