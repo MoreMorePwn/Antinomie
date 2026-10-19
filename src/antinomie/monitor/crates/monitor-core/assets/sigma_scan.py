@@ -110,10 +110,11 @@ def matching_rows(connection, queries, category):
     union = " UNION ".join(query for query, _ in converted)
     eligible = connection.execute("SELECT COUNT(*) FROM logs WHERE _category=? AND (" + guard + ")", (category,)).fetchone()[0]
     observed = connection.execute("SELECT COUNT(*) FROM logs WHERE _category=?", (category,)).fetchone()[0]
-    selection = "SELECT _evidence FROM logs WHERE _category=? AND (" + guard + ") AND _event_id IN (" + union + ")"
+    selection = "SELECT _event_id, _evidence FROM logs WHERE _category=? AND (" + guard + ") AND _event_id IN (" + union + ")"
     total = connection.execute("SELECT COUNT(*) FROM (" + selection + ")", (category,)).fetchone()[0]
-    rows = connection.execute(selection + " LIMIT ?", (category, min(total, MAX_EVIDENCE))).fetchall()
-    return total, [json.loads(row[0]) for row in rows], eligible, observed - eligible
+    # `_event_id` is the one-based position in the journal, so a finding can name the exact event it matched.
+    rows = connection.execute(selection + " ORDER BY _event_id LIMIT ?", (category, min(total, MAX_EVIDENCE))).fetchall()
+    return total, [json.loads(row[1]) for row in rows], eligible, observed - eligible, [row[0] for row in rows]
 
 
 def attack_tags(tags):
@@ -257,7 +258,7 @@ def scan(request, events_path):
                     if not queries:
                         report["backend_rejected"] += 1
                         raise ValueError("rule produced no supported query")
-                    total, evidence, evaluated, missing = matching_rows(connection, queries, category)
+                    total, evidence, evaluated, missing, event_ids = matching_rows(connection, queries, category)
                     if missing:
                         report["missing_field_events"] += int(missing)
                         report["state"] = "partial"
@@ -268,7 +269,8 @@ def scan(request, events_path):
                         raise ValueError("no captured events with all required fields")
                     report["scanned_rules"] += 1
                     if total:
-                        retained = evidence[:max(0, MAX_EVIDENCE - evidence_count)]
+                        room = max(0, MAX_EVIDENCE - evidence_count)
+                        retained = evidence[:room]
                         evidence_count += len(retained)
                         report["omitted_evidence"] += total - len(retained)
                         if len(report["findings"]) >= MAX_FINDINGS:
@@ -281,7 +283,7 @@ def scan(request, events_path):
                         if ref_text:
                             details += " References: " + ref_text
                         details = details.encode("utf-8")[:8000].decode("utf-8", errors="ignore")
-                        report["findings"].append({"rule_id": str(rule.id or (source["name"] + ":" + rule.title)), "title": rule.title, "severity": level, "source": source["name"] + " sha256:" + sha256, "license": str(getattr(rule, "license", None) or "Not supplied by rule"), "author": supplied_authors(rule), "mitre": attack_tags(rule.tags or []), "count": total, "evidence": retained, "details": details, "rule_text": rule_yaml(data, rule)})
+                        report["findings"].append({"rule_id": str(rule.id or (source["name"] + ":" + rule.title)), "title": rule.title, "severity": level, "source": source["name"] + " sha256:" + sha256, "license": str(getattr(rule, "license", None) or "Not supplied by rule"), "author": supplied_authors(rule), "mitre": attack_tags(rule.tags or []), "count": total, "evidence": retained, "events": event_ids[:room], "details": details, "rule_text": rule_yaml(data, rule)})
                 except Exception as error:
                     if "no such column" in str(error):
                         report["backend_rejected"] += 1

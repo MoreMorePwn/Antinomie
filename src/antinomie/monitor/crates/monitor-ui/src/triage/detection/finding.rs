@@ -2,6 +2,7 @@
 //! One finding in full: how each engine's explanation is read, and the movable
 //! Details window with the rule, its metadata and every evidence location.
 use super::*;
+use antinomie_monitor_core::analysis::detection::journal::Focus;
 
 /// An engine's `details` text split into a readable summary and label/value
 /// rows. The text is built by the engines in monitor-core and is never shown
@@ -235,14 +236,42 @@ pub(super) fn evidence_values(evidence: &Evidence) -> Vec<(&'static str, RowValu
     }
 }
 
+/// What a click on an evidence row asks for.
+#[derive(Debug, PartialEq)]
+pub(super) enum Pick {
+    /// The recorded call, packet or bytes.
+    Source(Evidence),
+    /// The normalized event in the Sigma journal.
+    Journal(Focus),
+}
+
+/// Where the event behind `finding.evidence[index]` sits in the journal. Only
+/// Sigma evaluates the journal. A result saved before event numbers were kept
+/// can only name the call or packet, which may have produced several events.
+pub(super) fn journal_focus(engine: Engine, finding: &Finding, index: usize) -> Option<Focus> {
+    if engine != Engine::Sigma {
+        return None;
+    }
+    if let Some(event) = finding.events.get(index) {
+        return Some(Focus::Event(*event));
+    }
+    match finding.evidence.get(index)? {
+        source @ (Evidence::Call { .. } | Evidence::Packet { .. }) => {
+            Some(Focus::Source(source.clone()))
+        }
+        Evidence::Bytes { .. } => None,
+    }
+}
+
 /// Every retained location of a finding, each one a button. Returns the one
-/// clicked this frame.
+/// clicked this frame. A Sigma location also opens the journal event.
 pub(super) fn evidence_list(
     ui: &mut egui::Ui,
+    engine: Engine,
     finding: &Finding,
     salt: impl std::hash::Hash,
     max_height: f32,
-) -> Option<Evidence> {
+) -> Option<Pick> {
     let mut selected = None;
     if finding.evidence.is_empty() {
         ui.weak("No evidence location was recorded for this rule.");
@@ -252,13 +281,33 @@ pub(super) fn evidence_list(
         .max_height(max_height)
         .auto_shrink([false, true])
         .show(ui, |ui| {
-            for evidence in &finding.evidence {
-                if ui
-                    .add(egui::Button::new(evidence_label(evidence)).wrap())
-                    .clicked()
-                {
-                    selected = Some(evidence.clone());
-                }
+            for (index, evidence) in finding.evidence.iter().enumerate() {
+                let focus = journal_focus(engine, finding, index);
+                ui.horizontal_wrapped(|ui| {
+                    if let Some(Focus::Event(event)) = &focus {
+                        let label = format!("Journal event #{event}");
+                        let button = ui
+                            .add(egui::Button::new(label).wrap())
+                            .on_hover_text("Open this event in the normalized event journal");
+                        if button.clicked() {
+                            selected = Some(Pick::Journal(Focus::Event(*event)));
+                        }
+                    }
+                    if ui
+                        .add(egui::Button::new(evidence_label(evidence)).wrap())
+                        .clicked()
+                    {
+                        selected = Some(Pick::Source(evidence.clone()));
+                    }
+                    if let Some(Focus::Source(source)) = &focus {
+                        let button = ui.small_button("In journal").on_hover_text(
+                            "Saved before event numbers were kept: shows the first journal event recorded for this source",
+                        );
+                        if button.clicked() {
+                            selected = Some(Pick::Journal(Focus::Source(source.clone())));
+                        }
+                    }
+                });
             }
         });
     if (finding.count as usize) > finding.evidence.len() {
@@ -325,6 +374,15 @@ impl View {
         }
     }
 
+    /// Act on a clicked location. `scanned` is the journal digest of the
+    /// result it came from, so the viewer can tell if the file has changed.
+    pub(super) fn open_pick(&mut self, ctx: &egui::Context, scanned: Option<String>, pick: Pick) {
+        match pick {
+            Pick::Source(evidence) => self.open_evidence(ctx, evidence),
+            Pick::Journal(focus) => self.journal.open(ctx, scanned, Some(focus)),
+        }
+    }
+
     /// Open a retained location: bytes load a preview, the rest jump to their view.
     pub(super) fn open_evidence(&mut self, ctx: &egui::Context, evidence: Evidence) {
         match evidence {
@@ -363,16 +421,17 @@ impl View {
                 .show(ctx, |ui| {
                     let preview = self.bytes.as_ref();
                     let loading = self.byte_rx.is_some();
-                    if let Some(evidence) = finding_body(ui, report, finding, preview, loading) {
-                        clicked = Some(evidence);
+                    if let Some(pick) = finding_body(ui, report, finding, preview, loading) {
+                        clicked = Some((report.source_digest.clone(), pick));
                     }
                 });
             open
         });
         self.windows = keys;
-        if let Some(evidence) = clicked {
-            self.open_evidence(ctx, evidence);
+        if let Some((scanned, pick)) = clicked {
+            self.open_pick(ctx, scanned, pick);
         }
+        self.journal.show(ctx, self.identity.as_ref(), self.clock);
     }
 }
 
@@ -382,7 +441,7 @@ fn finding_body(
     finding: &Finding,
     preview: Option<&BytePreview>,
     loading: bool,
-) -> Option<Evidence> {
+) -> Option<Pick> {
     let parsed = parse_details(report.engine, &finding.details);
     let mut clicked = None;
     egui::ScrollArea::vertical()
@@ -462,8 +521,9 @@ fn finding_body(
                 ui,
                 &format!("Evidence locations ({})", finding.evidence.len()),
             );
-            if let Some(evidence) = evidence_list(ui, finding, "detection-finding-hits", 240.0) {
-                clicked = Some(evidence);
+            if let Some(pick) = evidence_list(ui, report.engine, finding, "detection-finding-hits", 240.0)
+            {
+                clicked = Some(pick);
             }
             byte_preview(ui, preview, loading, finding);
         });

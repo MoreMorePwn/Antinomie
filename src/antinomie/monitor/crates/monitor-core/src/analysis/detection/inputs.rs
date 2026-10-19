@@ -195,17 +195,7 @@ pub(super) fn journal_input(
             _ => {}
         }
     }
-    let mut counted: Vec<_> = categories.into_iter().collect();
-    counted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    let total: u64 = counted.iter().map(|(_, count)| count).sum();
-    let mut detail = format!(
-        "{} {}",
-        group_digits(total),
-        if total == 1 { "event" } else { "events" }
-    );
-    for (category, count) in &counted {
-        detail.push_str(&format!(" · {category} {}", group_digits(*count)));
-    }
+    let detail = super::journal::category_detail(&categories);
     input = input.detail(detail);
     match end {
         None => input.partial("the journal has no end record; it was still being written"),

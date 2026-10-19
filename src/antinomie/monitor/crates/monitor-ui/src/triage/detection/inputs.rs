@@ -36,34 +36,44 @@ fn outcome(outcome: InputOutcome) -> (&'static str, egui::Color32) {
 }
 
 /// Where a click on the row goes.
-pub(super) fn target(input: &ScannedInput) -> Option<OpenInput> {
-    let parent = || input.path.parent().map(Path::to_path_buf);
-    match input.kind {
-        InputKind::Executable => Some(OpenInput::StaticAnalysis),
-        InputKind::Capture => Some(OpenInput::Capture(input.path.clone())),
-        InputKind::CoreDump => Some(OpenInput::Core(input.path.clone())),
-        InputKind::MemoryDump => parent().map(OpenInput::Memory),
-        InputKind::RecoveredFile => parent().map(OpenInput::Folder),
-        InputKind::EventJournal => None,
-    }
+#[derive(Debug, PartialEq)]
+pub(super) enum Route {
+    /// A panel or folder the app opens.
+    Open(OpenInput),
+    /// The event journal viewer here, pinned to the digest the scan read.
+    Journal(Option<String>),
 }
 
-fn hover(input: &ScannedInput, target: Option<&OpenInput>) -> String {
+pub(super) fn target(input: &ScannedInput) -> Option<Route> {
+    let parent = || input.path.parent().map(Path::to_path_buf);
+    let open = match input.kind {
+        InputKind::Executable => OpenInput::StaticAnalysis,
+        InputKind::Capture => OpenInput::Capture(input.path.clone()),
+        InputKind::CoreDump => OpenInput::Core(input.path.clone()),
+        InputKind::MemoryDump => OpenInput::Memory(parent()?),
+        InputKind::RecoveredFile => OpenInput::Folder(parent()?),
+        InputKind::EventJournal => return Some(Route::Journal(input.sha256.clone())),
+    };
+    Some(Route::Open(open))
+}
+
+fn hover(input: &ScannedInput, target: Option<&Route>) -> String {
     let mut text = input.path.display().to_string();
     if let Some(target) = target {
         text.push_str(match target {
-            OpenInput::StaticAnalysis => "\nClick to open in Static Analysis",
-            OpenInput::Capture(_) => "\nClick to open in Network",
-            OpenInput::Core(_) => "\nClick to open in Core dumps",
-            OpenInput::Memory(_) => "\nClick to open in Memory",
-            OpenInput::Folder(_) => "\nClick to open its folder",
+            Route::Open(OpenInput::StaticAnalysis) => "\nClick to open in Static Analysis",
+            Route::Open(OpenInput::Capture(_)) => "\nClick to open in Network",
+            Route::Open(OpenInput::Core(_)) => "\nClick to open in Core dumps",
+            Route::Open(OpenInput::Memory(_)) => "\nClick to open in Memory",
+            Route::Open(OpenInput::Folder(_)) => "\nClick to open its folder",
+            Route::Journal(_) => "\nClick to inspect the events Sigma evaluated",
         });
     }
     text
 }
 
 /// One input; returns where to go when its name was clicked.
-fn row(ui: &mut egui::Ui, input: &ScannedInput) -> Option<OpenInput> {
+fn row(ui: &mut egui::Ui, input: &ScannedInput) -> Option<Route> {
     let target = target(input);
     let mut clicked = false;
     ui.horizontal_wrapped(|ui| {
@@ -176,9 +186,12 @@ impl View {
                 ));
             }
         });
-        if let Some(target) = chosen {
-            ui.ctx()
-                .data_mut(|data| data.insert_temp(egui::Id::new(OPEN_INPUT), target));
+        match chosen {
+            Some(Route::Open(target)) => ui
+                .ctx()
+                .data_mut(|data| data.insert_temp(egui::Id::new(OPEN_INPUT), target)),
+            Some(Route::Journal(scanned)) => self.journal.open(ui.ctx(), scanned, None),
+            None => {}
         }
     }
 }
@@ -270,22 +283,32 @@ mod tests {
     #[test]
     fn rows_open_where_each_input_is_viewed() {
         let rows = inputs();
-        assert_eq!(target(&rows[0]), Some(OpenInput::StaticAnalysis));
+        assert_eq!(
+            target(&rows[0]),
+            Some(Route::Open(OpenInput::StaticAnalysis))
+        );
         assert_eq!(
             target(&rows[1]),
-            Some(OpenInput::Memory(PathBuf::from("/runs/r/memory")))
+            Some(Route::Open(OpenInput::Memory(PathBuf::from(
+                "/runs/r/memory"
+            ))))
         );
         assert_eq!(
             target(&rows[2]),
-            Some(OpenInput::Folder(PathBuf::from("/runs/r/memory")))
+            Some(Route::Open(OpenInput::Folder(PathBuf::from(
+                "/runs/r/memory"
+            ))))
         );
         let capture = ScannedInput::new(InputKind::Capture, "/runs/r/net.pcap");
         assert_eq!(
             target(&capture),
-            Some(OpenInput::Capture(PathBuf::from("/runs/r/net.pcap")))
+            Some(Route::Open(OpenInput::Capture(PathBuf::from(
+                "/runs/r/net.pcap"
+            ))))
         );
-        let journal = ScannedInput::new(InputKind::EventJournal, "/runs/r/triage-events.jsonl");
-        assert_eq!(target(&journal), None);
+        let mut journal = ScannedInput::new(InputKind::EventJournal, "/runs/r/triage-events.jsonl");
+        journal.sha256 = Some("ab".into());
+        assert_eq!(target(&journal), Some(Route::Journal(Some("ab".into()))));
 
         // Clicking a name leaves the target for the app.
         let ctx = egui::Context::default();

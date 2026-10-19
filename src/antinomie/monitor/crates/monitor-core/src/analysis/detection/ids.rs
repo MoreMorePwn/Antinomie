@@ -171,6 +171,7 @@ fn alert(
                 mitre: mitre_references(&metadata_text),
                 count: 0,
                 evidence: vec![],
+                events: vec![],
                 details: format!(
                     "{}; {}:{} → {}:{}; {}",
                     value(data, "category"),

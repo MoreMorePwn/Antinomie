@@ -123,6 +123,7 @@ fn record(
                     mitre: mitre_references(&references),
                     count: 0,
                     evidence: vec![],
+                    events: vec![],
                     details: details.chars().take(8192).collect(),
                     rule_text: budget.take(body.as_deref().unwrap_or("")),
                 });

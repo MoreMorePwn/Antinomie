@@ -509,6 +509,7 @@ fn validate_report(report: &Report, request: &Request) -> Result<(), String> {
             || finding.license.len() > 8192
             || finding.severity.len() > 1024
             || finding.evidence.len() > MATCH_LIMIT
+            || !(finding.events.is_empty() || finding.events.len() == finding.evidence.len())
             || finding.mitre.len() > 128
             || finding.mitre.iter().any(|value| value.len() > 128)
         {
@@ -1183,6 +1184,7 @@ mod tests {
                     cookie: 1,
                     call: 1,
                 },
+                time: None,
             })
             .unwrap();
         journal.finish(true).unwrap();
