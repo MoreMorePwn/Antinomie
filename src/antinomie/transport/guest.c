@@ -16,6 +16,7 @@
 #include <linux/workqueue.h>
 #include "queue.h"
 #include "process_core.h"
+#include "debug.h"
 
 struct ant_cpu {
 	struct page *pages;
@@ -44,7 +45,7 @@ struct ant_handler {
 	ant_command_handler fn;
 	void *context;
 };
-static struct ant_handler handlers[32];
+static struct ant_handler handlers[64];
 static DECLARE_RWSEM(handler_lock);
 static u8 command_args[ANT_MAX_COMMAND_LEN], command_result[ANT_MAX_RESULT_LEN];
 static u64 last_request_id;
@@ -68,7 +69,7 @@ static bool service_resume(void)
 	/* Fence acknowledgment waits until manual acquisition owns no parks.
 	 * Completed immutable evidence remains retained across reattachment.
 	 */
-	if (!ant_manual_fence())
+	if (!ant_manual_fence() || !ant_debug_fence())
 		return true;
 	floor = max(last_request_id, ANT_ACQ(&boot->resume_sequence_floor));
 	cursor = request_tail;

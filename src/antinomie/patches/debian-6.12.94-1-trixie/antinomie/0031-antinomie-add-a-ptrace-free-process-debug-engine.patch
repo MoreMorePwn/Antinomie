@@ -1,0 +1,1880 @@
+Description: antinomie: add a ptrace-free process debug engine
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-20
+
+Process debug engine: cooperative stop, engine breakpoints, hidden single-step; x86-64 first.
+
+---
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+index 5d02ea365..ca9d0323b 100644
+--- a/include/linux/antinomie_monitor.h
++++ b/include/linux/antinomie_monitor.h
+@@ -2,6 +2,7 @@
+ #ifndef _LINUX_ANTINOMIE_MONITOR_H
+ #define _LINUX_ANTINOMIE_MONITOR_H
+ #include <linux/types.h>
++#include <linux/jump_label.h>
+ struct task_struct;
+ struct pt_regs;
+ struct ant_task;
+@@ -21,6 +22,15 @@ struct kernel_siginfo;
+ #define ANT_ASYNC_PRODUCER_UNKNOWN BIT(1)
+ #define ANT_ASYNC_ABANDONED BIT(2)
+ #ifdef CONFIG_ANTINOMIE
++DECLARE_STATIC_KEY_FALSE(ant_dbg_shadow_key);
++void ant_dbg_shadow_read(struct mm_struct *mm, unsigned long addr, void *buf, int len);
++/* Reads of a debugged process's own memory never reveal an engine breakpoint. */
++static inline void ant_monitor_shadow_read(struct mm_struct *mm, unsigned long addr,
++					   void *buf, int len)
++{
++	if (static_branch_unlikely(&ant_dbg_shadow_key))
++		ant_dbg_shadow_read(mm, addr, buf, len);
++}
+ void ant_monitor_enter(struct pt_regs *regs, long nr);
+ void ant_monitor_exit(struct pt_regs *regs);
+ void ant_monitor_fork(struct task_struct *child);
+@@ -81,6 +91,8 @@ void ant_monitor_aio_ctx_free(const void *ioctx);
+ void ant_monitor_operand(u8 arg, const char *key, const char *layout, const void *data,
+ 			 size_t size);
+ #else
++static inline void ant_monitor_shadow_read(struct mm_struct *mm, unsigned long addr,
++					   void *buf, int len) {}
+ static inline void ant_monitor_enter(struct pt_regs *regs, long nr) {}
+ static inline void ant_monitor_exit(struct pt_regs *regs) {}
+ static inline void ant_monitor_fork(struct task_struct *child) {}
+diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
+index 5ebd04bd6..14baeb08f 100644
+--- a/kernel/antinomie/Makefile
++++ b/kernel/antinomie/Makefile
+@@ -6,3 +6,4 @@ obj-y += process_core.o
+ obj-y += manual_core.o
+ obj-y += resources.o
+ obj-y += hash.o
++obj-y += debug.o debug_x86.o
+diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
+index 3071c68d3..2b8303f4b 100644
+--- a/kernel/antinomie/control.c
++++ b/kernel/antinomie/control.c
+@@ -27,6 +27,7 @@
+ #include "observer.h"
+ #include "resources.h"
+ #include "process_core.h"
++#include "debug.h"
+ 
+ #define ANT_SESSION_MAX 64
+ 
+@@ -567,7 +568,8 @@ static int command(const void *data, size_t args_len, void *reply,
+ 	    get_unaligned_le16(args + 2) != ANTC_HEADER_SIZE)
+ 		return opcode == ANTC_RUN_STATUS ? -EINVAL : -EPROTO;
+ 	if (opcode != ANTC_UPLOAD_BEGIN && opcode != ANTC_EXEC &&
+-	    get_unaligned_le32(args + 4))
++	    opcode != ANTC_DEBUG_ATTACH && opcode != ANTC_DEBUG_DETACH &&
++	    opcode != ANTC_DEBUG_CONT && get_unaligned_le32(args + 4))
+ 		return -EINVAL;
+ 	switch (opcode) {
+ 	case ANTC_PROCESS_LIST: case ANTC_CAPTURE_ATTACH: case ANTC_CAPTURE_ALL:
+@@ -587,6 +589,12 @@ static int command(const void *data, size_t args_len, void *reply,
+ 		return ant_manual_command(opcode, args, args_len, reply, capacity, reply_len);
+ 	case ANTC_CORE_STATUS: case ANTC_CORE_READ: case ANTC_CORE_RELEASE: case ANTC_CORE_CANCEL:
+ 		return ant_core_command(opcode, args, args_len, reply, capacity, reply_len);
++	case ANTC_DEBUG_CAPS: case ANTC_DEBUG_ATTACH: case ANTC_DEBUG_DETACH:
++	case ANTC_DEBUG_STATUS: case ANTC_DEBUG_STOP: case ANTC_DEBUG_CONT:
++	case ANTC_DEBUG_THREADS: case ANTC_DEBUG_REGS_READ: case ANTC_DEBUG_REGS_WRITE:
++	case ANTC_DEBUG_MEM_READ: case ANTC_DEBUG_MEM_WRITE: case ANTC_DEBUG_BP_SET:
++	case ANTC_DEBUG_BP_CLEAR:
++		return ant_debug_command(opcode, args, args_len, reply, capacity, reply_len);
+ 	case ANTC_RESOURCES:
+ 		return ant_resources_command(args, args_len, reply, capacity, reply_len);
+ 	case ANTC_ACQUIRE:
+@@ -656,7 +664,11 @@ static int __init ant_control_init(void)
+ 		ANTC_SPECIMEN_RELEASE, ANTC_PROCESS_LIST, ANTC_CAPTURE_ATTACH,
+ 		ANTC_CAPTURE_ALL, ANTC_CAPTURE_STOP, ANTC_CAPTURE_STATUS,
+ 		ANTC_CORE_STATUS, ANTC_CORE_READ, ANTC_CORE_RELEASE,
+-		ANTC_CORE_CAPTURE, ANTC_CORE_LOOKUP, ANTC_CORE_CANCEL, ANTC_RESOURCES };
++		ANTC_CORE_CAPTURE, ANTC_CORE_LOOKUP, ANTC_CORE_CANCEL, ANTC_RESOURCES,
++		ANTC_DEBUG_CAPS, ANTC_DEBUG_ATTACH, ANTC_DEBUG_DETACH, ANTC_DEBUG_STATUS,
++		ANTC_DEBUG_STOP, ANTC_DEBUG_CONT, ANTC_DEBUG_THREADS, ANTC_DEBUG_REGS_READ,
++		ANTC_DEBUG_REGS_WRITE, ANTC_DEBUG_MEM_READ, ANTC_DEBUG_MEM_WRITE,
++		ANTC_DEBUG_BP_SET, ANTC_DEBUG_BP_CLEAR };
+ 	int i, error;
+ 
+ 	for (i = 0; i < ARRAY_SIZE(opcodes); i++) {
+diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
+new file mode 100644
+index 000000000..8cef32353
+--- /dev/null
++++ b/kernel/antinomie/debug.c
+@@ -0,0 +1,1493 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* Ptrace-free process debug engine: one all-stop session over one thread group.
++ *
++ * Threads stop cooperatively, as in manual_core.c: a task_work callback
++ * (TWA_SIGNAL) parks each thread at its next return to user mode, in a killable
++ * sleep, with its registers frozen in its pt_regs. No ptrace relationship, no
++ * tracer pid, no signal to the sample. A software breakpoint is an engine-owned
++ * byte written only while the group runs and removed at every stop; the trap is
++ * recognised by a die notifier and turned into a park, never into SIGTRAP.
++ *
++ * Lock order: dbg_lock (attach/teardown) -> session lock (a spinlock that trap
++ * and park callbacks may take with interrupts off). Callbacks never take dbg_lock
++ * and never sleep except in their final wait. Every wait on another task is
++ * cooperative with a deadline; a thread that cannot be stopped is reported, never
++ * waited for without bound.
++ */
++#include <linux/antinomie_monitor.h>
++#include <linux/elf.h>
++#include <linux/jiffies.h>
++#include <linux/mm.h>
++#include <linux/mutex.h>
++#include <linux/pid.h>
++#include <linux/rculist.h>
++#include <linux/refcount.h>
++#include <linux/regset.h>
++#include <linux/sched/mm.h>
++#include <linux/sched/signal.h>
++#include <linux/sched/task.h>
++#include <linux/slab.h>
++#include <linux/task_work.h>
++#include <linux/unaligned.h>
++#include <linux/wait.h>
++#include <linux/workqueue.h>
++#include "control_wire.h"
++#include "debug.h"
++
++#define MAX_RECORDS 1024U
++#define MAX_LIVE_THREADS 256U
++#define MAX_BREAKPOINTS 256U
++#define STOP_TIMEOUT_MS 3000U
++#define STEP_TIMEOUT_MS 2000U
++#define TEARDOWN_TIMEOUT_MS 3000U
++
++#define T_RUNNING ANTC_DEBUG_THREAD_RUNNING
++#define T_PARKED ANTC_DEBUG_THREAD_STOPPED
++#define T_DEAD ANTC_DEBUG_THREAD_GONE
++
++#define W_STOP 1U
++#define W_CONT 2U
++#define W_DETACH 4U
++#define W_SYNC 8U
++#define SPARE_RECORDS 32U
++
++/* The records list is appended to while readers walk it. */
++#define for_each_record(t, s) list_for_each_entry_rcu(t, &(s)->threads, node, true)
++
++DEFINE_STATIC_KEY_FALSE(ant_dbg_shadow_key);
++
++struct ant_dbg;
++
++struct ant_dbg_thread {
++	struct list_head node;
++	struct callback_head work;
++	struct rcu_head rcu;
++	struct ant_dbg *session;
++	struct task_struct *task;
++	u32 tid;
++	unsigned long queued;	/* bit 0: the park callback is queued */
++	u32 state;
++	u32 pending;		/* trap event, consumed by the park callback */
++	u64 pending_addr;
++	u32 reason;		/* why the thread last stopped (event kind) */
++	u32 epoch;		/* counts parks */
++	bool go, stepping;
++	struct ant_dbg_step step;
++};
++
++struct ant_dbg_bp {
++	u64 addr;
++	u32 len;
++	bool inserted;
++	u8 orig[ANT_DBG_MAX_BP_LEN];
++};
++
++struct ant_dbg {
++	struct rcu_head rcu;
++	struct work_struct free_work;
++	refcount_t refs;
++	spinlock_t lock;
++	wait_queue_head_t wait;
++	struct work_struct work;
++	struct list_head threads;	/* RCU readers: the trap glue */
++	unsigned int records, nspare;
++	struct ant_dbg_thread *spare[SPARE_RECORDS];
++	struct task_struct *leader;
++	struct mm_struct *mm;
++	struct pid *tgid_pid;
++	u64 id, cookie, start_ns, nonce_lo, nonce_hi, generation;
++	u32 tgid, state, want, park_seq;
++	u32 ev_kind, ev_tid, ev_seq;
++	u64 ev_pc, ev_addr;
++	int last_error;
++	u32 wait_status;
++	bool teardown, kill, interrupt, step_request, detaching;
++	u32 step_tid;
++	struct ant_dbg_bp bps[MAX_BREAKPOINTS];
++	unsigned int bp_count;
++};
++
++static DEFINE_MUTEX(dbg_lock);
++static struct ant_dbg __rcu *active_dbg;
++static struct workqueue_struct *dbg_worker;
++static u64 next_session_id;
++
++/* The last reference is dropped from any context, including a trap and a
++ * softirq. Freeing the address space reference takes pgd_lock, which is not
++ * softirq safe, so the free itself runs from a work item after an RCU grace
++ * period (trap readers may still walk the session until then).
++ */
++static void session_free_work(struct work_struct *work)
++{
++	struct ant_dbg *s = container_of(work, struct ant_dbg, free_work);
++	struct ant_dbg_thread *t, *next;
++	unsigned int i;
++
++	list_for_each_entry_safe(t, next, &s->threads, node) {
++		put_task_struct(t->task);
++		kfree(t);
++	}
++	for (i = 0; i < s->nspare; i++)
++		kfree(s->spare[i]);
++	put_task_struct(s->leader);
++	put_pid(s->tgid_pid);
++	mmdrop(s->mm);
++	kfree(s);
++}
++
++static void session_free_rcu(struct rcu_head *rcu)
++{
++	struct ant_dbg *s = container_of(rcu, struct ant_dbg, rcu);
++
++	INIT_WORK(&s->free_work, session_free_work);
++	schedule_work(&s->free_work);
++}
++
++static void session_put(struct ant_dbg *s)
++{
++	if (refcount_dec_and_test(&s->refs))
++		call_rcu(&s->rcu, session_free_rcu);
++}
++
++/* ---- thread records ---------------------------------------------------- */
++
++static struct ant_dbg_thread *find_thread(struct ant_dbg *s, struct task_struct *task)
++{
++	struct ant_dbg_thread *t;
++
++	list_for_each_entry_rcu(t, &s->threads, node)
++		if (t->task == task)
++			return t;
++	return NULL;
++}
++
++static struct ant_dbg_thread *find_tid(struct ant_dbg *s, u32 tid)
++{
++	struct ant_dbg_thread *t;
++
++	for_each_record(t, s)
++		if (t->tid == tid && t->state != T_DEAD)
++			return t;
++	return NULL;
++}
++
++static bool thread_gone(struct ant_dbg_thread *t)
++{
++	return READ_ONCE(t->state) == T_DEAD || (READ_ONCE(t->task->flags) & PF_EXITING);
++}
++
++/* Runs under scheduler locks. Never wait_task_inactive(): it may spin without
++ * bound. A parked thread sleeps in an uninterruptible-or-killable state.
++ */
++static int parked_inactive(struct task_struct *task, void *unused)
++{
++	return !task_curr(task) && !READ_ONCE(task->on_rq) &&
++		(READ_ONCE(task->__state) & TASK_UNINTERRUPTIBLE);
++}
++
++static bool thread_parked(struct ant_dbg_thread *t)
++{
++	return READ_ONCE(t->state) == T_PARKED && task_call_func(t->task, parked_inactive, NULL);
++}
++
++static void queue_work_ref(struct ant_dbg *s)
++{
++	if (!refcount_inc_not_zero(&s->refs))
++		return;
++	if (!queue_work(dbg_worker, &s->work))
++		session_put(s);
++}
++
++static void park_work(struct callback_head *work);
++
++/* Ask one thread to park. Callable from the trap glue (interrupts off) and from
++ * the worker. The queued bit makes the callback head single-use.
++ */
++static void queue_thread(struct ant_dbg *s, struct ant_dbg_thread *t)
++{
++	if (READ_ONCE(s->teardown) || test_and_set_bit(0, &t->queued))
++		return;
++	if (!refcount_inc_not_zero(&s->refs)) {
++		clear_bit(0, &t->queued);
++		return;
++	}
++	if (task_work_add(t->task, &t->work, TWA_SIGNAL)) {
++		/* The task is past its last task_work run: it is leaving. */
++		WRITE_ONCE(t->state, T_DEAD);
++		clear_bit(0, &t->queued);
++		wake_up_all(&s->wait);
++		session_put(s);
++	}
++}
++
++/* Add records for threads not yet known; optionally ask every unparked thread
++ * to stop. Returns -E2BIG when the session's bounds are exceeded.
++ */
++static int sync_threads(struct ant_dbg *s, bool stop_all)
++{
++	struct task_struct *found[32];
++	struct ant_dbg_thread *t;
++	unsigned int count, i;
++	struct task_struct *p;
++	bool more;
++	int error = 0;
++
++	do {
++		count = 0;
++		more = false;
++		read_lock(&tasklist_lock);
++		for_each_thread(s->leader, p) {
++			if (READ_ONCE(p->flags) & PF_EXITING)
++				continue;
++			rcu_read_lock();
++			t = find_thread(s, p);
++			rcu_read_unlock();
++			if (t)
++				continue;
++			if (count == ARRAY_SIZE(found)) {
++				more = true;
++				break;
++			}
++			get_task_struct(p);
++			found[count++] = p;
++		}
++		read_unlock(&tasklist_lock);
++		for (i = 0; i < count; i++) {
++			t = kzalloc(sizeof(*t), GFP_KERNEL);
++			if (!t) {
++				put_task_struct(found[i]);
++				error = -ENOMEM;
++				continue;
++			}
++			t->session = s;
++			t->task = found[i];
++			t->tid = task_pid_nr(found[i]);
++			t->state = T_RUNNING;
++			init_task_work(&t->work, park_work);
++			spin_lock_irq(&s->lock);
++			if (find_thread(s, found[i]) || s->records == MAX_RECORDS) {
++				/* Adopted by the trap glue meanwhile, or no room. */
++				if (!find_thread(s, found[i]))
++					error = -E2BIG;
++				spin_unlock_irq(&s->lock);
++				put_task_struct(found[i]);
++				kfree(t);
++				continue;
++			}
++			s->records++;
++			list_add_tail_rcu(&t->node, &s->threads);
++			spin_unlock_irq(&s->lock);
++		}
++	} while (more);
++	while (READ_ONCE(s->nspare) < SPARE_RECORDS) {
++		t = kzalloc(sizeof(*t), GFP_KERNEL);
++		if (!t)
++			break;
++		t->session = s;
++		init_task_work(&t->work, park_work);
++		spin_lock_irq(&s->lock);
++		if (s->nspare < SPARE_RECORDS) {
++			s->spare[s->nspare++] = t;
++			t = NULL;
++		}
++		spin_unlock_irq(&s->lock);
++		kfree(t);
++	}
++	if (stop_all)
++		for_each_record(t, s)
++			if (!thread_gone(t) && READ_ONCE(t->state) != T_PARKED)
++				queue_thread(s, t);
++	return error;
++}
++
++static void free_record_rcu(struct rcu_head *rcu)
++{
++	struct ant_dbg_thread *t = container_of(rcu, struct ant_dbg_thread, rcu);
++
++	put_task_struct(t->task);
++	kfree(t);
++}
++
++/* Forget threads that have fully exited, so a program that starts and ends
++ * threads for a long time does not use up the session's records. A record is
++ * safe to free once the task is a zombie (its task_work can no longer run) and
++ * no callback is queued.
++ */
++static void reap_records(struct ant_dbg *s)
++{
++	struct ant_dbg_thread *t, *next;
++
++	spin_lock_irq(&s->lock);
++	list_for_each_entry_safe(t, next, &s->threads, node) {
++		if (!READ_ONCE(t->task->exit_state) || test_bit(0, &t->queued))
++			continue;
++		list_del_rcu(&t->node);
++		s->records--;
++		call_rcu(&t->rcu, free_record_rcu);
++	}
++	spin_unlock_irq(&s->lock);
++}
++
++static unsigned int count_threads(struct ant_dbg *s, unsigned int *parked)
++{
++	struct ant_dbg_thread *t;
++	unsigned int live = 0, stopped = 0;
++
++	for_each_record(t, s) {
++		if (thread_gone(t))
++			continue;
++		live++;
++		if (READ_ONCE(t->state) == T_PARKED)
++			stopped++;
++	}
++	if (parked)
++		*parked = stopped;
++	return live;
++}
++
++/* Every live thread of the group is recorded and asleep in the park. */
++static bool all_parked(struct ant_dbg *s)
++{
++	struct ant_dbg_thread *t;
++	struct task_struct *p;
++	bool ok = true;
++
++	for_each_record(t, s)
++		if (!thread_gone(t) && !thread_parked(t))
++			return false;
++	read_lock(&tasklist_lock);
++	for_each_thread(s->leader, p) {
++		if (READ_ONCE(p->flags) & PF_EXITING)
++			continue;
++		rcu_read_lock();
++		ok = find_thread(s, p) != NULL;
++		rcu_read_unlock();
++		if (!ok)
++			break;
++	}
++	read_unlock(&tasklist_lock);
++	return ok;
++}
++
++/* ---- breakpoints and shadow reads -------------------------------------- */
++
++static bool bp_inserted_at(struct ant_dbg *s, u64 addr)
++{
++	unsigned long flags;
++	unsigned int i;
++	bool found = false;
++
++	spin_lock_irqsave(&s->lock, flags);
++	for (i = 0; i < s->bp_count; i++)
++		if (s->bps[i].inserted && s->bps[i].addr == addr) {
++			found = true;
++			break;
++		}
++	spin_unlock_irqrestore(&s->lock, flags);
++	return found;
++}
++
++/* Reads of the sample's own memory that overlap an inserted breakpoint return
++ * the original bytes. Called from __access_remote_vm (/proc/<pid>/mem,
++ * ptrace peeks, the engine's own reads) with the mmap lock held.
++ */
++void ant_dbg_shadow_read(struct mm_struct *mm, unsigned long addr, void *buf, int len)
++{
++	struct ant_dbg *s;
++	unsigned long flags;
++	unsigned int i, j;
++
++	rcu_read_lock();
++	s = rcu_dereference(active_dbg);
++	if (s && s->mm == mm) {
++		spin_lock_irqsave(&s->lock, flags);
++		for (i = 0; i < s->bp_count; i++) {
++			struct ant_dbg_bp *bp = &s->bps[i];
++
++			if (!bp->inserted)
++				continue;
++			for (j = 0; j < bp->len; j++) {
++				u64 at = bp->addr + j;
++
++				if (at >= addr && at - addr < (unsigned int)len)
++					((u8 *)buf)[at - addr] = bp->orig[j];
++			}
++		}
++		spin_unlock_irqrestore(&s->lock, flags);
++	}
++	rcu_read_unlock();
++}
++
++static int mem_access(struct ant_dbg *s, u64 addr, void *buf, unsigned int len, bool write)
++{
++	int done;
++
++	if (!mmget_not_zero(s->mm))
++		return -ESRCH;
++	done = access_remote_vm(s->mm, addr, buf, len, FOLL_FORCE | (write ? FOLL_WRITE : 0));
++	mmput(s->mm);
++	return done;
++}
++
++static void insert_breakpoints(struct ant_dbg *s)
++{
++	unsigned int i;
++
++	for (i = 0; i < s->bp_count; i++) {
++		struct ant_dbg_bp bp, *slot = &s->bps[i];
++		u8 insn[ANT_DBG_MAX_BP_LEN];
++
++		spin_lock_irq(&s->lock);
++		bp = *slot;
++		spin_unlock_irq(&s->lock);
++		if (bp.inserted || !ant_dbg_arch_bp_insn(bp.len, insn))
++			continue;
++		if (mem_access(s, bp.addr, bp.orig, bp.len, false) != bp.len)
++			continue;
++		if (mem_access(s, bp.addr, insn, bp.len, true) != bp.len)
++			continue;
++		spin_lock_irq(&s->lock);
++		memcpy(slot->orig, bp.orig, bp.len);
++		slot->inserted = true;
++		spin_unlock_irq(&s->lock);
++	}
++}
++
++static void remove_breakpoints(struct ant_dbg *s)
++{
++	unsigned int i;
++
++	for (i = 0; i < s->bp_count; i++) {
++		struct ant_dbg_bp bp, *slot = &s->bps[i];
++
++		spin_lock_irq(&s->lock);
++		bp = *slot;
++		spin_unlock_irq(&s->lock);
++		if (!bp.inserted)
++			continue;
++		mem_access(s, bp.addr, bp.orig, bp.len, true);
++		spin_lock_irq(&s->lock);
++		slot->inserted = false;
++		spin_unlock_irq(&s->lock);
++	}
++}
++
++static bool bp_at(struct ant_dbg *s, u64 addr)
++{
++	unsigned int i;
++	bool found = false;
++
++	spin_lock_irq(&s->lock);
++	for (i = 0; i < s->bp_count; i++)
++		if (s->bps[i].addr == addr) {
++			found = true;
++			break;
++		}
++	spin_unlock_irq(&s->lock);
++	return found;
++}
++
++/* ---- trap glue (exception context, interrupts off) --------------------- */
++
++/* A thread created since the last stop has no record. Hand it one of the
++ * spares allocated ahead of time (no allocation in exception context) so its
++ * breakpoint is a stop, not a SIGTRAP. The worker refills the spares.
++ */
++static struct ant_dbg_thread *adopt_current(struct ant_dbg *s)
++{
++	struct ant_dbg_thread *t = NULL;
++	unsigned long flags;
++
++	if (!same_thread_group(current, s->leader))
++		return NULL;
++	spin_lock_irqsave(&s->lock, flags);
++	if (s->nspare && s->records < MAX_RECORDS) {
++		t = s->spare[--s->nspare];
++		t->task = current;
++		get_task_struct(current);
++		t->tid = task_pid_nr(current);
++		t->state = T_RUNNING;
++		s->records++;
++		list_add_tail_rcu(&t->node, &s->threads);
++		s->want |= W_SYNC;
++	}
++	spin_unlock_irqrestore(&s->lock, flags);
++	if (t)
++		queue_work_ref(s);
++	return t;
++}
++
++bool ant_dbg_trap_breakpoint(struct pt_regs *regs, unsigned long addr)
++{
++	struct ant_dbg *s;
++	struct ant_dbg_thread *t;
++	bool consumed = false;
++
++	if (!static_branch_unlikely(&ant_dbg_shadow_key))
++		return false;
++	rcu_read_lock();
++	s = rcu_dereference(active_dbg);
++	t = s && !READ_ONCE(s->teardown) ? find_thread(s, current) : NULL;
++	if (s && !t && !READ_ONCE(s->teardown) && bp_inserted_at(s, addr))
++		t = adopt_current(s);
++	if (t && bp_inserted_at(s, addr)) {
++		ant_dbg_arch_set_pc(regs, addr);
++		t->pending_addr = addr;
++		WRITE_ONCE(t->pending, ANTC_DEBUG_EVENT_BREAKPOINT);
++		queue_thread(s, t);
++		consumed = true;
++	}
++	rcu_read_unlock();
++	return consumed;
++}
++
++bool ant_dbg_trap_step(struct pt_regs *regs)
++{
++	struct ant_dbg *s;
++	struct ant_dbg_thread *t;
++	bool consumed = false;
++
++	if (!static_branch_unlikely(&ant_dbg_shadow_key))
++		return false;
++	rcu_read_lock();
++	s = rcu_dereference(active_dbg);
++	t = s && !READ_ONCE(s->teardown) ? find_thread(s, current) : NULL;
++	if (t && READ_ONCE(t->stepping)) {
++		ant_dbg_arch_hide_step(regs, &t->step);
++		WRITE_ONCE(t->pending, ANTC_DEBUG_EVENT_STEP);
++		queue_thread(s, t);
++		consumed = true;
++	}
++	rcu_read_unlock();
++	return consumed;
++}
++
++/* ---- the park ----------------------------------------------------------- */
++
++static void park_work(struct callback_head *work)
++{
++	struct ant_dbg_thread *t = container_of(work, struct ant_dbg_thread, work);
++	struct ant_dbg *s = t->session;
++	unsigned long flags;
++	u32 pending;
++
++	clear_bit(0, &t->queued);
++	pending = xchg(&t->pending, 0);
++	if (READ_ONCE(s->teardown))
++		goto out;
++	if (current->flags & PF_EXITING) {
++		WRITE_ONCE(t->state, T_DEAD);
++		goto out;
++	}
++	spin_lock_irqsave(&s->lock, flags);
++	t->reason = pending ?: ANTC_DEBUG_EVENT_INTERRUPT;
++	t->go = false;
++	t->epoch++;
++	t->state = T_PARKED;
++	s->park_seq++;
++	if (!pending && s->state == ANTC_DEBUG_RUNNING) {
++		/* A stop request that was overtaken (the stop gave up): do not park. */
++		t->state = T_RUNNING;
++		spin_unlock_irqrestore(&s->lock, flags);
++		goto out;
++	}
++	if (pending && s->state == ANTC_DEBUG_RUNNING) {
++		/* All-stop: the first event of a running group stops everything. */
++		s->ev_kind = pending;
++		s->ev_tid = t->tid;
++		s->ev_pc = ant_dbg_arch_pc(current);
++		s->ev_addr = pending == ANTC_DEBUG_EVENT_BREAKPOINT ? t->pending_addr : 0;
++		s->ev_seq++;
++		s->state = ANTC_DEBUG_STOPPING;
++		s->want |= W_STOP;
++		spin_unlock_irqrestore(&s->lock, flags);
++		queue_work_ref(s);
++	} else {
++		spin_unlock_irqrestore(&s->lock, flags);
++	}
++	wake_up_all(&s->wait);
++	/* Killable: SIGKILL (and a detach with kill) always gets the thread out. */
++	wait_event_killable(s->wait, READ_ONCE(t->go) || READ_ONCE(s->teardown));
++	spin_lock_irqsave(&s->lock, flags);
++	t->state = T_RUNNING;
++	s->park_seq++;
++	spin_unlock_irqrestore(&s->lock, flags);
++out:
++	wake_up_all(&s->wait);
++	session_put(s);
++}
++
++/* ---- worker: stop, continue, detach ------------------------------------- */
++
++static void set_state(struct ant_dbg *s, u32 state)
++{
++	spin_lock_irq(&s->lock);
++	s->state = state;
++	s->generation++;
++	spin_unlock_irq(&s->lock);
++}
++
++static void release_threads(struct ant_dbg *s)
++{
++	struct ant_dbg_thread *t;
++
++	for_each_record(t, s)
++		if (READ_ONCE(t->state) == T_PARKED)
++			WRITE_ONCE(t->go, true);
++	wake_up_all(&s->wait);
++}
++
++/* The group's life, from its threads: exited, or replaced by an exec. */
++static bool group_over(struct ant_dbg *s)
++{
++	struct ant_dbg_thread *t;
++	struct task_struct *p;
++	bool exec = false;
++
++	if (atomic_read(&s->leader->signal->live) == 0) {
++		spin_lock_irq(&s->lock);
++		if (s->state != ANTC_DEBUG_EXITED) {
++			s->wait_status = READ_ONCE(s->leader->signal->flags) & SIGNAL_GROUP_EXIT ?
++				READ_ONCE(s->leader->signal->group_exit_code) :
++				READ_ONCE(s->leader->exit_code);
++			s->state = ANTC_DEBUG_EXITED;
++			s->ev_kind = ANTC_DEBUG_EVENT_EXIT;
++			s->ev_seq++;
++			s->generation++;
++		}
++		spin_unlock_irq(&s->lock);
++		return true;
++	}
++	read_lock(&tasklist_lock);
++	for_each_thread(s->leader, p) {
++		struct mm_struct *mm = READ_ONCE(p->mm);
++
++		if (!(READ_ONCE(p->flags) & PF_EXITING) && mm && mm != s->mm)
++			exec = true;
++	}
++	read_unlock(&tasklist_lock);
++	if (exec) {
++		/* The address space the breakpoints lived in is gone with the old image. */
++		spin_lock_irq(&s->lock);
++		if (s->state != ANTC_DEBUG_EXEC) {
++			unsigned int i;
++
++			for (i = 0; i < s->bp_count; i++)
++				s->bps[i].inserted = false;
++			s->bp_count = 0;
++			s->state = ANTC_DEBUG_EXEC;
++			s->ev_kind = ANTC_DEBUG_EVENT_EXEC;
++			s->ev_seq++;
++			s->generation++;
++		}
++		spin_unlock_irq(&s->lock);
++		for_each_record(t, s)
++			WRITE_ONCE(t->go, true);
++		wake_up_all(&s->wait);
++	}
++	return exec;
++}
++
++static void do_stop(struct ant_dbg *s)
++{
++	unsigned long deadline = jiffies + msecs_to_jiffies(STOP_TIMEOUT_MS);
++	struct ant_dbg_thread *t;
++	int error = 0;
++	u32 seen;
++
++	spin_lock_irq(&s->lock);
++	if (s->state != ANTC_DEBUG_RUNNING && s->state != ANTC_DEBUG_STOPPING) {
++		spin_unlock_irq(&s->lock);
++		return;
++	}
++	s->state = ANTC_DEBUG_STOPPING;
++	spin_unlock_irq(&s->lock);
++	reap_records(s);
++	for (;;) {
++		spin_lock_irq(&s->lock);
++		seen = s->park_seq;
++		spin_unlock_irq(&s->lock);
++		error = sync_threads(s, true);
++		if (group_over(s))
++			return;
++		if (error)
++			break;
++		if (all_parked(s))
++			break;
++		if (time_after(jiffies, deadline)) {
++			error = -ETIMEDOUT;
++			break;
++		}
++		wait_event_timeout(s->wait, READ_ONCE(s->park_seq) != seen, 1);
++	}
++	if (error) {
++		/* Never claim a consistent stop that did not happen. */
++		spin_lock_irq(&s->lock);
++		s->last_error = error;
++		s->ev_kind = ANTC_DEBUG_EVENT_NONE;
++		spin_unlock_irq(&s->lock);
++		set_state(s, ANTC_DEBUG_RUNNING);
++		release_threads(s);
++		return;
++	}
++	for_each_record(t, s)
++		if (READ_ONCE(t->stepping) && READ_ONCE(t->state) == T_PARKED) {
++			ant_dbg_arch_step_done(t->task, &t->step, false);
++			WRITE_ONCE(t->stepping, false);
++		}
++	remove_breakpoints(s);
++	spin_lock_irq(&s->lock);
++	s->last_error = 0;
++	if (!s->ev_kind) {
++		/* Report a thread that is really parked: an exited leader has no
++		 * registers left to read.
++		 */
++		for_each_record(t, s)
++			if (!thread_gone(t) && READ_ONCE(t->state) == T_PARKED) {
++				s->ev_tid = t->tid;
++				s->ev_pc = ant_dbg_arch_pc(t->task);
++				break;
++			}
++		s->ev_kind = ANTC_DEBUG_EVENT_INTERRUPT;
++		s->ev_addr = 0;
++		s->ev_seq++;
++	}
++	s->interrupt = false;
++	spin_unlock_irq(&s->lock);
++	set_state(s, ANTC_DEBUG_STOPPED);
++}
++
++/* Execute one user instruction on a stopped thread with the rest of the group
++ * stopped. 0: it stopped again after the step.
++ */
++static int step_thread(struct ant_dbg *s, struct ant_dbg_thread *t)
++{
++	unsigned long deadline = jiffies + msecs_to_jiffies(STEP_TIMEOUT_MS);
++	u32 epoch = READ_ONCE(t->epoch), seen;
++	bool interrupted = false;
++	int error = 0;
++
++	ant_dbg_arch_step_arm(t->task, &t->step);
++	WRITE_ONCE(t->stepping, true);
++	WRITE_ONCE(t->go, true);
++	wake_up_all(&s->wait);
++	for (;;) {
++		spin_lock_irq(&s->lock);
++		seen = s->park_seq;
++		spin_unlock_irq(&s->lock);
++		if (READ_ONCE(t->epoch) != epoch && thread_parked(t))
++			break;
++		if (thread_gone(t)) {
++			error = -ESRCH;
++			break;
++		}
++		if (READ_ONCE(s->interrupt) && !interrupted) {
++			interrupted = true;
++			queue_thread(s, t);
++		}
++		if (time_after(jiffies, deadline)) {
++			error = -ETIMEDOUT;
++			break;
++		}
++		wait_event_timeout(s->wait, READ_ONCE(s->park_seq) != seen, 1);
++	}
++	if (error)
++		return error;
++	WRITE_ONCE(t->stepping, false);
++	ant_dbg_arch_step_done(t->task, &t->step, t->reason == ANTC_DEBUG_EVENT_STEP);
++	return t->reason == ANTC_DEBUG_EVENT_STEP ? 0 : -EINTR;
++}
++
++static void do_cont(struct ant_dbg *s)
++{
++	struct ant_dbg_thread *t;
++	bool step;
++	u32 tid, kind;
++	int error = 0;
++
++	spin_lock_irq(&s->lock);
++	step = s->step_request;
++	tid = s->step_tid;
++	kind = s->ev_kind;
++	if (!step)
++		tid = s->ev_tid;
++	s->step_request = false;
++	spin_unlock_irq(&s->lock);
++	t = find_tid(s, tid);
++	if (step) {
++		error = t ? step_thread(s, t) : -ESRCH;
++		if (group_over(s))
++			return;
++		spin_lock_irq(&s->lock);
++		s->last_error = error == -EINTR ? 0 : error;
++		if (!error || error == -EINTR) {
++			s->ev_kind = error ? ANTC_DEBUG_EVENT_INTERRUPT : ANTC_DEBUG_EVENT_STEP;
++			s->ev_tid = tid;
++			s->ev_pc = ant_dbg_arch_pc(t->task);
++			s->ev_addr = 0;
++			s->ev_seq++;
++			s->interrupt = false;
++			spin_unlock_irq(&s->lock);
++			set_state(s, ANTC_DEBUG_STOPPED);
++			return;
++		}
++		spin_unlock_irq(&s->lock);
++		goto run;
++	}
++	/* Step the thread that reported a breakpoint over its own instruction
++	 * while everything is stopped and the breakpoints are out of memory.
++	 */
++	if (t && (kind == ANTC_DEBUG_EVENT_BREAKPOINT || kind == ANTC_DEBUG_EVENT_STEP) &&
++	    bp_at(s, ant_dbg_arch_pc(t->task))) {
++		unsigned long pc = ant_dbg_arch_pc(t->task);
++		unsigned int tries = 0;
++
++		/* A repeated string instruction retires one iteration per trap. */
++		do {
++			error = step_thread(s, t);
++		} while (!error && ant_dbg_arch_pc(t->task) == pc && ++tries < 65536 &&
++			 !READ_ONCE(s->interrupt));
++		if (group_over(s))
++			return;
++		if (error && error != -EINTR)
++			s->last_error = error;
++		if (error == -EINTR || READ_ONCE(s->interrupt)) {
++			spin_lock_irq(&s->lock);
++			s->ev_kind = ANTC_DEBUG_EVENT_INTERRUPT;
++			s->ev_seq++;
++			s->interrupt = false;
++			spin_unlock_irq(&s->lock);
++			set_state(s, ANTC_DEBUG_STOPPED);
++			return;
++		}
++	}
++run:
++	insert_breakpoints(s);
++	spin_lock_irq(&s->lock);
++	s->ev_kind = ANTC_DEBUG_EVENT_NONE;
++	s->interrupt = false;
++	spin_unlock_irq(&s->lock);
++	set_state(s, ANTC_DEBUG_RUNNING);
++	release_threads(s);
++}
++
++static void unpublish(struct ant_dbg *s)
++{
++	struct ant_dbg_thread *t;
++
++	mutex_lock(&dbg_lock);
++	if (rcu_access_pointer(active_dbg) == s)
++		rcu_assign_pointer(active_dbg, NULL);
++	mutex_unlock(&dbg_lock);
++	WRITE_ONCE(s->teardown, true);
++	wake_up_all(&s->wait);
++	/* Callbacks that never ran must not outlive the session's use. */
++	for_each_record(t, s)
++		if (test_bit(0, &t->queued) && task_work_cancel(t->task, &t->work)) {
++			clear_bit(0, &t->queued);
++			session_put(s);
++		}
++	static_branch_dec(&ant_dbg_shadow_key);
++	session_put(s);	/* the published reference */
++}
++
++static void do_detach(struct ant_dbg *s)
++{
++	u32 state;
++
++	spin_lock_irq(&s->lock);
++	s->detaching = true;
++	spin_unlock_irq(&s->lock);
++	if (s->kill) {
++		kill_pid(s->tgid_pid, SIGKILL, 1);
++		unpublish(s);
++		return;
++	}
++	state = READ_ONCE(s->state);
++	if (state == ANTC_DEBUG_RUNNING || state == ANTC_DEBUG_STOPPING) {
++		do_stop(s);
++		state = READ_ONCE(s->state);
++	}
++	if (state == ANTC_DEBUG_RUNNING || state == ANTC_DEBUG_STOPPING) {
++		/* Could not stop the group, so breakpoints cannot be removed safely:
++		 * stay attached and say why; the host may retry or kill.
++		 */
++		spin_lock_irq(&s->lock);
++		s->detaching = false;
++		spin_unlock_irq(&s->lock);
++		return;
++	}
++	if (state == ANTC_DEBUG_STOPPED)
++		remove_breakpoints(s);
++	unpublish(s);	/* teardown also releases every parked thread */
++}
++
++static void dbg_work_fn(struct work_struct *work)
++{
++	struct ant_dbg *s = container_of(work, struct ant_dbg, work);
++	unsigned int want;
++
++	for (;;) {
++		spin_lock_irq(&s->lock);
++		want = s->want;
++		s->want = 0;
++		spin_unlock_irq(&s->lock);
++		if (!want || READ_ONCE(s->teardown))
++			break;
++		if (want & W_DETACH) {
++			do_detach(s);
++			continue;
++		}
++		if (want & W_SYNC)
++			sync_threads(s, false);
++		if (want & W_STOP)
++			do_stop(s);
++		if (want & W_CONT)
++			do_cont(s);
++	}
++	session_put(s);
++}
++
++/* ---- commands ----------------------------------------------------------- */
++
++static struct ant_dbg *lookup(u64 id)
++{
++	struct ant_dbg *s = rcu_dereference_protected(active_dbg, lockdep_is_held(&dbg_lock));
++
++	return s && s->id == id ? s : NULL;
++}
++
++static int eligible_group(struct task_struct *leader)
++{
++	if (READ_ONCE(leader->flags) & (PF_KTHREAD | PF_USER_WORKER | PF_EXITING) ||
++	    !READ_ONCE(leader->mm) || !ant_dbg_arch_task_ok(leader) ||
++	    get_nr_threads(leader) > MAX_LIVE_THREADS)
++		return -EOPNOTSUPP;
++	return 0;
++}
++
++static void reply_session(struct ant_dbg *s, u8 *reply)
++{
++	put_unaligned_le64(s->id, reply);
++	put_unaligned_le64(s->generation, reply + 8);
++	put_unaligned_le32(count_threads(s, NULL), reply + 16);
++	put_unaligned_le32(0, reply + 20);
++}
++
++static int cmd_caps(u8 *reply, size_t capacity, size_t *reply_len)
++{
++	struct ant_dbg_caps caps;
++	unsigned int i;
++
++	if (capacity < ANTC_DEBUG_CAPS_SIZE + ANT_DBG_MAX_REGSETS * ANTC_DEBUG_REGSET_SIZE)
++		return -EMSGSIZE;
++	ant_dbg_arch_caps(&caps);
++	memset(reply, 0, ANTC_DEBUG_CAPS_SIZE);
++	put_unaligned_le32(ANTC_DEBUG_ABI, reply);
++	put_unaligned_le32(caps.arch, reply + 4);
++	put_unaligned_le32(caps.flags | ANTC_DEBUG_CAP_SHADOW_READS | ANTC_DEBUG_CAP_MULTI_THREAD,
++			   reply + 8);
++	put_unaligned_le32(caps.swbp_len_mask, reply + 12);
++	put_unaligned_le32(caps.hw_breakpoints, reply + 16);
++	put_unaligned_le32(caps.hw_watchpoints, reply + 20);
++	put_unaligned_le32(caps.hw_watch_len_mask, reply + 24);
++	put_unaligned_le32(MAX_LIVE_THREADS, reply + 28);
++	put_unaligned_le32(ANTC_DEBUG_TRANSFER_MAX, reply + 32);
++	put_unaligned_le32(caps.regset_count, reply + 36);
++	for (i = 0; i < caps.regset_count; i++) {
++		u8 *entry = reply + ANTC_DEBUG_CAPS_SIZE + i * ANTC_DEBUG_REGSET_SIZE;
++
++		put_unaligned_le32(caps.regsets[i].nt_type, entry);
++		put_unaligned_le32(caps.regsets[i].max_size, entry + 4);
++		put_unaligned_le32(caps.regsets[i].flags, entry + 8);
++		put_unaligned_le32(0, entry + 12);
++	}
++	*reply_len = ANTC_DEBUG_CAPS_SIZE + caps.regset_count * ANTC_DEBUG_REGSET_SIZE;
++	return 0;
++}
++
++static struct ant_dbg *create_session(const u8 *args, u32 flags, int *error)
++{
++	struct ant_dbg *s;
++	struct task_struct *leader;
++	struct mm_struct *mm;
++
++	s = kzalloc(sizeof(*s), GFP_KERNEL);
++	if (!s) {
++		*error = -ENOMEM;
++		return NULL;
++	}
++	s->cookie = get_unaligned_le64(args + 8);
++	s->start_ns = get_unaligned_le64(args + 16);
++	s->tgid = get_unaligned_le32(args + 24);
++	s->nonce_lo = get_unaligned_le64(args + 32);
++	s->nonce_hi = get_unaligned_le64(args + 40);
++	INIT_LIST_HEAD(&s->threads);
++	spin_lock_init(&s->lock);
++	init_waitqueue_head(&s->wait);
++	INIT_WORK(&s->work, dbg_work_fn);
++	refcount_set(&s->refs, 1);
++	read_lock(&tasklist_lock);
++	rcu_read_lock();
++	leader = find_task_by_pid_ns(s->tgid, &init_pid_ns);
++	*error = -ESRCH;
++	if (leader && thread_group_leader(leader) && READ_ONCE(leader->ant_cookie) == s->cookie &&
++	    leader->start_boottime == s->start_ns) {
++		*error = eligible_group(leader);
++		if (!*error) {
++			get_task_struct(leader);
++			s->leader = leader;
++			s->tgid_pid = get_pid(task_tgid(leader));
++		}
++	}
++	rcu_read_unlock();
++	read_unlock(&tasklist_lock);
++	if (*error)
++		goto fail;
++	mm = get_task_mm(leader);
++	if (!mm) {
++		*error = -ESRCH;
++		goto fail_leader;
++	}
++	mmgrab(mm);
++	mmput(mm);
++	s->mm = mm;
++	s->state = ANTC_DEBUG_RUNNING;
++	s->generation = 1;
++	*error = sync_threads(s, false);
++	if (*error) {
++		struct ant_dbg_thread *t, *next;
++
++		list_for_each_entry_safe(t, next, &s->threads, node) {
++			put_task_struct(t->task);
++			kfree(t);
++		}
++		while (s->nspare)
++			kfree(s->spare[--s->nspare]);
++		mmdrop(mm);
++		goto fail_leader;
++	}
++	return s;
++fail_leader:
++	put_task_struct(s->leader);
++	put_pid(s->tgid_pid);
++fail:
++	kfree(s);
++	return NULL;
++}
++
++static int cmd_attach(const u8 *args, size_t args_len, u8 *reply, size_t capacity,
++		      size_t *reply_len)
++{
++	u32 flags = get_unaligned_le32(args + 4);
++	struct ant_dbg *s, *old;
++	struct ant_dbg_caps caps;
++	int error = 0;
++
++	if (args_len != 48 || (flags & ~ANTC_DEBUG_ATTACH_STOP) || capacity < 24)
++		return -EINVAL;
++	if (!get_unaligned_le64(args + 8) || !get_unaligned_le32(args + 24) ||
++	    !(get_unaligned_le64(args + 32) | get_unaligned_le64(args + 40)))
++		return -EINVAL;
++	ant_dbg_arch_caps(&caps);
++	if (get_unaligned_le32(args + 28) != caps.arch)
++		return -EOPNOTSUPP;
++	mutex_lock(&dbg_lock);
++	old = rcu_dereference_protected(active_dbg, lockdep_is_held(&dbg_lock));
++	if (old) {
++		if (old->cookie == get_unaligned_le64(args + 8) &&
++		    old->start_ns == get_unaligned_le64(args + 16) &&
++		    old->tgid == get_unaligned_le32(args + 24) &&
++		    old->nonce_lo == get_unaligned_le64(args + 32) &&
++		    old->nonce_hi == get_unaligned_le64(args + 40)) {
++			reply_session(old, reply);
++			put_unaligned_le32(caps.arch, reply + 20);
++			*reply_len = 24;
++			mutex_unlock(&dbg_lock);
++			return 0;
++		}
++		if (old->state != ANTC_DEBUG_EXITED && old->state != ANTC_DEBUG_EXEC) {
++			mutex_unlock(&dbg_lock);
++			return -EBUSY;
++		}
++		/* The previous target is gone: its session is replaced. */
++		rcu_assign_pointer(active_dbg, NULL);
++		WRITE_ONCE(old->teardown, true);
++		wake_up_all(&old->wait);
++		static_branch_dec(&ant_dbg_shadow_key);
++		session_put(old);
++	}
++	s = create_session(args, flags, &error);
++	if (!s) {
++		mutex_unlock(&dbg_lock);
++		return error;
++	}
++	s->id = ++next_session_id;
++	static_branch_inc(&ant_dbg_shadow_key);
++	rcu_assign_pointer(active_dbg, s);
++	if (flags & ANTC_DEBUG_ATTACH_STOP) {
++		s->state = ANTC_DEBUG_STOPPING;
++		s->want |= W_STOP;
++		queue_work_ref(s);
++	}
++	reply_session(s, reply);
++	put_unaligned_le32(caps.arch, reply + 20);
++	*reply_len = 24;
++	mutex_unlock(&dbg_lock);
++	return 0;
++}
++
++static int cmd_status(struct ant_dbg *s, u8 *reply, size_t capacity, size_t *reply_len)
++{
++	unsigned int parked, live;
++	unsigned long flags;
++
++	if (capacity < ANTC_DEBUG_STATUS_SIZE)
++		return -EMSGSIZE;
++	if (READ_ONCE(s->state) == ANTC_DEBUG_RUNNING ||
++	    READ_ONCE(s->state) == ANTC_DEBUG_STOPPING)
++		group_over(s);
++	live = count_threads(s, &parked);
++	memset(reply, 0, ANTC_DEBUG_STATUS_SIZE);
++	spin_lock_irqsave(&s->lock, flags);
++	put_unaligned_le64(s->id, reply);
++	put_unaligned_le64(s->generation, reply + 8);
++	put_unaligned_le32(s->detaching ? ANTC_DEBUG_DETACHING : s->state, reply + 16);
++	put_unaligned_le32(0, reply + 20);
++	put_unaligned_le32(live, reply + 24);
++	put_unaligned_le32(parked, reply + 28);
++	put_unaligned_le32(s->ev_kind, reply + 32);
++	put_unaligned_le32(s->ev_tid, reply + 36);
++	put_unaligned_le64(s->ev_pc, reply + 40);
++	put_unaligned_le64(s->ev_addr, reply + 48);
++	put_unaligned_le32(s->wait_status, reply + 56);
++	put_unaligned_le32(s->last_error, reply + 60);
++	put_unaligned_le32(s->ev_seq, reply + 64);
++	put_unaligned_le32(s->bp_count, reply + 68);
++	spin_unlock_irqrestore(&s->lock, flags);
++	*reply_len = ANTC_DEBUG_STATUS_SIZE;
++	return 0;
++}
++
++static int cmd_threads(struct ant_dbg *s, u8 *reply, size_t capacity, size_t *reply_len)
++{
++	struct ant_dbg_thread *t;
++	unsigned int count = 0, total = 0;
++
++	if (capacity < 8 + MAX_LIVE_THREADS * ANTC_DEBUG_THREAD_SIZE)
++		return -EMSGSIZE;
++	for_each_record(t, s) {
++		u8 *entry = reply + 8 + count * ANTC_DEBUG_THREAD_SIZE;
++		bool parked = READ_ONCE(t->state) == T_PARKED;
++
++		if (thread_gone(t))
++			continue;
++		total++;
++		if (count == MAX_LIVE_THREADS)
++			continue;
++		memset(entry, 0, ANTC_DEBUG_THREAD_SIZE);
++		put_unaligned_le32(t->tid, entry);
++		put_unaligned_le32(parked ? T_PARKED : T_RUNNING, entry + 4);
++		put_unaligned_le32(parked ? t->reason : 0, entry + 8);
++		put_unaligned_le64(parked ? ant_dbg_arch_pc(t->task) : 0, entry + 16);
++		count++;
++	}
++	put_unaligned_le32(count, reply);
++	put_unaligned_le32(total, reply + 4);
++	*reply_len = 8 + count * ANTC_DEBUG_THREAD_SIZE;
++	return 0;
++}
++
++static int need_stopped(struct ant_dbg *s, u64 generation)
++{
++	if (READ_ONCE(s->state) != ANTC_DEBUG_STOPPED || READ_ONCE(s->detaching))
++		return -EBUSY;
++	if (generation && generation != s->generation)
++		return -ESTALE;
++	return 0;
++}
++
++static const struct user_regset *find_regset(struct task_struct *task, u32 nt)
++{
++	const struct user_regset_view *view = task_user_regset_view(task);
++	unsigned int i;
++
++	for (i = 0; i < view->n; i++)
++		if (view->regsets[i].core_note_type == nt && view->regsets[i].regset_get)
++			return &view->regsets[i];
++	return NULL;
++}
++
++static int cmd_regs(u32 opcode, struct ant_dbg *s, const u8 *args, size_t args_len,
++		    u8 *reply, size_t capacity, size_t *reply_len)
++{
++	bool write = opcode == ANTC_DEBUG_REGS_WRITE;
++	const struct user_regset *regset;
++	struct ant_dbg_thread *t;
++	u32 nt = get_unaligned_le32(args + 20), length = 0;
++	int error;
++
++	if (args_len < (write ? 40 : 32) || (!write && args_len != 32))
++		return -EINVAL;
++	error = need_stopped(s, get_unaligned_le64(args + 24));
++	if (error)
++		return error;
++	t = find_tid(s, get_unaligned_le32(args + 16));
++	if (!t || READ_ONCE(t->state) != T_PARKED || thread_gone(t))
++		return -ESRCH;
++	if (!ant_dbg_arch_task_ok(t->task))
++		return -EOPNOTSUPP;
++	regset = find_regset(t->task, nt);
++	if (!regset)
++		return -EOPNOTSUPP;
++	if (write) {
++		length = get_unaligned_le32(args + 32);
++		if (!regset->set || get_unaligned_le32(args + 36) || length != args_len - 40 ||
++		    !length || length > regset->n * regset->size || length % regset->size)
++			return -EINVAL;
++		return regset->set(t->task, regset, 0, length, args + 40, NULL);
++	}
++	if (capacity < 16)
++		return -EMSGSIZE;
++	error = regset_get(t->task, regset, min_t(size_t, capacity - 16, regset->n * regset->size),
++			   reply + 16);
++	if (error < 0)
++		return error;
++	memset(reply, 0, 16);
++	put_unaligned_le32(nt, reply);
++	put_unaligned_le32(error, reply + 4);
++	*reply_len = 16 + error;
++	return 0;
++}
++
++static int cmd_mem(u32 opcode, struct ant_dbg *s, const u8 *args, size_t args_len,
++		   u8 *reply, size_t capacity, size_t *reply_len)
++{
++	bool write = opcode == ANTC_DEBUG_MEM_WRITE;
++	u64 addr = get_unaligned_le64(args + 16);
++	u32 length = get_unaligned_le32(args + 24);
++	int done, error;
++
++	if (args_len < 40 || get_unaligned_le32(args + 28) || !length ||
++	    length > ANTC_DEBUG_TRANSFER_MAX || (write ? args_len != 40 + length : args_len != 40) ||
++	    capacity < 8 + (write ? 0 : length) || addr >= TASK_SIZE_MAX || length > TASK_SIZE_MAX - addr)
++		return -EINVAL;
++	error = need_stopped(s, get_unaligned_le64(args + 32));
++	if (error)
++		return error;
++	if (write) {
++		u8 *copy = kmemdup(args + 40, length, GFP_KERNEL);
++
++		if (!copy)
++			return -ENOMEM;
++		done = mem_access(s, addr, copy, length, true);
++		kfree(copy);
++	} else {
++		done = mem_access(s, addr, reply + 8, length, false);
++	}
++	if (done < 0)
++		return done;
++	if (!done)
++		return -EFAULT;
++	memset(reply, 0, 8);
++	put_unaligned_le32(done, reply);
++	*reply_len = 8 + (write ? 0 : done);
++	return 0;
++}
++
++static int cmd_breakpoint(u32 opcode, struct ant_dbg *s, const u8 *args, size_t args_len)
++{
++	u32 kind = get_unaligned_le32(args + 16), len = get_unaligned_le32(args + 20);
++	u64 addr = get_unaligned_le64(args + 24);
++	u8 insn[ANT_DBG_MAX_BP_LEN], probe[ANT_DBG_MAX_BP_LEN];
++	unsigned int i;
++	int error;
++
++	if (args_len != 40 || kind != ANTC_DEBUG_BP_SOFTWARE || addr >= TASK_SIZE_MAX)
++		return -EINVAL;
++	if (!len || len > ANT_DBG_MAX_BP_LEN || ant_dbg_arch_bp_insn(len, insn) != len)
++		return -EOPNOTSUPP;
++	error = need_stopped(s, get_unaligned_le64(args + 32));
++	if (error)
++		return error;
++	spin_lock_irq(&s->lock);
++	for (i = 0; i < s->bp_count && s->bps[i].addr != addr; i++)
++		;
++	if (opcode == ANTC_DEBUG_BP_CLEAR) {
++		if (i < s->bp_count) {
++			s->bps[i] = s->bps[--s->bp_count];
++			memset(&s->bps[s->bp_count], 0, sizeof(s->bps[0]));
++		}
++		spin_unlock_irq(&s->lock);
++		return 0;
++	}
++	spin_unlock_irq(&s->lock);
++	if (i < s->bp_count)
++		return 0;
++	if (s->bp_count == MAX_BREAKPOINTS)
++		return -ENOSPC;
++	/* Report an unwritable address now, not when the group resumes. */
++	if (mem_access(s, addr, probe, len, false) != len ||
++	    mem_access(s, addr, probe, len, true) != len)
++		return -EFAULT;
++	spin_lock_irq(&s->lock);
++	s->bps[s->bp_count++] = (struct ant_dbg_bp){ .addr = addr, .len = len };
++	spin_unlock_irq(&s->lock);
++	return 0;
++}
++
++static int cmd_control(u32 opcode, struct ant_dbg *s, const u8 *args, size_t args_len,
++		       u8 *reply, size_t capacity, size_t *reply_len)
++{
++	u32 flags = get_unaligned_le32(args + 4);
++
++	if (opcode == ANTC_DEBUG_DETACH) {
++		if (args_len != 16 || (flags & ~ANTC_DEBUG_DETACH_KILL))
++			return -EINVAL;
++		spin_lock_irq(&s->lock);
++		if (s->detaching || s->state == ANTC_DEBUG_RESUMING) {
++			spin_unlock_irq(&s->lock);
++			return -EBUSY;
++		}
++		s->kill = flags & ANTC_DEBUG_DETACH_KILL;
++		s->want |= W_DETACH;
++		spin_unlock_irq(&s->lock);
++		queue_work_ref(s);
++		return 0;
++	}
++	if (capacity < 8)
++		return -EMSGSIZE;
++	if (opcode == ANTC_DEBUG_STOP) {
++		if (args_len != 16 || flags)
++			return -EINVAL;
++		spin_lock_irq(&s->lock);
++		if (s->state == ANTC_DEBUG_RESUMING) {
++			s->interrupt = true;	/* ends an unfinished step */
++		} else if (s->state == ANTC_DEBUG_RUNNING) {
++			s->state = ANTC_DEBUG_STOPPING;
++			s->want |= W_STOP;
++			spin_unlock_irq(&s->lock);
++			queue_work_ref(s);
++			goto done;
++		} else if (s->state != ANTC_DEBUG_STOPPING && s->state != ANTC_DEBUG_STOPPED) {
++			spin_unlock_irq(&s->lock);
++			return -EBUSY;
++		}
++		spin_unlock_irq(&s->lock);
++		goto done;
++	}
++	/* CONT */
++	if (args_len != 40 || (flags & ~ANTC_DEBUG_CONT_STEP) || get_unaligned_le32(args + 24) ||
++	    get_unaligned_le32(args + 28))
++		return -EINVAL;
++	{
++		u32 tid = get_unaligned_le32(args + 16);
++		int error = need_stopped(s, get_unaligned_le64(args + 32));
++
++		if (error)
++			return error;
++		if (get_unaligned_le32(args + 20))
++			return -EINVAL;
++		if (flags & ANTC_DEBUG_CONT_STEP) {
++			struct ant_dbg_thread *t = find_tid(s, tid);
++
++			if (!t || READ_ONCE(t->state) != T_PARKED)
++				return -ESRCH;
++		}
++		spin_lock_irq(&s->lock);
++		s->state = ANTC_DEBUG_RESUMING;
++		s->step_request = flags & ANTC_DEBUG_CONT_STEP;
++		s->step_tid = tid;
++		s->want |= W_CONT;
++		spin_unlock_irq(&s->lock);
++		queue_work_ref(s);
++	}
++done:
++	memset(reply, 0, 8);
++	put_unaligned_le64(READ_ONCE(s->generation), reply);
++	*reply_len = 8;
++	return 0;
++}
++
++int ant_debug_command(u32 opcode, const u8 *args, size_t args_len, void *reply,
++		      size_t capacity, size_t *reply_len)
++{
++	struct ant_dbg *s;
++	int error;
++
++	if (opcode == ANTC_DEBUG_CAPS)
++		return args_len == 8 ? cmd_caps(reply, capacity, reply_len) : -EINVAL;
++	if (opcode == ANTC_DEBUG_ATTACH)
++		return cmd_attach(args, args_len, reply, capacity, reply_len);
++	if (args_len < 16)
++		return -EINVAL;
++	mutex_lock(&dbg_lock);
++	s = lookup(get_unaligned_le64(args + 8));
++	if (!s) {
++		mutex_unlock(&dbg_lock);
++		return -ESRCH;
++	}
++	switch (opcode) {
++	case ANTC_DEBUG_STATUS:
++		error = args_len == 16 ? cmd_status(s, reply, capacity, reply_len) : -EINVAL;
++		break;
++	case ANTC_DEBUG_THREADS:
++		error = args_len == 16 ? cmd_threads(s, reply, capacity, reply_len) : -EINVAL;
++		break;
++	case ANTC_DEBUG_REGS_READ: case ANTC_DEBUG_REGS_WRITE:
++		error = cmd_regs(opcode, s, args, args_len, reply, capacity, reply_len);
++		break;
++	case ANTC_DEBUG_MEM_READ: case ANTC_DEBUG_MEM_WRITE:
++		error = cmd_mem(opcode, s, args, args_len, reply, capacity, reply_len);
++		break;
++	case ANTC_DEBUG_BP_SET: case ANTC_DEBUG_BP_CLEAR:
++		error = cmd_breakpoint(opcode, s, args, args_len);
++		break;
++	default:
++		error = cmd_control(opcode, s, args, args_len, reply, capacity, reply_len);
++	}
++	mutex_unlock(&dbg_lock);
++	return error;
++}
++
++/* Reattachment and snapshots cannot keep a session: stop and release its
++ * target, then report the slot free. Returns true when no session remains.
++ */
++bool ant_debug_fence(void)
++{
++	struct ant_dbg *s;
++	bool free;
++
++	mutex_lock(&dbg_lock);
++	s = rcu_dereference_protected(active_dbg, lockdep_is_held(&dbg_lock));
++	if (s) {
++		spin_lock_irq(&s->lock);
++		if (!s->detaching && s->state != ANTC_DEBUG_RESUMING) {
++			s->want |= W_DETACH;
++			spin_unlock_irq(&s->lock);
++			queue_work_ref(s);
++		} else {
++			spin_unlock_irq(&s->lock);
++		}
++	}
++	free = !s;
++	mutex_unlock(&dbg_lock);
++	return free;
++}
++
++bool ant_debug_active(void)
++{
++	bool active;
++
++	rcu_read_lock();
++	active = rcu_dereference(active_dbg) != NULL;
++	rcu_read_unlock();
++	return active;
++}
++
++static int __init ant_debug_init(void)
++{
++	dbg_worker = alloc_workqueue("antinomie-debug", WQ_UNBOUND, 1);
++	return dbg_worker ? 0 : -ENOMEM;
++}
++late_initcall(ant_debug_init);
+diff --git a/kernel/antinomie/debug.h b/kernel/antinomie/debug.h
+new file mode 100644
+index 000000000..5f8ef6034
+--- /dev/null
++++ b/kernel/antinomie/debug.h
+@@ -0,0 +1,69 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Interface between the shared debug engine (debug.c) and one architecture
++ * (debug_<arch>.c). The engine knows threads, stops, memory, breakpoint tables
++ * and the wire format; the architecture file knows registers, the breakpoint
++ * instruction, how a trap is recognised and how a single step is armed.
++ */
++#ifndef ANT_DEBUG_H
++#define ANT_DEBUG_H
++
++#include <linux/types.h>
++
++struct pt_regs;
++struct task_struct;
++
++#define ANT_DBG_MAX_BP_LEN 8U
++#define ANT_DBG_MAX_REGSETS 8U
++
++struct ant_dbg_regset_cap {
++	u32 nt_type;
++	u32 max_size;	/* 0: the size depends on the task, query it */
++	u32 flags;	/* bit0: writable */
++};
++
++struct ant_dbg_caps {
++	u32 arch;		/* ELF e_machine */
++	u32 flags;		/* ANTC_DEBUG_CAP_* the architecture provides */
++	u32 swbp_len_mask;	/* bit n-1: a software breakpoint of n bytes */
++	u32 hw_breakpoints;
++	u32 hw_watchpoints;
++	u32 hw_watch_len_mask;
++	unsigned int regset_count;
++	struct ant_dbg_regset_cap regsets[ANT_DBG_MAX_REGSETS];
++};
++
++/* Per-thread private state of an armed single step. */
++struct ant_dbg_step {
++	unsigned long data[2];
++};
++
++/* Architecture side (kernel/antinomie/debug_x86.c). */
++void ant_dbg_arch_caps(struct ant_dbg_caps *caps);
++/* True when the task runs the architecture's native ABI and is supported. */
++bool ant_dbg_arch_task_ok(struct task_struct *task);
++unsigned long ant_dbg_arch_pc(struct task_struct *task);
++/* Bytes of the breakpoint instruction for a length, or 0 if unsupported. */
++unsigned int ant_dbg_arch_bp_insn(unsigned int len, u8 *insn);
++/* Arm a stopped task to execute one user instruction. */
++void ant_dbg_arch_step_arm(struct task_struct *task, struct ant_dbg_step *step);
++/* Undo the arm and any visible side effect once the task is stopped again. */
++void ant_dbg_arch_step_done(struct task_struct *task, struct ant_dbg_step *step,
++			    bool stepped);
++
++/* Engine side, called from the architecture's trap glue in exception context
++ * (interrupts off, no sleeping). They return true when the trap was consumed.
++ */
++bool ant_dbg_trap_breakpoint(struct pt_regs *regs, unsigned long addr);
++bool ant_dbg_trap_step(struct pt_regs *regs);
++void ant_dbg_arch_set_pc(struct pt_regs *regs, unsigned long pc);
++/* The pt_regs in an exception: where the instruction that trapped begins. */
++unsigned long ant_dbg_arch_bp_addr(struct pt_regs *regs);
++void ant_dbg_arch_hide_step(struct pt_regs *regs, struct ant_dbg_step *step);
++
++/* Engine entry points used by the control dispatcher and the reattach fence. */
++int ant_debug_command(u32 opcode, const u8 *args, size_t args_len, void *reply,
++		      size_t capacity, size_t *reply_len);
++bool ant_debug_fence(void);
++bool ant_debug_active(void);
++
++#endif
+diff --git a/kernel/antinomie/debug_x86.c b/kernel/antinomie/debug_x86.c
+new file mode 100644
+index 000000000..c330ce328
+--- /dev/null
++++ b/kernel/antinomie/debug_x86.c
+@@ -0,0 +1,156 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* x86-64 side of the debug engine: registers are the kernel's regset blobs
++ * (NT_PRSTATUS, NT_PRFPREG, NT_X86_XSTATE), a software breakpoint is INT3, and
++ * a single step is EFLAGS.TF armed on the stopped task and hidden again when the
++ * trap is taken. Nothing here touches ptrace state (TIF_SINGLESTEP, TIF_FORCED_TF,
++ * the debug registers), so the sample observes none of it.
++ */
++#include <linux/elf.h>
++#include <linux/init.h>
++#include <linux/kdebug.h>
++#include <linux/mm.h>
++#include <linux/notifier.h>
++#include <linux/ptrace.h>
++#include <linux/regset.h>
++#include <linux/sched.h>
++#include <linux/sched/task_stack.h>
++#include <asm/debugreg.h>
++#include <asm/processor-flags.h>
++#include <asm/user.h>
++#include "control_wire.h"
++#include "debug.h"
++
++#define STEP_TF_FORCED 0
++#define STEP_PUSHF 1
++
++void ant_dbg_arch_caps(struct ant_dbg_caps *caps)
++{
++	memset(caps, 0, sizeof(*caps));
++	caps->arch = EM_X86_64;
++	caps->flags = ANTC_DEBUG_CAP_SW_BREAKPOINT | ANTC_DEBUG_CAP_HW_SINGLE_STEP;
++	caps->swbp_len_mask = 1;
++	caps->regset_count = 3;
++	caps->regsets[0] = (struct ant_dbg_regset_cap){ NT_PRSTATUS,
++		sizeof(struct user_regs_struct), 1 };
++	caps->regsets[1] = (struct ant_dbg_regset_cap){ NT_PRFPREG,
++		sizeof(struct user_i387_struct), 1 };
++	caps->regsets[2] = (struct ant_dbg_regset_cap){ NT_X86_XSTATE, 0, 1 };
++}
++
++bool ant_dbg_arch_task_ok(struct task_struct *task)
++{
++	const struct user_regset_view *view = task_user_regset_view(task);
++
++	return view->e_machine == EM_X86_64 && !test_tsk_thread_flag(task, TIF_ADDR32);
++}
++
++unsigned long ant_dbg_arch_pc(struct task_struct *task)
++{
++	return task_pt_regs(task)->ip;
++}
++
++void ant_dbg_arch_set_pc(struct pt_regs *regs, unsigned long pc)
++{
++	regs->ip = pc;
++}
++
++unsigned long ant_dbg_arch_bp_addr(struct pt_regs *regs)
++{
++	/* INT3 is a trap: the saved ip is already past the one-byte instruction. */
++	return regs->ip - 1;
++}
++
++unsigned int ant_dbg_arch_bp_insn(unsigned int len, u8 *insn)
++{
++	if (len != 1)
++		return 0;
++	insn[0] = 0xcc;
++	return 1;
++}
++
++/* Which kind of PUSHF the next instruction is: 0 none, 2 or 8 bytes pushed. */
++static unsigned long pushf_width(struct task_struct *task, struct pt_regs *regs)
++{
++	u8 code[4] = { };
++	unsigned int i;
++	bool operand16 = false;
++
++	if (access_process_vm(task, regs->ip, code, sizeof(code), FOLL_FORCE) <= 0)
++		return 0;
++	for (i = 0; i < sizeof(code); i++) {
++		if (code[i] == 0x66)
++			operand16 = true;
++		else if (code[i] == 0x67 || code[i] == 0xf2 || code[i] == 0xf3 ||
++			 (code[i] >= 0x40 && code[i] <= 0x4f))
++			continue;
++		else
++			break;
++	}
++	if (i == sizeof(code) || code[i] != 0x9c)
++		return 0;
++	return operand16 ? 2 : 8;
++}
++
++void ant_dbg_arch_step_arm(struct task_struct *task, struct ant_dbg_step *step)
++{
++	struct pt_regs *regs = task_pt_regs(task);
++
++	step->data[STEP_TF_FORCED] = !(regs->flags & X86_EFLAGS_TF);
++	step->data[STEP_PUSHF] = pushf_width(task, regs);
++	regs->flags |= X86_EFLAGS_TF;
++}
++
++void ant_dbg_arch_hide_step(struct pt_regs *regs, struct ant_dbg_step *step)
++{
++	if (step->data[STEP_TF_FORCED])
++		regs->flags &= ~X86_EFLAGS_TF;
++}
++
++void ant_dbg_arch_step_done(struct task_struct *task, struct ant_dbg_step *step,
++			    bool stepped)
++{
++	struct pt_regs *regs = task_pt_regs(task);
++	u64 word = 0;
++	unsigned long width = step->data[STEP_PUSHF];
++
++	if (!step->data[STEP_TF_FORCED])
++		return;
++	regs->flags &= ~X86_EFLAGS_TF;
++	/* PUSHF stores the live flags, TF included: remove our TF from the word. */
++	if (stepped && width &&
++	    access_process_vm(task, regs->sp, &word, width, FOLL_FORCE) == width &&
++	    (word & X86_EFLAGS_TF)) {
++		word &= ~(u64)X86_EFLAGS_TF;
++		access_process_vm(task, regs->sp, &word, width, FOLL_FORCE | FOLL_WRITE);
++	}
++}
++
++static int ant_dbg_die(struct notifier_block *block, unsigned long cmd, void *data)
++{
++	struct die_args *args = data;
++
++	if (!args->regs || !user_mode(args->regs))
++		return NOTIFY_DONE;
++	if (cmd == DIE_INT3)
++		return ant_dbg_trap_breakpoint(args->regs, ant_dbg_arch_bp_addr(args->regs)) ?
++			NOTIFY_STOP : NOTIFY_DONE;
++	if (cmd == DIE_DEBUG) {
++		unsigned long *dr6 = (unsigned long *)args->err;
++
++		if (!(*dr6 & DR_STEP) || !ant_dbg_trap_step(args->regs))
++			return NOTIFY_DONE;
++		*dr6 &= ~(unsigned long)DR_STEP;
++		return NOTIFY_STOP;
++	}
++	return NOTIFY_DONE;
++}
++
++static struct notifier_block ant_dbg_die_block = {
++	.notifier_call = ant_dbg_die,
++};
++
++static int __init ant_dbg_x86_init(void)
++{
++	return register_die_notifier(&ant_dbg_die_block);
++}
++late_initcall(ant_dbg_x86_init);
+diff --git a/kernel/antinomie/guest.c b/kernel/antinomie/guest.c
+index 591ece178..d508f3cb8 100644
+--- a/kernel/antinomie/guest.c
++++ b/kernel/antinomie/guest.c
+@@ -16,6 +16,7 @@
+ #include <linux/workqueue.h>
+ #include "queue.h"
+ #include "process_core.h"
++#include "debug.h"
+ 
+ struct ant_cpu {
+ 	struct page *pages;
+@@ -68,7 +69,7 @@ static bool service_resume(void)
+ 	/* Fence acknowledgment waits until manual acquisition owns no parks.
+ 	 * Completed immutable evidence remains retained across reattachment.
+ 	 */
+-	if (!ant_manual_fence())
++	if (!ant_manual_fence() || !ant_debug_fence())
+ 		return true;
+ 	floor = max(last_request_id, ANT_ACQ(&boot->resume_sequence_floor));
+ 	cursor = request_tail;
+diff --git a/mm/memory.c b/mm/memory.c
+index e46a70d69..1930f9823 100644
+--- a/mm/memory.c
++++ b/mm/memory.c
+@@ -88,6 +88,7 @@
+ #include <linux/uaccess.h>
+ #include <asm/tlb.h>
+ #include <asm/tlbflush.h>
++#include <linux/antinomie_monitor.h>
+ 
+ #include "pgalloc-track.h"
+ #include "internal.h"
+@@ -6662,6 +6663,7 @@ static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
+ 			} else {
+ 				copy_from_user_page(vma, page, addr,
+ 						    buf, maddr + offset, bytes);
++				ant_monitor_shadow_read(mm, addr, buf, bytes);
+ 			}
+ 			unmap_and_put_page(page, maddr);
+ 		}
