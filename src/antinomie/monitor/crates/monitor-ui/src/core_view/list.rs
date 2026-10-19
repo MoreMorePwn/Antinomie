@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! The core list, its filters, and project export and import.
 use super::*;
+use crate::evidence_delete::{Deletion, Kind as DeleteKind};
 
 impl CoreView {
     pub(super) fn list_toolbar(&mut self, ui: &mut egui::Ui) {
@@ -172,6 +173,7 @@ impl CoreView {
         let mut imported_selection = None;
         let mut file_action: Option<(bool, PathBuf)> = None;
         let mut project_action = None;
+        let mut delete = None;
         let font_size = egui::TextStyle::Body.resolve(ui.style()).size;
         let mut fields = crate::query::LABEL_FIELDS.to_vec();
         fields.extend(crate::query::CAPTURE_FIELDS);
@@ -291,6 +293,12 @@ impl CoreView {
                             action = Some(CoreAction::Cancel(core.id.clone()));
                             ui.close_menu();
                         }
+                        let capturing = (core.phase != ProcessCorePhase::Finished
+                            && Some(core.boot_id.as_str()) == boot_id)
+                            .then_some(crate::evidence_delete::CORE_CAPTURING);
+                        if crate::evidence_delete::menu_item(ui, capturing) {
+                            delete = Some(Deletion::core(&core.directory, &title, DeleteKind::Core));
+                        }
                     });
                     if row.clicked() && self.job.is_none() {
                         acquired_selection = Some((core.directory.clone(), core.file.clone()));
@@ -317,6 +325,12 @@ impl CoreView {
                         crate::query::table_row_menu(ui, filter_id, &acquired_filter_row(ui, core));
                         core_file_menu(ui, core_file.as_deref(), &mut file_action);
                         core_project_menu(ui, &core.directory, self.job.is_none(), &mut project_action);
+                        let capturing = (core.state.in_progress()
+                            && Some(core.boot_id.as_str()) == boot_id)
+                            .then_some(crate::evidence_delete::CORE_CAPTURING);
+                        if crate::evidence_delete::menu_item(ui, capturing) {
+                            delete = Some(Deletion::core(&core.directory, &title, DeleteKind::Core));
+                        }
                     });
                     if row.clicked() && self.job.is_none() {
                         acquired_selection = Some((core.directory.clone(), core.file.clone()));
@@ -340,6 +354,9 @@ impl CoreView {
                         crate::query::table_row_menu(ui, filter_id, &imported_filter_row(ui, record));
                         core_file_menu(ui, Some(&core_file), &mut file_action);
                         core_project_menu(ui, &record.dir, self.job.is_none(), &mut project_action);
+                        if crate::evidence_delete::menu_item(ui, None) {
+                            delete = Some(Deletion::core(&record.dir, &title, DeleteKind::ImportedCore));
+                        }
                     });
                     if row.clicked() && self.job.is_none() {
                         imported_selection = Some(record.clone());
@@ -386,6 +403,9 @@ impl CoreView {
         }
         if let Some(source) = project_action {
             self.export_project(source);
+        }
+        if let Some(deletion) = delete {
+            action = Some(CoreAction::Delete(deletion));
         }
         action
     }

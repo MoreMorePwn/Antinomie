@@ -17,6 +17,7 @@ pub mod core_dump;
 pub mod dependencies;
 mod display;
 pub mod distribution;
+pub mod evidence_delete;
 mod execution;
 pub mod filter_members;
 mod guest_account;

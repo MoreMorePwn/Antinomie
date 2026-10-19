@@ -1532,3 +1532,148 @@ fn cancel_process_core_shows_only_while_a_capture_is_in_progress_and_cancels_tha
     }
     assert!(matches!(asked, Some(CoreAction::CancelRun(run)) if run == "waiting"));
 }
+
+/// Right-click the row whose text is `detail`, then click Delete…. Returns
+/// whether the menu had the item, and the action the click asked for.
+fn right_click_delete(
+    ctx: &egui::Context,
+    view: &mut CoreView,
+    detail: &str,
+    boot: Option<&str>,
+) -> (bool, Option<CoreAction>) {
+    let find = |texts: &[(String, egui::Rect)], needle: &str| {
+        texts
+            .iter()
+            .find(|(text, _)| text == needle)
+            .map(|(_, rect)| rect.center())
+    };
+    let mut texts = Vec::new();
+    for _ in 0..3 {
+        texts = frame_with_cancel(ctx, view, Vec::new(), false, boot).0;
+    }
+    let point = find(&texts, detail).expect("the row");
+    let event = |pos, button, pressed| egui::Event::PointerButton {
+        pos,
+        button,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let secondary = egui::PointerButton::Secondary;
+    for events in [
+        vec![egui::Event::PointerMoved(point)],
+        vec![event(point, secondary, true)],
+        vec![event(point, secondary, false)],
+        vec![],
+        vec![],
+    ] {
+        texts = frame_with_cancel(ctx, view, events, false, boot).0;
+    }
+    let Some(item) = find(&texts, "Delete…") else {
+        return (false, None);
+    };
+    let primary = egui::PointerButton::Primary;
+    let mut asked = None;
+    for events in [
+        vec![egui::Event::PointerMoved(item)],
+        vec![event(item, primary, true)],
+        vec![event(item, primary, false)],
+        vec![],
+    ] {
+        asked = frame_with_cancel(ctx, view, events, false, boot)
+            .1
+            .or(asked);
+    }
+    (true, asked)
+}
+
+fn acquired_core(
+    fixture: &Fixture,
+    state: antinomie_monitor_core::RunArtifactState,
+) -> AcquiredCore {
+    AcquiredCore {
+        vm_id: "fixture-vm".into(),
+        boot_id: "fixture-boot".into(),
+        run_id: "r1".into(),
+        directory: fixture.directory.join("runs/r1/core"),
+        file: None,
+        state,
+    }
+}
+
+#[test]
+fn a_finished_core_has_a_delete_item_that_asks_to_delete_its_directory() {
+    use antinomie_monitor_core::RunArtifactState::Complete;
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let mut fixture = Fixture::new();
+    let mut view = std::mem::take(&mut fixture.view);
+    let core = acquired_core(&fixture, Complete);
+    std::fs::create_dir_all(&core.directory).unwrap();
+    std::fs::write(core.directory.join("process.elf"), [0u8; 2048]).unwrap();
+    let directory = core.directory.clone();
+    view.acquired.push(core);
+    let (present, asked) = right_click_delete(&ctx, &mut view, "Complete", Some("fixture-boot"));
+    assert!(present);
+    let Some(CoreAction::Delete(deletion)) = asked else {
+        panic!("Delete… asks the app to delete");
+    };
+    assert_eq!(
+        deletion.item,
+        antinomie_monitor_core::EvidenceItem::ProcessCore {
+            directory: directory.clone()
+        }
+    );
+    assert_eq!(deletion.size, "2048 bytes (2.0 KB)");
+    assert!(directory.exists(), "asking deletes nothing");
+}
+
+#[test]
+fn an_imported_core_deletes_only_its_results() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let mut fixture = Fixture::new();
+    let view = std::mem::take(&mut fixture.view);
+    let mut view = view;
+    let (present, asked) = right_click_delete(&ctx, &mut view, "2 threads · 1 mappings", None);
+    assert!(present);
+    let Some(CoreAction::Delete(deletion)) = asked else {
+        panic!("Delete… asks the app to delete");
+    };
+    assert_eq!(deletion.kind, crate::evidence_delete::Kind::ImportedCore);
+    assert!(deletion.text().contains("original core file stays"));
+}
+
+#[test]
+fn a_core_still_being_captured_cannot_be_deleted() {
+    use antinomie_monitor_core::RunArtifactState::WaitingForRootExit;
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let mut fixture = Fixture::new();
+    let mut view = std::mem::take(&mut fixture.view);
+    view.acquired
+        .push(acquired_core(&fixture, WaitingForRootExit));
+    let detail = "Waiting for root process exit";
+    let (present, asked) = right_click_delete(&ctx, &mut view, detail, Some("fixture-boot"));
+    assert!(present, "the item is shown, disabled");
+    assert!(asked.is_none(), "a disabled item asks for nothing");
+    // The same record of an earlier boot is a stale leftover, not a capture.
+    let (_, asked) = right_click_delete(&ctx, &mut view, detail, Some("later-boot"));
+    assert!(matches!(asked, Some(CoreAction::Delete(_))));
+}
+
+#[test]
+fn a_deleted_core_leaves_the_list_and_clears_the_viewer() {
+    use antinomie_monitor_core::RunArtifactState::Complete;
+    let mut fixture = Fixture::new();
+    let mut view = std::mem::take(&mut fixture.view);
+    let core = acquired_core(&fixture, Complete);
+    view.selected_directory = Some(core.directory.clone());
+    view.acquired.push(core.clone());
+    view.forget_core(&core.directory);
+    assert!(view.acquired.is_empty());
+    assert!(view.selected.is_none() && view.selected_directory.is_none());
+    // The imported record the fixture opened goes the same way.
+    let dir = fixture.directory.clone();
+    view.forget_core(&dir);
+    assert!(view.records.is_empty() && view.selected.is_none());
+}

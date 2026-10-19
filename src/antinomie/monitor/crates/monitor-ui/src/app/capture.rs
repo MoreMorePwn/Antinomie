@@ -248,5 +248,6 @@ pub(crate) fn core_capture_status(state: antinomie_monitor_core::RunArtifactStat
         RunArtifactState::Partial => "Partial capture",
         RunArtifactState::Interrupted => "Interrupted",
         RunArtifactState::Failed => "Failed",
+        RunArtifactState::Deleted => "Deleted",
     }
 }

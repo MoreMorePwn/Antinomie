@@ -262,6 +262,12 @@ impl<'a> TriageInput<'a> {
 }
 
 impl TriageView {
+    /// Saved evidence was deleted: read the run's index again, so counts and
+    /// badges drop what is gone.
+    pub(crate) fn evidence_deleted(&mut self) {
+        self.request_refresh();
+    }
+
     /// Maintain the selected run's index even when the Triage pane is hidden.
     /// Identity changes cancel old jobs; refreshes coalesce into one next scan.
     pub(crate) fn set_address_lookup(&mut self, mode: AddressLookup) {

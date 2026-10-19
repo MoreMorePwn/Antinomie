@@ -97,6 +97,8 @@ pub(crate) enum CoreAction {
     Cancel(String),
     /// Cancel a run's Core Dump on Exit without stopping the program.
     CancelRun(String),
+    /// Delete a saved core, once the user confirms.
+    Delete(crate::evidence_delete::Deletion),
 }
 
 pub(crate) struct CoreControls<'a> {

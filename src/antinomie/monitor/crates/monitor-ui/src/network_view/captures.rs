@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! The list of network captures of the selected VM.
 use super::*;
+use crate::evidence_delete::{CAPTURE_LIVE, CAPTURE_WRITING};
 
 impl NetworkView {
     /// The running capture first, then earlier ones; a click opens one.
@@ -57,6 +58,7 @@ impl NetworkView {
         }
         ui.add_space(2.0);
         let mut open = None;
+        let mut delete = None;
         let font_size = cx.font_size;
         egui::ScrollArea::vertical()
             .id_salt("network_capture_list")
@@ -82,7 +84,9 @@ impl NetworkView {
                         font_size,
                     );
                     response.context_menu(|ui| {
-                        self.capture_menu(ui, active);
+                        delete = self
+                            .capture_menu(ui, active, &title, Some(CAPTURE_LIVE))
+                            .or(delete.take());
                     });
                     if response.clicked() {
                         self.capture_details = Some((active.clone(), true));
@@ -113,8 +117,14 @@ impl NetworkView {
                         &capture_detail(capture, false, None),
                         font_size,
                     );
+                    let writing = (capture.stopped_ms.is_none()
+                        && cx.running
+                        && cx.boot_id == Some(capture.boot_id.as_str()))
+                    .then_some(CAPTURE_WRITING);
                     response.context_menu(|ui| {
-                        self.capture_menu(ui, capture);
+                        delete = self
+                            .capture_menu(ui, capture, &title, writing)
+                            .or(delete.take());
                     });
                     if response.clicked() {
                         self.capture_details = Some((capture.clone(), false));
@@ -127,6 +137,9 @@ impl NetworkView {
             });
         if let Some(path) = open {
             self.open(Some(path));
+        }
+        if let Some(deletion) = delete {
+            action = Some(NetworkAction::Delete(deletion));
         }
         action
     }
@@ -232,7 +245,15 @@ impl NetworkView {
         );
     }
 
-    fn capture_menu(&self, ui: &mut egui::Ui, capture: &NetworkCapture) {
+    /// The right-click menu of a capture; the deletion it asked for, if any.
+    /// `blocked` is why the capture cannot be deleted yet.
+    fn capture_menu(
+        &self,
+        ui: &mut egui::Ui,
+        capture: &NetworkCapture,
+        title: &str,
+        blocked: Option<&str>,
+    ) -> Option<crate::evidence_delete::Deletion> {
         let directory = capture.file.with_extension("metadata");
         crate::evidence::menu(ui, &directory);
         if ui.button("Open PCAP directory").clicked() {
@@ -241,6 +262,8 @@ impl NetworkView {
             }
             ui.close_menu();
         }
+        crate::evidence_delete::menu_item(ui, blocked)
+            .then(|| crate::evidence_delete::Deletion::network(&capture.file, title))
     }
 }
 

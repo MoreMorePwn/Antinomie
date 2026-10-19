@@ -185,15 +185,24 @@ impl MonitorApp {
                             && !self.closing
                             && vm.is_some()
                             && vm == self.snapshot.active_vm,
+                        boot_id: self
+                            .snapshot
+                            .boot_id
+                            .as_deref()
+                            .filter(|_| vm.is_some() && vm == self.snapshot.active_vm),
                         pending: self.pending_network.is_some(),
                         font_size: self.settings.font_size,
                     },
                 );
-                if let (Some(action), true) = (action, self.network_toggle_enabled()) {
-                    self.send(match action {
-                        NetworkAction::Start => Command::StartNetworkCapture,
-                        NetworkAction::Stop => Command::StopNetworkCapture,
-                    });
+                match action {
+                    Some(NetworkAction::Delete(deletion)) => self.ask_delete_evidence(deletion),
+                    Some(NetworkAction::Start) if self.network_toggle_enabled() => {
+                        self.send(Command::StartNetworkCapture);
+                    }
+                    Some(NetworkAction::Stop) if self.network_toggle_enabled() => {
+                        self.send(Command::StopNetworkCapture);
+                    }
+                    _ => {}
                 }
             }
             Panel::CoreDump => {
@@ -231,6 +240,9 @@ impl MonitorApp {
                     }
                     Some(crate::core_view::CoreAction::CancelRun(run_id)) => {
                         self.send(Command::CancelProcessCore { run_id })
+                    }
+                    Some(crate::core_view::CoreAction::Delete(deletion)) => {
+                        self.ask_delete_evidence(deletion)
                     }
                     None => {}
                 }

@@ -483,6 +483,16 @@ impl Worker {
                 self.refresh_locations()?;
                 Ok("base deleted".into())
             }
+            Command::DeleteEvidence {
+                vm_id,
+                item,
+                confirmed,
+            } => {
+                if !confirmed {
+                    return Err("deleting evidence requires confirmation".into());
+                }
+                self.delete_evidence(&vm_id, item)
+            }
             Command::Save(mut vm) => {
                 storage::validate_vm(&vm)?;
                 vm.launch.validate_for(&self.options)?;

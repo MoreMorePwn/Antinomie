@@ -318,7 +318,17 @@ impl MonitorApp {
             self.settings_window(ctx);
         }
         if let Some(confirm) = &self.confirm {
+            let evidence_text = match confirm {
+                Confirm::DeleteEvidence(deletion) => deletion.text(),
+                _ => String::new(),
+            };
             let (title, text, button, destructive) = match confirm {
+                Confirm::DeleteEvidence(deletion) => (
+                    deletion.title(),
+                    evidence_text.as_str(),
+                    "Delete",
+                    true,
+                ),
                 Confirm::KillRun(_) => (
                     "Kill program run",
                     "Terminate the selected run and its descendants? Recording remains active while termination is collected. The VM keeps running.",
@@ -402,6 +412,7 @@ impl MonitorApp {
                         Confirm::Reset(_) | Confirm::Delete(_) | Confirm::DeleteBase(_) => {
                             self.snapshot.active_vm.is_none()
                         }
+                        Confirm::DeleteEvidence(_) => self.selected.is_some(),
                         Confirm::Upload(intent) => {
                             intent.same_session(&self.snapshot)
                                 && self.snapshot.state == VmState::Running
@@ -453,6 +464,7 @@ impl MonitorApp {
                             identity,
                             confirmed: true,
                         }),
+                        Confirm::DeleteEvidence(deletion) => self.submit_delete_evidence(deletion),
                         Confirm::Upload(intent) => self.submit_upload(intent, true),
                         Confirm::Clipboard { intent, text } => self.submit_clipboard(intent, text),
                         Confirm::Nat { mut vm, creating } => {

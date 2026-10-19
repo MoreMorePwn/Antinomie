@@ -132,6 +132,26 @@ impl CoreView {
         }
     }
 
+    /// A deleted core leaves the list, the viewer and Details at once; the
+    /// next catalog read confirms it.
+    pub(crate) fn forget_core(&mut self, directory: &Path) {
+        self.manual.retain(|core| core.directory != directory);
+        self.acquired.retain(|core| core.directory != directory);
+        self.records.retain(|record| record.dir != directory);
+        if self.selected_directory.as_deref() == Some(directory)
+            || self
+                .selected
+                .as_ref()
+                .is_some_and(|record| record.dir == directory)
+        {
+            self.selected = None;
+            self.selected_directory = None;
+            self.selected_stamp = None;
+            self.page = None;
+        }
+        self.invalidate_catalog();
+    }
+
     pub(super) fn invalidate_catalog(&mut self) {
         self.catalog_generation = self.catalog_generation.wrapping_add(1);
         self.catalog_checked = None;
@@ -410,7 +430,11 @@ pub(super) fn catalog(roots: &[PathBuf], vm_id: Option<&str>) -> Result<CoreCata
                 }
             };
             if artifacts.vm_id != vm_id
-                || artifacts.core_state == antinomie_monitor_core::RunArtifactState::Disabled
+                || matches!(
+                    artifacts.core_state,
+                    antinomie_monitor_core::RunArtifactState::Disabled
+                        | antinomie_monitor_core::RunArtifactState::Deleted
+                )
             {
                 continue;
             }

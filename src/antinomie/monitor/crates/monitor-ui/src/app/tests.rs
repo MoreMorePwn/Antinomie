@@ -8,6 +8,7 @@ mod capture;
 mod chrome;
 mod clipboard;
 mod details_scroll;
+mod evidence_delete;
 mod file_drop;
 mod fps_counter;
 mod getting_started;
@@ -109,6 +110,7 @@ pub(crate) fn app() -> MonitorApp {
         pending_observer: None,
         pending_core: None,
         pending_network: None,
+        pending_deletions: Vec::new(),
         selected_analysis: None,
         analysis_windows: BTreeMap::new(),
         analysis_directories: BTreeMap::new(),
