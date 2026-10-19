@@ -494,7 +494,7 @@ fn capture_history_filter_keeps_its_selected_capture_and_identifies_it_as_hidden
 // --- A run whose saving stopped says so wherever the run is shown ---------
 
 #[test]
-fn a_run_whose_saving_stopped_says_so_in_trace_history_details_summary_and_triage() {
+fn a_run_whose_saving_stopped_says_so_in_its_trace_history_details_and_triage() {
     let mut app = live_app();
     app.snapshot.runs[0].recording_error = Some("disk full while saving the recording".into());
     app.snapshot.health.persistence_error = None;
@@ -503,7 +503,6 @@ fn a_run_whose_saving_stopped_says_so_in_trace_history_details_summary_and_triag
         Panel::Trace,
         Panel::RunHistory,
         Panel::Details,
-        Panel::Summary,
         Panel::Triage,
     ] {
         let title = panel.title().to_owned();
@@ -516,7 +515,7 @@ fn a_run_whose_saving_stopped_says_so_in_trace_history_details_summary_and_triag
 }
 
 #[test]
-fn summary_includes_recording_state_from_saved_runs_of_the_selected_vm() {
+fn summary_omits_saved_run_causes_which_remain_in_the_selected_run_details() {
     let mut app = running_app();
     let mut saved = past_run("saved-run", "/bin/older", 1);
     saved.vm_id = "vm".into();
@@ -525,8 +524,12 @@ fn summary_includes_recording_state_from_saved_runs_of_the_selected_vm() {
     app.history.push(saved);
 
     let text = shown(&mut app, &context(), Panel::Summary);
-    assert!(mentions(&text, "disk full"), "{text:?}");
-    assert!(mentions(&text, "recording notes"), "{text:?}");
+    assert!(!mentions(&text, "disk full"), "{text:?}");
+    assert!(!mentions(&text, "an earlier recording note"), "{text:?}");
+    app.select_run(Some("saved-run".into()));
+    let text = shown(&mut app, &context(), Panel::Details);
+    assert!(mentions(&text, "disk full in an earlier boot"), "{text:?}");
+    assert!(mentions(&text, "an earlier recording note"), "{text:?}");
 }
 
 #[test]
@@ -558,7 +561,8 @@ fn recording_notes_show_as_notes_and_never_as_a_saving_failure() {
     let text = shown(&mut app, &ctx, Panel::RunHistory);
     assert!(!mentions(&text, "saving stopped"), "{text:?}");
     let text = shown(&mut app, &ctx, Panel::Summary);
-    assert!(mentions(&text, "recording notes"), "{text:?}");
+    // The selected run's Details pane remains visible below Summary.
+    assert!(!mentions(&text, "run(s) have recording notes"), "{text:?}");
     assert!(!mentions(&text, "saving stopped"), "{text:?}");
 }
 
@@ -575,6 +579,86 @@ fn the_recording_state_text_names_the_cause_and_each_note() {
         crate::run_recording::tooltip(&run),
         "Recording incomplete: saving stopped: disk full\nNote: a note"
     );
+}
+
+#[test]
+fn opening_another_run_does_not_show_the_previous_runs_saving_failure() {
+    let mut app = running_app();
+    let mut partial = past_run("partial", "/bin/partial", 1);
+    partial.recording_error = Some("unique retained first cause".into());
+    // Reopening persisted metadata must preserve the cause without requiring
+    // an active VM or a backend error banner.
+    let partial = serde_json::from_str(&serde_json::to_string(&partial).unwrap()).unwrap();
+    app.history = vec![partial, past_run("intact", "/bin/intact", 2)];
+    let ctx = context();
+    for id in ["partial", "intact", "partial"] {
+        app.select_run(Some(id.into()));
+        let text = shown(&mut app, &ctx, Panel::Details);
+        assert_eq!(
+            mentions(&text, "unique retained first cause"),
+            id == "partial"
+        );
+    }
+}
+
+#[test]
+fn full_run_warning_is_dismissible_and_deduplicates_with_activity_without_hiding_other_runs() {
+    let ctx = context();
+    let mut partial = run("partial-one");
+    let reason = format!("{} retained final cause", "long diagnostic ".repeat(40));
+    partial.recording_error = Some(reason.clone());
+    let message = crate::run_recording::warning_message(&partial).unwrap();
+    let mut journal = crate::activity::Journal::default();
+    let draw = |run: &RunSummary, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                crate::activity::report(ctx, crate::activity::Level::Warn, &message);
+                egui::CentralPanel::default().show(ctx, |ui| crate::run_recording::show(ui, run));
+            },
+        )
+    };
+    let _ = draw(&partial, vec![]);
+    let output = draw(&partial, vec![]);
+    let text = super::texts(&output);
+    assert!(text.iter().any(|(text, _)| text.contains(&reason)));
+    let pos = text
+        .iter()
+        .find(|(text, _)| text == "×")
+        .unwrap()
+        .1
+        .center();
+    for pressed in [true, false] {
+        draw(
+            &partial,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    assert!(!super::texts(&draw(&partial, vec![]))
+        .iter()
+        .any(|(text, _)| text.contains("retained final cause")));
+    journal.ingest(&ctx);
+    assert_eq!(journal.counts(), (1, 0));
+    let mut other = partial.clone();
+    other.id = "partial-two".into();
+    assert!(super::texts(&draw(&other, vec![]))
+        .iter()
+        .any(|(text, _)| text.contains("retained final cause")));
+    journal.ingest(&ctx);
+    assert_eq!(journal.counts(), (2, 0));
+    assert_eq!(partial.recording_error.as_deref(), Some(reason.as_str()));
 }
 
 // --- Deleting the selected VM ----------------------------------------------

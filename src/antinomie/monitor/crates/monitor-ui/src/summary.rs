@@ -293,7 +293,6 @@ pub(crate) fn show(
                         .wrap(),
                 );
             }
-            crate::run_recording::summary(ui, snapshot, run_history, &vm.id);
             let series = history.for_vm(&vm.id);
             let live = active
                 .then_some(snapshot.vm_resources.as_ref())

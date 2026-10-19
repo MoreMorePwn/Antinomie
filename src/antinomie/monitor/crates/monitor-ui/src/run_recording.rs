@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! How one run's recording is shown wherever the run is: Trace, Run History,
-//! Details, Triage and Summary read the same words from here.
+//! Details and Triage read the same words from here.
 //!
 //! A run whose saving stopped is incomplete; notes are facts about the
 //! recording (for example telemetry sent before the launch was acknowledged
@@ -8,9 +8,6 @@
 use crate::theme;
 use antinomie_monitor_core::{RunSummary, Snapshot};
 use eframe::egui::{self, RichText};
-
-/// Longest list of runs the Summary names before counting the rest.
-const SUMMARY_RUN_LIMIT: usize = 6;
 
 /// Short mark for a Run History row; `None` while saving works.
 pub(crate) fn badge(run: &RunSummary) -> Option<&'static str> {
@@ -30,8 +27,8 @@ pub(crate) fn tooltip(run: &RunSummary) -> String {
 /// The recording state of `run`: a warning when saving stopped, then each
 /// note as muted text. Draws nothing for a run with neither.
 pub(crate) fn show(ui: &mut egui::Ui, run: &RunSummary) {
-    if let Some(error) = &run.recording_error {
-        crate::activity::warning(ui, format!("Recording incomplete: saving stopped: {error}"));
+    if let Some(message) = warning_message(run) {
+        crate::activity::warning(ui, message);
     }
     for note in &run.notes {
         ui.add(
@@ -40,53 +37,15 @@ pub(crate) fn show(ui: &mut egui::Ui, run: &RunSummary) {
     }
 }
 
-/// Summary of the runs of `vm_id` that this session still holds: those whose
-/// saving stopped, then how many carry notes.
-pub(crate) fn summary(ui: &mut egui::Ui, snapshot: &Snapshot, history: &[RunSummary], vm_id: &str) {
-    let mut seen = std::collections::HashSet::new();
-    let mut stopped = Vec::with_capacity(SUMMARY_RUN_LIMIT);
-    let mut stopped_count = 0;
-    let mut noted = 0;
-    for run in snapshot.runs.iter().chain(history) {
-        if run.vm_id != vm_id || !seen.insert(run.id.as_str()) {
-            continue;
-        }
-        if run.recording_error.is_some() {
-            stopped_count += 1;
-            if stopped.len() < SUMMARY_RUN_LIMIT {
-                stopped.push(run);
-            }
-        }
-        if !run.notes.is_empty() {
-            noted += 1;
-        }
-    }
-    for run in stopped {
-        let id: String = run.id.chars().take(8).collect();
-        crate::activity::warning(
-            ui,
-            format!(
-                "Recording incomplete for {} [{id}]: saving stopped: {}",
-                run.request.path,
-                run.recording_error.as_deref().unwrap_or_default()
-            ),
-        );
-    }
-    if stopped_count > SUMMARY_RUN_LIMIT {
-        crate::activity::warning(
-            ui,
-            format!(
-                "{} more runs stopped saving",
-                stopped_count - SUMMARY_RUN_LIMIT
-            ),
-        );
-    }
-    if noted > 0 {
-        ui.colored_label(
-            theme::muted(),
-            format!("{noted} run(s) have recording notes; open the run to read them"),
-        );
-    }
+/// Shared run identity keeps Activity and inline dismissal in sync without
+/// suppressing another run that stopped for the same reason.
+pub(crate) fn warning_message(run: &RunSummary) -> Option<String> {
+    run.recording_error.as_ref().map(|error| {
+        format!(
+            "Recording incomplete for {} [{}]: saving stopped: {error}",
+            run.request.path, run.id
+        )
+    })
 }
 
 /// The boot-wide saving failure and the last backend error, as red text.
