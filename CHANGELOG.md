@@ -31,7 +31,39 @@ it runs.
   sandboxed worker (`antinomie-monitor --disk-reader`: bubblewrap with no
   network, the image mounted read-only, one writable extraction folder and
   `prlimit` bounds) using the new `ext4-view` crate. Whole-disk ext4 only;
-  saved disk dumps, imports, snapshot sources and partitions come later.
+  snapshot sources and partitions come later.
+
+- **Disks tab: disk dumps.** With the VM off, **Dump disk** flattens the
+  current disk straight into a standalone sparse `root.ext4` under the VM's
+  recordings (`disks/<id>/`), and **Keep as dump** turns an open view into a
+  dump by renaming its temporary folder: no second conversion, and the view
+  stays open on the kept file. The image is written as `root.ext4.part`,
+  synced, checked (size, ext4 magic and state), renamed, hashed and only then
+  named by its `dump.json` sidecar (VM, time, clean or not cleanly unmounted,
+  sizes, the source layers with their sizes and times, SHA-256), so a half-
+  written dump is never listed; Cancel, a failure and the sweep at the next
+  start remove what an unfinished dump left. A dump is bounded by the
+  recording quota as a per-dump ceiling on its estimated allocation (the
+  refusal says to raise the quota) and by free space under the `disks` folder,
+  and shows progress through the conversion and the hash. The SHA-256 of a
+  dump is on by default (Settings > Disks: dump hash); views are never hashed.
+  A second Settings toggle also records the SHA-256 of every layer of the
+  source chain (off by default; it doubles the time of a dump). Dumps are listed
+  newest first below the Current disk entry with badges (not cleanly
+  unmounted, imported, SHA-256, incomplete, file moved), a record filter and a
+  right-click menu (rename, tags, copy path, save, verify, delete); they stay
+  browsable while the VM runs, because they are plain files read by the same
+  sandboxed reader. Their Details show the record, and **Verify SHA-256**
+  hashes the image again. **Import image…** takes a raw ext4 image made
+  elsewhere (qcow2 and partitioned disks are refused for now; a truncated or
+  non-ext4 file is refused with the reason); the file stays where it is.
+  **Save image to host…** writes a sparse raw copy (holes stay holes) or a
+  compressed standalone qcow2 with `qemu-img`. **Delete…** uses the same
+  confirmation and backend command as the Core dumps and Network capture
+  deletes; the backend only deletes `disks/<id>` of the VM's recording folders
+  (no links, no `..`, a folder that has a `dump.json`), removes the sidecar
+  first, and never deletes an imported image's own file.
+
 - **Code audit fixes (host).**
   - TShark runs in the analysis sandbox's minimal mount profile: only `/usr`,
     a few read-only `/etc` entries, a private `/etc/passwd`, a minimal `/dev`
