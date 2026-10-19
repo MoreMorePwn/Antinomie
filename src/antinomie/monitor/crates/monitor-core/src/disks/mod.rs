@@ -31,6 +31,7 @@ pub mod extract;
 pub mod job;
 pub mod measure;
 pub mod reader;
+pub(crate) mod sandbox;
 
 /// Folder of a recording directory that holds disk views and (later) dumps.
 pub const DISKS_DIR: &str = "disks";

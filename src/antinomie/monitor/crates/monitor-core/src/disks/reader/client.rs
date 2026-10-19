@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! The parent's handle on the sandboxed reader worker.
 use super::protocol::{DiskRequest, Envelope, FIND_SECONDS, Reply};
+use crate::disks::sandbox::Account;
 use std::{
-    fs,
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
@@ -55,6 +55,7 @@ pub struct Reader {
     executable: PathBuf,
     image: PathBuf,
     out: PathBuf,
+    account: Account,
     live: Option<Live>,
     next_id: u64,
     timeout: Option<Duration>,
@@ -62,55 +63,26 @@ pub struct Reader {
 }
 
 /// The bubblewrap command line of the reader worker.
-pub(crate) fn sandbox_command(executable: &Path, image: &Path, out: &Path) -> Command {
-    let mut command = sandbox_base(executable, image, out);
+pub(crate) fn sandbox_command(
+    executable: &Path,
+    image: &Path,
+    out: &Path,
+    account: &Path,
+) -> Command {
+    let mut command = sandbox_base(executable, image, out, account);
     command.args(["/worker", "--disk-reader"]);
     command
 }
 
-/// The `sandbox_run` recipe with the image mounted read-only at `/image`, the
-/// program at `/worker` and one writable folder at `/out`: everything up to
-/// the program to run (tests run a shell there to probe the sandbox).
-pub(crate) fn sandbox_base(executable: &Path, image: &Path, out: &Path) -> Command {
+/// The shared analysis sandbox profile (`sandbox_profile`) with the image
+/// mounted read-only at `/image`, the program at `/worker` and one writable
+/// folder at `/out`: everything up to the program to run (tests run a shell
+/// there to probe the sandbox).
+pub(crate) fn sandbox_base(executable: &Path, image: &Path, out: &Path, account: &Path) -> Command {
     let mut command = Command::new("/usr/bin/bwrap");
-    command.args([
-        "--unshare-all",
-        "--hostname",
-        "disks",
-        "--unshare-user",
-        "--disable-userns",
-        "--die-with-parent",
-        "--new-session",
-        "--clearenv",
-        "--cap-drop",
-        "ALL",
-        "--ro-bind",
-        "/usr",
-        "/usr",
-    ]);
-    for path in ["/bin", "/sbin", "/lib", "/lib64"] {
-        if let Ok(target) = fs::read_link(path) {
-            command.arg("--symlink").arg(target).arg(path);
-        }
-    }
-    for path in ["/lib", "/lib64", "/etc/ld.so.cache"] {
-        if Path::new(path).exists() && fs::read_link(path).is_err() {
-            command.arg("--ro-bind").arg(path).arg(path);
-        }
-    }
+    crate::sandbox_profile::apply(&mut command, account, &[], TMP_SIZE);
     command
-        .args([
-            "--proc",
-            "/proc",
-            "--dir",
-            "/dev",
-            "--dev-bind",
-            "/dev/null",
-            "/dev/null",
-            "--size",
-        ])
-        .arg(TMP_SIZE.to_string())
-        .args(["--tmpfs", "/tmp", "--ro-bind"])
+        .arg("--ro-bind")
         .arg(executable)
         .arg("/worker")
         .arg("--ro-bind")
@@ -162,6 +134,7 @@ impl Reader {
             executable,
             image: image.to_path_buf(),
             out: out.to_path_buf(),
+            account: Account::new()?,
             live: None,
             next_id: 0,
             timeout: None,
@@ -192,7 +165,12 @@ impl Reader {
     }
 
     fn spawn(&self) -> Result<Live, String> {
-        let mut command = sandbox_command(&self.executable, &self.image, &self.out);
+        let mut command = sandbox_command(
+            &self.executable,
+            &self.image,
+            &self.out,
+            self.account.passwd(),
+        );
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
