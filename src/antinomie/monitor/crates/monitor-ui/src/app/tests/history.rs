@@ -75,6 +75,7 @@ fn async_only_row_keeps_missing_phases_and_renders_observation_loss() {
         async_events: vec![observed.clone()],
         async_saved: 1,
         task_exit: None,
+        kernel_notes: Vec::new(),
     };
     assert_eq!(trace::representative(&row).unwrap().tid, 42);
     assert!(
@@ -156,6 +157,7 @@ fn a_call_the_task_ended_in_shows_how_it_ended_and_empty_reads_say_why() {
         async_events: Vec::new(),
         async_saved: 0,
         task_exit: Some(ended),
+        kernel_notes: Vec::new(),
     };
     let cells = trace::cells(&row);
     assert_eq!(cells[1].0[0].0, "1\u{2192}9");
@@ -181,6 +183,7 @@ fn a_call_the_task_ended_in_shows_how_it_ended_and_empty_reads_say_why() {
         async_events: Vec::new(),
         async_saved: 0,
         task_exit: None,
+        kernel_notes: Vec::new(),
     };
     assert!(render(&read)
         .iter()
@@ -213,6 +216,7 @@ fn details_values_copy_in_many_forms_and_captured_fields_open_data_windows() {
         async_events: Vec::new(),
         async_saved: 0,
         task_exit: None,
+        kernel_notes: Vec::new(),
     };
     let ctx = egui::Context::default();
     theme::install(&ctx);

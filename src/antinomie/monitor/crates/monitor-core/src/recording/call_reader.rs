@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Assembles the saved evidence of one call from the packet index.
 //!
-//! A call's entry, exit and task end are always read. Its async observations
+//! A call's entry, exit, task end and kernel notes are always read. Its async observations
 //! are read in event order, a bounded window at a time: the first
 //! [`ASYNC_PREVIEW_LIMIT`] for the call's preview, any later window for
 //! [`Recording::async_page_cancellable`]. Reads follow the index, so a call
@@ -61,6 +61,8 @@ struct Queries<'a> {
     ends: rusqlite::Statement<'a>,
     /// Sequences of the records that end the task.
     exits: rusqlite::Statement<'a>,
+    /// Sequences of the credential and hash records.
+    notes: rusqlite::Statement<'a>,
     /// The packets of one observation.
     event: rusqlite::Statement<'a>,
     /// Packets of async observations from a sequence on, in event order.
@@ -144,6 +146,11 @@ impl<'a> CallReader<'a> {
                 exits: connection.prepare(&format!(
                     "SELECT seq FROM lifecycle WHERE key=?1 AND task_exit=1 \
                      ORDER BY seq LIMIT {TASK_EXITS}"
+                ))?,
+                notes: connection.prepare(&format!(
+                    "SELECT seq FROM lifecycle WHERE key=?1 AND task_exit=2 \
+                     ORDER BY seq LIMIT {}",
+                    crate::kernel_notes::NOTES_PER_CALL
                 ))?,
                 event: connection.prepare(
                     "SELECT offset FROM packets WHERE key=?1 AND phase=3 AND seq=?2 \
@@ -247,11 +254,17 @@ impl<'a> CallReader<'a> {
             self.source.ingest(key, row.get(0)?, &mut preview)?;
         }
         drop(rows);
-        let exits = self
+        let mut exits = self
             .queries
             .exits
             .query_map([key], |row| row.get::<_, i64>(0))?
             .collect::<Result<Vec<_>, _>>()?;
+        exits.extend(
+            self.queries
+                .notes
+                .query_map([key], |row| row.get::<_, i64>(0))?
+                .collect::<Result<Vec<_>, _>>()?,
+        );
         for seq in exits {
             let mut rows = self
                 .queries

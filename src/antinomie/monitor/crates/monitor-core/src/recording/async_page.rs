@@ -18,17 +18,38 @@ fn seq_from_index(value: i64) -> u64 {
     (value as u64) ^ (1 << 63)
 }
 
-/// Whether the field-begin `packet` names a lifecycle record, and if so
-/// whether that record is the end of the task.
-pub(super) fn lifecycle_field(header: &parser::Header, packet: &[u8]) -> Option<bool> {
+/// What a lifecycle record is, as the index stores it. Larger kinds win when
+/// one event holds several lifecycle fields.
+#[derive(Clone, Copy)]
+pub(super) enum LifecycleKind {
+    /// Exec commit and the other records the call does not carry.
+    Other = 0,
+    /// The task ended in this call.
+    TaskExit = 1,
+    /// Credentials or a file hash, read back with the call.
+    KernelNote = 2,
+}
+
+/// Whether the field-begin `packet` names a lifecycle record, and which kind.
+pub(super) fn lifecycle_field(header: &parser::Header, packet: &[u8]) -> Option<LifecycleKind> {
     if header.phase != 3 || header.fragment != 2 {
         return None;
     }
     let (_, body) = parser::parse_packet(packet).ok()?;
     let length = usize::from(u16::from_le_bytes(body.get(32..34)?.try_into().ok()?));
     let name = body.get(40..40usize.checked_add(length)?)?;
-    name.starts_with(b"lifecycle.")
-        .then_some(name == b"lifecycle.task_exit")
+    if !name.starts_with(b"lifecycle.") {
+        return None;
+    }
+    Some(if name == b"lifecycle.task_exit" {
+        LifecycleKind::TaskExit
+    } else if name == crate::kernel_notes::CREDS_KEY.as_bytes()
+        || name == crate::kernel_notes::HASH_KEY.as_bytes()
+    {
+        LifecycleKind::KernelNote
+    } else {
+        LifecycleKind::Other
+    })
 }
 
 impl Recording {

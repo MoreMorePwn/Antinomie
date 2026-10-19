@@ -33,6 +33,39 @@ marks invalid are unavailable, never zero. Kernels of revision 11 to 16 keep
 the temporary collector described below, unchanged, until their bases are
 outdated; a revision-17 kernel never receives the collector upload or exec.
 
+### Accepted guest credential and file-hash records (0.7.0)
+
+Revision 17 also gives the tracer two lifecycle records (layouts in
+`protocol/control.h`, rules in `native-schema-slices.md` section 18). They are
+ordinary phase-3 events with one fixed-structure field, so the ANTT envelope and
+ABI 9 are unchanged and a host that does not know them ignores them.
+
+* `lifecycle.creds` is written from `commit_creds()`, the only place a task's
+  credentials change, plus the login-uid setter. A task's first traced call
+  writes its credentials as they are (START), so a task that was running when
+  Capture All began is described too. No change, no record.
+* `lifecycle.file_hash` is SHA-256 of the image an exec committed (not a script,
+  whose interpreter is hashed and flagged) and of the file an `unlink` removed. The traced
+  task pins the dentry and mount and queues a job of about 450 bytes under a
+  spinlock; the system unbound workqueue reopens the file with
+  `kernel_file_open` (no fsnotify event, no atime update, no file accounting) and
+  publishes under the originating call's identity, so the host pairs it with the
+  call although it is written later. A 32-entry digest cache keyed by inode, size,
+  mtime and ctime covers an exec storm. Budget: 16 MiB per file, 16 queued jobs,
+  64 MiB queued bytes, ext4/tmpfs/ramfs only; every refusal is a record with its
+  reason and a cumulative loss count rides in every later record.
+
+The host (`kernel_notes.rs`) decodes both; the call pairing, the archive index
+(`lifecycle` rows now store a kind; the cached index is rebuilt once) and
+`InvocationSummary::kernel_notes` carry them with their call. Triage
+(`triage/kernel_records.rs`) follows credentials per task and attaches the ones in effect after
+the call to Sysmon-style `User` and `LogonId` and the auditd `uid` family, and
+the hash to `process_creation` and `file_delete`. Nothing is derived from a
+missing record: `User` is the numeric uid (no passwd on the host), `LogonId` is
+the audit login uid only when the guest set one, and the Sigma journal is
+format 3 (versions 1 and 2 still load). The MD5 digest is not recorded: no rule
+in the SigmaHQ Linux pack reads a hash.
+
 ### Accepted ANT-T0097 host UI performance (0.6.2)
 
 Remove render-time filesystem checks for host chooser availability; resolve

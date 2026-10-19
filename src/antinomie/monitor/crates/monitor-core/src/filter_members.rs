@@ -492,6 +492,7 @@ mod tests {
             async_events: Vec::new(),
             async_saved: 0,
             task_exit: None,
+            kernel_notes: Vec::new(),
         }
     }
     #[test]

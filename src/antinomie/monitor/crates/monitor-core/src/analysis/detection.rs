@@ -12,8 +12,10 @@ use std::{
 
 pub const JOURNAL_FILE: &str = "triage-events.jsonl";
 /// Format of a journal written now. Version 2 adds the per-event `_inferred`
-/// list; version 1 journals have none and still load and scan.
-pub const JOURNAL_VERSION: u64 = 2;
+/// list; version 3 adds the guest kernel's credentials and file hashes (`User`,
+/// `LogonId`, `Hashes`, `HashSkipped` and the auditd `uid` family). Older
+/// journals lack them and still load and scan.
+pub const JOURNAL_VERSION: u64 = 3;
 /// Oldest journal format the reader and the Sigma adapter accept.
 pub const JOURNAL_VERSION_MIN: u64 = 1;
 pub const REPORT_LIMIT: usize = 32 * 1024 * 1024;

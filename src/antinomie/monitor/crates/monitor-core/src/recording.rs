@@ -422,6 +422,11 @@ fn archive_index_path(directory: &Path) -> Result<PathBuf, RecordingError> {
     Ok(cache_root.join(format!("{name}.sqlite")))
 }
 
+/// Layout of the cached packet index. 2: a lifecycle row's `task_exit` column
+/// is a kind (see `async_page::LifecycleKind`), so credential and hash records
+/// can be read back with their call; an index built before is rebuilt.
+const INDEX_VERSION: i64 = 2;
+
 fn open_archive_index(
     directory: &Path,
     cancel: &AtomicBool,
@@ -453,8 +458,11 @@ fn open_archive_index(
         .optional()?;
     // Go on from where the index stopped, unless the archive is another file
     // (or, impossibly for an append-only archive, shorter).
+    let version: i64 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     let resume = cached
-        .filter(|(cached, indexed)| *cached == identity && *indexed as u64 <= length)
+        .filter(|(cached, indexed)| {
+            *cached == identity && *indexed as u64 <= length && version == INDEX_VERSION
+        })
         .map(|(_, indexed)| indexed as u64);
     if resume != Some(length) {
         if resume.is_none() {
@@ -467,6 +475,7 @@ fn open_archive_index(
                  CREATE TABLE packets(key BLOB NOT NULL, offset INTEGER NOT NULL, phase INTEGER NOT NULL, seq INTEGER NOT NULL); \
                  CREATE TABLE lifecycle(key BLOB NOT NULL, seq INTEGER NOT NULL, task_exit INTEGER NOT NULL, PRIMARY KEY(key, seq)) WITHOUT ROWID;",
             )?;
+            transaction.pragma_update(None, "user_version", INDEX_VERSION)?;
         }
         let mut indexed = resume.unwrap_or(0);
         {
@@ -516,8 +525,8 @@ fn open_archive_index(
                     }
                     let seq = async_page::seq_index(header.event_seq);
                     packets.execute(rusqlite::params![key, offset, header.phase, seq])?;
-                    if let Some(task_exit) = async_page::lifecycle_field(&header, &packet) {
-                        lifecycle.execute(rusqlite::params![key, seq, task_exit])?;
+                    if let Some(kind) = async_page::lifecycle_field(&header, &packet) {
+                        lifecycle.execute(rusqlite::params![key, seq, kind as i64])?;
                     }
                 }
             }
