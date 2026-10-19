@@ -348,8 +348,21 @@ impl MonitorApp {
     }
 
     pub(super) fn history_detail(&mut self, ui: &mut egui::Ui) {
+        // The same run or capture keeps its scroll position across repaints.
+        let selection = (
+            self.capture_tab,
+            self.selected.clone(),
+            self.selected_run.clone(),
+            self.selected_capture.clone(),
+        );
+        crate::details_scroll::show(ui, "history_details_scroll", selection, |ui, viewport| {
+            self.history_detail_content(ui, viewport)
+        });
+    }
+
+    fn history_detail_content(&mut self, ui: &mut egui::Ui, viewport: f32) {
         if self.capture_tab {
-            self.capture_detail(ui);
+            self.capture_detail(ui, viewport);
             return;
         }
         let Some(vm_id) = self.selected.clone() else {
@@ -369,13 +382,13 @@ impl MonitorApp {
         };
         // A warning or note about the recording shows only when there is one.
         crate::run_recording::show(ui, &run);
-        self.run_tree_view(ui, &run);
+        self.run_tree_view(ui, &run, viewport);
         ui.add_space(6.0);
         enabled_features(ui, &run);
         launch_details(ui, &run);
     }
 
-    fn capture_detail(&mut self, ui: &mut egui::Ui) {
+    fn capture_detail(&mut self, ui: &mut egui::Ui, viewport: f32) {
         let Some(id) = self.selected_capture.clone() else {
             ui.colored_label(theme::muted(), "Select a capture in Run History.");
             return;
@@ -412,7 +425,9 @@ impl MonitorApp {
                 );
                 None
             }
-            Some(Ok(processes)) => captures::process_tree(ui, processes, selected, font_size),
+            Some(Ok(processes)) => bounded_tree(ui, viewport, |ui| {
+                captures::process_tree(ui, processes, selected, font_size)
+            }),
         };
         if let Some(selection) = selection {
             self.select_process(selection);
@@ -420,7 +435,7 @@ impl MonitorApp {
         }
     }
 
-    fn run_tree_view(&mut self, ui: &mut egui::Ui, run: &RunSummary) {
+    fn run_tree_view(&mut self, ui: &mut egui::Ui, run: &RunSummary, viewport: f32) {
         ui.horizontal_wrapped(|ui| {
             ui.strong("Recorded process tree");
             if ui.button("Refresh tree").clicked() {
@@ -454,13 +469,9 @@ impl MonitorApp {
                 for issue in issues {
                     crate::activity::warning(ui, issue);
                 }
-                ui.allocate_ui_with_layout(
-                    egui::vec2(ui.available_width(), ui.available_height().min(220.0)),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        selection = captures::process_tree(ui, processes, selected, font_size);
-                    },
-                );
+                selection = bounded_tree(ui, viewport, |ui| {
+                    captures::process_tree(ui, processes, selected, font_size)
+                });
             }
             Some((_, Err(error))) => {
                 crate::activity::warning(ui, error);
@@ -761,6 +772,22 @@ pub(super) fn execution_detail(run: &RunSummary) -> String {
     }
 }
 
+/// The process tree in a box that is taller in a taller window and that the
+/// user can resize. The Details scroll area gives no height of its own, and
+/// the tree scrolls inside the box, both ways.
+fn bounded_tree<R>(ui: &mut egui::Ui, viewport: f32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let height = crate::details_scroll::tree_height(ui, viewport);
+    let result = ui
+        .allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), height),
+            egui::Layout::top_down(egui::Align::Min),
+            add,
+        )
+        .inner;
+    crate::details_scroll::tree_splitter(ui, height);
+    result
+}
+
 /// The run's program tree ended and its terminal is closed: its archive is
 /// complete and no more live events arrive for it.
 pub(super) fn run_recording_complete(run: &RunSummary) -> bool {
@@ -822,7 +849,8 @@ fn launch_details(ui: &mut egui::Ui, run: &RunSummary) {
         .id_salt("run_launch_details")
         .default_open(false)
         .show(ui, |ui| {
-            egui::ScrollArea::both()
+            // Vertical scrolling is the Details panel's; wide values scroll here.
+            egui::ScrollArea::horizontal()
                 .id_salt("launch_metadata")
                 .show(ui, |ui| {
                     egui::Grid::new("run_metadata")

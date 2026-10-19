@@ -7,6 +7,7 @@ mod bases;
 mod capture;
 mod chrome;
 mod clipboard;
+mod details_scroll;
 mod file_drop;
 mod fps_counter;
 mod history;

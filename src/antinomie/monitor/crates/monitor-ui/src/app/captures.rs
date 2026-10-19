@@ -645,95 +645,123 @@ pub(super) fn process_tree(
     let mono = theme::mono(font_size - 1.0);
     let char_width = ui.fonts(|fonts| fonts.glyph_width(&mono, '0'));
     let row_height = theme::row_height(font_size);
-    TableBuilder::new(ui)
-        .id_salt("capture_process_tree")
-        .sense(egui::Sense::click())
-        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .striped(true)
+    // The number columns have fixed widths; the process column is as wide as
+    // its longest row, or the panel if that is wider, and the tree scrolls
+    // sideways when it is not.
+    let numbers = char_width * 30.0 + 24.0 + 3.0 * ui.spacing().item_spacing.x;
+    let rows = layout.rows.iter().map(|row| {
+        let process = &processes[row.process as usize];
+        let exe = process
+            .exe
+            .as_deref()
+            .map_or(0, |exe| exe.chars().count() + 2);
+        let chars =
+            row.depth as usize * crate::tree_lines::CELL_CHARS + process.name.chars().count() + exe;
+        chars as f32 * char_width + 12.0
+    });
+    let wanted = rows.fold(160.0_f32, f32::max);
+    let process_width = wanted.max(ui.available_width() - numbers - 16.0);
+    egui::ScrollArea::horizontal()
+        .id_salt("capture_process_tree_columns")
         .auto_shrink([false, false])
-        .max_scroll_height(f32::INFINITY)
-        .min_scrolled_height(0.0)
-        .column(Column::remainder().at_least(160.0).clip(true))
-        .column(Column::exact(char_width * 8.0 + 8.0))
-        .column(Column::exact(char_width * 10.0 + 8.0))
-        .column(Column::exact(char_width * 12.0 + 8.0))
-        .header(row_height + 4.0, |mut header| {
-            for label in ["Process", "PID", "Calls", "Exit"] {
-                header.col(|ui| {
-                    theme::section(ui, label);
-                });
-            }
-        })
-        .body(|body| {
-            body.rows(row_height, layout.rows.len(), |mut row| {
-                let process = &processes[layout.rows[row.index()].process as usize];
-                let branch = layout.prefix(row.index());
-                row.set_selected(selected == Some(process.pid));
-                row.col(|ui| {
-                    let reach = ui.spacing().item_spacing.y * 0.5;
-                    let lines = ui.max_rect().expand2(egui::vec2(0.0, reach));
-                    branch.paint(ui.painter(), lines, char_width);
-                    ui.add_space(branch.width(char_width) + 4.0);
-                    let name = if process.name.is_empty() {
-                        "?"
-                    } else {
-                        process.name.as_str()
-                    };
-                    let color = if process.packets == 0 {
-                        theme::muted()
-                    } else {
-                        theme::value(theme::ValueKind::Name)
-                    };
-                    ui.add(
-                        egui::Label::new(RichText::new(name).color(color))
-                            .selectable(false)
-                            .truncate(),
-                    );
-                    if let Some(exe) = process.exe.as_deref().filter(|exe| {
-                        std::path::Path::new(exe)
-                            .file_name()
-                            .is_none_or(|file| file.to_string_lossy() != name)
-                    }) {
-                        ui.add_space(6.0);
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(exe).font(mono.clone()).color(theme::muted()),
-                            )
-                            .selectable(false)
-                            .truncate(),
-                        );
+        .show(ui, |ui| {
+            TableBuilder::new(ui)
+                .id_salt("capture_process_tree")
+                .sense(egui::Sense::click())
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                .striped(true)
+                .auto_shrink([false, false])
+                .max_scroll_height(f32::INFINITY)
+                .min_scrolled_height(0.0)
+                .column(Column::exact(process_width).clip(true))
+                .column(Column::exact(char_width * 8.0 + 8.0))
+                .column(Column::exact(char_width * 10.0 + 8.0))
+                .column(Column::exact(char_width * 12.0 + 8.0))
+                .header(row_height + 4.0, |mut header| {
+                    for label in ["Process", "PID", "Calls", "Exit"] {
+                        header.col(|ui| {
+                            theme::section(ui, label);
+                        });
                     }
-                });
-                row.col(|ui| {
-                    ui.label(
-                        RichText::new(process.pid.to_string())
-                            .font(mono.clone())
-                            .color(theme::value(theme::ValueKind::Number)),
-                    );
-                });
-                row.col(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if process.calls > 0 {
-                            ui.label(
-                                RichText::new(process.calls.to_string())
-                                    .font(mono.clone())
-                                    .color(theme::text()),
+                })
+                .body(|body| {
+                    body.rows(row_height, layout.rows.len(), |mut row| {
+                        let process = &processes[layout.rows[row.index()].process as usize];
+                        let branch = layout.prefix(row.index());
+                        row.set_selected(selected == Some(process.pid));
+                        row.col(|ui| {
+                            let reach = ui.spacing().item_spacing.y * 0.5;
+                            let lines = ui.max_rect().expand2(egui::vec2(0.0, reach));
+                            branch.paint(ui.painter(), lines, char_width);
+                            ui.add_space(branch.width(char_width) + 4.0);
+                            let name = if process.name.is_empty() {
+                                "?"
+                            } else {
+                                process.name.as_str()
+                            };
+                            let color = if process.packets == 0 {
+                                theme::muted()
+                            } else {
+                                theme::value(theme::ValueKind::Name)
+                            };
+                            ui.add(
+                                egui::Label::new(RichText::new(name).color(color))
+                                    .selectable(false)
+                                    .truncate(),
                             );
-                        } else {
-                            ui.label(RichText::new("-").font(mono.clone()).color(theme::muted()));
+                            if let Some(exe) = process.exe.as_deref().filter(|exe| {
+                                std::path::Path::new(exe)
+                                    .file_name()
+                                    .is_none_or(|file| file.to_string_lossy() != name)
+                            }) {
+                                ui.add_space(6.0);
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(exe).font(mono.clone()).color(theme::muted()),
+                                    )
+                                    .selectable(false)
+                                    .truncate(),
+                                );
+                            }
+                        });
+                        row.col(|ui| {
+                            ui.label(
+                                RichText::new(process.pid.to_string())
+                                    .font(mono.clone())
+                                    .color(theme::value(theme::ValueKind::Number)),
+                            );
+                        });
+                        row.col(|ui| {
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if process.calls > 0 {
+                                        ui.label(
+                                            RichText::new(process.calls.to_string())
+                                                .font(mono.clone())
+                                                .color(theme::text()),
+                                        );
+                                    } else {
+                                        ui.label(
+                                            RichText::new("-")
+                                                .font(mono.clone())
+                                                .color(theme::muted()),
+                                        );
+                                    }
+                                },
+                            );
+                        });
+                        row.col(|ui| {
+                            ui.add_space(8.0);
+                            let (text, color) = exit_status(process);
+                            ui.label(RichText::new(text).font(mono.clone()).color(color));
+                        });
+                        let response = row.response().on_hover_text(process_hover(process));
+                        if response.clicked() {
+                            action = Some(ProcessSelection::Process(process.pid));
                         }
                     });
                 });
-                row.col(|ui| {
-                    ui.add_space(8.0);
-                    let (text, color) = exit_status(process);
-                    ui.label(RichText::new(text).font(mono.clone()).color(color));
-                });
-                let response = row.response().on_hover_text(process_hover(process));
-                if response.clicked() {
-                    action = Some(ProcessSelection::Process(process.pid));
-                }
-            });
         });
     action
 }
