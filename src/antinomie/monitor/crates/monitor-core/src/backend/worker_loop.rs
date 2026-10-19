@@ -354,6 +354,7 @@ impl Worker {
                 if let Some(job) = self.build.as_ref() {
                     job.cancel.store(true, Ordering::Relaxed);
                 }
+                self.finish_evidence_deletes();
                 let result = self.stop();
                 if let Err(e) = result {
                     self.snapshot.last_error = Some(e);
@@ -406,6 +407,36 @@ impl Worker {
                             self.cancel_queued_commands();
                             handled += 1;
                             break;
+                        }
+                        // The deletion runs on its own thread, which answers the
+                        // command when it is done; only a refusal answers here.
+                        if let Command::DeleteEvidence {
+                            vm_id,
+                            item,
+                            confirmed,
+                        } = command
+                        {
+                            if let Err(message) =
+                                self.start_evidence_delete(id, &vm_id, item, confirmed)
+                            {
+                                self.snapshot.last_error = Some(message.clone());
+                                self.emit(Notification::CommandResult {
+                                    id,
+                                    success: false,
+                                    message,
+                                });
+                            }
+                            handled += 1;
+                            if handled >= 64 {
+                                break;
+                            }
+                            received = self.receiver.try_recv().map_err(|error| match error {
+                                mpsc::TryRecvError::Empty => mpsc::RecvTimeoutError::Timeout,
+                                mpsc::TryRecvError::Disconnected => {
+                                    mpsc::RecvTimeoutError::Disconnected
+                                }
+                            });
+                            continue;
                         }
                         let quiet = matches!(
                             command,
@@ -644,6 +675,7 @@ impl Worker {
             self.host_analysis_tick();
             self.check_run_artifacts();
             self.poll_flush();
+            self.poll_evidence_deletes();
             if self.last_publish.elapsed() >= Duration::from_millis(250)
                 && (self.session.is_some()
                     || self.refresh.is_some()

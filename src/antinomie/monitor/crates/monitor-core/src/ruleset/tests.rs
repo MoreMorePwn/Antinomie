@@ -1326,3 +1326,37 @@ mod source_catalog;
 mod source_fixture;
 mod source_install;
 mod source_policy;
+
+#[test]
+fn the_registry_lock_is_per_data_directory() {
+    let first = source_fixture_dir("lock-a");
+    let second = source_fixture_dir("lock-b");
+    let held = registry::registry_lock(&first);
+    // Another data directory is not blocked by the first one's lock.
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let other = second.clone();
+    let thread = std::thread::spawn(move || {
+        let _lock = registry::registry_lock(&other);
+        sender.send(()).unwrap();
+    });
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("an unrelated data directory waited for the lock");
+    thread.join().unwrap();
+    // The same directory behind a symbolic link is the same lock.
+    let spelled = second.join("alias");
+    std::os::unix::fs::symlink(&first, &spelled).unwrap();
+    assert_eq!(
+        registry::lock_key(&rules_root(&spelled)),
+        registry::lock_key(&rules_root(&first))
+    );
+    drop(held);
+    let _ = fs::remove_dir_all(first);
+    let _ = fs::remove_dir_all(second);
+}
+
+fn source_fixture_dir(label: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("ant-{label}-{}", crate::storage::unique_id()));
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}

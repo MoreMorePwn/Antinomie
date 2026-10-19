@@ -142,7 +142,7 @@ fn remove_entry(path: &Path) -> Result<(), String> {
 
 /// Rewrite every run record of `roots` for which `edit` returns true.
 fn update_runs(roots: &[PathBuf], edit: impl Fn(&mut RunArtifacts) -> bool) -> Result<(), String> {
-    let mut failures = Vec::new();
+    let mut changed = Vec::new();
     for root in roots {
         for run in fs::read_dir(root.join("runs"))
             .into_iter()
@@ -153,21 +153,69 @@ fn update_runs(roots: &[PathBuf], edit: impl Fn(&mut RunArtifacts) -> bool) -> R
             let Ok(Some(mut artifacts)) = RunArtifacts::load(&directory) else {
                 continue;
             };
-            if edit(&mut artifacts)
-                && let Err(error) =
-                    crate::storage::atomic_json(&directory.join("artifacts.json"), &artifacts)
-            {
-                failures.push(format!("{}: {error}", directory.display()));
+            if edit(&mut artifacts) {
+                changed.push((directory, artifacts));
+            }
+        }
+    }
+    publish_runs(changed).map_err(|failures| {
+        format!(
+            "the item was deleted but its run records could not be updated: {}",
+            failures.join("; ")
+        )
+    })
+}
+
+/// Longest wait for the background writer to publish the run records.
+const PUBLISH_WAIT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Publish the rewritten `artifacts.json` of several runs as one batch: all of
+/// them are queued for the JSON writer, which coalesces and orders them, and
+/// the wait for the disk happens once for the batch instead of once per run
+/// (a recording at disk speed makes each `fsync` take seconds). A run that
+/// the queue refuses is written directly. Returns every failure.
+fn publish_runs(records: Vec<(PathBuf, RunArtifacts)>) -> Result<(), Vec<String>> {
+    use crate::storage::JsonWriteStatus;
+    let mut failures = Vec::new();
+    let mut receipts = Vec::new();
+    for (directory, artifacts) in &records {
+        let path = directory.join("artifacts.json");
+        match crate::storage::queue_json_observed(&path, artifacts) {
+            Ok(receipt) => receipts.push((directory, receipt)),
+            Err(_) => {
+                if let Err(error) = crate::storage::atomic_json(&path, artifacts) {
+                    failures.push(format!("{}: {error}", directory.display()));
+                }
+            }
+        }
+    }
+    let started = std::time::Instant::now();
+    for (directory, receipt) in receipts {
+        loop {
+            match receipt.status() {
+                // A later write of the same file superseded this one; it is
+                // the newer record.
+                JsonWriteStatus::Complete | JsonWriteStatus::Superseded => break,
+                JsonWriteStatus::Failed(error) => {
+                    failures.push(format!("{}: {error}", directory.display()));
+                    break;
+                }
+                JsonWriteStatus::Pending if started.elapsed() > PUBLISH_WAIT => {
+                    failures.push(format!(
+                        "{}: still being written after {} s",
+                        directory.display(),
+                        PUBLISH_WAIT.as_secs()
+                    ));
+                    break;
+                }
+                JsonWriteStatus::Pending => std::thread::sleep(std::time::Duration::from_millis(2)),
             }
         }
     }
     if failures.is_empty() {
         Ok(())
     } else {
-        Err(format!(
-            "the item was deleted but its run records could not be updated: {}",
-            failures.join("; ")
-        ))
+        Err(failures)
     }
 }
 
@@ -304,8 +352,11 @@ pub(crate) fn remove_process_core(roots: &[PathBuf], directory: &Path) -> Result
         artifacts.core_dump = None;
         artifacts.core_state = RunArtifactState::Disabled;
         artifacts.core_deleted = true;
-        crate::storage::atomic_json(&run.join("artifacts.json"), &artifacts).map_err(|error| {
-            format!("the core was deleted but its run record could not be updated: {error}")
+        publish_runs(vec![(run.to_path_buf(), artifacts)]).map_err(|failures| {
+            format!(
+                "the core was deleted but its run record could not be updated: {}",
+                failures.join("; ")
+            )
         })?;
     }
     Ok(Removed {

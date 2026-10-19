@@ -28,7 +28,7 @@ pub fn snapshot_from(
     facts: &ToolFacts,
     cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<Snapshot, String> {
-    let _lock = registry_lock();
+    let _lock = registry_lock(data_dir);
     if cancelled(cancel) {
         return Err("cancelled".into());
     }
