@@ -80,12 +80,12 @@ impl NetworkView {
                         (&title, theme::error()),
                         &capture_detail(active, true, loaded),
                         font_size,
-                    )
-                    .on_hover_text(active.file.display().to_string());
+                    );
                     response.context_menu(|ui| {
                         self.capture_menu(ui, active);
                     });
                     if response.clicked() {
+                        self.capture_details = Some((active.clone(), true));
                         open = Some(active.file.clone());
                     }
                 }
@@ -100,12 +100,11 @@ impl NetworkView {
                     .collect();
                 for capture in &earlier {
                     let selected = self.list.path.as_ref() == Some(&capture.file);
-                    // The date in UTC; the zone is in the hover text.
-                    let started = format_date(capture.started_ms / 1000);
+                    let started = crate::time_format::local_seconds(capture.started_ms / 1000);
                     let title = crate::evidence::title(
                         ui,
                         &capture.file.with_extension("metadata"),
-                        started.trim_end_matches(" UTC"),
+                        &started,
                     );
                     let response = capture_row(
                         ui,
@@ -113,16 +112,12 @@ impl NetworkView {
                         (&title, theme::text()),
                         &capture_detail(capture, false, None),
                         font_size,
-                    )
-                    .on_hover_text(format!(
-                        "Started {started}\nBoot {}\n{}",
-                        capture.boot_id,
-                        capture.file.display()
-                    ));
+                    );
                     response.context_menu(|ui| {
                         self.capture_menu(ui, capture);
                     });
                     if response.clicked() {
+                        self.capture_details = Some((capture.clone(), false));
                         open = Some(capture.file.clone());
                     }
                 }
@@ -134,6 +129,107 @@ impl NetworkView {
             self.open(Some(path));
         }
         action
+    }
+
+    /// The clicked capture's record, for the Details panel: its identity,
+    /// timing, counts, file and the metadata sidecar.
+    pub(super) fn capture_record_details(
+        &self,
+        ui: &mut egui::Ui,
+        shown: &NetworkCapture,
+        live: bool,
+    ) {
+        // The list's copy is newer than the one taken at the click.
+        let capture = self
+            .captures
+            .iter()
+            .find(|capture| capture.file == shown.file)
+            .unwrap_or(shown);
+        let annotation = crate::evidence::annotation(ui, &capture.file.with_extension("metadata"));
+        let state = if live {
+            "Live"
+        } else if capture.stopped_ms.is_some() {
+            "Completed"
+        } else {
+            "Unfinished (the app ended first)"
+        };
+        let name = annotation
+            .as_ref()
+            .filter(|value| !value.name.is_empty())
+            .map_or_else(|| capture_title(capture, live), |value| value.name.clone());
+        let mut rows = vec![
+            ("Name", name),
+            ("Capture ID", capture.id.clone()),
+            (
+                "Tags",
+                annotation
+                    .as_ref()
+                    .map_or_else(String::new, |value| value.tags.join(", ")),
+            ),
+            ("State", state.into()),
+            (
+                "Scope",
+                if capture.whole_boot {
+                    "Whole boot"
+                } else {
+                    "Per run"
+                }
+                .into(),
+            ),
+            ("Boot", capture.boot_id.clone()),
+            (
+                "Start",
+                crate::time_format::local_seconds(capture.started_ms / 1000),
+            ),
+            (
+                "Stop",
+                capture.stopped_ms.map_or_else(
+                    || "Not recorded".into(),
+                    |stopped| crate::time_format::local_seconds(stopped / 1000),
+                ),
+            ),
+        ];
+        if let Some(stopped) = capture.stopped_ms {
+            rows.push((
+                "Duration",
+                format_duration(stopped.saturating_sub(capture.started_ms)),
+            ));
+        }
+        rows.push((
+            "Packets",
+            capture
+                .packets
+                .map_or_else(|| "Not counted".into(), |packets| packets.to_string()),
+        ));
+        rows.push((
+            "Size",
+            capture.bytes.map_or_else(
+                || "Not recorded".into(),
+                antinomie_monitor_core::byte_size::file_size,
+            ),
+        ));
+        rows.push(("PCAP file", capture.file.display().to_string()));
+        rows.push((
+            "Metadata",
+            capture
+                .file
+                .with_extension("metadata")
+                .display()
+                .to_string(),
+        ));
+        egui::Grid::new("network_capture_record")
+            .num_columns(2)
+            .show(ui, |ui| {
+                for (label, value) in rows {
+                    ui.label(label);
+                    ui.add(egui::Label::new(value).selectable(true));
+                    ui.end_row();
+                }
+            });
+        ui.colored_label(
+            theme::muted(),
+            "Select a packet in the Network tab to see its layers and bytes here.",
+        );
     }
 
     fn capture_menu(&self, ui: &mut egui::Ui, capture: &NetworkCapture) {
@@ -189,7 +285,7 @@ pub(super) fn capture_row_values(
                 if live {
                     "Live capture".into()
                 } else {
-                    format_date(capture.started_ms / 1000)
+                    crate::time_format::local_seconds(capture.started_ms / 1000)
                 }
             },
             |value| value.name.clone(),
@@ -256,7 +352,7 @@ pub(super) fn capture_history(current: Option<&Path>, retained: &[PathBuf]) -> V
 
 /// The list's name for a capture.
 pub(super) fn capture_title(capture: &NetworkCapture, live: bool) -> String {
-    let started = format_date(capture.started_ms / 1000);
+    let started = crate::time_format::local_seconds(capture.started_ms / 1000);
     if live {
         format!("Live capture of {started}")
     } else if capture.whole_boot {
@@ -276,7 +372,7 @@ pub(super) fn capture_detail(
     if live {
         parts.push(format!(
             "started {}",
-            format_date(capture.started_ms / 1000)
+            crate::time_format::local_seconds(capture.started_ms / 1000)
         ));
         if let Some(loaded) = loaded {
             parts.push(format!("{loaded} packets"));

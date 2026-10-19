@@ -47,10 +47,10 @@ fn network_panel_lists_captures_toggles_capture_and_filters_by_clicked_values() 
         .into_iter()
         .map(|(text, _)| text)
         .collect();
+    let local_start = crate::time_format::local_seconds(1_800_000_000);
     for expected in [
         "Captures",
-        "2027-01-15 08:00:00 UTC",
-        "2027-01-15 08:00:00",
+        &local_start,
         "2 packets · 6 s · 200 B",
         "DNS",
         "TCP",
@@ -121,9 +121,11 @@ fn network_panel_lists_captures_toggles_capture_and_filters_by_clicked_values() 
                 .starts_with(&format!("{} Live capture", egui_phosphor::regular::RECORD))),
         "{shown:?}"
     );
-    assert!(shown
-        .iter()
-        .any(|text| text == "Live capture of 2027-01-15 08:01:40 UTC"));
+    assert!(shown.iter().any(|text| *text
+        == format!(
+            "Live capture of {}",
+            crate::time_format::local_seconds(1_800_000_100)
+        )));
     // Without NAT the toggle stays off.
     app.pending_network = None;
     app.snapshot.network_capture = None;

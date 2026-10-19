@@ -229,6 +229,7 @@ impl NetworkView {
                             } else {
                                 self.display_validate_selection = false;
                                 self.list.selected = Some(packet.clone());
+                                self.capture_details = None;
                                 self.list.frame = None;
                                 self.list.field = None;
                                 self.display_jump_note = if position.is_none() {

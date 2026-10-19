@@ -151,6 +151,14 @@ pub fn hint_text(text: impl Into<String>) -> egui::RichText {
 pub fn hint() -> Color32 {
     palette().hint
 }
+/// Fill of a bright call-to-action button; text on it is `primary_text`.
+pub fn bright_blue() -> Color32 {
+    if is_light() {
+        Color32::from_rgb(10, 100, 230)
+    } else {
+        Color32::from_rgb(30, 130, 255)
+    }
+}
 /// Links, focus and accents.
 pub fn blue() -> Color32 {
     palette().accent
@@ -464,6 +472,7 @@ pub enum PacketColor {
 }
 
 impl PacketColor {
+    #[cfg(test)]
     pub const ALL: [PacketColor; 10] = [
         PacketColor::TcpReset,
         PacketColor::TcpSynFin,
@@ -476,21 +485,6 @@ impl PacketColor {
         PacketColor::Tcp,
         PacketColor::Udp,
     ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            PacketColor::TcpReset => "TCP reset (RST)",
-            PacketColor::TcpSynFin => "TCP open or close (SYN, FIN)",
-            PacketColor::Http => "HTTP",
-            PacketColor::Tls => "TLS",
-            PacketColor::Dns => "DNS",
-            PacketColor::Dhcp => "DHCP",
-            PacketColor::Arp => "ARP",
-            PacketColor::Icmp => "ICMP, ICMPv6",
-            PacketColor::Tcp => "Other TCP",
-            PacketColor::Udp => "Other UDP",
-        }
-    }
 
     /// Dark shades that keep the normal text readable (pastels in the
     /// light theme).

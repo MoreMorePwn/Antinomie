@@ -2,6 +2,14 @@
 //! Display filter toolbar, quick filters and the Wireshark handoff.
 use super::*;
 
+/// Placeholders of the three filter boxes, each a valid example.
+const QUICK_SEARCH_HINT: &str = "filter e.g. port 443";
+/// Bare examples: the shared filter editor adds the "filter e.g." prefix.
+const DISPLAY_FILTER_HINT: &str = "tcp.port == 443";
+const RECORD_FILTER_HINT: &str = "packets > 100";
+const QUICK_SEARCH_HELP: &str = "Native quick search: port N, ip ADDRESS, ADDRESS:PORT, proto NAME, or column text. Quick search affects only the loaded page; use the display filter for the whole capture.";
+const DISPLAY_FILTER_HELP: &str = "Evaluated by installed TShark with two-pass Wireshark display-filter semantics. Field suggestions come from that installation. Example: tcp.port in {80, 443} && ip.addr == 10.0.2.15";
+
 impl NetworkView {
     pub(super) fn toolbar(&mut self, ui: &mut egui::Ui, is_live: bool, cx: &NetworkContext<'_>) {
         ui.horizontal_wrapped(|ui| {
@@ -41,70 +49,14 @@ impl NetworkView {
                 }
             }
             ui.separator();
-            ui.menu_button(
-                format!("{} Colors", egui_phosphor::regular::PALETTE),
-                |ui| {
-                    for color in PacketColor::ALL {
-                        ui.horizontal(|ui| {
-                            let (rect, _) = ui
-                                .allocate_exact_size(egui::vec2(28.0, 14.0), egui::Sense::hover());
-                            ui.painter().rect_filled(rect, 2.0, color.tint());
-                            ui.label(color.label());
-                        });
-                    }
-                },
-            )
-            .response
-            .on_hover_text("Row colors by protocol, as in Wireshark");
             if let Some(path) = self.list.path.clone() {
                 self.wireshark_button(ui, &path, is_live);
             }
             if let Some(filter) = self.quick_filters(ui) {
                 self.filter = filter;
             }
-            ui.separator();
-            ui.label(RichText::new(egui_phosphor::regular::FUNNEL).color(theme::muted()));
-            let width = ui.available_width().max(180.0);
-            ui.add(
-                egui::TextEdit::singleline(&mut self.filter)
-                    .hint_text(crate::theme::hint_text("filter e.g. port 443"))
-                    .desired_width(width),
-            ).on_hover_text("Native quick search: port N, ip ADDRESS, ADDRESS:PORT, proto NAME, or column text. Quick search affects only the loaded page; use the display filter below for the whole capture.");
         });
         let registry = self.display_worker.as_ref().map(PacketFilterWorker::fields);
-        let mut edited = false;
-        ui.horizontal(|ui| {
-            let width = ui.available_width().max(100.0);
-            match &registry {
-                Some(FieldRegistry::Ready(fields)) => {
-                    ui.data_mut(|data| data.insert_temp(ui.id().with(("filter-edit", "tcp.port == 443")).with("history"), self.display_history.clone()));
-                    let schema = fields.iter().map(|field| crate::query::FieldSpec {
-                        name: &field.name,
-                        kind: &field.kind,
-                        detail: &field.description,
-                    });
-                    edited = crate::query::filter_edit_packet_field_iter(
-                        ui, &mut self.display_filter, "tcp.port == 443", width, schema, &[],
-                    ).on_hover_text("Evaluated by installed TShark with two-pass Wireshark display-filter semantics. Field suggestions come from that installation. Example: tcp.port in {80, 443} && ip.addr == 10.0.2.15").changed();
-                }
-                _ => {
-                    ui.add_enabled(false, egui::TextEdit::singleline(&mut self.display_filter)
-                        .hint_text(crate::theme::hint_text("filter e.g. tcp.port == 443 (needs tshark)")).desired_width(width));
-                }
-            }
-        });
-        if edited {
-            if let Some(worker) = &self.display_worker {
-                worker.cancel();
-            }
-            self.display_pending = false;
-            self.display_next_index = None;
-            self.display_edited = Some(Instant::now());
-            self.display_requested = None;
-            self.display_rejected = None;
-            self.display_error = None;
-            ui.ctx().request_repaint_after(Duration::from_millis(350));
-        }
         let fields = capture_fields();
         let captures: Vec<_> = cx
             .active
@@ -127,27 +79,98 @@ impl NetworkView {
             .flatten()
             .flat_map(|annotation| annotation.tags.iter().cloned())
             .collect();
-        egui::CollapsingHeader::new("Record filter")
-            .id_salt("network_record_filter")
+        let mut edited = false;
+        egui::CollapsingHeader::new("Filters")
+            .id_salt("network_filters")
+            .default_open(true)
             .show(ui, |ui| {
-                ui.data_mut(|data| {
-                    data.insert_temp(
-                        ui.id()
-                            .with(("filter-edit", "name contains boot"))
-                            .with("history"),
-                        self.record_history.clone(),
-                    )
-                });
-                crate::query::filter_edit_fields(
-                    ui,
-                    &mut self.record_filter,
-                    "name contains boot",
-                    ui.available_width(),
-                    &fields,
-                    &tags,
-                );
-                ui.weak("Record metadata AND packet display filter. Tags belong to the capture.");
+                egui::Grid::new("network_filter_rows")
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        ui.label("Quick Search");
+                        let width = ui.available_width().max(100.0);
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.filter)
+                                .hint_text(theme::hint_text(QUICK_SEARCH_HINT))
+                                .margin(theme::TEXT_EDIT_MARGIN)
+                                .desired_width(width),
+                        )
+                        .on_hover_text(QUICK_SEARCH_HELP);
+                        ui.end_row();
+                        ui.label("Display Filter");
+                        let width = ui.available_width().max(100.0);
+                        match &registry {
+                            Some(FieldRegistry::Ready(fields)) => {
+                                ui.data_mut(|data| {
+                                    data.insert_temp(
+                                        ui.id()
+                                            .with(("filter-edit", DISPLAY_FILTER_HINT))
+                                            .with("history"),
+                                        self.display_history.clone(),
+                                    )
+                                });
+                                let schema = fields.iter().map(|field| crate::query::FieldSpec {
+                                    name: &field.name,
+                                    kind: &field.kind,
+                                    detail: &field.description,
+                                });
+                                edited = crate::query::filter_edit_packet_field_iter(
+                                    ui,
+                                    &mut self.display_filter,
+                                    DISPLAY_FILTER_HINT,
+                                    width,
+                                    schema,
+                                    &[],
+                                )
+                                .on_hover_text(DISPLAY_FILTER_HELP)
+                                .changed();
+                            }
+                            _ => {
+                                ui.add_enabled(
+                                    false,
+                                    egui::TextEdit::singleline(&mut self.display_filter)
+                                        .hint_text(theme::hint_text(
+                                            "filter e.g. tcp.port == 443 (needs tshark)",
+                                        ))
+                                        .margin(theme::TEXT_EDIT_MARGIN)
+                                        .desired_width(width),
+                                );
+                            }
+                        }
+                        ui.end_row();
+                        ui.label("Record Filter");
+                        ui.data_mut(|data| {
+                            data.insert_temp(
+                                ui.id()
+                                    .with(("filter-edit", RECORD_FILTER_HINT))
+                                    .with("history"),
+                                self.record_history.clone(),
+                            )
+                        });
+                        let width = ui.available_width().max(100.0);
+                        crate::query::filter_edit_fields(
+                            ui,
+                            &mut self.record_filter,
+                            RECORD_FILTER_HINT,
+                            width,
+                            &fields,
+                            &tags,
+                        );
+                        ui.end_row();
+                    });
             });
+        if edited {
+            if let Some(worker) = &self.display_worker {
+                worker.cancel();
+            }
+            self.display_pending = false;
+            self.display_next_index = None;
+            self.display_edited = Some(Instant::now());
+            self.display_requested = None;
+            self.display_rejected = None;
+            self.display_error = None;
+            ui.ctx().request_repaint_after(Duration::from_millis(350));
+        }
         let record_filter =
             crate::query::applied_table(ui, &self.record_filter, &fields, "network-records");
         if crate::query::compile_table(&self.record_filter, &fields)
@@ -182,7 +205,10 @@ impl NetworkView {
         }
         match registry {
             Some(FieldRegistry::Loading) => {
-                ui.colored_label(theme::muted(), "Loading installed TShark fields…");
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.colored_label(theme::muted(), "Loading installed TShark fields…");
+                });
             }
             Some(FieldRegistry::Unavailable(error)) => {
                 crate::activity::warning(ui, error);
@@ -196,7 +222,12 @@ impl NetworkView {
             crate::activity::warning(ui, error);
         }
         if let Some(note) = &self.display_jump_note {
-            ui.colored_label(theme::muted(), note);
+            ui.horizontal(|ui| {
+                if note.starts_with("Locating frame") {
+                    ui.spinner();
+                }
+                ui.colored_label(theme::muted(), note);
+            });
         }
         if self.display_pending {
             ui.horizontal(|ui| {
@@ -344,14 +375,18 @@ impl NetworkView {
 
     fn wireshark_button(&mut self, ui: &mut egui::Ui, path: &Path, is_live: bool) {
         let wireshark = which("wireshark");
+        let label = format!(
+            "{} Open in Wireshark",
+            egui_phosphor::regular::ARROW_SQUARE_OUT
+        );
+        let mut button = egui::Button::new(label.clone());
+        // A disabled button keeps the plain look, so it reads as disabled.
+        if wireshark.is_some() {
+            button = egui::Button::new(RichText::new(label).color(theme::palette().primary_text))
+                .fill(theme::bright_blue());
+        }
         let clicked = ui
-            .add_enabled(
-                wireshark.is_some(),
-                egui::Button::new(format!(
-                    "{} Open in Wireshark",
-                    egui_phosphor::regular::ARROW_SQUARE_OUT
-                )),
-            )
+            .add_enabled(wireshark.is_some(), button)
             .on_disabled_hover_text("Wireshark is not installed")
             .on_hover_text(path.display().to_string())
             .clicked();
