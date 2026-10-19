@@ -124,6 +124,7 @@ pub(super) struct View {
     report_state: Option<antinomie_monitor_core::AnalysisState>,
     attempt_state: Option<antinomie_monitor_core::AnalysisState>,
     result: Option<Result<FileProperties, String>>,
+    refresh_error: Option<String>,
     rx: Option<Receiver<Result<FileProperties, String>>>,
     cancel: Option<Arc<AtomicBool>>,
     /// `<data>/tools`, for the managed tools the sandbox mounts (Magika).
@@ -145,6 +146,7 @@ impl View {
         }
         self.rx = None;
         self.result = None;
+        self.refresh_error = None;
         self.identity = None;
         self.report_state = None;
         self.attempt_state = None;
@@ -173,7 +175,7 @@ impl View {
             Err(mpsc::TryRecvError::Empty) => None,
         });
         if let Some(result) = ready {
-            self.result = Some(result);
+            self.accept_result(result);
             self.rx = None;
             self.cancel = None;
         }
@@ -193,9 +195,13 @@ impl View {
     }
 
     fn start(&mut self, ctx: &egui::Context) {
+        if self.rx.is_some() {
+            return;
+        }
         let Some((directory, id, Some(_))) = self.identity.clone() else {
             return;
         };
+        self.refresh_error = None;
         let tools_dir = self.tools_dir.clone();
         self.attempt_state = self.report_state;
         let cancel = Arc::new(AtomicBool::new(false));
@@ -215,8 +221,32 @@ impl View {
                 self.cancel = Some(cancel);
             }
             Err(error) => {
-                self.result = Some(Err(format!("Could not start property analysis: {error}")))
+                self.accept_result(Err(format!("Could not start property analysis: {error}")))
             }
+        }
+    }
+
+    fn accept_result(&mut self, result: Result<FileProperties, String>) {
+        self.refresh_error = None;
+        match result {
+            Ok(mut result) => {
+                if let Some(Ok(previous)) = &self.result {
+                    for field in &mut result.fields {
+                        if let Some(known) = previous
+                            .fields
+                            .iter()
+                            .find(|known| known.label == field.label && known.available)
+                        {
+                            field.clone_from(known);
+                        }
+                    }
+                }
+                self.result = Some(Ok(result));
+            }
+            Err(error) if self.result.as_ref().is_some_and(Result::is_ok) => {
+                self.refresh_error = Some(error);
+            }
+            Err(error) => self.result = Some(Err(error)),
         }
     }
 
@@ -235,7 +265,6 @@ impl View {
                 )
                 .clicked()
             {
-                self.result = None;
                 self.start(ui.ctx());
             }
             if let Some(directory) = input.archive.map(|directory| directory.join("analysis")) {
@@ -244,6 +273,9 @@ impl View {
                 }
             }
         });
+        if let Some(error) = &self.refresh_error {
+            crate::activity::warning(ui, format!("Property refresh failed: {error}"));
+        }
         if input.analysis.is_none() {
             crate::activity::warning(ui, "This run has no executable capture record. Enable static analysis before starting a new run.");
         } else if matches!(
@@ -270,6 +302,7 @@ impl View {
             .as_ref()
             .and_then(|result| result.as_ref().ok())
             .or(saved.as_ref());
+        let mut refresh_requested = false;
         egui::ScrollArea::vertical()
             .id_salt("triage-properties")
             .auto_shrink([false, false])
@@ -293,7 +326,39 @@ impl View {
                 ] {
                     presentation::frame().show(ui, |ui| {
                         ui.set_width(ui.available_width());
-                        presentation::heading(ui, title, subtitle);
+                        let unavailable = labels.iter().any(|label| {
+                            result
+                                .and_then(|result| {
+                                    result.fields.iter().find(|field| field.label == *label)
+                                })
+                                .is_none_or(|field| !field.available)
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(
+                                RichText::new(title)
+                                    .strong()
+                                    .color(theme::heading())
+                                    .size(ui.text_style_height(&egui::TextStyle::Body) + 1.0),
+                            );
+                            if unavailable {
+                                if self.rx.is_some() {
+                                    ui.spinner();
+                                }
+                                refresh_requested |= ui
+                                    .add_enabled(
+                                        ready && self.rx.is_none(),
+                                        egui::Button::new(egui_phosphor::regular::ARROW_CLOCKWISE)
+                                            .small(),
+                                    )
+                                    .on_hover_text("Refresh unavailable properties for this file")
+                                    .clicked();
+                            }
+                        });
+                        ui.add(
+                            egui::Label::new(RichText::new(subtitle).small().color(theme::muted()))
+                                .wrap(),
+                        );
+                        ui.add_space(8.0);
                         let width = (ui.available_width() - 125.0).max(80.0);
                         egui::Grid::new(("triage-property-fields", title))
                             .num_columns(2)
@@ -366,6 +431,9 @@ impl View {
                     ui.add_space(10.0);
                 }
             });
+        if refresh_requested {
+            self.start(ui.ctx());
+        }
     }
 
     fn show_specimen_status(
@@ -448,6 +516,137 @@ mod tests {
             warnings: vec![],
         };
         (report, result)
+    }
+
+    #[test]
+    fn refresh_keeps_known_values_and_only_replaces_unavailable_properties() {
+        let ctx = egui::Context::default();
+        let (report, old) = fixture_properties();
+        let input = TriageInput {
+            analysis: Some(&report),
+            archive: Some(Path::new("/fixture/run")),
+            ..TriageInput::empty()
+        };
+        let mut view = View::default();
+        view.tick(&ctx, &input);
+        view.result = Some(Ok(old.clone()));
+        let (tx, rx) = mpsc::sync_channel(1);
+        view.rx = Some(rx);
+        view.tick(&ctx, &input);
+        assert_eq!(view.result.as_ref().unwrap().as_ref().unwrap(), &old);
+        let mut refreshed = old.clone();
+        for field in &mut refreshed.fields {
+            field.value = format!("refreshed {}", field.label);
+            field.available = field.label == "Magika";
+        }
+        tx.send(Ok(refreshed)).unwrap();
+        view.tick(&ctx, &input);
+        let result = view.result.as_ref().unwrap().as_ref().unwrap();
+        for field in old.fields.iter().filter(|field| field.available) {
+            assert_eq!(
+                result
+                    .fields
+                    .iter()
+                    .find(|new| new.label == field.label)
+                    .unwrap(),
+                field
+            );
+        }
+        assert!(result
+            .fields
+            .iter()
+            .any(|field| field.label == "Magika" && field.available));
+        let known = result.clone();
+        let (tx, rx) = mpsc::sync_channel(1);
+        view.rx = Some(rx);
+        tx.send(Err("optional tool failed".into())).unwrap();
+        view.tick(&ctx, &input);
+        assert_eq!(view.result.as_ref().unwrap().as_ref().unwrap(), &known);
+        assert_eq!(view.refresh_error.as_deref(), Some("optional tool failed"));
+    }
+
+    #[test]
+    fn unavailable_section_refresh_dispatches_one_worker_and_is_disabled_while_pending() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let (report, result) = fixture_properties();
+        let mut view = View::default();
+        let input = TriageInput {
+            analysis: Some(&report),
+            archive: Some(Path::new("/fixture/run")),
+            ..TriageInput::empty()
+        };
+        view.tick(&ctx, &input);
+        view.result = Some(Ok(result.clone()));
+        let draw = |view: &mut View, events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| view.show(ui, &input));
+                },
+            )
+        };
+        let _ = draw(&mut view, vec![]);
+        let output = draw(&mut view, vec![]);
+        let buttons: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| {
+                if let egui::Shape::Text(text) = &shape.shape {
+                    (text.galley.text() == egui_phosphor::regular::ARROW_CLOCKWISE)
+                        .then(|| egui::Rect::from_min_size(text.pos, text.galley.size()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            buttons.len(),
+            1,
+            "one control for the two missing classifiers"
+        );
+        let pos = buttons[0].center();
+        for pressed in [true, false] {
+            draw(
+                &mut view,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert!(
+            view.rx.is_some(),
+            "section click must dispatch the existing worker"
+        );
+        let cancel = Arc::clone(view.cancel.as_ref().unwrap());
+        for pressed in [true, false] {
+            draw(
+                &mut view,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+        assert!(Arc::ptr_eq(view.cancel.as_ref().unwrap(), &cancel));
+        assert_eq!(view.result.as_ref().unwrap().as_ref().unwrap(), &result);
+        view.reset();
+        assert!(cancel.load(Ordering::Relaxed));
     }
 
     #[test]
