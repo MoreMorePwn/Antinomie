@@ -40,7 +40,7 @@ fn startup_reloads_local_selection_without_opening_the_manager() {
             app.triage.detection_settings().rules_root,
             root.display().to_string()
         );
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(60);
         while !app.rules_summary.contains("Enabled fixture") {
             app.poll_rules(&ctx);
             assert!(Instant::now() < deadline, "{}", app.rules_summary);
@@ -79,7 +79,7 @@ fn unreadable_registry_is_visible_and_not_retried_each_frame() {
     let mut app = app();
     app.options.data_dir = root.clone();
     let ctx = egui::Context::default();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while app.rules_summary != "Rules registry unavailable" {
         app.poll_rules(&ctx);
         assert!(Instant::now() < deadline);

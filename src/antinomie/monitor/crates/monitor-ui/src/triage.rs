@@ -116,6 +116,24 @@ enum NetTab {
     Dns,
 }
 
+/// The time the refresh loop schedules by. Production adds nothing; a test
+/// moves it forward instead of sleeping through the refresh interval.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Clock {
+    skew: Duration,
+}
+
+impl Clock {
+    pub(super) fn now(self) -> Instant {
+        Instant::now() + self.skew
+    }
+
+    #[cfg(test)]
+    pub(super) fn advance(&mut self, by: Duration) {
+        self.skew += by;
+    }
+}
+
 pub(crate) struct TriageView {
     properties: properties::View,
     detection: detection::View,
@@ -137,6 +155,7 @@ pub(crate) struct TriageView {
     scan_error: Option<String>,
     last_refresh: Option<Instant>,
     next_refresh: Option<Instant>,
+    clock: Clock,
     refresh_requested: bool,
     /// A refresh arrived while an index was already running.
     refresh_queued: bool,
@@ -175,6 +194,7 @@ impl Default for TriageView {
             scan_error: None,
             last_refresh: None,
             next_refresh: None,
+            clock: Clock::default(),
             refresh_requested: false,
             refresh_queued: false,
             timer_refresh: false,
@@ -401,7 +421,7 @@ impl TriageView {
             {
                 self.refresh_seconds = self.refresh_seconds.clamp(1, 300);
                 self.next_refresh =
-                    Some(Instant::now() + Duration::from_secs(self.refresh_seconds));
+                    Some(self.clock.now() + Duration::from_secs(self.refresh_seconds));
             }
             if self.scan_rx.is_some() {
                 theme::spinner(ui);

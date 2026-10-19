@@ -106,14 +106,14 @@ impl TriageView {
             return;
         }
         ctx.request_repaint_after(Duration::from_secs(self.refresh_seconds));
-        if self.next_refresh.is_some_and(|due| Instant::now() >= due) {
+        if self.next_refresh.is_some_and(|due| self.clock.now() >= due) {
             if idle && self.shown(ctx) {
                 self.refresh_requested = true;
                 self.timer_refresh = true;
                 self.next_refresh = None;
             } else {
                 self.next_refresh =
-                    Some(Instant::now() + Duration::from_secs(self.refresh_seconds));
+                    Some(self.clock.now() + Duration::from_secs(self.refresh_seconds));
             }
         }
     }
@@ -125,7 +125,7 @@ impl TriageView {
                 |when| {
                     format!(
                         "Refreshing; showing index from {} s ago",
-                        when.elapsed().as_secs()
+                        self.clock.now().saturating_duration_since(when).as_secs()
                     )
                 },
             );
@@ -136,7 +136,7 @@ impl TriageView {
         if let Some(when) = self.last_refresh {
             return format!(
                 "Refreshed {} s ago{}",
-                when.elapsed().as_secs(),
+                self.clock.now().saturating_duration_since(when).as_secs(),
                 if self.scan.as_ref().is_some_and(|scan| scan.partial) {
                     "; partial evidence"
                 } else {
@@ -229,7 +229,7 @@ impl TriageView {
         self.pending_generation = Some(generation);
         self.scan_cancel = Some(cancel);
         self.scan_rx = Some(rx);
-        self.next_refresh = Some(Instant::now() + Duration::from_secs(self.refresh_seconds));
+        self.next_refresh = Some(self.clock.now() + Duration::from_secs(self.refresh_seconds));
     }
 
     pub(super) fn poll_scan(&mut self, ctx: &egui::Context) {
@@ -250,11 +250,11 @@ impl TriageView {
                             }
                             self.scan = Some(scan);
                             self.scan_error = None;
-                            self.last_refresh = Some(Instant::now());
+                            self.last_refresh = Some(self.clock.now());
                         }
                         Err(error) if error == "cancelled" => {}
                         Err(error) if error == UNCHANGED => {
-                            self.last_refresh = Some(Instant::now())
+                            self.last_refresh = Some(self.clock.now())
                         }
                         Err(error) => self.scan_error = Some(error),
                     }

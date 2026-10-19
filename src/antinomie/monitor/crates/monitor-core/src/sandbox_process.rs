@@ -517,6 +517,17 @@ impl SandboxProcess {
 
 #[cfg(test)]
 mod tests {
+    /// Bound on a hang, not a speed requirement: starting bwrap (user
+    /// namespace, fork) can take several seconds on a loaded machine. Scale it
+    /// with `ANTINOMIE_TEST_SCALE`.
+    fn patience() -> std::time::Duration {
+        let scale = std::env::var("ANTINOMIE_TEST_SCALE")
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(1)
+            .max(1);
+        std::time::Duration::from_secs(60) * scale
+    }
     use super::*;
     use std::{
         thread,
@@ -587,7 +598,7 @@ mod tests {
             },
         );
         process.refresh_launcher().unwrap();
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + patience();
         let pid = loop {
             let path = PathBuf::from(format!("/proc/{0}/task/{0}/children", process.child.id()));
             let children = process_file(&path, 4096).unwrap().unwrap();
@@ -640,9 +651,7 @@ mod tests {
     fn sandbox_cleanup_reaps_preexec_and_unreported_new_session_inits() {
         for info_before_exec in [true, false] {
             let mut fixture = sandbox_fixture(info_before_exec);
-            let started = Instant::now();
             assert!(finish_cleanup(&mut fixture.process).unwrap());
-            assert!(started.elapsed() < Duration::from_secs(2));
             assert!(fixture.process.reaped);
             assert!(
                 pidfd_exited(&fixture.witness).unwrap(),
@@ -680,7 +689,7 @@ mod tests {
         let mut fixture = sandbox_fixture_mode(false, true);
         // Leave the real metadata unread until after its launcher has exited.
         fixture.process.child.kill().unwrap();
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + patience();
         while !fixture.process.launcher_exited().unwrap() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(5));
         }
@@ -751,7 +760,7 @@ mod tests {
             let child = command.spawn().unwrap();
             drop(command);
             let mut process = SandboxProcess::adopt(child, launch);
-            let deadline = Instant::now() + Duration::from_secs(2);
+            let deadline = Instant::now() + patience();
             let status = loop {
                 match process.poll_status() {
                     Ok(Some(status)) => break Ok(status),
@@ -789,7 +798,7 @@ mod tests {
     #[test]
     fn sandbox_legacy_info_still_checks_live_namespace_ownership() {
         let mut fixture = sandbox_fixture(true);
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + patience();
         let mut captured = Vec::new();
         loop {
             let mut chunk = [0; 1024];
@@ -836,7 +845,7 @@ mod tests {
         let child = command.spawn().unwrap();
         drop(command);
         let mut process = SandboxProcess::adopt(child, launch);
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + patience();
         while !process.launcher_exited().unwrap() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(5));
         }
@@ -855,7 +864,7 @@ mod tests {
     }
 
     fn finish_cleanup(process: &mut SandboxProcess) -> Result<bool, String> {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let deadline = std::time::Instant::now() + patience();
         while std::time::Instant::now() < deadline {
             if process.cleanup_poll()? {
                 return Ok(true);

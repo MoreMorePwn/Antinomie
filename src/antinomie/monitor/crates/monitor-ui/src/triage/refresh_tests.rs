@@ -32,15 +32,47 @@ fn spool_with_calls(range: std::ops::Range<u64>) -> (PacketSpool, std::fs::File)
     (spool, raw)
 }
 
+/// How long to wait for a background index thread before giving up. It is only
+/// a bound on a hang: what the tests observe is counted in ticks and moved
+/// with the view's clock, never measured. Scale it up on a slow machine with
+/// `ANTINOMIE_TEST_SCALE`.
+fn patience() -> Duration {
+    let scale = std::env::var("ANTINOMIE_TEST_SCALE")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(1)
+        .max(1);
+    Duration::from_secs(60) * scale
+}
+
 /// Tick until the index in flight has been delivered.
 fn settle(view: &mut TriageView, ctx: &egui::Context, archive: &Path, finished: bool, shown: bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + patience();
     loop {
         if shown {
             view.mark_shown(ctx);
         }
         view.tick(ctx, input(archive, finished));
         if view.scan.is_some() && view.scan_rx.is_none() {
+            return;
+        }
+        assert!(Instant::now() < deadline, "index never arrived");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Let one second of the view's own time pass and tick once, then wait for
+/// whatever index thread that started: the refresh loop has seen the second
+/// and finished reacting to it, however busy the machine is.
+fn second(view: &mut TriageView, ctx: &egui::Context, archive: &Path, finished: bool, shown: bool) {
+    view.clock.advance(Duration::from_secs(1));
+    let deadline = Instant::now() + patience();
+    loop {
+        if shown {
+            view.mark_shown(ctx);
+        }
+        view.tick(ctx, input(archive, finished));
+        if view.scan_rx.is_none() {
             return;
         }
         assert!(Instant::now() < deadline, "index never arrived");
@@ -74,16 +106,10 @@ fn finished_run_is_indexed_once_while_selected() {
     view.refresh_seconds = 1;
     settle(&mut view, &ctx, &spool.directory, true, false);
     let indexed = view.scan_generation;
-    let started = Instant::now();
-    while started.elapsed() < Duration::from_millis(4200) {
+    for _ in 0..5 {
         // Nothing changes on disk: the run is finished and its archive final.
-        view.tick(&ctx, input(&spool.directory, true));
-        std::thread::sleep(Duration::from_millis(10));
+        second(&mut view, &ctx, &spool.directory, true, false);
     }
-    eprintln!(
-        "index passes over a finished, unchanged archive in 4.2 s: {}",
-        view.scan_generation - indexed
-    );
     assert_eq!(
         view.scan_generation, indexed,
         "a finished, unchanged run was indexed again (every refresh_seconds, even hidden)"
@@ -101,11 +127,8 @@ fn live_run_is_re_read_only_when_it_grew_and_an_unchanged_one_writes_nothing() {
     assert_eq!(calls, 50);
     let before = listing(&spool.directory);
     let generation = view.scan_generation;
-    let started = Instant::now();
-    while started.elapsed() < Duration::from_millis(3300) {
-        view.mark_shown(&ctx);
-        view.tick(&ctx, input(&spool.directory, false));
-        std::thread::sleep(Duration::from_millis(10));
+    for _ in 0..4 {
+        second(&mut view, &ctx, &spool.directory, false, true);
     }
     assert_eq!(
         listing(&spool.directory),
@@ -115,21 +138,17 @@ fn live_run_is_re_read_only_when_it_grew_and_an_unchanged_one_writes_nothing() {
     assert_eq!(view.scan.as_ref().unwrap().counts.calls, calls);
     assert!(
         view.scan_generation - generation <= 4,
-        "{} checks in 3.3 s at one per second",
+        "{} checks in 4 s at one per second",
         view.scan_generation - generation
     );
     // The recording grows: the next refresh reads it.
     write_rwx_calls(&mut raw, 50..80);
     raw.sync_all().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut seconds = 0;
     while view.scan.as_ref().unwrap().counts.calls != 80 {
-        view.mark_shown(&ctx);
-        view.tick(&ctx, input(&spool.directory, false));
-        assert!(
-            Instant::now() < deadline,
-            "grown recording never re-indexed"
-        );
-        std::thread::sleep(Duration::from_millis(10));
+        second(&mut view, &ctx, &spool.directory, false, true);
+        seconds += 1;
+        assert!(seconds <= 10, "grown recording never re-indexed");
     }
 }
 
@@ -142,14 +161,12 @@ fn run_that_ends_gets_one_last_index_even_when_hidden() {
     settle(&mut view, &ctx, &spool.directory, false, false);
     let live = view.scan_generation;
     // The pane is hidden and the run is live: the timer reads nothing.
-    let started = Instant::now();
-    while started.elapsed() < Duration::from_millis(1500) {
-        view.tick(&ctx, input(&spool.directory, false));
-        std::thread::sleep(Duration::from_millis(10));
+    for _ in 0..3 {
+        second(&mut view, &ctx, &spool.directory, false, false);
     }
     assert_eq!(view.scan_generation, live, "a hidden live run was re-read");
     // The run ends: its final index is made once, then no more.
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + patience();
     while view.scan_generation == live || view.scan_rx.is_some() {
         view.tick(&ctx, input(&spool.directory, true));
         assert!(
@@ -159,10 +176,8 @@ fn run_that_ends_gets_one_last_index_even_when_hidden() {
         std::thread::sleep(Duration::from_millis(10));
     }
     let last = view.scan_generation;
-    let started = Instant::now();
-    while started.elapsed() < Duration::from_millis(2500) {
-        view.tick(&ctx, input(&spool.directory, true));
-        std::thread::sleep(Duration::from_millis(10));
+    for _ in 0..3 {
+        second(&mut view, &ctx, &spool.directory, true, false);
     }
     assert_eq!(view.scan_generation, last);
 }

@@ -401,11 +401,22 @@ impl NetworkView {
                     .arg(path)
                     .spawn()
             };
-            if let Err(error) = spawned {
-                self.list.error = Some(format!("Wireshark: {error}"));
+            match spawned {
+                Ok(child) => {
+                    reap(child);
+                }
+                Err(error) => self.list.error = Some(format!("Wireshark: {error}")),
             }
         }
     }
+}
+
+/// Wait for a launched program on a detached thread, so it does not stay a
+/// zombie until the app exits. The handle is for tests; callers drop it.
+pub(super) fn reap(mut child: std::process::Child) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    })
 }
 
 pub(super) fn remember_filter(history: &mut Vec<String>, expression: &str) {

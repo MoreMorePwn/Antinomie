@@ -1614,8 +1614,14 @@ mod tests {
             theme::text_size(&ctx, font);
             let mut history = CpuHistory::default();
             let mut paired_rows = 0;
+            // No wall clock anywhere in the frame: the history is fed fixed
+            // instants and egui's own clock advances by a settled ten seconds
+            // per frame, so no animation is ever caught half way.
+            let base = Instant::now();
+            let mut frame = 0u32;
             for width in [1400.0, 520.0, 1800.0, 320.0, 900.0, 1400.0] {
                 for mode in 0..3 {
+                    frame += 1;
                     let mut snapshot = fixture();
                     snapshot.boot_id = Some("card-layout".into());
                     let sample = snapshot.vm_resources.as_mut().unwrap();
@@ -1635,9 +1641,14 @@ mod tests {
                             ..Default::default()
                         });
                     }
-                    history.observe(&snapshot, Some("active"));
+                    history.observe_at(
+                        &snapshot,
+                        Some("active"),
+                        base + Duration::from_secs(u64::from(frame)),
+                    );
                     let output = ctx.run(
                         egui::RawInput {
+                            time: Some(f64::from(frame) * 10.0),
                             screen_rect: Some(egui::Rect::from_min_size(
                                 egui::Pos2::ZERO,
                                 egui::vec2(width, 6000.0),

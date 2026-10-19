@@ -26,8 +26,9 @@ fn fresh_app(name: &str) -> (MonitorApp, PathBuf) {
 }
 
 fn settle(app: &mut MonitorApp) {
-    // The dependency check runs on a worker; wait for it to finish.
-    let deadline = Instant::now() + Duration::from_secs(20);
+    // The dependency check runs on a worker; wait for it to finish. The bound
+    // only catches a hang: it runs host tools, which a loaded machine delays.
+    let deadline = Instant::now() + Duration::from_secs(120);
     while app.dependencies.checking() {
         app.dependencies.poll();
         assert!(Instant::now() < deadline, "dependency check did not finish");

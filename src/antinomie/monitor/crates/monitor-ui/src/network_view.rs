@@ -71,6 +71,8 @@ struct PacketList {
     truncated: bool,
     error: Option<String>,
     last_read: Option<Instant>,
+    /// When the capture's size was last looked at, and whether it had more.
+    size_checked: Option<(Instant, bool)>,
     selected: Option<NetworkPacket>,
     frame: Option<(u64, Result<Vec<u8>, String>)>,
     /// The selected frame's decoded layers, and the chosen layer (and field)
@@ -226,17 +228,21 @@ impl PacketList {
         let Some(path) = self.path.clone() else {
             return;
         };
-        let due = self.last_read.is_none_or(|last| {
+        let due = match self.last_read {
+            None => true,
             // A complete file is looked at four times a second, not every frame.
-            last.elapsed() >= Duration::from_secs(1)
-                || (!live
-                    && last.elapsed() >= Duration::from_millis(250)
-                    && self.more_on_disk(&path))
-        });
+            Some(last) => {
+                last.elapsed() >= Duration::from_secs(1)
+                    || (!live
+                        && last.elapsed() >= Duration::from_millis(250)
+                        && self.more_on_disk(&path))
+            }
+        };
         if !due || self.truncated {
             return;
         }
         self.last_read = Some(Instant::now());
+        self.size_checked = None;
         match network::read_page(&path, self.next_offset, self.next_number, READ_BATCH) {
             Ok(page) => {
                 let more = page.packets.len() == READ_BATCH;
@@ -257,8 +263,18 @@ impl PacketList {
         }
     }
 
-    fn more_on_disk(&self, path: &Path) -> bool {
-        std::fs::metadata(path).is_ok_and(|m| m.len() > self.next_offset)
+    /// Whether the file grew past what was read. The size is looked up at most
+    /// four times a second: this runs on the render thread, where a `stat` on
+    /// a network or DrvFs mount can take milliseconds.
+    fn more_on_disk(&mut self, path: &Path) -> bool {
+        if let Some((at, more)) = self.size_checked {
+            if at.elapsed() < Duration::from_millis(250) {
+                return more;
+            }
+        }
+        let more = std::fs::metadata(path).is_ok_and(|m| m.len() > self.next_offset);
+        self.size_checked = Some((Instant::now(), more));
+        more
     }
 
     /// Bring the filtered rows up to date with `filter` and the packets read.

@@ -32,6 +32,48 @@ it runs.
   network, the image mounted read-only, one writable extraction folder and
   `prlimit` bounds) using the new `ext4-view` crate. Whole-disk ext4 only;
   saved disk dumps, imports, snapshot sources and partitions come later.
+- **Code audit fixes (host).**
+  - TShark runs in the analysis sandbox's minimal mount profile: only `/usr`,
+    a few read-only `/etc` entries, a private `/etc/passwd`, a minimal `/dev`
+    and `/tmp`, the capture (read-only) and a private scratch directory. The
+    session bus, X11 and Wayland sockets, `/dev/shm`, other mounts and the
+    data directory are not visible, and every namespace (network included)
+    is unshared. CI and release probes use the same profile.
+  - The Debian cloud image's SHA-512 checksums are fetched from the fixed
+    `cloud.debian.org` URL, not from the mirror that serves the image. Debian
+    publishes no detached signature for the current cloud images, so there is
+    no key to pin and gpgv is not needed.
+  - One shared `curl` helper (`--disable`, HTTPS only including redirects,
+    connect and total timeouts, size limits, `--fail` unless the caller reads
+    the status, never `-k`) is used by MalShare, MalwareBazaar, base, tool and
+    image downloads and the rule catalog. The libicu66 `.deb` is fetched over
+    HTTPS (its SHA-256 was already pinned).
+  - A community rule pack is downloaded through the rule fetcher into a
+    private (0700) staging directory under the rules folder, not a predictable
+    file in the shared temp directory; redirects stay on the pack's hosts.
+  - `cargo audit` can fail CI. The reviewed ignore list is in
+    `.cargo/audit.toml`: RUSTSEC-2023-0071 (rsa timing channel; yara-x only
+    verifies signatures with public keys) and the Wasmtime 45 advisories
+    RUSTSEC-2026-0316, -0222, -0327 and -0269 (component-model, hostcall fuel,
+    type indices and WASI paths; yara-x runs core modules only, in the sandbox).
+  - A VM name is passed to QEMU as `-name guest=<name>` with commas doubled.
+  - Deleting evidence runs on its own thread, in order, and answers its
+    command when done; the run records it changes are written as one batch
+    through the JSON writer, so the thread that drains telemetry never waits
+    for an unlink or an `fsync`.
+  - The archive index is stamped with its writer; an older build that appends
+    to it clears the stamp and the index is rebuilt, so kernel notes are not
+    silently lost. The index disk budget is four times the archive.
+  - A guest resource request without a reply is abandoned after 60 s and
+    polling resumes.
+  - "Open in Wireshark" no longer leaves zombie processes.
+  - The rules registry lock is per data directory, not process-wide.
+  - The capture list stats the file at most four times a second.
+  - Flaky tests: the MalShare tests use a fresh script per case and no speed
+    bound; Triage refresh tests and the Summary card test use a synthetic
+    clock; the sandbox process tests wait for a hang bound, not for speed.
+    Added tests for the TShark mount set, the transport-thread invariant of
+    `DeleteEvidence` and malformed packets.
 
 - **Audit fixes (host).** A feature-completeness audit of 0.6.2 and 0.7.0
   found these; all are host-side.

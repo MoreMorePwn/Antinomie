@@ -543,3 +543,66 @@ fn reconstructs_http1_and_dns_and_drops_a_retransmission() {
     assert_eq!(built.https_segments, 1);
     assert!(built.notes.iter().any(|note| note.contains("HTTPS")));
 }
+
+/// Hand-made well-formed frames of every dissected kind.
+fn corpus() -> Vec<Vec<u8>> {
+    vec![
+        ethernet(0x0800, &ipv4_packet(17, &udp(5353, 53, &dns_query()))),
+        ethernet(
+            0x0800,
+            &ipv4_packet(6, &tcp(443, 0x18, &client_hello(b"evil.example"))),
+        ),
+        ethernet(
+            0x0800,
+            &ipv4_packet(
+                6,
+                &tcp(80, 0x18, b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"),
+            ),
+        ),
+        ethernet(
+            0x0800,
+            &ipv4_packet(17, &udp(68, 67, &[1, 1, 6, 0, 0, 0, 0, 1, 0, 0, 0, 0])),
+        ),
+        ethernet(0x0806, &arp_request()),
+    ]
+}
+
+#[test]
+fn malformed_frames_never_panic_the_dissectors_or_the_reconstruction() {
+    for frame in corpus() {
+        // Every truncation, and the frame with each byte forced to the
+        // values that break lengths, counts and offsets.
+        for len in 0..=frame.len() {
+            let _ = dissect(&frame[..len]);
+            let _ = describe(&frame[..len]);
+        }
+        for at in 0..frame.len() {
+            for value in [0x00, 0x7f, 0xff] {
+                let mut mutated = frame.clone();
+                mutated[at] = value;
+                let layers = dissect(&mutated);
+                // Field ranges stay inside the frame whatever the content.
+                for field in layers.iter().flat_map(|layer| &layer.fields) {
+                    assert!(field.start + field.len <= mutated.len(), "{field:?}");
+                }
+                let _ = describe(&mutated);
+            }
+        }
+    }
+    let frames = corpus();
+    let mut damaged: Vec<Vec<u8>> = frames
+        .iter()
+        .map(|frame| frame[..frame.len() * 2 / 3].to_vec())
+        .collect();
+    damaged.extend(frames);
+    let captured: Vec<_> = damaged
+        .iter()
+        .enumerate()
+        .map(|(i, bytes)| CapturedFrame {
+            number: i as u64 + 1,
+            time_us: i as u64,
+            bytes,
+        })
+        .collect();
+    let _ = reconstruct(&captured);
+}
