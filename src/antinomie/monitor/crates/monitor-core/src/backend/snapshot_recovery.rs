@@ -311,6 +311,7 @@ impl Session {
             terminal_cursor: 0,
             late_reads: BTreeMap::new(),
             run_status_poll: RunStatusPoll::default(),
+            recorder_poll: recorder_health::RecorderPoll::default(),
             last_process_save: Instant::now(),
             network_bytes_done: 0,
             network_bytes: 0,

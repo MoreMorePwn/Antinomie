@@ -6,6 +6,11 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Health includes recorder and async capture loss.** Recorder statistics are
+  sampled without blocking, with overdue replies shown as unavailable. Summary
+  shows failed sends and affected runs separately from TRL/UIL/STL. Async-loss
+  notes are retained with the run and Activity warnings deduplicate repeated polls.
+
 - **Triage sits beside Run History.** Default tabs, restored tabs and the View
   menu share their order. Untouched old defaults migrate while custom layouts
   and the selected tab are preserved.
