@@ -9,7 +9,7 @@
 use super::*;
 use crate::disks::{
     self, DiskSourceRecord,
-    job::{Job, JobResult, JobSpec},
+    job::{DumpPlan, Job, JobResult, JobSpec},
 };
 use std::path::Path;
 
@@ -49,7 +49,10 @@ pub(super) fn lease(job_vm: Option<&str>, command: &Command) -> Result<(), Strin
         return Ok(());
     };
     match command {
-        Command::MeasureDisk { .. } | Command::OpenCurrentDisk { .. } => {
+        Command::MeasureDisk { .. }
+        | Command::OpenCurrentDisk { .. }
+        | Command::DumpDisk { .. }
+        | Command::KeepCurrentDiskAsDump { .. } => {
             return Err(BUSY_MESSAGE.into());
         }
         _ => {}
@@ -128,7 +131,8 @@ impl Worker {
         }
     }
 
-    /// Remove every scratch folder left by an earlier run of the app.
+    /// Remove every scratch folder and unfinished dump left by an earlier run
+    /// of the app.
     pub(super) fn sweep_disk_scratch(&mut self) {
         let roots: Vec<_> = self
             .snapshot
@@ -137,7 +141,9 @@ impl Worker {
             .flat_map(|location| location.recording_directories.iter().cloned())
             .collect();
         for root in roots {
-            disks::sweep_scratch(&disks::disks_dir(&root), None);
+            let disks = disks::disks_dir(&root);
+            disks::sweep_scratch(&disks, None);
+            disks::dump::sweep_partial(&disks);
         }
     }
 
@@ -187,6 +193,28 @@ impl Worker {
             top,
             source,
             disks_dir: disks::disks_dir(&recordings),
+            quota: self.options.capture_quota_size,
+        })
+    }
+
+    /// What a dump records about the VM and its guest.
+    fn dump_plan(
+        &self,
+        vm: &VmConfig,
+        dir: &Path,
+        hash: bool,
+        layer_digests: bool,
+    ) -> Result<DumpPlan, String> {
+        let bundle: Bundle = storage::read_json(&dir.join("bundle.json"))?;
+        let system = match &bundle.name {
+            Some(name) => format!("Linux {} · {name}", bundle.kernel_version),
+            None => format!("Linux {}", bundle.kernel_version),
+        };
+        Ok(DumpPlan {
+            vm_name: vm.name.clone(),
+            system,
+            hash,
+            layer_digests,
         })
     }
 
@@ -211,6 +239,38 @@ impl Worker {
         self.close_disk_view();
         self.start_disk_job(Job::view(spec)?);
         Ok("reading the VM's disk".into())
+    }
+
+    pub(super) fn dump_disk(
+        &mut self,
+        vm_id: &str,
+        hash: bool,
+        layer_digests: bool,
+    ) -> Result<String, String> {
+        let (vm, dir) = self.disk_preconditions(vm_id)?;
+        let spec = self.disk_job_spec(&vm, &dir)?;
+        let plan = self.dump_plan(&vm, &dir, hash, layer_digests)?;
+        self.start_disk_job(Job::dump(spec, plan)?);
+        Ok("dumping the VM's disk".into())
+    }
+
+    pub(super) fn keep_current_disk(
+        &mut self,
+        vm_id: &str,
+        hash: bool,
+        layer_digests: bool,
+    ) -> Result<String, String> {
+        let (vm, dir) = self.disk_preconditions(vm_id)?;
+        let view = self
+            .snapshot
+            .current_disk
+            .clone()
+            .filter(|view| view.vm_id == vm_id)
+            .ok_or("no disk view is open for this VM")?;
+        let spec = self.disk_job_spec(&vm, &dir)?;
+        let plan = self.dump_plan(&vm, &dir, hash, layer_digests)?;
+        self.start_disk_job(Job::keep(spec, plan, view)?);
+        Ok("keeping the open disk view as a dump".into())
     }
 
     pub(super) fn close_current_disk(&mut self, vm_id: &str) -> Result<String, String> {
@@ -266,7 +326,23 @@ impl Worker {
                 self.snapshot.current_disk = Some(view);
                 (true, message)
             }
-            Err(error) if error == "cancelled" => (true, "disk read cancelled".to_string()),
+            Ok(JobResult::Dumped(dump)) => (
+                true,
+                format!(
+                    "Disk dump of {} saved ({}, {})",
+                    dump.vm_name,
+                    dump.fs_state.label(),
+                    disks::format_size(dump.allocated_size.unwrap_or(0))
+                ),
+            ),
+            Ok(JobResult::Kept(dump, view)) => {
+                self.snapshot.current_disk = Some(*view);
+                (
+                    true,
+                    format!("Current disk of {} kept as a dump", dump.vm_name),
+                )
+            }
+            Err(error) if error == "cancelled" => (true, "disk job cancelled".to_string()),
             Err(error) => {
                 self.snapshot.last_error = Some(error.clone());
                 (false, error)

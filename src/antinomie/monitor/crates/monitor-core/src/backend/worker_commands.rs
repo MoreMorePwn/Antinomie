@@ -678,6 +678,16 @@ impl Worker {
             Command::MeasureDisk { vm_id } => self.measure_disk(&vm_id),
             Command::OpenCurrentDisk { vm_id } => self.open_current_disk(&vm_id),
             Command::CloseCurrentDisk { vm_id } => self.close_current_disk(&vm_id),
+            Command::DumpDisk {
+                vm_id,
+                hash,
+                layer_digests,
+            } => self.dump_disk(&vm_id, hash, layer_digests),
+            Command::KeepCurrentDiskAsDump {
+                vm_id,
+                hash,
+                layer_digests,
+            } => self.keep_current_disk(&vm_id, hash, layer_digests),
             Command::CancelDiskJob { vm_id } => self.cancel_disk_job(&vm_id),
             Command::AnalyzeHostFile {
                 vm_id,

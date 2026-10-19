@@ -53,7 +53,9 @@ impl Deletion {
     pub(crate) fn path(&self) -> &Path {
         match &self.item {
             EvidenceItem::NetworkCapture { file } => file,
-            EvidenceItem::ProcessCore { directory } => directory,
+            EvidenceItem::ProcessCore { directory } | EvidenceItem::DiskDump { directory } => {
+                directory
+            }
         }
     }
 

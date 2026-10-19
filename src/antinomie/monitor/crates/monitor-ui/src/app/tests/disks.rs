@@ -37,6 +37,7 @@ fn measure() -> DiskMeasure {
         sparse_supported: true,
         measured_ms: 1,
         directory: PathBuf::from("/home/user/rec/disks"),
+        quota: 4 * 1024 * 1024 * 1024,
         error: None,
     }
 }
@@ -182,6 +183,7 @@ fn open_view(app: &mut MonitorApp) {
         fs_state: Ext4State::NotClean,
         logical_size: 16 * 1024 * 1024 * 1024,
         allocated_size: 100 * 1024 * 1024,
+        kept_as: None,
     });
 }
 
