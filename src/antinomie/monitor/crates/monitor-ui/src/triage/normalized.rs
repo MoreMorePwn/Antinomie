@@ -26,12 +26,17 @@ pub(super) struct Cache {
     pub summary: JournalSummary,
 }
 
-/// The argument vector of an execve or execveat joined with spaces, when the
-/// collector captured every pointer up to the terminating NULL and every
-/// string whole. The collector names them `argN.ptr[i]` and `argN.string[i]`
-/// and adds `argN.vector` when its budget ran out. An argument longer than
-/// the 256-octet field preview also leaves the command line missing.
-fn command_line(call: &InvocationSummary, event: &EventSummary) -> Option<String> {
+/// The captured argument vector of an execve or execveat. The collector names
+/// the pieces `argN.ptr[i]` and `argN.string[i]` and adds `argN.vector` when
+/// its budget ran out. An argument longer than the 256-octet field preview is
+/// left out of `arguments`, and the vector is complete only when every pointer
+/// up to the terminating NULL was captured and the budget did not run out.
+pub(super) struct Argv {
+    pub arguments: Vec<Option<String>>,
+    pub complete: bool,
+}
+
+pub(super) fn argument_vector(call: &InvocationSummary, event: &EventSummary) -> Option<Argv> {
     let argument = match event.syscall_nr {
         59 => 1,
         322 => 2,
@@ -44,28 +49,49 @@ fn command_line(call: &InvocationSummary, event: &EventSummary) -> Option<String
         .flat_map(|event| &event.fields)
         .collect();
     let field = |key: String| fields.iter().find(|field| field.key == key).copied();
-    if field(format!("arg{argument}.vector")).is_some() {
-        return None;
-    }
+    let exhausted = field(format!("arg{argument}.vector")).is_some();
     let mut arguments = Vec::new();
     for index in 0..=MAX_ARGUMENTS {
-        let pointer = field(format!("arg{argument}.ptr[{index}]"))?;
-        let bytes: [u8; 8] = trace::covered_preview(pointer).get(..8)?.try_into().ok()?;
-        if !pointer.complete {
-            return None;
+        let pointer = field(format!("arg{argument}.ptr[{index}]"));
+        let value = pointer
+            .filter(|pointer| pointer.complete)
+            .and_then(|pointer| trace::covered_preview(pointer).get(..8))
+            .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
+            .map(u64::from_le_bytes);
+        let Some(value) = value else {
+            return Some(Argv {
+                arguments,
+                complete: false,
+            });
+        };
+        if value == 0 {
+            let complete = !exhausted && !arguments.is_empty();
+            return Some(Argv {
+                arguments,
+                complete,
+            });
         }
-        if u64::from_le_bytes(bytes) == 0 {
-            return (!arguments.is_empty()).then(|| arguments.join(" "));
-        }
-        let string = field(format!("arg{argument}.string[{index}]"))?;
-        let data = trace::covered_preview(string);
-        let end = data.iter().position(|byte| *byte == 0)?;
-        if !string.complete || string.logical_len != Some(end as u64 + 1) {
-            return None;
-        }
-        arguments.push(String::from_utf8_lossy(&data[..end]).into_owned());
+        let text = field(format!("arg{argument}.string[{index}]")).and_then(|string| {
+            let data = trace::covered_preview(string);
+            let end = data.iter().position(|byte| *byte == 0)?;
+            (string.complete && string.logical_len == Some(end as u64 + 1))
+                .then(|| String::from_utf8_lossy(&data[..end]).into_owned())
+        });
+        arguments.push(text);
     }
-    None
+    Some(Argv {
+        arguments,
+        complete: false,
+    })
+}
+
+/// The argument vector of an execve or execveat joined with spaces, when the
+/// collector captured every pointer up to the terminating NULL and every
+/// string whole.
+pub(super) fn command_line(call: &InvocationSummary, event: &EventSummary) -> Option<String> {
+    let vector = argument_vector(call, event).filter(|vector| vector.complete)?;
+    let arguments: Option<Vec<_>> = vector.arguments.into_iter().collect();
+    arguments.map(|arguments| arguments.join(" "))
 }
 
 /// Arguments joined into a CommandLine; a longer vector stays missing.
@@ -74,39 +100,10 @@ const MAX_ARGUMENTS: usize = 256;
 /// `EINPROGRESS`: a non-blocking connect the kernel accepted and has not finished.
 const EINPROGRESS: i64 = -115;
 
-/// The IP address and port a connect() was given, from the captured
-/// `struct sockaddr`. Only a complete AF_INET or AF_INET6 address is decoded;
-/// Unix sockets and short captures give nothing.
-fn connect_destination(call: &InvocationSummary) -> Option<(String, u16)> {
-    let field = call
-        .entry
-        .iter()
-        .chain(call.exit.iter())
-        .flat_map(|event| &event.fields)
-        .find(|field| {
-            field.key.contains("addr")
-                && !field.key.contains("len")
-                && !field.key.contains("capacity")
-                && trace::field_argument(42, &field.key) == Some(1)
-        })?;
-    if !field.complete {
-        return None;
-    }
-    let data = trace::covered_preview(field);
-    let family = u16::from_le_bytes(data.get(..2)?.try_into().ok()?);
-    let port = u16::from_be_bytes(data.get(2..4)?.try_into().ok()?);
-    match family {
-        2 => {
-            let octets: [u8; 4] = data.get(4..8)?.try_into().ok()?;
-            Some((std::net::Ipv4Addr::from(octets).to_string(), port))
-        }
-        10 => {
-            let octets: [u8; 16] = data.get(8..24)?.try_into().ok()?;
-            Some((std::net::Ipv6Addr::from(octets).to_string(), port))
-        }
-        _ => None,
-    }
-}
+/// Connection events waiting for the capture's DNS answers, so each can carry
+/// the name its address was looked up under. Past this many, events are
+/// written at once without a name.
+pub(super) const PENDING_LIMIT: usize = 100_000;
 
 pub(super) fn source_key(
     directory: &Path,
@@ -189,19 +186,84 @@ fn text(fields: &mut BTreeMap<String, serde_json::Value>, name: &str, value: Opt
     }
 }
 
+/// Write `events` in order, holding back those that can still gain a hostname.
+fn route(
+    journal: &mut EventJournal,
+    pending: &mut Vec<Event>,
+    events: Vec<Event>,
+) -> Result<(), String> {
+    for event in events {
+        let named = event.category == "network_connection"
+            && event.fields.contains_key("DestinationIp")
+            && pending.len() < PENDING_LIMIT;
+        if named {
+            pending.push(event);
+        } else {
+            journal.push(event)?;
+        }
+    }
+    Ok(())
+}
+
+/// Write the held connection events, adding `DestinationHostname` where a DNS
+/// answer in the run's capture names the destination address. The name is
+/// inferred: the answer and the connection are correlated by address (and by
+/// time when several names share one), not recorded together.
+pub(super) fn flush_connections(
+    journal: &mut EventJournal,
+    pending: Vec<Event>,
+    files: &FdState,
+    clock: Option<antinomie_monitor_core::HostClockAnchor>,
+) -> Result<(), String> {
+    for mut event in pending {
+        let at_us = match event.time {
+            Some(Moment::GuestNs(ns)) => clock.and_then(|clock| clock.host_us(ns)),
+            Some(Moment::EpochUs(us)) => Some(us),
+            None => None,
+        };
+        let name = event
+            .fields
+            .get("DestinationIp")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|address| files.journal.hostname(address, at_us));
+        if let Some(name) = name {
+            event
+                .fields
+                .insert("DestinationHostname".into(), name.into());
+            event.inferred.push("DestinationHostname".into());
+        }
+        journal.push(event)?;
+    }
+    Ok(())
+}
+
 pub(super) fn call(
     journal: &mut EventJournal,
-    files: &FdState,
+    pending: &mut Vec<Event>,
+    files: &mut FdState,
     call: &InvocationSummary,
     event: &EventSummary,
 ) -> Result<(), String> {
+    let mut events = Vec::new();
+    build(&mut events, files, call, event);
+    sigma_events::track(files, call, event);
+    route(journal, pending, events)
+}
+
+fn build(
+    events: &mut Vec<Event>,
+    files: &mut FdState,
+    call: &InvocationSummary,
+    event: &EventSummary,
+) {
     let mut fields = BTreeMap::from([
         ("ProcessId".into(), serde_json::json!(event.pid)),
         ("ThreadId".into(), serde_json::json!(event.tid)),
         ("Syscall".into(), serde_json::json!(event.syscall_name)),
         ("Operation".into(), serde_json::json!(event.syscall_name)),
     ]);
-    text(&mut fields, "Image", process_image(files, event));
+    let image = process_image(files, event).map(str::to_owned);
+    text(&mut fields, "Image", image.as_deref());
     let ret = call.exit.as_ref().and_then(|exit| exit.result);
     if let Some(ret) = ret {
         fields.insert("Result".into(), ret.into());
@@ -212,33 +274,82 @@ pub(super) fn call(
         call: call.call_id,
     };
     let time = (event.timestamp_ns != 0).then_some(Moment::GuestNs(event.timestamp_ns));
-    let mut emit = |category: &str, fields: BTreeMap<String, serde_json::Value>| {
-        journal.push(Event {
-            category: category.into(),
-            fields,
-            evidence: evidence.clone(),
-            time,
-        })
-    };
+    let mut emit =
+        |category: &str, fields: BTreeMap<String, serde_json::Value>, inferred: Vec<String>| {
+            events.push(Event {
+                category: category.into(),
+                fields,
+                evidence: evidence.clone(),
+                time,
+                inferred,
+            })
+        };
     if committed_exec(call) {
         // CommandLine only from a proven complete vector; otherwise it stays
         // missing rather than letting negation match an omitted argument.
         let mut fields = fields.clone();
+        let mut inferred = Vec::new();
         if let Some(line) = command_line(call, event) {
             fields.insert("CommandLine".into(), line.into());
         }
-        emit("process_creation", fields)?;
+        if let Some(parent) = sigma_events::parent(files, event) {
+            fields.insert("ParentProcessId".into(), parent.pid.into());
+            text(&mut fields, "ParentImage", parent.image.as_deref());
+            text(
+                &mut fields,
+                "ParentCommandLine",
+                parent.command_line.as_deref(),
+            );
+        }
+        // The directory is exact only while it is still the launch directory.
+        if let Some((cwd, lexical)) = sigma_events::current_directory(files, call, event) {
+            fields.insert("CurrentDirectory".into(), cwd.into());
+            if lexical {
+                inferred.push("CurrentDirectory".into());
+            }
+        }
+        emit("process_creation", fields, inferred);
     }
-    // A connect() the kernel accepted is a connection this process initiated.
-    // Only an address that was captured whole is reported; there is no
-    // hostname, user or source address in the recording, so none is invented.
-    if event.syscall_nr == 42 && ret.is_some_and(|ret| ret == 0 || ret == EINPROGRESS) {
-        if let Some((address, port)) = connect_destination(call) {
+    for record in auditd_events::records(files, call, event, image.as_deref()) {
+        emit("auditd", record.fields, record.inferred);
+    }
+    // A connect() the kernel accepted is a connection this process initiated;
+    // an accept() one it received. Only an address that was captured whole is
+    // reported. There is no user or local address in the recording, so none
+    // is invented, and the hostname is added later from DNS answers.
+    let connected = event.syscall_nr == 42 && ret.is_some_and(|ret| ret == 0 || ret == EINPROGRESS);
+    let accepted = matches!(event.syscall_nr, 43 | 288) && ret.is_some_and(|ret| ret >= 0);
+    let sent = event.syscall_nr == 44 && ret.is_some_and(|ret| ret >= 0);
+    if connected || accepted || sent {
+        let argument = sigma_events::address_argument(event.syscall_nr).unwrap_or(1);
+        let kind = sigma_events::socket_kind(files, call, event);
+        let udp = kind == Some(sigma_events::SocketKind::Datagram);
+        if let Some(address) = sigma_events::address(call, event.syscall_nr, argument) {
             let mut fields = fields.clone();
-            fields.insert("DestinationIp".into(), address.into());
-            fields.insert("DestinationPort".into(), port.into());
-            fields.insert("Initiated".into(), "true".into());
-            emit("network_connection", fields)?;
+            // A datagram socket has no connection: report each peer once.
+            let report = !sent
+                || udp && sigma_events::first_flow(files, call, event, &address.ip, address.port);
+            match kind {
+                Some(sigma_events::SocketKind::Stream) => {
+                    fields.insert("Protocol".into(), "tcp".into());
+                }
+                Some(sigma_events::SocketKind::Datagram) => {
+                    fields.insert("Protocol".into(), "udp".into());
+                }
+                _ => {}
+            }
+            if accepted {
+                fields.insert("SourceIp".into(), address.ip.into());
+                fields.insert("SourcePort".into(), address.port.into());
+                fields.insert("Initiated".into(), "false".into());
+            } else {
+                fields.insert("DestinationIp".into(), address.ip.into());
+                fields.insert("DestinationPort".into(), address.port.into());
+                fields.insert("Initiated".into(), "true".into());
+            }
+            if report {
+                emit("network_connection", fields, Vec::new());
+            }
         }
     }
     if ret.is_some_and(|ret| ret >= 0)
@@ -246,7 +357,7 @@ pub(super) fn call(
     {
         let mut fields = fields.clone();
         fields.insert("BpfCommand".into(), "BPF_PROG_LOAD".into());
-        emit("antinomie_bpf", fields)?;
+        emit("antinomie_bpf", fields, Vec::new());
     }
     let operation = event.syscall_name.as_str();
     let anonymous_mapping = matches!(operation, "mmap" | "mmap2")
@@ -258,64 +369,81 @@ pub(super) fn call(
                 operation,
                 "read" | "pread64" | "readv" | "preadv" | "preadv2"
             ));
-    if file_operation {
-        let path = displayed_path(call, event, files);
-        text(&mut fields, "TargetFilename", Some(&path));
-        if matches!(
-            operation,
-            "read"
-                | "pread64"
-                | "readv"
-                | "preadv"
-                | "preadv2"
-                | "write"
-                | "pwrite64"
-                | "writev"
-                | "pwritev"
-                | "pwritev2"
-        ) {
-            if let Some(ret) = ret.filter(|ret| *ret >= 0) {
-                fields.insert("TransferredSize".into(), ret.into());
+    if !file_operation {
+        return;
+    }
+    // The path shown for a path joined from the working directory carries a
+    // note; the field holds the path alone and says so in `_inferred`.
+    let shown = displayed_path(call, event, files);
+    let mut inferred = Vec::new();
+    match sigma_events::clean(&shown) {
+        Some((path, lexical)) => {
+            text(&mut fields, "TargetFilename", Some(&path));
+            if lexical {
+                inferred.push("TargetFilename".to_owned());
             }
         }
-        emit("file_access", fields.clone())?;
-        if ret.is_some_and(|ret| ret >= 0) {
-            let mode = call_args(call).and_then(|args| match operation {
-                "chmod" | "fchmod" => Some(args[1]),
-                "fchmodat" | "fchmodat2" => Some(args[2]),
-                _ => None,
-            });
-            if let Some(mode) = mode {
-                let mut metadata = fields.clone();
-                metadata.insert("Mode".into(), mode.into());
-                metadata.insert("Setuid".into(), (mode & 0o4000 != 0).into());
-                emit("antinomie_file_metadata", metadata)?;
-            }
-            if OPEN_NAMES.contains(&operation)
-                && open_flags(call, event).is_some_and(|flags| flags & 0xc0 == 0xc0)
-            {
-                emit("file_event", fields.clone())?;
-            }
-            if matches!(operation, "unlink" | "unlinkat" | "rmdir") {
-                emit("file_delete", fields.clone())?;
-            }
-            if matches!(operation, "rename" | "renameat" | "renameat2") {
-                text(
-                    &mut fields,
-                    "SourceFilename",
-                    named_path(call, event, &["oldname", "old_path"]).as_deref(),
-                );
-                fields.remove("TargetFilename");
-                text(
-                    &mut fields,
-                    "TargetFilename",
-                    named_path(call, event, &["newname", "new_path"]).as_deref(),
-                );
-                emit("file_rename", fields)?;
-            }
+        None => text(&mut fields, "TargetFilename", Some(&shown)),
+    }
+    if matches!(
+        operation,
+        "read"
+            | "pread64"
+            | "readv"
+            | "preadv"
+            | "preadv2"
+            | "write"
+            | "pwrite64"
+            | "writev"
+            | "pwritev"
+            | "pwritev2"
+    ) {
+        if let Some(ret) = ret.filter(|ret| *ret >= 0) {
+            fields.insert("TransferredSize".into(), ret.into());
         }
     }
-    Ok(())
+    emit("file_access", fields.clone(), inferred.clone());
+    if !ret.is_some_and(|ret| ret >= 0) {
+        return;
+    }
+    let mode = call_args(call).and_then(|args| match operation {
+        "chmod" | "fchmod" => Some(args[1]),
+        "fchmodat" | "fchmodat2" => Some(args[2]),
+        _ => None,
+    });
+    if let Some(mode) = mode {
+        let mut metadata = fields.clone();
+        metadata.insert("Mode".into(), mode.into());
+        metadata.insert("Setuid".into(), (mode & 0o4000 != 0).into());
+        emit("antinomie_file_metadata", metadata, inferred.clone());
+    }
+    if let Some(created) = sigma_events::creation(files, call, event, false) {
+        let mut fields = fields.clone();
+        let mut marked: Vec<String> = created.inferred.iter().map(|name| (*name).into()).collect();
+        text(&mut fields, "TargetFilename", Some(&created.path));
+        fields.insert("IsNewFile".into(), "true".into());
+        if created.lexical && !marked.iter().any(|name| name == "TargetFilename") {
+            marked.push("TargetFilename".into());
+        }
+        emit("file_event", fields, marked);
+    }
+    if matches!(operation, "unlink" | "unlinkat" | "rmdir") {
+        emit("file_delete", fields.clone(), inferred.clone());
+    }
+    if matches!(operation, "rename" | "renameat" | "renameat2") {
+        text(
+            &mut fields,
+            "SourceFilename",
+            named_path(call, event, &["oldname", "old_path"]).as_deref(),
+        );
+        fields.remove("TargetFilename");
+        text(
+            &mut fields,
+            "TargetFilename",
+            named_path(call, event, &["newname", "new_path"]).as_deref(),
+        );
+        emit("file_rename", fields, Vec::new());
+    }
 }
 
 pub(super) fn packet(
@@ -382,6 +510,7 @@ pub(super) fn packet(
                 }
                 _ => None,
             }),
+        inferred: Vec::new(),
     })
 }
 
@@ -438,6 +567,7 @@ mod tests {
         };
         let mut journal = EventJournal::new(&temp.directory, &identity).unwrap();
         let mut files = FdState::default();
+        let mut held = Vec::new();
         let mut exec = super::super::tests::path_call(1, 59, "execve", 0, "/bin/sh");
         exec.call_id = u64::MAX;
         for part in [exec.entry.as_mut(), exec.exit.as_mut()]
@@ -449,7 +579,8 @@ mod tests {
         observe_processes(&mut files.process_images, std::slice::from_ref(&exec));
         call(
             &mut journal,
-            &files,
+            &mut held,
+            &mut files,
             &exec,
             trace::representative(&exec).unwrap(),
         )
@@ -457,15 +588,29 @@ mod tests {
         let failed = super::super::tests::path_call(1, 59, "execve", -2, "/bin/other");
         call(
             &mut journal,
-            &files,
+            &mut held,
+            &mut files,
             &failed,
             trace::representative(&failed).unwrap(),
         )
         .unwrap();
         let summary = journal.finish(true).unwrap();
-        assert_eq!(summary.events, 1);
+        // The committed exec gives a process_creation record and auditd's
+        // SYSCALL and PATH records; the failed one only the SYSCALL (it has
+        // no committed image) and an unnamed PATH.
         let data = std::fs::read_to_string(temp.directory.join(engine_file())).unwrap();
-        let event: serde_json::Value = serde_json::from_str(data.lines().nth(1).unwrap()).unwrap();
+        let created = data
+            .lines()
+            .filter(|line| line.contains("\"process_creation\""))
+            .count();
+        assert_eq!(created, 1);
+        assert!(summary.events >= 1);
+        let data = std::fs::read_to_string(temp.directory.join(engine_file())).unwrap();
+        let event: serde_json::Value = data
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .find(|event| event["event"]["category"] == "process_creation")
+            .unwrap();
         assert_eq!(event["event"]["fields"]["Image"], "/bin/sh");
         assert!(event["event"]["fields"].get("CommandLine").is_none());
         assert_eq!(event["event"]["evidence"]["call"].as_u64(), Some(u64::MAX));
@@ -569,6 +714,7 @@ mod tests {
             let temp = PacketSpool::new().unwrap();
             let mut journal = EventJournal::new(&temp.directory, &identity).unwrap();
             let mut files = FdState::default();
+            let mut held = Vec::new();
             let mut connect = super::super::tests::call(7, 42, "connect", result);
             let mut field = super::super::tests::captured("arg1.address", "", address);
             field.complete = complete;
@@ -576,22 +722,28 @@ mod tests {
             observe_processes(&mut files.process_images, std::slice::from_ref(&connect));
             call(
                 &mut journal,
-                &files,
+                &mut held,
+                &mut files,
                 &connect,
                 trace::representative(&connect).unwrap(),
             )
             .unwrap();
-            let summary = journal.finish(true).unwrap();
+            // A connection waits for DNS answers before it is written.
+            flush_connections(&mut journal, held, &files, None).unwrap();
+            journal.finish(true).unwrap();
+            let data = std::fs::read_to_string(temp.directory.join(engine_file())).unwrap();
+            let connections: Vec<serde_json::Value> = data
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                .filter(|event| event["event"]["category"] == "network_connection")
+                .collect();
             assert_eq!(
-                summary.events,
-                u64::from(expected.is_some()),
+                connections.len(),
+                usize::from(expected.is_some()),
                 "case {index}"
             );
             if let Some((ip, port)) = expected {
-                let data = std::fs::read_to_string(temp.directory.join(engine_file())).unwrap();
-                let event: serde_json::Value =
-                    serde_json::from_str(data.lines().nth(1).unwrap()).unwrap();
-                assert_eq!(event["event"]["category"], "network_connection");
+                let event = &connections[0];
                 let fields = &event["event"]["fields"];
                 assert_eq!(fields["DestinationIp"], ip);
                 assert_eq!(fields["DestinationPort"], port);

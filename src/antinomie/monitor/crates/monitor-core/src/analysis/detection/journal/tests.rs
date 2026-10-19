@@ -33,6 +33,7 @@ fn event(category: &str, image: &str, evidence: Evidence) -> Event {
         fields: BTreeMap::from([("Image".into(), image.into())]),
         evidence,
         time: Some(Moment::GuestNs(5)),
+        inferred: Vec::new(),
     }
 }
 
@@ -274,4 +275,41 @@ fn the_journal_is_opened_only_inside_its_run_folder_and_cancel_stops_the_read() 
     );
     fs::remove_dir_all(directory).unwrap();
     fs::remove_dir_all(outside).unwrap();
+}
+
+#[test]
+fn a_version_one_journal_still_reads_and_version_two_keeps_the_inferred_list() {
+    let directory = temp();
+    let mut writer = EventJournal::new(&directory, &identity()).unwrap();
+    let mut named = event("network_connection", "/bin/nc", call(1));
+    named.inferred = vec!["DestinationHostname".into()];
+    writer.push(named).unwrap();
+    writer.finish(true).unwrap();
+    let page = read(&query(&directory)).unwrap();
+    assert_eq!(page.format_version, JOURNAL_VERSION);
+    assert_eq!(page.rows[0].event.inferred, ["DestinationHostname"]);
+    let path = directory.join(JOURNAL_FILE);
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(text.contains("\"_inferred\":[\"DestinationHostname\"]"));
+    // A journal written before the list existed has neither the header
+    // version nor the list; it still loads, with nothing inferred.
+    let old = text
+        .replace("\"format_version\":2", "\"format_version\":1")
+        .replace(",\"_inferred\":[\"DestinationHostname\"]", "");
+    fs::write(&path, old).unwrap();
+    let page = read(&query(&directory)).unwrap();
+    assert_eq!(page.format_version, 1);
+    assert!(page.rows[0].event.inferred.is_empty());
+    fs::write(
+        &path,
+        fs::read_to_string(&path)
+            .unwrap()
+            .replace("\"format_version\":1", "\"format_version\":3"),
+    )
+    .unwrap();
+    assert!(
+        read(&query(&directory)).is_err(),
+        "a newer format is refused"
+    );
+    fs::remove_dir_all(directory).unwrap();
 }

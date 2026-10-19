@@ -45,7 +45,7 @@ pub(super) fn table_owner(files: &FdState, cookie: u64, pid: u32) -> (u64, u32) 
     follow_share(&files.share, cookie, pid)
 }
 
-fn fs_owner(files: &FdState, cookie: u64, pid: u32) -> (u64, u32) {
+pub(super) fn fs_owner(files: &FdState, cookie: u64, pid: u32) -> (u64, u32) {
     follow_share(&files.fs_share, cookie, pid)
 }
 
@@ -383,6 +383,7 @@ fn copy_files(files: &mut FdState, source: (u64, u32), target: (u64, u32)) {
             files.cloexec.insert((target.0, target.1, fd));
         }
     }
+    files.journal.copy_sockets(source, target);
 }
 
 /// Snapshot the parent's open descriptors onto the new process. The child
@@ -549,7 +550,7 @@ fn resolve_path(
     )
 }
 
-fn resolve_path_dirfd(
+pub(super) fn resolve_path_dirfd(
     path: &str,
     invocation: &InvocationSummary,
     event: &EventSummary,
@@ -580,7 +581,7 @@ fn resolve_path_dirfd(
     }
 }
 
-fn dirfd_argument(invocation: &InvocationSummary, event: &EventSummary) -> Option<u64> {
+pub(super) fn dirfd_argument(invocation: &InvocationSummary, event: &EventSummary) -> Option<u64> {
     let args = call_args(invocation)?;
     let index = (0..args.len()).find(|index| {
         matches!(

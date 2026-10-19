@@ -216,6 +216,7 @@ pub(super) fn observe_processes(
                     .filter(|field| field.key.contains("argv"))
                     .filter_map(path_text)
                     .collect();
+                node.command_line = normalized::command_line(invocation, event);
             }
         }
         let args = entry
@@ -356,7 +357,13 @@ fn link_child(
     let inherited = nodes
         .get(&parent)
         .filter(|node| node.comm != "?")
-        .map(|node| (node.comm.clone(), node.argv.clone()));
+        .map(|node| {
+            (
+                node.comm.clone(),
+                node.argv.clone(),
+                node.command_line.clone(),
+            )
+        });
     let candidates: Vec<TaskKey> = nodes
         .iter()
         .filter(|(key, node)| key.pid == child_pid && **key != parent && node.parent.is_none())
@@ -368,9 +375,10 @@ fn link_child(
                 node.parent = Some(parent);
                 node.provisional = false;
                 if node.comm == "?" {
-                    if let Some((comm, argv)) = &inherited {
+                    if let Some((comm, argv, line)) = &inherited {
                         node.comm.clone_from(comm);
                         node.argv.clone_from(argv);
+                        node.command_line.clone_from(line);
                     }
                 }
             }
@@ -394,6 +402,7 @@ fn link_child(
                             argv: inherited
                                 .as_ref()
                                 .map_or_else(Vec::new, |image| image.1.clone()),
+                            command_line: inherited.as_ref().and_then(|image| image.2.clone()),
                             provisional: true,
                             ..TaskNode::default()
                         },

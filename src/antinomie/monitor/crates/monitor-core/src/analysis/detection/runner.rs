@@ -1205,6 +1205,7 @@ mod tests {
                     call: 1,
                 },
                 time: None,
+                inferred: Vec::new(),
             })
             .unwrap();
         journal.finish(true).unwrap();

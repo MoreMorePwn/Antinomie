@@ -31,6 +31,7 @@ pub(crate) enum OpenInput {
 pub(crate) const OPEN_INPUT: &str = "triage-open-input";
 
 mod archive_scan;
+mod auditd_events;
 mod bpf_notes;
 mod counts;
 mod descriptors;
@@ -51,6 +52,9 @@ mod properties;
 mod refresh;
 #[cfg(test)]
 mod refresh_tests;
+mod sigma_events;
+#[cfg(test)]
+mod sigma_events_tests;
 mod sorting;
 mod summary;
 mod table;
@@ -920,6 +924,8 @@ struct TaskNode {
     argv: Vec<String>,
     state: String,
     exec_history: Vec<String>,
+    /// Joined argv of the committed exec, only when the whole vector was captured.
+    command_line: Option<String>,
 }
 
 enum Spawn {
@@ -1157,6 +1163,8 @@ struct FdState {
     cwd: std::collections::BTreeMap<(u64, u32), String>,
     cwd_unverified: std::collections::BTreeSet<(u64, u32)>,
     cloexec: std::collections::BTreeSet<(u64, u32, u64)>,
+    /// What the Sigma journal tracks beyond descriptors: sockets, known paths, DNS answers.
+    journal: sigma_events::State,
 }
 
 enum DupKind {

@@ -16,6 +16,25 @@ spec.loader.exec_module(adapter)
 
 
 class AdapterTests(unittest.TestCase):
+    def journal(self, events, version=2):
+        """Write a journal of (category, fields[, inferred]) events and load it into SQLite."""
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        identity = {"vm_id": "vm", "boot_id": "boot", "run_id": "run", "root_cookie": 7}
+        records = [{"kind": "header", "format_version": version, "identity": identity}]
+        for index, (category, fields, *inferred) in enumerate(events):
+            event = {"category": category, "fields": fields, "evidence": {"kind": "call", "stream": 1, "cookie": 7, "call": index + 1}}
+            if inferred:
+                event["_inferred"] = inferred[0]
+            records.append({"kind": "event", "event": event})
+        records.append({"kind": "end", "events": len(events), "omitted": 0, "complete": True})
+        path = Path(directory.name) / "events.jsonl"
+        path.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+        connection = sqlite3.connect(":memory:", cached_statements=0)
+        self.addCleanup(connection.close)
+        adapter.load_events(connection, path, identity)
+        return connection
+
     def fixture(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -34,15 +53,69 @@ class AdapterTests(unittest.TestCase):
     def test_missing_command_line_cannot_match_a_negated_condition(self):
         connection, _, _ = self.fixture()
         query = "SELECT * FROM logs WHERE Image LIKE '%/sh' AND NOT COALESCE(CommandLine LIKE '%evil%', 0)"
-        total, evidence, evaluated, missing, event_ids = adapter.matching_rows(connection, [query], "process_creation")
+        total, evidence, evaluated, missing, event_ids, _ = adapter.matching_rows(connection, [query], "process_creation")
         self.assertEqual((total, evaluated, missing), (1, 2, 1))
         self.assertEqual(evidence[0]["call"], 2 ** 64 - 1)
         self.assertEqual(event_ids, [1], "the exact journal ordinal of the matched event")
 
+    def test_version_one_and_two_journals_load_and_unknown_versions_do_not(self):
+        self.journal([("process_creation", {"Image": "/bin/sh"})], version=1)
+        self.journal([("process_creation", {"Image": "/bin/sh"}, ["Image"])], version=2)
+        with self.assertRaises(ValueError):
+            self.journal([("process_creation", {"Image": "/bin/sh"})], version=3)
+
+    def test_matches_on_inferred_fields_are_counted_and_missing_parents_are_never_matched(self):
+        connection = self.journal([
+            ("network_connection", {"DestinationIp": "203.0.113.9", "DestinationHostname": "evil.test", "Initiated": "true"}, ["DestinationHostname"]),
+            ("network_connection", {"DestinationIp": "203.0.113.9", "Initiated": "true"}),
+            ("process_creation", {"Image": "/bin/ls", "ParentImage": "/bin/sh"}),
+            ("process_creation", {"Image": "/bin/ls"}),
+        ])
+        query = "SELECT * FROM logs WHERE DestinationHostname LIKE '%.test'"
+        total, _, evaluated, missing, _, inferred = adapter.matching_rows(connection, [query], "network_connection")
+        self.assertEqual((total, evaluated, missing), (1, 1, 1))
+        self.assertEqual(inferred, (1, ["destinationhostname"]))
+        query = "SELECT * FROM logs WHERE NOT COALESCE(ParentImage LIKE '%/bash', 0)"
+        total, _, evaluated, missing, _, inferred = adapter.matching_rows(connection, [query], "process_creation")
+        self.assertEqual((total, evaluated, missing, inferred[0]), (1, 1, 1, 0))
+
+    def test_auditd_records_are_matched_by_audit_field_names_as_text(self):
+        connection = self.journal([
+            ("auditd", {"type": "SYSCALL", "Syscall": "personality", "a0": "40000", "exe": "/tmp/x"}, ["exe"]),
+            ("auditd", {"type": "EXECVE", "argc": "2", "a0": "chmod", "a1": "777"}),
+            ("auditd", {"type": "PATH", "name": "/etc/ld.so.preload", "nametype": "CREATE"}),
+            ("process_creation", {"Image": "/bin/chmod"}),
+        ])
+        for query, expected in [
+            ("SELECT * FROM logs WHERE (type='SYSCALL' COLLATE NOCASE AND SYSCALL='personality' COLLATE NOCASE AND a0=40000)", 1),
+            ("SELECT * FROM logs WHERE type='EXECVE' COLLATE NOCASE AND a0='chmod' COLLATE NOCASE AND a1=777", 1),
+            ("SELECT * FROM logs WHERE type='PATH' COLLATE NOCASE AND name='/etc/ld.so.preload' COLLATE NOCASE", 1),
+            ("SELECT * FROM logs WHERE type='PATH' COLLATE NOCASE AND `key`='x'", 0),
+        ]:
+            total = adapter.matching_rows(connection, [query], "auditd")[0]
+            self.assertEqual(total, expected, query)
+        total, _, _, _, _, inferred = adapter.matching_rows(connection, ["SELECT * FROM logs WHERE type='SYSCALL' AND exe LIKE '/tmp/%' ESCAPE '\\'"], "auditd")
+        self.assertEqual((total, inferred), (1, (1, ["exe"])))
+        # The trace has no audit keys: a rule on one has no events to evaluate.
+        _, _, evaluated, _, _, _ = adapter.matching_rows(connection, ["SELECT * FROM logs WHERE type='SYSCALL' AND `key`='network_connect_4'"], "auditd")
+        self.assertEqual(evaluated, 0)
+
+    def test_logsource_mapping_covers_auditd_and_keeps_keyword_and_other_services_out(self):
+        class Source:
+            def __init__(self, category=None, product="linux", service=None):
+                self.category, self.product, self.service = category, product, service
+        self.assertEqual(adapter.logsource_category(Source(service="auditd")), "auditd")
+        self.assertEqual(adapter.logsource_category(Source("process_creation")), "process_creation")
+        self.assertIsNone(adapter.logsource_category(Source("process_creation", service="auditd")))
+        self.assertIsNone(adapter.logsource_category(Source(service="syslog")))
+        self.assertIsNone(adapter.logsource_category(Source()))
+        self.assertIsNone(adapter.logsource_category(Source(service="auditd", product="windows")))
+        self.assertIsNone(adapter.logsource_category(Source("auditd")))
+
     def test_multiple_conditions_deduplicate_and_preserve_evidence(self):
         connection, _, _ = self.fixture()
         query = "SELECT * FROM logs WHERE Image LIKE '%/sh'"
-        total, evidence, _, _, event_ids = adapter.matching_rows(connection, [query, query], "process_creation")
+        total, evidence, _, _, event_ids, _ = adapter.matching_rows(connection, [query, query], "process_creation")
         self.assertEqual(total, 2)
         self.assertEqual(len(evidence), 2)
         self.assertEqual(event_ids, [1, 2])

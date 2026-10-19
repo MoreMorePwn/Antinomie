@@ -131,6 +131,9 @@ pub struct RunFilterFacts {
     pub ui_loss: Option<u64>,
     pub storage_loss: Option<u64>,
     pub complete: Option<bool>,
+    /// Working directory the root process was launched in, from the run's
+    /// saved request. Absent in a manifest that does not carry the request.
+    pub launch_cwd: Option<String>,
 }
 
 /// Read bounded sidecars on an archive worker; all three run identities must match.
@@ -169,6 +172,12 @@ pub fn run_filter_facts(
                 .get("started_ms")
                 .and_then(serde_json::Value::as_u64);
             facts.ended_ms = manifest.get("ended_ms").and_then(serde_json::Value::as_u64);
+            facts.launch_cwd = run
+                .get("request")
+                .and_then(|request| request.get("cwd"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|cwd| cwd.starts_with('/'))
+                .map(str::to_owned);
             facts.saved_size = manifest.get("bytes").and_then(serde_json::Value::as_u64);
             if facts
                 .started_ms
