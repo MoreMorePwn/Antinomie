@@ -1,7 +1,7 @@
 //! Bounded offline work, independent of rendering and the transport owner.
 use antinomie_monitor_core::{
-    recording, syscall_groups::SyscallGroup, BackendOptions, CaptureSummary, FieldSummary,
-    InvocationPage, RunSummary, TerminalPage, TerminalRecord,
+    recording, syscall_groups::SyscallGroup, AsyncPage, BackendOptions, CaptureSummary,
+    FieldSummary, InvocationPage, RunSummary, TerminalPage, TerminalRecord,
 };
 use std::{
     path::PathBuf,
@@ -14,6 +14,9 @@ use std::{
 
 mod totals;
 pub(crate) use totals::key as totals_key;
+
+/// Async observations one continuation request reads.
+pub(crate) const ASYNC_PAGE: usize = antinomie_monitor_core::ASYNC_PREVIEW_LIMIT;
 
 pub(crate) type ProcessTreeResult = Result<
     (
@@ -66,6 +69,16 @@ pub(crate) enum Request {
         field: FieldSummary,
         offset: u64,
         data_len: usize,
+    },
+    /// One page of the async observations a call row only previews.
+    AsyncObservations {
+        generation: u64,
+        directory: PathBuf,
+        capture: bool,
+        call: (u64, u64, u64),
+        /// Inclusive event sequence cursor; `0` for the first page.
+        from: u64,
+        cancel: Arc<AtomicBool>,
     },
     Specimen {
         view_key: String,
@@ -127,6 +140,11 @@ pub(crate) enum Answer {
         generation: u64,
         offset: u64,
         result: Result<Vec<u8>, String>,
+    },
+    AsyncObservations {
+        generation: u64,
+        call: (u64, u64, u64),
+        result: Result<AsyncPage, String>,
     },
     Specimen {
         view_key: String,
@@ -328,6 +346,34 @@ fn answer(request: Request, shared: &Shared) -> Answer {
             result: recording::read_captured_range(&directory, &field, offset, data_len)
                 .map_err(|e| e.to_string()),
         },
+        Request::AsyncObservations {
+            generation,
+            directory,
+            capture,
+            call,
+            from,
+            cancel,
+        } => {
+            if shared.cancelled.load(Ordering::Relaxed) {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            let view = totals::View {
+                directory,
+                capture,
+                pid: None,
+                query: String::new(),
+                hidden_categories: Vec::new(),
+            };
+            Answer::AsyncObservations {
+                generation,
+                call,
+                result: view.open(&cancel).and_then(|recording| {
+                    recording
+                        .async_page_cancellable(call, from, ASYNC_PAGE, &cancel)
+                        .map_err(|error| error.to_string())
+                }),
+            }
+        }
         Request::Specimen {
             view_key,
             generation,
@@ -667,6 +713,40 @@ mod tests {
                 assert_eq!(ids, expected.clone().collect::<Vec<_>>());
             }
         }
+    }
+
+    #[test]
+    fn worker_reads_async_pages_for_a_saved_call_and_reports_unknown_or_cancelled_reads() {
+        let fixture = fixture(10);
+        let worker = ArchiveWorker::new(None).unwrap();
+        let ask = |call: (u64, u64, u64), cancel: bool| {
+            worker
+                .request(Request::AsyncObservations {
+                    generation: 3,
+                    directory: fixture.0.clone(),
+                    capture: true,
+                    call,
+                    from: 0,
+                    cancel: Arc::new(AtomicBool::new(cancel)),
+                })
+                .unwrap();
+            let Answer::AsyncObservations {
+                generation,
+                call: answered,
+                result,
+            } = worker.wait_answer(Duration::from_secs(60)).unwrap()
+            else {
+                panic!("wrong answer")
+            };
+            assert_eq!((generation, answered), (3, call));
+            result
+        };
+        // The fixture's calls have no async observations: an empty, final page.
+        let page = ask((9, 41, 0), false).unwrap();
+        assert!(page.events.is_empty() && page.next_event_seq.is_none());
+        assert_eq!(page.total, 0);
+        assert!(ask((9, 41, 404), false).is_err());
+        assert!(ask((9, 41, 0), true).unwrap_err().contains("cancelled"));
     }
 
     #[test]

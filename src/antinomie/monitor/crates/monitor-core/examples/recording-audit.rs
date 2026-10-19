@@ -64,11 +64,38 @@ fn run() -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let mut calls = 0u64;
     let mut unmatched = 0u64;
     let mut page_issues = BTreeSet::new();
+    // Calls whose async observations the page only previews, and what browsing
+    // them finds: the browsed count must equal the saved count.
+    let (mut partial_calls, mut async_saved, mut async_omitted, mut async_browsed) =
+        (0u64, 0u64, 0u64, 0u64);
+    let mut browse_mismatch = Vec::new();
+    let cancel = AtomicBool::new(false);
     while let Some(offset) = cursor {
         let page = archive.invocation_page(offset, 256)?;
         page_issues.extend(page.issues);
         for call in page.invocations {
             calls += 1;
+            async_saved += call.async_saved;
+            if call.async_omitted() > 0 {
+                partial_calls += 1;
+                async_omitted += call.async_omitted();
+                let key = (call.stream_id, call.task_cookie, call.call_id);
+                let mut browsed = 0u64;
+                let mut from = 0;
+                loop {
+                    let more = archive.async_page_cancellable(key, from, 256, &cancel)?;
+                    browsed += more.events.len() as u64;
+                    match more.next_event_seq {
+                        Some(next) => from = next,
+                        None => break,
+                    }
+                }
+                async_browsed += browsed;
+                if browsed != call.async_saved {
+                    browse_mismatch
+                        .push(json!({"call": key, "saved": call.async_saved, "browsed": browsed}));
+                }
+            }
             unmatched += u64::from(
                 call.entry.is_none() || (call.exit.is_none() && call.task_exit.is_none()),
             );
@@ -111,10 +138,11 @@ fn run() -> Result<serde_json::Value, Box<dyn std::error::Error>> {
         .and_then(|run| run.pointer("/request/path"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let (tree, tree_issues) =
-        archive.process_tree_cancellable(pid, path, &AtomicBool::new(false))?;
+    let (tree, tree_issues) = archive.process_tree_cancellable(pid, path, &cancel)?;
     Ok(json!({
         "directory": directory, "packets": packets, "invocation_events": events, "calls": calls, "unmatched_calls": unmatched, "page_issues": page_issues,
+        "async_saved": async_saved, "async_partial_calls": partial_calls, "async_omitted": async_omitted,
+        "async_browsed_for_partial_calls": async_browsed, "async_browse_mismatch": browse_mismatch,
         "incomplete_events": incomplete, "phases": phases, "syscalls": syscalls,
         "event_issues": issues, "parser_errors": errors, "field_status_error": statuses,
         "field_gaps": field_gaps, "task_cookies": tasks.len(), "root_cookies": root_cookies,

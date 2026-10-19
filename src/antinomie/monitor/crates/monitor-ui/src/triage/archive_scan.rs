@@ -141,9 +141,15 @@ pub(super) fn scan_archive_query(
     let mut finding_page = sorting::Page::new(request, 0, cancel);
     let finding_query = query::compile_table(&request.filters[0], FINDING_FIELDS);
     let mut scoped_count = 0;
+    // Calls whose saved async observations the pages only preview, and how many.
+    let (mut async_partial, mut async_omitted) = (0u64, 0u64);
     let (seen, complete, issues) = walk_pages(&recording, cancel, |page| {
         let page: Vec<_> = page.iter().filter(scoped).cloned().collect();
         scoped_count += page.len() as u64;
+        for call in page.iter().filter(|call| call.async_omitted() > 0) {
+            async_partial += 1;
+            async_omitted = async_omitted.saturating_add(call.async_omitted());
+        }
         if clock_anchor.is_none() {
             clock_anchor = started_ms
                 .zip(
@@ -328,6 +334,12 @@ pub(super) fn scan_archive_query(
     }
     if !issues.is_empty() {
         coverage.push_str(&format!("; {} archive read issues", issues.len()));
+    }
+    if async_partial > 0 {
+        coverage.push_str(&format!(
+            "; {async_omitted} saved async observations on {async_partial} calls are past the {} each call previews and were not scanned",
+            antinomie_monitor_core::ASYNC_PREVIEW_LIMIT
+        ));
     }
     if let Some(error) = journal_error {
         coverage.push_str(&format!(

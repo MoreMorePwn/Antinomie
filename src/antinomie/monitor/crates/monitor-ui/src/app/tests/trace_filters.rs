@@ -12,6 +12,7 @@ fn invalid_syscall_filter_keeps_the_previous_applied_filter() {
         entry: Some(event(1, 0)),
         exit: None,
         async_events: Vec::new(),
+        async_saved: 0,
         task_exit: None,
     };
     assert_eq!(app.applied_filter, "");

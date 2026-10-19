@@ -1031,8 +1031,15 @@ pub struct InvocationSummary {
     pub call_id: u64,
     pub entry: Option<EventSummary>,
     pub exit: Option<EventSummary>,
-    /// Correlated async observations; capped at 256 records per invocation.
+    /// Correlated async observations: a preview of at most
+    /// [`ASYNC_PREVIEW_LIMIT`] records, the first saved. `async_saved` counts
+    /// every one; the rest are browsed with `Recording::async_page_cancellable`.
     pub async_events: Vec<EventSummary>,
+    /// Async observations saved for this call, including those the preview
+    /// leaves out. Pairing counts the events it was given; an archive page
+    /// counts the saved ones.
+    #[serde(default)]
+    pub async_saved: u64,
     /// The kernel's record that the calling task ended inside this call:
     /// `exit` and `exit_group`, which never return, or a fatal signal that
     /// arrived while the call was blocked. Its `lifecycle.task_exit` field
@@ -1042,6 +1049,13 @@ pub struct InvocationSummary {
 }
 
 impl InvocationSummary {
+    /// Saved async observations the preview does not carry. Zero means the
+    /// preview is the whole saved set; otherwise it is partial.
+    pub fn async_omitted(&self) -> u64 {
+        self.async_saved
+            .saturating_sub(self.async_events.len() as u64)
+    }
+
     /// How the calling task ended inside this call, when it did.
     pub fn task_exit_status(&self) -> Option<WaitStatus> {
         let field = self
@@ -1052,6 +1066,25 @@ impl InvocationSummary {
             .find(|field| field.key == "lifecycle.task_exit")?;
         WaitStatus::from_raw(u64::from_le_bytes(field.preview.get(..8)?.try_into().ok()?))
     }
+}
+
+/// Most async observations an invocation carries in its preview.
+pub const ASYNC_PREVIEW_LIMIT: usize = 256;
+
+/// One page of the async observations saved for a call, in event order.
+///
+/// | Field | Meaning |
+/// | --- | --- |
+/// | `events` | At most the requested number of observations, each assembled from its own packets |
+/// | `next_event_seq` | Cursor of the first observation after this page; `None` at the end |
+/// | `total` | Observations the archive index holds for the call, before the cursor too |
+/// | `issues` | Bounded diagnostics from assembling this page |
+#[derive(Clone, Debug)]
+pub struct AsyncPage {
+    pub events: Vec<EventSummary>,
+    pub next_event_seq: Option<u64>,
+    pub total: u64,
+    pub issues: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1570,6 +1603,7 @@ pub fn pair_events(events: &[EventSummary]) -> Vec<InvocationSummary> {
                 entry: None,
                 exit: None,
                 async_events: Vec::new(),
+                async_saved: 0,
                 task_exit: None,
             });
             rows.len() - 1
@@ -1604,11 +1638,13 @@ pub fn pair_events(events: &[EventSummary]) -> Vec<InvocationSummary> {
                 entry: None,
                 exit: None,
                 async_events: Vec::new(),
+                async_saved: 0,
                 task_exit: None,
             });
             rows.len() - 1
         });
-        if rows[index].async_events.len() < 256 {
+        rows[index].async_saved += 1;
+        if rows[index].async_events.len() < ASYNC_PREVIEW_LIMIT {
             rows[index].async_events.push(event.clone());
         } else if let Some(last) = rows[index].async_events.last_mut() {
             let issue =
@@ -2020,11 +2056,22 @@ mod tests {
         assert!(rows[2].entry.is_none());
         assert_eq!(rows[2].async_events.len(), 1);
         assert_eq!(rows[0].async_events.len(), 256);
+        assert_eq!((rows[0].async_saved, rows[0].async_omitted()), (260, 4));
+        assert_eq!(rows[1].async_omitted(), 0);
         assert!(
             rows[0].async_events[255]
                 .issues
                 .iter()
                 .any(|issue| issue.contains("bounded preview"))
         );
+    }
+    #[test]
+    fn invocations_saved_without_async_counts_still_read() {
+        let row = serde_json::json!({
+            "stream_id": 1, "task_cookie": 2, "call_id": 3,
+            "entry": null, "exit": null, "async_events": []
+        });
+        let read: InvocationSummary = serde_json::from_value(row).unwrap();
+        assert_eq!((read.async_saved, read.async_omitted()), (0, 0));
     }
 }

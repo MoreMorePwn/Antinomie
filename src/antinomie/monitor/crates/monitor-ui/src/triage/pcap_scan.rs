@@ -869,7 +869,12 @@ pub(super) fn walk_pages(
             }
         };
         seen += page.invocations.len() as u64;
-        issues.extend(page.issues);
+        // The same page diagnostic repeats on every page that has one.
+        for issue in page.issues {
+            if issues.len() < 32 && !issues.contains(&issue) {
+                issues.push(issue);
+            }
+        }
         each(&page.invocations)?;
         match page.next_offset {
             Some(next) if next > offset => offset = next,
