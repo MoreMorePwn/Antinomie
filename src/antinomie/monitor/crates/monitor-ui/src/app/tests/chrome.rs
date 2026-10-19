@@ -91,6 +91,7 @@ fn escape_closes_the_topmost_dialog_first() {
             Dialog::Rules => app.rules_open = true,
             Dialog::Samples => app.samples.open = true,
             Dialog::Dependencies => app.dependencies.open = true,
+            Dialog::GettingStarted => app.getting_started.open = true,
             Dialog::Performance => app.performance.open = true,
             Dialog::About => app.about_open = true,
             Dialog::Build => app.build_open = true,

@@ -1,6 +1,9 @@
 //! Runtime prerequisites, checked at startup and again before using a feature.
 //! Build tools and optional analysis adapters have their own existing checks.
 use crate::{BackendOptions, VmAcceleration, VmLaunchOptions};
+pub use install::{
+    InstallPlan, KVM_GROUP_COMMAND, KvmAdvice, PACKAGES, PackageManager, kvm_member, package,
+};
 use rustix::fs::{Access, AtFlags, CWD, OFlags, accessat, fcntl_getfl, fcntl_setfl};
 use std::{
     fs::OpenOptions,
@@ -9,6 +12,8 @@ use std::{
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
+
+mod install;
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const PROBE_OUTPUT_SIZE: usize = 16 * 1024;
@@ -27,6 +32,9 @@ pub enum Dependency {
     Prlimit,
     Suricata,
     PythonVenv,
+    Wireshark,
+    /// Zenity, the file chooser of the Explorer and Upload.
+    FileChooser,
 }
 
 /// One checked requirement, its affected action and a concrete repair hint.
@@ -45,6 +53,10 @@ pub struct Check {
 #[derive(Clone, Debug, Default)]
 pub struct Report {
     pub checks: Vec<Check>,
+    /// The host's package manager, from `/etc/os-release`; `None` if unknown.
+    pub package_manager: Option<PackageManager>,
+    /// What `/dev/kvm` needs, so the install command can add the group step.
+    pub kvm: KvmAdvice,
 }
 
 impl Report {
@@ -207,6 +219,26 @@ pub fn check(options: &BackendOptions) -> Report {
             "On Debian/Ubuntu: sudo apt install util-linux",
         ),
         Check {
+            dependency: Wireshark,
+            name: "Wireshark",
+            purpose: "Inspect saved captures in Wireshark, outside Antinomie",
+            problem: executable(Path::new("wireshark"))
+                .is_none()
+                .then(|| "wireshark is missing or not executable".to_owned()),
+            hint: "On Debian/Ubuntu: sudo apt install wireshark",
+            optional: true,
+        },
+        Check {
+            dependency: FileChooser,
+            name: "File chooser (Zenity)",
+            purpose: "Choose folders and files in Explorer and Upload",
+            problem: executable(Path::new("zenity"))
+                .is_none()
+                .then(|| "zenity is missing or not executable".to_owned()),
+            hint: "On Debian/Ubuntu: sudo apt install zenity",
+            optional: true,
+        },
+        Check {
             dependency: Suricata,
             name: "Suricata",
             purpose: "IDS scans of captured traffic",
@@ -246,7 +278,11 @@ pub fn check(options: &BackendOptions) -> Report {
         hint: "Enable hardware virtualization and access to /dev/kvm (kvm group; sign in again), or select TCG in VM settings",
         optional: false,
     });
-    Report { checks }
+    Report {
+        checks,
+        package_manager: PackageManager::detect(),
+        kvm: KvmAdvice::probe(),
+    }
 }
 
 fn kvm_problem() -> Option<String> {
@@ -398,14 +434,21 @@ mod tests {
                 entry(true, Some("Suricata is not installed")),
                 entry(false, None),
             ],
+            ..Report::default()
         };
         assert!(!optional.has_missing());
         let required = Report {
             checks: vec![entry(false, Some("missing"))],
+            ..Report::default()
         };
         assert!(required.has_missing());
         let checked = check(&BackendOptions::default());
-        for dependency in [Dependency::Suricata, Dependency::PythonVenv] {
+        for dependency in [
+            Dependency::Suricata,
+            Dependency::PythonVenv,
+            Dependency::Wireshark,
+            Dependency::FileChooser,
+        ] {
             assert!(
                 checked
                     .checks
@@ -528,6 +571,7 @@ mod tests {
                 hint: "sudo apt install curl",
                 optional: false,
             }],
+            ..Report::default()
         };
         assert!(report.has_missing());
         report.require(&[]).unwrap();

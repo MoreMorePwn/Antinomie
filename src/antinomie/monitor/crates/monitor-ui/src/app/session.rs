@@ -247,6 +247,7 @@ impl MonitorApp {
         }
         self.follow_runs(&snapshot);
         self.snapshot = snapshot;
+        self.getting_started.snapshot_seen = true;
     }
 
     pub(super) fn drain(&mut self) {

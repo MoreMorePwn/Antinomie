@@ -11,6 +11,7 @@ mod details_scroll;
 mod evidence;
 mod evidence_jobs;
 mod folders;
+mod getting_started;
 #[cfg(test)]
 mod memory_probe;
 mod memory_view;

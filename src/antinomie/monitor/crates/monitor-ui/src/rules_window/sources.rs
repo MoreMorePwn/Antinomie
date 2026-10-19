@@ -340,7 +340,7 @@ impl Model {
         }
     }
 
-    fn install_source_pack(
+    pub(super) fn install_source_pack(
         &mut self,
         data_dir: &Path,
         outbound: bool,

@@ -327,6 +327,10 @@ impl MonitorApp {
                     ui.menu_button("Help", |ui| {
                         // Room between an item and its shortcut.
                         ui.set_min_width(ui.spacing().menu_width);
+                        if ui.button("Getting started").clicked() {
+                            self.open_getting_started();
+                            ui.close_menu();
+                        }
                         if ui.button("About Antinomie").clicked() {
                             self.about_open = true;
                             ui.close_menu();

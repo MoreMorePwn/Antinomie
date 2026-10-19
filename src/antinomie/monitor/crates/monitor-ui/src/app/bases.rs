@@ -70,51 +70,8 @@ impl MonitorApp {
                 if let Some(error) = &self.snapshot.remote_error {
                     crate::activity::error(ui, error);
                 }
-                if let Some(status) = download.as_ref().filter(|status| !status.finished) {
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        if ui
-                            .add_enabled(!status.installing, egui::Button::new("Cancel"))
-                            .on_disabled_hover_text("Finishing the base installation")
-                            .clicked()
-                        {
-                            command = Some(Command::CancelDownload);
-                        }
-                        ui.label(if status.installing {
-                            format!("{}: installing…", status.label)
-                        } else {
-                            status.label.clone()
-                        });
-                    });
-                    let fraction = if status.total > 0 {
-                        (status.received as f32 / status.total as f32).clamp(0.0, 1.0)
-                    } else {
-                        0.0
-                    };
-                    ui.add(egui::ProgressBar::new(fraction).text(format!(
-                        "{} of {}",
-                        human_bytes(status.received),
-                        human_bytes(status.total)
-                    )));
-                }
-                if let Some(status) = download.as_ref().filter(|status| status.finished) {
-                    match &status.error {
-                        Some(error) if error.contains("cancelled") => {
-                            ui.colored_label(
-                                theme::muted(),
-                                format!(
-                                    "{}: download cancelled; it resumes where it stopped",
-                                    status.label
-                                ),
-                            );
-                        }
-                        Some(error) => {
-                            crate::activity::error(ui, format!("{}: {error}", status.label));
-                        }
-                        None => {
-                            ui.colored_label(theme::good(), format!("{} installed", status.label));
-                        }
-                    }
+                if let Some(next) = download_status(ui, download.as_ref()) {
+                    command = Some(next);
                 }
                 ui.separator();
                 if current.is_empty() && older.is_empty() && other.is_empty() {
@@ -154,6 +111,62 @@ impl MonitorApp {
             });
         command
     }
+}
+
+/// The running download's Cancel, label and progress bar, or how the last
+/// one ended. Shared by the Download base window and Getting started.
+pub(super) fn download_status(
+    ui: &mut egui::Ui,
+    download: Option<&antinomie_monitor_core::DownloadStatus>,
+) -> Option<Command> {
+    let mut command = None;
+    if let Some(status) = download.filter(|status| !status.finished) {
+        ui.separator();
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(!status.installing, egui::Button::new("Cancel"))
+                .on_disabled_hover_text("Finishing the base installation")
+                .clicked()
+            {
+                command = Some(Command::CancelDownload);
+            }
+            ui.label(if status.installing {
+                format!("{}: installing…", status.label)
+            } else {
+                status.label.clone()
+            });
+        });
+        let fraction = if status.total > 0 {
+            (status.received as f32 / status.total as f32).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        ui.add(egui::ProgressBar::new(fraction).text(format!(
+            "{} of {}",
+            human_bytes(status.received),
+            human_bytes(status.total)
+        )));
+    }
+    if let Some(status) = download.filter(|status| status.finished) {
+        match &status.error {
+            Some(error) if error.contains("cancelled") => {
+                ui.colored_label(
+                    theme::muted(),
+                    format!(
+                        "{}: download cancelled; it resumes where it stopped",
+                        status.label
+                    ),
+                );
+            }
+            Some(error) => {
+                crate::activity::error(ui, format!("{}: {error}", status.label));
+            }
+            None => {
+                ui.colored_label(theme::good(), format!("{} installed", status.label));
+            }
+        }
+    }
+    command
 }
 
 pub(super) fn base_selector(
@@ -203,7 +216,7 @@ pub(super) fn base_selector(
 
 /// One catalog base: name and facts on the left; installed, Download, or
 /// the running download's state on the right. Cancel stays above the list.
-fn download_row(
+pub(super) fn download_row(
     ui: &mut egui::Ui,
     base: &antinomie_monitor_core::RemoteBase,
     installed: &[String],
@@ -301,7 +314,7 @@ pub(super) fn versioned_label(
 
 /// Whether a remote base is for this app version (not an older one, and
 /// not one this app is too old for).
-fn remote_is_current(base: &antinomie_monitor_core::RemoteBase) -> bool {
+pub(super) fn remote_is_current(base: &antinomie_monitor_core::RemoteBase) -> bool {
     RevisionStatus::of_base(base.revision, base.min_app_version.as_deref())
         == RevisionStatus::Current
 }

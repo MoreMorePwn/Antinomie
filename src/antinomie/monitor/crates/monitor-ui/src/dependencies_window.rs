@@ -23,6 +23,9 @@ pub(crate) struct DependenciesWindow {
     report: Option<Report>,
     worker: Option<Worker>,
     error: Option<String>,
+    /// The running check was asked for by another window (Getting started):
+    /// its result must not open this one.
+    quiet: bool,
 }
 
 impl DependenciesWindow {
@@ -33,17 +36,36 @@ impl DependenciesWindow {
             report: None,
             worker: None,
             error: None,
+            quiet: false,
         };
         window.recheck(options);
         window
     }
 
-    fn recheck(&mut self, options: &BackendOptions) {
+    /// The latest completed check, if one has finished.
+    pub(crate) fn report(&self) -> Option<&Report> {
+        self.report.as_ref()
+    }
+
+    pub(crate) fn checking(&self) -> bool {
+        self.worker.is_some()
+    }
+
+    /// Check again for another window; the result does not open this one.
+    pub(crate) fn recheck_quietly(&mut self, options: &BackendOptions) {
+        if self.worker.is_none() {
+            self.recheck(options);
+            self.quiet = true;
+        }
+    }
+
+    pub(crate) fn recheck(&mut self, options: &BackendOptions) {
         if self.worker.is_some() {
             return;
         }
         self.report = None;
         self.error = None;
+        self.quiet = false;
         let options = options.clone();
         let wake = self.wake.clone();
         let (sender, receiver) = mpsc::sync_channel(1);
@@ -70,19 +92,19 @@ impl DependenciesWindow {
         };
         match receiver.try_recv() {
             Ok(report) => {
-                self.open |= report.has_missing();
+                self.open |= report.has_missing() && !self.quiet;
                 self.report = Some(report);
             }
             Err(TryRecvError::Empty) => return,
             Err(TryRecvError::Disconnected) => {
                 self.error = Some("Dependency check stopped; select Check again to retry".into());
-                self.open = true;
+                self.open |= !self.quiet;
             }
         }
         if let Some((_, thread)) = self.worker.take() {
             if thread.join().is_err() {
                 self.error = Some("Dependency check failed; select Check again to retry".into());
-                self.open = true;
+                self.open |= !self.quiet;
             }
         }
     }
@@ -143,11 +165,7 @@ impl DependenciesWindow {
                             ui.separator();
                             ui.horizontal_wrapped(|ui| {
                                 ui.label(egui::RichText::new(check.name).strong().color(theme::heading()));
-                                let (color, state) = match (&check.problem, check.optional) {
-                                    (Some(_), false) => (theme::warn(), "Unavailable"),
-                                    (Some(_), true) => (theme::muted(), "Optional, not installed"),
-                                    (None, _) => (theme::good(), "Ready"),
-                                };
+                                let (color, state) = state_of(check);
                                 ui.colored_label(color, state);
                             });
                             ui.weak(check.purpose);
@@ -165,14 +183,68 @@ impl DependenciesWindow {
                         }
                     });
                 }
+                if let Some(report) = &self.report {
+                    install_section(ui, report);
+                }
                 ui.separator();
                 recheck = ui.add_enabled(self.worker.is_none(), egui::Button::new(egui::RichText::new("Check again").color(theme::palette().primary_text)).fill(theme::primary())).clicked();
-                ui.weak("Package commands are for Debian/Ubuntu. Install with your system's package manager, then check again. Build tools and optional analysis tools are checked in their own dialogs.");
+                ui.weak("Install with your system's package manager, then check again. Build tools and optional analysis tools are checked in their own dialogs.");
             });
         if recheck {
             self.recheck(options);
         }
         recheck
+    }
+}
+
+/// Whether a check passed, and how to say so: required tools are
+/// "Unavailable" when missing, optional ones "Optional, not installed".
+pub(crate) fn state_of(check: &dependencies::Check) -> (egui::Color32, &'static str) {
+    match (&check.problem, check.optional) {
+        (Some(_), false) => (theme::warn(), "Unavailable"),
+        (Some(_), true) => (theme::muted(), "Optional, not installed"),
+        (None, _) => (theme::good(), "Ready"),
+    }
+}
+
+/// One copyable command for everything missing, for this system's package
+/// manager, plus the kvm-group step when `/dev/kvm` needs it.
+pub(crate) fn install_section(ui: &mut egui::Ui, report: &Report) {
+    use dependencies::KvmAdvice;
+    let plan = report.install_plan();
+    ui.separator();
+    theme::section(ui, "Install everything missing");
+    if let Some(command) = &plan.command {
+        match plan.manager {
+            Some(manager) => ui.weak(format!("Detected {} from /etc/os-release.", manager.name())),
+            None => ui.weak("This distribution's package manager is not recognised; install the packages named above, then run the group step."),
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.add(egui::Label::new(egui::RichText::new(command).monospace()).selectable(true));
+        });
+        if ui.button("Copy").clicked() {
+            ui.ctx().copy_text(command.clone());
+        }
+        if plan.kvm_group {
+            ui.weak("Sign out and in again after the group step so that it applies.");
+        }
+    } else {
+        ui.colored_label(theme::good(), "Nothing to install.");
+    }
+    match report.kvm {
+        KvmAdvice::SignInAgain => {
+            ui.colored_label(
+                theme::warn(),
+                "You are in the kvm group; sign out and in again to use KVM.",
+            );
+        }
+        KvmAdvice::NoDevice => {
+            ui.colored_label(theme::warn(), "There is no /dev/kvm: turn on hardware virtualization in the firmware, or choose TCG in VM settings.");
+        }
+        _ => {}
+    }
+    if !plan.unmapped.is_empty() {
+        ui.weak(format!("No package is known for: {:?}", plan.unmapped));
     }
 }
 
@@ -232,6 +304,12 @@ impl DependenciesWindow {
         window
     }
 
+    pub(crate) fn with_report_for_test(report: Report) -> Self {
+        let mut window = Self::ready_for_test();
+        window.report = Some(report);
+        window
+    }
+
     pub(crate) fn ready_for_test() -> Self {
         use Dependency::*;
         Self {
@@ -247,11 +325,13 @@ impl DependenciesWindow {
                         optional: false,
                     })
                     .collect(),
+                ..Report::default()
             }),
             open: false,
             worker: None,
             error: None,
             wake: None,
+            quiet: false,
         }
     }
 }
@@ -351,6 +431,7 @@ mod tests {
                         hint: "sudo apt install qemu-system-gui",
                         optional: false,
                     }],
+                    ..Report::default()
                 })
                 .unwrap();
         });
@@ -360,6 +441,7 @@ mod tests {
             open: false,
             report: None,
             error: None,
+            quiet: false,
         };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
         while window.worker.is_some() {
