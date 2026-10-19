@@ -9,6 +9,7 @@ mod data_view;
 mod dependencies_window;
 mod details_scroll;
 mod evidence;
+mod evidence_delete;
 mod evidence_jobs;
 mod folders;
 mod getting_started;

@@ -3,6 +3,7 @@
 //! VM, and the session that owns one transport client.
 mod completions;
 mod core_sink;
+mod evidence_delete;
 mod guest_resource_control;
 mod launch_failure;
 mod manual_core;

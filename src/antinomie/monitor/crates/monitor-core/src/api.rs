@@ -564,6 +564,23 @@ pub enum RunArtifactState {
     Partial,
     Interrupted,
     Failed,
+    /// The user deleted the evidence after it was recorded.
+    Deleted,
+}
+
+impl RunArtifactState {
+    /// The evidence is still being written or waited for, so it cannot be
+    /// deleted or treated as final.
+    pub fn in_progress(self) -> bool {
+        matches!(
+            self,
+            Self::WaitingForTreeExit
+                | Self::WaitingForRootExit
+                | Self::Recording
+                | Self::Queued
+                | Self::InProgress
+        )
+    }
 }
 
 /// Where a launched program runs. The guest desktop choices need a graphical
@@ -1127,6 +1144,16 @@ impl Default for ExecRequest {
     }
 }
 
+/// Saved evidence the user may delete, named by its place in a recording folder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EvidenceItem {
+    /// A pcap: a run's or a whole boot's.
+    NetworkCapture { file: PathBuf },
+    /// The directory of a manual core, a run's on-exit core or an imported
+    /// core's results.
+    ProcessCore { directory: PathBuf },
+}
+
 #[derive(Clone, Debug)]
 pub enum Command {
     RefreshVmSnapshots {
@@ -1198,6 +1225,14 @@ pub enum Command {
     /// Delete an installed base; blocked while any VM references it.
     DeleteBase {
         identity: String,
+        confirmed: bool,
+    },
+    /// Permanently delete one saved network capture or process core of a VM,
+    /// with its sidecars. Refused for evidence still being written, and for
+    /// anything outside the VM's recording folders.
+    DeleteEvidence {
+        vm_id: String,
+        item: EvidenceItem,
         confirmed: bool,
     },
     Save(VmConfig),

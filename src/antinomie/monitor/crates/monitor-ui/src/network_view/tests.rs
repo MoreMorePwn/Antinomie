@@ -46,6 +46,7 @@ fn disconnected_capture_warning_is_visible_while_inspecting_saved_packets() {
                                 nat: enabled,
                                 running: true,
                                 pending: false,
+                                boot_id: None,
                                 font_size: 16.0,
                             },
                         );
@@ -595,6 +596,7 @@ fn network_frame(
                         nat: true,
                         running: true,
                         pending: false,
+                        boot_id: None,
                         font_size: 16.0,
                     },
                 );
@@ -749,4 +751,149 @@ fn network_toolbar_has_no_colors_button() {
     let (ctx, mut view) = view_with_capture();
     let output = network_frame(&ctx, &mut view, 0.0, vec![]);
     assert!(text_rect(&output, "Colors").is_none());
+}
+
+/// One frame of the panel with its controls; the action it asks for.
+fn delete_frame(
+    ctx: &egui::Context,
+    view: &mut NetworkView,
+    time: f64,
+    events: Vec<egui::Event>,
+    boot_id: Option<&str>,
+) -> (egui::FullOutput, Option<NetworkAction>) {
+    let mut action = None;
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 700.0),
+            )),
+            time: Some(time),
+            events,
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                action = view.show(
+                    ui,
+                    NetworkContext {
+                        active: None,
+                        recordings: None,
+                        recording_roots: &[],
+                        nat: true,
+                        running: true,
+                        pending: false,
+                        boot_id,
+                        font_size: 16.0,
+                    },
+                );
+            });
+        },
+    );
+    (output, action)
+}
+
+/// Right-click the row showing `detail`, then click Delete…. Returns whether
+/// the menu had a Delete… item, and the action the click asked for.
+fn right_click_delete(
+    view: &mut NetworkView,
+    detail: &str,
+    boot_id: Option<&str>,
+) -> (bool, Option<NetworkAction>) {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut time = 0.0;
+    let mut frame = |view: &mut NetworkView, events: Vec<egui::Event>| {
+        time += 0.1;
+        delete_frame(&ctx, view, time, events, boot_id)
+    };
+    let mut output = egui::FullOutput::default();
+    for _ in 0..3 {
+        output = frame(view, vec![]).0;
+    }
+    let point = text_rect(&output, detail).expect("capture row").center();
+    let button = |pressed, button| egui::Event::PointerButton {
+        pos: point,
+        button,
+        pressed,
+        modifiers: Default::default(),
+    };
+    frame(view, vec![egui::Event::PointerMoved(point)]);
+    frame(view, vec![button(true, egui::PointerButton::Secondary)]);
+    frame(view, vec![button(false, egui::PointerButton::Secondary)]);
+    for _ in 0..2 {
+        output = frame(view, vec![]).0;
+    }
+    let Some(item) = text_rect(&output, "Delete…") else {
+        return (false, None);
+    };
+    let point = item.center();
+    let click = |pressed| egui::Event::PointerButton {
+        pos: point,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    let mut asked = None;
+    for events in [
+        vec![egui::Event::PointerMoved(point)],
+        vec![click(true)],
+        vec![click(false)],
+        vec![],
+    ] {
+        asked = frame(view, events).1.or(asked);
+    }
+    (true, asked)
+}
+
+#[test]
+fn a_saved_capture_has_a_delete_item_that_asks_to_delete_it() {
+    let dir = std::env::temp_dir().join(format!("ant-net-delete-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("cap-1.pcap");
+    std::fs::write(&file, vec![0u8; 4096]).unwrap();
+    let (_, mut view) = view_with_capture();
+    view.captures[0].file = file.clone();
+    view.record_shown.insert(file.clone());
+    let (present, asked) = right_click_delete(&mut view, "1234 packets", Some("other-boot"));
+    assert!(present, "the menu has Delete…");
+    let Some(NetworkAction::Delete(deletion)) = asked else {
+        panic!("Delete… asks the app to delete, got {asked:?}");
+    };
+    assert_eq!(
+        deletion.item,
+        antinomie_monitor_core::EvidenceItem::NetworkCapture { file: file.clone() }
+    );
+    assert_eq!(deletion.size, "4096 bytes (4.0 KB)");
+    // Asking does not delete: the app confirms first.
+    assert!(file.exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_capture_still_being_written_cannot_be_deleted() {
+    let (_, mut view) = view_with_capture();
+    view.captures[0].stopped_ms = None;
+    view.record_shown.insert(view.captures[0].file.clone());
+    let (present, asked) = right_click_delete(&mut view, "not stopped", Some("boot-9"));
+    assert!(present, "the item is shown, disabled");
+    assert_eq!(asked, None, "a disabled item asks for nothing");
+    // The same capture from an earlier boot (the app ended first) can go.
+    let (present, asked) = right_click_delete(&mut view, "not stopped", Some("newer-boot"));
+    assert!(present);
+    assert!(matches!(asked, Some(NetworkAction::Delete(_))));
+}
+
+#[test]
+fn a_deleted_capture_leaves_the_list_and_clears_its_selection() {
+    let (ctx, mut view) = view_with_capture();
+    let file = view.captures[0].file.clone();
+    view.record_shown.insert(file.clone());
+    view.open(Some(file.clone()));
+    view.capture_details = Some((view.captures[0].clone(), false));
+    view.forget_capture(&file);
+    assert!(view.captures.is_empty());
+    assert!(view.list.path.is_none() && view.capture_details.is_none());
+    let (output, _) = delete_frame(&ctx, &mut view, 0.0, vec![], None);
+    assert!(text_rect(&output, "1234 packets").is_none());
 }

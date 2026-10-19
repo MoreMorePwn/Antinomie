@@ -35,10 +35,12 @@ const READ_BATCH: usize = 5_000;
 const QUICK_ENTRIES: usize = 100;
 
 /// What the panel asks the app to do.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum NetworkAction {
     Start,
     Stop,
+    /// Delete a saved capture, once the user confirms.
+    Delete(crate::evidence_delete::Deletion),
 }
 
 /// The selected VM, as the panel needs it.
@@ -52,6 +54,8 @@ pub(crate) struct NetworkContext<'a> {
     pub nat: bool,
     /// The VM is the one running.
     pub running: bool,
+    /// The running boot: a capture of it that has not stopped is still written.
+    pub boot_id: Option<&'a str>,
     /// A start or stop request is still being answered.
     pub pending: bool,
     pub font_size: f32,
@@ -292,6 +296,23 @@ impl NetworkView {
         self.reset_display_capture();
         self.jump_to_frame(frame_number)
     }
+    /// A deleted capture leaves the list, the packet view and Details.
+    pub(crate) fn forget_capture(&mut self, file: &Path) {
+        self.captures.retain(|capture| capture.file != file);
+        self.record_shown.remove(file);
+        if self
+            .capture_details
+            .as_ref()
+            .is_some_and(|(capture, _)| capture.file == file)
+        {
+            self.capture_details = None;
+        }
+        if self.list.path.as_deref() == Some(file) {
+            self.list = PacketList::new(None);
+            self.reset_display_capture();
+        }
+    }
+
     pub(crate) fn open(&mut self, path: Option<PathBuf>) {
         if self.list.path != path {
             self.list = PacketList::new(path);

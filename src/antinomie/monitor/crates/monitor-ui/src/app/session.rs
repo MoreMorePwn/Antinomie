@@ -317,6 +317,11 @@ impl MonitorApp {
                     if self.consume_stale_command_id(id) {
                         continue;
                     }
+                    if let Some(deleted) = self.take_pending_deletion(id) {
+                        if success {
+                            self.evidence_deleted(&deleted);
+                        }
+                    }
                     let launch_still_pending = success && self.pending_launch == Some(id);
                     if !launch_still_pending {
                         self.pending_sessions.remove(&id);

@@ -6,6 +6,23 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **Right-click Delete for core dumps and network captures.** Host-only.
+  The Core dumps panel (manual cores, on-exit process cores and imported core
+  results) and the Network window (per-run and whole-boot captures) have a
+  **Delete…** item in the row's right-click menu. A confirmation names the item
+  and its size and says it can't be undone. The backend does the deletion
+  (`DeleteEvidence`), off the UI thread, only inside the VM's recording
+  folders: paths are canonicalized, `..` and symbolic links are refused, and
+  only the places the recorder writes these items are accepted. A capture goes
+  with its summary, `.metadata` annotation folder and any derived `<capture>.*`
+  file; an imported core loses only its results, never the original file. The
+  live capture and a capture or core still being written are disabled with a
+  tooltip (and refused by the backend). The boot's recording quota gets the
+  freed bytes back. Runs that listed the capture or core now read it as
+  deleted (Run History and Triage counts refresh, Detection says "Evidence
+  missing" instead of failing), a selected deleted item is deselected and
+  Details cleared, and each deletion is an Activity log entry.
+
 - **Triage > File activity is split by what the program did to a file.** The
   tabs are Opened, Created, Read, Written / resized, Deleted, Renamed / moved,
   Executed, Attributes (chmod and chown, timestamps, extended attributes),

@@ -51,6 +51,21 @@ pub(super) fn outcome_counts(inputs: &[ScannedInput]) -> String {
     .join(", ")
 }
 
+/// Shown on a row whose capture or core is no longer on disk.
+pub(super) const MISSING_NOTE: &str = "This capture or core was deleted or is no longer on disk. The result was computed before it went; this is not a clean result.";
+
+/// A saved result names a capture or core that has since been deleted.
+pub(super) fn evidence_missing(input: &ScannedInput) -> bool {
+    match input.kind {
+        // A run without captures lists a placeholder with no file at all.
+        InputKind::Capture => {
+            input.path.extension().is_some() && std::fs::symlink_metadata(&input.path).is_err()
+        }
+        InputKind::CoreDump => std::fs::symlink_metadata(&input.path).is_err(),
+        _ => false,
+    }
+}
+
 /// Where a click on the row goes.
 #[derive(Debug, PartialEq)]
 pub(super) enum Route {
@@ -114,7 +129,9 @@ struct ScanState {
 /// log; the engine scans every one of its inputs together, so Scan runs the
 /// whole engine again.
 fn row(ui: &mut egui::Ui, input: &ScannedInput, engine: &str, scan: ScanState) -> RowAction {
-    let target = target(input);
+    let missing = evidence_missing(input);
+    // A deleted capture or core has nothing left to open.
+    let target = target(input).filter(|_| !missing);
     let mut action = RowAction::default();
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(symbol(input.kind)).color(theme::blue()));
@@ -153,6 +170,10 @@ fn row(ui: &mut egui::Ui, input: &ScannedInput, engine: &str, scan: ScanState) -
         }
         let (text, color) = outcome(input.outcome);
         ui.label(RichText::new(text).color(color));
+        if missing {
+            ui.label(RichText::new("Evidence missing").color(theme::warn()))
+                .on_hover_text(MISSING_NOTE);
+        }
         if input.outcome == InputOutcome::Skipped && !input.reason.is_empty() {
             ui.label(RichText::new(&input.reason).small().color(theme::muted()));
         }
@@ -623,5 +644,30 @@ mod tests {
         );
         assert!(text.contains("no packets captured"), "{text}");
         assert!(!text.to_lowercase().contains("partial"), "{text}");
+    }
+
+    #[test]
+    fn a_deleted_capture_or_core_reads_as_missing_evidence_and_does_not_open() {
+        let dir = std::env::temp_dir().join(format!("ant-missing-input-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let kept = dir.join("kept.pcap");
+        std::fs::write(&kept, b"pcap").unwrap();
+        let gone = dir.join("gone.pcap");
+        let core = dir.join("core/process.elf");
+        let rows = vec![
+            ScannedInput::new(InputKind::Capture, &kept),
+            ScannedInput::new(InputKind::Capture, &gone),
+            ScannedInput::new(InputKind::CoreDump, &core),
+            // The placeholder of a run without captures has no file at all.
+            ScannedInput::new(InputKind::Capture, dir.join("network")),
+        ];
+        let missing: Vec<_> = rows.iter().map(evidence_missing).collect();
+        assert_eq!(missing, [false, true, true, false]);
+        let ctx = egui::Context::default();
+        let mut view = view(Some(rows));
+        view.inputs_open[0] = true;
+        let text = shown(&mut view, &ctx);
+        assert_eq!(text.matches("Evidence missing").count(), 2, "{text}");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -9,6 +9,7 @@ mod capture;
 mod captures;
 mod clipboard;
 mod dialogs;
+mod evidence_delete;
 mod explorer;
 mod file_drop;
 mod getting_started;
@@ -168,6 +169,8 @@ enum Confirm {
     Reset(String),
     Delete(String),
     DeleteBase(String),
+    /// A saved network capture or core, by name and size.
+    DeleteEvidence(crate::evidence_delete::Deletion),
     Upload(upload::Intent),
     Clipboard {
         intent: clipboard::Intent,
@@ -335,6 +338,8 @@ pub struct MonitorApp {
     pending_core: Option<u64>,
     /// A network capture start or stop request in flight.
     pending_network: Option<u64>,
+    /// Evidence deletions in flight, by request, until the backend answers.
+    pending_deletions: Vec<(u64, crate::evidence_delete::Deletion)>,
     selected_analysis: Option<String>,
     analysis_windows: BTreeMap<String, antinomie_monitor_core::AnalysisReport>,
     analysis_directories: BTreeMap<String, PathBuf>,
@@ -509,6 +514,7 @@ impl MonitorApp {
             pending_observer: None,
             pending_core: None,
             pending_network: None,
+            pending_deletions: Vec::new(),
             selected_analysis: None,
             analysis_windows: BTreeMap::new(),
             analysis_directories: BTreeMap::new(),

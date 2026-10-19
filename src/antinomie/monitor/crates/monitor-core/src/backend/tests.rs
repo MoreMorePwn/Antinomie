@@ -1772,3 +1772,68 @@ fn stopping_ends_a_pending_reconnection_of_the_boot() {
     );
     let _ = std::fs::remove_dir_all(root);
 }
+
+fn command_answer(backend: &Backend, id: u64) -> (bool, String) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(Notification::CommandResult {
+            id: answered,
+            success,
+            message,
+        }) = backend.try_recv()
+            && answered == id
+        {
+            return (success, message);
+        }
+        assert!(Instant::now() < deadline, "no answer to the command");
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn delete_evidence_runs_in_the_backend_inside_the_vms_recording_folder() {
+    let root = std::env::temp_dir().join(format!("ant-delete-evidence-{}", storage::unique_id()));
+    let recordings = root.join("vm-a");
+    let network = recordings.join("boots/b1/network");
+    fs::create_dir_all(&network).unwrap();
+    fs::write(network.join("c1.pcap"), vec![7u8; 512]).unwrap();
+    fs::write(network.join("c1.json"), b"{}").unwrap();
+    let vm = VmConfig {
+        id: "vm-a".into(),
+        ..VmConfig::default()
+    };
+    storage::atomic_json(&recordings.join("config.json"), &vm).unwrap();
+    let outside = root.join("victim.pcap");
+    fs::write(&outside, b"keep").unwrap();
+    let mut backend = Backend::new(BackendOptions {
+        data_dir: root.clone(),
+        bundle_dir: root.join("missing"),
+        ..BackendOptions::default()
+    })
+    .unwrap();
+    let item = |file: PathBuf| crate::EvidenceItem::NetworkCapture { file };
+    let send = |file: PathBuf, confirmed: bool| {
+        backend
+            .send(Command::DeleteEvidence {
+                vm_id: "vm-a".into(),
+                item: item(file),
+                confirmed,
+            })
+            .unwrap()
+    };
+    let id = send(network.join("c1.pcap"), false);
+    let (success, message) = command_answer(&backend, id);
+    assert!(!success && message.contains("confirmation"), "{message}");
+    assert!(network.join("c1.pcap").exists());
+    let id = send(outside.clone(), true);
+    let (success, message) = command_answer(&backend, id);
+    assert!(!success && message.contains("outside"), "{message}");
+    assert!(outside.exists());
+    let id = send(network.join("c1.pcap"), true);
+    let (success, message) = command_answer(&backend, id);
+    assert!(success, "{message}");
+    assert!(message.contains("Deleted network capture c1"), "{message}");
+    assert!(!network.join("c1.pcap").exists() && !network.join("c1.json").exists());
+    backend.shutdown().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
