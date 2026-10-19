@@ -281,6 +281,46 @@ fn an_index_built_before_kernel_notes_is_rebuilt_and_an_old_recording_still_load
 }
 
 #[test]
+fn an_index_appended_by_an_older_build_is_rebuilt_not_resumed() {
+    let directory = directory();
+    let mut raw = File::create(directory.join("telemetry.raw")).unwrap();
+    write(&mut raw, event_packet(1, 1, 1, 1));
+    write(&mut raw, event_packet(1, 1, 5, 2));
+    for packet in observation(1, 10, b"lifecycle.creds", &[]) {
+        write(&mut raw, packet);
+    }
+    write(&mut raw, event_packet(1, 2, 5, 2));
+    raw.sync_all().unwrap();
+    let recording = open_recording(&directory).unwrap();
+    assert_eq!(
+        recording.invocation_page(0, 10).unwrap().invocations[0]
+            .kernel_notes
+            .len(),
+        1
+    );
+    // What 0.6.2 leaves behind after appending: the same layout number, rows of
+    // the old kind, and the cursor row rewritten without the writer stamp.
+    let index = archive_index_path(&directory).unwrap();
+    let connection = rusqlite::Connection::open(&index).unwrap();
+    connection
+        .execute_batch(
+            "UPDATE lifecycle SET task_exit = 0; \
+             UPDATE indexed SET writer = NULL;",
+        )
+        .unwrap();
+    drop(connection);
+    let page = recording.invocation_page(0, 10).unwrap();
+    assert_eq!(page.invocations[0].kernel_notes.len(), 1, "index rebuilt");
+    // The rebuilt index is stamped, so the next open resumes it.
+    let connection = rusqlite::Connection::open(&index).unwrap();
+    let writer: Option<i64> = connection
+        .query_row("SELECT writer FROM indexed", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(writer, Some(INDEX_VERSION));
+    cleanup(&directory);
+}
+
+#[test]
 fn matching_pages_and_filters_agree_with_ordinary_pages() {
     let (directory, recording) = dense_recording(700);
     let cancel = AtomicBool::new(false);

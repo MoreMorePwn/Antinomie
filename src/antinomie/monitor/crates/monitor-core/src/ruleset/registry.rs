@@ -2,9 +2,51 @@
 //! The registry of installed packs and groups, and rule toggles.
 use super::*;
 
-pub(super) fn registry_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock().unwrap_or_else(|error| error.into_inner())
+/// The lock that serialises changes to the rules registry of one data
+/// directory. It is keyed by the directory, so unrelated data directories (other
+/// app instances, tests) never wait for each other's pack installs.
+pub(super) fn registry_lock(data_dir: &Path) -> std::sync::MutexGuard<'static, ()> {
+    use std::{
+        collections::HashMap,
+        sync::{Mutex, OnceLock},
+    };
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, &'static Mutex<()>>>> = OnceLock::new();
+    let key = lock_key(&rules_root(data_dir));
+    let lock: &'static Mutex<()> = {
+        let mut locks = LOCKS
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        // One small mutex per data directory ever used, kept for the process.
+        locks
+            .entry(key)
+            .or_insert_with(|| Box::leak(Box::new(Mutex::new(()))))
+    };
+    lock.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+/// The rules root as one stable key: its longest existing ancestor
+/// canonicalised (symbolic links resolved) plus the rest, so a path spelled
+/// two ways, or not created yet, still maps to one lock.
+pub(super) fn lock_key(root: &Path) -> PathBuf {
+    let absolute = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
+    let mut rest = Vec::new();
+    let mut existing = absolute.as_path();
+    loop {
+        if let Ok(canonical) = fs::canonicalize(existing) {
+            return rest
+                .iter()
+                .rev()
+                .fold(canonical, |path, part| path.join(part));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_owned());
+                existing = parent;
+            }
+            _ => return absolute,
+        }
+    }
 }
 
 pub fn load_registry(data_dir: &Path) -> Result<Registry, String> {
@@ -61,7 +103,7 @@ pub fn profile_label_of(registry: &Registry) -> String {
 }
 
 pub fn set_pack_enabled(data_dir: &Path, id: &str, enabled: bool) -> Result<(), String> {
-    let _lock = registry_lock();
+    let _lock = registry_lock(data_dir);
     let mut registry = load_registry(data_dir)?;
     let pack = registry
         .packs
@@ -73,7 +115,7 @@ pub fn set_pack_enabled(data_dir: &Path, id: &str, enabled: bool) -> Result<(), 
 }
 
 pub fn set_group_enabled(data_dir: &Path, id: &str, enabled: bool) -> Result<(), String> {
-    let _lock = registry_lock();
+    let _lock = registry_lock(data_dir);
     let mut registry = load_registry(data_dir)?;
     let group = registry
         .groups
@@ -90,7 +132,7 @@ pub fn set_rule_enabled(
     rule_id: &str,
     enabled: bool,
 ) -> Result<(), String> {
-    let _lock = registry_lock();
+    let _lock = registry_lock(data_dir);
     let mut registry = load_registry(data_dir)?;
     let slot = registry.disabled.entry(key.to_owned()).or_default();
     if enabled {

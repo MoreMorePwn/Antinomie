@@ -264,6 +264,12 @@ pub(crate) struct VmProcess {
 /// The QEMU command. Through util-linux `setpriv`, when installed, QEMU gets
 /// SIGKILL if the app dies, instead of running on with the VM's disk locked
 /// (the next Start would then fail on that lock).
+/// The `-name` value: an explicit `guest=` so a name holding `=` is not read
+/// as a sub-option, and commas doubled like every QEMU option value.
+fn name_option(name: &str) -> String {
+    format!("guest={}", crate::stealth::escape(name))
+}
+
 fn qemu_command(qemu: &Path) -> Command {
     match crate::dependencies::executable(Path::new("setpriv")) {
         Some(setpriv) => {
@@ -460,7 +466,7 @@ impl VmProcess {
         let stderr = File::create(runtime_dir.join("qemu.log")).map_err(|e| e.to_string())?;
         let mut cmd = qemu_command(&options.qemu);
         cmd.arg("-name")
-            .arg(&vm.name)
+            .arg(name_option(&vm.name))
             .arg("-machine")
             .arg(format!(
                 "q35,memory-backend=shared,max-ram-below-4g=4G{}",
@@ -1155,6 +1161,13 @@ mod tests {
             .get_args()
             .map(|arg| arg.to_str().unwrap().to_owned())
             .collect())
+    }
+
+    #[test]
+    fn a_vm_name_cannot_inject_qemu_sub_options() {
+        assert_eq!(name_option("Lab"), "guest=Lab");
+        assert_eq!(name_option("Lab,process=x"), "guest=Lab,,process=x");
+        assert_eq!(name_option("Test=1"), "guest=Test=1");
     }
 
     fn value<'a>(args: &'a [String], key: &str) -> Option<&'a str> {

@@ -69,6 +69,23 @@ fn a_late_reply_marks_stale_without_resending_and_then_recovers() {
 }
 
 #[test]
+fn a_request_that_never_gets_a_reply_is_abandoned_and_polling_resumes() {
+    let now = Instant::now();
+    let mut producer = KernelResources::default();
+    ask(&mut producer, 1, now);
+    assert!(producer.command(now + Duration::from_secs(59)).is_none());
+    // Past the deadline the id is dropped and a new request is offered.
+    assert!(producer.command(now + Duration::from_secs(61)).is_some());
+    let value = producer.sample("boot", false);
+    assert!(value.error.as_deref().unwrap().contains("never arrived"));
+    // The abandoned id is no longer owned, so a very late reply is ignored.
+    assert!(!producer.reply(1, 0, &reply(1, 0, 3), "boot", now + Duration::from_secs(62)));
+    ask(&mut producer, 2, now + Duration::from_secs(62));
+    assert!(producer.reply(2, 0, &reply(1, 0, 3), "boot", now + Duration::from_secs(63)));
+    assert!(producer.sample("boot", false).error.is_none());
+}
+
+#[test]
 fn first_poll_without_a_sample_retries_quickly_and_is_unavailable() {
     let now = Instant::now();
     let mut producer = KernelResources::default();

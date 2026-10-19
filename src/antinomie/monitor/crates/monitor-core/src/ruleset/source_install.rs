@@ -177,7 +177,7 @@ pub fn install_source(
         .join(&pack.id)
         .join(&version);
     if version_dir.join("manifest.json").is_file() {
-        let _lock = registry_lock();
+        let _lock = registry_lock(data_dir);
         let stored = retained_entry(data_dir, &pack.engine, &pack.id, &version)?;
         let provenance = retained_source(&version_dir)?;
         switch_version(data_dir, &stored, provenance.as_ref())?;
@@ -195,7 +195,7 @@ pub fn install_source(
     );
     let outcome = match result {
         Ok(built) => {
-            let _lock = registry_lock();
+            let _lock = registry_lock(data_dir);
             finish_install(data_dir, &version_dir, &staging, built)
         }
         Err(error) => Err(error),

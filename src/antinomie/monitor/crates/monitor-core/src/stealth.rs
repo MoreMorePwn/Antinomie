@@ -666,7 +666,7 @@ impl StealthProfile {
 }
 
 /// QEMU option values double their commas.
-fn escape(text: &str) -> String {
+pub(crate) fn escape(text: &str) -> String {
     text.replace(',', ",,")
 }
 

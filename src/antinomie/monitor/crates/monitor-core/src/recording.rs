@@ -424,7 +424,9 @@ fn archive_index_path(directory: &Path) -> Result<PathBuf, RecordingError> {
 
 /// Layout of the cached packet index. 2: a lifecycle row's `task_exit` column
 /// is a kind (see `async_page::LifecycleKind`), so credential and hash records
-/// can be read back with their call; an index built before is rebuilt.
+/// can be read back with their call; an index built before is rebuilt. Every
+/// cursor row carries this number (`indexed.writer`): an older build that
+/// appends to the index rewrites the row without it, which forces a rebuild.
 const INDEX_VERSION: i64 = 2;
 
 fn open_archive_index(
@@ -439,31 +441,51 @@ fn open_archive_index(
     // The index is a cache rebuilt from the recording when it is missing or
     // stale, so its writes are not synced to disk: building it must not wait
     // for the disk behind a recording that is being saved.
-    connection.execute_batch("PRAGMA trusted_schema=OFF; PRAGMA page_size=4096; PRAGMA cache_size=-2048; PRAGMA temp_store=FILE; PRAGMA synchronous=OFF; CREATE TABLE IF NOT EXISTS indexed(identity TEXT NOT NULL, length INTEGER NOT NULL);")?;
+    connection.execute_batch("PRAGMA trusted_schema=OFF; PRAGMA page_size=4096; PRAGMA cache_size=-2048; PRAGMA temp_store=FILE; PRAGMA synchronous=OFF; CREATE TABLE IF NOT EXISTS indexed(identity TEXT NOT NULL, length INTEGER NOT NULL, writer INTEGER);")?;
     // Own the writer reservation before reading the resume cursor. A builder
     // that waited for another builder must not append the same packets again.
     let transaction =
         connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    // An index written before the `writer` stamp existed has no such column.
+    let stamped: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('indexed') WHERE name='writer'",
+        [],
+        |row| row.get(0),
+    )?;
+    if stamped == 0 {
+        transaction.execute_batch("ALTER TABLE indexed ADD COLUMN writer INTEGER")?;
+    }
     let (identity, length) = raw_identity(&raw)?;
+    // Four times the archive: a pathological archive of tiny packets indexes
+    // to more than twice its size, and hitting the cap would rebuild the
+    // index on every open.
     let budget = length
-        .checked_mul(2)
+        .checked_mul(4)
         .and_then(|size| size.checked_add(1024 * 1024))
         .ok_or(RecordingError::Limit("archive index budget overflow"))?
         .min(16 * 1024 * 1024 * 1024);
     transaction.pragma_update(None, "max_page_count", (budget / 4096) as i64)?;
-    let cached: Option<(String, i64)> = transaction
-        .query_row("SELECT identity,length FROM indexed LIMIT 1", [], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })
+    let cached: Option<(String, i64, Option<i64>)> = transaction
+        .query_row(
+            "SELECT identity,length,writer FROM indexed LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
         .optional()?;
     // Go on from where the index stopped, unless the archive is another file
     // (or, impossibly for an append-only archive, shorter).
     let version: i64 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     let resume = cached
-        .filter(|(cached, indexed)| {
-            *cached == identity && *indexed as u64 <= length && version == INDEX_VERSION
+        .filter(|(cached, indexed, writer)| {
+            // An older build resumes any index without looking at its layout
+            // and appends rows of its own kind; it also rewrites the cursor
+            // row without the writer stamp, so such an index is rebuilt.
+            *cached == identity
+                && *indexed as u64 <= length
+                && version == INDEX_VERSION
+                && *writer == Some(INDEX_VERSION)
         })
-        .map(|(_, indexed)| indexed as u64);
+        .map(|(_, indexed, _)| indexed as u64);
     if resume != Some(length) {
         if resume.is_none() {
             // Rebuilt from scratch: an index from an older version has another schema.
@@ -545,8 +567,8 @@ fn open_archive_index(
             .map_err(|_| RecordingError::Limit("raw archive offset exceeds index range"))?;
         transaction.execute("DELETE FROM indexed", [])?;
         transaction.execute(
-            "INSERT INTO indexed(identity,length) VALUES(?1,?2)",
-            rusqlite::params![identity, indexed],
+            "INSERT INTO indexed(identity,length,writer) VALUES(?1,?2,?3)",
+            rusqlite::params![identity, indexed, INDEX_VERSION],
         )?;
     }
     transaction.commit()?;

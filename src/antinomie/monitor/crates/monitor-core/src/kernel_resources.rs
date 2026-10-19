@@ -24,6 +24,8 @@ const INTERVAL: Duration = Duration::from_secs(1);
 const WARMUP_INTERVAL: Duration = Duration::from_millis(200);
 const RETRY_INTERVAL: Duration = Duration::from_secs(2);
 const DEADLINE: Duration = Duration::from_secs(4);
+/// A request with no reply after this long is abandoned and polling resumes.
+const ABANDON: Duration = Duration::from_secs(60);
 const STALE: Duration = Duration::from_secs(6);
 const BLOCKED: u64 = 4000;
 const MEMORY_VALID: u32 = 1;
@@ -52,10 +54,24 @@ impl KernelResources {
     /// Return at most one new request; the caller assigns its transport id.
     pub(crate) fn command(&mut self, now: Instant) -> Option<(u32, Vec<u8>)> {
         if let Some(pending) = &self.pending {
-            if now.duration_since(pending.submitted) > DEADLINE && self.error.is_none() {
-                self.error = Some("guest resource reply is late; waiting without resending".into());
+            let waited = now.duration_since(pending.submitted);
+            if waited > ABANDON {
+                // The reply is not coming (a wedged guest worker, a reply
+                // dropped on a full ring). Forget the id so polling resumes;
+                // a reply that still arrives for it is ignored by the id check.
+                self.pending = None;
+                self.discard_pending = false;
+                self.error = Some(format!(
+                    "guest resource reply never arrived after {} s; polling again",
+                    ABANDON.as_secs()
+                ));
+            } else {
+                if waited > DEADLINE && self.error.is_none() {
+                    self.error =
+                        Some("guest resource reply is late; waiting without resending".into());
+                }
+                return None;
             }
-            return None;
         }
         if self.unsupported || self.next.is_some_and(|next| now < next) {
             return None;

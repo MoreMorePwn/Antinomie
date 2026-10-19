@@ -171,6 +171,7 @@ fn closing_owner_returns_a_result_for_each_accepted_queued_command() {
         disk_job: None,
         host_analysis: Default::default(),
         debug: DebugService::new().0,
+        evidence: Default::default(),
     };
     worker.run();
     drop(command_sender);
@@ -320,6 +321,7 @@ fn full_completion_lane_surfaces_terminal_failure_for_an_accepted_command() {
         disk_job: None,
         host_analysis: Default::default(),
         debug: DebugService::new().0,
+        evidence: Default::default(),
     };
     completion_sender
         .try_send(Notification::CommandResult {
@@ -757,6 +759,7 @@ pub(super) fn download_worker(root: PathBuf) -> Worker {
         disk_job: None,
         host_analysis: Default::default(),
         debug: DebugService::new().0,
+        evidence: Default::default(),
         wake: None,
     }
 }
@@ -1067,6 +1070,7 @@ fn invalid_launch_settings_are_rejected_before_lifecycle_io() {
         disk_job: None,
         host_analysis: Default::default(),
         debug: DebugService::new().0,
+        evidence: Default::default(),
         wake: None,
     };
     for command in [
@@ -1160,6 +1164,7 @@ fn fixed_display_guards_selected_boot_without_changing_pinned_disk() {
         disk_job: None,
         host_analysis: Default::default(),
         debug: DebugService::new().0,
+        evidence: Default::default(),
         wake: None,
     };
     worker
@@ -1264,6 +1269,7 @@ fn base_import_and_failed_credential_creation_preserve_published_state() {
         disk_job: None,
         host_analysis: Default::default(),
         debug: DebugService::new().0,
+        evidence: Default::default(),
         wake: None,
     };
     for guest in [false, true] {
@@ -1419,6 +1425,7 @@ fn running_vm_duplicate_and_delete_guards_preserve_data() {
         disk_job: None,
         host_analysis: Default::default(),
         debug: DebugService::new().0,
+        evidence: Default::default(),
         wake: None,
     };
     assert!(
@@ -1853,11 +1860,38 @@ fn delete_evidence_runs_in_the_backend_inside_the_vms_recording_folder() {
     let (success, message) = command_answer(&backend, id);
     assert!(!success && message.contains("outside"), "{message}");
     assert!(outside.exists());
+    // A run record that names the capture is rewritten by the deletion. The
+    // disk waits for it (unlink, fsync) happen on the deletion thread, never
+    // on the thread that drains telemetry and answers commands.
+    let run = recordings.join("runs/r1");
+    fs::create_dir_all(&run).unwrap();
+    storage::atomic_json(
+        &run.join("artifacts.json"),
+        &RunArtifacts {
+            boot_id: "b1".into(),
+            network_captures: vec![network.join("c1.pcap")],
+            network_state: RunArtifactState::Complete,
+            ..RunArtifacts::default()
+        },
+    )
+    .unwrap();
+    let sync_writes = storage::transport_sync_writes();
     let id = send(network.join("c1.pcap"), true);
+    // A second deletion queued behind it answers in order, with its own result.
+    let again = send(network.join("c1.pcap"), true);
     let (success, message) = command_answer(&backend, id);
     assert!(success, "{message}");
     assert!(message.contains("Deleted network capture c1"), "{message}");
+    let (success, message) = command_answer(&backend, again);
+    assert!(!success, "{message}");
     assert!(!network.join("c1.pcap").exists() && !network.join("c1.json").exists());
+    let artifacts = RunArtifacts::load(&run).unwrap().unwrap();
+    assert!(artifacts.network_captures.is_empty() && artifacts.network_deleted);
+    assert_eq!(
+        storage::transport_sync_writes(),
+        sync_writes,
+        "DeleteEvidence did not fsync on the transport thread"
+    );
     backend.shutdown().unwrap();
     fs::remove_dir_all(root).unwrap();
 }

@@ -5,7 +5,7 @@ use super::*;
 /// Verify `bytes` against the catalog entry and install that version.
 /// A failed install leaves any previous version selected.
 pub fn install_archive(data_dir: &Path, entry: &PackEntry, bytes: &[u8]) -> Result<(), String> {
-    let _lock = registry_lock();
+    let _lock = registry_lock(data_dir);
     if bytes.len() as u64 != entry.size {
         return Err(format!(
             "download size {} does not match catalog size {}",
@@ -148,7 +148,7 @@ pub(super) fn switch_version(
 }
 
 pub fn rollback(data_dir: &Path, id: &str, version: &str) -> Result<(), String> {
-    let _lock = registry_lock();
+    let _lock = registry_lock(data_dir);
     path_component(version, "version")?;
     let registry = load_registry(data_dir)?;
     let engine = registry
@@ -299,7 +299,7 @@ pub struct PackDiff {
 /// Scans that already ran keep their own record of what they used; the pack's
 /// toggles go with it. A pack that is not installed is an error.
 pub fn remove_pack(data_dir: &Path, id: &str) -> Result<(), String> {
-    let _lock = registry_lock();
+    let _lock = registry_lock(data_dir);
     path_component(id, "id")?;
     let mut registry = load_registry(data_dir)?;
     let at = registry

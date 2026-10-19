@@ -188,6 +188,7 @@ impl Backend {
                     disk_job: None,
                     host_analysis: crate::analysis::jobs::Jobs::with_tools(host_tools_dir),
                     debug: debug_service,
+                    evidence: Default::default(),
                     wake,
                 }
                 .run();
@@ -737,6 +738,8 @@ struct Worker {
     host_analysis: crate::analysis::jobs::Jobs,
     /// The guest debugger and the server thread's request queue.
     debug: DebugService,
+    /// Evidence deletions, off this thread (see `evidence_delete`).
+    evidence: evidence_delete::EvidenceDeleter,
 }
 
 /// Attempts at reconnecting a guest that stopped answering, before the VM is

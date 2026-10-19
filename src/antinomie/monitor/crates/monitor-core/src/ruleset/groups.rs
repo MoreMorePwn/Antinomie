@@ -3,7 +3,7 @@
 use super::*;
 
 pub fn rename_group(data_dir: &Path, id: &str, name: &str) -> Result<(), String> {
-    let _lock = registry_lock();
+    let _lock = registry_lock(data_dir);
     let name = name.trim();
     if name.is_empty() || name.len() > 80 {
         return Err("group name must be 1–80 characters".into());
@@ -26,7 +26,7 @@ pub fn import_group(
     engine: &str,
     source: &Path,
 ) -> Result<String, String> {
-    let _lock = registry_lock();
+    let _lock = registry_lock(data_dir);
     if !ENGINES.contains(&engine) {
         return Err(format!("unknown rules engine {engine}"));
     }
@@ -90,7 +90,7 @@ pub fn import_group(
 /// Replace the rules of an existing group with a new managed revision.
 /// The previous revision directory stays on disk.
 pub fn replace_group_revision(data_dir: &Path, id: &str, source: &Path) -> Result<u64, String> {
-    let _lock = registry_lock();
+    let _lock = registry_lock(data_dir);
     let mut registry = load_registry(data_dir)?;
     let group = registry
         .groups
@@ -136,7 +136,7 @@ pub fn revise_group(
     add: Option<&Path>,
     remove_ids: &[String],
 ) -> Result<u64, String> {
-    let _lock = registry_lock();
+    let _lock = registry_lock(data_dir);
     let mut registry = load_registry(data_dir)?;
     let group = registry
         .groups
@@ -261,7 +261,7 @@ fn remove_rules(root: &Path, engine: &str, ids: &[String]) -> Result<(), String>
 }
 
 pub fn delete_group(data_dir: &Path, id: &str, remove_files: bool) -> Result<(), String> {
-    let _lock = registry_lock();
+    let _lock = registry_lock(data_dir);
     let mut registry = load_registry(data_dir)?;
     let group = registry
         .groups
@@ -281,7 +281,7 @@ pub fn delete_group(data_dir: &Path, id: &str, remove_files: bool) -> Result<(),
 }
 
 pub fn set_group_tags(data_dir: &Path, id: &str, tags: Vec<String>) -> Result<(), String> {
-    let _lock = registry_lock();
+    let _lock = registry_lock(data_dir);
     let mut registry = load_registry(data_dir)?;
     let group = registry
         .groups

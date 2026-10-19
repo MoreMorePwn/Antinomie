@@ -501,15 +501,10 @@ impl Worker {
                 self.refresh_locations()?;
                 Ok("base deleted".into())
             }
-            Command::DeleteEvidence {
-                vm_id,
-                item,
-                confirmed,
-            } => {
-                if !confirmed {
-                    return Err("deleting evidence requires confirmation".into());
-                }
-                self.delete_evidence(&vm_id, item)
+            // Dispatched by the worker loop, which answers it when the
+            // deletion thread is done (see `start_evidence_delete`).
+            Command::DeleteEvidence { .. } => {
+                Err("evidence deletion is handled by the worker loop".into())
             }
             Command::Save(mut vm) => {
                 storage::validate_vm(&vm)?;

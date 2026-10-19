@@ -163,6 +163,7 @@ fn blank_worker(root: PathBuf) -> Worker {
         reconnect: (0, None),
         deferred_flush: None,
         flusher: Default::default(),
+        evidence: Default::default(),
         disk_job: None,
         host_analysis: Default::default(),
         debug: super::super::debug_service::DebugService::new().0,
