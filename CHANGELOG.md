@@ -6,6 +6,9 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Run as Root or Normal user.** A preset beside UID/GID sets both to 0 or
+  1000. Manual values remain editable and other combinations show Custom.
+
 - **Detection warnings appear once.** Selection diagnostics survive worker and
   parent report merging without duplication; distinct rule warnings and skipped
   counts are preserved.

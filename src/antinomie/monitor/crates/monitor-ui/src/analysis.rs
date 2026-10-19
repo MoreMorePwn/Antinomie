@@ -127,13 +127,7 @@ fn fields(
                 ui.end_row();
             }
             ui.label("User");
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("UID").color(crate::theme::muted()));
-                ui.add(egui::DragValue::new(&mut request.uid).range(0..=u32::MAX));
-                ui.add_space(8.0);
-                ui.label(egui::RichText::new("GID").color(crate::theme::muted()));
-                ui.add(egui::DragValue::new(&mut request.gid).range(0..=u32::MAX));
-            });
+            identity_fields(ui, request);
             ui.end_row();
         });
     if graphical {
@@ -141,6 +135,33 @@ fn fields(
         crate::theme::section(ui, "Session");
         run_in(ui, &mut request.run_in, request.uid);
     }
+}
+
+fn identity_fields(ui: &mut egui::Ui, request: &mut ExecRequest) {
+    ui.horizontal_wrapped(|ui| {
+        let selected = match (request.uid, request.gid) {
+            (0, 0) => "Root",
+            (1000, 1000) => "Normal user",
+            _ => "Custom",
+        };
+        egui::ComboBox::from_id_salt("launch-user-preset")
+            .selected_text(selected)
+            .show_ui(ui, |ui| {
+                for (label, id) in [("Root", 0), ("Normal user", 1000)] {
+                    if ui
+                        .selectable_label(request.uid == id && request.gid == id, label)
+                        .on_hover_text(format!("UID {id}, GID {id}"))
+                        .clicked()
+                    {
+                        (request.uid, request.gid) = (id, id);
+                    }
+                }
+            });
+        ui.label(egui::RichText::new("UID").color(crate::theme::muted()));
+        ui.add(egui::DragValue::new(&mut request.uid).range(0..=u32::MAX));
+        ui.label(egui::RichText::new("GID").color(crate::theme::muted()));
+        ui.add(egui::DragValue::new(&mut request.gid).range(0..=u32::MAX));
+    });
 }
 
 /// Where the program runs: this app's terminal or the guest's desktop.
@@ -506,6 +527,9 @@ pub(crate) fn other_progress<'a>(
         }
     }
 }
+
+#[cfg(test)]
+mod identity_tests;
 
 #[cfg(test)]
 mod tests {
