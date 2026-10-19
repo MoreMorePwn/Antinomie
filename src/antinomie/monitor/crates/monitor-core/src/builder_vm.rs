@@ -27,6 +27,13 @@ use std::{
 };
 
 const CLOUD_BASE: &str = "https://cloud.debian.org/images/cloud/trixie/latest";
+/// Where the image's SHA-512 checksums are fetched from: a fixed official HTTPS
+/// URL. Debian publishes no detached signature for the current cloud images
+/// (only the legacy OpenStack ones carry `SHA512SUMS.sign`); its documented
+/// method is to take the checksum file over TLS from cloud.debian.org, which
+/// is what is done here. The (redirected) mirror only supplies the image,
+/// whose digest must match this file.
+const CLOUD_SUMS_URL: &str = "https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS";
 const CLOUD_IMAGE: &str = "debian-13-genericcloud-amd64.qcow2";
 const LINE_PREFIX: &str = "ANTINOMIE-BUILD: ";
 /// Packages the builder needs for the kit (kernel, BusyBox and Debian images).
@@ -144,11 +151,10 @@ impl QemuBuild<'_> {
         let base = self.cloud_mirror()?;
         on_line(&format!("cloud image mirror {base}"));
         let sums_path = builder.join("SHA512SUMS");
-        let mut child = crate::distribution::spawn_download(
-            self.curl,
-            &format!("{base}/SHA512SUMS"),
-            &sums_path,
-        )?;
+        // The checksums always come from Debian's own host, never from the
+        // mirror that serves the image (see `CLOUD_SUMS_URL`).
+        let _ = fs::remove_file(&sums_path);
+        let mut child = crate::distribution::spawn_download(self.curl, CLOUD_SUMS_URL, &sums_path)?;
         self.wait_child(&mut child, "SHA512SUMS download", |_| {})?;
         let sums = fs::read_to_string(&sums_path).map_err(|e| e.to_string())?;
         let _ = fs::remove_file(&sums_path);
@@ -201,28 +207,32 @@ impl QemuBuild<'_> {
 
     /// cloud.debian.org redirects image downloads to a mirror and often resets
     /// connections itself; resolve the image's redirect once (with retries) and
-    /// use that mirror for both the checksums and the image. Integrity rests on the SHA-512 check.
+    /// download the image from that mirror. Integrity rests on the SHA-512
+    /// checksums fetched from `CLOUD_SUMS_URL`, not on the mirror.
     fn cloud_mirror(&self) -> Result<String, String> {
-        let output = Command::new(self.curl)
-            .args([
-                "-sSIL",
-                "--retry",
-                "10",
-                "--retry-delay",
-                "1",
-                "--retry-all-errors",
-            ])
-            .args([
-                "--connect-timeout",
-                "30",
-                "-o",
-                "/dev/null",
-                "-w",
-                "%{url_effective}",
-            ])
-            .arg(format!("{CLOUD_BASE}/{CLOUD_IMAGE}"))
-            .output()
-            .map_err(|e| format!("curl: {e}"))?;
+        let output = crate::http_fetch::command(
+            self.curl,
+            &crate::http_fetch::Options {
+                follow: true,
+                max_filesize: None,
+                ..crate::http_fetch::Options::new(60, 0)
+            },
+        )
+        .args([
+            "-I",
+            "--retry",
+            "10",
+            "--retry-delay",
+            "1",
+            "--retry-all-errors",
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{url_effective}",
+        ])
+        .arg(format!("{CLOUD_BASE}/{CLOUD_IMAGE}"))
+        .output()
+        .map_err(|e| format!("curl: {e}"))?;
         let effective = String::from_utf8_lossy(&output.stdout).trim().to_string();
         match effective.strip_suffix(&format!("/{CLOUD_IMAGE}")) {
             Some(base) if output.status.success() && base.starts_with("https://") => {

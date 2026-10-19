@@ -35,8 +35,9 @@ jobs:
         run: |
           packet_sandbox() {
             prlimit --as=2147483648 --core=0 --nofile=128 -- \
-              bwrap --ro-bind / / --proc /proc --dev /dev \
-              --unshare-net --unshare-pid --unshare-user --uid 65534 --gid 65534 \
+              bwrap --unshare-all --unshare-user --disable-userns --uid 65534 --gid 65534 \
+              --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib \
+              --symlink usr/lib64 /lib64 --proc /proc --dev /dev \
               --cap-drop ALL --die-with-parent --new-session -- \
               /bin/sh -c 'test "$(id -u)" -eq 65534 && tshark --version'
           }
@@ -85,9 +86,9 @@ jobs:
             src/antinomie/monitor/crates/monitor-core/src/guest_desktop.sh
 
   audit:
-    # Advisories in dependencies; reported, not blocking.
+    # Advisories in dependencies. A new one fails the job; the reviewed ones
+    # (each with its reason) are listed in src/antinomie/monitor/.cargo/audit.toml.
     runs-on: ubuntu-24.04
-    continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2

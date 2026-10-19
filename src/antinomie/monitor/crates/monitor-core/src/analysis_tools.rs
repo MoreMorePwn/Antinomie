@@ -128,7 +128,7 @@ pub const PACKAGES: &[Package] = &[
             // The portable build's Qt needs ICU 66, which it does not ship.
             Download {
                 file: "libicu66_66.1-2ubuntu2.1_amd64.deb",
-                url: "http://archive.ubuntu.com/ubuntu/pool/main/i/icu/libicu66_66.1-2ubuntu2.1_amd64.deb",
+                url: "https://archive.ubuntu.com/ubuntu/pool/main/i/icu/libicu66_66.1-2ubuntu2.1_amd64.deb",
                 sha256: "00d0de456134668f41bd9ea308a076bc0a6a805180445af8a37209d433f41efe",
                 size: 8_515_480,
                 archive: Archive::DebFiles {

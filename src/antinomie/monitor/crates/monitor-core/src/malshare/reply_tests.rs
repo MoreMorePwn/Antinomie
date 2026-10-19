@@ -2,6 +2,7 @@
 //! Public MalShare API metadata retrieved 2026-10-18; lists limited to three rows.
 //! Endpoint contract: https://malshare.com/doc.php. No key or sample bodies retained.
 use super::*;
+use std::path::PathBuf;
 
 #[test]
 fn actual_metadata_replies_fill_rows_and_preserve_empty_results() {
@@ -48,13 +49,37 @@ fn actual_metadata_replies_fill_rows_and_preserve_empty_results() {
     assert_eq!(infos(reply.as_bytes(), None, 2).unwrap().len(), 2);
 }
 
+/// Write `body` as an executable script at a path of its own. A path that was
+/// executed is never rewritten: the kernel refuses to exec a file some process
+/// still holds open for writing (ETXTBSY), and a test process full of threads
+/// that fork children inherits such descriptors for a moment.
+pub(super) fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.join(name);
+    std::fs::write(&path, body).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    path
+}
+
+/// Run `attempt` again while it fails only because another thread's child
+/// briefly held the script open for writing.
+pub(super) fn retry_busy<T>(mut attempt: impl FnMut() -> Result<T, String>) -> Result<T, String> {
+    for _ in 0..200 {
+        match attempt() {
+            Err(error) if error.contains("Text file busy") => {
+                std::thread::sleep(Duration::from_millis(10))
+            }
+            result => return result,
+        }
+    }
+    attempt()
+}
+
 #[test]
 fn http_failures_and_stderr_do_not_disclose_the_key() {
-    use std::os::unix::fs::PermissionsExt;
     let root = std::env::temp_dir().join(format!("ant-share-http-{}", crate::storage::unique_id()));
     std::fs::create_dir_all(&root).unwrap();
-    let curl = root.join("curl");
-    for (script, expected) in [
+    for (case, (body, expected)) in [
         (
             "#!/bin/sh\ncat >/dev/null\nprintf 'denied\\n403'\n",
             "HTTP 403",
@@ -67,33 +92,45 @@ fn http_failures_and_stderr_do_not_disclose_the_key() {
             "#!/bin/sh\ncat >/dev/null\nprintf 'temporarysecret' >&2\nexit 7\n",
             "[redacted]",
         ),
-    ] {
-        std::fs::write(&curl, script).unwrap();
-        std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let error = get(
-            &curl,
-            "temporarysecret",
-            &[("action", "getlist")],
-            MAX_REPLY,
-        )
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let curl = script(&root, &format!("curl-{case}"), body);
+        let error = retry_busy(|| {
+            get(
+                &curl,
+                "temporarysecret",
+                &[("action", "getlist")],
+                MAX_REPLY,
+            )
+        })
         .unwrap_err();
         assert!(error.contains(expected), "{error}");
         assert!(!error.contains("temporarysecret"));
     }
-    std::fs::write(&curl, "#!/bin/sh\ncat >/dev/null\nprintf '[]\\n200'\n").unwrap();
+    let curl = script(
+        &root,
+        "curl-empty",
+        "#!/bin/sh\ncat >/dev/null\nprintf '[]\\n200'\n",
+    );
     assert_eq!(
-        get(&curl, "temporarysecret", &[], MAX_REPLY).unwrap(),
+        retry_busy(|| get(&curl, "temporarysecret", &[], MAX_REPLY)).unwrap(),
         b"[]"
     );
     // File bytes ending with a newline are preserved exactly, not trimmed.
-    std::fs::write(&curl, "#!/bin/sh\ncat >/dev/null\nprintf 'file\\n\\n200'\n").unwrap();
+    let curl = script(
+        &root,
+        "curl-file",
+        "#!/bin/sh\ncat >/dev/null\nprintf 'file\\n\\n200'\n",
+    );
     assert_eq!(
-        get(
+        retry_busy(|| get(
             &curl,
             "temporarysecret",
             &[("action", "getfile")],
             MAX_REPLY
-        )
+        ))
         .unwrap(),
         b"file\n"
     );
