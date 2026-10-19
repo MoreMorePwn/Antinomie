@@ -45,6 +45,11 @@ impl MonitorApp {
         match deletion.kind {
             Kind::Network => self.network_view.forget_capture(deletion.path()),
             Kind::Core | Kind::ImportedCore => self.core_view.forget_core(deletion.path()),
+            Kind::Disk | Kind::ImportedDisk => {
+                // Nothing in Triage or Run History names a disk dump.
+                self.disk_view.forget_dump(deletion.path());
+                return;
+            }
         }
         *self.triage_pcap.borrow_mut() = Default::default();
         self.run_labels.invalidate();

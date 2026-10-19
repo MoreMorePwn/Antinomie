@@ -654,6 +654,26 @@ impl MonitorApp {
                             )
                             .on_hover_text("Largest guest file the Disks tab hashes on request");
                             ui.end_row();
+                            ui.label("Disks: dump hash");
+                            ui.checkbox(
+                                &mut self.settings.disks.dump_hash,
+                                "SHA-256 of each disk dump",
+                            )
+                            .on_hover_text(
+                                "Hash the whole image of a disk dump (what sha256sum prints). \
+                                 Views are never hashed.",
+                            );
+                            ui.end_row();
+                            ui.label("Disks: source digests");
+                            ui.checkbox(
+                                &mut self.settings.disks.source_digests,
+                                "SHA-256 of each source layer",
+                            )
+                            .on_hover_text(
+                                "Also hash every layer of the disk chain a dump was read from. \
+                                 Doubles the time of a dump; for evidence-grade provenance.",
+                            );
+                            ui.end_row();
                             if let Some(path) = &self.snapshot.capture_dir {
                                 ui.label("Recording");
                                 ui.add(

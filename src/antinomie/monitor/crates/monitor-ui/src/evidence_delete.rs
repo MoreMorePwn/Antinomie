@@ -14,6 +14,10 @@ pub(crate) enum Kind {
     Core,
     /// An imported core: only Antinomie's results go; the file stays.
     ImportedCore,
+    /// A saved disk dump: its image, record and extractions.
+    Disk,
+    /// An imported disk image: only the record and extractions go.
+    ImportedDisk,
 }
 
 /// One item the user asked to delete, with what the confirmation says of it.
@@ -50,6 +54,22 @@ impl Deletion {
         }
     }
 
+    pub(crate) fn disk(directory: &Path, name: &str, imported: bool) -> Self {
+        Self {
+            kind: if imported {
+                Kind::ImportedDisk
+            } else {
+                Kind::Disk
+            },
+            item: EvidenceItem::DiskDump {
+                directory: directory.to_path_buf(),
+            },
+            name: name.to_owned(),
+            // An imported image is not inside the folder and is not deleted.
+            size: size_text(directory),
+        }
+    }
+
     pub(crate) fn path(&self) -> &Path {
         match &self.item {
             EvidenceItem::NetworkCapture { file } => file,
@@ -63,6 +83,7 @@ impl Deletion {
         match self.kind {
             Kind::Network => "Delete network capture",
             Kind::Core | Kind::ImportedCore => "Delete core dump",
+            Kind::Disk | Kind::ImportedDisk => "Delete disk dump",
         }
     }
 
@@ -79,6 +100,14 @@ impl Deletion {
             Kind::ImportedCore => (
                 "imported core",
                 "Its analysis results are removed from disk; the original core file stays where it is.",
+            ),
+            Kind::Disk => (
+                "disk dump",
+                "The disk image, its record and the files extracted from it are removed from disk.",
+            ),
+            Kind::ImportedDisk => (
+                "imported disk image",
+                "Its record and the files extracted from it are removed from disk; the original image file stays where it is.",
             ),
         };
         format!(

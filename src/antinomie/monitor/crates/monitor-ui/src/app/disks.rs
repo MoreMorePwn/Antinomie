@@ -36,10 +36,22 @@ impl MonitorApp {
             .as_ref()
             .is_some_and(|job| !ours(&job.vm_id));
         let can_stop_vm = self.can_stop_vm() && !self.closing;
+        let locations = self
+            .snapshot
+            .vm_locations
+            .iter()
+            .find(|location| Some(&location.vm_id) == vm_id.as_ref());
+        let recordings = locations.map(|location| location.recording_directory.clone());
+        let recording_roots = locations
+            .map(|location| location.recording_directories.clone())
+            .unwrap_or_default();
         let action = self.disk_view.show(
             ui,
             DiskContext {
                 vm: vm.as_ref(),
+                recordings: recordings.as_deref(),
+                recording_roots: &recording_roots,
+                qemu_img: &self.options.qemu_img,
                 vm_off,
                 can_stop_vm,
                 current_disk: current_disk.as_ref(),
@@ -64,6 +76,24 @@ impl MonitorApp {
             (DiskAction::Open, Some(vm_id)) => self.send(Command::OpenCurrentDisk { vm_id }),
             (DiskAction::Close, Some(vm_id)) => self.send(Command::CloseCurrentDisk { vm_id }),
             (DiskAction::Cancel, Some(vm_id)) => self.send(Command::CancelDiskJob { vm_id }),
+            (DiskAction::Dump, Some(vm_id)) => self.send(Command::DumpDisk {
+                vm_id,
+                hash: self.settings.disks.dump_hash,
+                layer_digests: self.settings.disks.source_digests,
+            }),
+            (DiskAction::Keep, Some(vm_id)) => self.send(Command::KeepCurrentDiskAsDump {
+                vm_id,
+                hash: self.settings.disks.dump_hash,
+                layer_digests: self.settings.disks.source_digests,
+            }),
+            (DiskAction::Delete(dump), _) => {
+                let name = crate::disk_view::dump_name(&dump);
+                self.ask_delete_evidence(crate::evidence_delete::Deletion::disk(
+                    &dump.dir,
+                    &name,
+                    dump.imported,
+                ));
+            }
             (DiskAction::ViewBytes { key, title, bytes }, _) => {
                 self.data_windows.open_bytes(ctx, key, title, bytes);
             }

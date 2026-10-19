@@ -292,7 +292,9 @@ fn requirements(
         | Command::InstallTool { .. } => vec![Curl],
         Command::AnalyzeOnly { .. } | Command::AnalyzeHostFile { .. } => vec![Bubblewrap],
         Command::MeasureDisk { .. } => vec![QemuImg],
-        Command::OpenCurrentDisk { .. } => vec![QemuImg, Bubblewrap, Prlimit],
+        Command::OpenCurrentDisk { .. }
+        | Command::DumpDisk { .. }
+        | Command::KeepCurrentDiskAsDump { .. } => vec![QemuImg, Bubblewrap, Prlimit],
         Command::Execute(request) if request.analysis.enabled => vec![Bubblewrap],
         _ => Vec::new(),
     }

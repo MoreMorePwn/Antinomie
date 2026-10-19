@@ -5,11 +5,13 @@
 //! serves the filesystem tree, Details and extraction. Nothing from the
 //! guest is ever executed on the host.
 //!
-//! Phase 1 has the one entry "Current disk (VM off)". Saved dumps, imports
-//! and checkpoint sources (phases 2 and 3) add rows to [`entries`] and
-//! entry kinds beside `Current`.
+//! The entries are "Current disk (VM off)" and the saved disk dumps (made from
+//! it, or imported) newest first. A dump is a plain file: it stays browsable
+//! while the VM runs. Checkpoint sources (phase 3) add entry kinds beside
+//! `Current`.
 use antinomie_monitor_core::{
     disks::{
+        dump::DiskDump,
         reader::{DiskEntryKind, DiskFileInfo, DiskImageInfo, DiskRequest, FindResults},
         CurrentDiskView, DiskJobProgress, DiskMeasure,
     },
@@ -19,11 +21,13 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
 mod details;
+mod dump_actions;
+mod dumps;
 mod entries;
 mod extraction;
 mod find;
@@ -47,6 +51,11 @@ pub(crate) struct DiskSettings {
     pub hide_dotfiles: bool,
     /// Show modes as octal numbers instead of `rwx`.
     pub numeric_modes: bool,
+    /// Compute the SHA-256 of a disk dump (views are never hashed).
+    pub dump_hash: bool,
+    /// Also record the SHA-256 of every layer of the chain a dump was read
+    /// from: doubles the time of a dump, for evidence-grade provenance.
+    pub source_digests: bool,
 }
 
 impl Default for DiskSettings {
@@ -56,6 +65,8 @@ impl Default for DiskSettings {
             hash_cap_mib: 64,
             hide_dotfiles: false,
             numeric_modes: false,
+            dump_hash: true,
+            source_digests: false,
         }
     }
 }
@@ -76,7 +87,13 @@ pub(crate) enum DiskAction {
     Measure,
     Open,
     Close,
+    /// Dump the VM's current disk.
+    Dump,
+    /// Promote the open view to a dump.
+    Keep,
     Cancel,
+    /// Ask to delete a saved dump (the app confirms, the backend deletes).
+    Delete(Box<DiskDump>),
     /// The running-state notice's shortcut: the toolbar's Stop.
     StopVm,
     /// Show an extracted file in the data viewer.
@@ -93,6 +110,12 @@ pub(crate) enum DiskAction {
 
 pub(crate) struct DiskContext<'a> {
     pub vm: Option<&'a VmConfig>,
+    /// Where this VM's dumps and imports go.
+    pub recordings: Option<&'a Path>,
+    /// Every recording directory of the VM, to list dumps from.
+    pub recording_roots: &'a [PathBuf],
+    /// `qemu-img`, for saving a dump's image to the host.
+    pub qemu_img: &'a Path,
     /// The selected VM is not the one that runs.
     pub vm_off: bool,
     pub can_stop_vm: bool,
@@ -104,6 +127,30 @@ pub(crate) struct DiskContext<'a> {
     pub other_job: bool,
     pub font_size: f32,
     pub settings: &'a mut DiskSettings,
+}
+
+/// Which entry of the list is selected.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Entry {
+    /// "Current disk (VM off)".
+    #[default]
+    Current,
+    /// A saved dump, by id.
+    Dump(String),
+}
+
+/// What the readers are bound to: the open view, or a saved dump.
+struct Bound {
+    /// Names the entry; the readers restart when it changes.
+    key: String,
+    image: PathBuf,
+    extract_dir: PathBuf,
+    what: What,
+}
+
+enum What {
+    Current(Box<CurrentDiskView>),
+    Dump,
 }
 
 /// What a reader request was for.
@@ -143,8 +190,23 @@ pub(crate) struct Selection {
 
 #[derive(Default)]
 pub(crate) struct DiskView {
-    /// The open view the readers are bound to.
-    bound: Option<CurrentDiskView>,
+    /// The selected entry.
+    entry: Entry,
+    /// The open view or the dump the readers are bound to.
+    bound: Option<Bound>,
+    /// The saved dumps of the selected VM, newest first, as of the last scan.
+    dumps: Vec<dumps::Row>,
+    dumps_for: Option<Vec<PathBuf>>,
+    /// What the last scan was taken for, to scan again when it changes.
+    scan_key: dumps::ScanKey,
+    import: Option<dump_actions::Import>,
+    verify: Option<dump_actions::Verify>,
+    verified: BTreeMap<String, dump_actions::Verified>,
+    saving_image: Option<dump_actions::ImageSave>,
+    /// The dump the open Current disk view was kept as: it reads its image.
+    open_kept: Option<String>,
+    /// `qemu-img`, as of the last frame, for the Details dock.
+    qemu_img: PathBuf,
     browse: Option<worker::Worker>,
     search: Option<worker::Worker>,
     browse_queue: Vec<(u64, worker::Job)>,
@@ -163,6 +225,9 @@ pub(crate) struct DiskView {
     notice: Option<String>,
     /// A request sent to the backend that has no answer yet.
     waiting: Option<Instant>,
+    /// The request waits for a measurement or an open view (not for a dump,
+    /// which leaves an open view as it is).
+    waiting_for_view: bool,
     /// The state for which a measurement was already asked.
     measured_for: Option<(String, bool)>,
     had_measure: bool,
@@ -171,6 +236,16 @@ pub(crate) struct DiskView {
     settings: DiskSettings,
     /// An action from a pane drawn this frame.
     action: Option<DiskAction>,
+}
+
+/// The name the lists show for a dump: its annotation, else its default
+/// title. Reads the sidecar: for a click, not a frame.
+pub(crate) fn dump_name(dump: &DiskDump) -> String {
+    antinomie_monitor_core::annotations::load(&dump.dir)
+        .ok()
+        .map(|annotation| annotation.name)
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| dumps::dump_title(dump))
 }
 
 /// Escape what could mislead in a guest-controlled name: control characters
@@ -247,24 +322,54 @@ impl DiskView {
             self.tree.hide_dotfiles = cx.settings.hide_dotfiles;
             self.tree.dirty = true;
         }
-        let wanted = cx.current_disk.map(|view| view.view_id.as_str());
-        let bound = self.bound.as_ref().map(|view| view.view_id.as_str());
-        if wanted != bound {
-            // Another VM selected is not a closed view.
-            let same_vm = self
+        if self.qemu_img != cx.qemu_img {
+            self.qemu_img = cx.qemu_img.to_path_buf();
+        }
+        self.open_kept = cx.current_disk.and_then(|view| view.kept_as.clone());
+        self.scan_when_needed(cx);
+        if self.want(cx)
+            != self
                 .bound
                 .as_ref()
-                .is_some_and(|view| Some(view.vm_id.as_str()) == cx.vm.map(|vm| vm.id.as_str()));
-            self.unbind();
-            self.notice = None;
-            if let Some(view) = cx.current_disk {
-                self.bind(ctx, view.clone());
-            } else if same_vm {
-                self.notice = Some(if cx.vm_off {
-                    "Current disk view closed.".into()
-                } else {
-                    "Current disk view closed: VM started. Saved dumps stay available.".into()
-                });
+                .map(|b| (b.key.as_str(), b.image.as_path()))
+        {
+            let restart = self
+                .bound
+                .as_ref()
+                .is_some_and(|bound| self.want(cx).is_some_and(|(key, _)| key == bound.key));
+            if restart {
+                // The view was kept: the same bytes at the dump's path.
+                self.rebind(ctx, cx);
+            } else {
+                // Another VM selected is not a closed view.
+                let closed = matches!(
+                    (&self.bound, &self.entry),
+                    (Some(Bound { what: What::Current(view), .. }), Entry::Current)
+                        if Some(view.vm_id.as_str()) == cx.vm.map(|vm| vm.id.as_str())
+                );
+                self.unbind();
+                self.notice = None;
+                if let Some(bound) = self.make_bound(cx) {
+                    self.bind(ctx, bound);
+                } else if closed {
+                    self.notice = Some(if cx.vm_off {
+                        "Current disk view closed.".into()
+                    } else {
+                        "Current disk view closed: VM started. Saved dumps stay available.".into()
+                    });
+                }
+            }
+        }
+        if let (
+            Some(Bound {
+                what: What::Current(old),
+                ..
+            }),
+            Some(view),
+        ) = (&mut self.bound, cx.current_disk)
+        {
+            if **old != *view {
+                **old = view.clone();
             }
         }
         if cx.current_disk.is_some() {
@@ -283,22 +388,88 @@ impl DiskView {
             .waiting
             .is_some_and(|since| since.elapsed() > Duration::from_secs(5))
             || cx.job.is_some()
-            || cx.current_disk.is_some()
+            || (cx.current_disk.is_some() && self.waiting_for_view)
             || (measured.is_some() && measured != self.last_measured)
         {
             self.waiting = None;
         }
         self.last_measured = measured;
         self.poll_save(ctx);
+        self.poll_dump_actions(ctx);
         self.pump(ctx);
     }
 
-    fn bind(&mut self, ctx: &egui::Context, view: CurrentDiskView) {
-        let image = view.image.clone();
-        let out = view.extract_dir.clone();
+    /// The key and image of what the readers should be bound to.
+    fn want<'a>(&'a self, cx: &'a DiskContext<'_>) -> Option<(&'a str, &'a Path)> {
+        match &self.entry {
+            Entry::Current => cx
+                .current_disk
+                .map(|view| (view.view_id.as_str(), view.image.as_path())),
+            Entry::Dump(id) => self
+                .dumps
+                .iter()
+                .find(|row| &row.dump.id == id && row.browsable())
+                .map(|row| (row.dump.id.as_str(), row.image.as_path())),
+        }
+    }
+
+    fn make_bound(&self, cx: &DiskContext<'_>) -> Option<Bound> {
+        match &self.entry {
+            Entry::Current => cx.current_disk.map(|view| Bound {
+                key: view.view_id.clone(),
+                image: view.image.clone(),
+                extract_dir: view.extract_dir.clone(),
+                what: What::Current(Box::new(view.clone())),
+            }),
+            Entry::Dump(id) => self
+                .dumps
+                .iter()
+                .find(|row| &row.dump.id == id && row.browsable())
+                .map(|row| Bound {
+                    key: row.dump.id.clone(),
+                    image: row.image.clone(),
+                    extract_dir: row.dump.extract_dir(),
+                    what: What::Dump,
+                }),
+        }
+    }
+
+    fn bind(&mut self, ctx: &egui::Context, bound: Bound) {
+        self.start_readers(ctx, &bound);
+        self.tree.reset();
+        self.tree.hide_dotfiles = self.settings.hide_dotfiles;
+        self.queue_browse(Purpose::Probe, DiskRequest::Probe, None);
+        self.bound = Some(bound);
+    }
+
+    /// The same view now reads a different file (it was kept as a dump): new
+    /// readers on the new path, the tree and selection stay.
+    fn rebind(&mut self, ctx: &egui::Context, cx: &DiskContext<'_>) {
+        let Some(bound) = self.make_bound(cx) else {
+            return;
+        };
+        self.browse_queue.clear();
+        self.search_queue.clear();
+        self.purposes.clear();
+        self.start_readers(ctx, &bound);
+        self.queue_browse(Purpose::Probe, DiskRequest::Probe, None);
+        self.bound = Some(bound);
+    }
+
+    fn start_readers(&mut self, ctx: &egui::Context, bound: &Bound) {
         match (
-            worker::Worker::start(ctx.clone(), "disk-browse", image.clone(), out.clone()),
-            worker::Worker::start(ctx.clone(), "disk-search", image, out),
+            worker::Worker::start(
+                ctx.clone(),
+                "disk-browse",
+                bound.image.clone(),
+                bound.extract_dir.clone(),
+            ),
+            worker::Worker::start(
+                ctx.clone(),
+                "disk-search",
+                bound.image.clone(),
+                bound.extract_dir.clone(),
+            ),
         ) {
             (Ok(browse), Ok(search)) => {
                 self.browse = Some(browse);
@@ -306,10 +477,6 @@ impl DiskView {
             }
             (Err(error), _) | (_, Err(error)) => self.status = Some((error, true)),
         }
-        self.tree.reset();
-        self.tree.hide_dotfiles = self.settings.hide_dotfiles;
-        self.queue_browse(Purpose::Probe, DiskRequest::Probe, None);
-        self.bound = Some(view);
     }
 
     fn unbind(&mut self) {
@@ -487,9 +654,16 @@ impl DiskView {
             && self.measured_for.as_ref() != Some(&state)
         {
             self.measured_for = Some(state);
-            self.waiting = Some(Instant::now());
+            self.wait_for(true);
             self.action = Some(DiskAction::Measure);
         }
+    }
+
+    /// A request went to the backend; `view` when its answer is a view or a
+    /// measurement.
+    pub(super) fn wait_for(&mut self, view: bool) {
+        self.waiting = Some(Instant::now());
+        self.waiting_for_view = view;
     }
 
     pub(crate) fn show(
@@ -515,6 +689,7 @@ impl DiskView {
                 ..Default::default()
             }))
             .show_inside(ui, |ui| self.main_pane(ui, &mut cx));
+        self.import_window(ui.ctx(), &cx);
         self.action.take()
     }
 }

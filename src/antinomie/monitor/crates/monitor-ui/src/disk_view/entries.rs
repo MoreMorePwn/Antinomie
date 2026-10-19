@@ -1,35 +1,33 @@
 // SPDX-License-Identifier: MIT
-//! The list of entries on the left: "Current disk (VM off)" now; saved dumps
-//! and imported images join it in phase 2.
+//! The list of entries on the left: "Current disk (VM off)", the buttons to
+//! dump the disk or import an image, and the saved dumps (see [`super::dumps`]).
 use super::*;
 use crate::{network_view::capture_row, theme};
-use antinomie_monitor_core::disks::DiskJobStage;
+use antinomie_monitor_core::disks::{DiskJobPurpose, DiskJobStage};
 
 impl DiskView {
     pub(super) fn entries(&mut self, ui: &mut egui::Ui, cx: &DiskContext<'_>) {
         ui.horizontal(|ui| {
             theme::section(ui, "Disks");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let can = cx.vm.is_some()
+                let can_measure = cx.vm.is_some()
                     && cx.vm_off
                     && cx.current_disk.is_none()
                     && cx.job.is_none()
                     && !cx.other_job
                     && self.waiting.is_none();
                 if ui
-                    .add_enabled(
-                        can,
-                        egui::Button::new(egui_phosphor::regular::ARROW_CLOCKWISE).frame(false),
-                    )
-                    .on_hover_text("Measure the current disk again")
-                    .on_disabled_hover_text(
-                        "Measuring needs the VM off, no open view and no running disk job",
-                    )
+                    .add(egui::Button::new(egui_phosphor::regular::ARROW_CLOCKWISE).frame(false))
+                    .on_hover_text("Read the list of dumps again and measure the current disk")
                     .clicked()
                 {
-                    self.measured_for = None;
-                    self.waiting = Some(Instant::now());
-                    self.action = Some(DiskAction::Measure);
+                    // The list is read again on the next frame.
+                    self.dumps_for = None;
+                    if can_measure {
+                        self.measured_for = None;
+                        self.wait_for(true);
+                        self.action = Some(DiskAction::Measure);
+                    }
                 }
             });
         });
@@ -39,14 +37,37 @@ impl DiskView {
             return;
         };
         let (title, detail, color) = self.current_row(cx, vm);
-        // The one entry; it stays selected.
-        capture_row(ui, true, (&title, color), &detail, cx.font_size);
-        ui.add_space(6.0);
+        if capture_row(
+            ui,
+            self.entry == Entry::Current,
+            (&title, color),
+            &detail,
+            cx.font_size,
+        )
+        .clicked()
+        {
+            self.entry = Entry::Current;
+        }
+        ui.add_space(4.0);
+        self.dump_button(ui, cx, true);
+        if ui
+            .add_enabled(
+                cx.recordings.is_some(),
+                egui::Button::new(format!(
+                    "{} Import image…",
+                    egui_phosphor::regular::FILE_ARROW_UP
+                ))
+                .min_size(egui::vec2(ui.available_width(), 0.0)),
+            )
+            .on_hover_text("Browse a raw ext4 image made elsewhere. The file stays where it is.")
+            .on_disabled_hover_text("Select a VM: imported images are kept with its recordings")
+            .clicked()
+        {
+            self.open_import();
+        }
+        ui.add_space(4.0);
         ui.separator();
-        ui.colored_label(
-            theme::muted(),
-            "Saved disk dumps and imported images are not available yet.",
-        );
+        self.dump_list(ui, cx);
     }
 
     /// Title, detail and color of the Current disk row.
@@ -61,11 +82,19 @@ impl DiskView {
             );
         }
         let detail = if let Some(job) = cx.job {
-            match &job.stage {
-                DiskJobStage::Measuring => "measuring…".to_string(),
-                DiskJobStage::Converting { percent } => format!("reading… {percent:.0} %"),
-                DiskJobStage::Hashing { .. } => "hashing…".to_string(),
-                DiskJobStage::Finalizing => "finishing…".to_string(),
+            match (&job.stage, job.purpose) {
+                (DiskJobStage::Measuring, _) => "measuring…".to_string(),
+                (DiskJobStage::Converting { percent }, DiskJobPurpose::Dump) => {
+                    format!("dumping… {percent:.0} %")
+                }
+                (DiskJobStage::Converting { percent }, _) => format!("reading… {percent:.0} %"),
+                (DiskJobStage::Hashing { done, total }, _) => {
+                    format!(
+                        "hashing… {:.0} %",
+                        *done as f32 / (*total).max(1) as f32 * 100.0
+                    )
+                }
+                (DiskJobStage::Finalizing, _) => "finishing…".to_string(),
             }
         } else if let Some(view) = cx.current_disk {
             format!(

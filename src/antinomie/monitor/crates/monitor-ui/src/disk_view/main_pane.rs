@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! The main pane: one of the states of the Current disk entry (no VM, VM
-//! running, measured, job running, open).
+//! running, measured, job running, open), or the browser of a saved dump.
 use super::*;
 use crate::theme;
-use antinomie_monitor_core::disks::DiskJobStage;
+use antinomie_monitor_core::disks::{DiskJobPurpose, DiskJobStage};
 
 impl DiskView {
     pub(super) fn main_pane(&mut self, ui: &mut egui::Ui, cx: &mut DiskContext<'_>) {
@@ -11,12 +11,22 @@ impl DiskView {
             hint(ui, "Select a VM to inspect its disk.");
             return;
         };
+        if let Entry::Dump(_) = self.entry {
+            self.dump_pane(ui, cx);
+            return;
+        }
         if !cx.vm_off {
             self.running_notice(ui, cx);
             return;
         }
         if let Some(job) = cx.job {
-            self.job_card(ui, job);
+            // Keeping the open view leaves its tree visible beneath the bar.
+            if job.purpose == DiskJobPurpose::Keep && self.bound.is_some() {
+                self.job_strip(ui, job);
+                self.open_view_pane(ui, cx);
+            } else {
+                self.job_card(ui, job);
+            }
             return;
         }
         if cx.current_disk.is_some() {
@@ -89,26 +99,65 @@ impl DiskView {
         });
     }
 
+    /// What a job is doing, as a sentence.
+    fn job_text(job: &DiskJobProgress) -> String {
+        let what = match job.purpose {
+            DiskJobPurpose::Measure => "Measuring the current disk",
+            DiskJobPurpose::View => "Reading the current disk",
+            DiskJobPurpose::Dump => "Dumping the current disk",
+            DiskJobPurpose::Keep => "Keeping the open view as a dump",
+        };
+        match &job.stage {
+            DiskJobStage::Measuring => "Measuring the current disk…".to_string(),
+            DiskJobStage::Converting { percent } => format!("{what}… {percent:.0} %"),
+            DiskJobStage::Hashing { done, total } => format!(
+                "Computing the SHA-256… {:.0} %",
+                *done as f32 / (*total).max(1) as f32 * 100.0
+            ),
+            DiskJobStage::Finalizing => "Checking the image…".to_string(),
+        }
+    }
+
+    /// The fraction a job has done, when it knows.
+    fn job_fraction(job: &DiskJobProgress) -> Option<f32> {
+        match &job.stage {
+            DiskJobStage::Converting { percent } => Some(percent / 100.0),
+            DiskJobStage::Hashing { done, total } => Some(*done as f32 / (*total).max(1) as f32),
+            _ => None,
+        }
+    }
+
+    /// A compact progress line with Cancel, above a pane that stays usable.
+    pub(super) fn job_strip(&mut self, ui: &mut egui::Ui, job: &DiskJobProgress) {
+        ui.horizontal(|ui| {
+            theme::spinner(ui);
+            ui.label(egui::RichText::new(Self::job_text(job)).color(theme::heading()));
+            if let Some(fraction) = Self::job_fraction(job) {
+                ui.add(
+                    egui::ProgressBar::new(fraction.clamp(0.0, 1.0))
+                        .desired_width(160.0)
+                        .show_percentage(),
+                );
+            }
+            if ui.button("Cancel").clicked() {
+                self.action = Some(DiskAction::Cancel);
+            }
+        });
+    }
+
     fn job_card(&mut self, ui: &mut egui::Ui, job: &DiskJobProgress) {
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             theme::spinner(ui);
             ui.label(
-                egui::RichText::new(match &job.stage {
-                    DiskJobStage::Measuring => "Measuring the current disk…".to_string(),
-                    DiskJobStage::Converting { percent } => {
-                        format!("Reading the current disk… {percent:.0} %")
-                    }
-                    DiskJobStage::Hashing { .. } => "Computing the SHA-256…".to_string(),
-                    DiskJobStage::Finalizing => "Checking the image…".to_string(),
-                })
-                .strong()
-                .color(theme::heading()),
+                egui::RichText::new(Self::job_text(job))
+                    .strong()
+                    .color(theme::heading()),
             );
         });
-        if let DiskJobStage::Converting { percent } = &job.stage {
+        if let Some(fraction) = Self::job_fraction(job) {
             ui.add(
-                egui::ProgressBar::new((percent / 100.0).clamp(0.0, 1.0))
+                egui::ProgressBar::new(fraction.clamp(0.0, 1.0))
                     .desired_width(360.0)
                     .show_percentage(),
             );
@@ -119,7 +168,10 @@ impl DiskView {
                 format!(
                     "About {} to write into {}",
                     format_size(job.estimate),
-                    "the scratch image"
+                    match job.purpose {
+                        DiskJobPurpose::Dump => "the new dump",
+                        _ => "the scratch image",
+                    }
                 ),
             );
         }
@@ -205,17 +257,22 @@ impl DiskView {
                 .on_disabled_hover_text(why.unwrap_or(""))
                 .clicked()
             {
-                self.waiting = Some(Instant::now());
+                self.wait_for(true);
                 self.action = Some(DiskAction::Open);
             }
+            self.dump_button(ui, cx, false);
         });
+        if let Some(quota) = cx.measure.and_then(|measure| measure.quota_error()) {
+            crate::activity::warning(ui, quota);
+        }
         ui.add_space(4.0);
         ui.add(
             egui::Label::new(
                 egui::RichText::new(
                     "Opening copies the allocated data into a temporary image; nothing is \
                      written to the VM's disk. The image is deleted when you close the view or \
-                     start the VM.",
+                     start the VM, unless you keep it as a dump. Dump disk writes the image \
+                     straight into the VM's recordings.",
                 )
                 .color(theme::muted()),
             )
@@ -224,7 +281,10 @@ impl DiskView {
     }
 
     fn open_view_pane(&mut self, ui: &mut egui::Ui, cx: &mut DiskContext<'_>) {
-        let Some(view) = self.bound.clone() else {
+        let Some(view) = self.bound.as_ref().and_then(|bound| match &bound.what {
+            What::Current(view) => Some((**view).clone()),
+            What::Dump => None,
+        }) else {
             ui.horizontal(|ui| {
                 theme::spinner(ui);
                 ui.colored_label(theme::muted(), "Opening the view…");
@@ -243,15 +303,105 @@ impl DiskView {
                 .color(theme::heading()),
             );
         });
+        let keep_blocked = self.keep_blocked(cx);
         ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(keep_blocked.is_none(), egui::Button::new("Keep as dump"))
+                .on_hover_text("Promote this image to a saved dump: a rename, no second conversion")
+                .on_disabled_hover_text(keep_blocked.clone().unwrap_or_default())
+                .clicked()
+            {
+                self.wait_for(false);
+                self.action = Some(DiskAction::Keep);
+            }
             if ui.button("Close").clicked() {
                 self.action = Some(DiskAction::Close);
             }
             ui.checkbox(&mut cx.settings.hide_dotfiles, "Hide dotfiles");
             ui.checkbox(&mut cx.settings.numeric_modes, "Numeric modes");
         });
-        if view.fs_state == antinomie_monitor_core::disks::Ext4State::NotClean {
-            crate::activity::warning(ui, view.fs_state.explanation());
+        if view.kept_as.is_some() {
+            ui.colored_label(
+                theme::good(),
+                "Kept as a dump: this view now reads the dump's image, which stays when the \
+                 view is closed.",
+            );
+        }
+        self.browser_body(ui, cx, view.fs_state);
+    }
+
+    /// The pane of a saved dump: its header, then the same browser.
+    fn dump_pane(&mut self, ui: &mut egui::Ui, cx: &mut DiskContext<'_>) {
+        let Some(row) = self.selected_dump() else {
+            hint(ui, "Select an entry.");
+            return;
+        };
+        let (dump, missing, browsable) = (row.dump.clone(), row.missing, row.browsable());
+        if let Some(job) = cx.job.filter(|job| job.purpose != DiskJobPurpose::Measure) {
+            self.job_strip(ui, job);
+        }
+        let title = crate::evidence::title(ui, &dump.dir, &dumps::dump_title(&dump));
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new(format!(
+                    "Dump · {title} · {} · {}",
+                    dump.fs_state.label(),
+                    dump.file
+                        .file_name()
+                        .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
+                ))
+                .strong()
+                .color(theme::heading()),
+            );
+        });
+        if let Some(error) = &dump.error {
+            crate::activity::error(ui, format!("This dump failed: {error}"));
+            return;
+        }
+        if dump.finished_ms.is_none() {
+            crate::activity::warning(ui, "This dump was never completed.");
+            return;
+        }
+        if missing {
+            crate::activity::warning(
+                ui,
+                format!(
+                    "The imported image is no longer at {}. Delete this entry, or put the file back and refresh the list.",
+                    dump.path().display()
+                ),
+            );
+            return;
+        }
+        if !browsable {
+            crate::activity::warning(
+                ui,
+                "This dump was made by a newer version and its format cannot be opened here.",
+            );
+            return;
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut cx.settings.hide_dotfiles, "Hide dotfiles");
+            ui.checkbox(&mut cx.settings.numeric_modes, "Numeric modes");
+        });
+        if self.bound.is_none() {
+            ui.horizontal(|ui| {
+                theme::spinner(ui);
+                ui.colored_label(theme::muted(), "Opening the dump…");
+            });
+            return;
+        }
+        self.browser_body(ui, cx, dump.fs_state);
+    }
+
+    /// Warnings, the Find bar and the tree, shared by the view and the dumps.
+    fn browser_body(
+        &mut self,
+        ui: &mut egui::Ui,
+        cx: &mut DiskContext<'_>,
+        fs_state: antinomie_monitor_core::disks::Ext4State,
+    ) {
+        if fs_state == antinomie_monitor_core::disks::Ext4State::NotClean {
+            crate::activity::warning(ui, fs_state.explanation());
         }
         if let Some(Err(error)) = &self.probe {
             crate::activity::error(ui, error);

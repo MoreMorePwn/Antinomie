@@ -217,3 +217,68 @@ fn the_binary_refuses_to_run_as_a_reader_outside_the_sandbox() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("requires its sandbox"));
 }
+
+#[test]
+fn an_imported_image_browses_in_the_sandbox_and_deleting_it_keeps_the_original() {
+    use antinomie_monitor_core::disks::dump;
+    let scratch = Scratch::new();
+    let Some(image) = image(&scratch) else {
+        eprintln!("skipped: bubblewrap, prlimit and mkfs.ext4 are needed");
+        return;
+    };
+    if !sandbox_works(&scratch, &image) {
+        eprintln!("skipped: the sandbox cannot start here");
+        return;
+    }
+    // Import: a raw ext4 image only, validated before anything is recorded.
+    let recordings = scratch.0.join("recordings");
+    let junk = scratch.0.join("junk.img");
+    fs::write(&junk, vec![0u8; 1 << 20]).unwrap();
+    assert!(dump::import(&recordings, "vm", "VM", &junk).is_err());
+    let truncated = scratch.0.join("truncated.ext4");
+    fs::write(&truncated, &fs::read(&image).unwrap()[..4 << 20]).unwrap();
+    assert!(dump::import(&recordings, "vm", "VM", &truncated)
+        .unwrap_err()
+        .contains("cut short"));
+    assert!(dump::list(std::slice::from_ref(&recordings)).is_empty());
+    let imported = dump::import(&recordings, "vm", "VM", &image).unwrap();
+
+    // Listed and read through the sandbox like any dump: it is a plain file,
+    // so it needs no running VM.
+    let listed = dump::list(std::slice::from_ref(&recordings));
+    assert_eq!(listed.len(), 1);
+    let dump_entry = &listed[0];
+    let mut reader = Reader::with_executable(
+        PathBuf::from(env!("CARGO_BIN_EXE_antinomie-monitor")),
+        &dump_entry.path(),
+        &dump_entry.extract_dir(),
+    )
+    .unwrap();
+    let DiskAnswer::Listed(root) = reader
+        .request(DiskRequest::List {
+            path: "/".into(),
+            offset: 0,
+        })
+        .unwrap()
+        .unwrap()
+    else {
+        panic!("a listing")
+    };
+    assert!(root.entries.iter().any(|entry| entry.name == "etc"));
+    // Extractions of a dump live inside its own folder.
+    reader
+        .request(DiskRequest::Extract {
+            path: "/bin/tool".into(),
+            max_len: 1 << 20,
+        })
+        .unwrap()
+        .unwrap();
+    let placed = extract::place(reader.out(), reader.last_request_id(), "/bin/tool").unwrap();
+    assert!(placed.starts_with(fs::canonicalize(&imported.dir).unwrap()));
+    drop(reader);
+
+    // Deleting removes the folder with the extractions, never the image.
+    dump::delete(&imported).unwrap();
+    assert!(!imported.dir.exists() && !placed.exists());
+    assert!(image.is_file());
+}
