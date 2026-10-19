@@ -9,6 +9,7 @@ mod cards;
 mod finding;
 mod header;
 mod inputs;
+mod journal;
 
 use cards::{card_summary, match_cards, severity_color};
 use finding::{byte_preview, evidence_list, evidence_values, WindowKey};
@@ -224,6 +225,10 @@ pub(super) struct View {
     inputs_open: [bool; 3],
     /// Findings whose Details window is open.
     windows: Vec<WindowKey>,
+    /// The read-only viewer of the normalized event journal.
+    journal: journal::Viewer,
+    /// Converts guest times in the viewer, from the selected recording.
+    clock: Option<antinomie_monitor_core::HostClockAnchor>,
 }
 
 impl View {
@@ -240,6 +245,7 @@ impl View {
         self.pending_byte = None;
         self.bytes = None;
         self.windows.clear();
+        self.journal.close();
         self.results = Default::default();
         self.counts = Default::default();
         self.references.clear();
@@ -343,6 +349,7 @@ impl View {
             .unwrap_or_default();
     }
     pub fn tick(&mut self, ctx: &egui::Context, input: &TriageInput<'_>) {
+        self.clock = input.clock_anchor;
         let identity = input
             .archive
             .zip(input.vm_id.zip(input.boot_id).zip(input.run_id))
@@ -1130,17 +1137,19 @@ impl View {
             }
         }
         let mut selected = None;
+        let scanned = report.source_digest.clone();
         egui::CollapsingHeader::new(format!("Evidence locations ({})", finding.evidence.len()))
             .default_open(true)
             .show(ui, |ui| {
-                selected = evidence_list(ui, finding, "detection-evidence-hits", 240.0);
+                selected =
+                    evidence_list(ui, report.engine, finding, "detection-evidence-hits", 240.0);
             });
         byte_preview(ui, self.bytes.as_ref(), self.byte_rx.is_some(), finding);
         if let Some(key) = window {
             self.open_window(key);
         }
-        if let Some(evidence) = selected {
-            self.open_evidence(ui.ctx(), evidence);
+        if let Some(pick) = selected {
+            self.open_pick(ui.ctx(), scanned, pick);
         }
     }
 }
@@ -1194,6 +1203,7 @@ mod tests {
             mitre: vec![],
             count: evidence.len() as u64,
             evidence,
+            events: vec![],
             details: "readable summary".into(),
             rule_text: String::new(),
         }

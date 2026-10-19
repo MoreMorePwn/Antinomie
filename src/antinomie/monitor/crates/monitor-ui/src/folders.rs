@@ -224,6 +224,25 @@ pub(crate) fn show_detached(directory: PathBuf) {
     });
 }
 
+/// Hand an existing file to the desktop's default application on a background
+/// thread; a failure is only logged. This app opens nothing for writing: what
+/// the other application does with the file is its own business.
+pub(crate) fn open_file_detached(file: PathBuf) {
+    thread::spawn(move || {
+        let status = Command::new("xdg-open")
+            .arg(&file)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        match status {
+            Ok(status) if status.success() => {}
+            Ok(status) => eprintln!("Open file failed: {status}"),
+            Err(error) => eprintln!("Open file: {error}"),
+        }
+    });
+}
+
 /// A `file://` URI with every byte outside the unreserved set and `/`
 /// percent-encoded, so a comma cannot split the dbus-send array argument.
 fn file_uri(path: &Path) -> String {

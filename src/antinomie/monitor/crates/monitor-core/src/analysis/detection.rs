@@ -92,11 +92,24 @@ pub enum Evidence {
     },
 }
 
+/// When a source recorded an event, in that source's own clock: calls carry
+/// the guest's monotonic nanoseconds, packets the host's Unix microseconds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "clock", content = "value", rename_all = "snake_case")]
+pub enum Moment {
+    GuestNs(u64),
+    EpochUs(u64),
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Event {
     pub category: String,
     pub fields: BTreeMap<String, serde_json::Value>,
     pub evidence: Evidence,
+    /// Absent in journals written before this was recorded, and when the
+    /// source had no timestamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<Moment>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -244,6 +257,11 @@ pub struct Finding {
     pub mitre: Vec<String>,
     pub count: u64,
     pub evidence: Vec<Evidence>,
+    /// Sigma only: the one-based journal ordinal of the event behind each
+    /// `evidence` entry, in the same order. Empty on other engines and on
+    /// results saved before it was kept.
+    #[serde(default)]
+    pub events: Vec<u64>,
     pub details: String,
     /// Original rule body: one YARA rule, one Suricata rule, or one Sigma document.
     /// Empty on results saved before this was retained.
@@ -329,6 +347,7 @@ impl Report {
 
 mod ids;
 mod inputs;
+pub mod journal;
 mod runner;
 mod yara;
 pub use inputs::{InputKind, InputOutcome, ScannedInput};
@@ -596,6 +615,7 @@ mod tests {
                     cookie: 7,
                     call: u64::MAX,
                 },
+                time: None,
             })
             .unwrap();
         assert!(!directory.join(JOURNAL_FILE).exists());
@@ -608,6 +628,7 @@ mod tests {
                     cookie: 7,
                     call: 2,
                 },
+                time: None,
             })
             .unwrap();
         let result = journal.finish(true).unwrap();
@@ -625,6 +646,26 @@ mod tests {
         fs::remove_dir_all(directory).unwrap();
     }
     #[test]
+    fn events_keep_their_time_and_journals_without_one_still_load() {
+        let old = r#"{"category":"file_event","fields":{},"evidence":{"kind":"call","stream":1,"cookie":2,"call":3}}"#;
+        let event: Event = serde_json::from_str(old).unwrap();
+        assert_eq!(event.time, None);
+        assert!(!serde_json::to_string(&event).unwrap().contains("time"));
+        let timed = Event {
+            time: Some(Moment::EpochUs(9)),
+            ..event
+        };
+        let text = serde_json::to_string(&timed).unwrap();
+        assert!(
+            text.contains(r#""time":{"clock":"epoch_us","value":9}"#),
+            "{text}"
+        );
+        assert_eq!(
+            serde_json::from_str::<Event>(&text).unwrap().time,
+            timed.time
+        );
+    }
+    #[test]
     fn attack_reference_syntax_does_not_turn_arbitrary_numbers_into_techniques() {
         assert_eq!(
             mitre_references("attack.t1059.004 [T1105] T1105 task 123 T99999"),
@@ -636,6 +677,7 @@ mod tests {
         let saved = r#"{"rule_id":"old","title":"Old","severity":"low","source":"legacy","license":"","mitre":[],"count":1,"evidence":[],"details":""}"#;
         let finding: Finding = serde_json::from_str(saved).unwrap();
         assert!(finding.author.is_empty());
+        assert!(finding.events.is_empty(), "no journal event numbers kept");
         let authored = Finding {
             author: "One Author, Second Author".into(),
             ..finding.clone()

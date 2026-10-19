@@ -34,16 +34,19 @@ class AdapterTests(unittest.TestCase):
     def test_missing_command_line_cannot_match_a_negated_condition(self):
         connection, _, _ = self.fixture()
         query = "SELECT * FROM logs WHERE Image LIKE '%/sh' AND NOT COALESCE(CommandLine LIKE '%evil%', 0)"
-        total, evidence, evaluated, missing = adapter.matching_rows(connection, [query], "process_creation")
+        total, evidence, evaluated, missing, event_ids = adapter.matching_rows(connection, [query], "process_creation")
         self.assertEqual((total, evaluated, missing), (1, 2, 1))
         self.assertEqual(evidence[0]["call"], 2 ** 64 - 1)
+        self.assertEqual(event_ids, [1], "the exact journal ordinal of the matched event")
 
     def test_multiple_conditions_deduplicate_and_preserve_evidence(self):
         connection, _, _ = self.fixture()
         query = "SELECT * FROM logs WHERE Image LIKE '%/sh'"
-        total, evidence, _, _ = adapter.matching_rows(connection, [query, query], "process_creation")
+        total, evidence, _, _, event_ids = adapter.matching_rows(connection, [query, query], "process_creation")
         self.assertEqual(total, 2)
         self.assertEqual(len(evidence), 2)
+        self.assertEqual(event_ids, [1, 2])
+        self.assertEqual([item["call"] for item in evidence], [2 ** 64 - 1, 2 ** 64 - 2])
 
     def test_identity_mismatch_and_mutating_or_unknown_queries_are_rejected(self):
         connection, path, identity = self.fixture()
@@ -66,6 +69,7 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(report["skipped_rules"], 2, report)
         self.assertEqual(report["findings"][0]["title"], "Shell Execution Observed")
         self.assertEqual(report["findings"][0]["count"], 2)
+        self.assertEqual(report["findings"][0]["events"], [1, 2])
         self.assertEqual(report["findings"][0]["mitre"], ["T1059.004"])
         self.assertTrue(report["sources"][0]["sha256"])
         self.assertIn("not full compatibility", report["warnings"][0])

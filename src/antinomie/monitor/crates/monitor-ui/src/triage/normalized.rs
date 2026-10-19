@@ -2,7 +2,7 @@
 //! Normalize facts already reconstructed by triage; do not infer missing fields.
 use super::*;
 use antinomie_monitor_core::analysis::detection::JournalSummary;
-use antinomie_monitor_core::analysis::detection::{Event, EventJournal, Evidence};
+use antinomie_monitor_core::analysis::detection::{Event, EventJournal, Evidence, Moment};
 use std::collections::BTreeMap;
 
 type Stamp = (u64, u64, u64, i64, i64, i64, i64);
@@ -211,11 +211,13 @@ pub(super) fn call(
         cookie: call.task_cookie,
         call: call.call_id,
     };
+    let time = (event.timestamp_ns != 0).then_some(Moment::GuestNs(event.timestamp_ns));
     let mut emit = |category: &str, fields: BTreeMap<String, serde_json::Value>| {
         journal.push(Event {
             category: category.into(),
             fields,
             evidence: evidence.clone(),
+            time,
         })
     };
     if committed_exec(call) {
@@ -372,6 +374,14 @@ pub(super) fn packet(
             capture: path.to_path_buf(),
             frame,
         },
+        time: values
+            .iter()
+            .find_map(|(name, value)| match (*name, value) {
+                ("frame.time_us", RowValue::Number(time)) => {
+                    u64::try_from(*time).ok().map(Moment::EpochUs)
+                }
+                _ => None,
+            }),
     })
 }
 
@@ -430,6 +440,12 @@ mod tests {
         let mut files = FdState::default();
         let mut exec = super::super::tests::path_call(1, 59, "execve", 0, "/bin/sh");
         exec.call_id = u64::MAX;
+        for part in [exec.entry.as_mut(), exec.exit.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            part.timestamp_ns = 1234;
+        }
         observe_processes(&mut files.process_images, std::slice::from_ref(&exec));
         call(
             &mut journal,
@@ -453,6 +469,38 @@ mod tests {
         assert_eq!(event["event"]["fields"]["Image"], "/bin/sh");
         assert!(event["event"]["fields"].get("CommandLine").is_none());
         assert_eq!(event["event"]["evidence"]["call"].as_u64(), Some(u64::MAX));
+        // The recorded guest time travels with the event for the journal viewer.
+        assert_eq!(
+            event["event"]["time"],
+            serde_json::json!({"clock": "guest_ns", "value": 1234})
+        );
+    }
+    #[test]
+    fn a_packet_event_carries_the_capture_time() {
+        let temp = PacketSpool::new().unwrap();
+        let identity = Identity {
+            vm_id: "v".into(),
+            boot_id: "b".into(),
+            run_id: "r".into(),
+            root_cookie: 1,
+        };
+        let mut journal = EventJournal::new(&temp.directory, &identity).unwrap();
+        let mut row = cell("", theme::text(), true);
+        row.values = vec![
+            ("frame.number", RowValue::Number(5)),
+            ("frame.time_us", RowValue::Number(1_700_000_000_000_000)),
+            ("dns.name", RowValue::Text("a.test".into())),
+        ];
+        let capture = Path::new("/runs/r/net.pcap");
+        packet(&mut journal, capture, &[row], false, "198.51.100.1", "53").unwrap();
+        journal.finish(true).unwrap();
+        let data = std::fs::read_to_string(temp.directory.join(engine_file())).unwrap();
+        let event: serde_json::Value = serde_json::from_str(data.lines().nth(1).unwrap()).unwrap();
+        assert_eq!(
+            event["event"]["time"],
+            serde_json::json!({"clock": "epoch_us", "value": 1_700_000_000_000_000_u64})
+        );
+        assert_eq!(event["event"]["evidence"]["frame"], 5);
     }
     #[test]
     fn a_complete_argument_vector_becomes_the_command_line() {

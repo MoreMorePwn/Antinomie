@@ -247,6 +247,7 @@ mod tests {
                     cookie: 55,
                     call: 1,
                 }],
+                events: vec![],
                 details: "Synthetic match for native layout review".into(),
                 rule_text: String::new(),
             });

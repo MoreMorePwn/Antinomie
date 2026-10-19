@@ -6,6 +6,18 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Inspect the Sigma event journal.** The Event journal row under Detection →
+  Scanned inputs, and a Sigma finding's evidence, open a read-only viewer of the
+  normalized events the rules were matched against: category, time, process and
+  main fields per event, a category filter and text search, and every field of the
+  selected event. Each event links to its Syscall Trace call or Network packet.
+  The header shows the end record (complete or not, events left out, events per
+  category) and whether the file is the one the scan read. Sigma findings now keep
+  the exact journal event number; older results link by call or packet and say when
+  one source produced several events. Journals are read in pages of 100 on a
+  worker, bounded and cancelled on a run switch. Open file and Copy path expose the
+  raw JSONL; this app never writes it.
+
 - **Late forks preserve recorded child exits.** The host process tracker uses
   guest time and leader identity to distinguish delayed CPU-stream delivery from
   PID reuse. Old lifetime and exec records cannot erase newer terminal facts.
