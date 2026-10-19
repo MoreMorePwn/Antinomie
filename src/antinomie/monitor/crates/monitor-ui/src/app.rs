@@ -23,6 +23,7 @@ mod run_selector;
 mod session;
 mod sidebar;
 mod stealth;
+mod trace_paging;
 mod trace_view;
 mod triage_pcap;
 mod triage_ui;
@@ -92,6 +93,9 @@ struct Settings {
     font_size: f32,
     /// Tint syscall trace rows by syscall group.
     trace_colors: bool,
+    /// Maximum calls in a saved syscall page; constrained to the archive API.
+    #[serde(deserialize_with = "trace_paging::deserialize_page_size")]
+    trace_page_size: usize,
     /// Syscall groups hidden from the trace.
     hidden_trace_categories: Vec<SyscallGroup>,
     /// Light palette instead of the dark one.
@@ -137,6 +141,7 @@ impl Default for Settings {
             timeout: 10,
             font_size: 16.0,
             trace_colors: true,
+            trace_page_size: 100,
             hidden_trace_categories: Vec::new(),
             light_theme: false,
             compact: true,

@@ -6,6 +6,10 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Configurable syscall pages.** Calls/page accepts 1–256 (default 100), saves
+  the choice across restarts and resets page cursors when changed while keeping
+  the applied filter. Page totals use the selected size.
+
 - **Health includes recorder and async capture loss.** Recorder statistics are
   sampled without blocking, with overdue replies shown as unavailable. Summary
   shows failed sends and affected runs separately from TRL/UIL/STL. Async-loss

@@ -45,6 +45,7 @@ pub(crate) enum Request {
         generation: u64,
         directory: PathBuf,
         offset: u64,
+        limit: usize,
         capture: bool,
         /// Only this guest process (thread group ID).
         pid: Option<u32>,
@@ -176,6 +177,7 @@ fn invocations(
     shared: &Shared,
     view: &totals::View,
     offset: u64,
+    limit: usize,
     cancel: &Arc<AtomicBool>,
 ) -> Result<(InvocationPage, Option<(u64, u64)>), String> {
     let filter = crate::query::compile_note(&view.query);
@@ -188,7 +190,7 @@ fn invocations(
         .open(cancel)?
         .matching_page_cancellable(
             offset,
-            100,
+            limit,
             view.pid,
             cancel,
             totals::predicate(&filter, &view.hidden_categories),
@@ -245,6 +247,7 @@ fn answer(request: Request, shared: &Shared) -> Answer {
             generation,
             directory,
             offset,
+            limit,
             capture,
             pid,
             query,
@@ -265,7 +268,7 @@ fn answer(request: Request, shared: &Shared) -> Answer {
                 query,
                 hidden_categories,
             };
-            let read = invocations(shared, &view, offset, &cancel);
+            let read = invocations(shared, &view, offset, limit, &cancel);
             *shared
                 .active_invocations
                 .lock()
@@ -617,6 +620,7 @@ mod tests {
             generation: 1,
             directory: directory.into(),
             offset: 0,
+            limit: 100,
             capture: true,
             pid,
             query: query.into(),
@@ -624,6 +628,47 @@ mod tests {
             cancel,
         }
     }
+    #[test]
+    fn configurable_pages_follow_raw_cursors_without_skipping_filtered_calls() {
+        let fixture = fixture(350);
+        let worker = ArchiveWorker::new(None).unwrap();
+        for (query, expected) in [("call.id >= 150", 150..350), ("call.id > 500", 0..0)] {
+            for size in [1, 37, 100, 256] {
+                let mut offset = 0;
+                let mut ids = Vec::new();
+                loop {
+                    let mut asked = request(
+                        &fixture.0,
+                        query,
+                        None,
+                        Vec::new(),
+                        Arc::new(AtomicBool::new(false)),
+                    );
+                    if let Request::Invocations {
+                        offset: at, limit, ..
+                    } = &mut asked
+                    {
+                        *at = offset;
+                        *limit = size;
+                    }
+                    worker.request(asked).unwrap();
+                    let Answer::Invocations { result, .. } =
+                        worker.wait_answer(Duration::from_secs(60)).unwrap()
+                    else {
+                        panic!("wrong answer")
+                    };
+                    let page = result.unwrap();
+                    assert!(page.invocations.len() <= size);
+                    ids.extend(page.invocations.iter().map(|call| call.call_id));
+                    let Some(next) = page.next_offset else { break };
+                    assert!(next > offset);
+                    offset = next;
+                }
+                assert_eq!(ids, expected.clone().collect::<Vec<_>>());
+            }
+        }
+    }
+
     #[test]
     fn worker_searches_late_saved_calls_with_typed_query_process_and_category() {
         let fixture = fixture(350);

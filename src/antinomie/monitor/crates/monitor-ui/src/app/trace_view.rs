@@ -106,6 +106,15 @@ impl MonitorApp {
                 self.select_process(selection);
             }
             if self.trace_archive_directory().is_some() {
+                let mut size = self.settings.trace_page_size;
+                ui.label("Calls/page");
+                if ui
+                    .add(egui::DragValue::new(&mut size).range(1..=256))
+                    .on_hover_text("Saved syscall page size (1–256); saved across restarts")
+                    .changed()
+                {
+                    self.set_trace_page_size(size);
+                }
                 if icon(
                     ui,
                     egui_phosphor::regular::ARROW_LEFT,
@@ -152,9 +161,10 @@ impl MonitorApp {
                 if let Some(total) = self.archive_total {
                     if self.archive_page_generation == self.archive_generation {
                         ui.label(format!(
-                            "Page {} of {} · 100 calls/page · {total} matching / {} saved calls",
+                            "Page {} of {} · {} calls/page · {total} matching / {} saved calls",
                             self.archive_previous.len() + 1,
-                            total.div_ceil(100).max(1),
+                            total.div_ceil(self.settings.trace_page_size as u64).max(1),
+                            self.settings.trace_page_size,
                             self.archive_source_total.unwrap_or(total)
                         ));
                     } else {
