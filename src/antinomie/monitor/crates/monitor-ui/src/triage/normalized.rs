@@ -171,6 +171,10 @@ pub(super) struct Counts {
     pub opened: u64,
     pub reads: u64,
     pub changed: u64,
+    /// Operation tabs after Opened, by slot from 8. Failed attempts are left out.
+    pub tabs: [u64; FILE_TABS],
+    /// File calls that failed. They are not in any count above.
+    pub failed_attempts: u64,
     pub http: u64,
     pub dns: u64,
 }

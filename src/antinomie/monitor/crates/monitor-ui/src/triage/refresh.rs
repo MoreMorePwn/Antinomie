@@ -5,6 +5,12 @@ use super::*;
 /// The answer of an index thread that found the recording as the last index saw it.
 pub(super) const UNCHANGED: &str = "unchanged";
 
+/// Format of the file indexes built from a recording: which tabs exist and
+/// what their rows and counts mean. It is part of the source stamp, so an
+/// index made by an older format is never mistaken for current and is
+/// rebuilt from the recording.
+pub(super) const FILE_INDEX_VERSION: u32 = 2;
+
 /// What an index of the recording depends on, as a string: size and
 /// modification time of the files it reads, and the request facts that
 /// change its meaning. Equal strings mean a new index would be the same.
@@ -30,7 +36,7 @@ pub(super) fn source_stamp(
         )
     };
     let mut stamp = format!(
-        "{pcap_open}|{}|{:?}|{}|{:?}",
+        "files-v{FILE_INDEX_VERSION}|{pcap_open}|{}|{:?}|{}|{:?}",
         request.run_finished,
         request.started_ms,
         request.root_cookie,
@@ -294,6 +300,6 @@ impl TriageView {
         self.bpf_export_status.clear();
         self.packet_jump = None;
         self.packet_capture = None;
-        self.scan_request.offsets = [0; 8];
+        self.scan_request.offsets = [0; SLOTS];
     }
 }

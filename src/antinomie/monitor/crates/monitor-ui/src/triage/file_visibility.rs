@@ -6,6 +6,8 @@ use super::*;
 pub(super) struct FileVisibility {
     pub hide_standard_io: bool,
     pub hide_libraries: bool,
+    /// List calls the kernel refused. They are never counted as changes.
+    pub show_failed: bool,
 }
 
 impl Default for FileVisibility {
@@ -13,6 +15,7 @@ impl Default for FileVisibility {
         Self {
             hide_standard_io: true,
             hide_libraries: true,
+            show_failed: false,
         }
     }
 }
@@ -22,6 +25,13 @@ impl FileVisibility {
         let Some(first) = row.first() else {
             return true;
         };
+        if !self.show_failed
+            && first.values.iter().any(|(key, value)| {
+                *key == "file.result" && matches!(value, RowValue::Text(text) if text == "failed")
+            })
+        {
+            return false;
+        }
         if self.hide_standard_io
             && first.values.iter().any(|(key, value)| {
                 matches!((*key, value), ("file.standard_io", RowValue::Bool(true)))
@@ -69,10 +79,30 @@ mod tests {
         assert!(!visibility.keeps(&row));
         assert!(FileVisibility {
             hide_standard_io: false,
-            hide_libraries: false
+            hide_libraries: false,
+            show_failed: false
         }
         .keeps(&row));
         row[0].values = vec![("file.standard_io", RowValue::Bool(true))];
         assert!(!visibility.keeps(&row));
+    }
+
+    #[test]
+    fn failed_attempts_are_hidden_until_asked_for() {
+        let mut row = vec![cell("path", theme::text(), true)];
+        row[0].values = vec![
+            ("file.path", RowValue::Text("/tmp/a".into())),
+            ("file.result", RowValue::Text("failed".into())),
+        ];
+        assert!(!FileVisibility::default().keeps(&row));
+        let shown = FileVisibility {
+            show_failed: true,
+            ..FileVisibility::default()
+        };
+        assert!(shown.keeps(&row));
+        row[0].values[1].1 = RowValue::Text("no exit".into());
+        assert!(FileVisibility::default().keeps(&row));
+        row[0].values[1].1 = RowValue::Text("succeeded".into());
+        assert!(FileVisibility::default().keeps(&row));
     }
 }

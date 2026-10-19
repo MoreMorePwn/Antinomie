@@ -102,6 +102,8 @@ enum Metric {
     Opened,
     Reads,
     Changed,
+    /// An operation tab other than Opened and Read.
+    File(FileTab),
     Ips,
     Hosts,
     Http,
@@ -121,6 +123,7 @@ impl TriageView {
             Metric::Opened => scan.counts.opened,
             Metric::Reads => scan.counts.reads,
             Metric::Changed => scan.counts.changed,
+            Metric::File(tab) => scan.counts.tabs[tab.slot() - 8],
             Metric::Ips | Metric::Hosts | Metric::Http | Metric::Dns => {
                 let Some((_, ips, hosts)) = scan.network_counts else {
                     return Count::Unavailable;
@@ -155,15 +158,17 @@ impl TriageView {
 
     pub(super) fn file_tabs(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            for (value, title, metric) in [
-                (FileTab::Opened, "Opened files", Metric::Opened),
-                (FileTab::Read, "Read files", Metric::Reads),
-                (FileTab::Changed, "Changed files", Metric::Changed),
-            ] {
+            for value in FileTab::ALL {
+                let metric = match value {
+                    FileTab::Opened => Metric::Opened,
+                    FileTab::Read => Metric::Reads,
+                    FileTab::Changed => Metric::Changed,
+                    other => Metric::File(other),
+                };
                 if tab(
                     ui,
                     self.files == value,
-                    title,
+                    value.title(),
                     self.section_count(metric),
                     false,
                 ) {

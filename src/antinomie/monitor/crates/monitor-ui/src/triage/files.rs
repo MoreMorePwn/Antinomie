@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Bounded, evidence-based file reads and original-to-final change reconstruction.
 //! Unknown bytes are never zero-filled. Paths are observed names, not inode identities.
+use super::file_category::{self, Access, Category, Hit};
 use super::file_content::{capture as captured_data, CapturedPayload};
+use super::file_location::{self, Location};
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -43,7 +45,20 @@ pub(super) struct Change {
     deleted: bool,
     gaps: BTreeSet<&'static str>,
     operations: Vec<Operation>,
+    /// What happened to the file, in order; a repeat is counted, not listed again.
+    lifecycle: Vec<(String, u32)>,
+    lifecycle_cut: bool,
+    categories: BTreeSet<&'static str>,
+    /// Change attempts the kernel refused. They are not changes.
+    failed: u32,
+    /// Last mode a successful chmod set, to tell a new `+x` from a repeat.
+    mode: Option<u64>,
+    locations: Vec<Location>,
+    access: Option<Access>,
 }
+
+/// Distinct lifecycle steps kept per file.
+const LIFECYCLE_STEPS: usize = 64;
 
 impl Change {
     fn diff_count(&self) -> usize {
@@ -69,6 +84,56 @@ impl Change {
             _ => false,
         }
     }
+    /// Whether the file has a change the kernel accepted, or one with no exit.
+    pub fn real(&self) -> bool {
+        self.changes
+    }
+    fn step(&mut self, label: String) {
+        if let Some((last, count)) = self.lifecycle.last_mut() {
+            if *last == label {
+                *count += 1;
+                return;
+            }
+        }
+        if self.lifecycle.len() < LIFECYCLE_STEPS {
+            self.lifecycle.push((label, 1));
+        } else {
+            self.lifecycle_cut = true;
+        }
+    }
+    /// "created → written 3× → chmod +x → executed → deleted"
+    pub fn lifecycle_text(&self) -> String {
+        let mut text = self
+            .lifecycle
+            .iter()
+            .map(|(label, count)| {
+                if *count > 1 {
+                    format!("{label} {count}×")
+                } else {
+                    label.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" → ");
+        if self.lifecycle_cut {
+            text.push_str(" → …");
+        }
+        if text.is_empty() {
+            text = if self.changes {
+                "changed".into()
+            } else {
+                "no change".into()
+            };
+        }
+        if self.failed > 0 {
+            text.push_str(&format!(
+                " · {} failed attempt{} not counted",
+                self.failed,
+                if self.failed == 1 { "" } else { "s" }
+            ));
+        }
+        text
+    }
     fn count_label(&self) -> String {
         let count = self.diff_count();
         if self.original_size.is_some() && self.final_size.is_some() && self.gaps.is_empty() {
@@ -93,6 +158,7 @@ impl Change {
                 theme::text(),
                 true,
             ),
+            cell(self.lifecycle_text(), theme::text(), false),
             cell(
                 self.count_label(),
                 if self.gaps.is_empty() {
@@ -100,6 +166,11 @@ impl Change {
                 } else {
                     theme::warn()
                 },
+                false,
+            ),
+            cell(
+                file_category::location_text(&self.locations),
+                theme::text(),
                 false,
             ),
             cell(format!("call {}", self.call), theme::text(), true),
@@ -145,6 +216,34 @@ impl Change {
             (
                 "file.operation",
                 RowValue::List(self.operations.iter().map(|op| op.name.clone()).collect()),
+            ),
+            ("file.lifecycle", RowValue::Text(self.lifecycle_text())),
+            (
+                "file.category",
+                RowValue::List(
+                    self.categories
+                        .iter()
+                        .map(|name| (*name).to_owned())
+                        .collect(),
+                ),
+            ),
+            (
+                "file.failed_attempts",
+                RowValue::Number(i128::from(self.failed)),
+            ),
+            (
+                "file.result",
+                RowValue::Text(if self.changes { "succeeded" } else { "failed" }.into()),
+            ),
+            (
+                "file.access_by",
+                self.access.map_or(RowValue::Missing, |access| {
+                    RowValue::Text(access.tag().into())
+                }),
+            ),
+            (
+                "file.location",
+                RowValue::List(self.locations.iter().map(|l| l.tag().to_owned()).collect()),
             ),
         ];
         row
@@ -225,12 +324,26 @@ pub(super) struct FileIndex {
 }
 
 impl FileIndex {
+    #[cfg(test)]
     pub fn observe(
         &mut self,
         files: &FdState,
         call: &InvocationSummary,
         event: &EventSummary,
         directory: Option<&Path>,
+    ) -> Option<Vec<Cell>> {
+        let hits = file_category::classify(files, call, event);
+        self.observe_with(files, call, event, directory, &hits)
+    }
+
+    /// `hits` is the call's classification, made before the call was tracked.
+    pub fn observe_with(
+        &mut self,
+        files: &FdState,
+        call: &InvocationSummary,
+        event: &EventSummary,
+        directory: Option<&Path>,
+        hits: &[Hit],
     ) -> Option<Vec<Cell>> {
         let name = event.syscall_name.as_str();
         let args = call_args(call);
@@ -321,8 +434,18 @@ impl FileIndex {
             name,
             "write" | "pwrite64" | "writev" | "pwritev" | "pwritev2"
         );
-        let changed = change_operation(call, event);
-        if !reading && !changed {
+        let failed = file_category::outcome(call).failed();
+        let created = hits.iter().any(|hit| hit.category == Category::Created);
+        let changed = change_operation(call, event) || created;
+        // An exec or an executable mapping is part of a file's story, but
+        // does not make a file worth listing by itself.
+        let lifecycle_only = !reading
+            && !changed
+            && !failed
+            && hits
+                .iter()
+                .any(|hit| matches!(hit.category, Category::Executed | Category::Mapped));
+        if !reading && !changed && !lifecycle_only {
             return None;
         }
         let observed = displayed_path(call, event, files);
@@ -392,6 +515,16 @@ impl FileIndex {
                           path_known: bool,
                           fd: Option<u64>,
                           content: Option<&CapturedPayload>| {
+            let read_locations = if path_known {
+                file_location::classify(path, &file_category::own_images(files))
+            } else {
+                Vec::new()
+            };
+            let read_access = if path_known {
+                Access::ByDescriptor
+            } else {
+                Access::Inherited
+            };
             let mut row = vec![
                 cell(event.timestamp_ns.to_string(), theme::text(), true),
                 cell(path, theme::text(), true),
@@ -418,6 +551,12 @@ impl FileIndex {
                     true,
                 ),
                 cell(result_label(ret), theme::text(), false),
+                cell(
+                    file_category::location_text(&read_locations),
+                    theme::text(),
+                    false,
+                ),
+                cell(read_access.label(), theme::text(), false),
                 cell(format!("call {}", call.call_id), theme::text(), true),
             ];
             row[0].values = vec![
@@ -476,7 +615,16 @@ impl FileIndex {
                     "syscall.ret",
                     ret.map_or(RowValue::Missing, |ret| RowValue::Number(i128::from(ret))),
                 ),
+                (
+                    "file.category",
+                    RowValue::List(vec![Category::Read.label().to_owned()]),
+                ),
             ];
+            row[0].values.extend(file_category::cross_values(
+                file_category::outcome(call),
+                read_access,
+                &read_locations,
+            ));
             row
         };
         let read_row = if reading {
@@ -496,6 +644,9 @@ impl FileIndex {
                 }
             })
         };
+        if lifecycle_only && !self.changes.contains_key(&group) {
+            return read_row;
+        }
         if !self.changes.contains_key(&group) && self.changes.len() >= TRACKED_FILES {
             self.omitted_files += 1;
             return read_row;
@@ -510,6 +661,8 @@ impl FileIndex {
             first_ns: event.timestamp_ns,
             pid: event.pid,
             tid: event.tid,
+            locations: file_category::locations(files, call, event),
+            access: Some(file_category::access(files, call, event)),
             ..Change::default()
         });
         // Hide a group only when every observed operation uses fd 0/1/2.
@@ -537,18 +690,34 @@ impl FileIndex {
         } else {
             change.gaps.insert("Operation timeline retention limit reached; use syscall evidence for remaining operations.");
         }
-        if changed && !change.changes {
+        if changed && !failed && !change.changes {
             change.call = call.call_id;
             change.key = trace::key(call);
             change.first_ns = event.timestamp_ns;
             change.pid = event.pid;
             change.tid = event.tid;
         }
-        change.changes |= changed;
-        if changed && !success {
-            change.gaps.insert(
-                "A change attempt failed or has no recorded exit; see the operation timeline.",
-            );
+        change.changes |= changed && !failed;
+        if changed && failed {
+            change.failed = change.failed.saturating_add(1);
+        } else if changed && !success {
+            change
+                .gaps
+                .insert("A change attempt has no recorded exit; see the operation timeline.");
+        }
+        if !failed {
+            let created = hits.iter().any(|hit| hit.category == Category::Created);
+            for hit in hits {
+                if hit.category == Category::Truncated && created {
+                    continue;
+                }
+                if let Some(label) =
+                    file_category::step_label(files, call, event, *hit, &mut change.mode)
+                {
+                    change.categories.insert(hit.category.label());
+                    change.step(label);
+                }
+            }
         }
         if writing && ret.is_none() {
             change.modified = true;
@@ -682,7 +851,7 @@ impl FileIndex {
     pub fn finish(self) -> Vec<Change> {
         self.changes
             .into_values()
-            .filter(|change| change.changes)
+            .filter(|change| change.changes || change.failed > 0)
             .map(|mut change| {
                 change.known_diff_count = Some(change.diff_count());
                 change
@@ -692,7 +861,7 @@ impl FileIndex {
 }
 
 /// The descriptor a sendfile, copy_file_range or splice reads from.
-fn transfer_source(name: &str, args: Option<[u64; 6]>) -> Option<u64> {
+pub(super) fn transfer_source(name: &str, args: Option<[u64; 6]>) -> Option<u64> {
     let args = args?;
     match name {
         "sendfile" => Some(args[1]),
@@ -723,39 +892,17 @@ pub(super) fn change_operation(call: &InvocationSummary, event: &EventSummary) -
     // mmap records a mapping, not a write. msync is the observed write-back.
     CHANGE_NAMES.contains(&name)
         || (OPEN_NAMES.contains(&name)
-            && open_flags(call, event).is_some_and(|flags| flags & (0x40 | 0x200) != 0))
+            && open_flags(call, event).is_some_and(|flags| flags & 0x200 != 0))
         || reflink(name, call_args(call))
 }
 
 /// ioctl FICLONE and FICLONERANGE: the destination descriptor's contents are
 /// replaced by a shared extent of the source, without a write.
-const FICLONE: u64 = 0x4004_9409;
-const FICLONERANGE: u64 = 0x4020_940d;
+pub(super) const FICLONE: u64 = 0x4004_9409;
+pub(super) const FICLONERANGE: u64 = 0x4020_940d;
 
-fn reflink(name: &str, args: Option<[u64; 6]>) -> bool {
+pub(super) fn reflink(name: &str, args: Option<[u64; 6]>) -> bool {
     name == "ioctl" && args.is_some_and(|args| matches!(args[1], FICLONE | FICLONERANGE))
-}
-
-pub(super) fn opened_row(
-    row: &[Cell],
-    clock: Option<antinomie_monitor_core::HostClockAnchor>,
-) -> Vec<Cell> {
-    let values = &row[0].values;
-    let time = number(values, "event.time_ns");
-    let ret = number_signed(values, "syscall.ret").and_then(|value| i64::try_from(value).ok());
-    let mut projected = vec![
-        cell(
-            crate::time_format::guest_ns(clock, time),
-            theme::text(),
-            true,
-        ),
-        row[0].clone(),
-        row[1].clone(),
-        cell(result_label(ret), theme::text(), false),
-        row[11].clone(),
-    ];
-    projected[0].values = values.clone();
-    projected
 }
 
 pub(super) fn number(values: &[(&str, RowValue)], key: &str) -> Option<u64> {

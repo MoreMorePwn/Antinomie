@@ -32,6 +32,7 @@ pub(super) fn file_rows(invocations: &[InvocationSummary], names: &[&str]) -> Li
     limited
 }
 
+#[cfg(test)]
 pub(super) fn file_event_row(
     files: &FdState,
     invocation: &InvocationSummary,
@@ -54,6 +55,16 @@ pub(super) fn file_event_row(
             return None;
         }
     }
+    Some(event_row(files, invocation, event))
+}
+
+/// The row of one file call, without deciding whether its tab lists the call.
+pub(super) fn event_row(
+    files: &FdState,
+    invocation: &InvocationSummary,
+    event: &EventSummary,
+) -> Vec<Cell> {
+    let flags = open_flags(invocation, event);
     let path = displayed_path(invocation, event, files);
     let result = invocation
         .exit
@@ -232,7 +243,7 @@ pub(super) fn file_event_row(
         cell(event.timestamp_ns.to_string(), theme::text(), true),
         cell("1", theme::text(), true),
     ]);
-    Some(row)
+    row
 }
 
 pub(super) fn open_flags(invocation: &InvocationSummary, event: &EventSummary) -> Option<u64> {

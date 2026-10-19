@@ -378,11 +378,6 @@ impl<T: Row> Page<T> {
         }
         if let Some(sort) = self.sort {
             let cells = row.cells();
-            let projected = if self.index == 1 {
-                files::opened_row(&cells, None)
-            } else {
-                cells.clone()
-            };
             let headers: &[&str] = match self.index {
                 0 => &[
                     "Rule",
@@ -396,24 +391,11 @@ impl<T: Row> Page<T> {
                     "Version",
                     "Outcome",
                 ],
-                1 => &["Time", "Path", "Process (PID / TID)", "Result", "Evidence"],
-                2 => &[
-                    "Time",
-                    "Path",
-                    "Process (PID / TID)",
-                    "Diff count",
-                    "Evidence",
-                ],
+                1 | 8..=15 => file_category::EVENT_HEADERS,
+                2 => file_tabs::CHANGED_HEADERS,
                 3 => HTTP_HEADERS,
                 4 => DNS_HEADERS,
-                5 => &[
-                    "Time",
-                    "Path",
-                    "Process (PID / TID)",
-                    "Transferred / content",
-                    "Result",
-                    "Evidence",
-                ],
+                5 => file_tabs::READ_HEADERS,
                 6 => &["IP", "Country", "Organization"],
                 _ => &[
                     "Hostname",
@@ -433,7 +415,7 @@ impl<T: Row> Page<T> {
             self.spool
                 .as_mut()
                 .ok_or("sort spool missing")?
-                .push(atom(header, sort.column, &projected), cells)?;
+                .push(atom(header, sort.column, &cells), cells)?;
         } else if self.count >= self.offset && self.rows.len() < STORED_ROWS {
             self.rows.push(row);
         }

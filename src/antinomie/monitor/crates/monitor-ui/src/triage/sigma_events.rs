@@ -20,11 +20,11 @@ const ACCEPT: u64 = 43;
 const SENDTO: u64 = 44;
 const BIND: u64 = 49;
 const ACCEPT4: u64 = 288;
-const O_CREAT: u64 = 0o100;
-const O_EXCL: u64 = 0o200;
-const O_TRUNC: u64 = 0o1000;
+pub(super) const O_CREAT: u64 = 0o100;
+pub(super) const O_EXCL: u64 = 0o200;
+pub(super) const O_TRUNC: u64 = 0o1000;
 /// `__O_TMPFILE | O_DIRECTORY`; both bits must be set.
-const O_TMPFILE: u64 = 0o20200000;
+pub(super) const O_TMPFILE: u64 = 0o20200000;
 const SOCK_CLOEXEC: u64 = 0o2000000;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -56,6 +56,11 @@ pub(super) struct State {
 }
 
 impl State {
+    /// The path was seen earlier in this run, so it existed then.
+    pub(super) fn knows(&self, path: &str) -> bool {
+        self.known.contains(path)
+    }
+
     pub(super) fn copy_sockets(&mut self, source: (u64, u32), target: (u64, u32)) {
         let copied: Vec<_> = self
             .sockets

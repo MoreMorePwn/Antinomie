@@ -92,3 +92,39 @@ fn badge_states_are_grouped_muted_or_accented_and_wrap_in_both_themes() {
         }
     }
 }
+
+#[test]
+fn tab_badges_read_the_whole_run_counts() {
+    let temp = PacketSpool::new().unwrap();
+    let mut raw = std::fs::File::create(temp.directory.join("telemetry.raw")).unwrap();
+    super::super::tests::write_rwx_calls(&mut raw, 0..1);
+    raw.sync_all().unwrap();
+    let mut scan = scan_archive(&temp.directory, None, false, &AtomicBool::new(false)).unwrap();
+    for (at, count) in scan.counts.tabs.iter_mut().enumerate() {
+        *count = 100 + at as u64;
+    }
+    let mut view = TriageView::default();
+    view.scan = Some(scan);
+    for tab in FileTab::ALL {
+        if matches!(tab, FileTab::Opened | FileTab::Read | FileTab::Changed) {
+            continue;
+        }
+        assert_eq!(
+            view.section_count(Metric::File(tab)),
+            Count::Ready(100 + tab.slot() as u64 - 8),
+            "{}",
+            tab.title()
+        );
+    }
+    view.scan = None;
+    assert_eq!(
+        view.section_count(Metric::File(FileTab::Created)),
+        Count::Unavailable
+    );
+    // Every operation category has exactly one tab, and every tab its own slot.
+    let mut slots: Vec<_> = FileTab::ALL.iter().map(|tab| tab.slot()).collect();
+    slots.sort();
+    slots.dedup();
+    assert_eq!(slots.len(), FileTab::ALL.len());
+    assert!(FileTab::ALL.iter().all(|tab| tab.slot() < SLOTS));
+}
