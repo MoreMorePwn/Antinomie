@@ -6,6 +6,10 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Detection warnings appear once.** Selection diagnostics survive worker and
+  parent report merging without duplication; distinct rule warnings and skipped
+  counts are preserved.
+
 - **YARA scans physical RAM dumps.** Guest RAM uses QEMU's captured physical
   ELF segments rather than the Linux process-core reader. Missing ranges remain
   explicit, with the existing block, input-size and time limits.
