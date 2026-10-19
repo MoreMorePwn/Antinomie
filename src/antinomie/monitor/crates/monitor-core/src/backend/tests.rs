@@ -22,6 +22,7 @@ fn notification_backend() -> (Backend, SyncSender<Notification>) {
             sequence: AtomicU64::new(0),
             guest_epoch: Arc::new(AtomicU64::new(0)),
             latest_snapshot: Arc::new(Mutex::new(None)),
+            debug_link: DebugService::new().1,
         },
         sender,
     )
@@ -57,6 +58,7 @@ fn admission_backend() -> AdmissionParts {
             sequence: AtomicU64::new(0),
             guest_epoch: Arc::new(AtomicU64::new(0)),
             latest_snapshot: Arc::new(Mutex::new(None)),
+            debug_link: DebugService::new().1,
         },
         queued,
         sender,
@@ -168,6 +170,7 @@ fn closing_owner_returns_a_result_for_each_accepted_queued_command() {
         flusher: Default::default(),
         disk_job: None,
         host_analysis: Default::default(),
+        debug: DebugService::new().0,
     };
     worker.run();
     drop(command_sender);
@@ -284,6 +287,7 @@ fn full_completion_lane_surfaces_terminal_failure_for_an_accepted_command() {
         sequence: AtomicU64::new(0),
         guest_epoch: Arc::new(AtomicU64::new(0)),
         latest_snapshot: Arc::new(Mutex::new(None)),
+        debug_link: DebugService::new().1,
     };
     let id = backend
         .send(Command::RefreshVmSnapshots { vm_id: "vm".into() })
@@ -315,6 +319,7 @@ fn full_completion_lane_surfaces_terminal_failure_for_an_accepted_command() {
         flusher: Default::default(),
         disk_job: None,
         host_analysis: Default::default(),
+        debug: DebugService::new().0,
     };
     completion_sender
         .try_send(Notification::CommandResult {
@@ -718,7 +723,7 @@ fn run_artifacts_sidecar_load_is_optional_bounded_and_retains_failures() {
     fs::remove_dir_all(root).unwrap();
 }
 
-fn download_worker(root: PathBuf) -> Worker {
+pub(super) fn download_worker(root: PathBuf) -> Worker {
     let (_commands, receiver) = mpsc::sync_channel(1);
     let (sender, _notifications) = mpsc::sync_channel(1);
     let (completion_sender, _completions) = mpsc::sync_channel(COMMAND_COMPLETION_CAPACITY);
@@ -751,6 +756,7 @@ fn download_worker(root: PathBuf) -> Worker {
         flusher: Default::default(),
         disk_job: None,
         host_analysis: Default::default(),
+        debug: DebugService::new().0,
         wake: None,
     }
 }
@@ -1060,6 +1066,7 @@ fn invalid_launch_settings_are_rejected_before_lifecycle_io() {
         flusher: Default::default(),
         disk_job: None,
         host_analysis: Default::default(),
+        debug: DebugService::new().0,
         wake: None,
     };
     for command in [
@@ -1152,6 +1159,7 @@ fn fixed_display_guards_selected_boot_without_changing_pinned_disk() {
         flusher: Default::default(),
         disk_job: None,
         host_analysis: Default::default(),
+        debug: DebugService::new().0,
         wake: None,
     };
     worker
@@ -1255,6 +1263,7 @@ fn base_import_and_failed_credential_creation_preserve_published_state() {
         flusher: Default::default(),
         disk_job: None,
         host_analysis: Default::default(),
+        debug: DebugService::new().0,
         wake: None,
     };
     for guest in [false, true] {
@@ -1409,6 +1418,7 @@ fn running_vm_duplicate_and_delete_guards_preserve_data() {
         flusher: Default::default(),
         disk_job: None,
         host_analysis: Default::default(),
+        debug: DebugService::new().0,
         wake: None,
     };
     assert!(

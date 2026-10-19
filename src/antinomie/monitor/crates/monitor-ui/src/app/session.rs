@@ -45,6 +45,10 @@ impl MonitorApp {
         );
         let process_list = matches!(&command, Command::ListProcesses { .. });
         let core_capture = matches!(&command, Command::DumpProcessCore { .. });
+        let debugger = matches!(
+            &command,
+            Command::DebugAttach { .. } | Command::DebugDetach { .. }
+        );
         let sample = matches!(&command, Command::UploadSample { .. });
         let network = matches!(
             &command,
@@ -58,6 +62,7 @@ impl MonitorApp {
             || observer
             || process_list
             || core_capture
+            || debugger
             || sample
             || network
             || matches!(

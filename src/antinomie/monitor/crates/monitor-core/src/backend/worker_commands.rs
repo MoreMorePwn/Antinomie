@@ -83,6 +83,8 @@ impl Worker {
                     | Command::AttachProcess { .. }
                     | Command::CaptureAll
                     | Command::StopCapture { .. }
+                    | Command::DebugAttach { .. }
+                    | Command::DebugDetach { .. }
                     | Command::CreateVmSnapshot { .. }
                     | Command::RestoreVmSnapshot { .. }
                     | Command::ReconnectTransport

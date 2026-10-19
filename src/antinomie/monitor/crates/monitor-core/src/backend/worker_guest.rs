@@ -22,6 +22,11 @@ impl Worker {
             return Err("process attachment and Capture All are unavailable; running guest requires a base for Antinomie 0.2.0 or newer".into());
         }
         match command {
+            Command::DebugAttach { identity } => {
+                let message = self.debug_attach(identity)?;
+                Ok(message)
+            }
+            Command::DebugDetach { kill } => self.debug_detach(kill),
             Command::DumpProcessCore { request } => {
                 if !self
                     .snapshot

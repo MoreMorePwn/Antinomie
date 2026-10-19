@@ -14,6 +14,7 @@ pub mod clipboard;
 mod control;
 pub mod core_capture;
 pub mod core_dump;
+pub mod debug;
 pub mod dependencies;
 pub mod disks;
 mod display;

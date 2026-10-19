@@ -33,12 +33,14 @@ pub(super) enum ProcessPurpose {
     #[default]
     Attach,
     Core,
+    Debug,
 }
 
 pub(super) enum ProcessAction {
     Refresh(u32),
     Attach(GuestProcessIdentity),
     DumpCore(GuestProcessIdentity),
+    Debug(GuestProcessIdentity),
 }
 
 impl ProcessPicker {
@@ -82,7 +84,14 @@ impl ProcessPicker {
         let viewport = ctx.screen_rect();
         let width = 600.0_f32.min((viewport.width() - 64.0).max(200.0));
         let core = self.purpose == ProcessPurpose::Core;
-        egui::Window::new(if core { "Dump core" } else { "Attach to process" })
+        let debug = self.purpose == ProcessPurpose::Debug;
+        egui::Window::new(if core {
+            "Dump core"
+        } else if debug {
+            "Attach debugger"
+        } else {
+            "Attach to process"
+        })
             .id(egui::Id::new("attach_process"))
             .open(&mut open)
             .collapsible(false)
@@ -91,6 +100,9 @@ impl ProcessPicker {
             .max_width((viewport.width() - 64.0).max(200.0))
             .max_height((viewport.height() - 32.0).max(160.0))
             .show(ctx, |ui| {
+                if debug {
+                    ui.add(egui::Label::new("Attach gdb, IDA, Ghidra or radare2 to a process. Nothing runs in the guest: the kernel stops and inspects the process without ptrace, so it sees no tracer. The process keeps running until a debugger connects.").wrap());
+                }
                 if core {
                     ui.add(egui::Label::new("Briefly pause this process and its threads, capture a native ELF core, then resume. Resident memory only; unavailable pages remain marked. Limit: 64 MiB, 5 seconds.").wrap());
                 }
@@ -204,7 +216,7 @@ impl ProcessPicker {
                     .on_hover_text(format!("Boot {}", identity.boot_id));
                 }
                 if !enabled {
-                    crate::activity::warning(ui, if core { "Core capture unavailable" } else { "Process attachment unavailable" });
+                    crate::activity::warning(ui, if core { "Core capture unavailable" } else if debug { "Debugger unavailable" } else { "Process attachment unavailable" });
                 }
                 ui.horizontal_wrapped(|ui| {
                     if ui
@@ -213,6 +225,8 @@ impl ProcessPicker {
                             egui::Button::new(
                                 RichText::new(if core {
                                     format!("{} Dump core", egui_phosphor::regular::FILE)
+                                } else if debug {
+                                    format!("{} Attach debugger", egui_phosphor::regular::BUG)
                                 } else {
                                     format!("{} Attach", egui_phosphor::regular::PLUG)
                                 })
@@ -223,7 +237,13 @@ impl ProcessPicker {
                         .clicked()
                     {
                         if let Some(identity) = self.selected.clone() {
-                            action = Some(if core { ProcessAction::DumpCore(identity) } else { ProcessAction::Attach(identity) });
+                            action = Some(if core {
+                                ProcessAction::DumpCore(identity)
+                            } else if debug {
+                                ProcessAction::Debug(identity)
+                            } else {
+                                ProcessAction::Attach(identity)
+                            });
                         }
                     }
                     if ui.button("Cancel").clicked() {

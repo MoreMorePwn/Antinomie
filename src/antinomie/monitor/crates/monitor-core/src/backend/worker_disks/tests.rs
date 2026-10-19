@@ -165,6 +165,7 @@ fn blank_worker(root: PathBuf) -> Worker {
         flusher: Default::default(),
         disk_job: None,
         host_analysis: Default::default(),
+        debug: super::super::debug_service::DebugService::new().0,
         wake: None,
     }
 }

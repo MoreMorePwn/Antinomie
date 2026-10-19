@@ -435,6 +435,7 @@ impl Worker {
         let vm = self.snapshot_vm(id)?;
         if let Some(session) = self.session.as_ref() {
             session.manual_snapshot_guard()?;
+            self.debug_snapshot_guard()?;
         }
         let running = self.snapshot.active_vm.as_deref() == Some(id);
         if self.session.is_some() && !running {
@@ -611,6 +612,7 @@ impl Worker {
         let vm = self.snapshot_vm(id)?;
         if let Some(session) = self.session.as_ref() {
             session.manual_snapshot_guard()?;
+            self.debug_snapshot_guard()?;
         }
         if self.session.is_some() && self.snapshot.active_vm.as_deref() != Some(id) {
             return Err("stop the other VM before restoring".into());

@@ -1374,6 +1374,16 @@ pub enum Command {
     StopCapture {
         capture_id: String,
     },
+    /// Attach the debugger to one running guest process: opens a guest debug
+    /// session and a loopback RSP server (`Snapshot::debug` names the
+    /// endpoints). The process keeps running until a debugger connects.
+    DebugAttach {
+        identity: crate::observation::GuestProcessIdentity,
+    },
+    /// End the debug session; `kill` also ends the process. Otherwise it runs on.
+    DebugDetach {
+        kill: bool,
+    },
     /// Record the running VM's network traffic (NAT VMs) into a new capture
     /// of the boot recording, until `StopNetworkCapture` or the VM stops.
     StartNetworkCapture,
@@ -1526,8 +1536,30 @@ pub struct VmSnapshotProgress {
     pub stage: String,
 }
 
+/// A debugger attached to one guest process (see `crate::debug`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DebugSessionInfo {
+    pub target: crate::observation::GuestProcessIdentity,
+    pub architecture: String,
+    /// Loopback endpoints: a Unix socket in the run's private folder and an
+    /// ephemeral 127.0.0.1 port. Neither is reachable from another machine.
+    pub unix_socket: PathBuf,
+    pub tcp_port: u16,
+    /// Ready to paste into a terminal.
+    pub gdb_command: String,
+    pub gdb_unix_command: String,
+    pub client_connected: bool,
+    pub clients_served: u32,
+    /// "attached", "stopped", "running", "ended", ...
+    pub target_state: String,
+    /// Why the session ended, once it has.
+    pub ended: Option<String>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
+    /// The debugger attached to a guest process, while one is.
+    pub debug: Option<DebugSessionInfo>,
     /// Active manual captures and at most the latest 64 completed records.
     pub process_cores: Vec<ProcessCoreCapture>,
     /// Host measurements for the active QEMU process, refreshed once a second.
