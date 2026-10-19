@@ -205,38 +205,48 @@ fn sha256_file(path: &Path) -> Result<String, String> {
 /// Fetch a URL to `destination` with retries, following redirects. `curl -C -`
 /// resumes an existing partial file. Returns the child so callers can poll
 /// progress; the caller must wait on it.
+/// Largest single download (a base disk or a cloud image), in bytes.
+const DOWNLOAD_MAX_SIZE: u64 = 16 << 30;
+
 pub(crate) fn spawn_download(
     curl: &Path,
     url: &str,
     destination: &Path,
 ) -> Result<std::process::Child, String> {
     crate::dependencies::require_tool(curl, "curl")?;
-    ProcessCommand::new(curl)
-        // A stalled mirror (under 1 KiB/s for a minute) fails over to a retry.
-        .args([
-            "-fL",
-            "--retry",
-            "3",
-            "--retry-delay",
-            "2",
-            "--retry-all-errors",
-            "--connect-timeout",
-            "30",
-            "--speed-limit",
-            "1024",
-            "--speed-time",
-            "60",
-            "-C",
-            "-",
-            "-o",
-        ])
-        .arg(destination)
-        .arg(url)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("starting curl: {e}"))
+    // HTTPS only, also across redirects. There is no overall time limit (a
+    // base is gigabytes); a stalled mirror (under 1 KiB/s for a minute) fails
+    // over to a retry instead.
+    crate::http_fetch::command(
+        curl,
+        &crate::http_fetch::Options {
+            max_time: None,
+            max_filesize: Some(DOWNLOAD_MAX_SIZE),
+            follow: true,
+            ..crate::http_fetch::Options::new(0, 0)
+        },
+    )
+    .args([
+        "--retry",
+        "3",
+        "--retry-delay",
+        "2",
+        "--retry-all-errors",
+        "--speed-limit",
+        "1024",
+        "--speed-time",
+        "60",
+        "-C",
+        "-",
+        "-o",
+    ])
+    .arg(destination)
+    .arg(url)
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::piped())
+    .spawn()
+    .map_err(|e| format!("starting curl: {e}"))
 }
 
 pub(crate) fn wait_download(child: &mut std::process::Child, url: &str) -> Result<(), String> {

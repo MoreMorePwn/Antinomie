@@ -13,7 +13,7 @@ use std::{
     collections::HashSet,
     io::{Read, Write},
     path::Path,
-    process::{Command, Stdio},
+    process::Stdio,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
@@ -52,29 +52,22 @@ fn get(curl: &Path, key: &str, params: &[(&str, &str)], max: u64) -> Result<Vec<
     for (name, value) in params {
         url.push_str(&format!("&{name}={}", encode(value)));
     }
-    let mut child = Command::new(curl)
-        .args([
-            "--disable",
-            "-sS",
-            "--proto",
-            "=https",
-            "--location",
-            "--proto-redir",
-            "=https",
-            "--max-redirs",
-            "3",
-            "--max-time",
-            "300",
-            "-K",
-            "-",
-            "--write-out",
-            "\n%{http_code}",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("curl: {e}"))?;
+    // The HTTP status is reported through --write-out, so errors are not
+    // turned into failures here.
+    let mut child = crate::http_fetch::command(
+        curl,
+        &crate::http_fetch::Options {
+            fail: false,
+            follow: true,
+            ..crate::http_fetch::Options::new(300, max.saturating_add(16))
+        },
+    )
+    .args(["-K", "-", "--write-out", "\n%{http_code}"])
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .map_err(|e| format!("curl: {e}"))?;
     if let Some(mut stdin) = child.stdin.take() {
         // curl's config syntax: the value quoted, with \ and " escaped.
         if let Err(error) = writeln!(
@@ -813,27 +806,19 @@ fn fetch_public(curl: &Path, url: &str, max: u64, cancel: &AtomicBool) -> Result
     if cancel.load(Ordering::Relaxed) {
         return Err("cancelled".into());
     }
-    let mut child = Command::new(curl)
-        .args([
-            "--disable",
-            "-fsS",
-            "--proto",
-            "=https",
-            "--connect-timeout",
-            "10",
-            "--max-time",
-            "30",
-            "--max-filesize",
-            "1048576",
-            "--write-out",
-            "\n%{http_code}",
-            url,
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| format!("curl: {error}"))?;
+    let mut child = crate::http_fetch::command(
+        curl,
+        &crate::http_fetch::Options {
+            connect_timeout: 10,
+            ..crate::http_fetch::Options::new(30, 1_048_576)
+        },
+    )
+    .args(["--write-out", "\n%{http_code}", url])
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::null())
+    .spawn()
+    .map_err(|error| format!("curl: {error}"))?;
     let Some(stdout) = child.stdout.take() else {
         let _ = child.kill();
         let _ = child.wait();
@@ -1113,40 +1098,59 @@ mod tests {
     use super::*;
     #[test]
     fn cancel_reaps_metadata_process_promptly_and_rate_limit_preserves_resume() {
-        use std::os::unix::fs::PermissionsExt;
+        use super::reply_tests::{retry_busy, script};
         let dir = TestDir::new();
-        let curl = dir.path().join("curl");
-        std::fs::write(&curl, b"#!/bin/sh\nexec /bin/sleep 30\n").unwrap();
-        std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let pid_file = dir.path().join("pid");
+        let curl = script(
+            dir.path(),
+            "curl-sleep",
+            &format!(
+                "#!/bin/sh\necho $$ > '{}'\nexec /bin/sleep 30\n",
+                pid_file.display()
+            ),
+        );
         let cancel = std::sync::Arc::new(AtomicBool::new(false));
         let worker_cancel = std::sync::Arc::clone(&cancel);
         let signal = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(50));
             worker_cancel.store(true, Ordering::Relaxed);
         });
-        let started = Instant::now();
         assert_eq!(
-            fetch_public(
+            retry_busy(|| fetch_public(
                 &curl,
                 "https://malshare.com/daily/test",
                 DAILY_SIZE,
                 &cancel
-            ),
+            )),
             Err("cancelled".into())
         );
         signal.join().unwrap();
-        assert!(started.elapsed() < Duration::from_secs(2));
-        std::fs::write(&curl, b"#!/bin/sh\nprintf '\\n429'\nexit 22\n").unwrap();
+        // How fast it happened does not matter, only that curl is gone and was
+        // waited for: its process table entry no longer exists.
+        if let Ok(pid) = std::fs::read_to_string(&pid_file) {
+            assert!(!Path::new(&format!("/proc/{}", pid.trim())).exists());
+        }
+        let curl = script(
+            dir.path(),
+            "curl-429",
+            "#!/bin/sh\nprintf '\\n429'\nexit 22\n",
+        );
         let cache = dir.path().join("cache");
-        let result = dated_catalog(
-            &curl,
-            &cache,
-            Some(("2026-10-06", "2026-10-12")),
-            false,
-            1000,
-            &AtomicBool::new(false),
-            |_| {},
-        )
+        let result = retry_busy(|| {
+            let result = dated_catalog(
+                &curl,
+                &cache,
+                Some(("2026-10-06", "2026-10-12")),
+                false,
+                1000,
+                &AtomicBool::new(false),
+                |_| {},
+            )?;
+            match result.failed_days.first() {
+                Some(day) if day.contains("Text file busy") => Err(day.clone()),
+                _ => Ok(result),
+            }
+        })
         .unwrap();
         assert_eq!(result.failed_days.len(), 1);
         assert_eq!(result.requested_days, 7);

@@ -4,7 +4,7 @@
 use super::*;
 use std::{
     io::Read,
-    process::{Command, Stdio},
+    process::Stdio,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
@@ -59,38 +59,33 @@ impl Curl {
         progress: &mut dyn FnMut(u64),
     ) -> Result<Hop, String> {
         let _ = fs::remove_file(dest);
-        let mut child = Command::new(&self.program)
-            .args([
-                "--silent",
-                "--show-error",
-                "--proto",
-                "=https",
-                "--proto-redir",
-                "=https",
-                "--connect-timeout",
-                "30",
-                "--max-time",
-                &DOWNLOAD_TIMEOUT.to_string(),
-                "--speed-limit",
-                "1024",
-                "--speed-time",
-                "60",
-                "--max-filesize",
-                &max_size.to_string(),
-                "--user-agent",
-                concat!("Antinomie-rules/", env!("CARGO_PKG_VERSION")),
-                "--write-out",
-                "%{http_code} %{redirect_url}",
-                "--output",
-            ])
-            .arg(dest)
-            .arg("--url")
-            .arg(url)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| format!("curl: {error}"))?;
+        // Redirects are followed by hand so that each target is checked.
+        let mut child = crate::http_fetch::command(
+            &self.program,
+            &crate::http_fetch::Options {
+                fail: false,
+                ..crate::http_fetch::Options::new(DOWNLOAD_TIMEOUT as u32, max_size)
+            },
+        )
+        .args([
+            "--speed-limit",
+            "1024",
+            "--speed-time",
+            "60",
+            "--user-agent",
+            concat!("Antinomie-rules/", env!("CARGO_PKG_VERSION")),
+            "--write-out",
+            "%{http_code} %{redirect_url}",
+            "--output",
+        ])
+        .arg(dest)
+        .arg("--url")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("curl: {error}"))?;
         let started = Instant::now();
         let status = loop {
             if cancel.load(Ordering::Relaxed) {
@@ -212,6 +207,30 @@ pub fn refresh_catalog(
         let catalog = validate_catalog(&value)?;
         store_catalog(data_dir, &catalog)?;
         Ok(catalog)
+    })();
+    let _ = fs::remove_dir_all(&staging);
+    result
+}
+
+/// Download a catalog entry's archive through `fetcher` into a private staging
+/// directory under the rules root (mode 0700, a unique name) and return its
+/// bytes. The staging directory is always removed; the caller verifies the
+/// bytes (`install_archive` checks size and SHA-256).
+pub fn download_archive(
+    data_dir: &Path,
+    entry: &PackEntry,
+    fetcher: &dyn Fetcher,
+    cancel: &AtomicBool,
+) -> Result<Vec<u8>, String> {
+    let max_size = entry.size.min(MAX_ARCHIVE_BYTES);
+    let staging = rules_root(data_dir)
+        .join("staging")
+        .join(crate::storage::unique_id());
+    crate::storage::private_dir(&staging).map_err(|error| error.to_string())?;
+    let file = staging.join("archive");
+    let result = (|| {
+        fetcher.fetch(&entry.download_url, &file, max_size, cancel, &mut |_| {})?;
+        fs::read(&file).map_err(|error| error.to_string())
     })();
     let _ = fs::remove_dir_all(&staging);
     result

@@ -975,7 +975,8 @@ impl Model {
         let dir = data_dir.to_path_buf();
         self.status = format!("Downloading {}…", entry.name);
         self.spawn(move |cancel| {
-            let bytes = fetch(&entry.download_url, &cancel, entry.size)?;
+            let bytes =
+                ruleset::download_archive(&dir, &entry, &ruleset::Curl::default(), &cancel)?;
             ruleset::install_archive(&dir, &entry, &bytes)?;
             Ok(Done::Message(format!(
                 "Installed {} {}.",
@@ -1028,49 +1029,9 @@ impl Model {
     }
 }
 
-fn fetch(url: &str, cancel: &AtomicBool, max_bytes: u64) -> Result<Vec<u8>, String> {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    let output = std::env::temp_dir().join(format!(
-        "ant-rules-download-{}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
-    let _ = std::fs::remove_file(&output);
-    let limit = max_bytes.max(1).to_string();
-    let mut child = std::process::Command::new("curl")
-        .args(["-fsSL", "--max-time", "300", "--max-filesize", &limit, "-o"])
-        .arg(&output)
-        .arg(url)
-        .spawn()
-        .map_err(|error| format!("curl: {error}"))?;
-    loop {
-        if cancel.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = std::fs::remove_file(&output);
-            return Err("cancelled".into());
-        }
-        match child.try_wait().map_err(|error| error.to_string())? {
-            Some(status) if status.success() => break,
-            Some(status) => return Err(format!("download failed ({status})")),
-            None => thread::sleep(Duration::from_millis(150)),
-        }
-    }
-    let bytes = std::fs::read(&output).map_err(|error| error.to_string())?;
-    let _ = std::fs::remove_file(&output);
-    Ok(bytes)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_cancelled_download_does_not_return_bytes() {
-        let cancel = Arc::new(AtomicBool::new(true));
-        let error = fetch("https://127.0.0.1:9/not-a-pack", &cancel, 1024).unwrap_err();
-        assert!(error.contains("cancelled"));
-    }
 
     #[test]
     fn rule_manager_pages_a_large_pack_in_narrow_dark_and_light_panes() {

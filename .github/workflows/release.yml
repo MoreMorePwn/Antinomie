@@ -27,8 +27,9 @@ jobs:
         run: |
           packet_sandbox() {
             prlimit --as=2147483648 --core=0 --nofile=128 -- \
-              bwrap --ro-bind / / --proc /proc --dev /dev \
-              --unshare-net --unshare-pid --unshare-user --uid 65534 --gid 65534 \
+              bwrap --unshare-all --unshare-user --disable-userns --uid 65534 --gid 65534 \
+              --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib \
+              --symlink usr/lib64 /lib64 --proc /proc --dev /dev \
               --cap-drop ALL --die-with-parent --new-session -- \
               /bin/sh -c 'test "$(id -u)" -eq 65534 && tshark --version'
           }

@@ -13,7 +13,7 @@ use std::{
     fs,
     io::{Read, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
 };
 
 /// MalwareBazaar's API: every call is a POST with an `Auth-Key` header.
@@ -265,18 +265,15 @@ fn post(
     if key.trim().is_empty() || key.contains(['\r', '\n']) {
         return Err("set a MalwareBazaar API key first".into());
     }
-    let mut command = Command::new(curl);
-    command.args([
-        "-sS",
-        "--proto",
-        "=https",
-        "--max-time",
-        "300",
-        "-X",
-        "POST",
-        "-H",
-        "@-",
-    ]);
+    // The reply carries its own status text, so HTTP errors are not failures.
+    let mut command = crate::http_fetch::command(
+        curl,
+        &crate::http_fetch::Options {
+            fail: false,
+            ..crate::http_fetch::Options::new(300, MAX_SAMPLE + (1 << 20))
+        },
+    );
+    command.args(["-X", "POST", "-H", "@-"]);
     for (name, value) in form {
         command
             .arg("--data-urlencode")

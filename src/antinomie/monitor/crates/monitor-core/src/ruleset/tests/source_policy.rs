@@ -189,3 +189,48 @@ fn the_consent_names_every_host_the_catalog_can_contact() {
         assert!(hosts.contains(&host.to_owned()), "{host}: {hosts:?}");
     }
 }
+
+#[test]
+fn a_pack_download_stages_in_a_private_directory_and_leaves_nothing_behind() {
+    let data = temp_dir("pack-download");
+    let body = b"archive bytes".to_vec();
+    let mut pack = entry(&sha(&body), body.len() as u64);
+    pack.download_url = "https://example.invalid/sample.tar.gz".into();
+    let fixture = Fixture::default().with(&pack.download_url, body.clone());
+    let bytes =
+        download_archive(&data, &pack, &fixture, &AtomicBool::new(false)).expect("download");
+    assert_eq!(bytes, body);
+    // The staging area lives under the rules root, not in the shared temp dir.
+    let staging = rules_root(&data).join("staging");
+    assert!(staging.is_dir());
+    assert_eq!(fs::read_dir(&staging).unwrap().count(), 0);
+    // The unique directory the file is written into is private.
+    struct Probe(std::sync::Mutex<Option<u32>>);
+    impl Fetcher for Probe {
+        fn fetch(
+            &self,
+            _: &str,
+            dest: &Path,
+            _: u64,
+            _: &AtomicBool,
+            _: &mut dyn FnMut(u64),
+        ) -> Result<(), String> {
+            let mode = fs::metadata(dest.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode();
+            *self.0.lock().unwrap() = Some(mode & 0o777);
+            fs::write(dest, b"x").map_err(|e| e.to_string())
+        }
+    }
+    let probe = Probe(Default::default());
+    download_archive(&data, &pack, &probe, &AtomicBool::new(false)).unwrap();
+    assert_eq!(*probe.0.lock().unwrap(), Some(0o700));
+    // A cancelled or refused download is an error and leaves no file either.
+    let cancelled = AtomicBool::new(true);
+    assert!(download_archive(&data, &pack, &fixture, &cancelled).is_err());
+    let missing = Fixture::default();
+    assert!(download_archive(&data, &pack, &missing, &AtomicBool::new(false)).is_err());
+    assert_eq!(fs::read_dir(&staging).unwrap().count(), 0);
+    let _ = fs::remove_dir_all(&data);
+}
