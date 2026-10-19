@@ -4,7 +4,7 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
-## 0.6.2 — Unreleased
+## 0.6.2 — 2026-10-19
 
 - **Detection says what happened to each input, and never "partial".** Scanned
   inputs now end in exactly one of Succeeded, Failed or Skipped. A Suricata
