@@ -7,6 +7,7 @@
     {"revision": 13, "first_app_version": "0.3.0"},
     {"revision": 14, "first_app_version": "0.5.0"},
     {"revision": 15, "first_app_version": "0.6.0"},
-    {"revision": 16, "first_app_version": "0.6.0"}
+    {"revision": 16, "first_app_version": "0.6.0"},
+    {"revision": 17, "first_app_version": "0.7.0"}
   ]
 }

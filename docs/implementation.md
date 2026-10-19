@@ -7,6 +7,32 @@ V7-only restriction; older requirements remain recorded for their releases.
 
 ## Accepted requirements
 
+### Accepted kernel-native guest resources (0.7.0, ANT-T0084 follow-up)
+
+Contract revision 17 replaces the temporary guest collector with the kernel
+`RESOURCES` command (`0x1070`, header-only request, 96-byte reply; layout in
+`protocol/control.h`). The guest samples on its own dedicated single-slot
+workqueue: the handler returns the latest completed sample and queues a refresh
+only when that sample is at least 500 ms old and none is running, so a blocked
+statfs never stalls the control worker or queues work; it surfaces as a growing
+sample age and `refresh_pending_ms`. Memory is `si_meminfo` MemTotal and
+`si_mem_available` MemAvailable (the pinned `meminfo.c` sources, not text
+parsing). Storage is `vfs_statfs` on the root of PID 1 in the initial namespace,
+resolved at every sample and never held, so a `switch_root` is visible in the
+reported device/type/id and no old mount is pinned; sizes use `f_frsize` with
+checked arithmetic and distinct total, free and available values.
+
+The host (`kernel_resources.rs`) polls about once a second with one request in
+flight and a 4 s deadline. A request is idempotent: nothing is replayed, a late
+reply is still owned and recovers the state, a rejected request backs off 2 s
+and `EOPNOTSUPP` stops polling. Age is the kernel's sample age plus host time
+since the reply; older than 6 s, a late or invalid reply, a blocked refresh,
+a paused VM, snapshot or reconnect all mark the reading stale, and a timeline
+boundary discards readings and the answer still in flight. Values the kernel
+marks invalid are unavailable, never zero. Kernels of revision 11 to 16 keep
+the temporary collector described below, unchanged, until their bases are
+outdated; a revision-17 kernel never receives the collector upload or exec.
+
 ### Accepted ANT-T0097 host UI performance (0.6.2)
 
 Remove render-time filesystem checks for host chooser availability; resolve
@@ -41,7 +67,8 @@ No guest, image, shared-memory ABI, dependency or release-tag change is needed.
   option. Never execute automatically after upload.
 - Kernel implements control, upload, execution, tracing, and terminal I/O;
   no auxiliary guest control helper, except the explicitly approved temporary
-  resource-only collector in ANT-T0084 below. Ordinary init, shell and target programs
+  resource-only collector in ANT-T0084 below, which only revision 11 to 16
+  kernels still use (revision 17 samples resources in the kernel). Ordinary init, shell and target programs
   remain userspace processes.
 - Launch path, argument list, cwd, environment, UID/GID. Default unprivileged.
 - Interactive terminal in host control view, independent of QEMU console.

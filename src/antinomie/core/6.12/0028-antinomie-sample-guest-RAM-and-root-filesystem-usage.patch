@@ -1,0 +1,325 @@
+From 7c1aba4e9b423faf12183aaeeb009e46b1c4d216 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Mon, 19 Oct 2026 18:45:44 +0700
+Subject: [PATCH] antinomie: sample guest RAM and root filesystem usage in the
+ kernel
+
+---
+ kernel/antinomie/Makefile       |   1 +
+ kernel/antinomie/control.c      |   5 +-
+ kernel/antinomie/control_wire.h |  19 ++-
+ kernel/antinomie/resources.c    | 203 ++++++++++++++++++++++++++++++++
+ kernel/antinomie/resources.h    |   8 ++
+ 5 files changed, 234 insertions(+), 2 deletions(-)
+ create mode 100644 kernel/antinomie/resources.c
+ create mode 100644 kernel/antinomie/resources.h
+
+diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
+index 717f52238..f57eb1cf9 100644
+--- a/kernel/antinomie/Makefile
++++ b/kernel/antinomie/Makefile
+@@ -4,3 +4,4 @@ obj-y += specimen.o
+ obj-y += observer.o
+ obj-y += process_core.o
+ obj-y += manual_core.o
++obj-y += resources.o
+diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
+index c982adf09..3071c68d3 100644
+--- a/kernel/antinomie/control.c
++++ b/kernel/antinomie/control.c
+@@ -25,6 +25,7 @@
+ #include "control_wire.h"
+ #include "specimen.h"
+ #include "observer.h"
++#include "resources.h"
+ #include "process_core.h"
+ 
+ #define ANT_SESSION_MAX 64
+@@ -586,6 +587,8 @@ static int command(const void *data, size_t args_len, void *reply,
+ 		return ant_manual_command(opcode, args, args_len, reply, capacity, reply_len);
+ 	case ANTC_CORE_STATUS: case ANTC_CORE_READ: case ANTC_CORE_RELEASE: case ANTC_CORE_CANCEL:
+ 		return ant_core_command(opcode, args, args_len, reply, capacity, reply_len);
++	case ANTC_RESOURCES:
++		return ant_resources_command(args, args_len, reply, capacity, reply_len);
+ 	case ANTC_ACQUIRE:
+ 		if (capacity < 24)
+ 			return -EMSGSIZE;
+@@ -653,7 +656,7 @@ static int __init ant_control_init(void)
+ 		ANTC_SPECIMEN_RELEASE, ANTC_PROCESS_LIST, ANTC_CAPTURE_ATTACH,
+ 		ANTC_CAPTURE_ALL, ANTC_CAPTURE_STOP, ANTC_CAPTURE_STATUS,
+ 		ANTC_CORE_STATUS, ANTC_CORE_READ, ANTC_CORE_RELEASE,
+-		ANTC_CORE_CAPTURE, ANTC_CORE_LOOKUP, ANTC_CORE_CANCEL };
++		ANTC_CORE_CAPTURE, ANTC_CORE_LOOKUP, ANTC_CORE_CANCEL, ANTC_RESOURCES };
+ 	int i, error;
+ 
+ 	for (i = 0; i < ARRAY_SIZE(opcodes); i++) {
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index 1ff7e3432..7c4c178f5 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -12,7 +12,8 @@
+ #define ANTC_VERSION 1
+ /* Contract revision of the guest's observable behaviour (native-schema-slices). */
+ /* Revision 15: opt-in root-process ELF core acquisition at exit; ABI 9. */
+-#define ANTC_REVISION 16
++/* Revision 17: kernel-native guest resource sample (RESOURCES). */
++#define ANTC_REVISION 17
+ #define ANTC_HEADER_SIZE 8
+ #define ANTC_UPLOAD_BEGIN 0x1001
+ #define ANTC_UPLOAD_CHUNK 0x1002
+@@ -74,6 +75,11 @@
+ #define ANTC_CORE_MANUAL 0x10
+ #define ANTC_CORE_PAUSE_RELEASED 0x20
+ #define ANTC_CORE_RESIDENT_ONLY 0x40
++#define ANTC_RESOURCES 0x1070
++#define ANTC_RESOURCES_SIZE 96
++#define ANTC_RESOURCES_MEMORY_VALID 1
++#define ANTC_RESOURCES_FILESYSTEM_VALID 2
++#define ANTC_RESOURCES_REFRESHING 4
+ #define ANTC_UPLOAD_OVERWRITE 1
+ #define ANTC_UPLOAD_EXECUTABLE 2
+ 
+@@ -216,6 +222,17 @@
+  * STOPPED|TAILS_POSSIBLE does not promise delivery/drain or complete capture.
+  * ANTT minor 2 / 144-byte header adds capture_cookie at offset 136, preserving
+  * launched root cookie at 128. Capture attribution is frozen on admission.
++ * RESOURCES: header only (8 bytes). Non-blocking: returns the latest completed
++ * sample and, if it is older than 500 ms and no refresh runs, queues one on a
++ * dedicated worker (at most one in flight). Reply (96 bytes): u64 sequence at 0
++ * (0 = no sample yet), u64 age_ms at 8 (U64_MAX if none), u32 flags at 16
++ * (MEMORY_VALID, FILESYSTEM_VALID, REFRESHING), s32 fs_error at 20,
++ * u64 memory total/available bytes at 24/32 (MemTotal, MemAvailable as in
++ * /proc/meminfo), u64 filesystem total/free/available bytes at 40/48/56
++ * (statfs of PID 1's root, f_frsize units, free = privileged-free, available =
++ * unprivileged), u32 fs_dev at 64 (new_encode_dev), u32 fs_type at 68,
++ * u64 fs_id at 72, u64 refresh_pending_ms at 80 (0 when idle), s32 mem_error
++ * at 88, zero at 92. A value is meaningful only when its VALID flag is set.
+  * SHUTDOWN: header only; empty success reply, delayed kernel_power_off.
+  */
+ #endif
+diff --git a/kernel/antinomie/resources.c b/kernel/antinomie/resources.c
+new file mode 100644
+index 000000000..3d8d1728c
+--- /dev/null
++++ b/kernel/antinomie/resources.c
+@@ -0,0 +1,203 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* Kernel-native guest resource sample: RAM accounting and root filesystem use.
++ *
++ * The control handler never blocks on the filesystem. It returns the latest
++ * completed sample and, when that sample is old, queues one refresh on a
++ * dedicated single-slot workqueue. At most one refresh is in flight, so a
++ * statfs that blocks leaves the previous sample visibly aging instead of
++ * stalling the control worker or accumulating work.
++ */
++#include <linux/fs.h>
++#include <linux/fs_struct.h>
++#include <linux/init.h>
++#include <linux/kdev_t.h>
++#include <linux/ktime.h>
++#include <linux/mm.h>
++#include <linux/overflow.h>
++#include <linux/path.h>
++#include <linux/pid.h>
++#include <linux/pid_namespace.h>
++#include <linux/sched/task.h>
++#include <linux/slab.h>
++#include <linux/spinlock.h>
++#include <linux/statfs.h>
++#include <linux/unaligned.h>
++#include <linux/workqueue.h>
++#include "control_wire.h"
++#include "resources.h"
++
++#define REFRESH_NS (500ULL * NSEC_PER_MSEC)
++
++struct ant_resource_sample {
++	u64 sequence, done_ns;
++	u32 flags, fs_dev, fs_type;
++	s32 fs_error, mem_error;
++	u64 mem_total_size, mem_available_size;
++	u64 fs_total_size, fs_free_size, fs_available_size, fs_id;
++};
++
++static DEFINE_SPINLOCK(lock);
++static struct workqueue_struct *res_wq;
++static struct ant_resource_sample latest;
++static bool running;
++static u64 started_ns;
++
++/* The VM's root is the one init (PID 1 of the initial namespace) sees. It is
++ * resolved for every sample and never held, so a later switch_root is visible
++ * through the reported identity and no old mount is pinned.
++ */
++static int init_root(struct path *root)
++{
++	struct task_struct *init;
++	struct fs_struct *fs;
++	int error = -ESRCH;
++
++	rcu_read_lock();
++	init = find_task_by_pid_ns(1, &init_pid_ns);
++	if (init)
++		get_task_struct(init);
++	rcu_read_unlock();
++	if (!init)
++		return error;
++	task_lock(init);
++	fs = init->fs;
++	if (fs) {
++		spin_lock(&fs->lock);
++		*root = fs->root;
++		path_get(root);
++		spin_unlock(&fs->lock);
++		error = 0;
++	}
++	task_unlock(init);
++	put_task_struct(init);
++	return error;
++}
++
++static void sample_memory(struct ant_resource_sample *sample)
++{
++	struct sysinfo info;
++	u64 total, available;
++	long pages;
++
++	/* The same sources as the pinned /proc/meminfo: MemTotal and MemAvailable. */
++	si_meminfo(&info);
++	pages = si_mem_available();
++	if (pages < 0 || check_mul_overflow((u64)info.totalram, (u64)info.mem_unit, &total) ||
++	    check_mul_overflow((u64)pages, (u64)PAGE_SIZE, &available) ||
++	    !total || available > total) {
++		sample->mem_error = -EINVAL;
++		return;
++	}
++	sample->mem_total_size = total;
++	sample->mem_available_size = available;
++	sample->flags |= ANTC_RESOURCES_MEMORY_VALID;
++}
++
++static void sample_filesystem(struct ant_resource_sample *sample)
++{
++	struct kstatfs stat = {};
++	struct path root;
++	u64 unit, total, free, available;
++	int error;
++
++	error = init_root(&root);
++	if (error) {
++		sample->fs_error = error;
++		return;
++	}
++	error = vfs_statfs(&root, &stat);
++	if (!error)
++		sample->fs_dev = new_encode_dev(root.dentry->d_sb->s_dev);
++	path_put(&root);
++	if (error) {
++		sample->fs_error = error;
++		return;
++	}
++	unit = stat.f_frsize ? stat.f_frsize : stat.f_bsize;
++	if (!unit || stat.f_bfree > stat.f_blocks || stat.f_bavail > stat.f_bfree ||
++	    check_mul_overflow((u64)stat.f_blocks, unit, &total) ||
++	    check_mul_overflow((u64)stat.f_bfree, unit, &free) ||
++	    check_mul_overflow((u64)stat.f_bavail, unit, &available)) {
++		sample->fs_error = -EINVAL;
++		return;
++	}
++	sample->fs_total_size = total;
++	sample->fs_free_size = free;
++	sample->fs_available_size = available;
++	sample->fs_type = (u32)stat.f_type;
++	sample->fs_id = (u64)(u32)stat.f_fsid.val[0] | (u64)(u32)stat.f_fsid.val[1] << 32;
++	sample->flags |= ANTC_RESOURCES_FILESYSTEM_VALID;
++}
++
++static void refresh(struct work_struct *work)
++{
++	struct ant_resource_sample sample = {};
++	unsigned long flags;
++
++	sample_memory(&sample);
++	sample_filesystem(&sample);
++	sample.done_ns = ktime_get_ns();
++	spin_lock_irqsave(&lock, flags);
++	sample.sequence = latest.sequence + 1;
++	latest = sample;
++	running = false;
++	spin_unlock_irqrestore(&lock, flags);
++}
++static DECLARE_WORK(refresh_work, refresh);
++
++int ant_resources_command(const void *args, size_t args_len, void *reply,
++			  size_t capacity, size_t *reply_len)
++{
++	struct ant_resource_sample sample;
++	unsigned long flags;
++	bool start = false;
++	u64 now, age = U64_MAX, pending = 0;
++	u8 *out = reply;
++
++	if (args_len != ANTC_HEADER_SIZE || capacity < ANTC_RESOURCES_SIZE)
++		return -EINVAL;
++	if (!res_wq)
++		return -EOPNOTSUPP;
++	now = ktime_get_ns();
++	spin_lock_irqsave(&lock, flags);
++	if (!running && (!latest.sequence || now - latest.done_ns >= REFRESH_NS)) {
++		running = true;
++		started_ns = now;
++		start = true;
++	}
++	sample = latest;
++	if (running) {
++		pending = (now - started_ns) / NSEC_PER_MSEC;
++		sample.flags |= ANTC_RESOURCES_REFRESHING;
++	}
++	spin_unlock_irqrestore(&lock, flags);
++	if (start)
++		queue_work(res_wq, &refresh_work);
++	if (sample.sequence)
++		age = (now - sample.done_ns) / NSEC_PER_MSEC;
++
++	memset(out, 0, ANTC_RESOURCES_SIZE);
++	put_unaligned_le64(sample.sequence, out);
++	put_unaligned_le64(age, out + 8);
++	put_unaligned_le32(sample.flags, out + 16);
++	put_unaligned_le32(sample.fs_error, out + 20);
++	put_unaligned_le64(sample.mem_total_size, out + 24);
++	put_unaligned_le64(sample.mem_available_size, out + 32);
++	put_unaligned_le64(sample.fs_total_size, out + 40);
++	put_unaligned_le64(sample.fs_free_size, out + 48);
++	put_unaligned_le64(sample.fs_available_size, out + 56);
++	put_unaligned_le32(sample.fs_dev, out + 64);
++	put_unaligned_le32(sample.fs_type, out + 68);
++	put_unaligned_le64(sample.fs_id, out + 72);
++	put_unaligned_le64(pending, out + 80);
++	put_unaligned_le32(sample.mem_error, out + 88);
++	*reply_len = ANTC_RESOURCES_SIZE;
++	return 0;
++}
++
++static int __init ant_resources_init(void)
++{
++	res_wq = alloc_workqueue("antinomie_resources", WQ_UNBOUND, 1);
++	return 0;
++}
++late_initcall(ant_resources_init);
+diff --git a/kernel/antinomie/resources.h b/kernel/antinomie/resources.h
+new file mode 100644
+index 000000000..2e12bba48
+--- /dev/null
++++ b/kernel/antinomie/resources.h
+@@ -0,0 +1,8 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef ANTINOMIE_RESOURCES_H
++#define ANTINOMIE_RESOURCES_H
++#include <linux/types.h>
++
++int ant_resources_command(const void *args, size_t args_len, void *reply,
++			  size_t capacity, size_t *reply_len);
++#endif
+-- 
+2.53.0
+

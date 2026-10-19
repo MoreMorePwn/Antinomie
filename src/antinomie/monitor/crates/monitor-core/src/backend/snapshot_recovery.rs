@@ -286,6 +286,7 @@ impl Session {
         Ok(Self {
             resources: crate::resources::ResourceSampler::default(),
             guest_resources: crate::guest_resources::Collector::default(),
+            kernel_resources: crate::kernel_resources::KernelResources::default(),
             last_resource_check: None,
             analysis: crate::analysis::jobs::Jobs::with_tools(crate::analysis_tools::tools_dir(
                 &options.data_dir,

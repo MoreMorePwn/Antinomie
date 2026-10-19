@@ -338,6 +338,12 @@ impl Session {
         {
             return;
         }
+        if self
+            .kernel_resources
+            .reply(reply_id, status, payload, &self.boot_id, Instant::now())
+        {
+            return;
+        }
         if self.kernel_probe_reply(reply_id, status, payload, snapshot) {
             return;
         }

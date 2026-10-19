@@ -411,6 +411,7 @@ const BUSY_PACKETS: usize = 32;
 struct Session {
     resources: crate::resources::ResourceSampler,
     guest_resources: crate::guest_resources::Collector,
+    kernel_resources: crate::kernel_resources::KernelResources,
     last_resource_check: Option<Instant>,
     analysis: crate::analysis::jobs::Jobs,
     transport: Transport,

@@ -211,6 +211,9 @@ the exact patched kernel build.
 
 ## Temporary guest resource collector (0.6.1)
 
+From 0.7.0 the collector is carried only for bases of revision 16 and earlier;
+revision 17 kernels measure resources themselves.
+
 The embedded x86-64 executable is original MIT project code compiled statically
 with musl libc (`musl-tools`). musl's MIT and
 file-specific notices are retained in

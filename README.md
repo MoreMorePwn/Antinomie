@@ -203,5 +203,6 @@ terms. Read the [licensing scope](LICENSING.md) and
 [third-party notices](THIRD-PARTY-NOTICES.md) before redistributing; the kernel
 and guest images as a whole are not MIT licensed.
 
-Building 0.6.2 from source also requires `musl-tools` for the embedded static
-guest resource collector. Prebuilt installations need no guest packages.
+Building from source also requires `musl-tools` for the embedded static guest
+resource collector, which only bases older than 0.7.0 (revision 16 and earlier)
+still use. Prebuilt installations need no guest packages.
