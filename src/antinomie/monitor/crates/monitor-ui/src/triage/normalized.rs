@@ -90,9 +90,14 @@ pub(super) fn argument_vector(call: &InvocationSummary, event: &EventSummary) ->
 /// collector captured every pointer up to the terminating NULL and every
 /// string whole.
 pub(super) fn command_line(call: &InvocationSummary, event: &EventSummary) -> Option<String> {
+    complete_argv(call, event).map(|arguments| arguments.join(" "))
+}
+
+/// The arguments of an execve or execveat, only when the whole vector and
+/// every string in it were captured.
+pub(super) fn complete_argv(call: &InvocationSummary, event: &EventSummary) -> Option<Vec<String>> {
     let vector = argument_vector(call, event).filter(|vector| vector.complete)?;
-    let arguments: Option<Vec<_>> = vector.arguments.into_iter().collect();
-    arguments.map(|arguments| arguments.join(" "))
+    vector.arguments.into_iter().collect()
 }
 
 /// Arguments joined into a CommandLine; a longer vector stays missing.

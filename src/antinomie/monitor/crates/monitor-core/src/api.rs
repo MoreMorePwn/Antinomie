@@ -1404,6 +1404,10 @@ pub struct Health {
     pub received_packets: u64,
     /// Dequeued packets rejected by the raw recording writer.
     pub storage_dropped_packets: u64,
+    /// Credential and file-hash records the guest tracer dropped since boot (full
+    /// queue, byte budget, no memory, full ring), as its latest hash record says.
+    #[serde(default)]
+    pub guest_note_lost: u64,
     pub persisted_len: u64,
     pub persistence_error: Option<String>,
     pub recorder_stats: Option<[u64; 10]>,

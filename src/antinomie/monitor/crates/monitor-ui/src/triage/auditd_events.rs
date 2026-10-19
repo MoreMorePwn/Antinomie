@@ -72,6 +72,9 @@ const PATH_CALLS: &[&str] = &[
 /// Longest `comm` the kernel keeps.
 const COMM_LEN: usize = 15;
 
+/// Longest `PROCTITLE` the kernel logs, in bytes of the NUL-joined argv.
+const PROCTITLE_LEN: usize = 128;
+
 fn text(value: impl Into<String>) -> serde_json::Value {
     serde_json::Value::String(value.into())
 }
@@ -114,7 +117,51 @@ pub(super) fn records(
     if PATH_CALLS.contains(&name) {
         found.extend(path_records(files, call, event, ret));
     }
+    // auditd writes the working directory and the command line with every
+    // event that has a SYSCALL or PATH record.
+    if !found.is_empty() {
+        found.extend(cwd(files, call, event));
+        found.extend(proctitle(files, call, event));
+    }
     found
+}
+
+/// The `CWD` record: the working directory, exact while it is still the launch
+/// directory and joined lexically after a `chdir`.
+fn cwd(files: &FdState, call: &InvocationSummary, event: &EventSummary) -> Option<Record> {
+    let (directory, lexical) = sigma_events::current_directory(files, call, event)?;
+    let mut found = record("CWD");
+    found.fields.insert("cwd".into(), text(directory));
+    if lexical {
+        found.inferred.push("cwd".into());
+    }
+    Some(found)
+}
+
+/// The `PROCTITLE` record: the arguments joined with NULs and hex-encoded,
+/// cut at the length the kernel logs. An exec gives the new program's
+/// arguments; any other call the ones its process was last seen to start with.
+/// Without a complete argument vector there is no record: a partial one would
+/// be a different title.
+fn proctitle(files: &FdState, call: &InvocationSummary, event: &EventSummary) -> Option<Record> {
+    let arguments = if matches!(event.syscall_nr, 59 | 322) {
+        normalized::complete_argv(call, event)?
+    } else {
+        files
+            .process_images
+            .get(&TaskKey {
+                pid: event.pid,
+                cookie: event.task_cookie,
+            })?
+            .proctitle
+            .clone()?
+    };
+    let mut joined = arguments.join("\0").into_bytes();
+    joined.truncate(PROCTITLE_LEN);
+    let hex: String = joined.iter().map(|byte| format!("{byte:02X}")).collect();
+    let mut found = record("PROCTITLE");
+    found.fields.insert("proctitle".into(), text(hex));
+    Some(found)
 }
 
 fn syscall(

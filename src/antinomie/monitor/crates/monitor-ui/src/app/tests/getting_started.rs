@@ -43,6 +43,7 @@ fn check(dependency: Dependency, name: &'static str, missing: bool) -> Check {
         problem: missing.then(|| format!("{name} is missing or not executable")),
         hint: "",
         optional: !matches!(dependency, Dependency::Qemu | Dependency::Curl),
+        wrong_version: false,
     }
 }
 

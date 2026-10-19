@@ -6,6 +6,42 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **Audit fixes (host).** A feature-completeness audit of 0.6.2 and 0.7.0
+  found these; all are host-side.
+  - Detection > Scanned inputs no longer reads the file system while drawing:
+    whether a listed capture or core is gone is answered by a worker on load,
+    after a delete and every 30 seconds. The selection digest of the rule
+    sets is also computed on a worker, and a run's capture and core state is
+    read the same way.
+  - Opened files is the five-column table again (time, path, PID/TID, result,
+    evidence) and Read files the six-column one; failed opens and reads are
+    listed with their result. "Show failed attempts" now applies to the change
+    tabs and Changed files only. The extra columns stay in Details. The hint
+    line under the File activity tabs is gone.
+  - A failed result save restores the selection manifest and report that were
+    there before, instead of leaving the new manifest beside the old report.
+  - Sizes in Scanned inputs, the Sigma journal header, the capture list, base
+    and rule downloads and status messages read "N bytes (X.Y KB)".
+  - Sigma auditd records now include `CWD` (`cwd`) and `PROCTITLE`
+    (`proctitle`, the arguments joined with NULs, hex-encoded and cut at 128
+    bytes as the kernel does). `process_termination` events were not added:
+    no rule in the installed SigmaHQ Linux pack uses that category (it has
+    `process_creation`, `file_event` and `network_connection` rules, and 53
+    `service: auditd` ones).
+  - The guest's count of dropped credential and hash records is shown in the
+    run summary health, counts as observed loss, and is named in the TRL
+    hover.
+  - A deleted on-exit core stays in Core dumps as a "Deleted" row, and Run
+    History > Analysis enabled says what became of the run's network capture
+    and core ("Complete", "Deleted", ...).
+  - The TShark coverage note no longer says HTTPS is unavailable: TLS server
+    names are read from handshakes; the content of HTTPS and HTTP/3 is
+    encrypted, and cleartext HTTP/2 and encrypted DNS are not decoded.
+  - App dependencies reports "Wrong version" for a QEMU older than 6.0 (the
+    network capture needs its flat `object-add` arguments). No minimum was
+    invented for TShark or Suricata. The dnf and zypper package names were
+    checked against the Fedora and openSUSE package indexes, except as noted
+    in `dependencies/install.rs`.
 - **The guest tracer records who a task ran as and what a file contained.**
   Guest contract revision 17 (no new revision) adds two records to the
   syscall trace. Credentials: every traced task's uid, euid, suid, fsuid, the

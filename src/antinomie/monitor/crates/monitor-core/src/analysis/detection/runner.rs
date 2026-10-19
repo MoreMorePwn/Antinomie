@@ -690,6 +690,11 @@ fn run_program(
 fn commit_provenance(request: &Request, directory: &Path, mut report: Report) -> Report {
     let needs_manifest = !request.settings.rules_root.is_empty() && !report.selection.is_empty();
     let manifest_path = directory.join("selection-manifest.json");
+    // What the pair held before this commit, read before anything is written:
+    // a failed report save puts both back, so a report never sits next to a
+    // manifest from another scan.
+    let previous_report = fs::read(directory.join("report.json")).ok();
+    let previous_manifest = fs::read(&manifest_path).ok();
     let mut manifest_error = None;
     if needs_manifest {
         let engine = match request.engine {
@@ -751,8 +756,6 @@ fn commit_provenance(request: &Request, directory: &Path, mut report: Report) ->
         return report;
     }
     report.provenance_saved = Some(true);
-    let previous_report = fs::read(directory.join("report.json")).ok();
-    let previous_manifest = fs::read(&manifest_path).ok();
     let write_error = if provenance_failed("report-write") {
         Some("injected write failure".to_owned())
     } else {
@@ -772,15 +775,22 @@ fn commit_provenance(request: &Request, directory: &Path, mut report: Report) ->
         if needs_manifest {
             match previous_manifest {
                 Some(bytes) => {
-                    let _ = fs::write(&manifest_path, bytes);
+                    let _ = crate::storage::atomic_bytes(&manifest_path, &bytes);
                 }
                 None => {
                     let _ = fs::remove_file(&manifest_path);
                 }
             }
         }
-        if let Some(bytes) = previous_report {
-            let _ = fs::write(directory.join("report.json"), bytes);
+        // The failed write may have left a partial report behind.
+        let report_path = directory.join("report.json");
+        match previous_report {
+            Some(bytes) => {
+                let _ = crate::storage::atomic_bytes(&report_path, &bytes);
+            }
+            None => {
+                let _ = fs::remove_file(&report_path);
+            }
         }
     }
     report
@@ -1670,6 +1680,69 @@ mod tests {
             serde_json::from_slice::<Report>(&fs::read(directory.join("report.json")).unwrap())
                 .unwrap()
                 .selection
+        );
+        // The failed save left the old manifest next to the old report, not
+        // the manifest the failed scan wrote.
+        let kept: serde_json::Value =
+            serde_json::from_slice(&fs::read(directory.join("selection-manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(kept, manifest);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_failed_report_save_restores_the_manifest_that_was_there_and_removes_a_new_one() {
+        let root = std::env::temp_dir().join(format!("ant-prov-{}", crate::storage::unique_id()));
+        let profile = root.join("rules/profiles/yara/digest-2");
+        fs::create_dir_all(&profile).unwrap();
+        fs::write(profile.join("manifest.json"), br#"{"schema":1}"#).unwrap();
+        let directory = root.join("run");
+        fs::create_dir_all(&directory).unwrap();
+        let request = Request {
+            engine: Engine::Yara,
+            identity: Identity {
+                vm_id: "vm".into(),
+                boot_id: "boot".into(),
+                run_id: "run".into(),
+                root_cookie: 7,
+            },
+            directory: directory.clone(),
+            settings: Settings {
+                rules_root: root.display().to_string(),
+                ..Default::default()
+            },
+            source_digest: None,
+            frozen: None,
+        };
+        let scan = |key: &str| {
+            let mut report = Report::empty(Engine::Yara, request.identity.clone());
+            report.selection = "digest-2".into();
+            report.evidence_key = key.into();
+            report
+        };
+        // No earlier result: a failed save leaves neither file.
+        fail_provenance("report-write");
+        let first = commit_provenance(&request, &directory, scan("first"));
+        assert_eq!(first.provenance_saved, Some(false));
+        assert!(!directory.join("selection-manifest.json").exists());
+        assert!(!directory.join("report.json").exists());
+        // An earlier result: a failed save keeps its manifest, not the new one.
+        assert_eq!(
+            commit_provenance(&request, &directory, scan("old")).provenance_saved,
+            Some(true)
+        );
+        let before = fs::read(directory.join("selection-manifest.json")).unwrap();
+        let report_before = fs::read(directory.join("report.json")).unwrap();
+        fail_provenance("report-write");
+        let failed = commit_provenance(&request, &directory, scan("new"));
+        assert_eq!(failed.provenance_saved, Some(false));
+        assert_eq!(
+            fs::read(directory.join("selection-manifest.json")).unwrap(),
+            before
+        );
+        assert_eq!(
+            fs::read(directory.join("report.json")).unwrap(),
+            report_before
         );
         let _ = fs::remove_dir_all(&root);
     }

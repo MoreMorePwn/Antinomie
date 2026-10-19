@@ -266,6 +266,7 @@ impl TriageView {
     /// Saved evidence was deleted: read the run's index again, so counts and
     /// badges drop what is gone.
     pub(crate) fn evidence_deleted(&mut self) {
+        self.detection.evidence_deleted();
         self.request_refresh();
     }
 
@@ -368,7 +369,7 @@ impl TriageView {
                 let failed = self.scan.as_ref().map_or(0, |scan| scan.counts.failed_attempts);
                 let changed = ui.checkbox(&mut visibility.hide_standard_io, "Hide stdin, stdout, stderr").changed()
                     | ui.checkbox(&mut visibility.hide_libraries, "Hide library").changed()
-                    | ui.checkbox(&mut visibility.show_failed, format!("Show failed attempts ({failed})")).on_hover_text("Calls the kernel refused. They are not counted in the tab badges and do not count as changes.").changed();
+                    | ui.checkbox(&mut visibility.show_failed, format!("Show failed attempts ({failed})")).on_hover_text("Calls the kernel refused, in the change tabs and Changed files. They do not count as changes. Opened and Read always list failed attempts with their result.").changed();
                 if changed {
                     for index in file_tabs::file_slots() { self.scan_request.offsets[index] = 0; }
                     self.request_query_refresh();
@@ -711,7 +712,11 @@ impl TriageView {
             "triage-other",
         ][index];
         if let Some(sort) = sorting::take_request(ui.ctx(), table_id) {
-            self.scan_request.sorts[index] = sort;
+            // The sort runs on the full rows; a compact table draws a subset.
+            self.scan_request.sorts[index] = sort.map(|mut sort| {
+                sort.column = file_tabs::full_column(index, sort.column);
+                sort
+            });
             self.scan_request.offsets[index] = 0;
             self.request_query_refresh();
         }
@@ -858,6 +863,8 @@ struct TaskNode {
     exec_history: Vec<String>,
     /// Joined argv of the committed exec, only when the whole vector was captured.
     command_line: Option<String>,
+    /// The same vector kept as arguments, for the auditd `PROCTITLE` record.
+    proctitle: Option<Vec<String>>,
 }
 
 enum Spawn {

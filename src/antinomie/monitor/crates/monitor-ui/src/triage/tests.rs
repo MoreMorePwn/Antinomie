@@ -824,9 +824,15 @@ fn tshark_saved_and_live_prefix_index_use_all_capture_frames() {
         assert_eq!(index.http[0][3].text, "GET");
         assert_eq!(index.http[0][4].text, "example.com");
         assert_eq!(index.http[0][5].text, "/");
-        assert!(index
-            .coverage
-            .contains("HTTPS, HTTP/2, HTTP/3 and encrypted DNS unavailable"));
+        // TLS handshakes are decoded for the server name only; HTTP/2 and
+        // encrypted DNS are not requested from TShark at all.
+        assert!(index.coverage.contains(
+            "TLS server names are read from handshakes; the content of HTTPS and HTTP/3 is encrypted, and cleartext HTTP/2 and encrypted DNS are not decoded"
+        ));
+        assert!(TSHARK_FIELDS.contains(&"tls.handshake.extensions_server_name"));
+        assert!(!TSHARK_FIELDS
+            .iter()
+            .any(|field| field.starts_with("http2.")));
     }
 }
 use antinomie_monitor_core::{

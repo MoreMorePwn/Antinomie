@@ -450,6 +450,10 @@ pub(crate) fn show(
                         ("Transport drops", snapshot.health.dropped),
                         ("Storage drops", snapshot.health.storage_dropped_packets),
                         ("UI preview drops", snapshot.health.ui_dropped),
+                        (
+                            "Guest hash / credential drops",
+                            snapshot.health.guest_note_lost,
+                        ),
                     ] {
                         ui.colored_label(
                             if value == 0 {

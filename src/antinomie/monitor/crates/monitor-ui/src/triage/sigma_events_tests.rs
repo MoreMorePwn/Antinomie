@@ -461,6 +461,61 @@ fn an_incomplete_argument_vector_gives_no_argc_and_only_the_arguments_that_were_
     assert!(execve.get("argc").is_none());
 }
 
+#[test]
+fn auditd_cwd_and_proctitle_records_come_with_syscall_and_path_records() {
+    let hex = |text: &str| -> String { text.bytes().map(|byte| format!("{byte:02X}")).collect() };
+    let mut files = FdState::default();
+    files.journal.launch_cwd = Some("/work".into());
+    files.journal.root_cookie = 1;
+    let calls = [
+        exec(1, "/bin/sh", &["sh", "-c", "ls /tmp"]),
+        with_path(tests::call(1, 80, "chdir", 0), "arg0.filename", "sub"),
+        tests::path_call(1, 87, "unlink", 0, "/tmp/gone"),
+    ];
+    let events = run(&mut files, &calls);
+    let cwd = auditd(&events, "CWD");
+    let directories: Vec<_> = cwd
+        .iter()
+        .map(|event| event["fields"]["cwd"].as_str().unwrap())
+        .collect();
+    // One per audited call. The exec sees the launch directory; the unlink the
+    // directory chdir reached, which is joined lexically and says so.
+    assert_eq!(directories, ["/work", "/work/sub"]);
+    assert!(cwd[0].get("_inferred").is_none());
+    assert_eq!(cwd[1]["_inferred"], serde_json::json!(["cwd"]));
+    // The title is the arguments joined with NULs, hex-encoded: for the exec
+    // and, from the process's own recorded arguments, for the unlink.
+    let titles: Vec<_> = auditd(&events, "PROCTITLE")
+        .iter()
+        .map(|event| event["fields"]["proctitle"].as_str().unwrap().to_owned())
+        .collect();
+    let expected = hex("sh\0-c\0ls /tmp");
+    assert_eq!(titles, [expected.clone(), expected]);
+    // Calls with no SYSCALL or PATH record get neither.
+    let events = run(&mut FdState::default(), &[tests::call(1, 39, "getpid", 1)]);
+    assert!(auditd(&events, "CWD").is_empty() && auditd(&events, "PROCTITLE").is_empty());
+}
+
+#[test]
+fn a_title_is_cut_where_the_kernel_cuts_it_and_missing_without_a_whole_vector() {
+    let long = "x".repeat(200);
+    let mut files = FdState::default();
+    let events = run(&mut files, &[exec(1, "/bin/echo", &["echo", &long])]);
+    let title = auditd(&events, "PROCTITLE")[0]["fields"]["proctitle"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(title.len(), 2 * 128);
+    // No directory was recorded, so no CWD is made up.
+    assert!(auditd(&events, "CWD").is_empty());
+    let mut row = exec(7, "/bin/cp", &["cp", "a"]);
+    let entry = row.entry.as_mut().unwrap();
+    entry.fields.retain(|field| field.key != "arg1.ptr[2]");
+    entry.fields[3].complete = false;
+    let events = run(&mut FdState::default(), &[row]);
+    assert!(auditd(&events, "PROCTITLE").is_empty());
+}
+
 use antinomie_monitor_core::kernel_notes::{CREDS_KEY, HASH_KEY};
 
 /// A credentials record: `ids` are uid, euid, suid, fsuid then the gids.

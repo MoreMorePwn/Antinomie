@@ -281,7 +281,6 @@ pub(super) fn scan_archive_query(
                 // The journal tracks seen paths itself; without it, do it here.
                 sigma_events::track(&mut files, invocation, event);
             }
-            let result = file_category::outcome(invocation);
             tabs.observe(request, &mut counts, &files, invocation, event, &hits)?;
             if let Some(row) = file_index.observe_with(
                 &files,
@@ -290,10 +289,11 @@ pub(super) fn scan_archive_query(
                 Some(&recording.directory),
                 &hits,
             ) {
-                if !result.failed() {
-                    counts.reads += 1;
-                }
-                if request.file_visibility.keeps(&row) && read_query.keep_table(&row[0].values) {
+                // Failed reads are listed with their result.
+                counts.reads += 1;
+                if request.file_visibility.keeps_with(&row, true)
+                    && read_query.keep_table(&row[0].values)
+                {
                     read_page.push(row)?;
                 }
             }

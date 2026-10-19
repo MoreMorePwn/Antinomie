@@ -51,7 +51,7 @@ fn network_panel_lists_captures_toggles_capture_and_filters_by_clicked_values() 
     for expected in [
         "Captures",
         &local_start,
-        "2 packets · 6 s · 200 B",
+        "2 packets · 6 s · 200 bytes",
         "DNS",
         "TCP",
         "10.0.2.15",

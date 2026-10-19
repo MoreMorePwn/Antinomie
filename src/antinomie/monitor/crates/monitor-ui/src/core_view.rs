@@ -117,6 +117,16 @@ struct AcquiredCore {
     directory: PathBuf,
     file: Option<PathBuf>,
     state: antinomie_monitor_core::RunArtifactState,
+    /// The core was deleted: "Deleted", as the run's artifact list words it.
+    deleted: Option<&'static str>,
+}
+
+impl AcquiredCore {
+    /// What the core's state reads as.
+    fn status(&self) -> &'static str {
+        self.deleted
+            .unwrap_or_else(|| crate::app::core_capture_status(self.state))
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]

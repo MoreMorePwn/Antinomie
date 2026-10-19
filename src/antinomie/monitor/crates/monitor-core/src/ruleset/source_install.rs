@@ -517,11 +517,7 @@ fn unlisted_ok(filter: &SourceFilter, path: &str) -> bool {
 }
 
 fn human_bytes(bytes: u64) -> String {
-    if bytes >= 1024 * 1024 {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{} KB", bytes.div_ceil(1024))
-    }
+    crate::byte_size::file_size(bytes)
 }
 
 /// The provenance recorded in a retained version's manifest.
@@ -546,4 +542,12 @@ pub fn source_update<'a>(catalog: &'a Catalog, pack: &InstalledPack) -> Option<&
         .map(|source| source.options.iter().cloned().collect())
         .unwrap_or_default();
     (entry.version(&options) != pack.version).then_some(entry)
+}
+
+#[cfg(test)]
+mod size_text_tests {
+    #[test]
+    fn source_download_sizes_use_the_shared_bytes_format() {
+        assert_eq!(super::human_bytes(1500), "1500 bytes (1.5 KB)");
+    }
 }

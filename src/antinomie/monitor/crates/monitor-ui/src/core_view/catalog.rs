@@ -136,7 +136,15 @@ impl CoreView {
     /// next catalog read confirms it.
     pub(crate) fn forget_core(&mut self, directory: &Path) {
         self.manual.retain(|core| core.directory != directory);
-        self.acquired.retain(|core| core.directory != directory);
+        // A deleted run core stays as a Deleted row; the catalog confirms it.
+        for core in self
+            .acquired
+            .iter_mut()
+            .filter(|core| core.directory == directory)
+        {
+            core.file = None;
+            core.deleted = Some("Deleted");
+        }
         self.records.retain(|record| record.dir != directory);
         if self.selected_directory.as_deref() == Some(directory)
             || self
@@ -429,9 +437,10 @@ pub(super) fn catalog(roots: &[PathBuf], vm_id: Option<&str>) -> Result<CoreCata
                     continue;
                 }
             };
+            // A deleted core stays listed, as a Deleted row.
             if artifacts.vm_id != vm_id
-                || artifacts.core_deleted
-                || artifacts.core_state == antinomie_monitor_core::RunArtifactState::Disabled
+                || (!artifacts.core_deleted
+                    && artifacts.core_state == antinomie_monitor_core::RunArtifactState::Disabled)
             {
                 continue;
             }
@@ -454,7 +463,9 @@ pub(super) fn catalog(roots: &[PathBuf], vm_id: Option<&str>) -> Result<CoreCata
             {
                 continue;
             }
+            let deleted = artifacts.core_deleted.then(|| artifacts.core_label());
             result.acquired.push(AcquiredCore {
+                deleted,
                 vm_id: artifacts.vm_id,
                 boot_id: artifacts.boot_id,
                 run_id: artifacts.run_id,

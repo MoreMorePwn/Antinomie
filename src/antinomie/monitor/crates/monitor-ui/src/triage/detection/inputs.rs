@@ -54,15 +54,98 @@ pub(super) fn outcome_counts(inputs: &[ScannedInput]) -> String {
 /// Shown on a row whose capture or core is no longer on disk.
 pub(super) const MISSING_NOTE: &str = "This capture or core was deleted or is no longer on disk. The result was computed before it went; this is not a clean result.";
 
-/// A saved result names a capture or core that has since been deleted.
-pub(super) fn evidence_missing(input: &ScannedInput) -> bool {
+/// Whether a row names a file whose presence is worth checking: a capture
+/// (a run without captures lists a placeholder with no file at all) or a core.
+fn checked_path(input: &ScannedInput) -> Option<&Path> {
     match input.kind {
-        // A run without captures lists a placeholder with no file at all.
-        InputKind::Capture => {
-            input.path.extension().is_some() && std::fs::symlink_metadata(&input.path).is_err()
+        InputKind::Capture if input.path.extension().is_some() => Some(&input.path),
+        InputKind::CoreDump => Some(&input.path),
+        _ => None,
+    }
+}
+
+/// How long a presence answer is kept before the files are looked at again.
+const PRESENCE_KEEP: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Which listed captures and cores are gone from disk. The file system is
+/// read on a worker, never while a frame is drawn: on load, after a delete
+/// and on a slow timer. Until an answer arrives a row reads as present.
+#[derive(Default)]
+pub(super) struct Presence {
+    /// The paths the answer in `gone` was asked about.
+    asked: Vec<PathBuf>,
+    gone: std::collections::BTreeSet<PathBuf>,
+    at: Option<std::time::Instant>,
+    stale: bool,
+    rx: Option<mpsc::Receiver<std::collections::BTreeSet<PathBuf>>>,
+}
+
+impl Presence {
+    /// A file was deleted or the result changed: look again soon.
+    pub(super) fn invalidate(&mut self) {
+        self.stale = true;
+    }
+
+    /// Whether the saved result named a file that is no longer on disk.
+    fn missing(&self, input: &ScannedInput) -> bool {
+        checked_path(input).is_some_and(|path| self.gone.contains(path))
+    }
+
+    /// Take a finished answer and start a new probe when one is due.
+    fn update(&mut self, ctx: &egui::Context, inputs: &[ScannedInput]) {
+        if let Some(rx) = &self.rx {
+            match rx.try_recv() {
+                Ok(gone) => {
+                    self.gone = gone;
+                    self.rx = None;
+                    self.at = Some(std::time::Instant::now());
+                }
+                Err(mpsc::TryRecvError::Disconnected) => self.rx = None,
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(Duration::from_millis(100));
+                    return;
+                }
+            }
         }
-        InputKind::CoreDump => std::fs::symlink_metadata(&input.path).is_err(),
-        _ => false,
+        let paths: Vec<PathBuf> = inputs
+            .iter()
+            .take(SHOWN)
+            .filter_map(checked_path)
+            .map(Path::to_path_buf)
+            .collect();
+        let due = self.stale
+            || self.asked != paths
+            || self.at.is_none_or(|at| at.elapsed() >= PRESENCE_KEEP);
+        if paths.is_empty() {
+            self.asked = paths;
+            self.gone.clear();
+            self.stale = false;
+            return;
+        }
+        if !due {
+            ctx.request_repaint_after(PRESENCE_KEEP);
+            return;
+        }
+        let (tx, rx) = mpsc::sync_channel(1);
+        let repaint = ctx.clone();
+        let probe = paths.clone();
+        let spawned = std::thread::Builder::new()
+            .name("triage-input-presence".into())
+            .spawn(move || {
+                let gone = probe
+                    .into_iter()
+                    .filter(|path| std::fs::symlink_metadata(path).is_err())
+                    .collect();
+                let _ = tx.send(gone);
+                repaint.request_repaint_of(egui::ViewportId::ROOT);
+            })
+            .is_ok();
+        self.asked = paths;
+        self.stale = false;
+        if spawned {
+            self.rx = Some(rx);
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
     }
 }
 
@@ -128,8 +211,13 @@ struct ScanState {
 /// One input. Failed and Skipped rows offer a Scan button, and Failed rows the
 /// log; the engine scans every one of its inputs together, so Scan runs the
 /// whole engine again.
-fn row(ui: &mut egui::Ui, input: &ScannedInput, engine: &str, scan: ScanState) -> RowAction {
-    let missing = evidence_missing(input);
+fn row(
+    ui: &mut egui::Ui,
+    input: &ScannedInput,
+    missing: bool,
+    engine: &str,
+    scan: ScanState,
+) -> RowAction {
     // A deleted capture or core has nothing left to open.
     let target = target(input).filter(|_| !missing);
     let mut action = RowAction::default();
@@ -264,6 +352,7 @@ impl View {
             ready: self.rx.is_none() && self.identity.is_some(),
         };
         let engine = name(self.selected);
+        let presence = &mut self.presence;
         ui.indent(("detector-scanned-inputs", index), |ui| {
             let Some(inputs) = inputs else {
                 ui.weak("This result was saved before scanned inputs were recorded. Scan again to list them.");
@@ -278,8 +367,9 @@ impl View {
                     .small()
                     .color(theme::muted()),
             );
+            presence.update(ui.ctx(), inputs);
             for input in inputs.iter().take(SHOWN) {
-                let action = row(ui, input, engine, state);
+                let action = row(ui, input, presence.missing(input), engine, state);
                 if chosen.is_none() {
                     chosen = action.route;
                 }
@@ -373,7 +463,7 @@ mod tests {
             "1 succeeded, 1 failed, 1 skipped",
             "Executable",
             "sample",
-            "2.0 KiB",
+            "2048 bytes (2.0 KB)",
             "abababababab",
             "Succeeded",
             "memory.elf",
@@ -646,6 +736,18 @@ mod tests {
         assert!(!text.to_lowercase().contains("partial"), "{text}");
     }
 
+    /// Draw until the worker's answer shows `count` missing rows.
+    fn shown_until_missing(view: &mut View, ctx: &egui::Context, count: usize) -> String {
+        for _ in 0..200 {
+            let text = shown(view, ctx);
+            if text.matches("Evidence missing").count() == count {
+                return text;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        shown(view, ctx)
+    }
+
     #[test]
     fn a_deleted_capture_or_core_reads_as_missing_evidence_and_does_not_open() {
         let dir = std::env::temp_dir().join(format!("ant-missing-input-{}", std::process::id()));
@@ -661,13 +763,46 @@ mod tests {
             // The placeholder of a run without captures has no file at all.
             ScannedInput::new(InputKind::Capture, dir.join("network")),
         ];
-        let missing: Vec<_> = rows.iter().map(evidence_missing).collect();
-        assert_eq!(missing, [false, true, true, false]);
         let ctx = egui::Context::default();
         let mut view = view(Some(rows));
         view.inputs_open[0] = true;
-        let text = shown(&mut view, &ctx);
+        let text = shown_until_missing(&mut view, &ctx, 2);
         assert_eq!(text.matches("Evidence missing").count(), 2, "{text}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn drawing_frames_does_not_touch_the_file_system() {
+        let dir = std::env::temp_dir().join(format!("ant-presence-frames-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let kept = dir.join("kept.pcap");
+        std::fs::write(&kept, b"pcap").unwrap();
+        let ctx = egui::Context::default();
+        let mut view = view(Some(vec![ScannedInput::new(InputKind::Capture, &kept)]));
+        view.inputs_open[0] = true;
+        // The first answer arrives: nothing is missing.
+        let text = shown_until_missing(&mut view, &ctx, 0);
+        assert_eq!(text.matches("Evidence missing").count(), 0, "{text}");
+        for _ in 0..200 {
+            if view.presence.rx.is_none() {
+                break;
+            }
+            shown(&mut view, &ctx);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(view.presence.rx.is_none(), "the first probe never finished");
+        // The file goes. Frames drawn now answer from the cache: a stat per
+        // row per frame would notice at once.
+        std::fs::remove_file(&kept).unwrap();
+        for _ in 0..50 {
+            let text = shown(&mut view, &ctx);
+            assert!(!text.contains("Evidence missing"), "{text}");
+            assert!(view.presence.rx.is_none(), "a frame started a probe");
+        }
+        // A delete event refreshes it, off the frame.
+        view.evidence_deleted();
+        let text = shown_until_missing(&mut view, &ctx, 1);
+        assert_eq!(text.matches("Evidence missing").count(), 1, "{text}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

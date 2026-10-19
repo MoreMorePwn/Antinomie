@@ -24,7 +24,7 @@ AUDITD_SERVICE = "auditd"
 SUPPORTED_SERVICES = {"", "antinomie", AUDITD_SERVICE}
 # Field names auditd uses. Stored as TEXT so a rule's number (`a0: 40000`) equals the recorded text.
 # `Syscall` is shared with the Sysmon-style events: auditd rules write it `SYSCALL`, and names are case-insensitive.
-AUDITD_FIELDS = {"type", "exe", "comm", "name", "nametype", "key", "exit", "success", "pid", "ppid", "saddr", "argc", "uid", "euid", "suid", "fsuid", "gid", "egid", "sgid", "fsgid", "auid", "ses"} | {"a" + str(index) for index in range(16)}
+AUDITD_FIELDS = {"type", "exe", "comm", "name", "nametype", "key", "exit", "success", "pid", "ppid", "saddr", "argc", "cwd", "proctitle", "uid", "euid", "suid", "fsuid", "gid", "egid", "sgid", "fsgid", "auid", "ses"} | {"a" + str(index) for index in range(16)}
 SCHEMA = {"Image", "CommandLine", "ProcessId", "ThreadId", "TargetFilename", "SourceFilename", "QueryName", "QueryType", "ResponseCode", "DestinationIp", "DestinationPort", "HttpMethod", "HttpHost", "HttpUri", "Syscall", "Operation", "Result", "TransferredSize", "BpfCommand", "Mode", "Setuid", "Initiated", "ParentImage", "ParentCommandLine", "ParentProcessId", "CurrentDirectory", "DestinationHostname", "SourceIp", "SourcePort", "Protocol", "IsNewFile", "User", "LogonId", "Hashes", "HashSkipped"} | AUDITD_FIELDS
 MAX_INFERRED = 64
 # Individual rules named in `coverage.listed`; the counts cover all of them.

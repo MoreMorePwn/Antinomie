@@ -47,6 +47,7 @@ impl MonitorApp {
             Kind::Core | Kind::ImportedCore => self.core_view.forget_core(deletion.path()),
         }
         *self.triage_pcap.borrow_mut() = Default::default();
+        self.run_labels.invalidate();
         self.triage.evidence_deleted();
         self.refresh_history();
     }

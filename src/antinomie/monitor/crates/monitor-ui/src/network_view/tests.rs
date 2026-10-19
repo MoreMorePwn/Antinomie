@@ -299,7 +299,7 @@ fn hex_dump_pads_short_rows_and_marks_the_chosen_bytes() {
     assert_eq!(format_date(951_782_400), "2000-02-29 00:00:00 UTC");
     assert_eq!(format_duration(6_404), "6 s");
     assert_eq!(format_duration(125_000), "2 min 5 s");
-    assert_eq!(format_bytes(3_620), "3.5 KiB");
+    assert_eq!(format_bytes(3_620), "3620 bytes (3.5 KB)");
 }
 
 #[test]
