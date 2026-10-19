@@ -331,7 +331,22 @@ fn run_history_details_show_the_process_tree_then_the_enabled_analysis_only() {
             }],
         );
     }
-    let opened = draw(&mut app, Vec::new());
+    // The opened fold is below the taller tree: scroll the Details to it.
+    draw(
+        &mut app,
+        vec![
+            egui::Event::PointerMoved(egui::pos2(450.0, 10.0)),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -3000.0),
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    let mut opened = Vec::new();
+    for _ in 0..20 {
+        opened = draw(&mut app, Vec::new());
+    }
     for label in [
         "Executable",
         "Arguments",

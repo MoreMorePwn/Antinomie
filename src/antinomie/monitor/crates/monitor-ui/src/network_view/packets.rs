@@ -305,7 +305,14 @@ impl NetworkView {
     /// left, its bytes on the right with the chosen field's bytes marked.
     pub(crate) fn details(&mut self, ui: &mut egui::Ui, font_size: f32) {
         if let Some((capture, live)) = self.capture_details.clone() {
-            self.capture_record_details(ui, &capture, live);
+            // The record can be taller than the panel; its own scroll area
+            // keeps its place while the same capture is shown.
+            crate::details_scroll::show(
+                ui,
+                "network_capture_record_scroll",
+                &capture.file,
+                |ui, _| self.capture_record_details(ui, &capture, live),
+            );
             return;
         }
         let Some(packet) = self.list.selected.clone() else {

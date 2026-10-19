@@ -6,6 +6,16 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **The Details panel scrolls, and the process tree has room.** Long Run
+  History details and Network capture records are no longer clipped: the
+  panel scrolls vertically, keeps its place while the same run or capture
+  stays selected and returns to the top when another is chosen. The recorded
+  process tree is taller (it grows with the window), can be resized by
+  dragging the bar under it (double-click resets), and scrolls on its own in
+  both directions for deep trees and long paths; the mouse wheel over the
+  tree scrolls the tree first and the panel once the tree reaches its end.
+  Capture History's process tree scrolls sideways too.
+
 - **Sigma rules can match more of what a run did.** Host-only; nothing changes
   in the guest. The event journal Sigma reads now has the process's parent
   (`ParentImage`, `ParentCommandLine`, `ParentProcessId`, from the fork result

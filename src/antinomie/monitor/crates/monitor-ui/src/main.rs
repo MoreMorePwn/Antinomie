@@ -7,6 +7,7 @@ mod build_wizard;
 mod core_view;
 mod data_view;
 mod dependencies_window;
+mod details_scroll;
 mod evidence;
 mod evidence_jobs;
 mod folders;
