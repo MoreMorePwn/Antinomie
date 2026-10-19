@@ -16,8 +16,13 @@ it runs.
 - **Run History details show the process tree and the analysis that was on.**
   The details area is the run's recorded process tree, then the list of enabled
   analysis features (static analyses, memory dump, core dump and network
-  capture), plus the recording warning when saving stopped. The launch details,
-  artifact links and static-analysis button there are gone.
+  capture), then a closed "Launch" fold with the executable, arguments, working
+  directory, environment, UID/GID, boot, session and recording folder, plus the
+  recording warning when saving stopped. The artifact links and static-analysis
+  button there are gone.
+- **Cancel a process core from the Core dump panel.** While a manual or
+  Core Dump on Exit capture is in progress, the panel shows a "Cancel process
+  core" button; it is absent when nothing is being captured.
 - **Filter boxes say `filter e.g. ...`.** Every filter box shows a valid
   example of its own syntax as a placeholder in a grayer hint color, and the
   labels that repeated it are gone.

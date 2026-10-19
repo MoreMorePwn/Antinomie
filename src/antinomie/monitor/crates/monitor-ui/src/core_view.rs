@@ -95,12 +95,16 @@ struct CoreCatalog {
 pub(crate) enum CoreAction {
     Dump,
     Cancel(String),
+    /// Cancel a run's Core Dump on Exit without stopping the program.
+    CancelRun(String),
 }
 
 pub(crate) struct CoreControls<'a> {
     pub unavailable: Option<&'a str>,
     pub captures: &'a [ProcessCoreCapture],
     pub can_cancel: bool,
+    /// The running boot: only captures of this boot can still be cancelled.
+    pub boot_id: Option<&'a str>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -448,7 +452,12 @@ impl CoreView {
                     ..Default::default()
                 }))
                 .show_inside(ui, |ui| {
-                    action = self.dump_list(ui, controls.unavailable, controls.can_cancel);
+                    action = self.dump_list(
+                        ui,
+                        controls.unavailable,
+                        controls.can_cancel,
+                        controls.boot_id,
+                    );
                 });
         }
         egui::CentralPanel::default()
