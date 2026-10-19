@@ -213,6 +213,7 @@ impl MonitorApp {
             generation: self.archive_generation,
             directory,
             offset,
+            limit: self.settings.trace_page_size,
             capture: self.selected_capture.is_some(),
             pid: self.selected_process,
             query: self.applied_filter.clone(),

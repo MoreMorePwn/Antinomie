@@ -24,6 +24,7 @@ mod stealth;
 mod terminal_windows;
 mod terminals;
 mod trace_filters;
+mod trace_paging;
 mod trace_run_selector;
 mod trace_sort;
 mod trace_view;

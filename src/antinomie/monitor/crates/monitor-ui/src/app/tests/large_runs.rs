@@ -216,6 +216,7 @@ fn page_request(directory: &Path, query: &str, offset: u64) -> Request {
         generation: 1,
         directory: directory.into(),
         offset,
+        limit: 100,
         capture: false,
         pid: None,
         query: query.into(),

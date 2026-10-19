@@ -803,6 +803,7 @@ fn select_run_replaces_the_trace_read_of_the_old_run_with_one_for_the_new_run() 
         generation: app.archive_generation,
         directory,
         offset: 0,
+        limit: 100,
         capture: false,
         pid: None,
         query: String::new(),
