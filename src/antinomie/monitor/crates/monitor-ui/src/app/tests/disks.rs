@@ -257,3 +257,125 @@ fn the_details_dock_follows_the_disks_tab() {
         );
     }
 }
+
+#[test]
+fn dump_disk_and_keep_as_dump_send_their_commands_with_the_hash_settings() {
+    let mut app = app();
+    stopped_vm(&mut app);
+    app.focus_panel = Some(Panel::Disks);
+    app.snapshot.disk_measure = Some(measure());
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let size = egui::vec2(1600.0, 900.0);
+    let dump = format!("{} Dump disk", egui_phosphor::regular::HARD_DRIVES);
+    // The defaults: the image is hashed, the layers are not.
+    click_label(&mut app, &ctx, size, &dump);
+    assert!(matches!(
+        app.submitted.last(),
+        Some(Command::DumpDisk { vm_id, hash: true, layer_digests: false }) if vm_id == "vm"
+    ));
+    // The Settings toggles travel with the command.
+    let mut app = self::app();
+    stopped_vm(&mut app);
+    app.focus_panel = Some(Panel::Disks);
+    app.snapshot.disk_measure = Some(measure());
+    app.settings.disks.dump_hash = false;
+    app.settings.disks.source_digests = true;
+    click_label(&mut app, &ctx, size, &dump);
+    assert!(matches!(
+        app.submitted.last(),
+        Some(Command::DumpDisk {
+            hash: false,
+            layer_digests: true,
+            ..
+        })
+    ));
+    // Keep as dump, from the open view.
+    let mut app = self::app();
+    stopped_vm(&mut app);
+    app.focus_panel = Some(Panel::Disks);
+    open_view(&mut app);
+    app.snapshot.disk_measure = Some(measure());
+    click_label(&mut app, &ctx, size, "Keep as dump");
+    assert!(matches!(
+        app.submitted.last(),
+        Some(Command::KeepCurrentDiskAsDump { vm_id, hash: true, layer_digests: false })
+            if vm_id == "vm"
+    ));
+}
+
+#[test]
+fn deleting_a_dump_asks_first_then_sends_delete_evidence_for_its_folder() {
+    use crate::evidence_delete::Kind;
+    let mut app = app();
+    stopped_vm(&mut app);
+    app.focus_panel = Some(Panel::Disks);
+    let root = std::env::temp_dir().join(format!("ant-app-disk-delete-{}", std::process::id()));
+    let dir = root.join("disks").join("dump-1");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("root.ext4"), vec![0u8; 4096]).unwrap();
+    let dump = antinomie_monitor_core::disks::dump::DiskDump {
+        id: "dump-1".into(),
+        vm_id: "vm".into(),
+        vm_name: "Debian".into(),
+        file: "root.ext4".into(),
+        finished_ms: Some(2),
+        started_ms: 1,
+        dir: dir.clone(),
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    app.disk_action(
+        &ctx,
+        Some(crate::disk_view::DiskAction::Delete(Box::new(dump.clone()))),
+    );
+    assert!(app.submitted.is_empty(), "asked, not sent");
+    let Some(Confirm::DeleteEvidence(deletion)) = app.confirm.take() else {
+        panic!("a confirmation")
+    };
+    assert_eq!(deletion.kind, Kind::Disk);
+    assert_eq!(deletion.title(), "Delete disk dump");
+    assert!(
+        deletion.text().contains("disk image"),
+        "{}",
+        deletion.text()
+    );
+    assert!(deletion.text().contains("can't be undone"));
+    // An imported image's own file is said to stay.
+    let imported = crate::evidence_delete::Deletion::disk(&dir, "evidence.ext4", true);
+    assert_eq!(imported.kind, Kind::ImportedDisk);
+    assert!(imported.text().contains("original image file stays"));
+    app.submit_delete_evidence(deletion.clone());
+    let [Command::DeleteEvidence {
+        vm_id,
+        item: antinomie_monitor_core::EvidenceItem::DiskDump { directory },
+        confirmed: true,
+    }] = &app.submitted[..]
+    else {
+        panic!("one DeleteEvidence of a disk dump: {:?}", app.submitted);
+    };
+    assert_eq!(vm_id, "vm");
+    assert_eq!(directory, &dir);
+    assert!(
+        dir.join("root.ext4").exists(),
+        "the backend deletes, not the UI"
+    );
+    // Once the backend deleted it the tab forgets it.
+    app.evidence_deleted(&deletion);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn the_settings_offer_the_dump_hash_and_source_digest_toggles() {
+    let mut app = app();
+    stopped_vm(&mut app);
+    app.settings_open = true;
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let shown = shown_texts(&mut app, &ctx, egui::vec2(1600.0, 1000.0));
+    for label in ["Disks: dump hash", "Disks: source digests"] {
+        assert!(shown.iter().any(|text| text == label), "{label}: {shown:?}");
+    }
+    assert!(app.settings.disks.dump_hash && !app.settings.disks.source_digests);
+}

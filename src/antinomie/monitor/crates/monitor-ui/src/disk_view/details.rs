@@ -3,7 +3,7 @@
 //! file, directory or link, with Extract, Save, Open with and Static Analysis.
 use super::{extraction::Intent, *};
 use crate::theme;
-use antinomie_monitor_core::disks::reader::DiskEntry;
+use antinomie_monitor_core::disks::{export::ExportFormat, reader::DiskEntry};
 
 const GUEST_NOTE: &str = "Guest file; never executed on the host.";
 
@@ -24,31 +24,201 @@ impl DiskView {
     /// The Details of the tab; the action it asks for goes to `out`.
     pub(crate) fn details(&mut self, ui: &mut egui::Ui) -> Option<DiskAction> {
         self.poll_save(ui.ctx());
+        self.poll_dump_actions(ui.ctx());
         self.action = None;
-        let Some(view) = self.bound.clone() else {
+        let dump = self.selected_dump().map(|row| row.dump.clone());
+        let current = match self.bound.as_ref().map(|bound| &bound.what) {
+            Some(What::Current(view)) => Some((**view).clone()),
+            _ => None,
+        };
+        if dump.is_none() && current.is_none() {
             ui.add_space(8.0);
             ui.colored_label(
                 theme::muted(),
-                "Open the current disk of a stopped VM in the Disks tab, then select a file or \
-                 folder to see its details.",
+                "Open the current disk of a stopped VM or a saved dump in the Disks tab, then \
+                 select a file or folder to see its details.",
             );
             return None;
-        };
+        }
+        let extract_dir = self.bound.as_ref().map(|bound| bound.extract_dir.clone());
         egui::ScrollArea::vertical()
             .id_salt("disk_details")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                match self
+                let selected = self
                     .selection
                     .as_ref()
                     .map(|selection| selection.path.clone())
-                {
-                    Some(path) => self.entry_details(ui, &path),
-                    None => self.view_details(ui, &view),
+                    .filter(|_| self.bound.is_some());
+                match (selected, dump, current) {
+                    (Some(path), _, _) => self.entry_details(ui, &path),
+                    (None, Some(dump), _) => self.dump_details(ui, &dump),
+                    (None, None, Some(view)) => self.view_details(ui, &view),
+                    (None, None, None) => {}
                 }
-                self.extracted_files(ui, &view);
+                if let Some(extract_dir) = extract_dir {
+                    self.extracted_files(ui, &extract_dir);
+                }
             });
         self.action.take()
+    }
+
+    /// The record of a saved dump.
+    fn dump_details(&mut self, ui: &mut egui::Ui, dump: &DiskDump) {
+        theme::section(ui, "Disk dump");
+        let name = crate::evidence::title(ui, &dump.dir, &dumps::dump_title(dump));
+        let missing = self.selected_dump().is_some_and(|row| row.missing);
+        let image = self.selected_dump().map(|row| row.image.clone());
+        egui::Grid::new("disk_dump_details")
+            .num_columns(2)
+            .spacing([16.0, 4.0])
+            .show(ui, |ui| {
+                row(ui, "Name", name);
+                row(ui, "VM", format!("{} ({})", dump.vm_name, dump.vm_id));
+                if !dump.system.is_empty() {
+                    row(ui, "System", dump.system.clone());
+                }
+                row(
+                    ui,
+                    "Taken",
+                    crate::time_format::local_seconds(dump.started_ms / 1000),
+                );
+                if let Some(finished) = dump.finished_ms {
+                    row(
+                        ui,
+                        "Finished",
+                        crate::time_format::local_seconds(finished / 1000),
+                    );
+                }
+                row(ui, "Filesystem state", dump.fs_state.label());
+                row(ui, "Format", "Raw ext4 (whole disk)");
+                row(ui, "Logical size", format_size(dump.logical_size));
+                if let Some(allocated) = dump.allocated_size {
+                    row(ui, "Allocated", format_size(allocated));
+                }
+                row(
+                    ui,
+                    "SHA-256",
+                    dump.sha256.clone().unwrap_or_else(|| "not recorded".into()),
+                );
+                row(
+                    ui,
+                    "Source",
+                    match &dump.source.kind {
+                        antinomie_monitor_core::disks::DiskSourceKind::Imported => {
+                            "Imported image".to_string()
+                        }
+                        antinomie_monitor_core::disks::DiskSourceKind::Current => {
+                            "Current disk of the VM".to_string()
+                        }
+                    },
+                );
+                if !dump.source.active_layer.is_empty() {
+                    row(ui, "Source layer", dump.source.active_layer.clone());
+                }
+                if let Some(parent) = &dump.source.active_parent_id {
+                    row(ui, "After checkpoint", parent.clone());
+                }
+                for (index, layer) in dump.source.layers.iter().enumerate() {
+                    let mut text = format!(
+                        "{} · {} · {}",
+                        layer.filename,
+                        format_size(layer.size),
+                        clock(layer.modified_ms / 1000)
+                    );
+                    if let Some(sum) = &layer.sha256 {
+                        text.push_str(&format!(" · {sum}"));
+                    }
+                    row(ui, if index == 0 { "Layers" } else { "" }, text);
+                }
+                if let Some(image) = &image {
+                    row(ui, "Image", image.display().to_string());
+                }
+                row(
+                    ui,
+                    "Record",
+                    dump.dir.join("dump.json").display().to_string(),
+                );
+            });
+        if let Some(error) = &dump.error {
+            crate::activity::error(ui, format!("This dump failed: {error}"));
+        }
+        if missing {
+            crate::activity::warning(ui, "The imported image is no longer at its path.");
+        }
+        ui.add_space(4.0);
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(dump.fs_state.explanation()).color(theme::muted()),
+            )
+            .wrap(),
+        );
+        ui.add_space(6.0);
+        self.dump_buttons(ui, dump);
+        self.host_progress(ui, &dump.id);
+        ui.add_space(2.0);
+        ui.colored_label(theme::muted(), GUEST_NOTE);
+    }
+
+    fn dump_buttons(&mut self, ui: &mut egui::Ui, dump: &DiskDump) {
+        let Some(row) = self.selected_dump() else {
+            return;
+        };
+        let (browsable, image) = (row.browsable(), row.image.clone());
+        let busy_save = self.saving_image.is_some();
+        let busy_verify = self.verify.is_some();
+        let blocked = self.delete_blocked_id(&dump.id);
+        let qemu_img = self.qemu_img.clone();
+        ui.horizontal_wrapped(|ui| {
+            for format in [ExportFormat::SparseRaw, ExportFormat::Qcow2] {
+                if ui
+                    .add_enabled(
+                        browsable && !busy_save,
+                        egui::Button::new(match format {
+                            ExportFormat::SparseRaw => "Save image to host…",
+                            ExportFormat::Qcow2 => "Save as qcow2…",
+                        }),
+                    )
+                    .on_hover_text(match format {
+                        ExportFormat::SparseRaw => "Write a sparse raw ext4 copy: holes stay holes",
+                        ExportFormat::Qcow2 => {
+                            "Write a compressed, standalone qcow2 copy (no backing file)"
+                        }
+                    })
+                    .on_disabled_hover_text("Needs a finished dump, and no other save running")
+                    .clicked()
+                {
+                    self.start_save_image(ui.ctx(), dump, &qemu_img, format);
+                }
+            }
+            if ui
+                .add_enabled(
+                    browsable && !busy_verify,
+                    egui::Button::new("Verify SHA-256"),
+                )
+                .on_hover_text("Hash the image again and compare it with the recorded digest")
+                .on_disabled_hover_text("Needs a finished dump, and no other check running")
+                .clicked()
+            {
+                self.start_verify(ui.ctx(), dump, image.clone());
+            }
+            if ui.button("Open directory").clicked() {
+                self.action = Some(DiskAction::OpenWith(dump.dir.clone()));
+            }
+            let delete = ui.add_enabled(
+                blocked.is_none(),
+                egui::Button::new(egui::RichText::new("Delete…").color(theme::error())),
+            );
+            let delete = match &blocked {
+                Some(reason) => delete.on_disabled_hover_text(reason),
+                None => {
+                    delete.on_hover_text("Permanently delete this dump from the recording folder")
+                }
+            };
+            if delete.clicked() {
+                self.action = Some(DiskAction::Delete(Box::new(dump.clone())));
+            }
+        });
     }
 
     fn view_details(&mut self, ui: &mut egui::Ui, view: &CurrentDiskView) {
@@ -330,7 +500,7 @@ impl DiskView {
         }
     }
 
-    fn extracted_files(&mut self, ui: &mut egui::Ui, view: &CurrentDiskView) {
+    fn extracted_files(&mut self, ui: &mut egui::Ui, extract_dir: &Path) {
         if self.extracted.is_empty() {
             return;
         }
@@ -364,7 +534,7 @@ impl DiskView {
                         }
                     });
                 if ui.button("Open directory").clicked() {
-                    self.action = Some(DiskAction::OpenWith(view.extract_dir.clone()));
+                    self.action = Some(DiskAction::OpenWith(extract_dir.to_path_buf()));
                 }
             });
     }

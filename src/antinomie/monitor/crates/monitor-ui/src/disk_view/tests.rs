@@ -23,6 +23,9 @@ struct Scene {
     job: Option<DiskJobProgress>,
     other_job: bool,
     settings: DiskSettings,
+    /// The recording folders dumps are listed from.
+    roots: Vec<PathBuf>,
+    recordings: Option<PathBuf>,
 }
 
 fn machine() -> VmConfig {
@@ -81,6 +84,8 @@ impl Scene {
             job: None,
             other_job: false,
             settings: DiskSettings::default(),
+            roots: Vec::new(),
+            recordings: None,
         }
     }
 
@@ -111,6 +116,9 @@ impl Scene {
                         ui,
                         DiskContext {
                             vm: self.vm.as_ref(),
+                            recordings: self.recordings.as_deref(),
+                            recording_roots: &self.roots,
+                            qemu_img: Path::new("qemu-img"),
                             vm_off: self.vm_off,
                             can_stop_vm: self.can_stop,
                             current_disk: self.view.as_ref(),
@@ -298,11 +306,21 @@ fn listing(path: &str, entries: Vec<DiskEntry>, more: bool) -> DiskListing {
     }
 }
 
+/// What the readers are bound to for an open view (no reader is started).
+fn bound(view: CurrentDiskView) -> Bound {
+    Bound {
+        key: view.view_id.clone(),
+        image: view.image.clone(),
+        extract_dir: view.extract_dir.clone(),
+        what: What::Current(Box::new(view)),
+    }
+}
+
 /// A view opened on `scene`, with `/` listed.
 fn opened(scene: &mut Scene, entries: Vec<DiskEntry>) -> DiskView {
     scene.view = Some(open_view(Ext4State::Clean));
     let mut view = DiskView::default();
-    view.bound = scene.view.clone();
+    view.bound = scene.view.clone().map(bound);
     view.tree.reset();
     view.tree.accept("/", 0, Ok(listing("/", entries, false)));
     view.tree.listings.insert(
@@ -1235,7 +1253,7 @@ fn a_not_cleanly_unmounted_view_explains_what_that_means() {
     let mut scene = Scene::stopped();
     let mut view = opened(&mut scene, root_entries());
     scene.view = Some(open_view(Ext4State::NotClean));
-    view.bound = scene.view.clone();
+    view.bound = scene.view.clone().map(bound);
     load_root(&mut view, root_entries());
     let texts = scene.settle(&mut view, &ctx);
     assert!(
@@ -1344,4 +1362,767 @@ fn the_refresh_button_measures_again_only_when_it_can() {
     view.waiting = None;
     scene.vm_off = false;
     assert_eq!(scene.click(&mut view, &ctx, refresh), None);
+}
+
+// ---- Phase 2: saved dumps, import, verify, save, delete ----
+
+use antinomie_monitor_core::disks::dump::{DiskDump, DiskImageFormat};
+
+/// A temporary recording folder with `disks/<id>/dump.json` sidecars.
+struct Recordings(PathBuf);
+
+impl Recordings {
+    fn new() -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "ant-disk-view-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        Self(path)
+    }
+
+    /// A finished clean dump with an image stub; `edit` changes it first.
+    fn dump(&self, id: &str, started_ms: u64, edit: impl FnOnce(&mut DiskDump)) -> DiskDump {
+        let dir = self.0.join("disks").join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut dump = DiskDump {
+            id: id.into(),
+            vm_id: "vm".into(),
+            vm_name: "Debian QA".into(),
+            file: "root.ext4".into(),
+            fs_state: Ext4State::Clean,
+            started_ms,
+            finished_ms: Some(started_ms + 1000),
+            logical_size: 16 * 1024 * 1024 * 1024,
+            allocated_size: Some(812 * 1024 * 1024),
+            sha256: Some("ab".repeat(32)),
+            system: "Linux 6.12.94 · Debian trixie".into(),
+            dir,
+            ..DiskDump::default()
+        };
+        edit(&mut dump);
+        dump.save().unwrap();
+        if !dump.imported && dump.complete() {
+            std::fs::write(dump.path(), b"stub").unwrap();
+        }
+        dump
+    }
+}
+
+impl Drop for Recordings {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+impl Scene {
+    fn with_dumps(recordings: &Recordings) -> Self {
+        Self {
+            roots: vec![recordings.0.clone()],
+            recordings: Some(recordings.0.clone()),
+            ..Self::stopped()
+        }
+    }
+}
+
+/// Select `dump` and bind it by hand (no reader is started), listing `/`.
+fn select_dump(view: &mut DiskView, scene: &Scene, dump: &DiskDump) {
+    view.scan(&scene.roots);
+    view.entry = Entry::Dump(dump.id.clone());
+    view.bound = Some(Bound {
+        key: dump.id.clone(),
+        image: dump.path(),
+        extract_dir: dump.extract_dir(),
+        what: What::Dump,
+    });
+    view.tree.reset();
+    view.tree
+        .accept("/", 0, Ok(listing("/", root_entries(), false)));
+    load_root(view, root_entries());
+}
+
+fn y_of(output: &egui::FullOutput, label: &str) -> f32 {
+    texts(output)
+        .into_iter()
+        .find(|(text, _)| text == label)
+        .unwrap_or_else(|| panic!("{label} not shown"))
+        .1
+        .min
+        .y
+}
+
+#[test]
+fn dumps_are_listed_newest_first_with_their_badges() {
+    let recordings = Recordings::new();
+    recordings.dump("a-clean", 3_000_000, |_| {});
+    recordings.dump("b-forced", 2_000_000, |dump| {
+        dump.fs_state = Ext4State::NotClean;
+        dump.sha256 = None;
+    });
+    let image = recordings.0.join("elsewhere.ext4");
+    std::fs::write(&image, b"stub").unwrap();
+    recordings.dump("c-imported", 1_000_000, |dump| {
+        dump.imported = true;
+        dump.file = image.clone();
+    });
+    recordings.dump("d-moved", 900_000, |dump| {
+        dump.imported = true;
+        dump.file = recordings.0.join("gone.ext4");
+    });
+    recordings.dump("e-failed", 800_000, |dump| {
+        dump.error = Some("No space left on device".into());
+        dump.finished_ms = None;
+    });
+    recordings.dump("f-open", 700_000, |dump| dump.finished_ms = None);
+    recordings.dump("g-newer", 600_000, |dump| {
+        dump.format = DiskImageFormat::Unsupported
+    });
+    let ctx = context();
+    let mut scene = Scene::with_dumps(&recordings);
+    let mut view = DiskView::default();
+    scene.settle(&mut view, &ctx);
+    let output = scene.frame(&mut view, &ctx, Vec::new()).0;
+    let texts_now = shown(&output);
+    let details = [
+        "clean · 812 MiB of 16.0 GiB · SHA-256",
+        "not cleanly unmounted · 812 MiB of 16.0 GiB",
+        "clean · imported · 812 MiB of 16.0 GiB · SHA-256",
+        "file moved",
+        "Failed: No space left on device",
+        "incomplete",
+        "made by a newer version",
+    ];
+    let mut last = f32::MIN;
+    for detail in details {
+        assert!(has(&texts_now, detail), "{detail}: {texts_now:?}");
+        let y = y_of(&output, detail);
+        assert!(y > last, "{detail} is out of order");
+        last = y;
+    }
+    assert!(has(&texts_now, "7 / 7 dumps"), "{texts_now:?}");
+    // The forced-off dump carries the warning glyph in its title.
+    assert!(texts_now
+        .iter()
+        .any(|text| text.starts_with(egui_phosphor::regular::WARNING)));
+    assert_eq!(view.dumps.iter().filter(|row| row.browsable()).count(), 3);
+}
+
+#[test]
+fn the_list_reads_the_recordings_again_when_a_job_ends_and_not_every_frame() {
+    let recordings = Recordings::new();
+    recordings.dump("first", 2_000_000, |_| {});
+    let ctx = context();
+    let mut scene = Scene::with_dumps(&recordings);
+    let mut view = DiskView::default();
+    scene.settle(&mut view, &ctx);
+    assert_eq!(view.dumps.len(), 1);
+    // A dump that appears on disk is not noticed by idle frames.
+    recordings.dump("second", 3_000_000, |_| {});
+    scene.settle(&mut view, &ctx);
+    assert_eq!(view.dumps.len(), 1, "no scan per frame");
+    // A dump job is seen, then it ends: the list is read again.
+    scene.job = Some(DiskJobProgress {
+        vm_id: "vm".into(),
+        purpose: DiskJobPurpose::Dump,
+        stage: DiskJobStage::Converting { percent: 40.0 },
+        estimate: 1 << 30,
+        started_ms: 1,
+    });
+    let texts = scene.settle(&mut view, &ctx);
+    assert!(has(&texts, "writing… 40 %"), "{texts:?}");
+    assert!(has(&texts, "dumping… 40 %"), "{texts:?}");
+    scene.job = None;
+    scene.settle(&mut view, &ctx);
+    assert_eq!(view.dumps.len(), 2);
+    assert_eq!(view.dumps[0].dump.id, "second");
+    // Refresh reads the list too.
+    recordings.dump("third", 4_000_000, |_| {});
+    scene.measure = Some(measure());
+    scene.click(&mut view, &ctx, egui_phosphor::regular::ARROW_CLOCKWISE);
+    scene.settle(&mut view, &ctx);
+    assert_eq!(view.dumps.len(), 3);
+}
+
+#[test]
+fn a_running_vm_still_browses_a_selected_dump() {
+    let recordings = Recordings::new();
+    let dump = recordings.dump("kept", 3_000_000, |_| {});
+    let ctx = context();
+    let mut scene = Scene::with_dumps(&recordings);
+    scene.vm_off = false;
+    scene.can_stop = true;
+    let mut view = DiskView::default();
+    select_dump(&mut view, &scene, &dump);
+    let texts = scene.settle(&mut view, &ctx);
+    // The Current disk row says the VM runs, the dump's tree is shown.
+    assert!(has(&texts, "VM running — stop it to inspect"), "{texts:?}");
+    assert!(
+        !texts
+            .iter()
+            .any(|text| text.contains("need the VM to be off")),
+        "{texts:?}"
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.starts_with("Dump · ") && text.contains("clean · root.ext4")),
+        "{texts:?}"
+    );
+    assert!(texts.iter().any(|text| text.contains("etc")), "{texts:?}");
+    assert!(has(&texts, "Hide dotfiles"));
+    // Dump disk is off while the VM runs; the list can still be used.
+    let mut scene2 = Scene::with_dumps(&recordings);
+    scene2.vm_off = false;
+    let label = format!("{} Dump disk", egui_phosphor::regular::HARD_DRIVES);
+    assert_eq!(scene2.click(&mut view, &ctx, &label), None);
+    // Selecting the Current disk entry shows the running notice again.
+    view.entry = Entry::Current;
+    let texts = scene.settle(&mut view, &ctx);
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.contains("need the VM to be off")),
+        "{texts:?}"
+    );
+}
+
+#[test]
+fn a_dump_that_cannot_be_opened_says_why_instead_of_a_tree() {
+    let recordings = Recordings::new();
+    recordings.dump("failed", 5_000_000, |dump| {
+        dump.error = Some("qemu-img: out of space".into());
+        dump.finished_ms = None;
+    });
+    recordings.dump("open", 4_000_000, |dump| dump.finished_ms = None);
+    recordings.dump("moved", 3_000_000, |dump| {
+        dump.imported = true;
+        dump.file = recordings.0.join("gone.ext4");
+    });
+    recordings.dump("newer", 2_000_000, |dump| {
+        dump.format = DiskImageFormat::Unsupported
+    });
+    let ctx = context();
+    let mut scene = Scene::with_dumps(&recordings);
+    let mut view = DiskView::default();
+    view.scan(&scene.roots);
+    for (id, expected) in [
+        ("failed", "This dump failed: qemu-img: out of space"),
+        ("open", "This dump was never completed."),
+        ("newer", "This dump was made by a newer version"),
+    ] {
+        view.entry = Entry::Dump(id.into());
+        let texts = scene.settle(&mut view, &ctx);
+        assert!(
+            texts.iter().any(|text| text.starts_with(expected)),
+            "{id}: {texts:?}"
+        );
+        assert!(view.bound.is_none(), "{id} must not start a reader");
+    }
+    view.entry = Entry::Dump("moved".into());
+    let texts = scene.settle(&mut view, &ctx);
+    assert!(
+        texts.iter().any(|text| text.contains("is no longer at")),
+        "{texts:?}"
+    );
+    assert!(view.bound.is_none());
+}
+
+#[test]
+fn clicking_a_dump_row_selects_it() {
+    let recordings = Recordings::new();
+    recordings.dump("failed", 5_000_000, |dump| {
+        dump.error = Some("boom".into());
+        dump.finished_ms = None;
+    });
+    let ctx = context();
+    let mut scene = Scene::with_dumps(&recordings);
+    let mut view = DiskView::default();
+    assert_eq!(view.entry, Entry::Current);
+    scene.click(&mut view, &ctx, "Failed: boom");
+    assert_eq!(view.entry, Entry::Dump("failed".into()));
+    // The Current disk row selects it back.
+    scene.click(&mut view, &ctx, "Current disk (VM off)");
+    assert_eq!(view.entry, Entry::Current);
+}
+
+#[test]
+fn the_dump_record_fills_the_details_dock() {
+    let recordings = Recordings::new();
+    let dump = recordings.dump("rec", 3_000_000, |dump| {
+        dump.source.active_layer = "snapshots/ab12.qcow2".into();
+        dump.source.active_parent_id = Some("parent-7".into());
+        dump.source.layers = vec![
+            antinomie_monitor_core::disks::DiskLayerRef {
+                filename: "snapshots/ab12.qcow2".into(),
+                size: 5 << 20,
+                modified_ms: 1_800_000_000_000,
+                sha256: Some("cd".repeat(32)),
+            },
+            antinomie_monitor_core::disks::DiskLayerRef {
+                filename: "/data/base.qcow2".into(),
+                size: 900 << 20,
+                modified_ms: 1_700_000_000_000,
+                sha256: None,
+            },
+        ];
+    });
+    let ctx = context();
+    let mut scene = Scene::with_dumps(&recordings);
+    let mut view = DiskView::default();
+    select_dump(&mut view, &scene, &dump);
+    scene.settle(&mut view, &ctx);
+    let (texts, _) = scene.details(&mut view, &ctx);
+    for expected in [
+        "Disk dump",
+        "Debian QA (vm)",
+        "Linux 6.12.94 · Debian trixie",
+        "clean",
+        "Raw ext4 (whole disk)",
+        "16.0 GiB",
+        "812 MiB",
+        &"ab".repeat(32),
+        "Current disk of the VM",
+        "snapshots/ab12.qcow2",
+        "parent-7",
+    ] {
+        assert!(has(&texts, expected), "{expected}: {texts:?}");
+    }
+    assert!(texts
+        .iter()
+        .any(|text| text.starts_with("snapshots/ab12.qcow2 · 5.0 MiB")
+            && text.ends_with(&"cd".repeat(32))));
+    assert!(texts
+        .iter()
+        .any(|text| text.starts_with("/data/base.qcow2 · 900 MiB")));
+    for button in [
+        "Save image to host…",
+        "Save as qcow2…",
+        "Verify SHA-256",
+        "Open directory",
+        "Delete…",
+    ] {
+        assert!(has(&texts, button), "{button}: {texts:?}");
+    }
+    assert!(texts
+        .iter()
+        .any(|text| text.starts_with("The guest shut down cleanly")));
+    // Delete asks the application, which confirms; Open directory opens.
+    assert_eq!(
+        scene.click_details(&mut view, &ctx, "Delete…"),
+        Some(DiskAction::Delete(Box::new(dump.clone())))
+    );
+    assert_eq!(
+        scene.click_details(&mut view, &ctx, "Open directory"),
+        Some(DiskAction::OpenWith(dump.dir.clone()))
+    );
+    // Selecting a file shows the file; the record returns without a selection.
+    view.select("/etc".into());
+    let (texts, _) = scene.details(&mut view, &ctx);
+    assert!(has(&texts, "Entry"), "{texts:?}");
+}
+
+#[test]
+fn an_imported_dump_and_a_forced_off_dump_are_described() {
+    let recordings = Recordings::new();
+    let image = recordings.0.join("evidence.ext4");
+    std::fs::write(&image, b"stub").unwrap();
+    let dump = recordings.dump("imp", 3_000_000, |dump| {
+        dump.imported = true;
+        dump.file = image.clone();
+        dump.fs_state = Ext4State::NotClean;
+        dump.sha256 = None;
+        dump.source.kind = antinomie_monitor_core::disks::DiskSourceKind::Imported;
+        dump.system = "Imported raw ext4 image".into();
+    });
+    let ctx = context();
+    let mut scene = Scene::with_dumps(&recordings);
+    let mut view = DiskView::default();
+    select_dump(&mut view, &scene, &dump);
+    let texts = scene.settle(&mut view, &ctx);
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.starts_with("Not cleanly unmounted")),
+        "{texts:?}"
+    );
+    let (texts, _) = scene.details(&mut view, &ctx);
+    assert!(has(&texts, "Imported image"), "{texts:?}");
+    assert!(has(&texts, "not recorded"), "{texts:?}");
+    assert!(has(&texts, &image.display().to_string()));
+    assert!(has(&texts, "not cleanly unmounted"));
+}
+
+#[test]
+fn the_dump_disk_button_follows_the_measure_the_vm_and_the_job() {
+    let ctx = context();
+    let label = format!("{} Dump disk", egui_phosphor::regular::HARD_DRIVES);
+    // Measured and roomy: the click asks for a dump.
+    let mut scene = Scene::stopped();
+    scene.measure = Some(measure());
+    let mut view = DiskView::default();
+    assert_eq!(scene.click(&mut view, &ctx, &label), Some(DiskAction::Dump));
+    assert!(view.waiting.is_some(), "a request is on its way");
+    // ...and not twice.
+    assert_eq!(scene.click(&mut view, &ctx, &label), None);
+    // Not measured yet, a failed measure, a quota breach, a running job.
+    let blocked = |scene: &mut Scene| {
+        let mut view = DiskView::default();
+        scene.click(&mut view, &ctx, &label)
+    };
+    let mut scene = Scene::stopped();
+    assert_eq!(blocked(&mut scene), None);
+    scene.measure = Some(DiskMeasure {
+        error: Some("could not read".into()),
+        ..measure()
+    });
+    assert_eq!(blocked(&mut scene), None);
+    scene.measure = Some(DiskMeasure {
+        quota: 1 << 30,
+        ..measure()
+    });
+    assert_eq!(blocked(&mut scene), None);
+    let texts = scene.settle(&mut DiskView::default(), &ctx);
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.contains("exceeds the recording quota of 1.0 GiB")),
+        "{texts:?}"
+    );
+    scene.measure = Some(measure());
+    scene.other_job = true;
+    assert_eq!(blocked(&mut scene), None);
+    // The measure card has the same button beside Open.
+    let mut scene = Scene::stopped();
+    scene.measure = Some(measure());
+    let mut view = DiskView::default();
+    assert_eq!(scene.click(&mut view, &ctx, "Open"), Some(DiskAction::Open));
+}
+
+#[test]
+fn keep_as_dump_promotes_the_open_view_once() {
+    let ctx = context();
+    let mut scene = Scene::stopped();
+    scene.measure = Some(measure());
+    let mut view = opened(&mut scene, root_entries());
+    load_root(&mut view, root_entries());
+    assert_eq!(
+        scene.click(&mut view, &ctx, "Keep as dump"),
+        Some(DiskAction::Keep)
+    );
+    // Not while a request is on its way, or a job runs.
+    assert_eq!(scene.click(&mut view, &ctx, "Keep as dump"), None);
+    view.waiting = None;
+    scene.job = Some(DiskJobProgress {
+        vm_id: "vm".into(),
+        purpose: DiskJobPurpose::Keep,
+        stage: DiskJobStage::Hashing {
+            done: 512 << 20,
+            total: 1 << 30,
+        },
+        estimate: 0,
+        started_ms: 1,
+    });
+    // While it runs the tree stays visible beneath a progress line.
+    let texts = scene.settle(&mut view, &ctx);
+    assert!(has(&texts, "Computing the SHA-256… 50 %"), "{texts:?}");
+    assert!(has(&texts, "Cancel"));
+    assert!(
+        texts.iter().any(|text| text.contains("busybox")),
+        "{texts:?}"
+    );
+    assert_eq!(
+        scene.click(&mut view, &ctx, "Cancel"),
+        Some(DiskAction::Cancel)
+    );
+    // Once kept: the button is off and the view says where it reads from.
+    scene.job = None;
+    let mut kept = open_view(Ext4State::Clean);
+    kept.kept_as = Some("dump-1".into());
+    kept.image = PathBuf::from("/home/user/rec/disks/dump-1/root.ext4");
+    scene.view = Some(kept);
+    view.waiting = None;
+    let texts = scene.settle(&mut view, &ctx);
+    assert!(
+        texts.iter().any(|text| text.starts_with("Kept as a dump")),
+        "{texts:?}"
+    );
+    assert_eq!(scene.click(&mut view, &ctx, "Keep as dump"), None);
+    // The kept view is the same view reading a new path: its reader moved.
+    assert_eq!(
+        view.bound.as_ref().map(|bound| bound.image.clone()),
+        Some(PathBuf::from("/home/user/rec/disks/dump-1/root.ext4"))
+    );
+    // Keep is bounded by the quota ceiling on the view's allocation.
+    let mut scene = Scene::stopped();
+    scene.measure = Some(DiskMeasure {
+        quota: 100 * 1024 * 1024,
+        ..measure()
+    });
+    let mut view = opened(&mut scene, root_entries());
+    assert_eq!(scene.click(&mut view, &ctx, "Keep as dump"), None);
+}
+
+#[test]
+fn a_dump_cannot_be_deleted_while_the_open_view_reads_it() {
+    let recordings = Recordings::new();
+    let dump = recordings.dump("kept", 3_000_000, |_| {});
+    let ctx = context();
+    let mut scene = Scene::with_dumps(&recordings);
+    let mut view = DiskView::default();
+    let mut current = open_view(Ext4State::Clean);
+    current.kept_as = Some("kept".into());
+    current.image = dump.path();
+    scene.view = Some(current);
+    view.entry = Entry::Dump("kept".into());
+    view.scan(&scene.roots);
+    scene.settle(&mut view, &ctx);
+    assert!(view.delete_blocked_id("kept").is_some());
+    assert!(view.delete_blocked_id("other").is_none());
+    // The button is disabled: the click does nothing.
+    view.bound = None;
+    view.entry = Entry::Dump("kept".into());
+    assert_eq!(scene.click_details(&mut view, &ctx, "Delete…"), None);
+    // After the view closes it is allowed.
+    scene.view = None;
+    scene.settle(&mut view, &ctx);
+    assert!(view.delete_blocked_id("kept").is_none());
+}
+
+#[test]
+fn forgetting_a_deleted_dump_leaves_the_list_and_selects_the_current_disk() {
+    let recordings = Recordings::new();
+    let one = recordings.dump("one", 3_000_000, |_| {});
+    recordings.dump("two", 2_000_000, |_| {});
+    let ctx = context();
+    let mut scene = Scene::with_dumps(&recordings);
+    let mut view = DiskView::default();
+    select_dump(&mut view, &scene, &one);
+    scene.settle(&mut view, &ctx);
+    std::fs::remove_dir_all(&one.dir).unwrap();
+    view.forget_dump(&one.dir);
+    assert_eq!(view.entry, Entry::Current);
+    assert_eq!(view.dumps.len(), 1);
+    scene.settle(&mut view, &ctx);
+    assert_eq!(view.dumps.len(), 1);
+    assert_eq!(view.dumps[0].dump.id, "two");
+}
+
+#[test]
+fn verify_agrees_with_the_recorded_digest_and_notices_a_difference() {
+    let recordings = Recordings::new();
+    let ctx = context();
+    let mut view = DiskView::default();
+    let image = recordings.0.join("bytes.img");
+    std::fs::write(&image, b"abc").unwrap();
+    // SHA-256("abc")
+    let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    let finish = |view: &mut DiskView| {
+        for _ in 0..200 {
+            view.poll_dump_actions(&ctx);
+            if view.verify.is_none() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("verify did not finish");
+    };
+    let mut dump = DiskDump {
+        id: "v".into(),
+        sha256: Some(digest.into()),
+        ..DiskDump::default()
+    };
+    view.start_verify(&ctx, &dump, image.clone());
+    assert!(view.verify.is_some());
+    finish(&mut view);
+    assert_eq!(
+        view.verified.get("v"),
+        Some(&dump_actions::Verified::Matches(digest.into()))
+    );
+    dump.sha256 = Some("00".repeat(32));
+    view.start_verify(&ctx, &dump, image.clone());
+    finish(&mut view);
+    assert_eq!(
+        view.verified.get("v"),
+        Some(&dump_actions::Verified::Differs {
+            computed: digest.into(),
+            recorded: "00".repeat(32)
+        })
+    );
+    dump.sha256 = None;
+    view.start_verify(&ctx, &dump, image.clone());
+    finish(&mut view);
+    assert_eq!(
+        view.verified.get("v"),
+        Some(&dump_actions::Verified::Computed(digest.into()))
+    );
+    view.start_verify(&ctx, &dump, recordings.0.join("absent.img"));
+    finish(&mut view);
+    assert!(matches!(
+        view.verified.get("v"),
+        Some(dump_actions::Verified::Failed(_))
+    ));
+}
+
+#[test]
+fn saving_an_image_writes_a_sparse_raw_file_or_a_qcow2_and_reports_it() {
+    use antinomie_monitor_core::disks::export::ExportFormat;
+    if std::process::Command::new("qemu-img")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipped: qemu-img is needed");
+        return;
+    }
+    let recordings = Recordings::new();
+    let dump = recordings.dump("save", 3_000_000, |dump| dump.vm_name = "Debian QA!".into());
+    // A 4 MiB sparse "image": the export does not look inside.
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(dump.path())
+        .unwrap();
+    file.set_len(4 * 1024 * 1024).unwrap();
+    drop(file);
+    let ctx = context();
+    let mut view = DiskView::default();
+    let wait = |view: &mut DiskView| {
+        for _ in 0..500 {
+            view.poll_dump_actions(&ctx);
+            if view.saving_image.is_none() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("save did not finish");
+    };
+    let proposed = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    for (format, name) in [
+        (ExportFormat::SparseRaw, "out.ext4"),
+        (ExportFormat::Qcow2, "out.qcow2"),
+    ] {
+        let target = recordings.0.join(name);
+        let (target_for_chooser, proposed) = (target.clone(), proposed.clone());
+        view.spawn_save(
+            &ctx,
+            &dump,
+            Path::new("qemu-img"),
+            format,
+            move |suggestion| {
+                *proposed.lock().unwrap() = suggestion.to_owned();
+                Ok(Some(target_for_chooser))
+            },
+        );
+        assert!(view.saving_image.is_some());
+        // A second save does not start while one runs.
+        view.spawn_save(&ctx, &dump, Path::new("qemu-img"), format, |_| {
+            panic!("a second save started")
+        });
+        wait(&mut view);
+        let (message, failed) = view.status.clone().expect("a report");
+        assert!(!failed, "{message}");
+        assert!(message.contains(&target.display().to_string()), "{message}");
+        assert!(target.is_file());
+        if format == ExportFormat::SparseRaw {
+            assert_eq!(std::fs::metadata(&target).unwrap().len(), 4 * 1024 * 1024);
+        }
+    }
+    // The proposed name is the VM (made safe), the date and the extension.
+    let suggestion = proposed.lock().unwrap().clone();
+    assert!(suggestion.starts_with("Debian_QA_-"), "{suggestion}");
+    assert!(suggestion.ends_with(".qcow2"), "{suggestion}");
+    // Closing the chooser without a file changes nothing.
+    view.status = None;
+    view.spawn_save(
+        &ctx,
+        &dump,
+        Path::new("qemu-img"),
+        ExportFormat::SparseRaw,
+        |_| Ok(None),
+    );
+    wait(&mut view);
+    assert!(view.status.is_none());
+    // An unusable destination is reported as a failure.
+    view.spawn_save(
+        &ctx,
+        &dump,
+        Path::new("qemu-img"),
+        ExportFormat::SparseRaw,
+        |_| Ok(Some(PathBuf::from("/nonexistent-folder/out.img"))),
+    );
+    wait(&mut view);
+    let (message, failed) = view.status.clone().unwrap();
+    assert!(
+        failed && message.starts_with("Saving the image:"),
+        "{message}"
+    );
+}
+
+#[test]
+fn importing_an_image_selects_it_and_a_bad_file_is_refused_in_the_dialog() {
+    let recordings = Recordings::new();
+    let ctx = context();
+    let mut scene = Scene::with_dumps(&recordings);
+    let mut view = DiskView::default();
+    scene.settle(&mut view, &ctx);
+    assert!(view.import.is_none());
+    // The button opens the dialog.
+    scene.click(
+        &mut view,
+        &ctx,
+        &format!("{} Import image…", egui_phosphor::regular::FILE_ARROW_UP),
+    );
+    assert!(view.import.is_some());
+    let texts = scene.settle(&mut view, &ctx);
+    assert!(has(&texts, "Import disk image"), "{texts:?}");
+    // A file that is not ext4 is refused and nothing is recorded.
+    let bad = recordings.0.join("bad.img");
+    std::fs::write(&bad, vec![0u8; 4 * 1024 * 1024]).unwrap();
+    view.import.as_mut().unwrap().path = bad.display().to_string();
+    scene.click(&mut view, &ctx, "Import");
+    let texts = scene.settle(&mut view, &ctx);
+    assert!(
+        texts.iter().any(|text| text.contains("ext2/3/4")),
+        "{texts:?}"
+    );
+    assert!(view.import.is_some() && view.dumps.is_empty());
+    // A raw ext4 image imports, is listed as imported and selected.
+    let good = recordings.0.join("good.ext4");
+    let tree = recordings.0.join("tree");
+    std::fs::create_dir_all(&tree).unwrap();
+    std::fs::write(tree.join("hello"), "hi").unwrap();
+    let file = std::fs::File::create(&good).unwrap();
+    file.set_len(8 * 1024 * 1024).unwrap();
+    drop(file);
+    let mkfs = [
+        "/sbin/mkfs.ext4",
+        "/usr/sbin/mkfs.ext4",
+        "/usr/bin/mkfs.ext4",
+    ]
+    .into_iter()
+    .find(|path| Path::new(path).is_file());
+    let Some(mkfs) = mkfs else {
+        eprintln!("skipped the good image: mkfs.ext4 is needed");
+        return;
+    };
+    assert!(std::process::Command::new(mkfs)
+        .args(["-q", "-F", "-d"])
+        .arg(&tree)
+        .arg(&good)
+        .status()
+        .unwrap()
+        .success());
+    view.import.as_mut().unwrap().path = good.display().to_string();
+    view.import.as_mut().unwrap().error = None;
+    // Binding would start a reader; select by hand afterwards.
+    scene.click(&mut view, &ctx, "Import");
+    assert!(view.import.is_none());
+    assert_eq!(view.dumps.len(), 1);
+    assert!(view.dumps[0].dump.imported);
+    assert_eq!(view.entry, Entry::Dump(view.dumps[0].dump.id.clone()));
+    // The imported file stays where it is.
+    assert!(good.is_file());
 }
