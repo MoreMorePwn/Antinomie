@@ -10,6 +10,8 @@ const BLOCK_SIZE: usize = 64 * 1024 * 1024;
 const TOTAL_SIZE: u64 = 512 * 1024 * 1024;
 const EVIDENCE_LIMIT: usize = 16;
 
+mod physical;
+
 struct Target<'a> {
     path: &'a Path,
     offset: u64,
@@ -218,11 +220,14 @@ fn scan_file(
     Ok((data.len() as u64, sha256))
 }
 
-fn memory_blocks(path: &Path) -> u64 {
-    let Ok(core) = crate::core_dump::CoreDump::open(path) else {
+fn memory_blocks(path: &Path, virtual_addresses: bool) -> u64 {
+    let Ok(mut file) = crate::archive_io::open_regular(path.parent().unwrap_or(path), path) else {
         return 0;
     };
-    core.mappings
+    let Ok(mappings) = memory_mappings(path, &mut file, virtual_addresses) else {
+        return 0;
+    };
+    mappings
         .iter()
         .map(|mapping| {
             let available = mapping.available_size.min(mapping.captured_size);
@@ -233,6 +238,20 @@ fn memory_blocks(path: &Path) -> u64 {
             }
         })
         .sum()
+}
+
+fn memory_mappings(
+    path: &Path,
+    file: &mut fs::File,
+    virtual_addresses: bool,
+) -> Result<Vec<crate::core_dump::CoreMapping>, String> {
+    if virtual_addresses {
+        crate::core_dump::CoreDump::open(path)
+            .map(|core| core.mappings)
+            .map_err(|error| error.to_string())
+    } else {
+        physical::mappings(file).map_err(|error| error.to_string())
+    }
 }
 
 /// What the core and RAM passes share: rule sources, input budgets and block progress.
@@ -274,7 +293,15 @@ fn scan_core(
         crate::archive_io::open_regular(path.parent().ok_or("core has no parent")?, path)
             .map_err(|error| error.to_string())?;
     let before = file.metadata().map_err(|error| error.to_string())?;
-    let core = crate::core_dump::CoreDump::open(path).map_err(|error| error.to_string())?;
+    let (mappings, warnings) = if virtual_addresses {
+        let core = crate::core_dump::CoreDump::open(path).map_err(|error| error.to_string())?;
+        (core.mappings, core.warnings)
+    } else {
+        (
+            physical::mappings(&mut file).map_err(|error| error.to_string())?,
+            vec![],
+        )
+    };
     let current = crate::archive_io::open_regular(path.parent().ok_or("core has no parent")?, path)
         .map_err(|error| error.to_string())?
         .metadata()
@@ -287,10 +314,8 @@ fn scan_core(
     {
         return Err("Core changed while its mappings were parsed".into());
     }
-    report
-        .warnings
-        .extend(core.warnings.iter().take(16).cloned());
-    for mapping in &core.mappings {
+    report.warnings.extend(warnings.into_iter().take(16));
+    for mapping in &mappings {
         let available = mapping.available_size.min(mapping.captured_size);
         if available < mapping.memory_size {
             report.state = State::Partial;
@@ -476,10 +501,10 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
             if request.settings.scan_memory {
                 let mut block_total = 0u64;
                 if let Some(path) = artifacts.core_dump.as_deref() {
-                    block_total += memory_blocks(path);
+                    block_total += memory_blocks(path, true);
                 }
                 if let Some(directory) = artifacts.memory_dump.as_deref() {
-                    block_total += memory_blocks(&directory.join("memory.elf"));
+                    block_total += memory_blocks(&directory.join("memory.elf"), false);
                 }
                 let mut pass = MemoryPass {
                     sources: &sources,

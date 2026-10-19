@@ -6,6 +6,10 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **YARA scans physical RAM dumps.** Guest RAM uses QEMU's captured physical
+  ELF segments rather than the Linux process-core reader. Missing ranges remain
+  explicit, with the existing block, input-size and time limits.
+
 - **Executable capture status.** Triage Properties shows acquisition, captured,
   verification and unavailable states separately from computing properties.
   A failed property attempt can recover when its analysis report advances;
