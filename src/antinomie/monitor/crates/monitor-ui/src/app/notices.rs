@@ -60,12 +60,8 @@ impl MonitorApp {
             }
         }
         for run in snapshot.runs.iter().chain(&self.history) {
-            if let Some(error) = &run.recording_error {
-                report(
-                    ctx,
-                    Level::Warn,
-                    format!("Recording incomplete: saving stopped: {error}"),
-                );
+            if let Some(message) = crate::run_recording::warning_message(run) {
+                report(ctx, Level::Warn, message);
             }
             if let Some(analysis) = &run.analysis {
                 if let Some(reason) = &analysis.reason {

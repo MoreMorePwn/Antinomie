@@ -6,6 +6,10 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Recording warnings follow the selected run.** Full saving-stopped causes
+  appear in that run's details, Trace and Triage with a dismiss control. Summary
+  no longer lists unrelated run warnings; Activity retains run-specific entries.
+
 - **Configurable syscall pages.** Calls/page accepts 1–256 (default 100), saves
   the choice across restarts and resets page cursors when changed while keeping
   the applied filter. Page totals use the selected size.
