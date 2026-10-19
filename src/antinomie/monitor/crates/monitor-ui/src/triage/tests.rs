@@ -1184,6 +1184,29 @@ fn same_pid_two_cookies_are_two_process_nodes() {
 }
 
 #[test]
+fn triage_keeps_cookie_scoped_terminal_facts_after_a_late_parent_fork_and_pid_reuse() {
+    let mut ended = with_cookie(42, 200);
+    let mut terminal = ended.entry.as_ref().unwrap().clone();
+    terminal.phase = 3;
+    terminal.timestamp_ns = 120;
+    terminal.fields = vec![captured("lifecycle.task_exit", "u64", &0_u64.to_le_bytes())];
+    ended.task_exit = Some(terminal);
+    let mut nodes = std::collections::BTreeMap::new();
+    observe_processes(&mut nodes, &[ended]);
+    let mut fork = call(1, FORK, "fork", 42);
+    for event in fork.entry.iter_mut().chain(fork.exit.iter_mut()) {
+        event.timestamp_ns = 100;
+    }
+    observe_processes(&mut nodes, &[fork, with_cookie(42, 201)]);
+    let result = finish_processes(nodes);
+    let old = result.iter().find(|node| node.cookie == 200).unwrap();
+    assert!(old.state.contains("task exit"));
+    assert_eq!(old.parent.unwrap().pid, 1);
+    let current = result.iter().find(|node| node.cookie == 201).unwrap();
+    assert_eq!(current.state, "exit not recorded");
+}
+
+#[test]
 fn failed_exec_does_not_replace_the_program() {
     let mut started = call(3, 59, "execve", 0);
     started

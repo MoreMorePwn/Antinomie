@@ -38,8 +38,25 @@ pub struct ProcessTracker {
     processes: BTreeMap<u32, CaptureProcess>,
     /// Program path of the latest execve entry per thread group, applied when
     /// the exec commits.
-    exec_paths: BTreeMap<u32, String>,
+    exec_paths: BTreeMap<u32, ExecPath>,
+    /// At most one lifetime boundary per already tracked PID.
+    lifetimes: BTreeMap<u32, Lifetime>,
     changed: bool,
+}
+
+#[derive(Default)]
+struct Lifetime {
+    born_ns: u64,
+    exit_ns: u64,
+    exec_ns: u64,
+    leader: Option<(u64, u64)>,
+    leader_ns: u64,
+}
+
+struct ExecPath {
+    identity: (u64, u64),
+    timestamp_ns: u64,
+    path: String,
 }
 
 fn field_u64(event: &EventSummary, key: &str) -> Option<u64> {
@@ -68,6 +85,20 @@ impl ProcessTracker {
             .map(|process| (process.pid, process))
             .collect();
         self.exec_paths.clear();
+        self.lifetimes = self
+            .processes
+            .iter()
+            .map(|(pid, process)| {
+                (
+                    *pid,
+                    Lifetime {
+                        exit_ns: if process.exited { process.last_ns } else { 0 },
+                        exec_ns: process.last_ns,
+                        ..Lifetime::default()
+                    },
+                )
+            })
+            .collect();
         self.changed = true;
     }
 
@@ -99,6 +130,74 @@ impl ProcessTracker {
         })
     }
 
+    fn before_birth(&self, pid: u32, timestamp_ns: u64) -> bool {
+        timestamp_ns != 0
+            && self
+                .lifetimes
+                .get(&pid)
+                .is_some_and(|life| life.born_ns != 0 && timestamp_ns < life.born_ns)
+    }
+
+    fn reset_lifetime(&mut self, pid: u32, born_ns: u64) {
+        self.processes.insert(
+            pid,
+            CaptureProcess {
+                pid,
+                ..CaptureProcess::default()
+            },
+        );
+        self.exec_paths.remove(&pid);
+        self.lifetimes.insert(
+            pid,
+            Lifetime {
+                born_ns,
+                ..Lifetime::default()
+            },
+        );
+        self.changed = true;
+    }
+
+    /// Guest time orders CPU streams; a PID alone never proves reuse.
+    fn observe_identity(
+        &mut self,
+        pid: u32,
+        tid: u32,
+        stream: u64,
+        cookie: u64,
+        time: u64,
+    ) -> bool {
+        if self.before_birth(pid, time) {
+            return false;
+        }
+        if tid != pid || cookie == 0 {
+            return true;
+        }
+        let identity = (stream, cookie);
+        if let Some(life) = self.lifetimes.get(&pid)
+            && life.leader.is_some_and(|known| known != identity)
+        {
+            if time == 0 || time < life.leader_ns {
+                return false;
+            }
+            if life.exit_ns != 0 && time > life.exit_ns {
+                let lower_bound = life.exit_ns.saturating_add(1);
+                // A non-leader thread can exec and become the leader.
+                // Its already captured path belongs to this identity.
+                let pending = self.exec_paths.remove(&pid).filter(|pending| {
+                    pending.identity == identity && pending.timestamp_ns >= lower_bound
+                });
+                self.reset_lifetime(pid, lower_bound);
+                if let Some(pending) = pending {
+                    self.exec_paths.insert(pid, pending);
+                }
+            }
+        }
+        let life = self.lifetimes.entry(pid).or_default();
+        life.leader = Some(identity);
+        life.leader_ns = life.leader_ns.max(time);
+        true
+    }
+
     /// True when `pid` has no name yet (the app launched it, so no execve or
     /// fork of it was observed).
     pub fn unnamed(&self, pid: u32) -> bool {
@@ -120,6 +219,15 @@ impl ProcessTracker {
         if header.pid == 0 || header.record_type != 1 {
             return;
         }
+        if !self.observe_identity(
+            header.pid,
+            header.tid,
+            header.stream_id,
+            header.task_cookie,
+            header.timestamp_ns,
+        ) {
+            return;
+        }
         let process = self.process(header.pid);
         if process.first_ns == 0 || header.timestamp_ns < process.first_ns {
             process.first_ns = header.timestamp_ns;
@@ -137,15 +245,44 @@ impl ProcessTracker {
         if event.pid == 0 {
             return;
         }
+        if !self.observe_identity(
+            event.pid,
+            event.tid,
+            event.stream_id,
+            event.task_cookie,
+            event.timestamp_ns,
+        ) {
+            return;
+        }
         // execve (59) names its program in arg0, execveat (322) in arg1.
         if event.phase == 1 {
+            if event.timestamp_ns != 0
+                && self
+                    .lifetimes
+                    .get(&event.pid)
+                    .is_some_and(|life| event.timestamp_ns < life.exec_ns)
+            {
+                return;
+            }
             let key = match event.syscall_nr {
                 59 => "arg0.path",
                 322 => "arg1.path",
                 _ => return,
             };
-            if let Some(path) = field_text(event, key) {
-                self.exec_paths.insert(event.pid, path);
+            if let Some(path) = field_text(event, key)
+                && self
+                    .exec_paths
+                    .get(&event.pid)
+                    .is_none_or(|pending| pending.timestamp_ns <= event.timestamp_ns)
+            {
+                self.exec_paths.insert(
+                    event.pid,
+                    ExecPath {
+                        identity: (event.stream_id, event.task_cookie),
+                        timestamp_ns: event.timestamp_ns,
+                        path,
+                    },
+                );
             }
             return;
         }
@@ -153,21 +290,26 @@ impl ProcessTracker {
             return;
         }
         if let Some(child) = field_u64(event, "lifecycle.child_tgid") {
-            let child = child as u32;
-            if child != event.pid {
+            let Ok(child) = u32::try_from(child) else {
+                return;
+            };
+            if child != 0 && child != event.pid && !self.before_birth(child, event.timestamp_ns) {
                 let parent = self
                     .processes
                     .get(&event.pid)
                     .map(|parent| (parent.name.clone(), parent.exe.clone()))
                     .unwrap_or_default();
-                let process = self.process(child);
-                // A reused PID starts a new process in the tree.
-                if process.exited {
-                    *process = CaptureProcess {
-                        pid: child,
-                        ..CaptureProcess::default()
-                    };
+                let terminal = self.lifetimes.get(&child).map_or(0, |life| life.exit_ns);
+                // Older forks can be delivered after their child's exit. Only
+                // a fork strictly after the established exit proves PID reuse.
+                if terminal != 0 && event.timestamp_ns > terminal {
+                    self.reset_lifetime(child, event.timestamp_ns);
                 }
+                let life = self.lifetimes.entry(child).or_default();
+                if event.timestamp_ns != 0 && life.born_ns == 0 {
+                    life.born_ns = event.timestamp_ns;
+                }
+                let process = self.process(child);
                 process.parent_pid = event.pid;
                 if process.name.is_empty() {
                     (process.name, process.exe) = parent;
@@ -175,16 +317,32 @@ impl ProcessTracker {
                 self.changed = true;
             }
         } else if field_u64(event, "lifecycle.exec_commit").is_some() {
-            if let Some(path) = self.exec_paths.remove(&event.pid) {
+            let last_exec = self
+                .lifetimes
+                .get(&event.pid)
+                .map_or(0, |life| life.exec_ns);
+            let applicable = event.timestamp_ns >= last_exec
+                && self.exec_paths.get(&event.pid).is_some_and(|pending| {
+                    pending.identity == (event.stream_id, event.task_cookie)
+                        && pending.timestamp_ns <= event.timestamp_ns
+                });
+            if applicable && let Some(pending) = self.exec_paths.remove(&event.pid) {
+                self.lifetimes.entry(event.pid).or_default().exec_ns = event.timestamp_ns;
                 let process = self.process(event.pid);
-                process.name = file_name(&path);
-                process.exe = Some(path);
+                process.name = file_name(&pending.path);
+                process.exe = Some(pending.path);
                 self.changed = true;
             }
         } else if let Some(code) = field_u64(event, "lifecycle.task_exit") {
             // Only the thread group leader's exit ends the process.
             if event.tid == event.pid {
+                let life = self.lifetimes.entry(event.pid).or_default();
+                if life.exit_ns != 0 && event.timestamp_ns < life.exit_ns {
+                    return;
+                }
+                life.exit_ns = event.timestamp_ns;
                 let process = self.process(event.pid);
+                process.last_ns = process.last_ns.max(event.timestamp_ns);
                 process.exited = true;
                 process.exit_code = Some(code as i64);
                 self.changed = true;
@@ -224,11 +382,14 @@ impl ProcessTracker {
 }
 
 #[cfg(test)]
+mod ordering_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{api::FieldSummary, observation::GuestProcessIdentity};
 
-    fn header(pid: u32, phase: u8, fragment: u8) -> Header {
+    pub(super) fn header(pid: u32, phase: u8, fragment: u8) -> Header {
         Header {
             root_task_cookie: 0,
             capture_cookie: 1,
@@ -254,7 +415,7 @@ mod tests {
         }
     }
 
-    fn event(pid: u32, phase: u8, nr: u64, fields: &[(&str, Vec<u8>)]) -> EventSummary {
+    pub(super) fn event(pid: u32, phase: u8, nr: u64, fields: &[(&str, Vec<u8>)]) -> EventSummary {
         EventSummary {
             root_task_cookie: 0,
             stream_id: 1,
