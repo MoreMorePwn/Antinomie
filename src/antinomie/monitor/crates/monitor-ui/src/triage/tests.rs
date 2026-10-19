@@ -1119,6 +1119,7 @@ pub(super) fn call(pid: u32, nr: u64, name: &str, result: i64) -> InvocationSumm
         async_events: Vec::new(),
         async_saved: 0,
         task_exit: None,
+        kernel_notes: Vec::new(),
     }
 }
 

@@ -6,6 +6,7 @@
 //! that comes from tracking state or from correlating two sources is reported
 //! as inferred by the caller; a value nothing supports stays missing.
 use super::*;
+use antinomie_monitor_core::kernel_notes;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Paths remembered as existing. Past this, "not seen before" no longer means
@@ -53,12 +54,24 @@ pub(super) struct State {
     pub launch_cwd: Option<String>,
     pub root_cookie: u64,
     seeded: bool,
+    /// Credentials in effect for each task, by task cookie.
+    credentials: BTreeMap<u64, kernel_notes::Credentials>,
 }
 
 impl State {
     /// The path was seen earlier in this run, so it existed then.
     pub(super) fn knows(&self, path: &str) -> bool {
         self.known.contains(path)
+    }
+
+    pub(super) fn set_credentials(&mut self, task: u64, creds: kernel_notes::Credentials) {
+        if self.credentials.len() < TABLE_LIMIT || self.credentials.contains_key(&task) {
+            self.credentials.insert(task, creds);
+        }
+    }
+
+    pub(super) fn credentials(&self, task: u64) -> Option<kernel_notes::Credentials> {
+        self.credentials.get(&task).copied()
     }
 
     pub(super) fn copy_sockets(&mut self, source: (u64, u32), target: (u64, u32)) {

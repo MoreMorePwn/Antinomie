@@ -12,7 +12,8 @@
 #define ANTC_VERSION 1
 /* Contract revision of the guest's observable behaviour (native-schema-slices). */
 /* Revision 15: opt-in root-process ELF core acquisition at exit; ABI 9. */
-/* Revision 17: kernel-native guest resource sample (RESOURCES). */
+/* Revision 17: kernel-native guest resource sample (RESOURCES), and the
+ * credential and file-hash lifecycle records described below. */
 #define ANTC_REVISION 17
 #define ANTC_HEADER_SIZE 8
 #define ANTC_UPLOAD_BEGIN 0x1001
@@ -80,6 +81,54 @@
 #define ANTC_RESOURCES_MEMORY_VALID 1
 #define ANTC_RESOURCES_FILESYSTEM_VALID 2
 #define ANTC_RESOURCES_REFRESHING 4
+/* Telemetry lifecycle records (no control command): phase-3 events whose one
+ * field is a fixed little-endian structure. Layout names are versioned.
+ * lifecycle.creds, layout "antinomie.creds/1", 72 bytes: u32 uid, euid, suid,
+ * fsuid at 0/4/8/12, gid, egid, sgid, fsgid at 16/20/24/28 (init user namespace;
+ * 0xffffffff unmapped), u32 auid (loginuid) at 32 and u32 session id at 36
+ * (0xffffffff unset), u32 reason at 40, u32 flags at 44 (bit0 AUDIT: the kernel
+ * tracks loginuid), u64 cap_effective, cap_permitted, cap_inheritable at
+ * 48/56/64. Recorded at a task's first traced call (START) and whenever any of
+ * these change; the record belongs to the call it happened in.
+ * lifecycle.file_hash, layout "antinomie.hash/1", 80 bytes: u8 kind at 0,
+ * u8 status at 1, u8 algorithms at 2 (bit0 SHA-256), u8 flags at 3, s32 error
+ * at 4, u64 size (bytes at the event) at 8, u64 hashed bytes at 16, u64 size
+ * limit at 24 (flag bit2 CACHED: served from a digest of the same inode state
+ * hashed earlier), sha256[32] at 32 (zero unless status is OK), u32 queue wait
+ * and u32 hashing time in microseconds at 64/68, u32 cumulative records
+ * lost since boot at 72 (queue, budget, memory or ring loss), zero at 76.
+ * Published after the call returned, by a worker, with the call's identity.
+ */
+#define ANTC_CREDS_SIZE 72
+#define ANTC_CRED_START 1
+#define ANTC_CRED_SETUID 2
+#define ANTC_CRED_SETGID 3
+#define ANTC_CRED_SETRES 4
+#define ANTC_CRED_SETFS 5
+#define ANTC_CRED_CAPSET 6
+#define ANTC_CRED_EXEC_SETID 7
+#define ANTC_CRED_EXEC_CAPS 8
+#define ANTC_CRED_LOGINUID 9
+#define ANTC_CRED_OTHER 10
+#define ANTC_CRED_AUDIT 1
+#define ANTC_HASH_SIZE 80
+#define ANTC_HASH_EXEC 1
+#define ANTC_HASH_DELETE 2
+#define ANTC_HASH_OK 0
+#define ANTC_HASH_TOO_LARGE 1
+#define ANTC_HASH_UNSUPPORTED_FS 2
+#define ANTC_HASH_NOT_REGULAR 3
+#define ANTC_HASH_QUEUE_FULL 4
+#define ANTC_HASH_READ_ERROR 5
+#define ANTC_HASH_NO_MEMORY 6
+#define ANTC_HASH_BUDGET 7
+#define ANTC_HASH_SHA256 1
+#define ANTC_HASH_INTERPRETER 1
+#define ANTC_HASH_CHANGED 2
+#define ANTC_HASH_CACHED 4
+#define ANTC_HASH_FILE_MAX 16777216
+#define ANTC_HASH_PENDING_MAX 67108864
+#define ANTC_HASH_QUEUE 16
 #define ANTC_UPLOAD_OVERWRITE 1
 #define ANTC_UPLOAD_EXECUTABLE 2
 

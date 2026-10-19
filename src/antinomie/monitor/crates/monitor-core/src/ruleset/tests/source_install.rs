@@ -492,7 +492,10 @@ fn sigma_keeps_the_listed_log_sources_and_marks_unevaluated_ones_with_a_reason()
                 ids[5],
                 "    product: linux\n    category: network_connection",
             )
-            .replace("Image|endswith: '/bin/sh'", "User|endswith: 'root'"),
+            .replace(
+                "Image|endswith: '/bin/sh'",
+                "IntegrityLevel|endswith: 'High'",
+            ),
         ),
         (
             "rules/linux/auditd/d.yml",
@@ -575,11 +578,11 @@ fn sigma_keeps_the_listed_log_sources_and_marks_unevaluated_ones_with_a_reason()
     let by_name = |name: &str| rules.iter().find(|rule| rule.name == name).unwrap();
     assert!(by_name("Proc").compatible);
     // Connections are recorded with an address and port, so these are evaluated;
-    // a rule that needs a user is not, and says which field is missing.
+    // a rule that needs a Windows-only field is not, and says which one is missing.
     assert!(by_name("Net").compatible, "{}", by_name("Net").reason);
     assert!(!by_name("NetHost").compatible);
     assert!(
-        by_name("NetHost").reason.contains("User"),
+        by_name("NetHost").reason.contains("IntegrityLevel"),
         "{}",
         by_name("NetHost").reason
     );

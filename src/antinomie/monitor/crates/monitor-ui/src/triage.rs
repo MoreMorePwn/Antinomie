@@ -47,6 +47,7 @@ mod file_tabs;
 mod file_visibility;
 mod files;
 mod findings;
+mod kernel_records;
 mod network;
 mod network_index;
 mod normalized;

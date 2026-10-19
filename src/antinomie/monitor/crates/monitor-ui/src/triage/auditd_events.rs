@@ -4,8 +4,10 @@
 //!
 //! Field names are the ones those rules use (`type`, `a0`..`a3`, `exe`, `comm`,
 //! `name`, `nametype`, `saddr`). The trace has no audit rules, so there is no
-//! `key`; it has no credentials, so no `auid`, `uid` or `euid`; and it has no
-//! file mode or inode. Those fields are left out, never filled in.
+//! `key`; it has no file mode or inode; and a recording from a kernel that did
+//! not write credential records has no `uid`, `euid`, `auid` or the rest of
+//! that family. Those fields are left out, never filled in.
+use super::kernel_records;
 use super::sigma_events::{self, Role};
 use super::*;
 use std::collections::BTreeMap;
@@ -135,6 +137,7 @@ fn syscall(
         fields.insert("success".into(), text(if ret < 0 { "no" } else { "yes" }));
     }
     fields.insert("pid".into(), text(event.pid.to_string()));
+    kernel_records::audit_ids(fields, kernel_records::credentials(files, call).as_ref());
     if let Some(parent) = sigma_events::parent(files, event) {
         fields.insert("ppid".into(), text(parent.pid.to_string()));
     }

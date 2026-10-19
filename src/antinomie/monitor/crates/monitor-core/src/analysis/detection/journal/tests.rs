@@ -294,7 +294,7 @@ fn a_version_one_journal_still_reads_and_version_two_keeps_the_inferred_list() {
     // A journal written before the list existed has neither the header
     // version nor the list; it still loads, with nothing inferred.
     let old = text
-        .replace("\"format_version\":2", "\"format_version\":1")
+        .replace("\"format_version\":3", "\"format_version\":1")
         .replace(",\"_inferred\":[\"DestinationHostname\"]", "");
     fs::write(&path, old).unwrap();
     let page = read(&query(&directory)).unwrap();
@@ -304,7 +304,15 @@ fn a_version_one_journal_still_reads_and_version_two_keeps_the_inferred_list() {
         &path,
         fs::read_to_string(&path)
             .unwrap()
-            .replace("\"format_version\":1", "\"format_version\":3"),
+            .replace("\"format_version\":1", "\"format_version\":2"),
+    )
+    .unwrap();
+    assert_eq!(read(&query(&directory)).unwrap().format_version, 2);
+    fs::write(
+        &path,
+        fs::read_to_string(&path)
+            .unwrap()
+            .replace("\"format_version\":2", "\"format_version\":4"),
     )
     .unwrap();
     assert!(

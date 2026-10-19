@@ -6,6 +6,40 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **The guest tracer records who a task ran as and what a file contained.**
+  Guest contract revision 17 (no new revision) adds two records to the
+  syscall trace. Credentials: every traced task's uid, euid, suid, fsuid, the
+  gid equivalents, audit login uid and session, and capability sets are written
+  at its first traced call and whenever they change (`setuid`, `setgid`,
+  `setres*`, `setfs*`, `capset`, a setuid/setgid or file-capability exec, a login
+  uid change), from the one place the kernel changes them. File hashes: the
+  SHA-256 of the image an exec committed and of a file about to be deleted, or
+  the reason there is none (over the 16 MiB limit, unsupported filesystem,
+  queue or byte budget full, read error). The hashing never runs in the traced
+  call: the call only queues a small job and a kernel worker, one 64 KiB chunk at
+  a time, reads the file through a private open that raises no file-change
+  notification and leaves the access time alone; at most 16 jobs and 64 MiB
+  wait, and a dropped request is recorded and counted. No helper process, file
+  or BPF program appears in the guest. SHA-256 only: the SigmaHQ Linux pack has
+  no rule that reads a hash, and MD5 would be reads without a consumer. This
+  needs a base built with 0.7.0; older bases and recordings simply lack the
+  records.
+- **Sigma and auditd events now carry them.** Triage follows each task's
+  credentials and attaches the ones in effect after a call, the way auditd
+  reports them: Sysmon-style events get `User` (the numeric effective uid; a
+  guest's `/etc/passwd` is not available on the host without a guest agent, so
+  no name is looked up or guessed, not even `root`) and `LogonId` (the audit login
+  uid, empty when the guest never set one), `process_creation` and `file_delete`
+  get `Hashes` as `SHA256=…`, and `HashSkipped` says why there is none. The
+  auditd `SYSCALL` record gets `uid`, `euid`, `suid`, `fsuid`, the gid family,
+  `auid` and `ses` (an unset login uid prints as 4294967295, as auditd does). A
+  script's interpreter is not reported as the script's hash, and a file that
+  changed while it was read gives none. Against the installed SigmaHQ Linux pack,
+  177 of 210 rules can now run (was 174): the pack barely reads credentials, so
+  most of its rules stay as they were. The event journal is now format 3;
+  formats 1 and 2 still open and scan, and recordings from before this have the
+  fields missing, not empty.
+
 - **Right-click Delete for core dumps and network captures.** Host-only.
   The Core dumps panel (manual cores, on-exit process cores and imported core
   results) and the Network window (per-run and whole-boot captures) have a
@@ -112,8 +146,9 @@ it runs.
   `SOCKADDR` records built from the same trace. Against the installed SigmaHQ
   Linux pack, 174 of 210 rules can run on a journal with every field the trace
   can supply, up from 119 (process creation 109 to 120, network
-  connection 2 to 5, auditd 0 to 41); rules that need a user, an audit key, a
-  file mode or a keyword search stay not evaluated, and say so.
+  connection 2 to 5, auditd 0 to 41); rules that need an audit key, a file
+  mode or a keyword search stay not evaluated, and say so. Users and
+  credentials come from the guest tracer's records, below.
 - **Inferred values are labelled.** A value that comes from tracking state or
   from matching two sources, not from one recorded call, is listed in the
   event's `_inferred` field: a new file judged by the path not having been seen

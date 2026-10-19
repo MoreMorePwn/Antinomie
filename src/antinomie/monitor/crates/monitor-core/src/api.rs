@@ -1104,6 +1104,13 @@ pub struct InvocationSummary {
     /// holds the wait status.
     #[serde(default)]
     pub task_exit: Option<EventSummary>,
+    /// Kernel records of this call that are not syscall phases: the task's
+    /// credentials when they were first seen or changed, and the SHA-256 of the
+    /// file an exec or delete named (see [`crate::kernel_notes`]). At most
+    /// [`crate::kernel_notes::NOTES_PER_CALL`], in event order. A recording
+    /// from a kernel without them, or saved before they existed, has none.
+    #[serde(default)]
+    pub kernel_notes: Vec<EventSummary>,
 }
 
 impl InvocationSummary {
@@ -1681,6 +1688,7 @@ pub fn pair_events(events: &[EventSummary]) -> Vec<InvocationSummary> {
                 async_events: Vec::new(),
                 async_saved: 0,
                 task_exit: None,
+                kernel_notes: Vec::new(),
             });
             rows.len() - 1
         });
@@ -1716,6 +1724,7 @@ pub fn pair_events(events: &[EventSummary]) -> Vec<InvocationSummary> {
                 async_events: Vec::new(),
                 async_saved: 0,
                 task_exit: None,
+                kernel_notes: Vec::new(),
             });
             rows.len() - 1
         });
@@ -1728,6 +1737,20 @@ pub fn pair_events(events: &[EventSummary]) -> Vec<InvocationSummary> {
             if !last.issues.iter().any(|existing| existing == issue) {
                 last.issues.push(issue.into());
             }
+        }
+    }
+    // Credential and hash records belong to the call that made them, even when
+    // a worker wrote them after it returned.
+    let mut notes: Vec<&EventSummary> = events
+        .iter()
+        .filter(|event| event.call_id != 0 && crate::kernel_notes::is_note(event))
+        .collect();
+    notes.sort_by_key(|event| event.event_seq);
+    for event in notes {
+        if let Some(&index) = indexes.get(&(event.stream_id, event.task_cookie, event.call_id))
+            && rows[index].kernel_notes.len() < crate::kernel_notes::NOTES_PER_CALL
+        {
+            rows[index].kernel_notes.push(event.clone());
         }
     }
     // A task's end belongs to the call it ended in; one without a captured

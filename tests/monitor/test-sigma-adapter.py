@@ -59,11 +59,33 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(evidence[0]["call"], 2 ** 64 - 1)
         self.assertEqual(event_ids, [1], "the exact journal ordinal of the matched event")
 
-    def test_version_one_and_two_journals_load_and_unknown_versions_do_not(self):
+    def test_version_one_to_three_journals_load_and_unknown_versions_do_not(self):
         self.journal([("process_creation", {"Image": "/bin/sh"})], version=1)
         self.journal([("process_creation", {"Image": "/bin/sh"}, ["Image"])], version=2)
+        self.journal([("process_creation", {"Image": "/bin/sh", "User": "0"})], version=3)
         with self.assertRaises(ValueError):
-            self.journal([("process_creation", {"Image": "/bin/sh"})], version=3)
+            self.journal([("process_creation", {"Image": "/bin/sh"})], version=4)
+
+    def test_credentials_and_hashes_are_matched_and_a_run_without_them_has_nothing_to_evaluate(self):
+        connection = self.journal([
+            ("process_creation", {"Image": "/bin/sh", "User": "0", "LogonId": 0, "Hashes": "SHA256=" + "ab" * 32}),
+            ("process_creation", {"Image": "/bin/sh", "User": "1000", "HashSkipped": "file is 20971520 bytes, over the 16 MiB limit"}),
+            ("process_creation", {"Image": "/bin/sh"}),
+            ("auditd", {"type": "SYSCALL", "Syscall": "execve", "uid": "1000", "euid": "0", "suid": "0", "fsuid": "0", "gid": "1000", "egid": "1000", "auid": "4294967295", "ses": "4294967295"}),
+            ("auditd", {"type": "SYSCALL", "Syscall": "execve"}),
+        ], version=3)
+        for query, category, matched, evaluated in [
+            ("SELECT * FROM logs WHERE User='0' COLLATE NOCASE AND LogonId=0", "process_creation", 1, 1),
+            ("SELECT * FROM logs WHERE Hashes LIKE 'SHA256=ab%'", "process_creation", 1, 1),
+            ("SELECT * FROM logs WHERE HashSkipped LIKE '%16 MiB%'", "process_creation", 1, 1),
+            ("SELECT * FROM logs WHERE type='SYSCALL' AND euid=0 AND uid!=0", "auditd", 1, 1),
+            ("SELECT * FROM logs WHERE type='SYSCALL' AND auid=4294967295", "auditd", 1, 1),
+        ]:
+            total, _, ready, missing, _, _ = adapter.matching_rows(connection, [query], category)
+            self.assertEqual((total, ready), (matched, evaluated), query)
+        # An event without the fields is counted as missing them, never as a non-match.
+        total, _, ready, missing, _, _ = adapter.matching_rows(connection, ["SELECT * FROM logs WHERE NOT COALESCE(User='0', 0)"], "process_creation")
+        self.assertEqual((total, ready, missing), (1, 2, 1))
 
     def test_matches_on_inferred_fields_are_counted_and_missing_parents_are_never_matched(self):
         connection = self.journal([
@@ -169,7 +191,7 @@ level: low
         self.addCleanup(directory.cleanup)
         identity = {"vm_id": "vm", "boot_id": "boot", "run_id": "run", "root_cookie": 7}
         events = [("process_creation", {"Image": "/bin/sh"})] * 3 if events is None else events
-        records = [{"kind": "header", "format_version": 2, "identity": identity}]
+        records = [{"kind": "header", "format_version": 3, "identity": identity}]
         for index, (category, fields) in enumerate(events):
             records.append({"kind": "event", "event": {"category": category, "fields": fields, "evidence": {"kind": "call", "stream": 1, "cookie": 7, "call": index + 1}}})
         records.append({"kind": "end", "events": len(events), "omitted": 0, "complete": complete})

@@ -133,13 +133,17 @@ fn sigma_unknown_fields(doc: &str, audit: bool) -> Vec<String> {
         "SourcePort",
         "Protocol",
         "IsNewFile",
+        "User",
+        "LogonId",
+        "Hashes",
+        "HashSkipped",
     ];
-    // auditd fields the recording cannot supply: credentials, audit rule keys,
-    // file ownership and mode. A rule that needs one is not evaluated.
-    const AUDITD_ABSENT: &[&str] = &[
-        "key", "auid", "uid", "euid", "gid", "egid", "suid", "fsuid", "sgid", "fsgid", "ses",
-        "tty", "mode", "inode", "ouid", "ogid", "unit",
-    ];
+    // auditd fields the recording cannot supply: audit rule keys, the terminal,
+    // file ownership and mode. A rule that needs one is not evaluated. The
+    // credential family (uid, euid, auid and the rest) is supplied by the guest
+    // kernel's credential records; a run without them lacks the fields, and a
+    // rule that needs them then finds no event that has them.
+    const AUDITD_ABSENT: &[&str] = &["key", "tty", "mode", "inode", "ouid", "ogid", "unit"];
     let mut unknown = Vec::new();
     let mut detection = false;
     for line in doc.lines() {
@@ -273,7 +277,7 @@ mod tests {
         );
         assert!(known.compatible, "{}", known.reason);
         assert_eq!(known.evidence, ["auditd"]);
-        for field in ["key", "euid", "auid"] {
+        for field in ["key", "tty", "inode"] {
             let absent = rule(
                 audit,
                 &format!("    selection:\n        type: 'SYSCALL'\n        {field}: 'x'"),
@@ -281,10 +285,32 @@ mod tests {
             assert!(!absent.compatible, "{field}");
             assert!(absent.reason.contains(field), "{}", absent.reason);
         }
+        // The credential family is supplied by the kernel's credential records.
+        for field in [
+            "uid", "euid", "suid", "fsuid", "gid", "egid", "sgid", "fsgid", "auid", "ses",
+        ] {
+            let rule = rule(
+                audit,
+                &format!("    selection:\n        type: 'SYSCALL'\n        {field}: '0'"),
+            );
+            assert!(rule.compatible, "{field}: {}", rule.reason);
+        }
         let other = rule(
             "    product: linux\n    service: syslog",
             "    selection:\n        a0: 'x'",
         );
         assert!(!other.compatible && other.reason.contains("syslog"));
+    }
+
+    #[test]
+    fn user_logon_id_and_hashes_are_captured_process_fields() {
+        let process = "    product: linux\n    category: process_creation";
+        let known = rule(
+            process,
+            "    selection:\n        User: root\n        LogonId: 0\n        Hashes|contains: 'SHA256='",
+        );
+        assert!(known.compatible, "{}", known.reason);
+        let unknown = rule(process, "    selection:\n        IntegrityLevel: High");
+        assert!(!unknown.compatible && unknown.reason.contains("IntegrityLevel"));
     }
 }

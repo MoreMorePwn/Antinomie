@@ -195,6 +195,92 @@ fn dense_call_keeps_its_facts_counts_every_completion_and_browses_them_all() {
 }
 
 #[test]
+fn credential_and_hash_records_come_back_with_their_call_and_are_not_observations() {
+    let directory = directory();
+    let mut raw = File::create(directory.join("telemetry.raw")).unwrap();
+    write(&mut raw, event_packet(1, 1, 1, 1));
+    write(&mut raw, event_packet(1, 1, 5, 2));
+    // Many completions after the credential record, so a preview cut by
+    // sequence would lose it, and a hash record that arrives after the exit.
+    for packet in observation(1, 10, b"lifecycle.creds", &[]) {
+        write(&mut raw, packet);
+    }
+    for number in 0..600u64 {
+        for packet in observation(1, 1000 + number, b"async.request_id", &[]) {
+            write(&mut raw, packet);
+        }
+    }
+    write(&mut raw, event_packet(1, 2, 5, 2));
+    for packet in observation(1, 5000, b"lifecycle.file_hash", &[]) {
+        write(&mut raw, packet);
+    }
+    for packet in observation(1, 5001, b"lifecycle.exec_commit", &[]) {
+        write(&mut raw, packet);
+    }
+    raw.sync_all().unwrap();
+    let recording = open_recording(&directory).unwrap();
+    let page = recording.invocation_page(0, 10).unwrap();
+    let call = &page.invocations[0];
+    let keys: Vec<_> = call
+        .kernel_notes
+        .iter()
+        .flat_map(|event| event.fields.iter().map(|field| field.key.as_str()))
+        .collect();
+    assert_eq!(keys, ["lifecycle.creds", "lifecycle.file_hash"]);
+    assert_eq!(call.async_saved, 600, "notes are not async observations");
+    let (seqs, total) = browse_all(&recording, (9, 10, 1), 256);
+    assert_eq!((seqs.len(), total), (600, 600));
+    cleanup(&directory);
+}
+
+#[test]
+fn an_index_built_before_kernel_notes_is_rebuilt_and_an_old_recording_still_loads() {
+    let directory = directory();
+    let mut raw = File::create(directory.join("telemetry.raw")).unwrap();
+    write(&mut raw, event_packet(1, 1, 1, 1));
+    write(&mut raw, event_packet(1, 1, 5, 2));
+    for packet in observation(1, 10, b"lifecycle.creds", &[]) {
+        write(&mut raw, packet);
+    }
+    write(&mut raw, event_packet(1, 2, 5, 2));
+    raw.sync_all().unwrap();
+    let recording = open_recording(&directory).unwrap();
+    assert_eq!(
+        recording.invocation_page(0, 10).unwrap().invocations[0]
+            .kernel_notes
+            .len(),
+        1
+    );
+    // The cache an earlier version wrote: no layout version, and a lifecycle
+    // row that only says "not a task end".
+    let index = archive_index_path(&directory).unwrap();
+    let connection = rusqlite::Connection::open(&index).unwrap();
+    connection
+        .execute_batch("PRAGMA user_version = 0; UPDATE lifecycle SET task_exit = 0;")
+        .unwrap();
+    drop(connection);
+    let page = recording.invocation_page(0, 10).unwrap();
+    assert_eq!(page.invocations[0].kernel_notes.len(), 1, "index rebuilt");
+    // A recording from a kernel without the records has none, and loads.
+    let plain = directory.join("plain");
+    fs::create_dir(&plain).unwrap();
+    storage::atomic_json(&plain.join("manifest.json"), &serde_json::json!({})).unwrap();
+    let mut raw = File::create(plain.join("telemetry.raw")).unwrap();
+    write(&mut raw, event_packet(1, 1, 1, 1));
+    write(&mut raw, event_packet(1, 1, 5, 2));
+    write(&mut raw, event_packet(1, 2, 5, 2));
+    raw.sync_all().unwrap();
+    let page = open_recording(&plain)
+        .unwrap()
+        .invocation_page(0, 10)
+        .unwrap();
+    assert!(page.invocations[0].kernel_notes.is_empty());
+    assert!(page.invocations[0].entry.is_some());
+    let _ = fs::remove_file(archive_index_path(&plain).unwrap());
+    cleanup(&directory);
+}
+
+#[test]
 fn matching_pages_and_filters_agree_with_ordinary_pages() {
     let (directory, recording) = dense_recording(700);
     let cancel = AtomicBool::new(false);

@@ -207,6 +207,7 @@ fn call(nr: u64, name: &str, args: [u64; 6]) -> InvocationSummary {
         async_events: Vec::new(),
         async_saved: 0,
         task_exit: None,
+        kernel_notes: Vec::new(),
     }
 }
 

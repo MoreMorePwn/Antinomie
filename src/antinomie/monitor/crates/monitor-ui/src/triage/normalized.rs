@@ -3,6 +3,7 @@
 use super::*;
 use antinomie_monitor_core::analysis::detection::JournalSummary;
 use antinomie_monitor_core::analysis::detection::{Event, EventJournal, Evidence, Moment};
+use antinomie_monitor_core::kernel_notes::HashKind;
 use std::collections::BTreeMap;
 
 type Stamp = (u64, u64, u64, i64, i64, i64, i64);
@@ -249,6 +250,7 @@ pub(super) fn call(
     event: &EventSummary,
 ) -> Result<(), String> {
     let mut events = Vec::new();
+    kernel_records::observe(files, call);
     build(&mut events, files, call, event);
     sigma_events::track(files, call, event);
     route(journal, pending, events)
@@ -268,6 +270,8 @@ fn build(
     ]);
     let image = process_image(files, event).map(str::to_owned);
     text(&mut fields, "Image", image.as_deref());
+    let creds = kernel_records::credentials(files, call);
+    kernel_records::sysmon_user(&mut fields, creds.as_ref());
     let ret = call.exit.as_ref().and_then(|exit| exit.result);
     if let Some(ret) = ret {
         fields.insert("Result".into(), ret.into());
@@ -296,6 +300,10 @@ fn build(
         if let Some(line) = command_line(call, event) {
             fields.insert("CommandLine".into(), line.into());
         }
+        kernel_records::sysmon_hashes(
+            &mut fields,
+            kernel_records::file_hash(call, HashKind::Exec).as_ref(),
+        );
         if let Some(parent) = sigma_events::parent(files, event) {
             fields.insert("ParentProcessId".into(), parent.pid.into());
             text(&mut fields, "ParentImage", parent.image.as_deref());
@@ -432,7 +440,14 @@ fn build(
         emit("file_event", fields, marked);
     }
     if matches!(operation, "unlink" | "unlinkat" | "rmdir") {
-        emit("file_delete", fields.clone(), inferred.clone());
+        let mut fields = fields.clone();
+        if operation != "rmdir" {
+            kernel_records::sysmon_hashes(
+                &mut fields,
+                kernel_records::file_hash(call, HashKind::Delete).as_ref(),
+            );
+        }
+        emit("file_delete", fields, inferred.clone());
     }
     if matches!(operation, "rename" | "renameat" | "renameat2") {
         text(

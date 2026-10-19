@@ -14,6 +14,7 @@ fn invalid_syscall_filter_keeps_the_previous_applied_filter() {
         async_events: Vec::new(),
         async_saved: 0,
         task_exit: None,
+        kernel_notes: Vec::new(),
     };
     assert_eq!(app.applied_filter, "");
     assert!(crate::query::compile_note(&app.applied_filter).keep(&invocation));

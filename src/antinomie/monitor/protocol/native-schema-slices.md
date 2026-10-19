@@ -671,3 +671,51 @@ their references retain bounded metadata until they drain, temporarily preventin
 a new manual admission. Shared-file mappings, DMA and external kernel writers
 remain outside this process-group freeze, so it is not an atomic VM snapshot.
 
+
+## 18. Revision 17: credential and file-hash records (0.7.0)
+
+Revision 17 also records what host-side conversion cannot reconstruct: who a
+task ran as, and what an executed or deleted file contained. Both are ordinary
+phase-3 lifecycle events (the kind that already carries `lifecycle.exec_commit`)
+with one fixed-structure field, so the ANTT envelope, ABI 9 and the field
+framing are unchanged. No new record kind exists, so no transport version
+moves: a host that does not know the keys sees an unknown lifecycle field, and a
+recording from before them simply has none. Layouts are versioned by name
+(`antinomie.creds/1`, `antinomie.hash/1`) and given byte for byte in the
+mirrored `control.h`.
+
+| Record | Key and layout | When | Belongs to |
+|---|---|---|---|
+| Credentials | `lifecycle.creds`, `antinomie.creds/1`, 72 bytes | A traced task's first traced call (reason START); then each time `uid`, `euid`, `suid`, `fsuid`, the gid equivalents or `cap_effective`/`cap_permitted`/`cap_inheritable` change in `commit_creds()`; and when the audit login uid is set | The call that made the change; START belongs to the task's first call |
+| File hash | `lifecycle.file_hash`, `antinomie.hash/1`, 80 bytes | Successful exec commit (the image the kernel will run); `unlink`/`unlinkat` that succeeded (the file's content as it was) | The call that triggered it, published later by a worker |
+
+Credentials carry the ids in the initial user namespace, the audit login uid and
+session id (`0xffffffff` unset, and `flags` bit 0 says whether the kernel tracks
+them at all), and the capability sets. The change reason is derived from the
+syscall in progress: setuid/setreuid, setgid/setregid, setresuid/setresgid,
+setfsuid/setfsgid, capset, an exec that changed an id (setuid/setgid image), an
+exec that changed only capabilities (file capabilities, root exec), the login
+uid, or other (for example `prctl`, user namespaces). A change with no id or
+capability difference writes nothing.
+
+Hashing is SHA-256 only. The SigmaHQ Linux pack has no rule that reads a hash
+field, and Sysmon for Linux rules that do read `Hashes` use SHA256, so MD5 would
+cost reads without a consumer. Budget and failure rules:
+
+| Rule | Value |
+|---|---|
+| Largest file read | 16 MiB (`ANTC_HASH_FILE_MAX`); a larger file is not opened and the record says TOO_LARGE with the size |
+| Queue | 16 jobs and 64 MiB of queued file bytes; a full queue or byte budget drops the request and records QUEUE_FULL or BUDGET |
+| Filesystems | ext4, tmpfs, ramfs; any other is recorded UNSUPPORTED_FS without being opened (a remote or user-space filesystem could block) |
+| Other outcomes | NOT_REGULAR, NO_MEMORY, READ_ERROR with the errno, and a `CHANGED` flag when size or mtime moved while reading |
+| Loss | A record that could not be sent is counted; every later record carries the cumulative count |
+| Path | The traced task only allocates a 450-byte job and takes path references; a worker on the system unbound workqueue (no workqueue of its own) reopens the file read-only through `kernel_file_open` with no fsnotify event, no access-time update and no file-table accounting, one 64 KiB chunk at a time |
+| Repeats | A 32-entry cache keyed by device, inode, generation, size, mtime and ctime lets an exec storm of one program read it once; the record is flagged CACHED |
+
+An exec whose image is a script's interpreter sets flag INTERPRETER: the hash
+is of the interpreter that ran, which is not the file the call named. The first
+exec of a launched root (the usermodehelper exec before any traced call) has no
+call to belong to and is not hashed. Nothing here starts a process, opens a
+descriptor in the guest or registers a BPF program; the pinned dentry and mount
+live a few milliseconds longer than they otherwise would, which is the only
+guest-observable effect (a deleted file's space is released when its job ends).
