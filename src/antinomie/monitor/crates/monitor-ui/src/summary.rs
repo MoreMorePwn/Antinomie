@@ -490,7 +490,6 @@ fn summary_resource(
                 used: guest.and_then(|guest| guest.memory_used_size),
                 total: guest.and_then(|guest| guest.memory_total_size),
                 available: guest.and_then(|guest| guest.memory_available_size),
-                free: None,
                 hover: "Guest /proc/meminfo: used = MemTotal − MemAvailable. Reclaimable cache is included in available memory.",
                 missing: "Guest RAM utilization unavailable",
                 root: false,
@@ -504,7 +503,6 @@ fn summary_resource(
                 used: guest.and_then(|guest| guest.root_used_size),
                 total: guest.and_then(|guest| guest.root_total_size),
                 available: guest.and_then(|guest| guest.root_available_size),
-                free: guest.and_then(|guest| guest.root_free_size),
                 hover: "Guest statvfs(/): available = f_bavail × f_frsize; used = (f_blocks − f_bfree) × f_frsize. Other mounts are outside this meter.",
                 missing: "Guest root filesystem unavailable",
                 root: true,
@@ -521,7 +519,6 @@ struct GuestGauge {
     used: Option<u64>,
     total: Option<u64>,
     available: Option<u64>,
-    free: Option<u64>,
     hover: &'static str,
     missing: &'static str,
     root: bool,
@@ -533,7 +530,6 @@ fn guest_gauge(ui: &mut egui::Ui, gauge_spec: GuestGauge, history: Option<&VmHis
         used,
         total,
         available,
-        free,
         hover,
         missing,
         root,
@@ -567,16 +563,6 @@ fn guest_gauge(ui: &mut egui::Ui, gauge_spec: GuestGauge, history: Option<&VmHis
         .wrap(),
     )
     .on_hover_text(hover);
-    if let Some(free) = free {
-        ui.add(
-            egui::Label::new(
-                RichText::new(format!("Free including reserved: {}", size(free)))
-                    .small()
-                    .color(theme::muted()),
-            )
-            .wrap(),
-        );
-    }
     if used.is_none() {
         ui.add(egui::Label::new(missing).wrap());
     } else if ratio.is_none() {
@@ -625,7 +611,6 @@ fn resident_meter(ui: &mut egui::Ui, sample: &VmResources, vm: &VmConfig) {
                     format!("{:.2} GiB", available as f64 / 1_073_741_824.0),
                 )
             }),
-            free: None,
             color: accent(1),
             available_hover: "Host /proc/meminfo MemAvailable, including reclaimable memory; this is not guest RAM usage.",
             missing: "Unavailable measurement",
@@ -696,19 +681,6 @@ fn volume_meter(ui: &mut egui::Ui, sample: &VmResources, vm: &VmConfig) {
         ui.add(egui::Label::new(RichText::new(format!("Data volume used: {:.2} GiB", used as f64 / 1_073_741_824.0)).small().color(theme::muted())).wrap())
             .on_hover_text("Host statvfs: (f_blocks - f_bfree) × f_frsize. Reserved free blocks are not counted as used; this is not guest filesystem usage.");
     }
-    if let Some(free) = sample.data_disk_free_size {
-        ui.add(
-            egui::Label::new(
-                RichText::new(format!(
-                    "Free including reserved: {:.2} GiB",
-                    free as f64 / 1_073_741_824.0
-                ))
-                .small()
-                .color(theme::muted()),
-            )
-            .wrap(),
-        );
-    }
 }
 
 struct Usage {
@@ -716,7 +688,6 @@ struct Usage {
     used: Option<u64>,
     total: Option<u64>,
     available: Option<(&'static str, String)>,
-    free: Option<u64>,
     color: Color32,
     available_hover: &'static str,
     missing: &'static str,
@@ -737,9 +708,6 @@ fn usage_meter(ui: &mut egui::Ui, usage: Usage) {
     if let Some((label, value)) = usage.available {
         ui.add(egui::Label::new(format!("{label}: {value}")).wrap())
             .on_hover_text(usage.available_hover);
-    }
-    if let Some(free) = usage.free {
-        ui.add(egui::Label::new(format!("Free including reserved: {}", size(free))).wrap());
     }
     if usage.used.is_none() {
         ui.add(egui::Label::new(usage.missing).wrap());
@@ -1589,7 +1557,6 @@ mod tests {
             .collect();
         assert!(text.contains("Host RAM available: 8.00 GiB"));
         assert!(text.contains("Data volume used: 492.00 GiB"));
-        assert!(text.contains("Free including reserved: 20.00 GiB"));
         assert!(text.contains("Guest RAM utilization unavailable"));
     }
 

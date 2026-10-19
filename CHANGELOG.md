@@ -6,6 +6,9 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Simpler storage cards.** Summary omits the extra reserved-free-space line;
+  available space, used space and underlying measurements keep their meaning.
+
 - **Run as Root or Normal user.** A preset beside UID/GID sets both to 0 or
   1000. Manual values remain editable and other combinations show Custom.
 
