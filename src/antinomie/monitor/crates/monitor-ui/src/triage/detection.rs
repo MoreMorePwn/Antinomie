@@ -6,6 +6,7 @@ use antinomie_monitor_core::analysis::detection::{
 use std::path::{Path, PathBuf};
 
 mod cards;
+mod coverage;
 mod finding;
 mod header;
 mod inputs;
@@ -1025,6 +1026,7 @@ impl View {
             self.scan_progress(ui, index);
         }
         self.notes_line(ui, index);
+        self.coverage_section(ui, index);
 
         if self.selected == Engine::Sigma {
             if let Some(error) = scan.and_then(|scan| scan.event_error.as_ref()) {

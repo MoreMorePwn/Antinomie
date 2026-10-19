@@ -94,6 +94,10 @@ pub(super) struct Staged {
     /// Inputs staging could not prepare; the scan lists them as skipped.
     #[serde(default)]
     pub skipped_inputs: Vec<super::ScannedInput>,
+    /// Selected rule files that could not be staged. Their rules did not run,
+    /// so the result is incomplete; this is not a coverage limit.
+    #[serde(default)]
+    pub unstaged: Vec<String>,
 }
 
 fn text(path: &Path) -> Result<String, String> {
@@ -359,6 +363,7 @@ fn stage(
         captures: vec![],
         journal: None,
         skipped_inputs: vec![],
+        unstaged: vec![],
         warnings: vec![],
         selection: String::new(),
         no_rules: false,
@@ -372,6 +377,7 @@ fn stage(
     let extra = match stage_rules(configured, extensions, work, cancel) {
         Ok(extra) => extra,
         Err(error) => {
+            staged.unstaged.push(error.clone());
             staged.warnings.push(error);
             vec![]
         }
@@ -505,6 +511,13 @@ fn validate_report(report: &Report, request: &Request) -> Result<(), String> {
             || inputs.iter().any(|input| !input.bounded()))
     {
         return Err("detector input list exceeds bounds".into());
+    }
+    if report
+        .coverage
+        .as_ref()
+        .is_some_and(|coverage| !coverage.bounded())
+    {
+        return Err("detector coverage list exceeds bounds".into());
     }
     let mut evidence_count = 0usize;
     for finding in &report.findings {
@@ -1029,6 +1042,10 @@ fn sigma(staged: &Staged, work: &Path) -> Result<Report, String> {
     }
     let data = read_bounded(work, Path::new("sigma-report.json"), REPORT_LIMIT)?;
     let mut report: Report = serde_json::from_slice(&data).map_err(|error| error.to_string())?;
+    if let Some(coverage) = report.coverage.as_mut() {
+        // Rules the managed selection already left out count the same as these.
+        coverage.add_selection_exclusions(Engine::Sigma, &staged.warnings);
+    }
     let missing = report.state == State::Unavailable
         && report
             .warnings
@@ -1076,19 +1093,7 @@ pub fn worker_main_if_requested() -> Option<i32> {
             Engine::Ids => super::ids::scan(&staged, work)?,
             Engine::Sigma => sigma(&staged, work)?,
         };
-        if report.selection.is_empty() {
-            report.selection = staged.selection.clone();
-        }
-        if report.evidence_key.is_empty() {
-            report.evidence_key = staged.request.settings.evidence_key.clone();
-        }
-        if staged.request.settings.partial && report.state == State::Complete {
-            report.state = State::Partial;
-            report
-                .warnings
-                .push("Partial: this scan used evidence that was still being captured.".into());
-        }
-        merge_staged_warnings(&mut report, &staged.warnings);
+        finish_report(&mut report, &staged);
         validate_report(&report, &staged.request)?;
         let data = serde_json::to_vec(&report).map_err(|error| error.to_string())?;
         if data.len() > REPORT_LIMIT {
@@ -1102,20 +1107,62 @@ pub fn worker_main_if_requested() -> Option<i32> {
     Some(i32::from(result.is_err()))
 }
 
-/// Worker and parent may see the same selection diagnostics; merge idempotently.
-fn merge_staged_warnings(report: &mut Report, warnings: &[String]) {
-    if !warnings.is_empty() && report.state == State::Complete {
-        report.state = State::Partial;
+/// What the worker adds to every engine's report before saving it.
+fn finish_report(report: &mut Report, staged: &Staged) {
+    if report.selection.is_empty() {
+        report.selection = staged.selection.clone();
     }
+    if report.evidence_key.is_empty() {
+        report.evidence_key = staged.request.settings.evidence_key.clone();
+    }
+    if staged.request.settings.partial && report.state == State::Complete {
+        report.state = State::Partial;
+        report
+            .warnings
+            .push("Partial: this scan used evidence that was still being captured.".into());
+    }
+    if !staged.unstaged.is_empty() && report.state == State::Complete {
+        report.state = State::Partial;
+        report.warnings.push(format!(
+            "Partial: selected rules were not run because they could not be staged: {}",
+            staged.unstaged.join("; ")
+        ));
+    }
+    merge_staged_warnings(report, &staged.warnings);
+}
+
+/// Selection warnings kept in a report; the rest are counted in one line.
+const SELECTION_WARNING_LIMIT: usize = 200;
+
+/// Worker and parent may see the same selection diagnostics; merge idempotently.
+///
+/// A selection warning (a rule that cannot be loaded or does not apply, a pack
+/// that was not evaluated) is a coverage limit and never changes the state.
+/// Rules already counted in `report.coverage` are not repeated as warnings.
+fn merge_staged_warnings(report: &mut Report, warnings: &[String]) {
     let mut seen = std::collections::BTreeSet::new();
     report
         .warnings
         .retain(|warning| seen.insert(warning.clone()));
-    for warning in warnings {
-        if seen.insert(warning.clone()) {
-            report.warnings.push(warning.clone());
-        }
+    let counted = |warning: &str| {
+        report.coverage.is_some()
+            && crate::ruleset::selection_exclusion(report.engine, warning).is_some()
+    };
+    let fresh: Vec<&String> = warnings
+        .iter()
+        .filter(|warning| !counted(warning) && seen.insert((*warning).clone()))
+        .collect();
+    let kept = SELECTION_WARNING_LIMIT.saturating_sub(report.warnings.len());
+    let more = fresh.len().saturating_sub(kept);
+    let mut added: Vec<String> = fresh.into_iter().take(kept).cloned().collect();
+    let noted = report
+        .warnings
+        .iter()
+        .any(|warning| warning.ends_with(" further selection warnings are not listed."));
+    if more > 0 && !noted {
+        added.push(format!("{more} further selection warnings are not listed."));
     }
+    report.warnings.extend(added);
 }
 
 #[cfg(test)]
@@ -1135,7 +1182,7 @@ mod tests {
         report.skipped_rules = 26;
         report.warnings = vec!["engine warning".into(), "engine warning".into()];
         let staged: Vec<_> = (1..=26)
-            .map(|sid| format!("sid {sid}: requires a TLS fingerprint keyword"))
+            .map(|sid| format!("sid {sid}: a pack was not evaluated"))
             .collect();
         merge_staged_warnings(&mut report, &staged);
         let worker = report.warnings.clone();
@@ -1146,9 +1193,161 @@ mod tests {
         assert_eq!(report.warnings[1], staged[0]);
         assert_eq!(report.warnings[26], staged[25]);
         assert_eq!(report.skipped_rules, 26);
-        assert_eq!(report.state, State::Partial);
+        assert_eq!(
+            report.state,
+            State::Complete,
+            "selection warnings are coverage, not incompleteness"
+        );
         merge_staged_warnings(&mut report, &["different capture warning".into()]);
         assert_eq!(report.warnings.len(), 28);
+    }
+
+    #[test]
+    fn selection_warnings_are_bounded_and_rules_already_counted_are_not_repeated() {
+        let mut report = Report::empty(Engine::Ids, identity());
+        report.coverage = Some(Coverage::default());
+        let mut staged: Vec<String> = (0..500)
+            .map(|index| format!("pack {index} was not evaluated"))
+            .collect();
+        staged.push("9: requires an external dataset".into());
+        merge_staged_warnings(&mut report, &staged);
+        let first = report.warnings.clone();
+        assert_eq!(
+            first.len(),
+            SELECTION_WARNING_LIMIT + 1,
+            "bounded, plus one summary line"
+        );
+        assert!(
+            first
+                .last()
+                .unwrap()
+                .starts_with("300 further selection warnings")
+        );
+        assert!(!first.iter().any(|warning| warning.contains("dataset")));
+        merge_staged_warnings(&mut report, &staged);
+        assert_eq!(report.warnings, first, "merging again changes nothing");
+        assert_eq!(report.state, State::Complete);
+    }
+
+    #[test]
+    fn a_report_saved_before_coverage_loads_and_keeps_its_stored_state() {
+        let saved = r#"{"engine":"ids","identity":{"vm_id":"v","boot_id":"b","run_id":"r","root_cookie":1},"state":"partial","sources":[],"findings":[],"scanned_rules":null,"skipped_rules":26,"skipped":["sid 1: duplicate SID"],"omitted_evidence":0,"warnings":["w"],"source_digest":null}"#;
+        let report: Report = serde_json::from_str(saved).unwrap();
+        assert_eq!(
+            report.state,
+            State::Partial,
+            "no migration of stored states"
+        );
+        assert_eq!(report.format_version, 0);
+        assert!(report.coverage.is_none());
+        let again: Report = serde_json::from_str(
+            &serde_json::to_string(&Report::empty(Engine::Sigma, identity())).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(again.format_version, REPORT_FORMAT_VERSION);
+        let counted: Report = serde_json::from_str(&saved.replace(
+            r#""warnings""#,
+            r#""coverage":{"evaluated":4,"no_sid":1},"format_version":1,"warnings""#,
+        ))
+        .unwrap();
+        assert_eq!(counted.coverage.unwrap().no_sid, 1);
+    }
+
+    fn identity() -> Identity {
+        Identity {
+            vm_id: "v".into(),
+            boot_id: "b".into(),
+            run_id: "r".into(),
+            root_cookie: 1,
+        }
+    }
+
+    #[test]
+    fn a_rule_file_that_cannot_be_staged_makes_the_result_partial_with_its_reason() {
+        let directory =
+            std::env::temp_dir().join(format!("ant-unstaged-{}", crate::storage::unique_id()));
+        crate::storage::private_dir(&directory).unwrap();
+        let work = directory.join("work");
+        crate::storage::private_dir(&work).unwrap();
+        let request = Request {
+            engine: Engine::Ids,
+            identity: identity(),
+            directory: directory.clone(),
+            settings: Settings {
+                ids_rules: directory.join("missing.rules").display().to_string(),
+                ..Default::default()
+            },
+            source_digest: None,
+            frozen: None,
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (staged, _, _) = stage(request, &work, &cancel).unwrap();
+        assert_eq!(staged.unstaged.len(), 1);
+        assert!(
+            staged.unstaged[0].contains("local rules"),
+            "{:?}",
+            staged.unstaged
+        );
+        let mut report = Report::empty(Engine::Ids, identity());
+        finish_report(&mut report, &staged);
+        assert_eq!(report.state, State::Partial);
+        let note = report
+            .warnings
+            .iter()
+            .find(|warning| warning.contains("could not be staged"))
+            .unwrap();
+        assert!(note.contains("local rules"), "{note}");
+        // Other states are not overwritten.
+        let mut missing = Report::empty(Engine::Ids, identity());
+        missing.state = State::Missing;
+        finish_report(&mut missing, &staged);
+        assert_eq!(missing.state, State::Missing);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_scan_of_evidence_still_being_captured_is_partial() {
+        let mut staged = Staged {
+            request: Request {
+                engine: Engine::Ids,
+                identity: identity(),
+                directory: PathBuf::new(),
+                settings: Settings {
+                    partial: true,
+                    ..Default::default()
+                },
+                source_digest: None,
+                frozen: None,
+            },
+            sigma_sources: vec![],
+            yara_sources: vec![],
+            ids_sources: vec![],
+            captures: vec![],
+            journal: None,
+            skipped_inputs: vec![],
+            unstaged: vec![],
+            warnings: vec!["pack x was not evaluated".into()],
+            selection: String::new(),
+            no_rules: false,
+            include_dir: None,
+        };
+        let mut report = Report::empty(Engine::Ids, identity());
+        finish_report(&mut report, &staged);
+        assert_eq!(report.state, State::Partial);
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("still being captured"))
+        );
+        staged.request.settings.partial = false;
+        let mut closed = Report::empty(Engine::Ids, identity());
+        finish_report(&mut closed, &staged);
+        assert_eq!(
+            closed.state,
+            State::Complete,
+            "selection warnings alone stay complete"
+        );
     }
 
     #[test]
@@ -1369,6 +1568,7 @@ mod tests {
             captures: vec![],
             journal: None,
             skipped_inputs: vec![],
+            unstaged: vec![],
             warnings: vec![],
             selection: String::new(),
             no_rules: false,

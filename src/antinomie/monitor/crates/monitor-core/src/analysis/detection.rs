@@ -18,6 +18,8 @@ pub const JOURNAL_VERSION: u64 = 2;
 pub const JOURNAL_VERSION_MIN: u64 = 1;
 pub const REPORT_LIMIT: usize = 32 * 1024 * 1024;
 pub const MATCH_LIMIT: usize = 10_000;
+/// Format of a report written now; see [`Report::format_version`].
+pub const REPORT_FORMAT_VERSION: u64 = 1;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -322,6 +324,17 @@ pub struct Report {
     /// was recorded.
     #[serde(default)]
     pub inputs: Option<Vec<ScannedInput>>,
+    /// Report format. 0 is a result saved before it was recorded.
+    ///
+    /// Version 1 adds `coverage`. Rules that could not be loaded or did not
+    /// apply no longer make a scan partial. A report saved earlier keeps the
+    /// state it was stored with; it is not migrated, so an older IDS or Sigma
+    /// result can still read "partial" for only those reasons.
+    #[serde(default)]
+    pub format_version: u64,
+    /// IDS and Sigma rule counts. None on YARA and on results saved before version 1.
+    #[serde(default)]
+    pub coverage: Option<Coverage>,
 }
 
 impl Report {
@@ -347,6 +360,8 @@ impl Report {
             backend_rejected: 0,
             missing_field_events: 0,
             inputs: Some(Vec::new()),
+            format_version: REPORT_FORMAT_VERSION,
+            coverage: None,
         }
     }
     pub fn unavailable(engine: Engine, identity: Identity, reason: impl Into<String>) -> Self {
@@ -357,11 +372,15 @@ impl Report {
     }
 }
 
+mod coverage;
 mod ids;
 mod inputs;
 pub mod journal;
 mod runner;
 mod yara;
+pub use coverage::{
+    COVERAGE_LIST_LIMIT, Coverage, CoverageItem, CoverageReason, IDS_REASONS, SIGMA_REASONS,
+};
 pub use inputs::{InputKind, InputOutcome, SIGMA_COVERAGE_WARNING, ScannedInput};
 pub use runner::{
     FrozenSelection, Request, load, read_evidence, result_directory, run, run_with_progress,

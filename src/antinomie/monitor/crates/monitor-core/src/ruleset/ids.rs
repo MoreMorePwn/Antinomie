@@ -2,6 +2,10 @@
 //! Suricata rule parsing for the rule index.
 use super::*;
 
+pub(super) const IDS_DATASET_REASON: &str = "requires an external dataset";
+pub(super) const IDS_TLS_REASON: &str =
+    "requires a TLS fingerprint keyword that is not part of the bundled Suricata configuration";
+
 pub(super) fn parse_ids(text: &str) -> Vec<IndexedRule> {
     ids_blocks(text)
         .into_iter()
@@ -60,13 +64,10 @@ fn ids_action(line: &str) -> bool {
 
 fn ids_support(body: &str) -> (bool, String) {
     if body.contains("dataset:") {
-        return (false, "requires an external dataset".into());
+        return (false, IDS_DATASET_REASON.into());
     }
     if body.contains("ja3.") || body.contains("ja3s.") || body.contains("ja4.") {
-        return (
-            false,
-            "requires a TLS fingerprint keyword that is not part of the bundled Suricata configuration".into(),
-        );
+        return (false, IDS_TLS_REASON.into());
     }
     (true, String::new())
 }

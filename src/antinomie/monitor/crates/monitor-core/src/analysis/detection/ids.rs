@@ -8,10 +8,23 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Packet locations kept per finding; the alert count itself is complete.
+const EVIDENCE_PREVIEW_LIMIT: usize = 16;
+/// Selection notes kept in `Report::skipped`; the counts cover every rule.
+const SKIPPED_LIMIT: usize = 100;
+
+/// A rule the worker did not load: why, its SID (empty when it has none) and
+/// the wording kept in `Report::skipped`.
+struct Unloaded {
+    reason: CoverageReason,
+    sid: String,
+    text: String,
+}
+
 fn select_ids_rules(
     text: &str,
     seen: &mut std::collections::BTreeSet<String>,
-) -> (String, Vec<String>) {
+) -> (String, Vec<Unloaded>) {
     let mut kept = String::new();
     let mut skipped = Vec::new();
     let mut current = String::new();
@@ -34,18 +47,33 @@ fn select_ids_rules(
             .and_then(|rest| rest.split([';', ',']).next())
             .map(str::trim)
             .unwrap_or("");
+        let unloaded = |reason, text: String| Unloaded {
+            reason,
+            sid: sid.to_owned(),
+            text,
+        };
         if current.contains("dataset:") {
-            skipped.push(format!("sid {sid}: requires an external dataset"));
+            skipped.push(unloaded(
+                CoverageReason::Dataset,
+                format!("sid {sid}: requires an external dataset"),
+            ));
         } else if current.contains("ja3.") || current.contains("ja3s.") || current.contains("ja4.")
         {
-            skipped.push(format!(
-                "sid {sid}: requires a TLS fingerprint keyword that this configuration does not enable"
+            skipped.push(unloaded(
+                CoverageReason::TlsFingerprint,
+                format!(
+                    "sid {sid}: requires a TLS fingerprint keyword that this configuration does not enable"
+                ),
             ));
         } else if sid.is_empty() {
-            skipped.push("a rule has no SID and was not loaded".into());
+            skipped.push(unloaded(
+                CoverageReason::NoSid,
+                "a rule has no SID and was not loaded".into(),
+            ));
         } else if !seen.insert(sid.to_owned()) {
-            skipped.push(format!(
-                "sid {sid}: duplicate SID; the later copy was not loaded"
+            skipped.push(unloaded(
+                CoverageReason::DuplicateSid,
+                format!("sid {sid}: duplicate SID; the later copy was not loaded"),
             ));
         } else {
             kept.push_str(&current);
@@ -189,6 +217,7 @@ fn alert(
             report.findings.len() - 1
         }
         None => {
+            // No room for this rule: its alert count is lost, not just its evidence.
             report.omitted_evidence += 1;
             report.state = State::Partial;
             return;
@@ -202,13 +231,18 @@ fn alert(
         .and_then(serde_json::Value::as_u64)
         .filter(|frame| *frame > 0 && *frame <= capture.packets)
     {
-        if finding.evidence.len() < 16 {
+        if finding.evidence.len() < EVIDENCE_PREVIEW_LIMIT {
             finding.evidence.push(Evidence::Packet {
                 capture: capture.original.clone(),
                 frame,
             });
         } else {
             report.omitted_evidence += 1;
+            // The count above is complete; only the preview is cut.
+            report
+                .coverage
+                .get_or_insert_with(Coverage::default)
+                .evidence_preview_limit = Some(EVIDENCE_PREVIEW_LIMIT as u64);
         }
     } else {
         report.omitted_evidence += 1;
@@ -424,6 +458,9 @@ fn scan_with(staged: &Staged, work: &Path, tool: &str) -> Result<Report, String>
     let tool_env: &[(&str, &str)] = if libs.is_empty() { &[] } else { &pair };
     let mut report = Report::empty(Engine::Ids, staged.request.identity.clone());
     report.selection = staged.selection.clone();
+    let mut coverage = Coverage::default();
+    // Rules the managed selection already left out count the same as these.
+    coverage.add_selection_exclusions(Engine::Ids, &staged.warnings);
     let version =
         super::super::tools::run_with(tool, &["-V"], tool_env, Duration::from_secs(20), 4096, true)
             .map(|run| {
@@ -454,7 +491,17 @@ fn scan_with(staged: &Staged, work: &Path, tool: &str) -> Result<Report, String>
         }
         let text = String::from_utf8_lossy(&data);
         let (kept, skipped) = select_ids_rules(&text, &mut seen_sids);
-        report.skipped.extend(skipped);
+        for rule in skipped {
+            let name = if rule.sid.is_empty() {
+                "(no SID)".to_owned()
+            } else {
+                format!("sid {}", rule.sid)
+            };
+            coverage.add(rule.reason, name, rule.text.clone());
+            if report.skipped.len() < SKIPPED_LIMIT {
+                report.skipped.push(rule.text);
+            }
+        }
         rules.extend_from_slice(kept.as_bytes());
         report.sources.push(Source {
             name: source.name.clone(),
@@ -464,7 +511,8 @@ fn scan_with(staged: &Staged, work: &Path, tool: &str) -> Result<Report, String>
             data: "VM-wide owned PCAP segments. Suricata decodes the capture; the HTTP/DNS table is not the input. Packet evidence is not process attribution.".into(),
         });
     }
-    report.skipped_rules = report.skipped.len() as u64;
+    report.skipped_rules = coverage.not_loadable();
+    report.coverage = Some(coverage);
     if rules.is_empty() {
         report.state = State::Unavailable;
         report
@@ -511,6 +559,7 @@ fn scan_with(staged: &Staged, work: &Path, tool: &str) -> Result<Report, String>
     let capture_total = staged.captures.len() as u64;
     // Segments evaluated so far, and why the rest were not.
     let mut evaluated = 0;
+    let mut loaded_rules = None;
     let mut stopped = "the scan stopped early";
     for (index, capture) in staged.captures.iter().enumerate() {
         let mut row = capture_input(capture);
@@ -560,6 +609,9 @@ fn scan_with(staged: &Staged, work: &Path, tool: &str) -> Result<Report, String>
         )?;
         let tool_log = format!("{}\n{}", result.stderr, result.stdout);
         let loaded = suricata_loaded(&tool_log);
+        if loaded.is_some() {
+            loaded_rules = loaded;
+        }
         if let Some(loaded) = loaded {
             progress.set_rules(loaded);
             progress.stage(ScanTarget::CaptureSegment {
@@ -652,6 +704,12 @@ fn scan_with(staged: &Staged, work: &Path, tool: &str) -> Result<Report, String>
         } else {
             State::Unavailable
         };
+    }
+    if successful > 0
+        && let Some(coverage) = report.coverage.as_mut()
+    {
+        // What Suricata says it loaded; the rules offered if it said nothing.
+        coverage.evaluated = loaded_rules.unwrap_or(rule_lines.len() as u64);
     }
     if staged.captures.len() > 1 {
         report.warnings.push("Each capture segment is evaluated independently; streams crossing snapshot boundaries cannot be reassembled across segments.".into());
@@ -789,6 +847,7 @@ mod tests {
                 .collect(),
             journal: None,
             skipped_inputs: vec![],
+            unstaged: vec![],
             warnings: vec![],
             selection: "test".into(),
             no_rules: false,
@@ -967,6 +1026,145 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    /// One tool run that loads one rule and reports no alerts.
+    const LOADS_ONE_RULE: &str = "echo 'Info: detect: 1 rules successfully loaded, 0 rules failed' >&2\n: > \"$OUT/eve.json\"";
+
+    fn rules_scan(dir: &Path, rules: &str, warnings: &[&str]) -> Report {
+        let pcap = dir.join("capture.pcap");
+        fs::write(&pcap, pcap_header()).unwrap();
+        let tool = fake_suricata(dir, LOADS_ONE_RULE);
+        let mut staged = staged_over(dir, &[(&pcap, 3, true)]);
+        fs::write(&staged.ids_sources[0].path, rules).unwrap();
+        staged.warnings = warnings.iter().map(|text| (*text).to_owned()).collect();
+        scan_with(&staged, dir, &tool).unwrap()
+    }
+
+    #[test]
+    fn rules_that_cannot_load_are_counted_by_reason_and_the_scan_stays_complete() {
+        let dir = temp_dir("coverage");
+        let rules = "alert tcp any any -> any any (msg:\"ok\"; sid:1; rev:1;)\n\
+            alert tls any any -> any any (msg:\"fp\"; ja3.hash; content:\"x\"; sid:2; rev:1;)\n\
+            alert tcp any any -> any any (msg:\"ds\"; dataset:isset,bad,type string,state /x; sid:3; rev:1;)\n\
+            alert tcp any any -> any any (msg:\"again\"; sid:1; rev:2;)\n\
+            alert tcp any any -> any any (msg:\"none\"; rev:1;)\n";
+        let report = rules_scan(
+            &dir,
+            rules,
+            &[
+                "4001: requires an external dataset",
+                "4002: duplicate rule id; the later copy was not evaluated",
+                "pack:x 1 was not evaluated: missing",
+            ],
+        );
+        let coverage = report.coverage.as_ref().unwrap();
+        assert_eq!(
+            (
+                coverage.evaluated,
+                coverage.tls_fingerprint,
+                coverage.dataset,
+                coverage.duplicate_sid,
+                coverage.no_sid
+            ),
+            (1, 1, 2, 2, 1),
+            "{coverage:?}"
+        );
+        assert_eq!(coverage.not_loadable(), 6);
+        assert_eq!(coverage.listed.len(), 6);
+        assert_eq!(report.skipped_rules, 6);
+        assert_eq!(report.state, State::Complete, "{:?}", report.warnings);
+        assert_eq!(report.format_version, REPORT_FORMAT_VERSION);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn counts_stay_complete_when_far_more_rules_fail_than_are_listed() {
+        let dir = temp_dir("many");
+        let mut rules = String::from("alert tcp any any -> any any (msg:\"ok\"; sid:1; rev:1;)\n");
+        for sid in 10..10 + 350 {
+            rules.push_str(&format!(
+                "alert tcp any any -> any any (msg:\"d\"; dataset:isset,x,type string; sid:{sid}; rev:1;)\n"
+            ));
+        }
+        let report = rules_scan(&dir, &rules, &[]);
+        let coverage = report.coverage.as_ref().unwrap();
+        assert_eq!(coverage.dataset, 350);
+        assert_eq!(coverage.listed.len(), COVERAGE_LIST_LIMIT);
+        assert_eq!(coverage.unlisted, 350 - COVERAGE_LIST_LIMIT as u64);
+        assert_eq!(report.skipped_rules, 350);
+        assert!(report.skipped.len() <= 100 + 3, "{}", report.skipped.len());
+        assert_eq!(report.state, State::Complete);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_capped_evidence_preview_is_a_note_but_a_lost_finding_is_partial() {
+        let mut report = Report::empty(Engine::Ids, test_identity());
+        let capture = Capture {
+            path: "/s".into(),
+            original: "/a.pcap".into(),
+            complete: true,
+            packets: 100,
+        };
+        let mut rules = std::collections::BTreeMap::new();
+        rules.insert(7, "alert".to_owned());
+        let mut budget = super::super::RuleTextBudget::new();
+        for frame in 1..=20 {
+            let event = serde_json::json!({"event_type":"alert","pcap_cnt":frame,"alert":{"signature_id":7,"signature":"t"}});
+            alert(&event, &capture, &rules, &mut budget, &mut report);
+        }
+        assert_eq!(report.findings[0].count, 20, "the count is complete");
+        assert_eq!(report.findings[0].evidence.len(), 16);
+        assert_eq!(
+            report.coverage.as_ref().unwrap().evidence_preview_limit,
+            Some(16)
+        );
+        assert_eq!(report.state, State::Complete);
+        // Out of room for another rule: its count is gone, so the scan is incomplete.
+        report.findings.resize(
+            MATCH_LIMIT,
+            Finding {
+                rule_id: "filler".into(),
+                title: String::new(),
+                severity: String::new(),
+                source: String::new(),
+                license: String::new(),
+                author: String::new(),
+                mitre: vec![],
+                count: 1,
+                evidence: vec![],
+                events: vec![],
+                details: String::new(),
+                rule_text: String::new(),
+            },
+        );
+        let other = serde_json::json!({"event_type":"alert","pcap_cnt":1,"alert":{"signature_id":8,"signature":"u"}});
+        alert(&other, &capture, &rules, &mut budget, &mut report);
+        assert_eq!(report.state, State::Partial);
+    }
+
+    #[test]
+    fn a_failed_segment_cleanup_is_partial() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir("cleanup");
+        let pcap = dir.join("capture.pcap");
+        fs::write(&pcap, pcap_header()).unwrap();
+        // Take away the right to remove the output directory once the tool has written it.
+        let tool = fake_suricata(&dir, &format!("{LOADS_ONE_RULE}\nchmod 555 \"$OUT/..\""));
+        let staged = staged_over(&dir, &[(&pcap, 3, true)]);
+        let report = scan_with(&staged, &dir, &tool).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        if dir.join("ids-0").exists() {
+            assert_eq!(report.state, State::Partial);
+            assert!(
+                report
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.contains("IDS segment cleanup failed"))
+            );
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn emerging_threats_pack_loads_and_reads_a_pcap() {
         let Ok(tool) = std::env::var("ANTINOMIE_SURICATA") else {
@@ -1010,15 +1208,15 @@ mod tests {
         }
         let dataset = skipped
             .iter()
-            .filter(|line| line.contains("dataset"))
+            .filter(|rule| rule.reason == CoverageReason::Dataset)
             .count();
         let fingerprints = skipped
             .iter()
-            .filter(|line| line.contains("fingerprint"))
+            .filter(|rule| rule.reason == CoverageReason::TlsFingerprint)
             .count();
         let duplicates = skipped
             .iter()
-            .filter(|line| line.contains("duplicate"))
+            .filter(|rule| rule.reason == CoverageReason::DuplicateSid)
             .count();
         assert!(!rules.is_empty(), "the pack emitted no rules");
         let work = std::env::temp_dir().join(format!("ant-ids-{}", std::process::id()));
@@ -1261,6 +1459,7 @@ mod tests {
             }],
             journal: None,
             skipped_inputs: vec![],
+            unstaged: vec![],
             warnings: vec![],
             selection: "et-test".into(),
             no_rules: false,

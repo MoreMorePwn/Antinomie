@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Selection profiles a scan reads: digests, snapshots and their manifests.
-use super::*;
+use super::{exclusions::DUPLICATE_RULE_REASON, *};
 
 /// Digest of the profile [`snapshot_from`] builds for the same inputs.
 pub fn selection_digest_of(
@@ -440,10 +440,9 @@ fn copy_selected(
             if !counts.seen.insert(rule.id.clone()) {
                 counts.excluded += 1;
                 counts.excluded_ids.push(rule.id.clone());
-                counts.warnings.push(format!(
-                    "{}: duplicate rule id; the later copy was not evaluated",
-                    rule.id
-                ));
+                counts
+                    .warnings
+                    .push(format!("{}: {DUPLICATE_RULE_REASON}", rule.id));
                 continue;
             }
             kept.push(rule);

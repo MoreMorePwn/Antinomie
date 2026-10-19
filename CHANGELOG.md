@@ -41,6 +41,24 @@ it runs.
   Sigma finding says how many of its matched events rely on an inferred field,
   and the warning that Sigma events are converted from the syscall trace and
   may not cover everything a Sysmon or auditd log would hold stays.
+- **Detection is "partial" only when a scan really is incomplete.** An IDS or
+  Sigma scan is now Partial only when its time or rule budget ran out (Sigma:
+  90 s, 4096 rules), the evidence was still being captured, the result or its
+  provenance could not be saved, the event journal was truncated, an IDS
+  segment could not be cleaned up, a finding or match could not be kept, a
+  selected rule file could not be staged, or Sigma stopped on an error partway through. Rules an engine cannot use are
+  counted instead. IDS shows `2,094 rules loaded · 7 not loadable (TLS
+  fingerprint 3, dataset 2, duplicate 1, no SID 1)`; Sigma shows `12 rules
+  evaluated · 33 not applicable (no matching events 30, backend 2, syntax 1)`.
+  Each has a collapsible list of the rules (the first 200; the counts include
+  all of them). A rule with no captured event carrying its fields is not
+  applicable to this run, which is different from a rule that failed to
+  convert. A capped evidence preview is a note (`Evidence preview limited to 16
+  per rule; match counts are complete.`), not Partial. Results now carry
+  explicit count fields (`format_version` 1, `coverage`) so nothing reads
+  warning text; older saved results still open. They are not migrated, so one
+  saved as partial only for these reasons keeps showing Partial until the scan
+  is run again.
 
 ## 0.6.2 — 2026-10-19
 

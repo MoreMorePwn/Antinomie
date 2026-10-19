@@ -17,6 +17,7 @@ use std::{
 
 mod catalog;
 mod engines;
+mod exclusions;
 mod files;
 mod groups;
 mod ids;
@@ -33,6 +34,8 @@ mod source_install;
 mod source_sigma;
 mod source_yara;
 mod yara;
+
+pub(crate) use exclusions::selection_exclusion;
 
 pub use self::{
     catalog::*, groups::*, index::*, packs::*, registry::*, requirements::*, selection::*,
