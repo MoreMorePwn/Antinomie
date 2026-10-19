@@ -464,16 +464,19 @@ fn counts_badges_and_pages_leave_failed_attempts_out_unless_shown() {
     let tab = |tab: FileTab| tab.slot() - 8;
     for show in [false, true] {
         let (counts, opened, tabs) = sink_run(show);
-        // Badges never include the refused calls, whatever the toggle says.
-        assert_eq!(counts.opened, 1);
+        // Change badges never include the refused calls, whatever the toggle
+        // says. Opened lists its failed opens with their result, so counts them.
+        assert_eq!(counts.opened, 2);
         assert_eq!(counts.tabs[tab(FileTab::Deleted)], 1);
         assert_eq!(counts.tabs[tab(FileTab::Attributes)], 1);
         assert_eq!(counts.tabs[tab(FileTab::Probed)], 1);
         assert_eq!(counts.tabs[tab(FileTab::Other)], 1);
         assert_eq!(counts.tabs[tab(FileTab::Created)], 0);
-        assert_eq!(counts.failed_attempts, 2);
+        // The toggle is for the change categories, not Opened.
+        assert_eq!(counts.failed_attempts, 1);
+        assert_eq!(opened.rows.len(), 2);
+        assert_eq!(opened.rows[1][6].text, "Failed (ENOENT)");
         // Rows follow the toggle.
-        assert_eq!(opened.rows.len(), if show { 2 } else { 1 });
         assert_eq!(
             tabs[tab(FileTab::Deleted)].rows.len(),
             if show { 2 } else { 1 }
@@ -663,4 +666,42 @@ fn an_index_stamped_by_an_older_format_is_rebuilt() {
         ..ScanRequest::default()
     };
     assert!(scan_archive_query(&temp.directory, None, false, &cancel, &stale).is_ok());
+}
+
+#[test]
+fn opened_and_read_draw_the_five_and_six_columns_the_cards_asked_for() {
+    let full = |headers: &[&str], keep: &[usize]| -> Vec<String> {
+        keep.iter()
+            .map(|&index| headers[index].to_owned())
+            .collect()
+    };
+    assert_eq!(
+        full(file_category::EVENT_HEADERS, file_tabs::OPENED_COLUMNS),
+        ["Time", "Path", "Process (PID / TID)", "Result", "Evidence"]
+    );
+    assert_eq!(
+        full(file_tabs::READ_HEADERS, file_tabs::READ_COLUMNS),
+        [
+            "Time",
+            "Path",
+            "Process (PID / TID)",
+            "Transferred / content",
+            "Result",
+            "Evidence"
+        ]
+    );
+    // A click on a sort header sorts the full rows by the same column.
+    assert_eq!(file_tabs::full_column(1, 1), 3);
+    assert_eq!(file_tabs::full_column(1, 4), 9);
+    assert_eq!(file_tabs::full_column(5, 5), 7);
+    assert_eq!(file_tabs::full_column(8, 2), 2);
+}
+
+#[test]
+fn a_failed_read_is_listed_with_its_result_while_the_toggle_is_off() {
+    let visibility = file_visibility::FileVisibility::default();
+    let mut row = vec![cell("t", theme::text(), true)];
+    row[0].values = vec![("file.result", RowValue::Text("failed".into()))];
+    assert!(!visibility.keeps(&row));
+    assert!(visibility.keeps_with(&row, true));
 }

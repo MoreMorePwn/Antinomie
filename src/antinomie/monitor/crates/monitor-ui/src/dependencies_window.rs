@@ -198,8 +198,12 @@ impl DependenciesWindow {
 }
 
 /// Whether a check passed, and how to say so: required tools are
-/// "Unavailable" when missing, optional ones "Optional, not installed".
+/// "Unavailable" when missing, optional ones "Optional, not installed", and an installed
+/// tool that is too old "Wrong version".
 pub(crate) fn state_of(check: &dependencies::Check) -> (egui::Color32, &'static str) {
+    if check.wrong_version {
+        return (theme::warn(), "Wrong version");
+    }
     match (&check.problem, check.optional) {
         (Some(_), false) => (theme::warn(), "Unavailable"),
         (Some(_), true) => (theme::muted(), "Optional, not installed"),
@@ -323,6 +327,7 @@ impl DependenciesWindow {
                         problem: None,
                         hint: "test fix",
                         optional: false,
+                        wrong_version: false,
                     })
                     .collect(),
                 ..Report::default()
@@ -430,6 +435,7 @@ mod tests {
                         problem: Some("missing".into()),
                         hint: "sudo apt install qemu-system-gui",
                         optional: false,
+                        wrong_version: false,
                     }],
                     ..Report::default()
                 })
@@ -450,5 +456,21 @@ mod tests {
             thread::yield_now();
         }
         assert!(window.open && window.report.as_ref().unwrap().has_missing());
+    }
+}
+
+#[cfg(test)]
+mod wrong_version_tests {
+    use super::*;
+
+    #[test]
+    fn an_installed_tool_that_is_too_old_reads_as_wrong_version() {
+        let mut window = DependenciesWindow::ready_for_test();
+        let check = &mut window.report.as_mut().unwrap().checks[0];
+        assert_eq!(state_of(check).1, "Ready");
+        check.problem = Some("QEMU 5.2 is older than 6.0".into());
+        assert_eq!(state_of(check).1, "Unavailable");
+        check.wrong_version = true;
+        assert_eq!(state_of(check).1, "Wrong version");
     }
 }

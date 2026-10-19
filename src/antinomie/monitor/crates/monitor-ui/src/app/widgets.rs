@@ -2,20 +2,9 @@
 //! Small shared widgets and formatting helpers.
 use super::*;
 
-/// Compact byte size for catalog rows and download progress.
+/// Byte size for catalog rows and download progress.
 pub(super) fn human_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit < UNITS.len() - 1 {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{bytes} B")
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
+    crate::values::file_size(bytes)
 }
 
 pub(super) fn unix_seconds() -> u64 {
@@ -330,4 +319,17 @@ pub(super) fn icon(ui: &mut egui::Ui, icon: &str, tooltip: &str, enabled: bool) 
     )
     .on_hover_text(tooltip)
     .clicked()
+}
+
+#[cfg(test)]
+mod size_tests {
+    #[test]
+    fn download_and_catalog_sizes_use_the_shared_bytes_format() {
+        assert_eq!(super::human_bytes(3_620), "3620 bytes (3.5 KB)");
+        assert_eq!(super::human_bytes(7), "7 bytes");
+        assert_eq!(
+            crate::network_view::format_bytes(5 * 1024 * 1024),
+            "5242880 bytes (5.0 MB)"
+        );
+    }
 }

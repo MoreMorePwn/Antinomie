@@ -67,9 +67,12 @@ impl Session {
                             reserved + if saved { packet.len() as u64 + 4 } else { 0 },
                         )),
                 );
-                if let Err(error) = run.assembler.ingest(&packet) {
-                    snapshot.health.parser_errors += 1;
-                    snapshot.last_error = Some(error.to_string());
+                match run.assembler.ingest(&packet) {
+                    Ok(event) => note_guest_loss(&mut snapshot.health, event.as_ref()),
+                    Err(error) => {
+                        snapshot.health.parser_errors += 1;
+                        snapshot.last_error = Some(error.to_string());
+                    }
                 }
                 saved
             } else {
@@ -80,9 +83,12 @@ impl Session {
                     &packet,
                     reserved,
                 );
-                if let Err(error) = self.assembler.ingest(&packet) {
-                    snapshot.health.parser_errors += 1;
-                    snapshot.last_error = Some(error.to_string());
+                match self.assembler.ingest(&packet) {
+                    Ok(event) => note_guest_loss(&mut snapshot.health, event.as_ref()),
+                    Err(error) => {
+                        snapshot.health.parser_errors += 1;
+                        snapshot.last_error = Some(error.to_string());
+                    }
                 }
                 self.pre_ack
                     .hold(root, self.guest_resources.cookie, &packet, started);
@@ -800,6 +806,14 @@ impl Session {
             len: count,
             full: count == TERMINAL_READ_SIZE && !eof,
         })
+    }
+}
+
+/// Keep the guest's own count of dropped credential and hash records: it
+/// counts since boot, so the latest figure is the total.
+pub(super) fn note_guest_loss(health: &mut Health, event: Option<&EventSummary>) {
+    if let Some(lost) = event.and_then(crate::kernel_notes::guest_lost) {
+        health.guest_note_lost = health.guest_note_lost.max(lost);
     }
 }
 

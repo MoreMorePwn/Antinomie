@@ -49,8 +49,8 @@ impl Worker {
         self.publish();
         let bytes = finished?;
         Ok(format!(
-            "network capture stopped ({:.1} MB)",
-            bytes as f64 / 1e6
+            "network capture stopped ({})",
+            crate::byte_size::file_size(bytes)
         ))
     }
     /// Start writing the running VM's RAM to a new memory dump; QEMU writes
@@ -198,8 +198,8 @@ impl Worker {
                     format!("memory dump failed: {error}")
                 } else {
                     format!(
-                        "memory dump written ({:.1} GB)",
-                        dump.bytes.unwrap_or(0) as f64 / 1e9
+                        "memory dump written ({})",
+                        crate::byte_size::file_size(dump.bytes.unwrap_or(0))
                     )
                 }
             }

@@ -346,6 +346,7 @@ fn late_catalog_reply_is_rejected_for_vm_and_roots_and_current_refresh_is_queued
                     directory: fixture.directory.join("old"),
                     file: None,
                     state: antinomie_monitor_core::RunArtifactState::WaitingForRootExit,
+                    deleted: None,
                 }],
                 ..Default::default()
             }),
@@ -460,6 +461,32 @@ fn acquired_catalog_finds_unopened_partial_cores_and_scopes_the_vm() {
         !fixture.directory.join("core-dumps").exists(),
         "discovery must not import or parse incomplete ELF files"
     );
+}
+
+#[test]
+fn a_deleted_on_exit_core_is_listed_as_a_deleted_row() {
+    let fixture = Fixture::new();
+    let directory = fixture.directory.join("runs/gone");
+    fs::create_dir_all(directory.join("core")).unwrap();
+    // What the backend writes once the user deleted the run's core.
+    let artifacts = antinomie_monitor_core::RunArtifacts {
+        run_id: "gone".into(),
+        vm_id: "chosen".into(),
+        boot_id: "boot".into(),
+        core_state: antinomie_monitor_core::RunArtifactState::Disabled,
+        core_deleted: true,
+        ..Default::default()
+    };
+    fs::write(
+        directory.join("artifacts.json"),
+        serde_json::to_vec(&artifacts).unwrap(),
+    )
+    .unwrap();
+    let found = catalog(std::slice::from_ref(&fixture.directory), Some("chosen")).unwrap();
+    assert_eq!(found.acquired.len(), 1);
+    assert_eq!(found.acquired[0].status(), artifacts.core_label());
+    assert_eq!(found.acquired[0].status(), "Deleted");
+    assert!(found.acquired[0].file.is_none());
 }
 
 #[test]
@@ -677,6 +704,7 @@ fn sidebar_selection_shows_unfinished_capture_without_old_core_context() {
         directory: directory.clone(),
         file: None,
         state: antinomie_monitor_core::RunArtifactState::WaitingForRootExit,
+        deleted: None,
     });
     let output = settle(&ctx, &mut fixture.view, size);
     let content = texts(&output);
@@ -1484,6 +1512,7 @@ fn cancel_process_core_shows_only_while_a_capture_is_in_progress_and_cancels_tha
         directory: fixture.directory.join("runs/waiting/core"),
         file: None,
         state,
+        deleted: None,
     };
     let button = |texts: &[(String, egui::Rect)]| {
         texts
@@ -1597,6 +1626,7 @@ fn acquired_core(
         directory: fixture.directory.join("runs/r1/core"),
         file: None,
         state,
+        deleted: None,
     }
 }
 
@@ -1670,7 +1700,10 @@ fn a_deleted_core_leaves_the_list_and_clears_the_viewer() {
     view.selected_directory = Some(core.directory.clone());
     view.acquired.push(core.clone());
     view.forget_core(&core.directory);
-    assert!(view.acquired.is_empty());
+    // The run's row stays, as a Deleted one with nothing left to open.
+    assert_eq!(view.acquired.len(), 1);
+    assert_eq!(view.acquired[0].status(), "Deleted");
+    assert!(view.acquired[0].file.is_none());
     assert!(view.selected.is_none() && view.selected_directory.is_none());
     // The imported record the fixture opened goes the same way.
     let dir = fixture.directory.clone();

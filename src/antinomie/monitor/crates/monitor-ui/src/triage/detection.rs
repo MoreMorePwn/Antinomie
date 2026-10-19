@@ -11,9 +11,11 @@ mod finding;
 mod header;
 mod inputs;
 mod journal;
+mod selection;
 
 use cards::{card_summary, match_cards, severity_color};
 use finding::{byte_preview, evidence_list, evidence_values, WindowKey};
+use selection::SelectionDigests;
 
 const FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::text("finding.rule", "Engine rule identifier"),
@@ -208,6 +210,8 @@ pub(super) struct View {
     digest_rx: Option<Receiver<(String, u64, u128, String)>>,
     digest_cache: [String; 3],
     digest_generation: u64,
+    /// The selection digests being computed off the UI thread.
+    selection_rx: Option<Receiver<SelectionDigests>>,
     /// Tool facts the cached digests were computed with.
     digest_facts: Option<antinomie_monitor_core::ruleset::ToolFacts>,
     ready_key: [String; 3],
@@ -224,6 +228,8 @@ pub(super) struct View {
     sets_open: [bool; 3],
     /// Whether each engine's scanned-input list is expanded.
     inputs_open: [bool; 3],
+    /// Which captures and cores in the scanned-input list are gone from disk.
+    presence: inputs::Presence,
     /// Findings whose Details window is open.
     windows: Vec<WindowKey>,
     /// The read-only viewer of the normalized event journal.
@@ -233,6 +239,10 @@ pub(super) struct View {
 }
 
 impl View {
+    /// Saved evidence was deleted: look at the listed captures and cores again.
+    pub(super) fn evidence_deleted(&mut self) {
+        self.presence.invalidate();
+    }
     fn reset(&mut self) {
         if let Some(cancel) = self.cancel.take() {
             cancel.store(true, Ordering::Relaxed);
@@ -251,6 +261,7 @@ impl View {
         self.counts = Default::default();
         self.references.clear();
         self.stats.clear();
+        self.presence.invalidate();
         self.rows = Default::default();
         self.filtered = Default::default();
         self.applied = Default::default();
@@ -577,6 +588,7 @@ impl View {
         if self.rx.is_some()
             || self.byte_rx.is_some()
             || self.digest_rx.is_some()
+            || self.selection_rx.is_some()
             || self.registry_rx.is_some()
             || self.pending.is_some()
         {
@@ -757,45 +769,6 @@ impl View {
             }
             break;
         }
-    }
-    fn current_digest(&mut self, ctx: &egui::Context, index: usize) -> String {
-        if self.settings.rules_root.is_empty() {
-            return String::new();
-        }
-        let Some(registry) = self.fresh_registry().cloned() else {
-            self.request_registry(ctx);
-            return "preparing".into();
-        };
-        let tools = antinomie_monitor_core::ruleset::ToolConfig::from_sigma_setting(
-            &self.settings.effective_sigma_python(),
-        );
-        let repaint = ctx.clone();
-        let Some(facts) = antinomie_monitor_core::ruleset::try_tool_facts(&tools, move || {
-            repaint.request_repaint_of(egui::ViewportId::ROOT)
-        }) else {
-            return "preparing".into();
-        };
-        let tools_changed = self.digest_facts.as_ref().is_some_and(|old| *old != facts);
-        if self.digest_generation != self.rules_generation
-            || self.digest_facts.as_ref() != Some(&facts)
-        {
-            for (slot, engine) in ENGINES.iter().enumerate() {
-                self.digest_cache[slot] = antinomie_monitor_core::ruleset::selection_digest_of(
-                    Path::new(&self.settings.rules_root),
-                    &registry,
-                    engine_key(*engine),
-                    &facts,
-                );
-            }
-            self.digest_generation = self.rules_generation;
-            self.digest_facts = Some(facts);
-        }
-        if tools_changed {
-            // A tool appeared, changed or went away: the selection is different
-            // even though no rule changed.
-            self.auto_key = Default::default();
-        }
-        self.digest_cache[index].clone()
     }
     fn fresh_registry(&self) -> Option<&antinomie_monitor_core::ruleset::Registry> {
         self.registry
@@ -1369,6 +1342,39 @@ mod tests {
         assert_eq!(first.len(), 64);
         assert_ne!(first, second);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_selection_digest_is_computed_off_the_ui_thread() {
+        let dir = std::env::temp_dir().join(format!("ant-ui-digest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        view.settings.rules_root = dir.display().to_string();
+        view.registry = Some(antinomie_monitor_core::ruleset::Registry::default());
+        view.registry_for = view.rules_generation;
+        let mut first = None;
+        let mut digest = String::new();
+        for _ in 0..400 {
+            digest = view.current_digest(&ctx, 0);
+            if first.is_none() && view.selection_rx.is_some() {
+                // The call that started the work did not wait for it.
+                first = Some(digest.clone());
+            }
+            if digest != "preparing" {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert_eq!(first.as_deref(), Some("preparing"));
+        assert_eq!(digest.len(), 64, "{digest}");
+        assert_eq!(
+            view.current_digest(&ctx, 0),
+            digest,
+            "kept for the generation"
+        );
+        assert!(view.selection_rx.is_none());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

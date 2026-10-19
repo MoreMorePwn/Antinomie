@@ -70,6 +70,16 @@ impl PackageManager {
 
 /// Package names per dependency, in `PackageManager::ALL` order:
 /// apt, dnf, pacman, zypper. KVM access is a group, not a package.
+///
+/// The dnf names were checked against packages.fedoraproject.org (qemu-system-
+/// x86-core, qemu-img, qemu-ui-gtk, guestfs-tools with virt-customize,
+/// wireshark-cli) and the zypper names against the openSUSE Tumbleweed oss
+/// repository (qemu-x86, qemu-tools, qemu-ui-gtk, guestfs-tools, wireshark,
+/// wireshark-ui-qt, zenity, bubblewrap, suricata, curl, util-linux). Not
+/// confirmed against an index: zypper `python3` (a capability that resolves to
+/// the current python3xx package), which of dnf `python3` / zypper
+/// `python3` carries `ensurepip`, and the pacman and apt names, which no
+/// package index was consulted for.
 pub const PACKAGES: &[(Dependency, [&str; 4])] = &[
     (
         Dependency::Qemu,
@@ -266,6 +276,7 @@ mod tests {
                     problem: missing.contains(&dependency).then(|| "missing".to_owned()),
                     hint: "",
                     optional: false,
+                    wrong_version: false,
                 })
                 .collect(),
             package_manager: Some(manager),

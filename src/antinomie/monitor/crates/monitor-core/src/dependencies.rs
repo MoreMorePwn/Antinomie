@@ -47,6 +47,9 @@ pub struct Check {
     pub hint: &'static str,
     /// Only one optional feature needs it; missing it is not a startup problem.
     pub optional: bool,
+    /// The tool is installed but older than the app needs; `problem` says which
+    /// version is the oldest it can drive.
+    pub wrong_version: bool,
 }
 
 /// Snapshot of runtime availability. Recheck after changing host packages.
@@ -122,7 +125,37 @@ fn tool(
             .then(|| format!("{} is missing or not executable", path.display())),
         hint,
         optional: false,
+        wrong_version: false,
     }
+}
+
+/// The oldest QEMU the app drives. The network capture adds its `filter-dump`
+/// object with `object-add` arguments given flat (`qom-type`, `id`, `netdev`,
+/// ...), which QEMU accepts from 6.0; earlier releases want them under `props`.
+/// Other tools have no minimum here: no code path needs a feature that only a
+/// newer TShark or Suricata has.
+pub const QEMU_MINIMUM: (u64, u64) = (6, 0);
+
+/// `major.minor` after the word "version" in a `--version` line.
+fn version_of(output: &str) -> Option<(u64, u64)> {
+    let rest = output.split_once("version")?.1.trim_start();
+    let mut numbers = rest
+        .split(|ch: char| !ch.is_ascii_digit() && ch != '.')
+        .next()?
+        .split('.');
+    Some((numbers.next()?.parse().ok()?, numbers.next()?.parse().ok()?))
+}
+
+/// Why an installed QEMU is too old; an unreadable version is not a problem.
+fn qemu_version_problem(qemu: &Path) -> Option<String> {
+    let output = probe_output(qemu, &["--version"], PROBE_TIMEOUT).ok()?;
+    let found = version_of(output.lines().next()?)?;
+    (found < QEMU_MINIMUM).then(|| {
+        format!(
+            "QEMU {}.{} is older than {}.{}, the oldest this app can drive",
+            found.0, found.1, QEMU_MINIMUM.0, QEMU_MINIMUM.1
+        )
+    })
 }
 
 /// Where IDS scans look for Suricata.
@@ -168,14 +201,21 @@ fn venv_problem() -> Option<String> {
 /// No packages, application data or guest disks are modified.
 pub fn check(options: &BackendOptions) -> Report {
     use Dependency::*;
+    let mut qemu = tool(
+        Qemu,
+        "QEMU",
+        "Start VMs",
+        &options.qemu,
+        "On Debian/Ubuntu: sudo apt install qemu-system-x86",
+    );
+    if qemu.problem.is_none()
+        && let Some(problem) = qemu_version_problem(&options.qemu)
+    {
+        qemu.problem = Some(problem);
+        qemu.wrong_version = true;
+    }
     let mut checks = vec![
-        tool(
-            Qemu,
-            "QEMU",
-            "Start VMs",
-            &options.qemu,
-            "On Debian/Ubuntu: sudo apt install qemu-system-x86",
-        ),
+        qemu,
         tool(
             QemuImg,
             "QEMU image tools",
@@ -227,6 +267,7 @@ pub fn check(options: &BackendOptions) -> Report {
                 .then(|| "wireshark is missing or not executable".to_owned()),
             hint: "On Debian/Ubuntu: sudo apt install wireshark",
             optional: true,
+            wrong_version: false,
         },
         Check {
             dependency: FileChooser,
@@ -237,6 +278,7 @@ pub fn check(options: &BackendOptions) -> Report {
                 .then(|| "zenity is missing or not executable".to_owned()),
             hint: "On Debian/Ubuntu: sudo apt install zenity",
             optional: true,
+            wrong_version: false,
         },
         Check {
             dependency: Suricata,
@@ -248,6 +290,7 @@ pub fn check(options: &BackendOptions) -> Report {
                 .then(|| "Suricata is not installed".to_owned()),
             hint: "On Debian/Ubuntu: sudo apt install suricata",
             optional: true,
+            wrong_version: false,
         },
         Check {
             dependency: PythonVenv,
@@ -256,6 +299,7 @@ pub fn check(options: &BackendOptions) -> Report {
             problem: venv_problem(),
             hint: "On Debian/Ubuntu: sudo apt install python3-venv",
             optional: true,
+            wrong_version: false,
         },
     ];
     if !options.headless {
@@ -266,6 +310,7 @@ pub fn check(options: &BackendOptions) -> Report {
             problem: gtk_problem(&options.qemu),
             hint: "On Debian/Ubuntu: sudo apt install qemu-system-gui",
             optional: false,
+            wrong_version: false,
         });
     }
     // Always report KVM, even when TCG is selected; it remains a recommendation
@@ -277,6 +322,7 @@ pub fn check(options: &BackendOptions) -> Report {
         problem: kvm_problem(),
         hint: "Enable hardware virtualization and access to /dev/kvm (kvm group; sign in again), or select TCG in VM settings",
         optional: false,
+        wrong_version: false,
     });
     Report {
         checks,
@@ -321,6 +367,9 @@ pub fn vm_requirements(options: &BackendOptions, launch: &VmLaunchOptions) -> Ve
 /// Revalidate launch requirements before allocating RAM or spawning a guest.
 pub(crate) fn require_vm(options: &BackendOptions, launch: &VmLaunchOptions) -> Result<(), String> {
     require_tool(&options.qemu, "qemu-system-x86")?;
+    if let Some(problem) = qemu_version_problem(&options.qemu) {
+        return Err(format!("{problem}; install a newer QEMU"));
+    }
     require_tool(&options.qemu_img, "qemu-utils")?;
     if !options.headless
         && let Some(problem) = gtk_problem(&options.qemu)
@@ -341,8 +390,13 @@ pub(crate) fn require_vm(options: &BackendOptions, launch: &VmLaunchOptions) -> 
 }
 
 fn display_help(qemu: &Path, timeout: Duration) -> Result<String, String> {
-    let mut child = Command::new(qemu)
-        .args(["-display", "help"])
+    probe_output(qemu, &["-display", "help"], timeout)
+}
+
+/// Standard output of `program args`, bounded in time and size.
+fn probe_output(program: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
+    let mut child = Command::new(program)
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -361,7 +415,7 @@ fn display_help(qemu: &Path, timeout: Duration) -> Result<String, String> {
                     Ok(0) => break,
                     Ok(len) => {
                         if output.len() + len > PROBE_OUTPUT_SIZE {
-                            return Err("QEMU display probe exceeded 16 KiB output limit".into());
+                            return Err("QEMU probe exceeded 16 KiB output limit".into());
                         }
                         output.extend_from_slice(&buffer[..len]);
                     }
@@ -372,7 +426,7 @@ fn display_help(qemu: &Path, timeout: Duration) -> Result<String, String> {
             }
             if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
                 if !status.success() {
-                    return Err(format!("QEMU display probe exited with {status}"));
+                    return Err(format!("QEMU probe exited with {status}"));
                 }
                 // Drain the last bytes written between the read and wait.
                 loop {
@@ -382,7 +436,7 @@ fn display_help(qemu: &Path, timeout: Duration) -> Result<String, String> {
                             output.extend_from_slice(&buffer[..len])
                         }
                         Ok(_) => {
-                            return Err("QEMU display probe exceeded 16 KiB output limit".into());
+                            return Err("QEMU probe exceeded 16 KiB output limit".into());
                         }
                         Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
                         Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -390,10 +444,10 @@ fn display_help(qemu: &Path, timeout: Duration) -> Result<String, String> {
                     }
                 }
                 return String::from_utf8(output)
-                    .map_err(|_| "QEMU display help is not UTF-8".into());
+                    .map_err(|_| "QEMU probe output is not UTF-8".into());
             }
             if Instant::now() >= deadline {
-                return Err("QEMU display probe timed out after its deadline".into());
+                return Err("QEMU probe timed out after its deadline".into());
             }
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -428,6 +482,7 @@ mod tests {
             problem: problem.map(str::to_owned),
             hint: "On Debian/Ubuntu: sudo apt install suricata",
             optional,
+            wrong_version: false,
         };
         let optional = Report {
             checks: vec![
@@ -506,6 +561,56 @@ mod tests {
     }
 
     #[test]
+    fn a_qemu_older_than_the_minimum_is_a_wrong_version_not_a_missing_tool() {
+        assert_eq!(
+            version_of("QEMU emulator version 11.0.3 (Debian 1:11.0.3+ds-2)"),
+            Some((11, 0))
+        );
+        assert_eq!(version_of("QEMU emulator version 5.2.0"), Some((5, 2)));
+        assert_eq!(version_of("none\ngtk"), None);
+        let old = Fixture::new("echo 'QEMU emulator version 5.2.0 (Debian 1:5.2+dfsg-11)'");
+        let problem = qemu_version_problem(&old.executable()).unwrap();
+        assert!(
+            problem.contains("5.2") && problem.contains("6.0"),
+            "{problem}"
+        );
+        let options = BackendOptions {
+            qemu: old.executable(),
+            qemu_img: old.executable(),
+            headless: true,
+            force_tcg: true,
+            ..Default::default()
+        };
+        let checked = check(&options);
+        let qemu = checked
+            .checks
+            .iter()
+            .find(|check| check.dependency == Dependency::Qemu)
+            .unwrap();
+        assert!(qemu.wrong_version && qemu.problem.is_some());
+        assert!(
+            require_vm(&options, &VmLaunchOptions::default())
+                .unwrap_err()
+                .contains("older than 6.0")
+        );
+        for output in [
+            "QEMU emulator version 6.0.0",
+            "QEMU emulator version 11.0.3",
+            "unreadable",
+        ] {
+            let fine = Fixture::new(&format!("echo '{output}'"));
+            assert_eq!(qemu_version_problem(&fine.executable()), None, "{output}");
+        }
+        let checked = check(&BackendOptions::default());
+        assert!(
+            checked
+                .checks
+                .iter()
+                .all(|check| { check.dependency == Dependency::Qemu || !check.wrong_version })
+        );
+    }
+
+    #[test]
     fn non_executable_and_missing_tools_are_not_available() {
         let fixture = Fixture::new("exit 0");
         fs::set_permissions(fixture.executable(), fs::Permissions::from_mode(0o600)).unwrap();
@@ -570,6 +675,7 @@ mod tests {
                 problem: Some("missing".into()),
                 hint: "sudo apt install curl",
                 optional: false,
+                wrong_version: false,
             }],
             ..Report::default()
         };

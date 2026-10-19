@@ -22,10 +22,16 @@ impl Default for FileVisibility {
 
 impl FileVisibility {
     pub fn keeps(self, row: &[Cell]) -> bool {
+        self.keeps_with(row, self.show_failed)
+    }
+
+    /// Like [`Self::keeps`], with `show_failed` decided by the caller: the
+    /// Opened and Read tables always list failed attempts.
+    pub fn keeps_with(self, row: &[Cell], show_failed: bool) -> bool {
         let Some(first) = row.first() else {
             return true;
         };
-        if !self.show_failed
+        if !show_failed
             && first.values.iter().any(|(key, value)| {
                 *key == "file.result" && matches!(value, RowValue::Text(text) if text == "failed")
             })

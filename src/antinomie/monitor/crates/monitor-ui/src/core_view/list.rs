@@ -310,7 +310,7 @@ impl CoreView {
                     let title = crate::evidence::title(ui, &core.directory, &fallback);
                     let selected = self.selected_directory.as_ref() == Some(&core.directory)
                         || self.selected.as_ref().is_some_and(|record| record.dir == core.directory);
-                    let state = crate::app::core_capture_status(core.state);
+                    let state = core.status();
                     let color = match core.state {
                         antinomie_monitor_core::RunArtifactState::Failed => crate::theme::error(),
                         antinomie_monitor_core::RunArtifactState::Partial
@@ -321,8 +321,10 @@ impl CoreView {
                         .on_hover_text(format!("{title}\n{state}\n{}", core.directory.display()));
                     let core_file = core.file.clone();
                     row.context_menu(|ui| {
-                        crate::evidence::menu(ui, &core.directory);
                         crate::query::table_row_menu(ui, filter_id, &acquired_filter_row(ui, core));
+                        // A deleted core has no files left to open or delete.
+                        if core.deleted.is_some() { return; }
+                        crate::evidence::menu(ui, &core.directory);
                         core_file_menu(ui, core_file.as_deref(), &mut file_action);
                         core_project_menu(ui, &core.directory, self.job.is_none(), &mut project_action);
                         let capturing = (core.state.in_progress()
@@ -634,7 +636,7 @@ fn acquired_filter_row(
         &core.directory,
         &core.run_id,
         &format!("Run {}", core.run_id),
-        crate::app::core_capture_status(core.state),
+        core.status(),
         CoreRowMetrics::default(),
     );
     row.extend([

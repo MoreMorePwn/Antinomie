@@ -36,6 +36,7 @@ impl<'a> Facts<'a> {
         } else if health.dropped > 0
             || health.ui_dropped > 0
             || health.storage_dropped_packets > 0
+            || health.guest_note_lost > 0
             || health.shedding
             || self.failed_sends.is_some_and(|count| count > 0)
             || !self.async_runs.is_empty()

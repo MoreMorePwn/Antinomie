@@ -38,11 +38,7 @@ fn fetched_at(seconds: u64) -> String {
 }
 
 fn size_text(bytes: u64) -> String {
-    if bytes >= 1024 * 1024 {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{} KB", bytes.div_ceil(1024))
-    }
+    crate::values::file_size(bytes)
 }
 
 fn note(ui: &mut egui::Ui, text: impl Into<String>, color: egui::Color32) {
@@ -403,5 +399,14 @@ impl Model {
                 "Removed {id}. Earlier scan results keep their own record."
             )))
         });
+    }
+}
+
+#[cfg(test)]
+mod size_tests {
+    #[test]
+    fn rule_pack_sizes_use_the_shared_bytes_format() {
+        assert_eq!(super::size_text(2048), "2048 bytes (2.0 KB)");
+        assert_eq!(super::size_text(3 * 1024 * 1024), "3145728 bytes (3.0 MB)");
     }
 }

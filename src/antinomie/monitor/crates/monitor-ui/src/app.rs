@@ -21,6 +21,7 @@ mod panels;
 mod recording;
 mod rules;
 mod run_kill;
+mod run_labels;
 mod run_selector;
 mod session;
 mod sidebar;
@@ -322,6 +323,8 @@ pub struct MonitorApp {
     cpu_history: crate::summary::CpuHistory,
     /// What the disk said about the capture Triage shows; see `triage_pcap`.
     triage_pcap: std::cell::RefCell<triage_pcap::PcapLookup>,
+    /// The state of the selected run's saved captures and core.
+    run_labels: run_labels::RunLabels,
     run_tree: Option<(String, crate::archive::ProcessTreeResult)>,
     run_tree_pending: Option<String>,
     archive_total: Option<u64>,
@@ -501,6 +504,7 @@ impl MonitorApp {
             triage: Default::default(),
             cpu_history: Default::default(),
             triage_pcap: Default::default(),
+            run_labels: Default::default(),
             run_tree: None,
             run_tree_pending: None,
             archive_total: None,

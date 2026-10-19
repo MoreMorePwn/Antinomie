@@ -1837,3 +1837,14 @@ fn delete_evidence_runs_in_the_backend_inside_the_vms_recording_folder() {
     backend.shutdown().unwrap();
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn the_guest_lost_counter_reaches_health_and_never_goes_down() {
+    use crate::kernel_notes::tests::lost_note;
+    let mut health = Health::default();
+    for lost in [3, 9, 4] {
+        note_guest_loss(&mut health, Some(&lost_note(lost)));
+    }
+    note_guest_loss(&mut health, None);
+    assert_eq!(health.guest_note_lost, 9);
+}

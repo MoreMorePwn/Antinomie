@@ -223,3 +223,17 @@ fn pairing_gives_each_call_its_notes_in_event_order() {
     assert_eq!(order, [5, 9]);
     assert!(rows[0].async_events.is_empty() && rows[0].task_exit.is_none());
 }
+
+#[test]
+fn the_guest_lost_counter_reads_from_the_latest_hash_record_only() {
+    let hash = note(HASH_KEY, HASH_LAYOUT, hash_bytes(1, 0, 0));
+    assert_eq!(guest_lost(&hash), Some(3));
+    let creds = note(CREDS_KEY, CREDS_LAYOUT, creds_bytes([1; 12], [0; 3]));
+    assert_eq!(guest_lost(&creds), None);
+}
+
+pub(crate) fn lost_note(lost: u32) -> EventSummary {
+    let mut bytes = hash_bytes(1, 0, 0);
+    bytes[72..76].copy_from_slice(&lost.to_le_bytes());
+    note(HASH_KEY, HASH_LAYOUT, bytes)
+}

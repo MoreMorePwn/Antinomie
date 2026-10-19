@@ -97,6 +97,7 @@ pub(crate) fn app() -> MonitorApp {
         triage: Default::default(),
         cpu_history: Default::default(),
         triage_pcap: Default::default(),
+        run_labels: Default::default(),
         run_tree: None,
         run_tree_pending: None,
         archive_total: None,

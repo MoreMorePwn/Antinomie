@@ -13,6 +13,22 @@ pub(super) const READ_HEADERS: &[&str] = &[
     "Access",
     "Evidence",
 ];
+/// The Opened table shows only these columns of [`EVENT_HEADERS`]: time, path,
+/// PID/TID, result, evidence. The rest stay in Details.
+pub(super) const OPENED_COLUMNS: &[usize] = &[0, 3, 5, 6, 9];
+/// The Read table shows time, path, PID/TID, content, result and evidence of
+/// [`READ_HEADERS`]; Location and Access stay in Details.
+pub(super) const READ_COLUMNS: &[usize] = &[0, 1, 2, 3, 4, 7];
+/// The column of the full row behind column `shown` of a table's slot.
+pub(super) fn full_column(slot: usize, shown: usize) -> usize {
+    let columns = match slot {
+        1 => OPENED_COLUMNS,
+        5 => READ_COLUMNS,
+        _ => return shown,
+    };
+    columns.get(shown).copied().unwrap_or(shown)
+}
+
 pub(super) const CHANGED_HEADERS: &[&str] = &[
     "Time",
     "Path",
@@ -52,23 +68,6 @@ impl FileTab {
             Self::Probed => "Metadata probed",
             Self::Other => "Other",
             Self::Changed => "Changed files",
-        }
-    }
-
-    /// Hover text naming the operations a tab gathers.
-    pub(super) fn hint(self) -> &'static str {
-        match self {
-            Self::Opened => "open, openat, openat2, creat that succeeded, with access mode",
-            Self::Created => "O_CREAT that made the file, creat, mkdir, mknod, memfd_create, O_TMPFILE; inferred when the path was not seen earlier",
-            Self::Read => "read, readv, pread64, preadv and the source of kernel-side copies",
-            Self::Written => "write, writev, pwrite64, pwritev, truncate, ftruncate, fallocate, O_TRUNC",
-            Self::Deleted => "unlink, unlinkat, rmdir",
-            Self::Renamed => "rename, renameat, renameat2: old path to new path",
-            Self::Executed => "execve, execveat",
-            Self::Attributes => "chmod and chown family, utime family (timestamps), extended attributes",
-            Self::Probed => "stat family, statx, access, faccessat, readlink",
-            Self::Other => "link, symlink, sendfile, copy_file_range, splice, FICLONE, executable or shared writable mappings, getdents, inotify, fanotify, flock, fcntl locks",
-            Self::Changed => "One row per file: what happened to it, from created to deleted",
         }
     }
 
@@ -115,7 +114,6 @@ impl TriageView {
         self.file_tabs(ui);
         let tab = self.files;
         let index = tab.slot();
-        ui.weak(tab.hint());
         let (retained, total) = self.scan.as_ref().map_or((0, 0), |scan| {
             let (rows, omitted) = scan.file_rows(tab);
             (rows, rows as u64 + omitted)
@@ -129,7 +127,13 @@ impl TriageView {
         match tab {
             FileTab::Read => {
                 let rows = file_category::with_time(&scan.read, clock);
-                table(ui, "triage-read", file_tabs::READ_HEADERS, &rows);
+                compact(
+                    ui,
+                    "triage-read",
+                    file_tabs::READ_HEADERS,
+                    &rows,
+                    READ_COLUMNS,
+                );
             }
             FileTab::Changed => {
                 egui::ScrollArea::horizontal()
@@ -157,10 +161,33 @@ impl TriageView {
                     &scan.file_tabs[index - 8].rows
                 };
                 let rows = file_category::with_time(source, clock);
-                table(ui, tab.table_id(), EVENT_HEADERS, &rows);
+                if tab == FileTab::Opened {
+                    compact(ui, tab.table_id(), EVENT_HEADERS, &rows, OPENED_COLUMNS);
+                } else {
+                    table(ui, tab.table_id(), EVENT_HEADERS, &rows);
+                }
             }
         }
     }
+}
+
+/// `headers` and `rows` with only the columns at `keep` drawn. Details still
+/// shows the selected row in full.
+fn compact(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[Vec<Cell>], keep: &[usize]) {
+    let shown_headers: Vec<&str> = keep.iter().map(|&index| headers[index]).collect();
+    let shown: Vec<Vec<Cell>> = rows
+        .iter()
+        .map(|row| {
+            keep.iter()
+                .filter_map(|&index| row.get(index).cloned())
+                .collect()
+        })
+        .collect();
+    egui::ScrollArea::horizontal()
+        .id_salt((id, "columns"))
+        .auto_shrink([false, true])
+        .show(ui, |ui| table_rows(ui, id, &shown_headers, &shown));
+    details::refresh(ui.ctx(), id, headers, rows);
 }
 
 impl ArchiveScan {
@@ -238,7 +265,12 @@ impl TabSink {
         hits: &[file_category::Hit],
     ) -> Result<(), String> {
         let failed = file_category::outcome(call).failed();
-        if failed && !hits.is_empty() {
+        // Opened and Read list failed attempts with their result; the toggle
+        // is for the change categories.
+        let toggled = |hit: &&file_category::Hit| {
+            !matches!(hit.category.tab(), FileTab::Opened | FileTab::Read)
+        };
+        if failed && hits.iter().any(|hit| toggled(&hit)) {
             counts.failed_attempts += 1;
         }
         for hit in hits
@@ -246,7 +278,8 @@ impl TabSink {
             .filter(|hit| hit.category != file_category::Category::Read)
         {
             let tab = hit.category.tab();
-            if !failed {
+            let listed = !toggled(&hit);
+            if !failed || listed {
                 match tab {
                     FileTab::Opened => counts.opened += 1,
                     _ => counts.tabs[tab.slot() - 8] += 1,
@@ -256,7 +289,10 @@ impl TabSink {
             }
             let row = file_category::category_row(files, call, event, *hit);
             let at = Self::position(tab);
-            if request.file_visibility.keeps(&row) && self.queries[at].keep_table(&row[0].values) {
+            let keeps = request
+                .file_visibility
+                .keeps_with(&row, listed || request.file_visibility.show_failed);
+            if keeps && self.queries[at].keep_table(&row[0].values) {
                 self.pages[at].push(row)?;
             }
         }

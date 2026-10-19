@@ -443,6 +443,7 @@ impl MonitorApp {
                 let dropped = self.snapshot.health.dropped;
                 let attempted = self.snapshot.health.attempted;
                 let ui_dropped = self.snapshot.health.ui_dropped;
+                let guest_lost = self.snapshot.health.guest_note_lost;
                 let storage_dropped = self.snapshot.health.storage_dropped_packets;
                 let persisted = self.snapshot.health.persisted_len;
                 let quota = self.settings.quota_gib;
@@ -485,7 +486,7 @@ impl MonitorApp {
                         .on_hover_text(format!("UIL — User interface loss\n{ui_dropped} preview records could not be delivered to the interface."));
                     ui.add_space(16.0);
                     status_value_rtl(ui, "TRL", &dropped.to_string(), loss(dropped))
-                        .on_hover_text(format!("TRL — Transport loss\n{dropped} of {attempted} attempted records could not be handed over by the guest.\nCapture All shedding: {}",
+                        .on_hover_text(format!("TRL — Transport loss\n{dropped} of {attempted} attempted records could not be handed over by the guest.\nGuest hash and credential records dropped by the tracer: {guest_lost}\nCapture All shedding: {}",
                             if shedding { "dropping events" } else { "off" }));
                     version.on_hover_text(format!("Antinomie {APP_VERSION}"));
                     ui.add_space(16.0);

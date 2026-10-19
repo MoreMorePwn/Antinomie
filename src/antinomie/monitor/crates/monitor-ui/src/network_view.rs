@@ -516,11 +516,7 @@ fn empty_state(ui: &mut egui::Ui, text: &str) {
 }
 
 pub(crate) fn format_bytes(bytes: u64) -> String {
-    match bytes {
-        0..1024 => format!("{bytes} B"),
-        1024..1_048_576 => format!("{:.1} KiB", bytes as f64 / 1024.0),
-        _ => format!("{:.1} MiB", bytes as f64 / 1_048_576.0),
-    }
+    crate::values::file_size(bytes)
 }
 
 /// UTC date and time of Unix `seconds`.

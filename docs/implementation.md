@@ -405,7 +405,9 @@ run, because the join is lexical). `file_event` covers `O_CREAT|O_EXCL`,
 was not seen to exist earlier in the run, which is inferred and marked so.
 Sigma `service: auditd` rules are evaluated against auditd-style records under
 the journal category `auditd`: `SYSCALL` (`Syscall`, `a0`..`a3` as hex, `exit`,
-`success`, `pid`, `ppid`, `exe`, `comm`), `EXECVE` (`argc`, `a0`..`a15` from
+`success`, `pid`, `ppid`, `exe`, `comm`), `CWD` (`cwd`), `PROCTITLE` (`proctitle`:
+the arguments NUL-joined and hex-encoded, 128 bytes at most; only with a whole
+argument vector), `EXECVE` (`argc`, `a0`..`a15` from
 the captured argument vector), `PATH` (`name`, `nametype`) and `SOCKADDR`
 (`saddr`). The trace has no audit keys, credentials, file modes or inodes, so
 those fields are absent and a rule that needs one is reported as not

@@ -217,6 +217,7 @@ pub(super) fn observe_processes(
                     .filter_map(path_text)
                     .collect();
                 node.command_line = normalized::command_line(invocation, event);
+                node.proctitle = normalized::complete_argv(invocation, event);
             }
         }
         let args = entry
@@ -362,6 +363,7 @@ fn link_child(
                 node.comm.clone(),
                 node.argv.clone(),
                 node.command_line.clone(),
+                node.proctitle.clone(),
             )
         });
     let candidates: Vec<TaskKey> = nodes
@@ -375,10 +377,11 @@ fn link_child(
                 node.parent = Some(parent);
                 node.provisional = false;
                 if node.comm == "?" {
-                    if let Some((comm, argv, line)) = &inherited {
+                    if let Some((comm, argv, line, title)) = &inherited {
                         node.comm.clone_from(comm);
                         node.argv.clone_from(argv);
                         node.command_line.clone_from(line);
+                        node.proctitle.clone_from(title);
                     }
                 }
             }
@@ -403,6 +406,7 @@ fn link_child(
                                 .as_ref()
                                 .map_or_else(Vec::new, |image| image.1.clone()),
                             command_line: inherited.as_ref().and_then(|image| image.2.clone()),
+                            proctitle: inherited.as_ref().and_then(|image| image.3.clone()),
                             provisional: true,
                             ..TaskNode::default()
                         },

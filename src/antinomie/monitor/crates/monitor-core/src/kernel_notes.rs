@@ -235,6 +235,12 @@ impl FileHash {
     }
 }
 
+/// How many credential and hash records the guest has lost since boot, as the
+/// latest hash record of `event` reports it. Nothing else carries the count.
+pub fn guest_lost(event: &EventSummary) -> Option<u64> {
+    file_hash(event).map(|hash| u64::from(hash.lost))
+}
+
 /// The file hash record of `event`, when it is a complete one.
 pub fn file_hash(event: &EventSummary) -> Option<FileHash> {
     let data = payload(event, HASH_KEY, HASH_LAYOUT, HASH_SIZE)?;
@@ -275,4 +281,4 @@ pub fn file_hash(event: &EventSummary) -> Option<FileHash> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

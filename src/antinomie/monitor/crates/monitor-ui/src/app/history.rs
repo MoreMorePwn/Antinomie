@@ -384,7 +384,8 @@ impl MonitorApp {
         crate::run_recording::show(ui, &run);
         self.run_tree_view(ui, &run, viewport);
         ui.add_space(6.0);
-        enabled_features(ui, &run);
+        let labels = self.run_labels.of(ui.ctx(), &run);
+        enabled_features(ui, &run, labels);
         launch_details(ui, &run);
     }
 
@@ -810,7 +811,7 @@ pub(super) fn run_in_live_session(snapshot: &Snapshot, run: &RunSummary) -> bool
 
 /// What the run was started with: the static analyses and the capture
 /// options that were switched on, in the order the launch dialog lists them.
-fn enabled_features(ui: &mut egui::Ui, run: &RunSummary) {
+fn enabled_features(ui: &mut egui::Ui, run: &RunSummary, labels: Option<run_labels::Labels>) {
     let request = &run.request;
     let mut features = Vec::new();
     if request.analysis.enabled {
@@ -828,7 +829,16 @@ fn enabled_features(ui: &mut egui::Ui, run: &RunSummary) {
         (request.capture_network, "Network capture"),
     ] {
         if on {
-            features.push(label.to_owned());
+            // What became of the capture and the core, once the run saved them.
+            let state = labels.and_then(|labels| match label {
+                "Core dump on exit" => Some(labels.core),
+                "Network capture" => Some(labels.network),
+                _ => None,
+            });
+            features.push(match state {
+                Some(state) => format!("{label} · {state}"),
+                None => label.to_owned(),
+            });
         }
     }
     ui.strong("Analysis enabled");

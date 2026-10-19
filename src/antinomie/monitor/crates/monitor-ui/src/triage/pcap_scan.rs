@@ -622,7 +622,7 @@ pub(super) fn scan_pcap_query_observed(
             None => retention.into(),
         });
     }
-    index.coverage = format!("TShark HTTP/1 and DNS/UDP/TCP; {} capture frames; complete-record extent {}/{} octets; HTTP matches {http_count}, DNS matches {dns_count}; response correlation uses decoder frame links; attribution unknown. HTTPS, HTTP/2, HTTP/3 and encrypted DNS unavailable{}",
+    index.coverage = format!("TShark HTTP/1 and DNS/UDP/TCP; {} capture frames; complete-record extent {}/{} octets; HTTP matches {http_count}, DNS matches {dns_count}; response correlation uses decoder frame links; attribution unknown. TLS server names are read from handshakes; the content of HTTPS and HTTP/3 is encrypted, and cleartext HTTP/2 and encrypted DNS are not decoded{}",
         extent.packet_count, extent.complete_extent, extent.file_size,
         if pcap_open { "; live prefix watermark; final capture requires reanalysis" } else { "" });
     Ok(index)

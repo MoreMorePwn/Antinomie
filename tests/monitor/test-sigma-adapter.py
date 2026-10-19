@@ -107,6 +107,8 @@ class AdapterTests(unittest.TestCase):
             ("auditd", {"type": "SYSCALL", "Syscall": "personality", "a0": "40000", "exe": "/tmp/x"}, ["exe"]),
             ("auditd", {"type": "EXECVE", "argc": "2", "a0": "chmod", "a1": "777"}),
             ("auditd", {"type": "PATH", "name": "/etc/ld.so.preload", "nametype": "CREATE"}),
+            ("auditd", {"type": "CWD", "cwd": "/tmp/work"}, ["cwd"]),
+            ("auditd", {"type": "PROCTITLE", "proctitle": "63686D6F6400373737"}),
             ("process_creation", {"Image": "/bin/chmod"}),
         ])
         for query, expected in [
@@ -114,6 +116,8 @@ class AdapterTests(unittest.TestCase):
             ("SELECT * FROM logs WHERE type='EXECVE' COLLATE NOCASE AND a0='chmod' COLLATE NOCASE AND a1=777", 1),
             ("SELECT * FROM logs WHERE type='PATH' COLLATE NOCASE AND name='/etc/ld.so.preload' COLLATE NOCASE", 1),
             ("SELECT * FROM logs WHERE type='PATH' COLLATE NOCASE AND `key`='x'", 0),
+            ("SELECT * FROM logs WHERE type='CWD' COLLATE NOCASE AND cwd LIKE '/tmp/%' ESCAPE '\\'", 1),
+            ("SELECT * FROM logs WHERE type='PROCTITLE' COLLATE NOCASE AND proctitle='63686D6F6400373737'", 1),
         ]:
             total = adapter.matching_rows(connection, [query], "auditd")[0]
             self.assertEqual(total, expected, query)

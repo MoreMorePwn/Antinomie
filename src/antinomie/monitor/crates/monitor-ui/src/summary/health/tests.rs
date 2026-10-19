@@ -190,3 +190,17 @@ fn health_loss_rows_wrap_at_narrow_width_and_large_text() {
         }
     }
 }
+
+#[test]
+fn guest_hash_and_credential_drops_count_as_observed_loss() {
+    let mut snapshot = snapshot();
+    assert_eq!(
+        Facts::new(&snapshot, &[]).state(&snapshot.health).0,
+        "No recorded losses"
+    );
+    snapshot.health.guest_note_lost = 2;
+    assert_eq!(
+        Facts::new(&snapshot, &[]).state(&snapshot.health).0,
+        "Loss observed"
+    );
+}

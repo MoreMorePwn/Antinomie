@@ -58,9 +58,11 @@ impl CoreView {
                 let title =
                     crate::evidence::title(ui, &core.directory, &format!("Run {}", core.run_id));
                 crate::theme::section(ui, &title);
-                ui.label(crate::app::core_capture_status(core.state));
+                ui.label(core.status());
                 ui.add(egui::Label::new(format!("Run {}", core.run_id)).wrap());
-                let explanation = if core.file.is_some() {
+                let explanation = if core.deleted.is_some() {
+                    "This core was deleted. The run keeps its record."
+                } else if core.file.is_some() {
                     "Select this capture to open its currently recorded data."
                 } else if matches!(
                     core.state,
