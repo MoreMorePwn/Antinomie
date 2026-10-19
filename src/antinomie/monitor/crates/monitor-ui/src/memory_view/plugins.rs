@@ -33,10 +33,7 @@ impl MemoryView {
         match &self.catalog {
             Catalog::Ready(..) => {}
             Catalog::Loading(_) | Catalog::Unknown => {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.colored_label(theme::muted(), "Listing Volatility plugins…");
-                });
+                theme::loading_colored(ui, theme::muted(), "Listing Volatility plugins…");
             }
             Catalog::Failed(_) => {
                 let error = failed.unwrap_or_default();
@@ -52,8 +49,7 @@ impl MemoryView {
                                     self.catalog = Catalog::Unknown;
                                 }
                             } else if cx.volatility_installing {
-                                ui.spinner();
-                                ui.label("Installing Volatility 3…");
+                                theme::loading(ui, "Installing Volatility 3…");
                             } else {
                                 ui.label(
                                     "Memory analysis runs Volatility 3 on the system Python 3. \

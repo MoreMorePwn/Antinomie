@@ -338,10 +338,11 @@ pub(super) fn content(
             }
             let Some(scan) = &view.scan else {
                 presentation::frame().show(ui, |ui| {
-                    presentation::heading(
+                    presentation::heading_busy(
                         ui,
                         "Preparing run evidence",
                         "Whole-run counts appear after the recording is indexed.",
+                        true,
                     );
                 });
                 return;

@@ -423,10 +423,7 @@ pub(crate) fn progress_text(report: &AnalysisReport) -> Option<String> {
 /// A spinner and the progress line while `report` is still being analyzed.
 pub(crate) fn progress_banner(ui: &mut egui::Ui, report: &AnalysisReport) {
     if let Some(text) = progress_text(report) {
-        ui.horizontal_wrapped(|ui| {
-            ui.add(egui::Spinner::new());
-            ui.colored_label(crate::theme::blue(), text);
-        });
+        crate::theme::loading_colored(ui, crate::theme::blue(), text);
     }
 }
 

@@ -6,6 +6,12 @@ it runs.
 
 ## 0.6.2 — Unreleased
 
+- **Loading and in-progress text shows a spinning icon.** Everywhere the app
+  says it is loading, reading, checking, indexing, uploading or waiting for
+  something that is still running, a small spinner now sits left of the text,
+  such as in Triage, Static Analysis, Memory, Core dumps, the base images and
+  the rule manager. The spinner disappears when the work ends, so an idle
+  screen is not redrawn.
 - **Network filters in one place, with Details for captures.** Quick Search,
   Display Filter and Record Filter now sit in one collapsible Filters section,
   one labelled row each, and every box shows a gray `filter e.g. …` example.

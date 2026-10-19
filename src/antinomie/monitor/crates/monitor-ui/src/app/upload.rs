@@ -60,7 +60,7 @@ impl MonitorApp {
                 }
             }
             if self.folder_picker.checking() {
-                ui.weak("Checking file chooser…");
+                theme::loading_weak(ui, "Checking file chooser…");
             } else if !self.folder_picker.installed() {
                 ui.colored_label(
                     theme::muted(),
@@ -100,10 +100,7 @@ impl MonitorApp {
             });
         });
         if self.pending_upload.is_some() {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label("Uploading…");
-            });
+            theme::loading(ui, "Uploading…");
         } else if !self.running() {
             ui.colored_label(theme::muted(), "Start the selected VM to upload.");
         }

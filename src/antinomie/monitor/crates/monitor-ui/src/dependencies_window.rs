@@ -122,7 +122,7 @@ impl DependenciesWindow {
             .show(ctx, |ui| {
                 ui.label("Missing requirements block the actions listed below. You can still open saved recordings.");
                 if self.worker.is_some() {
-                    ui.horizontal(|ui| { ui.spinner(); ui.label("Checking this system…"); });
+                    crate::theme::loading(ui, "Checking this system…");
                 }
                 if let Some(error) = &self.error {
                     crate::activity::error(ui, error);

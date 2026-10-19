@@ -104,8 +104,11 @@ impl ProcessPicker {
                         self.reset();
                         action = Some(ProcessAction::Refresh(0));
                     }
+                    if self.pending.is_some() {
+                        crate::theme::spinner(ui);
+                    }
                     ui.label(if self.pending.is_some() {
-                        "Reading processes...".to_owned()
+                        "Reading processes…".to_owned()
                     } else {
                         page.map_or("Guest processes".into(), |page| {
                             format!("{} guest processes", page.processes.len())

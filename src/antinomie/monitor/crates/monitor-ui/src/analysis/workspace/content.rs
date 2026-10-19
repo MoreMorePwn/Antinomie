@@ -198,10 +198,7 @@ pub(super) fn show(
             crate::activity::error(ui, reason);
         }
         _ => {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label("Reading specimen content…");
-            });
+            crate::theme::loading(ui, "Reading specimen content…");
         }
     }
     action

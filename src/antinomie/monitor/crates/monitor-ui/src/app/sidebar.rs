@@ -249,7 +249,7 @@ impl MonitorApp {
                     .show(ui, |ui| {
                         if self.snapshot.bases_checking {
                             ui.horizontal(|ui| {
-                                ui.spinner();
+                                theme::spinner(ui);
                                 ui.label(
                                     RichText::new("Checking base images…").color(theme::muted()),
                                 )

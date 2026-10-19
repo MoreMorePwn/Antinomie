@@ -548,6 +548,12 @@ impl MonitorApp {
                                         );
                                         if active.is_some() {
                                             ui.label(RichText::new(word).color(color).strong());
+                                            if matches!(
+                                                self.snapshot.state,
+                                                VmState::Starting | VmState::Stopping
+                                            ) {
+                                                theme::spinner(ui);
+                                            }
                                         }
                                         ui.add(
                                             egui::Label::new(RichText::new(name).color(

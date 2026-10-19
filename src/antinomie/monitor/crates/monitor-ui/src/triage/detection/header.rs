@@ -109,6 +109,9 @@ impl View {
             ui,
             |ui| {
                 ui.set_max_width((ui.available_width() - 140.0).max(80.0));
+                if loading {
+                    theme::spinner(ui);
+                }
                 toggle = ui
                     .add(
                         egui::Button::new(
@@ -129,11 +132,11 @@ impl View {
         if open {
             ui.indent(("detector-rule-sets", index), |ui| {
                 if self.sets[index].is_empty() {
-                    ui.weak(if loading {
-                        "Reading installed packs…"
+                    if loading {
+                        theme::loading_weak(ui, "Reading installed packs…");
                     } else {
-                        "No packs or custom groups for this engine."
-                    });
+                        ui.weak("No packs or custom groups for this engine.");
+                    }
                 }
                 for set in &self.sets[index] {
                     ui.horizontal_wrapped(|ui| {
@@ -410,6 +413,47 @@ mod tests {
                 super::super::super::counts::Count::Unavailable
             );
         }
+    }
+
+    #[test]
+    fn rule_sets_loading_shows_a_spinner_only_while_the_registry_loads() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        view.sets_open[0] = true;
+        let (_tx, rx) = std::sync::mpsc::channel();
+        view.registry_rx = Some(rx);
+        let draw = |view: &mut View| {
+            frames(&ctx, 2, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| view.rule_sets(ui, 0));
+            })
+        };
+        let loading = draw(&mut view);
+        assert!(rendered_text(&loading).contains("Reading installed packs…"));
+        // The title button and the body line each carry one.
+        assert_eq!(theme::spinners_in(&loading), 2);
+        view.registry_rx = None;
+        let done = draw(&mut view);
+        assert!(rendered_text(&done).contains("No packs or custom groups"));
+        assert_eq!(theme::spinners_in(&done), 0);
+    }
+
+    #[test]
+    fn scanning_shows_a_spinner_beside_cancel() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        let (_tx, rx) = std::sync::mpsc::channel();
+        view.rx = Some(rx);
+        view.cancel = Some(Arc::new(AtomicBool::new(false)));
+        let draw = |view: &mut View| {
+            frames(&ctx, 2, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| view.scan_buttons(ui, 0, None));
+            })
+        };
+        let running = draw(&mut view);
+        assert!(rendered_text(&running).contains("Cancel"));
+        assert_eq!(theme::spinners_in(&running), 1);
+        view.rx = None;
+        assert_eq!(theme::spinners_in(&draw(&mut view)), 0);
     }
 
     fn panel_text(view: &mut View) -> String {

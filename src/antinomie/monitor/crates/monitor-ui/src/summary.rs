@@ -322,6 +322,9 @@ pub(crate) fn show(
                         );
                     }
                 } else {
+                    if active {
+                        theme::spinner(ui);
+                    }
                     ui.colored_label(
                         theme::muted(),
                         if active {

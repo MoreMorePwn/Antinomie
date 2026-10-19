@@ -232,7 +232,7 @@ impl SnapshotManager {
                 };
             }
             let Some(tree) = tree else {
-                ui.label("Loading snapshots…");
+                crate::theme::loading(ui, "Loading snapshots…");
                 ui.weak("Use Refresh if the snapshot list is unavailable.");
                 // The graph's room: the window keeps its size (and its
                 // close button its place) when the list arrives.

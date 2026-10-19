@@ -268,10 +268,7 @@ impl Model {
         let Some(facts) = ruleset::try_tool_facts(&self.tools, move || {
             repaint.request_repaint_of(egui::ViewportId::ROOT)
         }) else {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label("Checking the engine…");
-            });
+            theme::loading(ui, "Checking the engine…");
             return None;
         };
         ui.horizontal_wrapped(

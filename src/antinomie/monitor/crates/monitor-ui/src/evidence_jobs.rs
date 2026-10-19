@@ -171,8 +171,7 @@ impl EvidenceJobs {
                 .open(&mut open)
                 .show(ctx, |ui| {
                     if self.receiver.is_some() {
-                        ui.spinner();
-                        ui.label("Working…");
+                        crate::theme::loading(ui, "Working…");
                     }
                     if let Some(result) = &self.result {
                         match result {
