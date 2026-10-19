@@ -319,7 +319,6 @@ fn scan_core(
     for mapping in &mappings {
         let available = mapping.available_size.min(mapping.captured_size);
         if available < mapping.memory_size {
-            report.state = State::Partial;
             pass.gaps += 1;
         }
         let mut consumed = 0;
@@ -363,9 +362,6 @@ fn scan_core(
             )?;
             *pass.total += len as u64;
             consumed += len as u64;
-        }
-        if available > BLOCK_SIZE as u64 {
-            report.state = State::Partial;
         }
     }
     Ok(())
@@ -421,6 +417,9 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
     let mut total = 0;
     let analysis = request.directory.join("analysis");
     let mut executable = ScannedInput::new(InputKind::Executable, &analysis);
+    // Whether the engine got as far as scanning: a specimen that could not be
+    // read is skipped, one the engine failed on is failed.
+    let mut reached_engine = false;
     let specimen = (|| {
         let directory = &analysis;
         let saved = super::super::jobs::open_report(directory)?;
@@ -431,6 +430,7 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
         total += data.len() as u64;
+        reached_engine = true;
         let sha256 = record(
             &mut scanner,
             &data,
@@ -450,8 +450,11 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
         Ok((size, sha256)) => report.input(executable.size(size).sha256(sha256)),
         Err(error) => {
             report.warnings.push(format!("Executable: {error}"));
-            report.state = State::Partial;
-            report.input(executable.skipped(error));
+            report.input(if reached_engine {
+                executable.failed(format!("YARA failed: {error}"))
+            } else {
+                executable.skipped(error)
+            });
         }
     }
     let scanning = request.settings.scan_memory || request.settings.scan_recovered;
@@ -547,7 +550,6 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
                     );
                     if let Err(error) = &result {
                         report.warnings.push(format!("{label}: {error}"));
-                        report.state = State::Partial;
                     }
                     let blocks = pass.block_index - first;
                     report.input(inputs::memory_input(
@@ -555,7 +557,6 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
                     ));
                 }
                 report.warnings.push("Memory rules run on captured contiguous blocks up to 64 MiB. Missing pages are excluded; matches spanning blocks and whole-file conditions are not complete memory coverage.".into());
-                report.state = State::Partial;
             }
             if request.settings.scan_recovered {
                 let mut pending = artifacts
@@ -578,7 +579,6 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
                     let metadata = match fs::symlink_metadata(&path) {
                         Ok(metadata) => metadata,
                         Err(error) => {
-                            report.state = State::Partial;
                             if report.warnings.len() < 64 {
                                 report.warnings.push(error.to_string());
                             }
@@ -632,20 +632,37 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
                     ) {
                         Ok((size, sha256)) => report.input(input.size(size).sha256(sha256)),
                         Err(error) => {
-                            report.state = State::Partial;
                             if report.warnings.len() < 64 {
                                 report.warnings.push(format!("{}: {error}", path.display()));
                             }
-                            report.input(input.sized().skipped(error));
+                            report.input(input.sized().failed(format!("YARA failed: {error}")));
                         }
                     }
                 }
             }
         } else {
-            report.state = State::Partial;
             report
                 .warnings
                 .push("No owned memory/core artifacts recorded".into());
+            for (on, kind, name) in [
+                (
+                    request.settings.scan_memory,
+                    InputKind::MemoryDump,
+                    "memory",
+                ),
+                (
+                    request.settings.scan_recovered,
+                    InputKind::RecoveredFile,
+                    "files",
+                ),
+            ] {
+                if on {
+                    report.input(
+                        ScannedInput::new(kind, request.directory.join(name))
+                            .skipped("no memory dump or core file for this run"),
+                    );
+                }
+            }
         }
     }
     if report.scanned_objects == 0 {
@@ -779,9 +796,9 @@ mod tests {
         assert_eq!(
             kinds,
             [
-                (InputKind::Executable, InputOutcome::Scanned),
+                (InputKind::Executable, InputOutcome::Succeeded),
                 (InputKind::MemoryDump, InputOutcome::Skipped),
-                (InputKind::RecoveredFile, InputOutcome::Scanned),
+                (InputKind::RecoveredFile, InputOutcome::Succeeded),
             ],
             "{inputs:?}"
         );

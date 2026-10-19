@@ -116,7 +116,9 @@ fn physical_ram_matches_without_scanning_notes_or_inventing_virtual_addresses() 
         pass.block_index,
         pass.gaps,
     );
-    assert_eq!(input.outcome, InputOutcome::Partial);
+    // The engine finished what was captured; the gaps are a note, not a failure.
+    assert_eq!(input.outcome, InputOutcome::Succeeded);
+    assert!(input.reason.contains("missing from the dump"));
     assert_eq!(report.findings.len(), 1);
     assert_eq!(report.findings[0].title, "ram_only");
     assert!(matches!(
@@ -267,7 +269,7 @@ fn upstream_kobalos_rule_matches_ram_in_the_complete_scan_pipeline() {
         inputs
             .iter()
             .any(|input| input.kind == InputKind::MemoryDump
-                && input.outcome == InputOutcome::Scanned),
+                && input.outcome == InputOutcome::Succeeded),
         "{inputs:?}"
     );
     assert!(

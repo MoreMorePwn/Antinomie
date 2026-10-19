@@ -261,7 +261,6 @@ def scan(request, events_path):
                     total, evidence, evaluated, missing, event_ids = matching_rows(connection, queries, category)
                     if missing:
                         report["missing_field_events"] += int(missing)
-                        report["state"] = "partial"
                         if len(report["skipped"]) < 1000:
                             report["skipped"].append(str(rule.id or rule.title) + f": {missing} events lack fields used by this rule; missing values were not invented")
                     if not evaluated:

@@ -270,15 +270,90 @@ fn suricata_config(classification: &Path, reference: &Path, threshold: &Path) ->
     )
 }
 
-/// Lists every staged segment as skipped for `reason`, with those staging
-/// could not prepare.
+/// Lists every staged segment as skipped for `reason` (an empty one for
+/// having no packets), with those staging could not prepare.
 fn unscanned(report: &mut Report, staged: &Staged, reason: &str) {
     for capture in &staged.captures {
+        let reason = if capture.packets == 0 {
+            NO_PACKETS
+        } else {
+            reason
+        };
         report.input(capture_input(capture).skipped(reason));
     }
     for input in &staged.skipped_inputs {
         report.input(input.clone());
     }
+}
+
+/// Why an input with no packet records is not scanned.
+pub(super) const NO_PACKETS: &str = "no packets captured";
+
+/// Whether a capture file holds no packet record: a classic PCAP of just its
+/// 24-byte header (or a torn first record), or a pcapng with only its section
+/// and interface blocks. Anything unreadable or unrecognized is not called
+/// empty, so the engine still gets to report on it.
+pub(super) fn capture_is_empty(path: &Path) -> bool {
+    use std::io::{Seek, SeekFrom};
+    let Ok(mut file) = File::open(path) else {
+        return false;
+    };
+    let Ok(size) = file.metadata().map(|metadata| metadata.len()) else {
+        return false;
+    };
+    let mut magic = [0u8; 12];
+    if file.read_exact(&mut magic).is_err() {
+        // Shorter than any header: no packet can be in it.
+        return size < 24;
+    }
+    let word = |bytes: &[u8], little: bool| {
+        let bytes: [u8; 4] = bytes.try_into().unwrap_or_default();
+        if little {
+            u32::from_le_bytes(bytes)
+        } else {
+            u32::from_be_bytes(bytes)
+        }
+    };
+    if magic[..4] == [0x0a, 0x0d, 0x0d, 0x0a] {
+        // Section header; its byte-order magic says how every length reads.
+        let little = match magic[8..12] {
+            [0x4d, 0x3c, 0x2b, 0x1a] => true,
+            [0x1a, 0x2b, 0x3c, 0x4d] => false,
+            _ => return false,
+        };
+        let mut offset = 0u64;
+        // Enhanced (6), simple (3) and obsolete (2) packet blocks hold packets.
+        for _ in 0..4096 {
+            let mut head = [0u8; 8];
+            if file.seek(SeekFrom::Start(offset)).is_err() {
+                return false;
+            }
+            if file.read_exact(&mut head).is_err() {
+                return offset == size;
+            }
+            let (kind, length) = (
+                word(&head[..4], little),
+                u64::from(word(&head[4..], little)),
+            );
+            if matches!(kind, 2 | 3 | 6) {
+                return false;
+            }
+            if length < 12 || length % 4 != 0 {
+                return false;
+            }
+            offset += length;
+        }
+        return false;
+    }
+    let classic = matches!(
+        magic[..4],
+        [0xd4, 0xc3, 0xb2, 0xa1]
+            | [0xa1, 0xb2, 0xc3, 0xd4]
+            | [0x4d, 0x3c, 0xb2, 0xa1]
+            | [0xa1, 0xb2, 0x3c, 0x4d]
+    );
+    // One record header is 16 octets.
+    classic && size < 24 + 16
 }
 
 fn capture_input(capture: &super::runner::Capture) -> ScannedInput {
@@ -306,6 +381,30 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
         unscanned(&mut report, staged, "no rules enabled");
         return Ok(report);
     }
+    if staged.captures.iter().all(|capture| capture.packets == 0) {
+        // Nothing to read: Suricata is neither looked for nor started.
+        let mut report = Report::empty(Engine::Ids, staged.request.identity.clone());
+        report.state = State::Missing;
+        report.selection = staged.selection.clone();
+        if staged.captures.is_empty() && staged.skipped_inputs.is_empty() {
+            report.input(ScannedInput {
+                name: "Network capture".into(),
+                ..ScannedInput::new(InputKind::Capture, staged.request.directory.join("network"))
+                    .skipped("no network capture for this run")
+            });
+            report.warnings.push(
+                "Evidence missing: no saved run-owned PCAP segment. This is not a clean result."
+                    .into(),
+            );
+        } else {
+            report.warnings.push(
+                "Evidence missing: no capture with packets to scan. This is not a clean result."
+                    .into(),
+            );
+        }
+        unscanned(&mut report, staged, NO_PACKETS);
+        return Ok(report);
+    }
     let Some(tool) = suricata_tool() else {
         let mut report = Report::unavailable(
             Engine::Ids,
@@ -315,28 +414,27 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
         unscanned(&mut report, staged, "Suricata is not installed");
         return Ok(report);
     };
+    scan_with(staged, work, &tool)
+}
+
+/// The scan proper, with the Suricata executable already found.
+fn scan_with(staged: &Staged, work: &Path, tool: &str) -> Result<Report, String> {
     let libs = std::env::var("ANTINOMIE_SURICATA_LIBS").unwrap_or_default();
     let pair = [("LD_LIBRARY_PATH", libs.as_str())];
     let tool_env: &[(&str, &str)] = if libs.is_empty() { &[] } else { &pair };
     let mut report = Report::empty(Engine::Ids, staged.request.identity.clone());
     report.selection = staged.selection.clone();
-    let version = super::super::tools::run_with(
-        tool.as_str(),
-        &["-V"],
-        tool_env,
-        Duration::from_secs(20),
-        4096,
-        true,
-    )
-    .map(|run| {
-        run.stderr
-            .lines()
-            .chain(run.stdout.lines())
-            .find(|line| !line.is_empty())
-            .unwrap_or("suricata")
-            .to_owned()
-    })
-    .unwrap_or_else(|_| "suricata".into());
+    let version =
+        super::super::tools::run_with(tool, &["-V"], tool_env, Duration::from_secs(20), 4096, true)
+            .map(|run| {
+                run.stderr
+                    .lines()
+                    .chain(run.stdout.lines())
+                    .find(|line| !line.is_empty())
+                    .unwrap_or("suricata")
+                    .to_owned()
+            })
+            .unwrap_or_else(|_| "suricata".into());
     let mut rules = Vec::new();
     let mut seen_sids = std::collections::BTreeSet::new();
     let mut classification_bytes = None;
@@ -407,33 +505,31 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
         "HOME_NET is the private address ranges because this scan has no recorded guest address set. Rules that negate those groups can load; matches are limited to that assumption. VM-wide PCAP is not process attribution.".into(),
     );
     fs::write(&config, config_text).map_err(|error| error.to_string())?;
-    if staged.captures.is_empty() {
-        report.state = State::Missing;
-        report.warnings.push(
-            "Evidence missing: no saved run-owned PCAP segment. This is not a clean result.".into(),
-        );
-        return Ok(report);
-    }
     let deadline = Instant::now() + Duration::from_secs(100);
     let mut successful = 0;
+    let mut failed = 0;
     let capture_total = staged.captures.len() as u64;
     // Segments evaluated so far, and why the rest were not.
     let mut evaluated = 0;
     let mut stopped = "the scan stopped early";
     for (index, capture) in staged.captures.iter().enumerate() {
+        let mut row = capture_input(capture);
+        if capture.packets == 0 {
+            report.input(row.skipped(NO_PACKETS));
+            evaluated += 1;
+            continue;
+        }
         progress.stage(ScanTarget::CaptureSegment {
             index: index as u64 + 1,
             total: capture_total.max(1),
         });
         let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
-            report.state = State::Partial;
             report
                 .warnings
                 .push("IDS scan reached its 100 second budget".into());
             stopped = "the scan reached its 100 second budget";
             break;
         };
-        let mut row = capture_input(capture);
         let output = work.join(format!("ids-{index}"));
         crate::storage::private_dir(&output).map_err(|error| error.to_string())?;
         let strings = [&config, &capture.path, &rule_path, &output]
@@ -441,7 +537,7 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
             .into_iter()
             .collect::<Result<Vec<_>, _>>()?;
         let result = super::super::tools::run_with(
-            tool.as_str(),
+            tool,
             &[
                 "-v",
                 "-c",
@@ -463,7 +559,8 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
             true,
         )?;
         let tool_log = format!("{}\n{}", result.stderr, result.stdout);
-        if let Some(loaded) = suricata_loaded(&tool_log) {
+        let loaded = suricata_loaded(&tool_log);
+        if let Some(loaded) = loaded {
             progress.set_rules(loaded);
             progress.stage(ScanTarget::CaptureSegment {
                 index: index as u64 + 1,
@@ -487,36 +584,45 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
                 report.skipped.push(line.chars().take(300).collect());
             }
         }
-        if !result.success || result.timed_out {
-            report.state = State::Partial;
-            report.warnings.push(format!(
-                "Segment {}: Suricata failed or timed out; alerts are partial. {}",
-                index + 1,
-                result.stdout.chars().take(1024).collect::<String>()
-            ));
-            row = row.partial("Suricata failed or timed out; alerts are partial");
+        let failure = result.failure_text("Suricata", remaining);
+        if let Some(reason) = failure {
+            failed += 1;
+            report
+                .warnings
+                .push(format!("Segment {}: {reason}", index + 1));
+            row = row.failed(reason);
         } else {
             successful += 1;
             report.scanned_objects += capture.packets;
-        }
-        if !capture.complete {
-            report.state = State::Partial;
-            if row.outcome == InputOutcome::Scanned {
-                row = row.partial("still being captured; the complete prefix was scanned");
+            if let Some(loaded) = loaded {
+                row.detail = format!("{} · {} rules loaded", row.detail, group_digits(loaded));
+            }
+            if !capture.complete {
+                row = row.note(format!(
+                    "scanned the {} packets captured so far",
+                    group_digits(capture.packets)
+                ));
             }
         }
-        if let Err(error) = read_eve(
-            &output.join("eve.json"),
-            capture,
-            &rule_lines,
-            &mut budget,
-            &mut report,
-        ) {
-            report.state = State::Partial;
+        // A failed run can still have written alerts before it stopped.
+        if (row.outcome == InputOutcome::Succeeded || output.join("eve.json").exists())
+            && let Err(error) = read_eve(
+                &output.join("eve.json"),
+                capture,
+                &rule_lines,
+                &mut budget,
+                &mut report,
+            )
+        {
             report
                 .warnings
                 .push(format!("Segment {}: {error}", index + 1));
-            row = row.partial(format!("alerts could not be read: {error}"));
+            if row.outcome == InputOutcome::Succeeded {
+                successful -= 1;
+                failed += 1;
+                report.scanned_objects -= capture.packets;
+                row = row.failed(format!("alerts could not be read: {error}"));
+            }
         }
         report.input(row);
         evaluated += 1;
@@ -527,10 +633,12 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
             report
                 .warnings
                 .push(format!("IDS segment cleanup failed: {error}"));
+            stopped = "segment cleanup failed";
             break;
         }
         if report.warnings.len() >= 256 {
             report.state = State::Partial;
+            stopped = "the scan stopped at its warning limit";
             break;
         }
     }
@@ -538,15 +646,15 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
         report.input(capture_input(capture).skipped(stopped));
     }
     if successful == 0 {
-        report.state = State::Unavailable;
+        // Nothing completed: the evidence was never read, or the engine failed on all of it.
+        report.state = if failed == 0 {
+            State::Missing
+        } else {
+            State::Unavailable
+        };
     }
     if staged.captures.len() > 1 {
         report.warnings.push("Each capture segment is evaluated independently; streams crossing snapshot boundaries cannot be reassembled across segments.".into());
-        report.state = if report.state == State::Unavailable {
-            State::Unavailable
-        } else {
-            State::Partial
-        };
     }
     report.warnings.push("IDS sees captured plaintext and metadata; encrypted application contents are unavailable. Stream reassembly is capped at 1 MiB. VM-wide PCAP is not process attribution.".into());
     progress.flush();
@@ -640,6 +748,225 @@ mod tests {
 
     /// Loads the selected Emerging Threats tree with the Suricata named by
     /// `ANTINOMIE_SURICATA`. A missing variable is not an engine result.
+    fn test_identity() -> Identity {
+        Identity {
+            vm_id: "vm".into(),
+            boot_id: "boot".into(),
+            run_id: "run".into(),
+            root_cookie: 1,
+        }
+    }
+
+    /// One rule, and a staged request over `captures` as (file, packets, complete).
+    fn staged_over(work: &Path, captures: &[(&Path, u64, bool)]) -> Staged {
+        let rules = work.join("test.rules");
+        let text = b"alert tcp any any -> any any (msg:\"t\"; sid:1; rev:1;)\n";
+        fs::write(&rules, text).unwrap();
+        Staged {
+            request: Request {
+                engine: Engine::Ids,
+                identity: test_identity(),
+                directory: work.to_path_buf(),
+                settings: Settings::default(),
+                source_digest: None,
+                frozen: None,
+            },
+            sigma_sources: vec![],
+            yara_sources: vec![],
+            ids_sources: vec![super::super::runner::RuleFile {
+                path: rules,
+                name: "test.rules".into(),
+                sha256: crate::storage::sha256_hex(text),
+            }],
+            captures: captures
+                .iter()
+                .map(|(path, packets, complete)| Capture {
+                    path: path.to_path_buf(),
+                    original: path.to_path_buf(),
+                    complete: *complete,
+                    packets: *packets,
+                })
+                .collect(),
+            journal: None,
+            skipped_inputs: vec![],
+            warnings: vec![],
+            selection: "test".into(),
+            no_rules: false,
+            include_dir: None,
+        }
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("ant-ids-{name}-{}", crate::storage::unique_id()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A stand-in for Suricata: runs `body` with `$OUT` set to the `-l` directory
+    /// and `$ARGS` the arguments.
+    fn fake_suricata(dir: &Path, body: &str) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("fake-suricata");
+        fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\nARGS=\"$*\"\nwhile [ $# -gt 0 ]; do [ \"$1\" = -l ] && OUT=$2; shift; done\n{body}\n"
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path.display().to_string()
+    }
+
+    fn pcap_header() -> Vec<u8> {
+        let mut header = Vec::new();
+        header.extend_from_slice(&0xa1b2c3d4u32.to_le_bytes());
+        header.extend_from_slice(&[2, 0, 4, 0]);
+        header.extend_from_slice(&[0; 8]);
+        header.extend_from_slice(&65535u32.to_le_bytes());
+        header.extend_from_slice(&1u32.to_le_bytes());
+        assert_eq!(header.len(), 24);
+        header
+    }
+
+    fn pcapng_block(kind: u32, body: &[u8]) -> Vec<u8> {
+        let length = 12 + body.len() as u32;
+        let mut block = Vec::new();
+        block.extend_from_slice(&kind.to_le_bytes());
+        block.extend_from_slice(&length.to_le_bytes());
+        block.extend_from_slice(body);
+        block.extend_from_slice(&length.to_le_bytes());
+        block
+    }
+
+    #[test]
+    fn a_capture_without_packet_records_is_empty() {
+        let dir = temp_dir("empty");
+        let write = |name: &str, bytes: &[u8]| {
+            let path = dir.join(name);
+            fs::write(&path, bytes).unwrap();
+            path
+        };
+        // The 24-byte header the run in question left behind.
+        assert!(capture_is_empty(&write("header.pcap", &pcap_header())));
+        assert!(capture_is_empty(&write("nothing.pcap", b"")));
+        let mut one = pcap_header();
+        one.extend_from_slice(&[0; 16 + 4]);
+        assert!(!capture_is_empty(&write("one.pcap", &one)));
+        // pcapng: section and interface blocks only, then with an enhanced packet.
+        let mut section = vec![0x4d, 0x3c, 0x2b, 0x1a, 1, 0, 0, 0];
+        section.extend_from_slice(&u64::MAX.to_le_bytes());
+        let mut ng = pcapng_block(0x0a0d0d0a, &section);
+        ng.extend(pcapng_block(1, &[1, 0, 0, 0, 0xff, 0xff, 0, 0]));
+        assert!(capture_is_empty(&write("header.pcapng", &ng)));
+        ng.extend(pcapng_block(6, &[0; 20]));
+        assert!(!capture_is_empty(&write("packets.pcapng", &ng)));
+        // Unknown or missing files are left for the engine to report on.
+        assert!(!capture_is_empty(&write(
+            "text.pcap",
+            b"not a capture at all, just text"
+        )));
+        assert!(!capture_is_empty(&dir.join("absent.pcap")));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_empty_capture_is_skipped_and_suricata_is_not_started() {
+        let dir = temp_dir("skip");
+        let pcap = dir.join("capture.pcap");
+        fs::write(&pcap, pcap_header()).unwrap();
+        let staged = staged_over(&dir, &[(&pcap, 0, true)]);
+        let report = scan(&staged, &dir).unwrap();
+        let inputs = report.inputs.unwrap();
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].outcome, InputOutcome::Skipped);
+        assert_eq!(inputs[0].reason, "no packets captured");
+        assert_eq!(inputs[0].size, Some(24));
+        // No version probe, no rule loading: the report holds no engine facts.
+        assert!(report.sources.is_empty() && report.scanned_rules.is_none());
+        assert_eq!(report.state, State::Missing);
+        assert!(
+            !report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("partial"))
+        );
+        // A run with no capture at all says so on a row of its own.
+        let none = scan(&staged_over(&dir, &[]), &dir).unwrap();
+        let row = &none.inputs.unwrap()[0];
+        assert_eq!(row.outcome, InputOutcome::Skipped);
+        assert_eq!(row.reason, "no network capture for this run");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_suricata_failure_is_a_failed_input_with_its_error_lines_not_a_partial_result() {
+        let dir = temp_dir("fail");
+        let pcap = dir.join("capture.pcap");
+        fs::write(&pcap, pcap_header()).unwrap();
+        let tool = fake_suricata(
+            &dir,
+            "echo 'Notice: suricata: This is Suricata version 8.0.7 RELEASE'\necho 'Info: cpu: CPUs/cores online: 12'\necho 'Error: pcap: failed to get first packet timestamp. pcap_next_ex(): -2' >&2\necho 'Error: pcap: pcap file reader thread failed to initialize' >&2\nexit 1",
+        );
+        // The capture claims packets, so the engine does run.
+        let staged = staged_over(&dir, &[(&pcap, 3, true)]);
+        let report = scan_with(&staged, &dir, &tool).unwrap();
+        let row = &report.inputs.as_ref().unwrap()[0];
+        assert_eq!(row.outcome, InputOutcome::Failed);
+        assert_eq!(
+            row.reason,
+            "Suricata exited with code 1: Error: pcap: failed to get first packet timestamp. pcap_next_ex(): -2; Error: pcap: pcap file reader thread failed to initialize"
+        );
+        assert!(!row.reason.contains("Notice") && !row.reason.contains("Info"));
+        assert_ne!(report.state, State::Partial);
+        let all = report.warnings.join("\n");
+        assert!(
+            !all.contains("partial") && !all.contains("timed out; alerts"),
+            "{all}"
+        );
+        assert!(
+            all.contains("Segment 1: Suricata exited with code 1"),
+            "{all}"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_finished_scan_succeeds_with_notes_and_one_failure_does_not_spoil_the_rest() {
+        let dir = temp_dir("mixed");
+        let good = dir.join("good.pcap");
+        let live = dir.join("live.pcap");
+        let empty = dir.join("empty.pcap");
+        for path in [&good, &live, &empty] {
+            fs::write(path, pcap_header()).unwrap();
+        }
+        // The segment the capture calls `live` makes the tool fail.
+        let tool = fake_suricata(
+            &dir,
+            "case \"$ARGS\" in *live.pcap*) echo 'Error: boom' >&2; exit 2;; esac\necho 'Info: detect: 1 rule files processed. 52662 rules successfully loaded, 0 rules failed' >&2\n: > \"$OUT/eve.json\"",
+        );
+        let staged = staged_over(
+            &dir,
+            &[(&good, 1234, false), (&live, 5, true), (&empty, 0, true)],
+        );
+        let report = scan_with(&staged, &dir, &tool).unwrap();
+        let inputs = report.inputs.as_ref().unwrap();
+        assert_eq!(inputs[0].outcome, InputOutcome::Succeeded);
+        assert_eq!(
+            inputs[0].reason,
+            "scanned the 1,234 packets captured so far"
+        );
+        assert_eq!(inputs[0].detail, "1,234 packets · 52,662 rules loaded");
+        assert_eq!(inputs[1].outcome, InputOutcome::Failed);
+        assert_eq!(inputs[1].reason, "Suricata exited with code 2: Error: boom");
+        assert_eq!(inputs[2].outcome, InputOutcome::Skipped);
+        // Inputs that failed or were skipped do not make the result partial.
+        assert_eq!(report.state, State::Complete);
+        assert_eq!(report.scanned_objects, 1234);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn emerging_threats_pack_loads_and_reads_a_pcap() {
         let Ok(tool) = std::env::var("ANTINOMIE_SURICATA") else {
@@ -868,8 +1195,8 @@ mod tests {
         assert!(
             matches!(inputs, [input] if input.kind == InputKind::Capture
                 && input.path == positive
-                && input.outcome == InputOutcome::Scanned
-                && input.detail == "4 packets"
+                && input.outcome == InputOutcome::Succeeded
+                && input.detail.starts_with("4 packets")
                 && input.size.is_some()),
             "{inputs:?}"
         );

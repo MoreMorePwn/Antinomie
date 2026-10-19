@@ -405,6 +405,14 @@ fn stage(
                     if cancel.load(Ordering::Relaxed) {
                         return Err("cancelled".into());
                     }
+                    if super::ids::capture_is_empty(&path) {
+                        staged.skipped_inputs.push(
+                            super::ScannedInput::new(super::InputKind::Capture, &path)
+                                .sized()
+                                .skipped(super::ids::NO_PACKETS),
+                        );
+                        continue;
+                    }
                     let result = (|| {
                         let identity = CaptureIdentity::read(&path)?;
                         if total.saturating_add(identity.file_size) > 2 * 1024 * 1024 * 1024 {
@@ -425,8 +433,8 @@ fn stage(
                         snapshots.push(snapshot);
                         Ok::<_, String>(())
                     })();
+                    // The row carries the reason; it is not a selection warning.
                     if let Err(error) = result {
-                        staged.warnings.push(format!("{}: {error}", path.display()));
                         staged.skipped_inputs.push(
                             super::ScannedInput::new(super::InputKind::Capture, &path)
                                 .sized()
@@ -1008,18 +1016,30 @@ fn sigma(staged: &Staged, work: &Path) -> Result<Report, String> {
         staged.request.source_digest.as_deref(),
         staged.request.settings.partial,
     );
-    if !result.success || result.timed_out {
+    // A crash or timeout is a failed input with the adapter's own error lines;
+    // unmapped categories or missing fields in the journal are not.
+    if let Some(reason) = result.failure_text("Sigma adapter", Duration::from_secs(110)) {
         let mut report = Report::unavailable(
             Engine::Sigma,
             staged.request.identity.clone(),
-            "Local Sigma adapter failed or timed out; inspect the detector log.",
+            reason.clone(),
         );
-        report.input(input.skipped("the Sigma adapter failed or timed out"));
+        report.input(input.failed(reason));
         return Ok(report);
     }
     let data = read_bounded(work, Path::new("sigma-report.json"), REPORT_LIMIT)?;
     let mut report: Report = serde_json::from_slice(&data).map_err(|error| error.to_string())?;
-    report.inputs = Some(vec![input]);
+    let missing = report.state == State::Unavailable
+        && report
+            .warnings
+            .first()
+            .is_some_and(|warning| warning.starts_with("Local pySigma"));
+    report.inputs = Some(vec![if missing {
+        // The engine never evaluated the journal.
+        input.skipped("pySigma 2.x and its SQLite backend are not installed")
+    } else {
+        input
+    }]);
     Ok(report)
 }
 
