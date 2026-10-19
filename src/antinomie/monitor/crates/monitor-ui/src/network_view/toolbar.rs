@@ -205,10 +205,7 @@ impl NetworkView {
         }
         match registry {
             Some(FieldRegistry::Loading) => {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.colored_label(theme::muted(), "Loading installed TShark fields…");
-                });
+                theme::loading_colored(ui, theme::muted(), "Loading installed TShark fields…");
             }
             Some(FieldRegistry::Unavailable(error)) => {
                 crate::activity::warning(ui, error);
@@ -222,21 +219,18 @@ impl NetworkView {
             crate::activity::warning(ui, error);
         }
         if let Some(note) = &self.display_jump_note {
-            ui.horizontal(|ui| {
-                if note.starts_with("Locating frame") {
-                    ui.spinner();
-                }
+            if note.starts_with("Locating frame") {
+                theme::loading_colored(ui, theme::muted(), note.as_str());
+            } else {
                 ui.colored_label(theme::muted(), note);
-            });
+            }
         }
         if self.display_pending {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.colored_label(
-                    theme::muted(),
-                    "Applying display filter… Previous result stays visible.",
-                );
-            });
+            theme::loading_colored(
+                ui,
+                theme::muted(),
+                "Applying display filter… Previous result stays visible.",
+            );
         }
         if let Some(index) = &self.display_index {
             ui.horizontal_wrapped(|ui| {
@@ -289,8 +283,8 @@ impl NetworkView {
         if !shown_filter.is_empty() || cx.pending {
             ui.horizontal_wrapped(|ui| {
                 if cx.pending {
-                    ui.add(egui::Spinner::new());
-                    ui.colored_label(theme::muted(), "Waiting for the VM...");
+                    theme::spinner(ui);
+                    ui.colored_label(theme::muted(), "Waiting for the VM…");
                 }
                 if !shown_filter.is_empty() {
                     ui.colored_label(
