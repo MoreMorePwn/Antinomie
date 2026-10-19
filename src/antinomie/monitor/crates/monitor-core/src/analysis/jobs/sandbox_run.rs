@@ -50,73 +50,8 @@ pub(crate) fn run_sandboxed_with(
     reader.set_nonblocking(true).map_err(|e| e.to_string())?;
     let stderr = writer.try_clone().map_err(|e| e.to_string())?;
     let mut cmd = Command::new("/usr/bin/bwrap");
-    cmd.args([
-        "--unshare-all",
-        "--hostname",
-        "analysis",
-        "--unshare-user",
-        "--disable-userns",
-        "--die-with-parent",
-        "--new-session",
-        "--clearenv",
-        "--cap-drop",
-        "ALL",
-        "--ro-bind",
-        "/usr",
-        "/usr",
-    ]);
-    for path in ["/bin", "/sbin", "/lib", "/lib64"] {
-        if let Ok(target) = fs::read_link(path) {
-            cmd.arg("--symlink").arg(target).arg(path);
-        }
-    }
-    for path in [
-        "/lib",
-        "/lib64",
-        "/etc/alternatives",
-        "/etc/java-17-openjdk",
-        "/etc/java-21-openjdk",
-        "/etc/ld.so.cache",
-    ] {
-        if Path::new(path).exists() && fs::read_link(path).is_err() {
-            cmd.arg("--ro-bind").arg(path).arg(path);
-        }
-    }
-    cmd.arg("--ro-bind").arg(&account).arg("/etc/passwd");
-    cmd.args([
-        "--proc",
-        "/proc",
-        "--dir",
-        "/dev",
-        "--dev-bind",
-        "/dev/null",
-        "/dev/null",
-        "--dev-bind",
-        "/dev/urandom",
-        "/dev/urandom",
-        "--dev-bind",
-        "/dev/random",
-        "/dev/random",
-        "--symlink",
-        "/proc/self/fd",
-        "/dev/fd",
-        "--symlink",
-        "/proc/self/fd/0",
-        "/dev/stdin",
-        "--symlink",
-        "/proc/self/fd/1",
-        "/dev/stdout",
-        "--symlink",
-        "/proc/self/fd/2",
-        "/dev/stderr",
-        "--size",
-        "2147483648",
-        "--tmpfs",
-        "/tmp",
-        "--bind",
-    ])
-    .arg(writable)
-    .arg(writable);
+    crate::sandbox_profile::apply(&mut cmd, &account, &[], 2147483648);
+    cmd.arg("--bind").arg(writable).arg(writable);
     for path in mounts.paths {
         if path.exists() {
             cmd.arg("--ro-bind").arg(path).arg(path);
