@@ -316,6 +316,7 @@ impl Run {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        crate::process_tree::own_group(&mut command);
         let mut child = command
             .spawn()
             .map_err(|error| format!("mandatory bubblewrap isolation unavailable: {error}"))?;
