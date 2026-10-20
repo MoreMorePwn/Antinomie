@@ -21,9 +21,9 @@ pub(crate) fn validate_request(request: &ProcessCoreRequest) -> Result<(), Strin
         || request.target.task_cookie == 0
         || request.target.tgid == 0
         || request.max_size == 0
-        || request.max_size > 64 * 1024 * 1024
+        || u64::from(request.max_size) > crate::core_limits::CORE_MAX_SUPPORTED
         || request.timeout_ms == 0
-        || request.timeout_ms > 5000
+        || request.timeout_ms > crate::core_limits::CORE_TIMEOUT_MAX_MS
         || request
             .source_run_id
             .as_ref()
@@ -66,6 +66,24 @@ pub fn load(directory: &Path) -> Result<ProcessCoreCapture, String> {
             .is_some_and(|id| id.is_empty() || id.len() > 128)
         || record.stored_size > LOGICAL_LIMIT
         || record.guest_size.is_some_and(|size| size > LOGICAL_LIMIT)
+        || record
+            .requested_max_size
+            .is_some_and(|requested| requested < record.max_size)
+        || record
+            .guest_max_size
+            .is_some_and(|size| size > crate::core_limits::CORE_MAX_SUPPORTED)
+        || [
+            record.stored_bytes,
+            record.expected_size,
+            record.allocated_size,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|size| size > LOGICAL_LIMIT)
+        || record
+            .reason
+            .as_ref()
+            .is_some_and(|reason| reason.text.len() > 2048)
         || record
             .issue
             .as_ref()
@@ -218,6 +236,12 @@ mod tests {
             guest_handle: None,
             guest_status: None,
             issue: None,
+            requested_max_size: None,
+            guest_max_size: None,
+            stored_bytes: None,
+            expected_size: None,
+            allocated_size: None,
+            reason: None,
         }
     }
     #[test]
@@ -242,6 +266,45 @@ mod tests {
                 .len(),
             0
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn sizes_and_reason_round_trip_and_an_older_sidecar_still_loads() {
+        let root =
+            std::env::temp_dir().join(format!("ant-core-size-{}", crate::storage::unique_id()));
+        fs::create_dir(&root).unwrap();
+        let mut value = record(root.clone());
+        value.max_size = 128 << 20;
+        value.requested_max_size = Some(256 << 20);
+        value.guest_max_size = Some(128 << 20);
+        value.stored_bytes = Some(100 << 20);
+        value.expected_size = Some(134_660_096);
+        value.allocated_size = Some(100 << 20);
+        value.reason = Some(crate::core_limits::CoreReason::new(
+            crate::core_limits::CoreReasonCode::Budget,
+            Some(-27),
+            "budget",
+        ));
+        crate::storage::atomic_json(&root.join("core.json"), &value).unwrap();
+        let loaded = load(&root).unwrap();
+        assert_eq!(loaded.requested_max_size, Some(256 << 20));
+        assert_eq!(loaded.reason.unwrap().errno, Some(-27));
+        value.requested_max_size = Some(64 << 20);
+        crate::storage::atomic_json(&root.join("core.json"), &value).unwrap();
+        assert!(load(&root).is_err(), "requested may not be below accepted");
+        let mut old = serde_json::to_value(record(root.clone())).unwrap();
+        for key in [
+            "requested_max_size",
+            "guest_max_size",
+            "stored_bytes",
+            "expected_size",
+            "allocated_size",
+            "reason",
+        ] {
+            old.as_object_mut().unwrap().remove(key);
+        }
+        fs::write(root.join("core.json"), serde_json::to_vec(&old).unwrap()).unwrap();
+        assert!(load(&root).unwrap().reason.is_none());
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

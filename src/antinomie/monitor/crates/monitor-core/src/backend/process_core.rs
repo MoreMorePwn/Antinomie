@@ -2,13 +2,18 @@
 //! Bounded root-group ELF core acquisition. Immutable guest buffers are read by
 //! offset; launch and release side effects are never automatically replayed.
 use super::core_sink::{Action, Kind, Sink};
+use super::core_stream::{self, Assembled};
 use super::*;
+use crate::core_limits::{
+    CORE_LEGACY_SIZE, CORE_MAX_SUPPORTED, CoreLimits, CoreOutcome, CoreReason, CoreReasonCode,
+    guest_reason,
+};
 
 const STATUS: u32 = 0x1060;
-const READ: u32 = 0x1061;
 const RELEASE: u32 = 0x1062;
-/// Most bytes a handle may store (the guest's `max_size`).
-const LIMIT: u64 = 64 * 1024 * 1024;
+/// The budget of a run saved before it could be chosen (and of a guest without
+/// `CORE_CAPS`).
+const LEGACY_BUDGET: u64 = CORE_LEGACY_SIZE;
 /// Longest core file the guest reports: the stored bytes plus the holes
 /// (`ANTC_CORE_LOGICAL_MAX`).
 pub(super) const LOGICAL_LIMIT: u64 = crate::core_capture::LOGICAL_LIMIT;
@@ -29,7 +34,7 @@ impl SavedHandle {
             || self.source_run_id != run.id
             || self.core_id == 0
             || self.max_size == 0
-            || self.max_size > LIMIT
+            || self.max_size > CORE_MAX_SUPPORTED
             || self.root_cookie == 0
             || self.root_cookie != run.root_task_cookie
             || self.tgid == 0
@@ -60,18 +65,27 @@ pub(super) struct CoreStatus {
     pub(super) flags: u32,
     pub(super) tgid: u32,
     pub(super) thread_count: u32,
+    /// Bytes the guest holds, from the extended status; None without it.
+    pub(super) stored: Option<u64>,
 }
 impl CoreStatus {
-    fn parse(reply: &[u8], id: u64, cookie: u64, tgid: u32) -> Result<Self, String> {
-        Self::parse_mode(reply, id, cookie, tgid, false)
+    fn parse(
+        reply: &[u8],
+        id: u64,
+        cookie: u64,
+        tgid: u32,
+        extended: bool,
+    ) -> Result<Self, String> {
+        Self::parse_mode(reply, id, cookie, tgid, false, extended)
     }
     pub(super) fn parse_manual(
         reply: &[u8],
         id: u64,
         cookie: u64,
         tgid: u32,
+        extended: bool,
     ) -> Result<Self, String> {
-        Self::parse_mode(reply, id, cookie, tgid, true)
+        Self::parse_mode(reply, id, cookie, tgid, true, extended)
     }
     fn parse_mode(
         reply: &[u8],
@@ -79,10 +93,13 @@ impl CoreStatus {
         cookie: u64,
         tgid: u32,
         manual: bool,
+        extended: bool,
     ) -> Result<Self, String> {
-        if reply.len() != 80 {
+        // A lookup by identity answers with the 80 bytes whatever was asked.
+        if reply.len() != 80 && !(extended && reply.len() == 96) {
             return Err("invalid process-core status length".into());
         }
+        let extended = reply.len() == 96;
         let u64 = |offset| u64_at(reply, offset).map_err(|error| error.to_string());
         let u32 = |offset| u32_at(reply, offset).map_err(|error| error.to_string());
         let result = Self {
@@ -99,6 +116,7 @@ impl CoreStatus {
             flags: u32(64)?,
             tgid: u32(68)?,
             thread_count: u32(72)?,
+            stored: if extended { Some(u64(80)?) } else { None },
         };
         if id == 0
             || cookie == 0
@@ -121,6 +139,8 @@ impl CoreStatus {
             || result.thread_count > 256
             || !(-4095..=0).contains(&result.status)
             || u32(76)? != 0
+            || (extended
+                && (u64(88)? != 0 || result.stored.is_some_and(|stored| stored > result.size)))
             || (result.finish_ns != 0 && result.finish_ns < result.start_ns)
             || (result.state == 3
                 && (result.status != 0
@@ -160,6 +180,14 @@ pub(super) struct Transfer {
     artifacts_failed: bool,
     released: bool,
     arm_status: i32,
+    /// Why the core is not complete; the first reason found stays.
+    reason: Option<CoreReason>,
+    /// When the guest finished the core and the copy to the host began, and
+    /// how long the copy took once it was over.
+    copy_started: Option<Instant>,
+    copy_ms: Option<u64>,
+    /// The host's free space was checked against the core's size.
+    preflighted: bool,
 }
 impl Transfer {
     fn new(id: u64, max_size: u64, run: &RunSummary) -> Self {
@@ -186,18 +214,76 @@ impl Transfer {
             artifacts_failed: false,
             released: id == 0,
             arm_status: 0,
+            reason: None,
+            copy_started: None,
+            copy_ms: None,
+            preflighted: false,
         }
     }
+    /// The first reason sticks: a later one is usually its consequence.
+    fn set_reason(&mut self, code: CoreReasonCode, errno: Option<i32>, text: impl Into<String>) {
+        if self.reason.is_none() {
+            self.reason = Some(CoreReason::new(code, errno, text));
+        }
+    }
+    /// A terminal guest status is being copied, or its copy is being sealed.
+    pub(super) fn transferring(&self) -> bool {
+        self.target.is_none()
+            && self.initialized
+            && self.status.as_ref().is_some_and(|status| status.state >= 3)
+    }
+    /// What the run's artifacts say about this core's sizes and reason.
+    fn sync_summary(&self, summary: &mut RunArtifacts) {
+        summary.core_requested_size = Some(self.max_size);
+        summary.core_accepted_size = Some(self.max_size);
+        summary.core_expected_size = self
+            .status
+            .as_ref()
+            .map(|status| status.expected_size)
+            .filter(|&size| size > 0);
+        summary.core_saved_size = Some(self.allocated);
+        summary.core_logical_size = Some(self.offset);
+        summary.core_reason.clone_from(&self.reason);
+    }
+    fn guest_reason(&self, status: &CoreStatus, limits: &CoreLimits) -> Option<CoreReason> {
+        guest_reason(&CoreOutcome {
+            state: status.state,
+            status: status.status,
+            expected: status.expected_size,
+            size: status.size,
+            stored: status.stored,
+            flags: status.flags,
+            budget: self.max_size,
+            limits: *limits,
+        })
+    }
+    /// The recording quota ended the copy before the core was whole.
+    fn quota_error(&mut self, size: u64) -> String {
+        let text = format!(
+            "recording quota exhausted during process-core transfer; the core was cut at {} of {size} bytes",
+            self.offset
+        );
+        self.set_reason(CoreReasonCode::Quota, None, text.clone());
+        text
+    }
+    fn accepted_size(run: &RunSummary) -> u64 {
+        run.request.core_max_size.map_or(LEGACY_BUDGET, u64::from)
+    }
     pub(super) fn armed(reply: &[u8], run: &RunSummary) -> Result<Self, String> {
-        let (id, size) =
-            control::acquisition(reply).map_err(|error| format!("process-core arm: {error}"))?;
-        if size == 0 || size > LIMIT {
-            return Err("invalid core reservation size".into());
+        let (id, size) = control::acquisition_bounded(reply, CORE_MAX_SUPPORTED)
+            .map_err(|error| format!("process-core arm: {error}"))?;
+        // The guest reserves exactly what was asked; anything else means the
+        // two sides disagree about the budget, and the host will not guess.
+        if size == 0 || size != Self::accepted_size(run) {
+            return Err(format!(
+                "the guest reserved {size} bytes for the core, not the {} requested",
+                Self::accepted_size(run)
+            ));
         }
         Ok(Self::new(id, size, run))
     }
     pub(super) fn failed(reply: &[u8], run: &RunSummary, error: String) -> Self {
-        let mut transfer = Self::new(0, LIMIT, run);
+        let mut transfer = Self::new(0, Self::accepted_size(run), run);
         transfer.arm_status = u32_at(reply, 16).map_or(-5, |status| status as i32);
         transfer.finish_request(RunArtifactState::Failed, error);
         transfer
@@ -207,7 +293,11 @@ impl Transfer {
             "root_task_cookie":self.cookie,"tgid":self.tgid,"guest_handle":self.id,"guest_arm_status":self.arm_status,
             "executable":self.run.request.path,"state":state,"guest_status":self.status,
             "stored_size":self.offset,"sha256":self.sha256,"incomplete":state!=RunArtifactState::Complete,
-            "issue":issue,"max_size":self.max_size,"capture_timeout_ms":5000,"publication_generation":self.finish_generation,
+            "issue":issue,"max_size":self.max_size,"requested_size":self.max_size,"accepted_size":self.max_size,
+            "expected_size":self.status.as_ref().map(|status| status.expected_size),
+            "stored_bytes":self.status.as_ref().and_then(|status| status.stored),
+            "allocated_size":self.allocated,"reason":self.reason,"copy_ms":self.copy_ms,
+            "capture_timeout_ms":self.run.request.core_timeout_ms.unwrap_or(5000),"publication_generation":self.finish_generation,
             "scope":"native Linux x86-64 root thread group; Linux filtered memory",
             "deadline_limit":"guest page faults and thread rendezvous do not guarantee a strict wall-clock deadline",
             "progress_limit":"in-progress core.json is a checkpoint; stored_size/hash become authoritative after the final durable seal"})
@@ -222,6 +312,9 @@ impl Transfer {
         }
         if self.target.is_none() {
             self.last_activity = Instant::now();
+            self.copy_ms = self
+                .copy_started
+                .map(|started| started.elapsed().as_millis() as u64);
         }
         if state != RunArtifactState::Complete {
             self.sink.seal();
@@ -244,7 +337,7 @@ impl Transfer {
             || saved.root_cookie != run.root_task_cookie
             || saved.tgid != run.pid
             || saved.max_size == 0
-            || saved.max_size > LIMIT
+            || saved.max_size > CORE_MAX_SUPPORTED
         {
             return Err("restored core handle identity mismatch".into());
         }
@@ -303,7 +396,9 @@ impl Session {
         if receipt.kind == Kind::Init {
             core.initialized = true;
         }
+        core.sync_summary(&mut owner.summary);
         if let Err(error) = receipt.result {
+            core.set_reason(CoreReasonCode::HostWrite, None, error.clone());
             owner.issue(error.clone());
             if receipt.kind == Kind::Finish {
                 core.target = Some((RunArtifactState::Failed, error));
@@ -363,6 +458,7 @@ impl Session {
             if !issue.is_empty() {
                 owner.issue(issue);
             }
+            core.sync_summary(&mut owner.summary);
             let mut final_summary = owner.summary.clone();
             final_summary.core_state = if core.artifacts_failed {
                 RunArtifactState::Failed
@@ -437,10 +533,15 @@ impl Session {
         {
             core.root_exit_observed.get_or_insert_with(Instant::now);
         }
+        // Right after a restore the guest has not been asked yet.
+        let Some(limits) = self.core_limits else {
+            return Ok(());
+        };
         if core.status.as_ref().is_none_or(|status| status.state <= 2) {
+            let extended = limits.stored_status;
             let Some(reply) = self.core_readonly(
                 STATUS,
-                &control::with_session(core.id),
+                &control::core_status(core.id, extended),
                 snapshot,
                 sender,
                 core.last_activity,
@@ -448,7 +549,7 @@ impl Session {
             else {
                 return Ok(());
             };
-            let status = CoreStatus::parse(&reply, core.id, cookie, core.tgid)?;
+            let status = CoreStatus::parse(&reply, core.id, cookie, core.tgid, extended)?;
             let state = status.state;
             core.status = Some(status);
             core.last_activity = Instant::now();
@@ -471,42 +572,52 @@ impl Session {
             owner.summary.core_state = RunArtifactState::InProgress;
             queue_artifacts(owner)?;
         }
-        let status = core.status.as_ref().ok_or("core status missing")?;
+        let status = core.status.clone().ok_or("core status missing")?;
+        if !core.preflighted {
+            core.preflighted = true;
+            core.copy_started = Some(Instant::now());
+            self.core_preflight(owner, core, &status)?;
+        }
         if core.offset == status.size {
             let complete = status.state == 3 && status.flags & 8 == 0;
+            if let Some(reason) = core.guest_reason(&status, &limits) {
+                core.reason.get_or_insert(reason);
+            }
+            let issue = match (&core.reason, complete) {
+                (_, true) => String::new(),
+                (Some(reason), false) => reason.text.clone(),
+                (None, false) => {
+                    "guest retained an incomplete process core; only its available prefix is saved"
+                        .into()
+                }
+            };
             core.finish_request(
                 if complete {
                     RunArtifactState::Complete
                 } else {
                     RunArtifactState::Partial
                 },
-                if complete {
-                    String::new()
-                } else if status.state == 3 && status.flags & 8 != 0 {
-                    "guest saved a complete ELF file with a coverage gap or missing thread context"
-                        .into()
-                } else {
-                    "guest retained an incomplete process core; only its available prefix is saved"
-                        .into()
-                },
+                issue,
             );
             return Ok(());
         }
-        let capacity = (status.size - core.offset)
-            .min(u64::from(control::SPECIMEN_CHUNK_SIZE))
-            .min(self.available()) as u32;
-        if capacity == 0 {
-            return Err("recording quota exhausted during process-core transfer".into());
+        let depth = if limits.advertised {
+            core_stream::READ_DEPTH
+        } else {
+            1
+        };
+        let requests = core_stream::plan(core.offset, status.size, depth, self.available());
+        if requests.is_empty() {
+            return Err(core.quota_error(status.size));
         }
-        let total = status.size;
-        let args = control::specimen_read(core.id, core.offset, capacity);
-        let Some(reply) = self.core_readonly(READ, &args, snapshot, sender, core.last_activity)?
+        let Some(replies) =
+            self.core_read_burst(core.id, &requests, snapshot, sender, core.last_activity)?
         else {
             return Ok(());
         };
-        let chunk = match control::core_chunk(&reply, core.offset, total, capacity)? {
-            control::CoreChunk::Data(chunk) => chunk,
-            control::CoreChunk::Hole(len) => {
+        let data = match core_stream::assemble(&requests, &replies, status.size)? {
+            Assembled::Data(data) => data,
+            Assembled::Hole(len) => {
                 // Zeros the guest never stored: a sparse range, no quota used.
                 core.sink.submit(Action::Hole {
                     offset: core.offset,
@@ -517,11 +628,10 @@ impl Session {
                 return Ok(());
             }
         };
-        let retained_len = chunk.len().min(self.available() as usize);
+        let retained_len = data.len().min(self.available() as usize);
         if retained_len == 0 {
-            return Err("recording quota exhausted during process-core transfer".into());
+            return Err(core.quota_error(status.size));
         }
-        let data = &chunk[..retained_len];
         if core.allocated + retained_len as u64 > core.max_size {
             return Err("guest process core stored more than its accepted reservation".into());
         }
@@ -533,21 +643,44 @@ impl Session {
         {
             return Err("guest process core is not a native little-endian x86-64 ELF core".into());
         }
+        let cut = retained_len < data.len();
+        let mut data = data;
+        data.truncate(retained_len);
         if core.sink.submit(Action::Write {
             offset: core.offset,
-            data: data.to_vec(),
+            data,
             metadata: core.metadata(RunArtifactState::InProgress, None),
         })? {
             core.reserved_len = retained_len as u64;
             self.core_reserved_len = self.core_reserved_len.saturating_add(core.reserved_len);
-            if retained_len < chunk.len() {
-                core.finish_request(
-                    RunArtifactState::Partial,
-                    "recording quota exhausted; retained available prefix".into(),
-                );
+            if cut {
+                let text = "recording quota exhausted; retained available prefix";
+                core.set_reason(CoreReasonCode::Quota, None, text);
+                core.finish_request(RunArtifactState::Partial, text.into());
             }
         }
         core.last_activity = Instant::now();
+        Ok(())
+    }
+    /// Before the copy starts: say up front what the recording quota will cut,
+    /// and refuse to start one the host disk cannot hold.
+    fn core_preflight(
+        &mut self,
+        owner: &mut RunArtifactOwner,
+        core: &mut Transfer,
+        status: &CoreStatus,
+    ) -> Result<(), String> {
+        let need = status
+            .stored
+            .unwrap_or_else(|| status.size.min(LEGACY_BUDGET));
+        if let Some(text) = core_stream::quota_warning(self.available(), need) {
+            core.set_reason(CoreReasonCode::Quota, None, text.clone());
+            owner.issue(text);
+        }
+        if let Some(text) = core_stream::host_space_refusal(&owner.directory, need) {
+            core.set_reason(CoreReasonCode::HostDisk, None, text.clone());
+            return Err(text);
+        }
         Ok(())
     }
     fn step_core(
@@ -684,7 +817,7 @@ impl Session {
         else {
             return Ok(false);
         };
-        CoreStatus::parse(&reply, core.id, core.cookie, core.tgid)?;
+        CoreStatus::parse(&reply, core.id, core.cookie, core.tgid, false)?;
         let reply = self.request(
             RELEASE,
             &control::with_session(core.id),
@@ -713,6 +846,7 @@ impl Session {
             .as_mut()
             .ok_or("run has no pending process-core acquisition")?;
         core.last_activity = Instant::now();
+        core.set_reason(CoreReasonCode::Canceled, None, "canceled by the user");
         core.finish_request(RunArtifactState::Interrupted,"process-core acquisition canceled by user; retained prefix durability is pending and specimen continues running".into());
         owner.issue(
             "process-core cancellation requested; waiting for bounded disk worker completion"
@@ -741,6 +875,11 @@ impl Session {
                 self.run_artifacts.insert(cookie, owner);
                 continue;
             };
+            core.set_reason(
+                CoreReasonCode::Sealed,
+                None,
+                format!("sealed at {boundary}"),
+            );
             core.finish_request(RunArtifactState::Interrupted,format!("process-core acquisition sealed at {boundary}; only checkpoint-validated ownership may be adopted in a new timeline"));
             core.released = true;
             let deadline = Instant::now() + Duration::from_secs(120);
@@ -826,31 +965,34 @@ mod tests {
     #[test]
     fn rejects_truncation_stale_identity_bounds_and_reserved_flags() {
         let wire = status();
-        assert!(CoreStatus::parse(&wire, 5, 6, 7).is_ok());
+        assert!(CoreStatus::parse(&wire, 5, 6, 7, false).is_ok());
         for len in 0..80 {
-            assert!(CoreStatus::parse(&wire[..len], 5, 6, 7).is_err());
+            assert!(CoreStatus::parse(&wire[..len], 5, 6, 7, false).is_err());
         }
         for identity in [(4, 6, 7), (5, 8, 7), (5, 6, 9)] {
-            assert!(CoreStatus::parse(&wire, identity.0, identity.1, identity.2).is_err());
+            assert!(CoreStatus::parse(&wire, identity.0, identity.1, identity.2, false).is_err());
         }
         for offset in [48, 64, 76] {
             let mut bad = wire.clone();
             bad[offset..offset + 4].copy_from_slice(&128u32.to_le_bytes());
-            assert!(CoreStatus::parse(&bad, 5, 6, 7).is_err());
+            assert!(CoreStatus::parse(&bad, 5, 6, 7, false).is_err());
         }
         // The size is the file's logical extent, holes included: it may pass the
         // 64 MiB that bounds the stored bytes, up to the guest's own bound.
         let mut sparse = wire.clone();
-        sparse[32..40].copy_from_slice(&(LIMIT + 1).to_le_bytes());
-        assert_eq!(CoreStatus::parse(&sparse, 5, 6, 7).unwrap().size, LIMIT + 1);
+        sparse[32..40].copy_from_slice(&(CORE_LEGACY_SIZE + 1).to_le_bytes());
+        assert_eq!(
+            CoreStatus::parse(&sparse, 5, 6, 7, false).unwrap().size,
+            CORE_LEGACY_SIZE + 1
+        );
         sparse[32..40].copy_from_slice(&LOGICAL_LIMIT.to_le_bytes());
-        assert!(CoreStatus::parse(&sparse, 5, 6, 7).is_ok());
+        assert!(CoreStatus::parse(&sparse, 5, 6, 7, false).is_ok());
         let mut bad = wire;
         bad[32..40].copy_from_slice(&(LOGICAL_LIMIT + 1).to_le_bytes());
-        assert!(CoreStatus::parse(&bad, 5, 6, 7).is_err());
+        assert!(CoreStatus::parse(&bad, 5, 6, 7, false).is_err());
         let mut bad = status();
         bad[72..76].copy_from_slice(&257u32.to_le_bytes());
-        assert!(CoreStatus::parse(&bad, 5, 6, 7).is_err());
+        assert!(CoreStatus::parse(&bad, 5, 6, 7, false).is_err());
     }
     #[test]
     fn partial_write_releases_unused_quota_and_retains_actual_prefix_only() {
@@ -869,7 +1011,7 @@ mod tests {
         let summary = run(root.join("original"));
         let mut reply = vec![];
         reply.extend(5u64.to_le_bytes());
-        reply.extend(LIMIT.to_le_bytes());
+        reply.extend(CORE_LEGACY_SIZE.to_le_bytes());
         reply.extend([0; 8]);
         let core = Transfer::armed(&reply, &summary).unwrap();
         let saved = core.checkpoint_handle().unwrap();
