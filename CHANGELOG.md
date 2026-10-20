@@ -141,6 +141,11 @@ it runs.
   - The archive index is stamped with its writer; an older build that appends
     to it clears the stamp and the index is rebuilt, so kernel notes are not
     silently lost. The index disk budget is four times the archive.
+  - A first index of a large recording is built in steps of about 256 MiB,
+    each its own transaction, instead of one that also holds the drop of the
+    old tables. A cancelled or interrupted index keeps what it finished and
+    the next open continues from its cursor, and other readers wait for one
+    step rather than the whole build.
   - A guest resource request without a reply is abandoned after 60 s and
     polling resumes.
   - "Open in Wireshark" no longer leaves zombie processes.
