@@ -355,6 +355,16 @@ impl PanelControl {
             };
         }
         let selected = self.selected;
+        // Breakpoints the guest held for a session found again are the panel's.
+        let held = debugger
+            .get(selected)
+            .map(|inferior| inferior.registry.borrow().panel_items())
+            .unwrap_or_default();
+        for (kind, addr, _) in held {
+            if self.list.get(addr).is_none() {
+                let _ = self.list.add(addr, kind);
+            }
+        }
         let state = match debugger.get(selected) {
             Some(inferior) => inferior.backend.state(),
             None => return Err("the guest ended the debug session".into()),

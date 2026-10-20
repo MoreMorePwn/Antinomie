@@ -58,6 +58,18 @@ impl Session {
         context.driver.receive();
         context.driver.output(&self.run).to_string()
     }
+    /// The terminal output once it holds `needle` (a detached parent prints a
+    /// moment after its child ended), or what there is after `seconds`.
+    fn output_with(&self, context: &mut Context, needle: &str, seconds: u64) -> String {
+        let until = Instant::now() + Duration::from_secs(seconds);
+        loop {
+            let output = self.output(context);
+            if output.contains(needle) || Instant::now() >= until {
+                return output;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
 }
 
 fn sysroot_line(context: &Context) -> String {
@@ -67,7 +79,7 @@ fn sysroot_line(context: &Context) -> String {
         ""
     };
     format!(
-        "set sysroot {}{trace}",
+        "set sysroot {}\nset remote timeout 30{trace}",
         context.dir.join("sysroot").display()
     )
 }
@@ -101,7 +113,7 @@ pub fn follow_child(context: &mut Context) -> Result<String, String> {
     let text = session.gdb.run("continue", 60)?;
     expect(&text, &["exited with code 07"], "the child's exit")?;
     session.gdb.run("kill", 20).ok();
-    let output = session.output(context);
+    let output = session.output_with(context, "child exit=7 sig=0", 5);
     let transcript = session.finish(context)?;
     refuse(
         &transcript,
@@ -272,7 +284,7 @@ pub fn vfork(context: &mut Context) -> Result<String, String> {
     let text = session.gdb.run("delete\ncontinue", 60)?;
     expect(&text, &["exited with code 05"], "the leaf's exit")?;
     session.gdb.run("kill", 20).ok();
-    let output = session.output(context);
+    let output = session.output_with(context, "vfork child exit=5", 5);
     let transcript = session.finish(context)?;
     refuse(
         &transcript,
@@ -428,18 +440,29 @@ pub fn nonstop(context: &mut Context) -> Result<String, String> {
         "interrupt in non-stop",
     )?;
     session.gdb.run("continue -a &", 30)?;
-    thread::sleep(Duration::from_millis(500));
-    let text = session.gdb.run("info threads", 30)?;
-    if text.matches("(stopped)").count() != 0 {
+    // Every thread runs again; the guest takes a moment to let go of them.
+    let mut text = String::new();
+    for _ in 0..20 {
+        thread::sleep(Duration::from_millis(500));
+        text = session.gdb.run("info threads", 30)?;
+        if !text.contains("(stopped)") {
+            break;
+        }
+    }
+    if text.contains("(stopped)") {
         return Err(format!("continue -a left threads stopped:\n{text}"));
     }
     session.gdb.run("interrupt -a\ndetach", 30)?;
     let transcript = session.finish(context)?;
+    // gdb in extended-remote mode expects the connection to outlive a detach and
+    // says so once the detach is done; that is not a failure of the detach.
+    let before_detach = transcript.split("detached]").next().unwrap_or("");
     refuse(
-        &transcript,
+        before_detach,
         &["Remote connection closed", "Cannot access memory"],
         "non-stop",
     )?;
+    expect(&transcript, &["detached]"], "the detach")?;
     Ok(format!(
         "non-stop: {stopped} threads stopped at the breakpoint while the others ran; one thread continued alone; interrupt and continue -a worked; detach left the program running"
     ))

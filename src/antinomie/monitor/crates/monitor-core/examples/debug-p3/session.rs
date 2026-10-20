@@ -116,7 +116,10 @@ fn finish(context: &mut Context, attached: &Attached) -> Result<(), String> {
     let _ = context.driver.command(Command::StopRun {
         run_id: attached.run.clone(),
     });
-    run_ended(&mut context.driver, &attached.run, 40).map(|_| ())
+    // A run of a restored boot is not in the app's run list any more; the kill
+    // above is what ends the program, so only wait where the run is known.
+    let _ = run_ended(&mut context.driver, &attached.run, 10);
+    Ok(())
 }
 
 /// A transport reconnect keeps the debug session: the process stays stopped at its

@@ -209,14 +209,15 @@ pub fn run(bundle: &str, data: &str, dir: &str, only: &[String]) -> Result<(), S
         ("stoprun-bytes", engine::stop_run_bytes),
         ("fork-stress", engine::fork_stress),
         ("reconnect", session::reconnect),
-        ("snapshot", session::snapshot_with_debugger),
-        ("snapshot-readopt", session::snapshot_readopt),
         ("gdb-follow-child", gdb::follow_child),
         ("gdb-follow-parent", gdb::follow_parent),
         ("gdb-keep-both", gdb::keep_both),
         ("gdb-vfork", gdb::vfork),
         ("gdb-exec", gdb::exec),
         ("gdb-nonstop", gdb::nonstop),
+        // Restoring a snapshot changes the VM under the later tests: keep these last.
+        ("snapshot", session::snapshot_with_debugger),
+        ("snapshot-readopt", session::snapshot_readopt),
     ];
     let mut failed = Vec::new();
     for (name, test) in tests {
