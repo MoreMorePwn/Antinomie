@@ -37,6 +37,7 @@ mod tree_lines;
 mod triage;
 mod ui_performance;
 mod values;
+mod widgets;
 mod workspace;
 
 use antinomie_monitor_core::{Backend, BackendOptions, Command, Notification};

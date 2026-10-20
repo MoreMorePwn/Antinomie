@@ -428,7 +428,7 @@ fn paint_rows(
                 continue;
             };
             let bg = if content.inverse() {
-                color(content.fgcolor(), theme::text())
+                color(content.fgcolor(), theme::terminal_text())
             } else {
                 color(content.bgcolor(), theme::terminal())
             };
@@ -445,7 +445,7 @@ fn paint_rows(
             let fg = if content.inverse() {
                 color(content.bgcolor(), theme::terminal())
             } else {
-                color(content.fgcolor(), theme::text())
+                color(content.fgcolor(), theme::terminal_text())
             };
             if !content.is_wide_continuation() {
                 painter.text(
