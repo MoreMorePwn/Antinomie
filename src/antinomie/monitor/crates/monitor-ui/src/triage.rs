@@ -671,10 +671,6 @@ impl TriageView {
         mut findings: Vec<Finding>,
         omitted: u64,
     ) -> Option<trace::InvocationKey> {
-        ui.colored_label(
-            theme::muted(),
-            "A row is a rule match with its source. It is not a verdict that the sample is malicious.",
-        );
         if omitted > 0 {
             crate::activity::warning(
                 ui,
