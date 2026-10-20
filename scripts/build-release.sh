@@ -120,6 +120,10 @@ BUILD-INFO.json records the source revision, compiler, musl package and notices.
 TEXT
 mkdir -p "$OUT"
 archive="$OUT/$name-linux-x86_64.tar.gz"
-tar -C "$stage" --sort=name --owner=0 --group=0 --numeric-owner -czf "$archive" "$name"
+# Reproducible: fixed member times (the commit time unless SOURCE_DATE_EPOCH is
+# set), sorted names, numeric owners, and no name or time in the gzip header.
+epoch="${SOURCE_DATE_EPOCH:-$(git -C "$REPO" log -1 --format=%ct)}"
+tar -C "$stage" --sort=name --owner=0 --group=0 --numeric-owner \
+    --mtime="@${epoch}" -cf - "$name" | gzip -n >"$archive"
 (cd "$OUT" && sha256sum "$(basename "$archive")" > SHA256SUMS)
 cat "$OUT/SHA256SUMS"

@@ -110,6 +110,9 @@ it runs.
   of the analysis workers instead of repeating it.
 
 - **Code audit fixes (host).**
+  - The release archive is reproducible: members carry the commit time (or
+    `SOURCE_DATE_EPOCH`) and the gzip header has no name or time, so two builds
+    of one commit give the same archive when the binary is the same.
   - TShark runs in the analysis sandbox's minimal mount profile: only `/usr`,
     a few read-only `/etc` entries, a private `/etc/passwd`, a minimal `/dev`
     and `/tmp`, the capture (read-only) and a private scratch directory. The
