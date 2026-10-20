@@ -406,8 +406,7 @@ it runs.
   breakpoints, single-step of one thread, x86-64. Guest contract revision 17
   (unchanged; older bases say the debugger is unavailable). Fork/exec following
   comes next (Debug on start, hardware breakpoints and signals are in the next
-  entries). New dependency: `gdbstub 0.7.10` (MIT OR Apache-2.0) for the protocol.
-  Every guest request costs about one 10 ms control poll, so registers take
+  entries). Every guest request costs about one 10 ms control poll, so registers take
   about 44 ms and a step about 44 ms; see `protocol/debugger.md`.
 - **The debugger gets Debug on start, threads, hardware breakpoints, signals and
   fast requests.** Run dialog > Debugger > **Debug on start** parks the new
@@ -451,6 +450,33 @@ it runs.
   the panel stay set. Breakpoints can be changed only while the process is
   stopped. Saved process cores keep their own viewer (registers, memory
   mappings and disassembly in Core dumps); they are not opened in the debugger.
+- **The debugger follows forks and execs, runs in non-stop mode and survives a
+  reconnect or a snapshot.** gdb's `follow-fork-mode` (parent or child),
+  `detach-on-fork`, `catch fork`, `catch exec` and vfork work as they do against
+  gdbserver: a followed fork or vfork arrives as `fork:`/`vfork:`/`vforkdone:` with
+  the child held at the fork (a second inferior; `D;pid` lets one go), an `exec`
+  is an event with the new program's path and the session carries on in the new
+  image instead of ending (breakpoints of the old image are dropped). `set
+  non-stop on` stops and runs threads one at a time (`vCont;t`, `continue -a`,
+  `interrupt`, `%Stop` notifications) and memory can be read while threads run.
+  After a transport reconnect or a restored snapshot the app adopts the guest's
+  sessions again: stopped threads stay stopped and breakpoints stay in place.
+  Snapshots are therefore **no longer refused while a debugger is attached**; a
+  connected gdb is dropped on a restore (its picture is from another time), the
+  panel reads the state again. The panel's Processes list shows forks and execs
+  and lets you pick which process to follow (off, parent, child, ask; detach the
+  other or keep it), threads show running or stopped (with their signal), and a
+  Signals table (stop, print, pass per signal, gdb's defaults: SIGCHLD,
+  SIGWINCH, SIGALRM, SIGPROF, SIGURG... nostop noprint pass) is editable and
+  remembered; a gdb client keeps its own `handle`. Also fixed: threads created
+  while the program runs get hardware breakpoints at their first instruction
+  (they missed them until the next stop), and Stop on a program that cannot be
+  stopped no longer leaves a breakpoint byte in its memory. The `gdbstub` crate
+  is gone: the app speaks the protocol itself (it had no multiprocess, fork
+  events or non-stop). Guest series 0041-0042, contract revision 17 (unchanged):
+  every addition is optional, an older base keeps working with the Phase 2
+  behaviour (a fork's child runs free, an exec ends the session, snapshots drop
+  the session) and says what it cannot do.
 - **The guest tracer records who a task ran as and what a file contained.**
   Guest contract revision 17 (no new revision) adds two records to the
   syscall trace. Credentials: every traced task's uid, euid, suid, fsuid, the

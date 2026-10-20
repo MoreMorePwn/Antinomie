@@ -59,8 +59,9 @@ additive and an older guest answers `-EOPNOTSUPP`. Layouts are in
   server; `Snapshot::debug` carries the endpoints and a ready-to-paste
   `gdb -ex 'target remote 127.0.0.1:PORT'`. The server thread never touches the
   transport: it sends requests, limited to the debug opcodes, to the transport
-  thread. A VM snapshot is refused while a debugger is attached; the VM stopping
-  or the app closing ends the session and resumes the process.
+  thread. (Phase 1 refused a VM snapshot while a debugger was attached; Phase 3
+  allows it and re-adopts the sessions, below.) The VM stopping or the app closing
+  ends the session and resumes the process.
 * **Phase 0 evidence** (real BusyBox VM, KVM, one vCPU): a three-thread process
   stopped without ptrace in 44-55 ms with memory provably frozen; registers (216 B
   general, 512 B FXSAVE) and memory read and written; an `INT3` planted by the
@@ -81,9 +82,8 @@ additive and an older guest answers `-EOPNOTSUPP`. Layouts are in
   stepped into handlers; Stop of a debugged run ended it in about 1 s without the
   SIGKILL escalation; a process core completed under a debug stop. A request costs
   4 ms (22 ms in Phase 1). `debug-check p2` repeats all of it.
-* **Not yet** (phase 3): stepping one thread while the others run, fork/vfork/exec
-  following, non-stop, reconnect that re-adopts a session. (The minimal in-app panel is
-  described next.)
+* **Phase 3** (fork and exec following, non-stop, re-adoption, the panel's
+  process and signal controls) is described after the panel.
 
 ### Accepted ANT-T0120 configurable process-core size (0.7.0)
 
@@ -120,7 +120,7 @@ choosers (`core_budget.rs`) in Run program, Dump core and Settings.
 
 The Debugger window is the minimal in-app UI over the same engine. It does not
 connect to the RSP socket: the controller (`debug/ui_control.rs`) runs on the
-RSP server thread and drives the same `RspTarget` and `DebugBackend`, reaching the
+RSP server thread and drives the same `Debugger` and `DebugBackend`, reaching the
 guest through the same `DebugLink` as an external client. Panel data types are in
 `debug/view.rs`.
 
@@ -159,6 +159,53 @@ guest through the same `DebugLink` as an external client. Panel data types are i
 * **Not in the panel.** Saved process cores (opened read-only in Core dumps, which
   already shows registers, mappings with a hex view and disassembly), memory and
   register writes, step over, and anything that needs phase 2.
+
+### Accepted debugger phase 3: follow, non-stop, re-adoption (0.7.0)
+
+Guest series 0041-0042, contract revision 17 unchanged. The wire (`protocol/control.h`,
+`protocol/debugger.md`) adds CONFIG, EVENTS, THREAD_CTL, SESSIONS and BP_LIST, an
+ADOPT flag on ATTACH and a `CAPS` extension (flags2: FOLLOW, NONSTOP, ADOPT,
+THREAD_HW) that only a host sending the extension sees: an old host with a new
+guest, and a new host with an old guest, both keep the Phase 2 behaviour.
+
+* **Engine.** Sessions are a list, one per thread group, over a shared address
+  space record (breakpoints, history) that a vfork child shares until its exec.
+  A fork parks the child at its first return to user mode with a CHILD event and
+  gives the parent a FORK event; a vfork parent sleeps in the kernel, so its stop
+  is reported without parking (VFORK, later VFORK_DONE). One-shot events that
+  arrive when the state cannot take them are deferred and promoted at the next
+  stop or continue, so none is lost or doubled. Exec swaps the address space and
+  reports EXEC with the path. Non-stop keeps breakpoints inserted, queues events
+  (64, sequence and ack) and stops, steps and continues threads singly.
+  Asynchronous exact steps (`syscall`, `rep` strings) no longer plant a temporary
+  breakpoint. A new thread installs the hardware breakpoints from its own context.
+  `ant_debug_fence()` no longer cancels sessions.
+* **Host.** `debug/` has its own RSP implementation (`rsp_packet`, `rsp_client`,
+  `rsp_requests`) over a `Debugger` that owns one `Inferior` per process
+  (`debugger.rs`, `inferior.rs`). The panel and a gdb client share it: the same
+  registry gives each breakpoint its owners, a client leaving removes only its own.
+  `ui_follow.rs` holds the panel's fork policy, process list and signal handling
+  (`signal_policy.rs` is gdb's default `handle` table). Panel features stay in
+  `ui_control.rs` and `view.rs`; the UI crate only draws them.
+* **Reconnect and snapshots.** The link is paused around a snapshot, a restore
+  or a reconnect (`DebugPause`), then `debug_guest_moved` either refreshes a live
+  server (`request_resync`; a restore ends a connected gdb client, a reconnect does
+  not) or adopts the guest's sessions into a new server. Snapshots while attached
+  are allowed: the guest's session state is bit-exact in a snapshot, a
+  breakpoint-time snapshot is a useful thing to keep, and refusing would have
+  cost that workflow for no protection once the host can reconcile. A restore that
+  reboots the disks ends the session.
+* **What a client sees at connect.** A process stopped at a fork or exec the panel
+  had not handled is reported by `?` as the fork or exec (gdb follows it before
+  `target remote` returns); stops of other threads in non-stop follow as
+  notifications after `qSymbol`.
+* **The forkbp flake.** `debug-check p2 forkbp` failed under host load with
+  "unexpected stop Signal 17". glibc's `fork` blocks every signal around the
+  clone; a child that exits before the parent unblocks leaves a queued SIGCHLD,
+  which the engine correctly reports (a tracer sees the same). gdb's default for
+  SIGCHLD is nostop noprint pass, which the checker did not apply. The checker was
+  wrong, the engine right: it now passes the signals gdb's table says are quiet.
+  `debug-check p3 sigchld` makes the race deterministic.
 
 ### Accepted guest credential and file-hash records (0.7.0)
 
