@@ -9,6 +9,7 @@ mod chrome;
 mod clipboard;
 mod debugger;
 mod details_scroll;
+mod dialog_shots;
 mod disks;
 mod evidence_delete;
 mod file_drop;
@@ -17,8 +18,8 @@ mod getting_started;
 mod history;
 mod large_runs;
 mod launch;
-mod layout;
 mod launch_source;
+mod layout;
 mod memory_probe;
 mod network;
 mod pending;
@@ -26,9 +27,9 @@ mod rules_startup;
 mod run_kill;
 mod run_selection;
 mod scanned_inputs;
+mod settings_window;
 mod startup;
 mod stealth;
-mod settings_window;
 mod terminal_windows;
 mod terminals;
 mod theme_setting;
@@ -58,13 +59,13 @@ pub(crate) fn app() -> MonitorApp {
         settings: Settings::default(),
         options: BackendOptions::default(),
         settings_open: false,
+        settings_page: Default::default(),
         create_open: false,
         config_open: false,
-        settings_page: Default::default(),
         launch_open: false,
         upload_open: false,
-        draft: VmConfig::default(),
         launch_source: Default::default(),
+        draft: VmConfig::default(),
         confirm: None,
         clipboard_request: None,
         pending_kill: None,
