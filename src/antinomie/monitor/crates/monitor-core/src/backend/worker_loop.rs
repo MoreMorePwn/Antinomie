@@ -440,7 +440,9 @@ impl Worker {
                         }
                         let quiet = matches!(
                             command,
-                            Command::TerminalRead { .. } | Command::TerminalResize { .. }
+                            Command::TerminalRead { .. }
+                                | Command::TerminalResize { .. }
+                                | Command::DebugUi(_)
                         );
                         let terminal_read_run = match &command {
                             Command::TerminalRead { run_id } => Some(run_id.clone()),

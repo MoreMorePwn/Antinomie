@@ -1416,6 +1416,10 @@ pub enum Command {
     DebugDetach {
         kill: bool,
     },
+    /// One request from the in-app debugger panel (continue, step, stop,
+    /// breakpoints, reads). Refused while an external debugger controls the
+    /// process; the answer arrives as `Snapshot::debug_view`.
+    DebugUi(crate::debug::view::DebugRequest),
     /// Record the running VM's network traffic (NAT VMs) into a new capture
     /// of the boot recording, until `StopNetworkCapture` or the VM stops.
     StartNetworkCapture,
@@ -1645,6 +1649,8 @@ pub struct DebugSessionInfo {
 pub struct Snapshot {
     /// The debugger attached to a guest process, while one is.
     pub debug: Option<DebugSessionInfo>,
+    /// What the in-app debugger panel shows, while a debugger is attached.
+    pub debug_view: Option<std::sync::Arc<crate::debug::view::DebugView>>,
     /// Active manual captures and at most the latest 64 completed records.
     pub process_cores: Vec<ProcessCoreCapture>,
     /// Host measurements for the active QEMU process, refreshed once a second.

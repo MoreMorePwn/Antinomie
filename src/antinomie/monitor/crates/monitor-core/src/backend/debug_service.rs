@@ -97,6 +97,8 @@ pub(super) struct DebugService {
     link: DebugLink,
     active: Option<ActiveDebug>,
     last_shown: Option<DebugSessionInfo>,
+    /// The panel view last published, by epoch.
+    last_view: Option<u64>,
 }
 impl DebugService {
     pub(super) fn new() -> (Self, DebugLink) {
@@ -108,6 +110,7 @@ impl DebugService {
                 link: link.clone(),
                 active: None,
                 last_shown: None,
+                last_view: None,
             },
             link,
         )
@@ -212,6 +215,22 @@ impl Worker {
         Ok(message)
     }
 
+    /// A request from the in-app panel: queued for the controller on the
+    /// server thread, which answers through `Snapshot::debug_view`. Refused
+    /// while an external debugger controls the process.
+    pub(super) fn debug_panel_request(
+        &mut self,
+        request: crate::debug::view::DebugRequest,
+    ) -> Result<String, String> {
+        let active = self
+            .debug
+            .active
+            .as_ref()
+            .ok_or("no debugger is attached")?;
+        active.server.panel().submit(request)?;
+        Ok(String::new())
+    }
+
     pub(super) fn debug_detach(&mut self, kill: bool) -> Result<String, String> {
         let Some(mut active) = self.debug.active.take() else {
             return Err("no debugger is attached".into());
@@ -233,7 +252,9 @@ impl Worker {
         let joined = active.server.join();
         let status = active.server.status();
         self.snapshot.debug = None;
+        self.snapshot.debug_view = None;
         self.debug.last_shown = None;
+        self.debug.last_view = None;
         self.publish();
         joined?;
         Ok(match status.ended {
@@ -260,9 +281,24 @@ impl Worker {
                 ended: status.ended,
             }
         });
+        let view = self
+            .debug
+            .active
+            .as_ref()
+            .map(|active| active.server.panel().clone());
+        let view_epoch = view.as_ref().map(|panel| panel.epoch());
+        let mut changed = false;
+        if view_epoch != self.debug.last_view {
+            self.snapshot.debug_view = view.map(|panel| panel.view());
+            self.debug.last_view = view_epoch;
+            changed = true;
+        }
         if shown != self.debug.last_shown {
             self.snapshot.debug = shown.clone();
             self.debug.last_shown = shown;
+            changed = true;
+        }
+        if changed {
             self.publish();
         }
     }
@@ -277,7 +313,9 @@ impl Worker {
         }
         if self.snapshot.debug.is_some() {
             self.snapshot.debug = None;
+            self.snapshot.debug_view = None;
             self.debug.last_shown = None;
+            self.debug.last_view = None;
         }
     }
 

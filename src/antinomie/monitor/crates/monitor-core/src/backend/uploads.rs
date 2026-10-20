@@ -130,6 +130,7 @@ pub(super) fn guest_scoped_command(command: &Command) -> bool {
             | Command::StopCapture { .. }
             | Command::DebugAttach { .. }
             | Command::DebugDetach { .. }
+            | Command::DebugUi(_)
             | Command::StartNetworkCapture
             | Command::StopNetworkCapture
     )

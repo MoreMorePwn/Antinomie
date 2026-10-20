@@ -85,6 +85,7 @@ impl Worker {
                     | Command::StopCapture { .. }
                     | Command::DebugAttach { .. }
                     | Command::DebugDetach { .. }
+                    | Command::DebugUi(_)
                     | Command::CreateVmSnapshot { .. }
                     | Command::RestoreVmSnapshot { .. }
                     | Command::ReconnectTransport

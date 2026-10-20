@@ -98,6 +98,101 @@ fn call_targets(file: &object::File, bitness: u32, functions: &mut Functions) {
     }
 }
 
+/// The listing's text style, shared with the debugger's live disassembly.
+fn configure(formatter: &mut IntelFormatter) {
+    formatter.options_mut().set_first_operand_char_index(0);
+    formatter
+        .options_mut()
+        .set_space_after_operand_separator(true);
+    formatter.options_mut().set_hex_prefix("0x");
+    formatter.options_mut().set_hex_suffix("");
+    formatter.options_mut().set_uppercase_hex(false);
+}
+
+/// One instruction decoded from raw bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DecodedInstruction {
+    pub address: u64,
+    pub bytes: Vec<u8>,
+    pub text: String,
+}
+
+/// Decode x86-64 code around `focus` from `bytes` that start at `address`:
+/// up to `before` instructions ahead of `focus` and `after` from it on (counting
+/// it). Going backwards is a guess, since x86 instructions vary in length: the
+/// decode starts at the earliest byte from which linear decoding lands exactly
+/// on `focus`, or at `focus` itself when none does. The same formatter as the
+/// static listing, so the text matches it.
+pub fn decode_window(
+    address: u64,
+    bytes: &[u8],
+    focus: u64,
+    before: usize,
+    after: usize,
+) -> Vec<DecodedInstruction> {
+    let Some(focus_offset) = focus
+        .checked_sub(address)
+        .and_then(|offset| usize::try_from(offset).ok())
+        .filter(|offset| *offset < bytes.len())
+    else {
+        return Vec::new();
+    };
+    let lands_on_focus = |start: usize| {
+        let mut decoder = Decoder::with_ip(
+            64,
+            &bytes[start..focus_offset],
+            address + start as u64,
+            DecoderOptions::NONE,
+        );
+        let mut instruction = Instruction::default();
+        while decoder.can_decode() {
+            decoder.decode_out(&mut instruction);
+            if instruction.is_invalid() {
+                return false;
+            }
+        }
+        decoder.position() == focus_offset - start
+    };
+    let start = (0..focus_offset)
+        .find(|start| lands_on_focus(*start))
+        .unwrap_or(focus_offset);
+    let mut formatter = IntelFormatter::new();
+    configure(&mut formatter);
+    formatter.options_mut().set_branch_leading_zeros(false);
+    let mut decoder = Decoder::with_ip(
+        64,
+        &bytes[start..],
+        address + start as u64,
+        DecoderOptions::NONE,
+    );
+    let mut instruction = Instruction::default();
+    let mut lines = Vec::new();
+    let mut seen_focus = 0usize;
+    while decoder.can_decode() && seen_focus < after {
+        decoder.decode_out(&mut instruction);
+        let offset = (instruction.ip() - address) as usize;
+        let mut text = String::new();
+        formatter.format(&instruction, &mut text);
+        if instruction.is_invalid() {
+            text = "(bad)".into();
+        }
+        lines.push(DecodedInstruction {
+            address: instruction.ip(),
+            bytes: bytes[offset..offset + instruction.len()].to_vec(),
+            text,
+        });
+        if instruction.ip() >= focus {
+            seen_focus += 1;
+        }
+    }
+    let first = lines
+        .iter()
+        .position(|line| line.address >= focus)
+        .unwrap_or(0)
+        .saturating_sub(before);
+    lines.split_off(first)
+}
+
 pub(super) fn disassemble(section: &mut AnalysisSection, specimen: &[u8], listings: &Path) {
     let Ok(file) = object::File::parse(specimen) else {
         unavailable(
@@ -124,13 +219,7 @@ pub(super) fn disassemble(section: &mut AnalysisSection, specimen: &[u8], listin
         };
     let mut formatter =
         IntelFormatter::with_options(Some(Box::new(Names(functions.clone()))), None);
-    formatter.options_mut().set_first_operand_char_index(0);
-    formatter
-        .options_mut()
-        .set_space_after_operand_separator(true);
-    formatter.options_mut().set_hex_prefix("0x");
-    formatter.options_mut().set_hex_suffix("");
-    formatter.options_mut().set_uppercase_hex(false);
+    configure(&mut formatter);
     let (mut instructions, mut sections, mut invalid) = (0u64, 0u64, 0u64);
     let mut full = false;
     'sections: for code in file.sections() {
@@ -349,4 +438,49 @@ fn objdump(section: &mut AnalysisSection, listings: &Path) {
 fn unavailable(section: &mut AnalysisSection, reason: impl Into<String>) {
     section.state = AnalysisSectionState::Unavailable;
     section.summary = reason.into();
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+
+    // push rbp; mov rbp, rsp; sub rsp, 0x20; call +0; xor eax, eax; ret
+    const CODE: &[u8] = &[
+        0x55, 0x48, 0x89, 0xe5, 0x48, 0x83, 0xec, 0x20, 0xe8, 0, 0, 0, 0, 0x31, 0xc0, 0xc3,
+    ];
+
+    #[test]
+    fn the_window_starts_before_the_focus_and_matches_the_listing_style() {
+        let lines = decode_window(0x401000, CODE, 0x401008, 2, 3);
+        let text: Vec<_> = lines
+            .iter()
+            .map(|line| (line.address, line.text.as_str()))
+            .collect();
+        assert_eq!(
+            text,
+            [
+                (0x401001, "mov rbp, rsp"),
+                (0x401004, "sub rsp, 0x20"),
+                (0x401008, "call 0x40100d"),
+                (0x40100d, "xor eax, eax"),
+                (0x40100f, "ret"),
+            ]
+        );
+        assert_eq!(lines[2].bytes, [0xe8, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn a_focus_outside_the_bytes_decodes_nothing() {
+        assert!(decode_window(0x1000, CODE, 0x900, 2, 3).is_empty());
+        assert!(decode_window(0x1000, CODE, 0x2000, 2, 3).is_empty());
+        assert!(decode_window(0x1000, &[], 0x1000, 2, 3).is_empty());
+    }
+
+    #[test]
+    fn a_focus_that_no_earlier_start_reaches_decodes_from_the_focus() {
+        // 0xe8 needs four more bytes, so nothing before the focus can end on it.
+        let lines = decode_window(0x1000, &[0xe8, 0x90, 0x90, 0x90, 0x90, 0x90], 0x1001, 3, 2);
+        assert_eq!(lines.first().map(|line| line.address), Some(0x1001));
+        assert_eq!(lines.len(), 2);
+    }
 }

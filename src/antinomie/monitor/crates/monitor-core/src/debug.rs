@@ -17,6 +17,8 @@ mod rsp_target;
 mod target;
 #[cfg(test)]
 mod tests;
+mod ui_control;
+pub mod view;
 pub mod wire;
 
 pub use kernel_backend::{AttachedSession, KernelDebugBackend};
@@ -26,3 +28,4 @@ pub use target::{
     ArchTag, DebugBackend, DebugCaps, DebugError, DetachMode, GuestLink, LinkError, RegsetBlob,
     RegsetInfo, ResumeAction, StopEvent, StopKind, TargetState, ThreadInfo,
 };
+pub use ui_control::PanelHandle;

@@ -3,6 +3,8 @@
 //! All-stop, one process. Breakpoints are reference-counted here (a debugger
 //! may ask for the same address twice) and live in the guest only while the
 //! group runs, so memory read while stopped is always the sample's own bytes.
+//! The in-app panel shares the guest's breakpoint table: an address stays
+//! registered while either a connected debugger or the panel wants it.
 use super::{
     amd64::{Amd64, BreakpointLen},
     regs::{RegisterFile, TargetDescription},
@@ -54,11 +56,24 @@ struct Actions {
     step: Option<u32>,
 }
 
+/// Who wants a breakpoint at one address: the RSP client (counted, it may ask
+/// twice) and the in-app panel (once).
+#[derive(Default)]
+struct Wanted {
+    client: u32,
+    panel: bool,
+}
+impl Wanted {
+    fn none(&self) -> bool {
+        self.client == 0 && !self.panel
+    }
+}
+
 pub(super) struct RspTarget {
     backend: Box<dyn DebugBackend>,
     description: &'static TargetDescription,
     actions: Actions,
-    breakpoints: BTreeMap<u64, u32>,
+    breakpoints: BTreeMap<u64, Wanted>,
     registers: Option<(u32, RegisterFile)>,
     stop: Option<StopEvent>,
     last_sequence: Option<u32>,
@@ -99,18 +114,65 @@ impl RspTarget {
         }
         Ok(state)
     }
-    /// Remove every breakpoint this session set (the target must be stopped).
-    pub(super) fn clear_all_breakpoints(&mut self) {
+    /// Drop every breakpoint the RSP client set (the target must be stopped).
+    /// The panel's own stay registered.
+    pub(super) fn clear_client_breakpoints(&mut self) {
         let addresses: Vec<u64> = self.breakpoints.keys().copied().collect();
         for address in addresses {
-            let _ = self.backend.clear_breakpoint(address, 1);
+            if let Some(wanted) = self.breakpoints.get_mut(&address) {
+                wanted.client = 0;
+                if wanted.none() {
+                    let _ = self.backend.clear_breakpoint(address, 1);
+                    self.breakpoints.remove(&address);
+                }
+            }
         }
-        self.breakpoints.clear();
+    }
+    /// Register (or release) the panel's interest in a breakpoint at `addr`;
+    /// the guest is asked only when nobody else already holds the address.
+    /// The target must be stopped.
+    pub(super) fn panel_breakpoint(&mut self, addr: u64, on: bool) -> Result<(), DebugError> {
+        if on {
+            if self
+                .breakpoints
+                .get(&addr)
+                .is_some_and(|wanted| wanted.panel)
+            {
+                return Ok(());
+            }
+            if !self.breakpoints.contains_key(&addr) {
+                self.backend.set_breakpoint(addr, 1)?;
+            }
+            self.breakpoints.entry(addr).or_default().panel = true;
+            return Ok(());
+        }
+        let Some(wanted) = self.breakpoints.get_mut(&addr) else {
+            return Ok(());
+        };
+        if !wanted.panel {
+            return Ok(());
+        }
+        wanted.panel = false;
+        if wanted.none() {
+            self.backend.clear_breakpoint(addr, 1)?;
+            self.breakpoints.remove(&addr);
+        }
+        Ok(())
     }
     pub(super) fn resume_plain(&mut self) -> Result<(), DebugError> {
         self.registers = None;
         self.running = true;
         self.backend.resume(ResumeAction::Continue)
+    }
+    /// The panel resumed the process (it is running, its registers are stale).
+    pub(super) fn note_resumed(&mut self) {
+        self.registers = None;
+        self.running = true;
+    }
+    /// The panel saw the process stop.
+    pub(super) fn note_stopped(&mut self) {
+        self.registers = None;
+        self.running = false;
     }
     pub(super) fn interrupt(&mut self) -> Result<(), DebugError> {
         self.backend.interrupt()
@@ -310,27 +372,33 @@ impl Breakpoints for RspTarget {
 impl SwBreakpoint for RspTarget {
     fn add_sw_breakpoint(&mut self, addr: u64, kind: BreakpointLen) -> TargetResult<bool, Self> {
         let len = u32::try_from(kind.0).map_err(|_| TargetError::Errno(22))?;
-        if let Some(count) = self.breakpoints.get_mut(&addr) {
-            *count += 1;
+        if let Some(wanted) = self.breakpoints.get_mut(&addr) {
+            wanted.client += 1;
             return Ok(true);
         }
         self.backend.set_breakpoint(addr, len).map_err(report)?;
-        self.breakpoints.insert(addr, 1);
+        self.breakpoints.insert(
+            addr,
+            Wanted {
+                client: 1,
+                panel: false,
+            },
+        );
         Ok(true)
     }
     fn remove_sw_breakpoint(&mut self, addr: u64, kind: BreakpointLen) -> TargetResult<bool, Self> {
         let len = u32::try_from(kind.0).map_err(|_| TargetError::Errno(22))?;
-        match self.breakpoints.get_mut(&addr) {
-            None => Ok(false),
-            Some(count) if *count > 1 => {
-                *count -= 1;
-                Ok(true)
-            }
-            Some(_) => {
-                self.backend.clear_breakpoint(addr, len).map_err(report)?;
-                self.breakpoints.remove(&addr);
-                Ok(true)
-            }
+        let Some(wanted) = self.breakpoints.get_mut(&addr) else {
+            return Ok(false);
+        };
+        if wanted.client == 0 {
+            return Ok(false);
         }
+        wanted.client -= 1;
+        if wanted.none() {
+            self.backend.clear_breakpoint(addr, len).map_err(report)?;
+            self.breakpoints.remove(&addr);
+        }
+        Ok(true)
     }
 }
