@@ -365,7 +365,7 @@ fn row(
         wrapped(ui, &input.detail, theme::muted());
     }
     if !input.warning.is_empty() {
-        wrapped(ui, &input.warning, theme::warn());
+        wrapped(ui, &input.warning, theme::text());
     }
     action
 }
@@ -831,6 +831,23 @@ mod tests {
         );
         assert!(text.contains("no packets captured"), "{text}");
         assert!(!text.to_lowercase().contains("partial"), "{text}");
+        // The caveat is ordinary text, not a warning.
+        let output = frames(&ctx, 2, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0, None));
+        });
+        let mut color = None;
+        for shape in &output {
+            super::super::tests::each_galley(&shape.shape, &mut |galley| {
+                if galley.text().starts_with("Sigma events are converted") {
+                    color = galley
+                        .job
+                        .sections
+                        .first()
+                        .map(|section| section.format.color);
+                }
+            });
+        }
+        assert_eq!(color, Some(theme::text()));
     }
 
     /// Draw until the worker's answer shows `count` missing rows.
