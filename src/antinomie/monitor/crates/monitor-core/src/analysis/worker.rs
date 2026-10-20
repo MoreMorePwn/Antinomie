@@ -914,7 +914,7 @@ fn symbol_range<'data, S: ObjectSection<'data>>(
 const REPORT_STRINGS: usize = 256;
 
 /// Printable ASCII (four or more octets) and UTF-16LE strings, in file order.
-fn find_strings(specimen: &[u8]) -> Vec<(usize, usize, &'static str, String)> {
+pub(crate) fn find_strings(specimen: &[u8]) -> Vec<(usize, usize, &'static str, String)> {
     let mut found = Vec::new();
     let mut start = 0;
     for index in 0..=specimen.len() {

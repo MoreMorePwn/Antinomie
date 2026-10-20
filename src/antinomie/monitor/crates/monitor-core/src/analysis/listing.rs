@@ -226,6 +226,7 @@ pub fn read_listing_page_with(
     let mut rows = Vec::new();
     let mut total = 0u64;
     let mut seen = 0u64;
+    let mut functions: Vec<AnalysisFunctionLines> = Vec::new();
     for (index, line) in BufReader::new(file).split(b'\n').enumerate() {
         let line = line.map_err(|error| format!("listing: {error}"))?;
         let entry: AnalysisEntry = serde_json::from_slice(&line)
@@ -236,6 +237,7 @@ pub fn read_listing_page_with(
             return Err("listing row id out of sequence".into());
         }
         super::validation::validate_record(kind, &entry, record, report.specimen_len)?;
+        count_function_line(kind, &entry, &mut functions);
         if keep(&entry) {
             if total >= start && rows.len() < count {
                 rows.push((index as u64, entry));
@@ -253,7 +255,43 @@ pub fn read_listing_page_with(
         start,
         total,
         rows,
+        functions,
     })
+}
+
+/// Tally `entry` under the function it follows: a function header starts a
+/// count, an instruction (disassembly) or source line (decompilation) adds one.
+fn count_function_line(
+    kind: AnalysisKind,
+    entry: &AnalysisEntry,
+    functions: &mut Vec<AnalysisFunctionLines>,
+) {
+    if !matches!(
+        kind,
+        AnalysisKind::Disassembly | AnalysisKind::Decompilation
+    ) {
+        return;
+    }
+    match entry.record.as_ref().map(|record| &record.data) {
+        Some(AnalysisData::Function { name, address, .. }) => {
+            functions.push(AnalysisFunctionLines {
+                name: name.clone(),
+                address: *address,
+                lines: 0,
+            })
+        }
+        Some(AnalysisData::Instruction { .. }) if kind == AnalysisKind::Disassembly => {
+            if let Some(function) = functions.last_mut() {
+                function.lines += 1;
+            }
+        }
+        Some(AnalysisData::SourceLine { .. }) if kind == AnalysisKind::Decompilation => {
+            if let Some(function) = functions.last_mut() {
+                function.lines += 1;
+            }
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]
@@ -353,5 +391,89 @@ mod tests {
             .contains("malformed")
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Write a listing of `kind` made of `(function, address, body lines)` and
+    /// a report that holds it.
+    fn function_listing(kind: AnalysisKind, functions: &[(&str, u64, u32)]) -> std::path::PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("ant-listing-{}", crate::storage::unique_id()));
+        crate::storage::private_dir(&root).unwrap();
+        std::fs::create_dir(root.join("listings")).unwrap();
+        let mut writer =
+            ListingWriter::create(&root.join("listings"), kind, LISTING_MAX_SIZE).unwrap();
+        for (name, address, lines) in functions {
+            assert!(writer.push(
+                *name,
+                *name,
+                None,
+                AnalysisData::Function {
+                    name: (*name).into(),
+                    address: *address,
+                    size: 0
+                }
+            ));
+            for line in 1..=*lines {
+                let data = if kind == AnalysisKind::Disassembly {
+                    AnalysisData::Instruction {
+                        address: address + u64::from(line),
+                        bytes: "90".into(),
+                        mnemonic: "nop".into(),
+                        operands: String::new(),
+                        function: Some((*name).into()),
+                    }
+                } else {
+                    AnalysisData::SourceLine {
+                        function: (*name).into(),
+                        address: None,
+                        line,
+                    }
+                };
+                assert!(writer.push("row", format!("row {line}"), None, data));
+            }
+        }
+        let mut section = AnalysisSection::new(kind);
+        section.state = AnalysisSectionState::Complete;
+        section.listing = Some(writer.finish(false).unwrap());
+        let report = AnalysisReport {
+            id: "counted".into(),
+            state: AnalysisState::Complete,
+            source_path: "/fixture".into(),
+            specimen_sha256: None,
+            specimen_len: None,
+            reason: None,
+            sections: vec![section],
+        };
+        std::fs::write(
+            root.join("report.json"),
+            serde_json::to_vec(&report).unwrap(),
+        )
+        .unwrap();
+        root
+    }
+
+    #[test]
+    fn a_page_counts_the_lines_of_every_function_whatever_the_query() {
+        for kind in [AnalysisKind::Disassembly, AnalysisKind::Decompilation] {
+            let root = function_listing(kind, &[("_start", 0x1000, 7), ("main", 0x2000, 3)]);
+            let all = read_listing_page(&root, "counted", kind, 0, 2, "").unwrap();
+            let narrowed = read_listing_page(&root, "counted", kind, 0, 2, "row 1").unwrap();
+            let expected = vec![
+                AnalysisFunctionLines {
+                    name: "_start".into(),
+                    address: 0x1000,
+                    lines: 7,
+                },
+                AnalysisFunctionLines {
+                    name: "main".into(),
+                    address: 0x2000,
+                    lines: 3,
+                },
+            ];
+            assert_eq!(all.functions, expected, "{kind:?}");
+            assert_eq!(narrowed.functions, expected, "{kind:?} under a query");
+            assert!(narrowed.total < all.total);
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 }

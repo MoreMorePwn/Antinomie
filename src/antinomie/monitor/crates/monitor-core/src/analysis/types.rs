@@ -264,6 +264,18 @@ pub struct AnalysisListingPage {
     pub total: u64,
     /// Listing row index and entry.
     pub rows: Vec<(u64, AnalysisEntry)>,
+    /// Every function of a disassembly or decompilation listing with the number
+    /// of lines under it, counted over the whole listing whatever the query.
+    pub functions: Vec<AnalysisFunctionLines>,
+}
+
+/// How many lines one function has in a disassembly (instructions) or
+/// decompilation (source lines) listing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnalysisFunctionLines {
+    pub name: String,
+    pub address: u64,
+    pub lines: u64,
 }
 
 /// Bounded read-only specimen preview returned by the host archive API.

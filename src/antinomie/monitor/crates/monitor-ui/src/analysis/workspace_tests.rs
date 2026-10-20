@@ -330,6 +330,7 @@ fn listing_page(report: &AnalysisReport, kind: AnalysisKind) -> Listing {
         start: 0,
         total: rows.len() as u64,
         rows,
+        functions: Vec::new(),
     })
 }
 
