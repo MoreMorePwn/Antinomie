@@ -121,6 +121,7 @@ impl NetworkView {
         egui::ScrollArea::horizontal()
             .id_salt("network_columns")
             .show(ui, |ui| {
+                crate::widgets::table::begin(ui);
                 TableBuilder::new(ui)
                     .id_salt(("network_packets", self.display_page_start))
                     .sense(egui::Sense::click())
@@ -147,120 +148,144 @@ impl NetworkView {
                     .column(Column::exact(chars(7.0)).clip(true))
                     .column(Column::exact(chars(6.0)))
                     .column(Column::remainder().at_least(chars(12.0)).clip(true))
-                    .header(theme::row_height(font_size) + 4.0, |mut header| {
-                        for label in [
-                            "No.",
-                            "Time",
-                            "Source",
-                            "Destination",
-                            "Protocol",
-                            "Length",
-                            "Info",
-                        ] {
-                            header.col(|ui| {
-                                ui.label(RichText::new(label).strong().color(theme::heading()));
-                            });
-                        }
-                    })
+                    .header(
+                        crate::widgets::table::header_height(font_size),
+                        |mut header| {
+                            for label in [
+                                "No.",
+                                "Time",
+                                "Source",
+                                "Destination",
+                                "Protocol",
+                                "Length",
+                                "Info",
+                            ] {
+                                header.col(|ui| crate::widgets::table::head(ui, label));
+                            }
+                        },
+                    )
                     .body(|body| {
-                        body.rows(theme::row_height(font_size), list.rows.len(), |mut row| {
-                            let index = list.rows[row.index()];
-                            let packet = &packets[index];
-                            let selected = list
-                                .selected
-                                .as_ref()
-                                .is_some_and(|selected| selected.number == packet.number);
-                            row.set_selected(selected);
-                            let tint = packet_color(packet)
-                                .filter(|_| !selected)
-                                .map(PacketColor::tint);
-                            let elapsed = packet.time_us.saturating_sub(start) as f64 / 1e6;
-                            for column in 0..7 {
-                                row.col(|ui| {
-                                    // Paint the cell and half of each gap so a
-                                    // tinted row reads as one band.
-                                    if let Some(tint) = tint {
-                                        let cell = ui.max_rect().expand2(egui::vec2(
-                                            ui.spacing().item_spacing.x / 2.0,
-                                            0.0,
-                                        ));
-                                        ui.painter().rect_filled(cell, 0.0, tint);
-                                    }
-                                    let set = match column {
-                                        2 => address_cell(
-                                            ui,
-                                            &mono,
-                                            &packet.source,
-                                            packet.src_ip,
-                                            packet.src_port,
-                                        ),
-                                        3 => address_cell(
-                                            ui,
-                                            &mono,
-                                            &packet.destination,
-                                            packet.dst_ip,
-                                            packet.dst_port,
-                                        ),
-                                        4 => link(
-                                            ui,
-                                            RichText::new(&packet.protocol)
-                                                .font(mono.clone())
-                                                .color(protocol_color(&packet.protocol)),
-                                            &format!("Filter by protocol {}", packet.protocol),
-                                        )
-                                        .then(|| format!("proto {}", packet.protocol)),
-                                        6 => {
-                                            ui.add(
-                                                egui::Label::new(info_text(packet, font_size))
+                        body.rows(
+                            crate::widgets::table::row_height(font_size),
+                            list.rows.len(),
+                            |mut row| {
+                                let index = list.rows[row.index()];
+                                let packet = &packets[index];
+                                let selected = list
+                                    .selected
+                                    .as_ref()
+                                    .is_some_and(|selected| selected.number == packet.number);
+                                row.set_selected(selected);
+                                let tint = packet_color(packet)
+                                    .filter(|_| !selected)
+                                    .map(PacketColor::tint);
+                                let elapsed = packet.time_us.saturating_sub(start) as f64 / 1e6;
+                                for column in 0..7 {
+                                    row.col(|ui| {
+                                        if column == 0 {
+                                            let mark = if selected {
+                                                crate::widgets::table::Mark::Selected
+                                            } else if packet
+                                                .tcp_flags
+                                                .is_some_and(|flags| flags & network::TCP_RST != 0)
+                                            {
+                                                crate::widgets::table::Mark::Failed
+                                            } else {
+                                                crate::widgets::table::Mark::None
+                                            };
+                                            crate::widgets::table::row_mark(ui, mark);
+                                        }
+                                        // Paint the cell and half of each gap so a
+                                        // tinted row reads as one band.
+                                        if let Some(tint) = tint {
+                                            let cell = ui.max_rect().expand2(egui::vec2(
+                                                ui.spacing().item_spacing.x / 2.0,
+                                                0.0,
+                                            ));
+                                            ui.painter().rect_filled(cell, 0.0, tint);
+                                        }
+                                        let set = match column {
+                                            2 => address_cell(
+                                                ui,
+                                                &mono,
+                                                &packet.source,
+                                                packet.src_ip,
+                                                packet.src_port,
+                                            ),
+                                            3 => address_cell(
+                                                ui,
+                                                &mono,
+                                                &packet.destination,
+                                                packet.dst_ip,
+                                                packet.dst_port,
+                                            ),
+                                            4 => link(
+                                                ui,
+                                                RichText::new(&packet.protocol)
+                                                    .font(mono.clone())
+                                                    .color(protocol_color(&packet.protocol)),
+                                                &format!("Filter by protocol {}", packet.protocol),
+                                            )
+                                            .then(|| format!("proto {}", packet.protocol)),
+                                            6 => {
+                                                ui.add(
+                                                    egui::Label::new(info_text(packet, font_size))
+                                                        .selectable(false)
+                                                        .truncate(),
+                                                );
+                                                None
+                                            }
+                                            _ => {
+                                                let (text, color) = match column {
+                                                    0 => {
+                                                        (packet.number.to_string(), theme::muted())
+                                                    }
+                                                    1 => (
+                                                        format!("{elapsed:.6}"),
+                                                        theme::value(ValueKind::Number),
+                                                    ),
+                                                    _ => (packet.length.to_string(), theme::text()),
+                                                };
+                                                ui.add(
+                                                    egui::Label::new(
+                                                        RichText::new(text)
+                                                            .font(mono.clone())
+                                                            .color(color),
+                                                    )
                                                     .selectable(false)
                                                     .truncate(),
-                                            );
-                                            None
+                                                );
+                                                None
+                                            }
+                                        };
+                                        if set.is_some() {
+                                            filter = set;
                                         }
-                                        _ => {
-                                            let (text, color) = match column {
-                                                0 => (packet.number.to_string(), theme::muted()),
-                                                1 => (
-                                                    format!("{elapsed:.6}"),
-                                                    theme::value(ValueKind::Number),
-                                                ),
-                                                _ => (packet.length.to_string(), theme::text()),
-                                            };
-                                            ui.add(
-                                                egui::Label::new(
-                                                    RichText::new(text)
-                                                        .font(mono.clone())
-                                                        .color(color),
-                                                )
-                                                .selectable(false)
-                                                .truncate(),
-                                            );
-                                            None
-                                        }
-                                    };
-                                    if set.is_some() {
-                                        filter = set;
-                                    }
-                                });
-                            }
-                            let response = row.response();
-                            if response.clicked() {
-                                clicked = Some(packet.clone());
-                            }
-                            response.context_menu(|ui| {
-                                ui.menu_button("Display filter", |ui| {
-                                    for (field, clause) in packet_display_clauses(packet) {
-                                        ui.menu_button(field, |ui| {
-                                            display_clause_menu(ui, &clause, &mut display_filter);
-                                        });
-                                    }
-                                });
-                                if let Some(set) = filter_menu(ui, packet, filtering) {
-                                    filter = Some(set);
-                                    ui.close_menu();
+                                    });
                                 }
-                            });
-                        });
+                                let response = row.response();
+                                if response.clicked() {
+                                    clicked = Some(packet.clone());
+                                }
+                                response.context_menu(|ui| {
+                                    ui.menu_button("Display filter", |ui| {
+                                        for (field, clause) in packet_display_clauses(packet) {
+                                            ui.menu_button(field, |ui| {
+                                                display_clause_menu(
+                                                    ui,
+                                                    &clause,
+                                                    &mut display_filter,
+                                                );
+                                            });
+                                        }
+                                    });
+                                    if let Some(set) = filter_menu(ui, packet, filtering) {
+                                        filter = Some(set);
+                                        ui.close_menu();
+                                    }
+                                });
+                            },
+                        );
                     });
             });
         if list.rows.is_empty() {
