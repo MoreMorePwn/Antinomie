@@ -375,8 +375,9 @@ impl WorkspaceLayout {
                         ctx.input(|input| self.remember_geometry(index, input.viewport()));
                     }
                     if class == egui::ViewportClass::Embedded {
-                        egui::Window::new("Workspace")
+                        crate::widgets::window("Workspace")
                             .id(egui::Id::new(("workspace-fallback", index)))
+                            .default_size([720.0, 480.0])
                             .show(ctx, |ui| self.show_surface(app, ui, surface));
                     } else {
                         egui::CentralPanel::default()

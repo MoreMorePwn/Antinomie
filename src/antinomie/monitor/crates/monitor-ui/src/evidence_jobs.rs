@@ -138,7 +138,7 @@ impl EvidenceJobs {
         if let Some(export) = &mut self.export {
             let mut open = true;
             let mut save = false;
-            egui::Window::new("Export analysis result").open(&mut open).default_width(620.0).collapsible(false).show(ctx, |ui| {
+            crate::widgets::window("Export analysis result").open(&mut open).default_width(620.0).collapsible(false).show(ctx, |ui| {
                 ui.label(if export.format == AnalysisExportFormat::GhidraProject { "Destination: new directory for the Ghidra project and database" } else { "Destination: new file" });
                 ui.add(egui::TextEdit::singleline(&mut export.destination).desired_width(f32::INFINITY));
                 ui.label("Exports all saved rows in this category, including rows outside the current page/filter. Existing files are preserved.");
@@ -167,7 +167,7 @@ impl EvidenceJobs {
         }
         if self.receiver.is_some() || self.result.is_some() {
             let mut open = true;
-            egui::Window::new("Evidence action")
+            crate::widgets::window("Evidence action")
                 .open(&mut open)
                 .show(ctx, |ui| {
                     if self.receiver.is_some() {

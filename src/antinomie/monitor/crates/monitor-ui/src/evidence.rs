@@ -155,7 +155,7 @@ pub(crate) fn dialogs(ctx: &egui::Context) {
             Field::Name => "Evidence name",
             Field::Tags => "Evidence tags",
         };
-        egui::Window::new(title)
+        crate::widgets::window(title)
             .id(egui::Id::new("annotation-editor"))
             .open(&mut open)
             .collapsible(false)
@@ -195,7 +195,7 @@ pub(crate) fn dialogs(ctx: &egui::Context) {
     }
     if let Some(error) = error {
         let mut open = true;
-        egui::Window::new("Evidence action failed")
+        crate::widgets::window("Evidence action failed")
             .open(&mut open)
             .show(ctx, |ui| {
                 crate::activity::error(ui, &error);

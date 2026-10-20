@@ -24,7 +24,7 @@ impl MemoryView {
             .iter()
             .filter(|base| base.directory.join(memory_symbols_file()).is_file())
             .collect();
-        egui::Window::new("Import memory dump")
+        crate::widgets::window("Import memory dump")
             .id(egui::Id::new("memory_import"))
             .collapsible(false)
             .resizable(false)
@@ -185,7 +185,7 @@ impl MemoryView {
         let mut open = true;
         let mut install = None;
         let mut remove = None;
-        egui::Window::new("Community plugin catalog")
+        crate::widgets::window("Community plugin catalog")
             .id(egui::Id::new("memory_plugin_catalog"))
             .collapsible(false)
             .resizable(true)

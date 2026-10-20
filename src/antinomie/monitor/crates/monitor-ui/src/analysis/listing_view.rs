@@ -303,7 +303,7 @@ pub(super) fn show(
                 table
                     .header(row_height, |mut header| {
                         for (title, _) in columns {
-                            header.col(|ui| crate::widgets::table::head(ui, *title));
+                            header.col(|ui| crate::widgets::table::head(ui, title));
                         }
                     })
                     .body(|body| {

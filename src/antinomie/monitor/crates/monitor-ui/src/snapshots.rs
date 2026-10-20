@@ -148,7 +148,7 @@ impl SnapshotManager {
         let mut command = None;
         let busy = self.pending.is_some() || progress.is_some();
         let enabled = enabled && !busy;
-        let window = egui::Window::new(format!("Snapshots — {}", self.vm_name))
+        let window = crate::widgets::window(format!("Snapshots — {}", self.vm_name))
             .id(egui::Id::new(WINDOW_ID))
             .open(&mut open)
             .collapsible(false)

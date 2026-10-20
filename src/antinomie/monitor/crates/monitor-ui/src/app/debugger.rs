@@ -68,11 +68,18 @@ impl MonitorApp {
         }
         let mut actions = Vec::new();
         let panel = &mut self.debugger;
-        egui::Window::new(format!("Debugger / PID {}", info.target.tgid))
+        crate::widgets::window(format!("Debugger / PID {}", info.target.tgid))
             .id(egui::Id::new("debugger_session"))
             .collapsible(true)
             .resizable(true)
-            .default_size([1450.0, 780.0])
+            .default_size({
+                // Most of the screen, never past it.
+                let screen = ctx.screen_rect().size();
+                [
+                    1450.0_f32.min(screen.x - 60.0),
+                    780.0_f32.min(screen.y - 80.0),
+                ]
+            })
             .show(ctx, |ui| {
                 show(ui, panel, &info, view.as_deref(), &mut actions);
             });

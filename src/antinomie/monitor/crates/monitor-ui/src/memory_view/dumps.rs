@@ -324,7 +324,7 @@ impl MemoryView {
         };
         let mut open = true;
         let mut done = false;
-        egui::Window::new("Delete memory dump")
+        crate::widgets::window("Delete memory dump")
             .id(egui::Id::new("memory_delete"))
             .collapsible(false)
             .resizable(false)

@@ -175,7 +175,7 @@ impl Performance {
         if !self.open {
             return;
         }
-        egui::Window::new("UI performance").id(egui::Id::new("ui-performance"))
+        crate::widgets::window("UI performance").id(egui::Id::new("ui-performance"))
             .open(&mut self.open).default_width(530.0).resizable(true).show(ctx, |ui| {
                 ui.strong("Graphics");
                 ui.add(egui::Label::new(format!("Renderer: {}", if self.renderer.is_empty() { "Unavailable" } else { &self.renderer })).wrap());

@@ -4,7 +4,9 @@
 //! readable, and tables size their rows from the density setting.
 // The value colors, headings and density are adopted view by view.
 use eframe::egui::{self, Color32, FontData, FontFamily, FontId, Stroke, TextStyle};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+#[cfg(not(test))]
+use std::sync::atomic::AtomicU8;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 mod palettes;
 pub use palettes::{Palette, Theme, TREE_COLOR_COUNT};

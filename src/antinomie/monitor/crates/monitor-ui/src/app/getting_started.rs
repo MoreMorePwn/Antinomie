@@ -4,6 +4,7 @@
 //! `steps` for what a step shows.
 use super::*;
 use crate::getting_started::{self as walkthrough, Facts, Status, Step};
+use crate::widgets::{tabs, TabItem, Tone};
 use antinomie_monitor_core::dependencies::Dependency;
 
 mod steps;
@@ -143,40 +144,38 @@ impl MonitorApp {
         let mut go = None;
         let mut skip = false;
         let mut finish = false;
-        egui::Window::new("Getting started")
+        // Wide enough for every step on one row, whatever the text size, and
+        // locked: the steps never wrap and the window never needs resizing.
+        let size = getting_started_size(ctx);
+        crate::widgets::window("Getting started")
             .id(Dialog::GettingStarted.window_id())
             .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
-            .default_size([780.0, 560.0])
-            .min_width(560.0)
+            .fixed_size(size)
             .show(ctx, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    for step in Step::ALL {
-                        let status = walkthrough::status(step, &facts, &self.settings.getting_started);
-                        let (glyph, color) = match status {
-                            Status::Done => (egui_phosphor::regular::CHECK_CIRCLE, theme::good()),
-                            Status::Skipped => (egui_phosphor::regular::MINUS_CIRCLE, theme::muted()),
-                            Status::Pending => (egui_phosphor::regular::CIRCLE, theme::text()),
-                        };
-                        if ui
-                            .selectable_label(
-                                self.getting_started.step == step,
-                                RichText::new(format!("{glyph} {}", step.title())).color(color),
-                            )
-                            .on_hover_text(status.word())
-                            .clicked()
-                        {
-                            go = Some(step);
-                        }
-                    }
+                let items = Step::ALL.map(|step| {
+                    let status = walkthrough::status(step, &facts, &self.settings.getting_started);
+                    let (glyph, tone) = match status {
+                        Status::Done => (egui_phosphor::regular::CHECK_CIRCLE, Tone::Good),
+                        Status::Skipped => (egui_phosphor::regular::MINUS_CIRCLE, Tone::Neutral),
+                        Status::Pending => (egui_phosphor::regular::CIRCLE, Tone::Accent),
+                    };
+                    (
+                        step,
+                        TabItem::new(step.title())
+                            .icon(glyph, tone)
+                            .tooltip(status.word()),
+                    )
                 });
-                ui.separator();
-                let height = (ctx.screen_rect().height() * 0.6).clamp(200.0, 520.0);
+                let mut chosen = self.getting_started.step;
+                if tabs(ui, items, &mut chosen) {
+                    go = Some(chosen);
+                }
+                let height = (ui.available_height() - 52.0).max(120.0);
                 egui::ScrollArea::vertical()
                     .id_salt("getting_started_step")
                     .max_height(height)
-                    .auto_shrink([false, true])
+                    .min_scrolled_height(height)
+                    .auto_shrink([false, false])
                     .show(ui, |ui| self.getting_started_step(ui, &facts));
                 dialog_footer(ui, |ui| {
                     let step = self.getting_started.step;
@@ -218,4 +217,32 @@ impl MonitorApp {
         self.settings.getting_started.step = self.getting_started.step.id().into();
         self.getting_started.open = open;
     }
+}
+
+/// The locked inner size of the window: the six step tabs on one row at
+/// the current text size (measured), and a height that fits the screen.
+fn getting_started_size(ctx: &egui::Context) -> egui::Vec2 {
+    let style = ctx.style();
+    let font = egui::TextStyle::Button.resolve(&style);
+    let widths: f32 = ctx.fonts(|fonts| {
+        Step::ALL
+            .iter()
+            .map(|step| {
+                let text = fonts.layout_no_wrap(step.title().into(), font.clone(), theme::text());
+                let icon = fonts.layout_no_wrap(
+                    egui_phosphor::regular::CHECK_CIRCLE.into(),
+                    font.clone(),
+                    theme::text(),
+                );
+                // Tab padding (20), icon gap (5) and the gap between tabs (3).
+                text.size().x + icon.size().x + 28.0
+            })
+            .sum()
+    });
+    let screen = ctx.screen_rect();
+    let width = (widths + 24.0)
+        .max(640.0)
+        .min((screen.width() - 80.0).max(320.0));
+    let height = 560.0_f32.min((screen.height() - 120.0).max(260.0));
+    egui::vec2(width, height)
 }

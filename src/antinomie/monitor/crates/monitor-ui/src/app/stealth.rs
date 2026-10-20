@@ -300,7 +300,7 @@ pub(super) fn window(
     creating: bool,
 ) {
     let mut closed = false;
-    egui::Window::new("Stealth profile")
+    crate::widgets::window("Stealth profile")
         .id(egui::Id::new("vm_stealth"))
         .pivot(egui::Align2::CENTER_TOP)
         .default_pos(egui::pos2(ctx.screen_rect().center().x, 60.0))

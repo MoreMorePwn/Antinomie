@@ -2,6 +2,7 @@
 //! The theme choice: Settings > Appearance, remembered across launches, and
 //! the windows that follow the new window style.
 use super::*;
+use crate::getting_started::Step;
 use crate::theme::Theme;
 
 const SIZE: egui::Vec2 = egui::vec2(1280.0, 900.0);
@@ -50,4 +51,44 @@ fn choosing_a_theme_in_settings_restyles_the_app_and_is_kept() {
         assert_eq!(loaded.active_theme(), expected);
     }
     theme::apply_theme(&ctx, Theme::Dark);
+}
+
+#[test]
+fn getting_started_keeps_every_step_on_one_row_in_a_locked_window() {
+    for font in [12.0, 16.0, 20.0, 24.0] {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        theme::text_size(&ctx, font);
+        let mut app = app();
+        app.getting_started.open = true;
+        app.getting_started.snapshot_seen = true;
+        for _ in 0..3 {
+            render(&mut app, &ctx, SIZE);
+        }
+        let id = Dialog::GettingStarted.window_id();
+        let first = ctx.memory(|memory| memory.area_rect(id)).expect("window");
+        let output = render(&mut app, &ctx, SIZE);
+        let shown = texts(&output);
+        let rows: Vec<f32> = Step::ALL
+            .iter()
+            .map(|step| {
+                shown
+                    .iter()
+                    .find(|(text, _)| text == step.title())
+                    .unwrap_or_else(|| panic!("step {} missing at {font}: {shown:?}", step.title()))
+                    .1
+                    .center()
+                    .y
+            })
+            .collect();
+        assert!(
+            rows.iter().all(|y| (y - rows[0]).abs() < 6.0),
+            "steps wrap at text size {font}: {rows:?}"
+        );
+        // Locked: the size does not move between frames, and it is not
+        // resizable (no resize handle takes a drag).
+        let later = ctx.memory(|memory| memory.area_rect(id)).unwrap();
+        assert_eq!(first.size(), later.size());
+        assert!(later.width() <= SIZE.x && later.height() <= SIZE.y);
+    }
 }

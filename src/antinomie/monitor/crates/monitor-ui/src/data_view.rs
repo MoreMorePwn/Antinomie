@@ -632,7 +632,7 @@ impl DataWindow {
     fn show(&mut self, ctx: &egui::Context) {
         self.poll(ctx);
         let mut open = self.open;
-        egui::Window::new(self.title.as_str())
+        crate::widgets::window(self.title.as_str())
             .id(self.id())
             .open(&mut open)
             .default_size([860.0, 460.0])

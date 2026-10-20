@@ -376,7 +376,7 @@ impl MonitorApp {
         } else {
             column.min(screen.width() - 60.0)
         };
-        egui::Window::new(if creating {
+        crate::widgets::window(if creating {
             "New VM"
         } else {
             "VM configuration"
@@ -774,7 +774,7 @@ fn transport_window(
     editable: bool,
 ) {
     let mut closed = false;
-    egui::Window::new("Telemetry transport")
+    crate::widgets::window("Telemetry transport")
         .id(egui::Id::new("vm_transport"))
         // Beside the top of the VM dialog, not over its buttons.
         .pivot(egui::Align2::CENTER_TOP)
