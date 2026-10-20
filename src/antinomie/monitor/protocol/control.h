@@ -64,7 +64,19 @@
 #define ANTC_CORE_CAPTURE 0x1063
 #define ANTC_CORE_LOOKUP 0x1064
 #define ANTC_CORE_CANCEL 0x1065
+/* Revision 17 additions (0.7.0): CORE_CAPS and CORE_STATUS STORED are optional.
+ * A host must treat -EOPNOTSUPP from CORE_CAPS as the 64MiB / 5000ms contract
+ * and must not send the STORED flag to a guest that did not advertise it. */
+#define ANTC_CORE_CAPS 0x1066
 #define ANTC_CORE_STATUS_SIZE 80
+#define ANTC_CORE_STATUS_STORED 1
+#define ANTC_CORE_STATUS_STORED_SIZE 96
+#define ANTC_CORE_CAPS_SIZE 48
+#define ANTC_CORE_CAPS_BUDGET 1
+#define ANTC_CORE_CAPS_STORED 2
+#define ANTC_CORE_CAPS_LONG_TIMEOUT 4
+#define ANTC_CORE_CAPS_CHUNKED 8
+#define ANTC_CORE_CAPS_FAST_READ 16
 #define ANTC_CORE_READ_HOLE 1
 #define ANTC_CORE_LOGICAL_MAX 17179869184ULL
 #define ANTC_CORE_ARMED 1
@@ -226,7 +238,9 @@
  * EXEC_SPECIMEN appends u32 max_size, u32 timeout_ms after argv/env.
  * Its reply appends the 24-byte acquisition reply to the normal 24 bytes.
  * Acquisition failure never changes the execution result.
- * EXEC_CORE appends u32 max_size (1..64MiB), u32 timeout_ms (1..5000),
+ * EXEC_CORE appends u32 max_size (1..max_core_bytes from CORE_CAPS, 1..64MiB
+ * without it), u32 timeout_ms (1..max_timeout_ms from CORE_CAPS, 1..5000
+ * without it),
  * after the optional specimen trailer. Reply appends u64 core_id, u64
  * max_size, i32 status, u32 reserved=0 after optional specimen reply.
  * EXEC_DEBUG (Debug on start; capability DEBUG_START) opens a debug session on
@@ -244,6 +258,27 @@
  * u64 id/root_cookie/start_ns/finish_ns/size/expected_size at 0/8/16/24/32/40,
  * u32 state at48, i32 status at52, i32 original wait_status at56,
  * u32 signal/flags/tgid/thread_count/reserved=0 at60/64/68/72/76.
+ * With header flags=STORED (ANTC_CORE_STATUS_STORED, only for a guest whose
+ * CORE_CAPS advertised STATUS_STORED) the reply is 96 bytes: the 80 above, then
+ * u64 stored at 80 (bytes held in the buffer, zero until terminal like size)
+ * and u64 reserved=0 at 88. Any other header flag is -EINVAL.
+ * CORE_CAPS: header only (8 bytes). Reply 48 bytes: u32 abi=1 at 0, u32 flags at
+ * 4 (bit0 BUDGET: max_size up to max_core_bytes; bit1 STATUS_STORED; bit2
+ * LONG_TIMEOUT: timeout_ms up to max_timeout_ms; bit3 CHUNKED: the buffer grows
+ * while it is written, so -ENOMEM means the budget could not be reached; bit4
+ * FAST_READ: the guest polls every tick while a finished core is read),
+ * u64 max_core_bytes at 8 (per handle, 64MiB..1GiB: half of RAM less 128MiB,
+ * clamped), u64 pool_bytes at 16 (sum of the budgets of open handles, twice
+ * the maximum), u32 max_handles=4 at 24, u32 max_timeout_ms=60000 at 28,
+ * u64 guest_ram_bytes at 32, u64 prealloc_bytes at 40 (an exit core allocates
+ * this much when armed; the rest in 8MiB chunks as the core is written).
+ * The sink enforces the budget, so the status errno of a core is one reason:
+ * -EFBIG stored-byte budget reached, -ENOMEM no memory for another chunk,
+ * -ETIMEDOUT deadline, -ECANCELED cancel/release/fence, -E2BIG extent table
+ * full or more than 256 threads / 4096 mappings, -EOVERFLOW logical extent past
+ * 16GiB, -ENODATA coverage gap, -EINTR signal, -EIO the writer stopped
+ * otherwise. Earlier guests reported the first, fourth-from-last and last of
+ * these as -EIO or -EFBIG without that distinction.
  * Expected size is zero if complete ELF program headers are unavailable.
  * States: ARMED/COPYING/READY/PARTIAL/UNAVAILABLE/CANCELED. READY has
  * status0; PARTIAL retains a prefix with negative errno. Flags identify
@@ -259,7 +294,8 @@
  * max_size bounds the bytes actually stored (data replies), not that extent.
  * Only READY/PARTIAL data is readable; it is immutable.
  * CORE_RELEASE: header flags=0, u64 id at8; removes/cancels the handle.
- * Four handles, 128MiB global reservation; terminal handles expire after
+ * Four handles; their budgets add up to at most pool_bytes (128MiB on a guest
+ * without CORE_CAPS); terminal handles expire after
  * 180s idle. Armed handles require release; no automatic cancellation of
  * a long running process. Release while copying retains its reservation
  * until capture unwinds. Unknown ids return -ESRCH; ids/root cookies must
