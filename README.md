@@ -52,8 +52,9 @@ read, and anything the app could not decode or lost is marked as such.
   **Tools > Analysis tools** downloads them for Antinomie. The Properties tab
   computes ssdeep and TLSH itself; it also shows Magika's file type when
   **Tools > Analysis tools** has installed Magika (or the system has it)
-- Wireshark packet display filters and HTTP/DNS triage use the installed
-  `tshark` command with `prlimit` resource limits. On Debian/Ubuntu install
+- The Network tab (packet list and details), Wireshark packet display filters
+  and network triage use the installed `tshark` command with `prlimit`
+  resource limits; Antinomie decodes no protocol itself. On Debian/Ubuntu install
   `tshark util-linux`; these tools are checked in **Tools > App dependencies**.
 - Detection rules come from **Tools > Rule manager**, which downloads each
   pack from its publisher (GitHub, rules.emergingthreats.net, sslbl.abuse.ch),
@@ -158,9 +159,11 @@ for Antinomie 0.3.0 and newer):
   saved trace.
 - **Network**: select an ongoing or saved capture from capture history, or start
   one there. Protocol colors help scan the packets; click an address, protocol
-  or port to filter it, or use the counted dropdowns. Packets include source,
-  destination, DNS names, TCP flags, HTTP request lines and TLS server names,
-  with a byte view. **Open in Wireshark** opens the capture when installed.
+  or port to filter it, or use the counted dropdowns. The packet list and the
+  expandable details tree are exactly what the installed TShark prints
+  (protocol, info, every field), with a byte view that marks the bytes of the
+  selected line. Without TShark you see raw frames and bytes and a note to
+  install it. **Open in Wireshark** opens the capture when installed.
 - **Static Analysis**: the selected run's report: an overview, then each
   category; disassembly and decompilation are full listings with search.
 - **Details** and **Activity**: the selected call or run, and VM events.

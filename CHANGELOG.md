@@ -39,6 +39,46 @@ it runs.
   corners and a shadow; nothing dims behind them and they still move freely.
   **Getting started** is now wide enough for all six steps on one row at every
   text size, and its size is locked. No table contents changed.
+- **Network viewer: TShark parses every packet, the app only displays it.**
+  The packet list (Protocol and Info as Wireshark shows them) and the details
+  tree of the selected packet now come from the installed TShark, so every
+  protocol it knows is labeled: all TLS versions and handshakes, HTTP/2,
+  QUIC/HTTP/3 Initial packets with their server name, SSH, SMB, FTP, SMTP,
+  IRC, NTP, mDNS, DNS on any port and the rest, where before only
+  Ethernet/ARP/IP/ICMP/TCP/UDP, TLS Client Hello, HTTP/1, DNS on port 53 and
+  DHCP were labeled and everything else read as TCP or UDP. The details pane
+  is Wireshark's tree with expand and collapse (Expand all, Collapse all; a
+  line stays open in the next packet), and the hex pane marks the bytes of the
+  chosen line from TShark's own offsets; an offset that does not fit the frame
+  is dropped. Without keys it shows what TShark parses: handshakes with ALPN,
+  cipher suites, certificates, JA3/JA4 when the installed TShark computes them,
+  QUIC Initial server names, cleartext h2c and SSH banners. TShark runs in the
+  same sandbox as the display filters (no network, bounded time, memory and
+  output) and its output is treated as untrusted: values are validated and
+  sanitized, the details tree is capped at 20,000 lines and 24 levels, and
+  every byte range is checked against the frame. The app's own decoder of
+  frames (layers, summaries, HTTP/DNS reconstruction) is removed. Without
+  TShark the Network tab says "TShark not installed — install it from Tools"
+  and still lists raw frames (number, time, length) with their bytes.
+  Large captures: TShark prints the list once per capture on its own thread
+  (cancel with **Stop parsing**; the first 500 rows appear within a moment and
+  the page fills as parsing goes on), only one page of rows is held in memory,
+  and a finished capture's parsed list is cached beside it
+  (`<capture>.pcap.view`, keyed by the pcap's size and modification time and
+  the TShark version, deleted with the capture). A live capture is re-read
+  about once a second and only new frames are parsed again into the same list.
+  A synthetic 144,000-packet capture parses in about 11 seconds (the first
+  page after 1.5 s, a reopen from the cache in 0.3 s) while the slowest window
+  frame stays at 20 ms. Triage > Network gains a **Sessions** table (TLS and
+  QUIC hellos with server name, ALPN, cipher suites and fingerprints, and SSH
+  banners), lists cleartext HTTP/2 requests with the HTTP requests, and names
+  QUIC and HTTP/2 hosts in Hosts. The HTTP, DNS, IPs and Hosts tables were
+  already built from TShark fields; their earlier built-in reconstruction path,
+  which only the tests used, is removed.
+  Known limits: TShark reports byte ranges of reassembled or decrypted data
+  relative to that data, so such lines can highlight the wrong bytes of the
+  frame; and the details are parsed in one pass, so earlier segments of a
+  reassembled stream do not show "reassembled in" links.
 
 - **Detection shows what happened to each input.** Beside *Scanned inputs* the
   tab now reads "N complete · N skipped · N failed". The scan's status follows
