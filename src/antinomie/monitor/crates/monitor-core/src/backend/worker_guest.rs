@@ -168,6 +168,13 @@ impl Worker {
                             .into(),
                     );
                 }
+                if request.core_dump_on_exit {
+                    crate::core_limits::CoreLimits::check_known(
+                        self.snapshot.guest_core_limits,
+                        u64::from(request.core_max_size.unwrap_or(64 << 20)),
+                        request.core_timeout_ms.unwrap_or(5000),
+                    )?;
+                }
                 if request.core_dump_on_exit && request.run_in.guest_desktop() {
                     return Err("process Core Dump on Exit currently requires App Terminal; desktop wrappers do not identify the selected executable as the root group".into());
                 }

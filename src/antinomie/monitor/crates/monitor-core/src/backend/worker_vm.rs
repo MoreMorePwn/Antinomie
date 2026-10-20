@@ -51,6 +51,7 @@ impl Worker {
         self.snapshot.last_error = None;
         self.snapshot.health = Health::default();
         self.snapshot.guest_kernel = None;
+        self.snapshot.guest_core_limits = None;
         self.snapshot.events.clear();
         self.snapshot.captures.clear();
         self.snapshot.capture_events.clear();
@@ -143,6 +144,7 @@ impl Worker {
                 last_status_query: Instant::now(),
                 persisted_packets: 0,
                 kernel_probe: KernelProbe::Due(Instant::now()),
+                core_limits: None,
                 flush_queue: Vec::new(),
             })
         })();

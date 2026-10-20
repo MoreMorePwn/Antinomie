@@ -387,7 +387,13 @@ impl Worker {
                     mpsc::TryRecvError::Empty => mpsc::RecvTimeoutError::Timeout,
                     mpsc::TryRecvError::Disconnected => mpsc::RecvTimeoutError::Disconnected,
                 })
-            } else if self.debug.is_busy() {
+            } else if self.debug.is_busy()
+                || self
+                    .session
+                    .as_ref()
+                    .is_some_and(|session| session.core_transfer_active())
+            {
+                // A debugger's or a core transfer's round trips each wait for this loop.
                 self.receiver.recv_timeout(Duration::from_millis(1))
             } else {
                 self.receiver.recv_timeout(Duration::from_millis(10))

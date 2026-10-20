@@ -436,6 +436,13 @@ pub struct ExecRequest {
     /// Capture the native x86-64 root process group before its address space exits.
     #[serde(default)]
     pub core_dump_on_exit: bool,
+    /// Stored-byte budget of the exit core, bytes. None is a run saved before
+    /// the budget could be chosen, which used 64 MiB.
+    #[serde(default)]
+    pub core_max_size: Option<u32>,
+    /// Serialization deadline of the exit core, milliseconds; None is 5000.
+    #[serde(default)]
+    pub core_timeout_ms: Option<u32>,
     /// Debug on start: the guest parks the new program before its first user
     /// instruction and the app opens the debugger on it (a revision-17 base with
     /// the Phase 2 debugger; the run starts "Stopped at entry").
@@ -459,6 +466,15 @@ pub struct RunArtifacts {
     /// ELF core file; partial captures retain their available prefix.
     pub core_dump: Option<PathBuf>,
     pub core_state: RunArtifactState,
+    /// Why the core is not complete, when it is not.
+    pub core_reason: Option<crate::core_limits::CoreReason>,
+    /// The budget asked for, the one the guest accepted, the ELF-declared
+    /// extent, the bytes stored on disk and the file's logical size.
+    pub core_requested_size: Option<u64>,
+    pub core_accepted_size: Option<u64>,
+    pub core_expected_size: Option<u64>,
+    pub core_saved_size: Option<u64>,
+    pub core_logical_size: Option<u64>,
     pub issues: Vec<String>,
     /// The user deleted the run's captures. Older releases ignore this field
     /// and read the unchanged state and the now-empty capture list.
@@ -569,6 +585,23 @@ pub struct ProcessCoreCapture {
     pub guest_handle: Option<u64>,
     pub guest_status: Option<serde_json::Value>,
     pub issue: Option<String>,
+    /// The budget the user asked for when the guest's maximum lowered it.
+    #[serde(default)]
+    pub requested_max_size: Option<u32>,
+    /// The guest's largest budget when the request was made.
+    #[serde(default)]
+    pub guest_max_size: Option<u64>,
+    /// Bytes the guest held (its stored count) once the core was finished.
+    #[serde(default)]
+    pub stored_bytes: Option<u64>,
+    /// The file's ELF-declared extent.
+    #[serde(default)]
+    pub expected_size: Option<u64>,
+    /// Bytes on the host disk, holes excluded.
+    #[serde(default)]
+    pub allocated_size: Option<u64>,
+    #[serde(default)]
+    pub reason: Option<crate::core_limits::CoreReason>,
 }
 
 impl RunArtifacts {
@@ -1225,6 +1258,8 @@ impl Default for ExecRequest {
             capture_network: false,
             memory_dump_on_exit: false,
             core_dump_on_exit: false,
+            core_max_size: None,
+            core_timeout_ms: None,
             debug_on_start: false,
         }
     }
@@ -1752,6 +1787,8 @@ pub struct Snapshot {
     pub serial_log: Option<PathBuf>,
     /// The running guest kernel, once it has answered the INFO probe.
     pub guest_kernel: Option<GuestKernel>,
+    /// What the guest accepts for process cores; None until it has answered.
+    pub guest_core_limits: Option<crate::core_limits::CoreLimits>,
     pub last_error: Option<String>,
 }
 

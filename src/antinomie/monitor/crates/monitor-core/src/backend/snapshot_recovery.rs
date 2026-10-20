@@ -354,6 +354,7 @@ impl Session {
             last_status_query: Instant::now() - Duration::from_secs(1),
             persisted_packets: 0,
             kernel_probe: KernelProbe::Due(Instant::now()),
+            core_limits: None,
             flush_queue: Vec::new(),
         })
     }
@@ -786,6 +787,7 @@ impl Worker {
                 self.snapshot.capture_processes.clear();
                 self.snapshot.process_page = None;
                 self.snapshot.guest_kernel = None;
+                self.snapshot.guest_core_limits = None;
                 self.snapshot.network_capture = None;
                 self.snapshot.active_vm = Some(id.into());
                 self.snapshot.state = VmState::Running;

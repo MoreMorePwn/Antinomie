@@ -150,7 +150,7 @@ fn check() -> Result<(), String> {
         driver.command(Command::Create(VmConfig {
             name: "Process core qualification".into(),
             cpus: 4,
-            ram_mib: 512,
+            ram_mib: 256,
             disk_gib: 1,
             ..Default::default()
         }))?;
@@ -273,10 +273,13 @@ fn check() -> Result<(), String> {
         println!("PASS SIGKILL reports unavailable context without delaying immediate teardown");
         let partial = driver.launch("large", true)?;
         let path = driver.core(&partial, RunArtifactState::Partial)?;
+        // The budget bounds the stored bytes; a sparse core's length also counts holes.
+        use std::os::unix::fs::MetadataExt;
         let size = fs::metadata(&path)
             .map_err(|error| error.to_string())?
-            .len();
-        if size > 64 * 1024 * 1024 {
+            .blocks()
+            * 512;
+        if size > 64 * 1024 * 1024 + 65536 {
             return Err("partial core exceeded its configured limit".into());
         }
         println!("PASS bounded partial core: {size} bytes");

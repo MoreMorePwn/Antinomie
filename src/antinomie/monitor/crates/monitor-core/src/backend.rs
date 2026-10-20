@@ -3,6 +3,7 @@
 //! VM, and the session that owns one transport client.
 mod completions;
 mod core_sink;
+mod core_stream;
 mod debug_service;
 mod evidence_delete;
 mod guest_resource_control;
@@ -480,6 +481,8 @@ struct Session {
     last_status_query: Instant,
     persisted_packets: u64,
     kernel_probe: KernelProbe,
+    /// What the guest accepts for process cores, once it has said.
+    core_limits: Option<crate::core_limits::CoreLimits>,
     /// Disk work of recordings closed while the boot runs (a retired capture
     /// archive), taken by the worker into a flush job.
     flush_queue: Vec<crate::recording_flush::Step>,
@@ -674,6 +677,10 @@ enum KernelProbe {
     Info(u64),
     /// INFO was unsupported; STATS tells a pre-INFO kernel from one still booting.
     Stats(u64),
+    /// Send CORE_CAPS at this instant; the count is the attempts made.
+    CoreDue(Instant, u8),
+    /// CORE_CAPS request in flight.
+    Core(u64, u8),
     Done,
 }
 /// Retry interval while the guest control service is not yet registered.

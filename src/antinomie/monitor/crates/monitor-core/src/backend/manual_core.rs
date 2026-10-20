@@ -3,13 +3,16 @@
 //! durable nonce journal; uncertain admission is reconciled only by LOOKUP.
 use super::{
     core_sink::{Action, Kind, Sink},
+    core_stream::{self, Assembled},
     process_core::CoreStatus,
     *,
+};
+use crate::core_limits::{
+    CORE_MAX_SUPPORTED, CoreLimits, CoreOutcome, CoreReason, CoreReasonCode, guest_reason,
 };
 use crate::{ProcessCoreCapture, ProcessCorePhase, ProcessCoreRequest, core_capture};
 use sha2::{Digest, Sha256};
 const STATUS: u32 = 0x1060;
-const READ: u32 = 0x1061;
 const RELEASE: u32 = 0x1062;
 const IO_TIMEOUT: Duration = Duration::from_millis(50);
 fn terminal(state: u32) -> bool {
@@ -47,6 +50,9 @@ pub(super) struct Owner {
     pub done: bool,
     disk_finished: bool,
     disk_failed: bool,
+    /// The copy to the host has been checked against the host disk and quota.
+    preflighted: bool,
+    copy_started: Option<Instant>,
 }
 impl Owner {
     fn new(request: ProcessCoreRequest, directory: PathBuf, id: String) -> Self {
@@ -78,6 +84,12 @@ impl Owner {
                 guest_handle: None,
                 guest_status: None,
                 issue: None,
+                requested_max_size: None,
+                guest_max_size: None,
+                stored_bytes: None,
+                expected_size: None,
+                allocated_size: None,
+                reason: None,
             },
             sink: Sink::new(directory),
             initialized: false,
@@ -97,7 +109,25 @@ impl Owner {
             done: false,
             disk_finished: false,
             disk_failed: false,
+            preflighted: false,
+            copy_started: None,
         }
+    }
+    /// The first reason sticks: a later one is usually its consequence.
+    fn set_reason(&mut self, code: CoreReasonCode, errno: Option<i32>, text: impl Into<String>) {
+        if self.summary.reason.is_none() {
+            self.summary.reason = Some(CoreReason::new(code, errno, text));
+        }
+    }
+    /// A terminal guest status is being copied to the host.
+    pub(super) fn transferring(&self) -> bool {
+        !self.done
+            && self.desired.is_none()
+            && self.initialized
+            && self
+                .status
+                .as_ref()
+                .is_some_and(|status| matches!(status.state, 3 | 4))
     }
     fn issue(&mut self, issue: impl Into<String>) {
         self.summary.issue = Some(issue.into().chars().take(2048).collect());
@@ -156,12 +186,25 @@ impl Owner {
         }
         let mut value = serde_json::to_value(summary).map_err(|error| error.to_string())?;
         value["incomplete"] = (final_state != Some(RunArtifactState::Complete)).into();
+        value["copy_ms"] = self
+            .copy_started
+            .map(|started| started.elapsed().as_millis() as u64)
+            .into();
         value["policy"] =
             "native x86-64; resident-only no-fault pages; Linux filtered mappings".into();
         value["progress_limit"] =
             "in-progress metadata is a checkpoint prefix; final size/hash require the durable seal"
                 .into();
         Ok(value)
+    }
+    /// The recording quota ended the copy before the core was whole.
+    fn quota_error(&mut self, size: u64) -> String {
+        let text = format!(
+            "recording quota exhausted during manual core transfer; the core was cut at {} of {size} bytes",
+            self.summary.stored_size
+        );
+        self.set_reason(CoreReasonCode::Quota, None, text.clone());
+        text
     }
     pub(super) fn guest_busy(&self) -> bool {
         !self.done
@@ -246,6 +289,12 @@ impl Session {
         mut request: ProcessCoreRequest,
     ) -> Result<String, String> {
         core_capture::validate_request(&request)?;
+        CoreLimits::check_known(
+            self.core_limits,
+            u64::from(request.max_size),
+            request.timeout_ms,
+        )?;
+        let limits = self.core_limits.unwrap_or(CoreLimits::LEGACY);
         if request.vm_id != self.vm.id || request.target.boot_id != self.boot_id {
             return Err("manual core target belongs to another VM or boot".into());
         }
@@ -296,11 +345,12 @@ impl Session {
             .directory
             .parent()
             .ok_or("missing boot directory")?;
-        let owner = Owner::new(
+        let mut owner = Owner::new(
             request,
             boot_dir.join("core-captures").join(&id),
             id.clone(),
         );
+        owner.summary.guest_max_size = Some(limits.max_size);
         self.manual_record_count += 1;
         self.manual_cores.insert(id.clone(), owner);
         Ok(format!(
@@ -317,6 +367,7 @@ impl Session {
         }
         owner.cancel_requested = true;
         owner.activity = Instant::now();
+        owner.set_reason(CoreReasonCode::Canceled, None, "canceled by the user");
         owner.finish(RunArtifactState::Interrupted,"cancellation requested; waiting for guest pause release and retained-prefix durability");
         owner.issue("cancellation requested; waiting for guest pause release and retained-prefix durability");
         Ok("Manual core cancellation queued; specimen is not terminated".into())
@@ -338,14 +389,17 @@ impl Session {
         } else {
             STATUS
         };
+        // Only a status by handle can carry the stored byte count.
+        let extended = opcode == STATUS && self.core_limits.is_some_and(|l| l.stored_status);
         let args = if opcode == control::CORE_LOOKUP {
             control::core_lookup(&owner.summary.target, owner.summary.nonce)
         } else {
-            control::with_session(
+            control::core_status(
                 owner
                     .summary
                     .guest_handle
                     .ok_or("manual core handle missing")?,
+                extended,
             )
         };
         let reply = match self.request_typed(opcode, &args, snapshot, sender, IO_TIMEOUT) {
@@ -375,6 +429,7 @@ impl Session {
             id,
             owner.summary.target.task_cookie,
             owner.summary.target.tgid,
+            extended,
         )?;
         if status.size > core_capture::LOGICAL_LIMIT {
             return Err("manual core exceeded the longest extent a guest may report".into());
@@ -414,7 +469,9 @@ impl Session {
         if receipt.kind == Kind::Init {
             owner.initialized = true;
         }
+        owner.summary.allocated_size = Some(owner.allocated);
         if let Err(error) = receipt.result {
+            owner.set_reason(CoreReasonCode::HostWrite, None, error.clone());
             owner.initialized = true;
             owner.cancel_requested = true;
             if receipt.kind == Kind::Finish {
@@ -486,8 +543,8 @@ impl Session {
                 Duration::from_millis(100),
             ) {
                 Ok(reply) => {
-                    match control::acquisition(&reply) {
-                        Ok((id, size)) if size > 0 && size <= u64::from(owner.summary.max_size) => {
+                    match control::acquisition_bounded(&reply, CORE_MAX_SUPPORTED) {
+                        Ok((id, size)) if size > 0 && size == u64::from(owner.summary.max_size) => {
                             owner.summary.guest_handle = Some(id);
                             owner.summary.phase = ProcessCorePhase::GuestCapture;
                         }
@@ -570,69 +627,125 @@ impl Session {
         }
         owner.summary.phase = ProcessCorePhase::Transfer;
         owner.summary.state = RunArtifactState::InProgress;
+        let status = status.clone();
+        let limits = self.core_limits.unwrap_or(CoreLimits::LEGACY);
+        if !owner.preflighted {
+            owner.preflighted = true;
+            owner.copy_started = Some(Instant::now());
+            self.manual_preflight(owner, &status)?;
+        }
         if owner.summary.stored_size == status.size {
             let complete = status.state == 3 && status.flags & 8 == 0;
-            owner.finish(if complete{RunArtifactState::Complete}else{RunArtifactState::Partial},if complete{""}else{"manual capture has omitted resident pages, missing context or a truncated prefix"});
+            let reason = guest_reason(&CoreOutcome {
+                state: status.state,
+                status: status.status,
+                expected: status.expected_size,
+                size: status.size,
+                stored: status.stored,
+                flags: status.flags,
+                budget: u64::from(owner.summary.max_size),
+                limits,
+            });
+            if let Some(reason) = reason {
+                owner.summary.reason.get_or_insert(reason);
+            }
+            let issue = match (&owner.summary.reason, complete) {
+                (_, true) => String::new(),
+                (Some(reason), false) => reason.text.clone(),
+                (None, false) => {
+                    "manual capture has omitted resident pages, missing context or a truncated prefix".into()
+                }
+            };
+            owner.finish(
+                if complete {
+                    RunArtifactState::Complete
+                } else {
+                    RunArtifactState::Partial
+                },
+                issue,
+            );
             return Ok(());
         }
-        let capacity = (status.size - owner.summary.stored_size)
-            .min(u64::from(control::SPECIMEN_CHUNK_SIZE))
-            .min(self.available()) as u32;
-        if capacity == 0 {
-            return Err("recording quota exhausted during manual core transfer".into());
+        let depth = if limits.advertised {
+            core_stream::READ_DEPTH
+        } else {
+            1
+        };
+        let requests = core_stream::plan(
+            owner.summary.stored_size,
+            status.size,
+            depth,
+            self.available(),
+        );
+        if requests.is_empty() {
+            return Err(owner.quota_error(status.size));
         }
-        let Some(reply) = self.core_readonly(
-            READ,
-            &control::specimen_read(status.id, owner.summary.stored_size, capacity),
-            snapshot,
-            sender,
-            owner.activity,
-        )?
+        let Some(replies) =
+            self.core_read_burst(status.id, &requests, snapshot, sender, owner.activity)?
         else {
             return Ok(());
         };
-        let chunk =
-            match control::core_chunk(&reply, owner.summary.stored_size, status.size, capacity)? {
-                control::CoreChunk::Data(chunk) => chunk,
-                control::CoreChunk::Hole(len) => {
-                    // Zeros the guest never stored: a sparse range, no quota used.
-                    owner.sink.submit(Action::Hole {
-                        offset: owner.summary.stored_size,
-                        len,
-                    })?;
-                    owner.reserved_len = 0;
-                    owner.activity = Instant::now();
-                    return Ok(());
-                }
-            };
-        let retained = chunk.len().min(self.available() as usize);
+        let data = match core_stream::assemble(&requests, &replies, status.size)? {
+            Assembled::Data(data) => data,
+            Assembled::Hole(len) => {
+                // Zeros the guest never stored: a sparse range, no quota used.
+                owner.sink.submit(Action::Hole {
+                    offset: owner.summary.stored_size,
+                    len,
+                })?;
+                owner.reserved_len = 0;
+                owner.activity = Instant::now();
+                return Ok(());
+            }
+        };
+        let retained = data.len().min(self.available() as usize);
         if retained == 0 {
-            return Err("recording quota exhausted during manual core transfer".into());
+            return Err(owner.quota_error(status.size));
         }
         if owner.allocated + retained as u64 > u64::from(owner.summary.max_size) {
             return Err("manual core stored more than its requested limit".into());
         }
         if owner.summary.stored_size == 0
             && retained >= 20
-            && (&chunk[..7] != b"\x7fELF\x02\x01\x01"
-                || chunk[16..18] != 4u16.to_le_bytes()
-                || chunk[18..20] != 62u16.to_le_bytes())
+            && (&data[..7] != b"\x7fELF\x02\x01\x01"
+                || data[16..18] != 4u16.to_le_bytes()
+                || data[18..20] != 62u16.to_le_bytes())
         {
             return Err("manual core is not a native Linux x86-64 ELF core".into());
         }
+        let cut = retained < data.len();
+        let mut data = data;
+        data.truncate(retained);
         if owner.sink.submit(Action::Write {
             offset: owner.summary.stored_size,
-            data: chunk[..retained].to_vec(),
+            data,
             metadata: owner.metadata(None)?,
         })? {
             owner.reserved_len = retained as u64;
             self.core_reserved_len = self.core_reserved_len.saturating_add(owner.reserved_len);
-            if retained < chunk.len() {
-                owner.finish(
-                    RunArtifactState::Partial,
-                    "recording quota exhausted; retained available manual-core prefix",
-                );
+            if cut {
+                let text = "recording quota exhausted; retained available manual-core prefix";
+                owner.set_reason(CoreReasonCode::Quota, None, text);
+                owner.finish(RunArtifactState::Partial, text);
             }
+        }
+        Ok(())
+    }
+    /// Before the copy starts: announce what the recording quota will cut and
+    /// refuse to start one the host disk cannot hold.
+    fn manual_preflight(&mut self, owner: &mut Owner, status: &CoreStatus) -> Result<(), String> {
+        let need = status
+            .stored
+            .unwrap_or_else(|| status.size.min(CoreLimits::LEGACY.max_size));
+        owner.summary.stored_bytes = status.stored;
+        owner.summary.expected_size = Some(status.expected_size).filter(|&size| size > 0);
+        if let Some(text) = core_stream::quota_warning(self.available(), need) {
+            owner.set_reason(CoreReasonCode::Quota, None, text.clone());
+            owner.issue(text);
+        }
+        if let Some(text) = core_stream::host_space_refusal(&owner.summary.directory, need) {
+            owner.set_reason(CoreReasonCode::HostDisk, None, text.clone());
+            return Err(text);
         }
         Ok(())
     }
@@ -859,6 +972,11 @@ impl Session {
             owner.known_absent = true;
             owner.release_attempted = true;
             owner.cancel_requested = true;
+            owner.set_reason(
+                CoreReasonCode::Sealed,
+                None,
+                format!("sealed at {boundary}"),
+            );
             owner.finish(
                 RunArtifactState::Interrupted,
                 format!("manual capture sealed at {boundary}; no admission is replayed"),
@@ -953,7 +1071,13 @@ mod tests {
         assert_eq!(u64_at(&lookup, 32).unwrap(), 11);
         assert_eq!(u64_at(&lookup, 40).unwrap(), 12);
         let mut invalid = request();
+        // The wire carries up to the host's absolute bound; the guest's own is checked elsewhere.
+        invalid.max_size = 1 << 30;
+        assert!(control::core_capture(&invalid, [11, 12]).is_ok());
         invalid.max_size += 1;
+        assert!(control::core_capture(&invalid, [11, 12]).is_err());
+        invalid.max_size = 64 << 20;
+        invalid.timeout_ms = 60_001;
         assert!(control::core_capture(&invalid, [11, 12]).is_err());
     }
     #[test]
@@ -981,22 +1105,28 @@ mod tests {
     }
     #[test]
     fn terminal_manual_status_requires_pause_release_and_native_coverage() {
-        assert!(CoreStatus::parse_manual(&status(2, 0x50), 5, 6, 7).is_ok());
-        assert!(CoreStatus::parse_manual(&status(3, 0x76), 5, 6, 7).is_ok());
+        assert!(CoreStatus::parse_manual(&status(2, 0x50), 5, 6, 7, false).is_ok());
+        assert!(CoreStatus::parse_manual(&status(3, 0x76), 5, 6, 7, false).is_ok());
         for flags in [0x56, 0x77, 0x36, 0xf6] {
-            assert!(CoreStatus::parse_manual(&status(3, flags), 5, 6, 7).is_err());
+            assert!(CoreStatus::parse_manual(&status(3, flags), 5, 6, 7, false).is_err());
         }
         for identity in [(4, 6, 7), (5, 9, 7), (5, 6, 8)] {
             assert!(
-                CoreStatus::parse_manual(&status(3, 0x76), identity.0, identity.1, identity.2)
-                    .is_err()
+                CoreStatus::parse_manual(
+                    &status(3, 0x76),
+                    identity.0,
+                    identity.1,
+                    identity.2,
+                    false
+                )
+                .is_err()
             );
         }
         let mut invalid = status(3, 0x76);
         invalid[60..64].copy_from_slice(&11u32.to_le_bytes());
-        assert!(CoreStatus::parse_manual(&invalid, 5, 6, 7).is_err());
+        assert!(CoreStatus::parse_manual(&invalid, 5, 6, 7, false).is_err());
         for len in 0..80 {
-            assert!(CoreStatus::parse_manual(&invalid[..len], 5, 6, 7).is_err());
+            assert!(CoreStatus::parse_manual(&invalid[..len], 5, 6, 7, false).is_err());
         }
     }
     #[test]
@@ -1071,7 +1201,7 @@ mod tests {
         owner.summary.guest_handle = Some(5);
         owner.summary.guest_size = Some(64);
         owner.summary.pause_released = Some(true);
-        owner.status = Some(CoreStatus::parse_manual(&status(3, 0x76), 5, 6, 7).unwrap());
+        owner.status = Some(CoreStatus::parse_manual(&status(3, 0x76), 5, 6, 7, false).unwrap());
         assert!(
             !owner.snapshot_busy(),
             "an ordinary resumed immutable transfer remains snapshot-compatible"

@@ -27,6 +27,16 @@ pub(crate) const CAPTURE_STATUS: u32 = 0x1054;
 pub(crate) const CORE_CAPTURE: u32 = 0x1063;
 pub(crate) const CORE_LOOKUP: u32 = 0x1064;
 pub(crate) const CORE_CANCEL: u32 = 0x1065;
+pub(crate) const CORE_CAPS: u32 = 0x1066;
+/// `CORE_STATUS` header flag: append the stored byte count (reply of 96 bytes).
+pub(crate) const CORE_STATUS_STORED: u32 = 1;
+/// `CORE_STATUS` for a handle; `extended` asks for the stored byte count, which
+/// only a guest that advertised it understands.
+pub(crate) fn core_status(id: u64, extended: bool) -> Vec<u8> {
+    let mut args = header(u32::from(extended) * CORE_STATUS_STORED);
+    args.extend(id.to_le_bytes());
+    args
+}
 pub(crate) fn core_capture(
     request: &crate::api::ProcessCoreRequest,
     nonce: [u64; 2],
@@ -281,8 +291,9 @@ pub(crate) fn execute_analysis(r: &ExecRequest, supported: bool) -> Result<Vec<u
     if r.core_dump_on_exit {
         let flags = u32::from(supported && r.analysis.enabled) | 2;
         encoded[4..8].copy_from_slice(&flags.to_le_bytes());
-        encoded.extend(SPECIMEN_MAX_SIZE.to_le_bytes());
-        encoded.extend(5000u32.to_le_bytes());
+        // A run saved before the budget could be chosen used the old contract.
+        encoded.extend(r.core_max_size.unwrap_or(SPECIMEN_MAX_SIZE).to_le_bytes());
+        encoded.extend(r.core_timeout_ms.unwrap_or(5000).to_le_bytes());
     }
     if r.debug_on_start {
         // No request bytes follow the flag; the reply carries the start time.
@@ -308,6 +319,10 @@ pub(crate) fn acquire(path: &str, uid: u32, gid: u32) -> Result<Vec<u8>, String>
     Ok(encoded)
 }
 pub(crate) fn acquisition(reply: &[u8]) -> Result<(u64, u64), String> {
+    acquisition_bounded(reply, u64::from(SPECIMEN_MAX_SIZE))
+}
+/// An arm reply whose reservation may be as large as `limit` bytes.
+pub(crate) fn acquisition_bounded(reply: &[u8], limit: u64) -> Result<(u64, u64), String> {
     use crate::parser::{u32_at, u64_at};
     if reply.len() != 24 || u32_at(reply, 20).map_err(|e| e.to_string())? != 0 {
         return Err("invalid acquisition reply length or padding".into());
@@ -325,7 +340,7 @@ pub(crate) fn acquisition(reply: &[u8]) -> Result<(u64, u64), String> {
             std::io::Error::from_raw_os_error(errno)
         ));
     }
-    if status != 0 || id == 0 || size > u64::from(SPECIMEN_MAX_SIZE) {
+    if status != 0 || id == 0 || size > limit {
         return Err("invalid acquisition identity, size or status".into());
     }
     Ok((id, size))
@@ -492,6 +507,29 @@ mod tests {
             &combined[legacy.len()..legacy.len() + 8],
             &combined[legacy.len() + 8..]
         );
+    }
+    #[test]
+    fn core_exec_trailer_carries_the_requested_budget_and_deadline() {
+        let mut request = ExecRequest::default();
+        let legacy = execute(&request).unwrap();
+        request.core_dump_on_exit = true;
+        request.core_max_size = Some(256 << 20);
+        request.core_timeout_ms = Some(7600);
+        let core = execute_analysis(&request, true).unwrap();
+        assert_eq!(
+            &core[legacy.len()..legacy.len() + 4],
+            &(256u32 << 20).to_le_bytes()
+        );
+        assert_eq!(&core[legacy.len() + 4..], &7600u32.to_le_bytes());
+        let status = core_status(9, true);
+        assert_eq!(&status[4..8], &1u32.to_le_bytes());
+        assert_eq!(&core_status(9, false)[4..8], &0u32.to_le_bytes());
+        let mut arm = Vec::new();
+        arm.extend(4u64.to_le_bytes());
+        arm.extend((256u64 << 20).to_le_bytes());
+        arm.extend(0u64.to_le_bytes());
+        assert!(acquisition(&arm).is_err());
+        assert_eq!(acquisition_bounded(&arm, 1 << 30).unwrap(), (4, 256 << 20));
     }
     #[test]
     fn analysis_wire_preserves_off_and_legacy_execution_and_rejects_bad_replies() {

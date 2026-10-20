@@ -155,6 +155,12 @@ fn live_manual_metadata_refresh_keeps_loaded_inspection_and_filters() {
         guest_handle: None,
         guest_status: None,
         issue: None,
+        requested_max_size: None,
+        guest_max_size: None,
+        stored_bytes: None,
+        expected_size: None,
+        allocated_size: None,
+        reason: None,
     };
     for (phase, state) in [
         (ProcessCorePhase::Admission, State::WaitingForRootExit),
@@ -772,6 +778,12 @@ fn unfinished_manual_core_shows_recorded_status_without_stale_context() {
         guest_handle: Some(7),
         guest_status: None,
         issue: None,
+        requested_max_size: None,
+        guest_max_size: None,
+        stored_bytes: None,
+        expected_size: None,
+        allocated_size: None,
+        reason: None,
     });
     let output = settle(&ctx, &mut fixture.view, egui::vec2(1280.0, 900.0));
     let content = texts(&output);

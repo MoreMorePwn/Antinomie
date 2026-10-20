@@ -18,7 +18,8 @@ use std::{
 
 const WORKERS: usize = 4;
 const QUEUED_JOBS: usize = 4;
-pub(super) const CHUNK_SIZE: usize = 16328;
+/// Most bytes one write may carry: a burst of reads joined into one.
+pub(super) const WRITE_LIMIT: usize = 256 * 1024;
 
 pub(super) enum Action {
     Init {
@@ -171,7 +172,7 @@ impl Sink {
             return Ok(false);
         }
         if let Action::Write { data, .. } = &action
-            && (data.is_empty() || data.len() > CHUNK_SIZE)
+            && (data.is_empty() || data.len() > WRITE_LIMIT)
         {
             return Err("core disk chunk exceeds its bound".into());
         }
@@ -466,6 +467,35 @@ mod tests {
         sink.pending = true;
         assert!(matches!(sink.poll(), Err(error) if error.contains("disconnected")));
         assert!(!sink.pending());
+    }
+    #[test]
+    fn a_joined_write_of_a_burst_keeps_size_digest_and_its_bound() {
+        let root = std::env::temp_dir().join(format!("ant-core-burst-{}", storage::unique_id()));
+        let mut sink = Sink::new(root);
+        let data = vec![0x5a; WRITE_LIMIT];
+        assert!(
+            sink.submit(Action::Write {
+                offset: 0,
+                data: data.clone(),
+                metadata: serde_json::json!({})
+            })
+            .unwrap()
+        );
+        let receipt = wait(&mut sink);
+        assert!(receipt.result.is_ok());
+        assert_eq!(
+            (receipt.size, receipt.allocated),
+            (WRITE_LIMIT as u64, WRITE_LIMIT as u64)
+        );
+        assert_eq!(receipt.sha256, format!("{:x}", Sha256::digest(&data)));
+        assert!(
+            sink.submit(Action::Write {
+                offset: WRITE_LIMIT as u64,
+                data: vec![0; WRITE_LIMIT + 1],
+                metadata: serde_json::json!({})
+            })
+            .is_err()
+        );
     }
     #[test]
     fn worker_reports_actual_prefix_hash_and_terminal_durability_errors() {

@@ -70,6 +70,8 @@ impl Session {
             capture_network: false,
             memory_dump_on_exit: false,
             core_dump_on_exit: false,
+            core_max_size: None,
+            core_timeout_ms: None,
             debug_on_start: false,
         };
         let reply = match self.request_typed(
