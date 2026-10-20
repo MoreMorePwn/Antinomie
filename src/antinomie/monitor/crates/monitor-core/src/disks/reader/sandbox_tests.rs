@@ -190,6 +190,31 @@ fn script_worker(fixture: &Fixture, body: &str) -> std::path::PathBuf {
     path
 }
 
+/// A `sleep` argument unique to this test process, so a worker is found by
+/// its command line even while other test runs use the same sandbox.
+fn marker(base: u32) -> String {
+    format!("{base}.{}", std::process::id())
+}
+
+/// Run `body` on its own thread and fail, instead of hanging the suite, when
+/// it takes longer than a minute: a reader that cannot stop its worker would
+/// otherwise block on the worker's pipes for ever.
+fn within_a_minute(body: impl FnOnce() + Send + 'static) {
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        body();
+        let _ = done.send(());
+    });
+    match finished.recv_timeout(Duration::from_secs(60)) {
+        Ok(()) => {}
+        // The body panicked (its sender dropped): report that, not a timeout.
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!("the test body panicked"),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            panic!("hung: the reader did not stop its worker within a minute")
+        }
+    }
+}
+
 fn process_running(marker: &str) -> bool {
     fs::read_dir("/proc")
         .unwrap()
@@ -201,85 +226,94 @@ fn process_running(marker: &str) -> bool {
 #[test]
 fn a_stalled_worker_is_killed_and_the_next_request_starts_a_new_one() {
     require_sandbox!();
-    let fixture = Fixture::new();
-    let image = fixture.path("image");
-    fs::write(&image, b"x").unwrap();
-    // A worker that never answers.
-    let worker = script_worker(&fixture, "exec /usr/bin/sleep 31337");
-    let mut reader = Reader::with_executable(worker, &image, &fixture.path("out")).unwrap();
-    reader.set_timeout(Duration::from_millis(800));
-    let error = reader.request(DiskRequest::Probe).unwrap_err();
-    assert!(error.contains("did not answer in time"), "{error}");
-    std::thread::sleep(Duration::from_millis(300));
-    assert!(
-        !process_running("31337"),
-        "the stalled worker was left running"
-    );
+    within_a_minute(|| {
+        let fixture = Fixture::new();
+        let image = fixture.path("image");
+        fs::write(&image, b"x").unwrap();
+        // A worker that never answers.
+        let worker = script_worker(&fixture, &format!("exec /usr/bin/sleep {}", marker(31337)));
+        let mut reader = Reader::with_executable(worker, &image, &fixture.path("out")).unwrap();
+        reader.set_timeout(Duration::from_millis(800));
+        let error = reader.request(DiskRequest::Probe).unwrap_err();
+        assert!(error.contains("did not answer in time"), "{error}");
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            !process_running(&marker(31337)),
+            "the stalled worker was left running"
+        );
 
-    // A worker that dies at once reports why (its stderr), then is replaced.
-    let dying = script_worker(&fixture, "echo 'cannot start' >&2; exit 3");
-    let mut reader = Reader::with_executable(dying, &image, &fixture.path("out")).unwrap();
-    reader.set_timeout(Duration::from_secs(5));
-    let error = reader.request(DiskRequest::Probe).unwrap_err();
-    assert!(
-        error.contains("stopped") && error.contains("cannot start"),
-        "{error}"
-    );
-    let again = reader.request(DiskRequest::Probe).unwrap_err();
-    assert!(again.contains("cannot start"), "{again}");
+        // A worker that dies at once reports why (its stderr), then is replaced.
+        let dying = script_worker(&fixture, "echo 'cannot start' >&2; exit 3");
+        let mut reader = Reader::with_executable(dying, &image, &fixture.path("out")).unwrap();
+        reader.set_timeout(Duration::from_secs(5));
+        let error = reader.request(DiskRequest::Probe).unwrap_err();
+        assert!(
+            error.contains("stopped") && error.contains("cannot start"),
+            "{error}"
+        );
+        let again = reader.request(DiskRequest::Probe).unwrap_err();
+        assert!(again.contains("cannot start"), "{again}");
+    });
 }
 
 #[test]
 fn dropping_the_reader_stops_its_worker() {
     require_sandbox!();
-    let fixture = Fixture::new();
-    let image = fixture.path("image");
-    fs::write(&image, b"x").unwrap();
-    let worker = script_worker(&fixture, "exec /usr/bin/sleep 41414");
-    let mut reader = Reader::with_executable(worker, &image, &fixture.path("out")).unwrap();
-    reader.set_timeout(Duration::from_millis(300));
-    let _ = reader.request(DiskRequest::Probe);
-    drop(reader);
-    std::thread::sleep(Duration::from_millis(300));
-    assert!(!process_running("41414"));
+    within_a_minute(|| {
+        let fixture = Fixture::new();
+        let image = fixture.path("image");
+        fs::write(&image, b"x").unwrap();
+        let worker = script_worker(&fixture, &format!("exec /usr/bin/sleep {}", marker(41414)));
+        let mut reader = Reader::with_executable(worker, &image, &fixture.path("out")).unwrap();
+        reader.set_timeout(Duration::from_millis(300));
+        let _ = reader.request(DiskRequest::Probe);
+        drop(reader);
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!process_running(&marker(41414)));
+    });
 }
 
 #[test]
 fn cancelling_a_diff_or_a_content_search_kills_its_reader_at_once() {
     require_sandbox!();
-    let fixture = Fixture::new();
-    let (image, other) = (fixture.path("image"), fixture.path("other"));
-    fs::write(&image, b"x").unwrap();
-    fs::write(&other, b"y").unwrap();
-    // A worker that never answers, like a diff of two enormous images.
-    let worker = script_worker(&fixture, "exec /usr/bin/sleep 61616");
-    let mut reader =
-        Reader::with_executable_and_other(worker, &image, Some(&other), &fixture.path("out"))
-            .unwrap();
-    let abort = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    reader.set_abort_flag(abort.clone());
-    let flag = abort.clone();
-    let canceller = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(400));
-        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    within_a_minute(|| {
+        let fixture = Fixture::new();
+        let (image, other) = (fixture.path("image"), fixture.path("other"));
+        fs::write(&image, b"x").unwrap();
+        fs::write(&other, b"y").unwrap();
+        // A worker that never answers, like a diff of two enormous images.
+        let worker = script_worker(&fixture, &format!("exec /usr/bin/sleep {}", marker(61616)));
+        let mut reader =
+            Reader::with_executable_and_other(worker, &image, Some(&other), &fixture.path("out"))
+                .unwrap();
+        let abort = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        reader.set_abort_flag(abort.clone());
+        let flag = abort.clone();
+        let canceller = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(400));
+            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
+        let started = std::time::Instant::now();
+        let error = reader.request(DiskRequest::Diff).unwrap_err();
+        canceller.join().unwrap();
+        assert!(error.starts_with("cancelled"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(10));
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            !process_running(&marker(61616)),
+            "the reader was left running"
+        );
+        // The same flag stops a content search before it starts working.
+        let error = reader
+            .request(DiskRequest::Find {
+                query: FindQuery {
+                    pattern: "needle".into(),
+                    mode: FindMode::Content,
+                },
+            })
+            .unwrap_err();
+        assert!(error.starts_with("cancelled"), "{error}");
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!process_running(&marker(61616)));
     });
-    let started = std::time::Instant::now();
-    let error = reader.request(DiskRequest::Diff).unwrap_err();
-    canceller.join().unwrap();
-    assert!(error.starts_with("cancelled"), "{error}");
-    assert!(started.elapsed() < Duration::from_secs(10));
-    std::thread::sleep(Duration::from_millis(300));
-    assert!(!process_running("61616"), "the reader was left running");
-    // The same flag stops a content search before it starts working.
-    let error = reader
-        .request(DiskRequest::Find {
-            query: FindQuery {
-                pattern: "needle".into(),
-                mode: FindMode::Content,
-            },
-        })
-        .unwrap_err();
-    assert!(error.starts_with("cancelled"), "{error}");
-    std::thread::sleep(Duration::from_millis(300));
-    assert!(!process_running("61616"));
 }
