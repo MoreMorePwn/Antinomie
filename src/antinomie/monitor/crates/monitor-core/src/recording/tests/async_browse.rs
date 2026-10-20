@@ -536,3 +536,66 @@ fn interleaved_dense_calls_keep_their_own_observations() {
     }
     cleanup(&directory);
 }
+
+/// Packets, calls and lifecycle rows an index holds.
+fn index_counts(connection: &rusqlite::Connection) -> (i64, i64, i64) {
+    let count = |table: &str| -> i64 {
+        connection
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    };
+    (count("packets"), count("invocations"), count("lifecycle"))
+}
+
+#[test]
+fn an_index_build_that_stops_between_chunks_resumes_from_its_cursor() {
+    let (directory, recording) = dense_recording(300);
+    let cancel = AtomicBool::new(false);
+    let index_path = archive_index_path(&directory).unwrap();
+    let (full, _) = archive_index(&directory, &cancel).unwrap();
+    let reference = index_counts(&full);
+    drop(full);
+    fs::remove_file(&index_path).unwrap();
+    // A build that dies after two chunks of a few packets each.
+    let stopped = index_archive(&directory, &cancel, 512, 2);
+    assert!(matches!(stopped, Err(RecordingError::Limit(_))));
+    let partial = rusqlite::Connection::open(&index_path).unwrap();
+    let (cursor, writer): (i64, Option<i64>) = partial
+        .query_row("SELECT length, writer FROM indexed", [], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .unwrap();
+    let raw = fs::metadata(directory.join("telemetry.raw")).unwrap().len();
+    assert!(
+        cursor > 0 && (cursor as u64) < raw,
+        "the cursor is inside the archive"
+    );
+    assert_eq!(writer, Some(INDEX_VERSION), "the partial index is stamped");
+    let held = index_counts(&partial);
+    assert!(held.0 > 0 && held.0 < reference.0, "a prefix is indexed");
+    drop(partial);
+    // The next open continues after the cursor instead of starting over or
+    // appending the same packets twice.
+    let (resumed, _) = archive_index(&directory, &cancel).unwrap();
+    assert_eq!(index_counts(&resumed), reference);
+    drop(resumed);
+    let page = recording.invocation_page(0, 10).unwrap();
+    assert_eq!(page.invocations[0].async_saved, 300);
+    cleanup(&directory);
+}
+
+#[test]
+fn a_cancelled_first_index_keeps_the_chunks_it_committed() {
+    let (directory, _) = dense_recording(300);
+    let index_path = archive_index_path(&directory).unwrap();
+    let _ = fs::remove_file(&index_path);
+    let cancel = AtomicBool::new(false);
+    let _ = index_archive(&directory, &cancel, 512, 1);
+    cancel.store(true, Ordering::Relaxed);
+    assert!(index_archive(&directory, &cancel, 512, usize::MAX).is_err());
+    let connection = rusqlite::Connection::open(&index_path).unwrap();
+    assert!(index_counts(&connection).0 > 0);
+    cleanup(&directory);
+}
