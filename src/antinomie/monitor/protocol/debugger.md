@@ -5,10 +5,14 @@ V7 control channel and exposed to the outside as a GDB Remote Serial Protocol
 (RSP) server on the host. Nothing runs inside the guest: no gdbserver, no agent,
 no `PTRACE_ATTACH`. The sample's `TracerPid` stays 0 and its own
 `PTRACE_TRACEME` still succeeds, because the engine never touches ptrace state.
-Opcodes `0x1080..0x108c` and their layouts are in `control.h`; this file records
+Opcodes `0x1080..0x1092` and their layouts are in `control.h`; this file records
 the semantics and the limits. The revision number is unchanged (17): the
 opcodes are additive and an older guest answers `-EOPNOTSUPP`, which the host
-reports as "this guest has no debugger".
+reports as "this guest has no debugger". Phase 3 (following forks and execs,
+non-stop threads, adoptable sessions) is additive on top of phase 2 in the same
+way: an earlier host never asks for any of it and gets the earlier replies; an
+earlier guest refuses the new requests and the host offers nothing that needs
+them (`CAPS` with the extension flag reports the second capability word).
 
 ## Multi-architecture by construction
 
@@ -51,16 +55,24 @@ The generic engine reads and writes registers through the kernel's own
   registers are not used. Stepping a breakpoint's own instruction happens with
   the group stopped and the breakpoints out of memory (a repeated string
   instruction is stepped until the instruction pointer moves).
-* **Threads** created while the group runs are adopted at their first breakpoint
-  from preallocated records (no allocation in exception context), so a new thread
-  is never handed a `SIGTRAP`.
+* **Threads** created while the group runs get a record when they are cloned
+  (the clone hook) and, when hardware breakpoints are set, install them from their
+  own context before their first user instruction; a thread the hook missed is
+  adopted at its first breakpoint from preallocated records (no allocation in
+  exception context), so a new thread is never handed a `SIGTRAP`.
 * **Steps are one user instruction.** The trap flag does it for ordinary
-  instructions. A `SYSCALL` (or `INT 0x80`) and a `rep`-prefixed string
-  instruction run to the instruction after them under an engine breakpoint with
-  the rest of the group stopped: the trap flag would retire the next instruction
-  after a system call (`SYSCALL` clears it and the return restores it) and one
-  iteration of a string loop. A step that blocks in a system call waits for the
-  system call; only the debugger's stop request ends it.
+  instructions. The trap flag alone would retire the next instruction after a
+  system call (`SYSCALL` clears it and the return restores it) and one iteration of
+  a string loop, so those two are special: a step that starts on `SYSCALL` or
+  `INT 0x80` arms the `SYSCALL_EXIT_TRAP` work bit that ptrace's single step uses,
+  and the engine's hook in `syscall_exit_work()` (taken before the `SIGTRAP`
+  report) ends the step at the system call's exit with the flag already removed;
+  a `rep`-prefixed string instruction keeps the trap flag armed and the `#DB`
+  handler consumes each iteration's trap in place until the instruction pointer
+  moves. Phase 2 planted a temporary breakpoint after the instruction with the
+  rest of the group stopped; that is gone, which is what lets threads step
+  independently. A step that blocks in a system call waits for the system call;
+  only the debugger's stop request ends it.
 * **Signals** (guest Phase 2). Every signal about to be delivered to a thread of
   the group stops the group first (`get_signal` calls the engine under the
   signal lock; the thread parks as a tracer's signal stop would, without a
@@ -96,17 +108,57 @@ The generic engine reads and writes registers through the kernel's own
   tells a debugging session first: no new stop starts, the group is stopped if it
   runs, then every thread is released and a signal it stopped on is delivered;
   the SIGKILL escalation stays the backstop and ends a parked thread through its
-  killable sleep. A breakpoint byte a `fork` child inherits in its own copy of the
+  killable sleep. When the group cannot be stopped (job control holds every
+  thread, a thread in an uninterruptible wait) the engine's breakpoint bytes are
+  taken out anyway after the stop gave up: a program that outlives its Stop must
+  not find them (a thread that reaches one in that instant gets the default
+  `SIGTRAP`, which is what the Stop is about to do to it anyway). A breakpoint byte a `fork` child inherits in its own copy of the
   memory is repaired in the child at its first trap (no `SIGTRAP`); a `vfork` child
   shares the parent's memory and cannot be repaired. Breakpoint removal restores
   the original bytes only where the engine's byte is still in place: code the
   program rewrote while it ran (self-modifying code) is left alone.
-* **Exit and exec**: `STATUS` reports `EXITED` with the wait status, or `EXEC`
-  when the address space was replaced (breakpoints are dropped; follow-exec is
-  future work).
-* **Reattach and snapshots**: the control fence resumes and removes the session
-  before it acknowledges; the host refuses VM snapshots while a debugger is
-  attached.
+* **Exit** (all sessions): `STATUS` reports `EXITED` with the wait status.
+* **Exec** (phase 3, option `EXEC`): the session continues in the new image. The
+  hook at the end of `exec_binprm` replaces the session's address-space object
+  (breakpoints and debug registers of the old image are dropped), the thread that
+  executed is the group leader (its id is the group id after `de_thread`), and the
+  thread stops with event `EXEC` carrying the path. Without the option exec still
+  ends the session (`EXEC` state), as in phase 2. A launch's own exec (Debug on
+  start) is not an event.
+* **Sessions and children** (phase 3): sessions are a list (at most 16), each over
+  one thread group; the engine's bytes live in an address-space object a vfork
+  child shares with its parent until it execs. With option `FORK` the fork hook (in
+  `kernel_clone`, before the child runs) opens a session for the child, parked at
+  its first return to user mode with event `CHILD`, holding a record of the engine
+  bytes it inherited (taken out when the debugger adopts it); the parent thread
+  stops at the system call's return with event `FORK` and the child's identity
+  (`ATTACH` with that identity and the debugger's nonce adopts the child). A vfork
+  parent sleeps in the kernel until the child execs or exits and cannot park: its
+  stop is reported at once without parking it (`VFORK`), the thread counts as
+  stopped (its registers are the system call's), and when the child lets go the
+  thread reports `VFORK_DONE`. A child nobody adopted when its parent session ends
+  is released with its bytes removed; detaching a child does the same. A clone that
+  shares memory without being a vfork (a "process" built from `CLONE_VM`) has no
+  owner of that memory and is not followed.
+* **Events that cannot wait** (phase 3): fork, exec and vfork-done happen once. When
+  one arrives while the stop cannot take it (the debugger already asked for a stop,
+  or the group is stopped), the thread keeps it and it is reported by the next
+  resume, before anything runs; a stop request that raced a fork therefore shows the
+  stop first and the fork on the continue.
+* **Non-stop** (phase 3, option `NONSTOP`): a thread with an event parks alone and
+  the event is queued (64 deep, oldest lost on overflow, counted) for the debugger to
+  read with `EVENTS` and acknowledge by sequence number; the others run. Software
+  breakpoint bytes stay in memory (`BP_SET` writes, `BP_CLEAR` restores at once, a
+  write over one updates the saved original and keeps the byte), so memory and
+  breakpoint requests need no stop, while registers need the thread stopped.
+  `THREAD_CTL` stops, continues or steps one thread (or every thread). A
+  breakpoint under a resumed thread fires again unless the debugger took it out
+  first, as gdb does (its own step-over or displaced stepping).
+* **Reconnect and restored snapshots** (phase 3): the control fence no longer ends
+  sessions. A session, its breakpoints and its stopped threads are guest state like
+  any other and survive; `SESSIONS` lists them, `BP_LIST` a session's breakpoints and
+  `ATTACH` with `ADOPT` takes one over with a new nonce. See "Reconnect and
+  snapshots" below.
 * Lock order: `dbg_lock` (attach and teardown) then the session spinlock; trap and
   park callbacks never take `dbg_lock` and never sleep except in the final wait.
 
@@ -133,18 +185,40 @@ host's worker loop. Poll time while no session exists is unchanged (10 ms).
 
 ## Host RSP server
 
-`gdbstub 0.7.10` owns framing, checksums, escaping, run-length encoding,
-`qSupported`, no-ack mode and packet dispatch; `RspTarget` implements the
-`Target` callbacks. All-stop, one process, multi-thread listing, software
-(`swbreak`) and hardware (`hwbreak`, `Z1`) breakpoints, write and access
-watchpoints (`Z2`, `Z4`; `Z3` is refused), `vCont` continue and single-step of one
-thread (others stay stopped), `C<sig>`/`S<sig>` to pass a signal, signal stops as
-`T<sig>` in GDB's own numbering (Linux and GDB differ for `SIGBUS`, `SIGUSR1`,
-`SIGCHLD`, ...; `debug/signals.rs` converts both ways), `qXfer:auxv:read`,
-`Ctrl-C`, `D`, `k`. Not offered, so never advertised: non-stop, range stepping,
-multiprocess, host I/O. A Phase 1 guest has no hardware kinds, signals or
-auxiliary vector and is not offered any.
+The server speaks the remote serial protocol itself (`debug/rsp_packet.rs`
+framing, escaping and run-length decoding; `rsp_client.rs` the session loop and
+stop replies; `rsp_requests.rs` the queries). No third-party protocol library: the
+`gdbstub` crate has no multiprocess ids, fork or exec events or non-stop, which
+are Phase 3. Offered: `multiprocess+`, `fork-events+`, `vfork-events+`,
+`exec-events+` (each only if the client asks and the guest announces FOLLOW),
+`QNonStop+` (guest NONSTOP), `swbreak+`, `hwbreak+`, `vContSupported+`,
+`QStartNoAckMode+`, `qXfer:features` and `qXfer:auxv`. Thread ids are
+`p<pid>.<tid>` (hex, even length); `Hgp0.0` and `-1` mean any process or thread.
 
+All-stop and non-stop. Software (`swbreak`) and hardware (`hwbreak`, `Z1`)
+breakpoints, write and access watchpoints (`Z2`, `Z4`; `Z3` is refused), `vCont`
+with `c`, `C`, `s`, `S`, `t` and per-process selectors (`vCont;c:p5f.-1`), signals
+as `T<sig>` in GDB's own numbering (`debug/signals.rs` converts both ways),
+`Ctrl-C`, `vCtrlC`, `D`, `D;pid`, `k`, `vKill;pid`.
+
+* **Fork and vfork.** A followed fork reaches the client as
+  `T05thread:p5e.5e;fork:p5f.5f;` (`vfork:` for a vfork, then
+  `vforkdone:;` when the child lets go of the parent's memory). The child is a
+  second inferior held at the fork (rax 0, no output); gdb's follow-fork-mode and
+  detach-on-fork do the rest: `D;pid` releases one process (the engine repairs the
+  child's inherited breakpoint bytes), plain `D` leaves the session. A fork the
+  panel left standing when a client connects is what `?` reports.
+* **Exec.** `T05thread:p5f.5f;exec:<hex path>;` and the session continues in the new
+  image; the breakpoints of the old image are gone and the client sets them again.
+  Without the client's `exec-events+` (or an old guest) the old behaviour holds:
+  the session ends with the address-space change.
+* **Non-stop.** `QNonStop:1` puts the session in non-stop: threads stop and run
+  one by one (`vCont;t`, `vCont;c:p..`), stops arrive as `%Stop` notifications
+  acknowledged with `vStopped`, memory can be read while threads run. A thread the
+  client asked to stop is reported with signal 0 (`T00`), a Ctrl-C in all-stop as
+  `T02`. Of the threads already stopped when the client connects, the first
+  answers `?` and the others follow as notifications once the client has asked for
+  symbols (gdb 17's first wait cannot take two queued stops while it starts up).
 * Listens on a Unix socket (mode 0600, in the run's private folder or a short
   private folder under the temporary directory when the path would not fit
   `sun_path`) and an ephemeral `127.0.0.1` port. Never anything else. A Unix
@@ -157,27 +231,56 @@ auxiliary vector and is not offered any.
 * The register image follows GDB's amd64-linux order and is also published as
   the target description: core (rax..gs, st0..st7, fctrl..fop), sse (xmm0..xmm15,
   mxcsr), linux (orig_rax), segments (fs_base, gs_base); 560 bytes.
+* gdb keeps its own `handle` table: the host passes the signals gdb tells it to
+  (`C<sig>`) and never filters for a client.
 
-## Known limits (left for P3)
+## Reconnect and snapshots
 
-Fork/vfork/exec following (a forked child runs free; its inherited breakpoint
-byte is repaired, a `vfork` child's cannot be), non-stop, reconnect that re-adopts
-a session across a snapshot (the fence cancels it), threads created while the
-group runs miss hardware breakpoints until the next stop, `rwatch`, direct reads
-of the program's own code still see a software breakpoint's byte while the group
-runs (use `hbreak`), and a `STOP_RUN` while a breakpoint is in memory and the
-group cannot be stopped in 3 s leaves the byte in. The panel passes the signal a
-thread stopped on when it resumes (except `SIGTRAP`, `SIGINT`); gdb's own
-`handle` table applies to a gdb client. A panel watchpoint covers 8 bytes from its
-address.
+Sessions live in the guest, so they outlast the host's link. The guest's fence no
+longer cancels them. After a transport reconnect or a snapshot restore the host
+asks `SESSIONS`, adopts its own by identity (`ATTACH` with the ADOPT flag, a new
+nonce), reads `STATUS`, `THREADS` and `BP_LIST` and carries on: the stopped threads
+stay stopped, the breakpoints stay in memory, the host's registry (the panel's and
+a client's) is made to match the guest's list. Breakpoints the host does not know
+about are removed, ones it expects are set again.
 
-## In-app panel
+Snapshots are allowed while a debugger is attached (the P2 refusal is gone). The
+guest's session state is bit-exact in a snapshot, so a snapshot taken at a
+breakpoint resumes at it; that workflow is worth more than the refusal protected.
+A restore is a different time: a connected gdb client is dropped (its picture of
+memory and registers is from another moment), the panel reads the state again
+and keeps its breakpoints. A reconnect only refreshes. A restore that reboots the
+disks ends the session. Snapshots of a guest whose base is older than this
+contract still take the old route (`ant_debug_fence` cancelled the session).
 
-The Debugger window in the app is a second controller of the same engine, on the
-RSP server thread, never through our own socket. See "Accepted in-app debugger
-panel" in `docs/implementation.md` for the messages and the rule: one controller
-at a time, a connecting client takes the process and the panel is read-only
-("controlled by gdb") until it leaves. A client leaving still resumes the process.
+## Panel signal table and fork choice
+
+The panel keeps gdb's `handle` table: per signal stop, print and pass, with gdb's
+defaults (`SIGCHLD`, `SIGWINCH`, `SIGALRM`, `SIGPROF`, `SIGURG`, ... nostop
+noprint pass; `SIGTRAP`, `SIGINT` stop and are not passed). It is editable, saved
+with the app's settings (only the differences from the defaults) and sent to the
+controller at the start of each session. A quiet signal never stops the program:
+the controller passes it on and notes it in a short log. The fork policy
+(off, parent, child, ask; detach the other process or keep it) is saved too and
+applies at each fork; with "ask" the program stops at the fork and the panel's
+Processes list offers the choice. Threads and processes show their run state.
+
+## Known limits
+
+`CLONE_VM` without `CLONE_VFORK` (a thread-like clone of the address space) is not
+followed, and a `clone` thread's creation is not reported as an event. A vfork
+child shares its parent's breakpoint table until it execs, so a breakpoint the
+parent hits while the child runs is missed. In non-stop gdb steps over a
+breakpoint itself (the engine does not hold a thread while it does). `rwatch` is
+unsupported. Direct reads of the program's own code still see a software
+breakpoint's byte while the group runs (use `hbreak`). A thread that reaches a
+breakpoint byte just after a `STOP_RUN` took it out gets `SIGTRAP`. The Quilt view
+of the series stops at 0038; the guest patches are `src/antinomie/core/6.12`.
+A panel watchpoint covers 8 bytes from its address.
+
+Fixed in Phase 3 (they were P2 limits): threads created while the group runs get
+their hardware breakpoints at their own first return to user mode; a `STOP_RUN`
+that cannot stop the group still removes its breakpoint bytes (they were left in).
 
 ## Qualification
 
@@ -219,3 +322,21 @@ Tests: `start`, `pie`, `dynamic` (Debug on start under a real gdb), `gdb-threads
 (real gdb), `step`, `signals`, `signal-step`, `forkbp`, `hw`, `slots`,
 `hwthreads`, `smc`, `anti`, `latency` (backend trait). With no test names all
 run in one VM.
+
+Phase 3 has `tests/monitor/debug-p3-fixture.c` (modes `fork`, `vfork`, `exec`,
+`leaf`, `nonstop`, `system`, `spawn`, `chld`, `stopself`; the optional fourth
+argument is a lead-in in milliseconds, so gdb connects to a program that is idle,
+not in the middle of a fork) and `debug-check p3`:
+
+```
+gcc -O1 -static -no-pie -pthread -o p3fix tests/monitor/debug-p3-fixture.c
+cargo run --release --example debug-check -- p3 BUNDLE NEW_DATA_DIR DIR [test ...]
+```
+
+Backend tests: `fork-follow`, `vfork-follow`, `exec-event`, `exec-legacy`,
+`nonstop`, `hwthreads`, `sigchld`, `readopt`, `stoprun-bytes`, `fork-stress`.
+Real gdb: `gdb-follow-child`, `gdb-follow-parent`, `gdb-keep-both`, `gdb-vfork`,
+`gdb-exec`, `gdb-nonstop`. App level (the panel controller through the app's
+backend): `reconnect`, `snapshot`, `snapshot-readopt` (these need a release base,
+a snapshot of an unversioned development kernel is refused). `P3_TRACE=1` turns on
+gdb's `debug remote`, `P3_TRACE_FILE` keeps the whole gdb transcript.
