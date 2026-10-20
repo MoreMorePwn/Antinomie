@@ -542,6 +542,16 @@ it runs.
   warning text; older saved results still open. They are not migrated, so one
   saved as partial only for these reasons keeps showing Partial until the scan
   is run again.
+- **Fixed: the Disks reader could hang, and leave its sandbox running.** When
+  the reader stopped, cancelled or timed out a worker, it killed only the
+  bubblewrap launcher; the namespace init behind it, in a session of its own,
+  could survive and keep the output pipes open, so the thread reading them
+  waited for ever (seen under load as a test run that never ended). The reader
+  and the Disks conversion jobs now stop the launcher first, kill its
+  namespace init and the whole process group, and reap it; their pipe reads
+  and thread joins after a kill are bounded. The analysis tool runner shares
+  the same helper, and the reader's lifecycle tests now fail after a minute
+  instead of hanging.
 - **Fixed: a tool that timed out kept running and stalled the analysis.**
   An analysis tool is now started in its own process group, and a timeout or a
   cancel kills the whole group, not only the first process. capa's launcher
