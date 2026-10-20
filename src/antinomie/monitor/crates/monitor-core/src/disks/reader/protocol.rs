@@ -19,6 +19,25 @@ pub const FIND_SECONDS: u64 = 15;
 pub const FIND_DEPTH_LIMIT: usize = 64;
 /// Longest guest path accepted or reported, in bytes.
 pub const PATH_LIMIT: usize = 4096;
+/// Content search: the most of one file that is read.
+pub const CONTENT_FILE_LIMIT: u64 = 16 * 1024 * 1024;
+/// Content search: the most bytes read from the whole image.
+pub const CONTENT_TOTAL_LIMIT: u64 = 512 * 1024 * 1024;
+/// Content search: wall-clock budget, in seconds.
+pub const CONTENT_SECONDS: u64 = 60;
+/// Content search: shortest and longest needle, in bytes.
+pub const CONTENT_NEEDLE_MIN: usize = 2;
+pub const CONTENT_NEEDLE_MAX: usize = 256;
+/// Bytes of context kept around a content match.
+pub const SNIPPET_LEN: usize = 96;
+/// Diff: entries listed at most (the counts go on past it).
+pub const DIFF_RESULT_LIMIT: usize = 20_000;
+/// Diff: entries looked at at most, over both images.
+pub const DIFF_SCAN_LIMIT: u64 = 2_000_000;
+/// Diff: wall-clock budget, in seconds.
+pub const DIFF_SECONDS: u64 = 120;
+/// Diff: the largest file whose bytes are compared.
+pub const DIFF_COMPARE_LIMIT: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Envelope<T> {
@@ -35,6 +54,19 @@ pub enum FindMode {
     /// `*`, `?` and `[...]` against the file name (the full path when the
     /// pattern contains a `/`).
     Glob,
+    /// The bytes of regular files contain the text (exact bytes). Bounded:
+    /// [`CONTENT_FILE_LIMIT`] per file, [`CONTENT_TOTAL_LIMIT`] and
+    /// [`CONTENT_SECONDS`] overall.
+    Content,
+    /// [`Self::Content`], ASCII letters in any case.
+    ContentAnyCase,
+}
+
+impl FindMode {
+    /// The search reads file contents.
+    pub fn is_content(&self) -> bool {
+        matches!(self, Self::Content | Self::ContentAnyCase)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,6 +88,9 @@ pub enum DiskRequest {
     /// Write a regular file (or a link's target) to `/out/<request id>`,
     /// at most `max_len` bytes.
     Extract { path: String, max_len: u64 },
+    /// Compare the image with the reference mounted at `/other` (the
+    /// "before"): the added, deleted and changed entries.
+    Diff,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,6 +172,13 @@ pub struct DiskImageInfo {
 pub struct FoundEntry {
     pub path: String,
     pub kind: DiskEntryKind,
+    /// A content match: where in the file the first hit starts.
+    #[serde(default)]
+    pub offset: Option<u64>,
+    /// A content match: the bytes around the hit, control characters
+    /// replaced.
+    #[serde(default)]
+    pub snippet: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,6 +190,105 @@ pub struct FindResults {
     /// The time budget ended the search.
     pub timed_out: bool,
     pub scanned: u64,
+    /// Content search: files read, bytes read, and files of which only the
+    /// first [`CONTENT_FILE_LIMIT`] bytes were searched.
+    #[serde(default)]
+    pub files_read: u64,
+    #[serde(default)]
+    pub bytes_read: u64,
+    #[serde(default)]
+    pub partial_files: u64,
+    /// Content search: the total byte limit ended it.
+    #[serde(default)]
+    pub byte_limit_reached: bool,
+}
+
+/// What happened to an entry between the reference and the image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DiffStatus {
+    Added,
+    Deleted,
+    Changed,
+}
+
+impl DiffStatus {
+    /// `+`, `−` or `~`.
+    pub fn badge(self) -> &'static str {
+        match self {
+            Self::Added => "+",
+            Self::Deleted => "−",
+            Self::Changed => "~",
+        }
+    }
+}
+
+/// Why a file counts as changed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DiffReason {
+    /// A different kind of entry (file, directory, link...).
+    Type,
+    Size,
+    /// Same size, different bytes.
+    Content,
+    Mode,
+    Owner,
+    /// Only the modification time differs (the bytes are the same).
+    Time,
+    /// A symbolic link points elsewhere.
+    Target,
+}
+
+impl DiffReason {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Type => "type",
+            Self::Size => "size",
+            Self::Content => "content",
+            Self::Mode => "mode",
+            Self::Owner => "owner",
+            Self::Time => "time",
+            Self::Target => "link target",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiffEntry {
+    pub path: String,
+    pub status: DiffStatus,
+    /// The entry in the reference (`None` for an added one).
+    pub before: Option<DiskEntry>,
+    /// The entry in the image (`None` for a deleted one).
+    pub after: Option<DiskEntry>,
+    pub reasons: Vec<DiffReason>,
+}
+
+impl DiffEntry {
+    /// The kind of the entry on whichever side exists.
+    pub fn kind(&self) -> DiskEntryKind {
+        self.after
+            .as_ref()
+            .or(self.before.as_ref())
+            .map_or(DiskEntryKind::File, |entry| entry.kind)
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiffResults {
+    /// Directory by directory, by name inside each; at most
+    /// [`DIFF_RESULT_LIMIT`].
+    pub entries: Vec<DiffEntry>,
+    /// Totals, which go on counting past the listing limit.
+    pub added: u64,
+    pub deleted: u64,
+    pub changed: u64,
+    /// More differences exist than were listed.
+    pub truncated: bool,
+    /// The time budget or the entry limit ended the comparison.
+    pub timed_out: bool,
+    pub scanned: u64,
+    /// Directories that could not be read on one side.
+    pub unreadable: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,6 +305,7 @@ pub enum DiskAnswer {
     Info(DiskFileInfo),
     Found(FindResults),
     Extracted(ExtractReceipt),
+    Diffed(DiffResults),
 }
 
 /// Typed so the UI can tell "unsupported feature" from "damaged image" from

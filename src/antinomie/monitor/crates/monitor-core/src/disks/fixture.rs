@@ -124,6 +124,9 @@ impl Fixture {
             "cd /".into(),
             "mknod fifo p".into(),
             "mknod null c 1 3".into(),
+            // Fixed times, so two images of one tree compare equal.
+            "sif fifo mtime 20010909014640".into(),
+            "sif null mtime 20010909014640".into(),
         ];
         script.extend(commands.iter().map(|command| command.to_string()));
         self.debugfs(&image, &script);
@@ -154,6 +157,38 @@ impl Fixture {
             .trim()
             .parse()
             .unwrap()
+    }
+
+    /// Set the access and modification time of every entry of `tree`
+    /// (links themselves, not their targets) to `seconds` after the epoch.
+    pub fn stamp_tree(&self, tree: &Path, seconds: i64) {
+        use rustix::fs::{AtFlags, CWD, Timespec, Timestamps, utimensat};
+        fn walk(path: &Path, found: &mut Vec<PathBuf>) {
+            found.push(path.to_path_buf());
+            if fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir()) {
+                for entry in fs::read_dir(path).unwrap().flatten() {
+                    walk(&entry.path(), found);
+                }
+            }
+        }
+        let mut paths = Vec::new();
+        walk(tree, &mut paths);
+        let time = Timespec {
+            tv_sec: seconds,
+            tv_nsec: 0,
+        };
+        for path in paths {
+            utimensat(
+                CWD,
+                &path,
+                &Timestamps {
+                    last_access: time,
+                    last_modification: time,
+                },
+                AtFlags::SYMLINK_NOFOLLOW,
+            )
+            .unwrap();
+        }
     }
 
     /// The standard raw image.
@@ -189,6 +224,117 @@ impl Fixture {
             parent = Some(qcow);
         }
         parent.unwrap()
+    }
+}
+
+/// Which partition table [`Fixture::partitioned`] writes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Scheme {
+    Gpt,
+    Mbr,
+}
+
+/// Where the partitions of [`Fixture::partitioned`] are, in bytes.
+pub(crate) const OTHER_START: u64 = 1024 * 1024;
+pub(crate) const OTHER_LENGTH: u64 = 4 * 1024 * 1024;
+pub(crate) const EXT4_START: u64 = 5 * 1024 * 1024;
+
+/// A GPT type GUID in its on-disk (mixed-endian) bytes.
+pub(crate) fn guid_bytes(text: &str) -> [u8; 16] {
+    let hex: Vec<u8> = text
+        .replace('-', "")
+        .as_bytes()
+        .chunks(2)
+        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+        .collect();
+    let mut bytes = [0u8; 16];
+    bytes[0..4].copy_from_slice(&[hex[3], hex[2], hex[1], hex[0]]);
+    bytes[4..6].copy_from_slice(&[hex[5], hex[4]]);
+    bytes[6..8].copy_from_slice(&[hex[7], hex[6]]);
+    bytes[8..16].copy_from_slice(&hex[8..16]);
+    bytes
+}
+
+impl Fixture {
+    /// A raw disk with a partition table: partition 1 holds 4 MiB of
+    /// non-filesystem bytes (the "unsupported filesystem"), partition 2 the
+    /// ext4 image `ext4`. Returns the disk and the table's byte layout is
+    /// [`OTHER_START`]/[`OTHER_LENGTH`]/[`EXT4_START`].
+    pub fn partitioned(&self, name: &str, scheme: Scheme, ext4: &Path) -> PathBuf {
+        use std::io::{Seek, SeekFrom, Write};
+        let filesystem = fs::read(ext4).unwrap();
+        let disk_size = EXT4_START + filesystem.len() as u64 + 1024 * 1024;
+        let path = self.path(name);
+        let mut disk = fs::File::create(&path).unwrap();
+        disk.set_len(disk_size).unwrap();
+        disk.seek(SeekFrom::Start(OTHER_START)).unwrap();
+        disk.write_all(&vec![0xAB; OTHER_LENGTH as usize]).unwrap();
+        disk.seek(SeekFrom::Start(EXT4_START)).unwrap();
+        disk.write_all(&filesystem).unwrap();
+        let sectors = disk_size / 512;
+        let spans = [
+            (OTHER_START / 512, (OTHER_START + OTHER_LENGTH) / 512 - 1),
+            (
+                EXT4_START / 512,
+                (EXT4_START + filesystem.len() as u64) / 512 - 1,
+            ),
+        ];
+        match scheme {
+            Scheme::Mbr => {
+                let mut sector = [0u8; 512];
+                for (slot, (first, last)) in spans.iter().enumerate() {
+                    let entry = &mut sector[446 + slot * 16..462 + slot * 16];
+                    entry[4] = if slot == 0 { 0x82 } else { 0x83 };
+                    entry[8..12].copy_from_slice(&(*first as u32).to_le_bytes());
+                    entry[12..16].copy_from_slice(&((last - first + 1) as u32).to_le_bytes());
+                }
+                sector[510] = 0x55;
+                sector[511] = 0xAA;
+                disk.seek(SeekFrom::Start(0)).unwrap();
+                disk.write_all(&sector).unwrap();
+            }
+            Scheme::Gpt => {
+                let mut protective = [0u8; 512];
+                protective[446 + 4] = 0xEE;
+                protective[446 + 8..446 + 12].copy_from_slice(&1u32.to_le_bytes());
+                protective[446 + 12..446 + 16]
+                    .copy_from_slice(&((sectors - 1) as u32).to_le_bytes());
+                protective[510] = 0x55;
+                protective[511] = 0xAA;
+                let mut header = [0u8; 512];
+                header[..8].copy_from_slice(b"EFI PART");
+                header[8..12].copy_from_slice(&0x0001_0000u32.to_le_bytes());
+                header[12..16].copy_from_slice(&92u32.to_le_bytes());
+                header[24..32].copy_from_slice(&1u64.to_le_bytes());
+                header[32..40].copy_from_slice(&(sectors - 1).to_le_bytes());
+                header[40..48].copy_from_slice(&34u64.to_le_bytes());
+                header[48..56].copy_from_slice(&(sectors - 34).to_le_bytes());
+                header[72..80].copy_from_slice(&2u64.to_le_bytes());
+                header[80..84].copy_from_slice(&128u32.to_le_bytes());
+                header[84..88].copy_from_slice(&128u32.to_le_bytes());
+                let mut entries = vec![0u8; 128 * 128];
+                let kinds = [
+                    "0657FD6D-A4AB-43C4-84E5-0933C84B4F4F",
+                    "4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709",
+                ];
+                for (slot, (first, last)) in spans.iter().enumerate() {
+                    let entry = &mut entries[slot * 128..(slot + 1) * 128];
+                    entry[..16].copy_from_slice(&guid_bytes(kinds[slot]));
+                    entry[16] = 1 + slot as u8;
+                    entry[32..40].copy_from_slice(&first.to_le_bytes());
+                    entry[40..48].copy_from_slice(&last.to_le_bytes());
+                    for (position, unit) in ["swap", "root"][slot].encode_utf16().enumerate() {
+                        entry[56 + position * 2..58 + position * 2]
+                            .copy_from_slice(&unit.to_le_bytes());
+                    }
+                }
+                disk.seek(SeekFrom::Start(0)).unwrap();
+                disk.write_all(&protective).unwrap();
+                disk.write_all(&header).unwrap();
+                disk.write_all(&entries).unwrap();
+            }
+        }
+        path
     }
 }
 
