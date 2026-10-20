@@ -75,7 +75,52 @@ additive and an older guest answers `-EOPNOTSUPP`. Layouts are in
   attached, no `SIGTRAP`), and Ctrl-C.
 * **Not yet** (later phases): debug on start, threads stepping while others run,
   hardware breakpoints and watchpoints, signals, fork/vfork/exec following,
-  non-stop, the in-app debugger views, reconnect that re-adopts a session.
+  non-stop, reconnect that re-adopts a session. (The minimal in-app panel is
+  described next.)
+
+### Accepted in-app debugger panel (0.7.0)
+
+The Debugger window is the minimal in-app UI over the same engine. It does not
+connect to the RSP socket: the controller (`debug/ui_control.rs`) runs on the
+RSP server thread and drives the same `RspTarget` and `DebugBackend`, reaching the
+guest through the same `DebugLink` as an external client. Panel data types are in
+`debug/view.rs`.
+
+* **Messages.** `Command::DebugUi(DebugRequest { id, sequence, action })` is queued
+  (at most 32) for the controller; the answer is `Snapshot::debug_view`, an
+  `Arc<DebugView>` replaced as a whole with an increasing `epoch`. The success of a
+  `DebugUi` command is not reported (no result is emitted); a refusal is. A
+  request that needs a stop names the stop it was made against (`sequence`); the
+  controller drops one that does not match the current stop and reports it in the
+  view (`handled` says which request ids are answered, `notice` says why one was
+  dropped). The panel shows memory windows only when they belong to the stop on
+  screen.
+* **One controller at a time.** Without an RSP client the panel drives. A client
+  that connects takes control: queued panel requests are dropped, the view becomes
+  `Controller::Gdb` (no registers or windows, read-only, new requests refused
+  with a message), the process is stopped for the client (the server's existing
+  behaviour at connect), and the client's session proceeds unchanged. When the
+  client leaves the server removes the client's breakpoints and resumes the
+  process (unchanged), and the panel reads the state again and drives. The
+  panel's breakpoints and the client's share the guest's table with ownership:
+  an address stays registered while either holds it, and a client leaving removes
+  only its own. Tested with fakes and with a real TCP client
+  (`debug::tests::ui_control`).
+* **Guest cost.** About 22 ms per request. A stop fetches, in order, the thread
+  list, the general register set, 256 bytes of code (up to 48 before the
+  instruction pointer), 256 bytes of stack and, if chosen, the memory range: five
+  requests (about 110 ms), published after each part. Nothing is read while the
+  process runs or is idle at a stop. A running process is polled every 100 ms, one
+  that was asked to stop or step every 10 ms. Memory reads are at most 4096 bytes.
+  Disassembly decodes the window in the UI thread (`analysis::decode_window`, the
+  listing's iced-x86 formatter); instructions before the current one are a guess.
+* **Room for phase 2.** `StopReason` has signal, watchpoint and entry variants,
+  `BreakpointKind` has hardware and watch kinds (requests for them are refused
+  until the guest offers them), `ViewCaps` carries the guest's capabilities, and a
+  stop reason is mapped from the engine's `StopKind` in one place.
+* **Not in the panel.** Saved process cores (opened read-only in Core dumps, which
+  already shows registers, mappings with a hex view and disassembly), memory and
+  register writes, step over, and anything that needs phase 2.
 
 ### Accepted guest credential and file-hash records (0.7.0)
 
