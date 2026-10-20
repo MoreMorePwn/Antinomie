@@ -388,11 +388,13 @@ static void control_tick(struct work_struct *work)
 	}
 	service_commands();
 	ANT_REL(&control->guest_heartbeat, control->guest_heartbeat + 1);
-	/* While a debugger is attached every request is a round trip the user waits
-	 * for: poll at the next tick instead of every ANT_POLL_MS.
+	/* While a debugger is attached, or a finished process core is being read,
+	 * every request is a round trip the user waits for: poll at the next tick
+	 * instead of every ANT_POLL_MS.
 	 */
 	queue_delayed_work(worker, &control_work,
-			   ant_debug_active() ? 1 : msecs_to_jiffies(ANT_POLL_MS));
+			   ant_debug_active() || ant_core_reading() ?
+			   1 : msecs_to_jiffies(ANT_POLL_MS));
 }
 
 static int __init ant_guest_init(void)
