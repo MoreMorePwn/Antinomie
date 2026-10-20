@@ -73,6 +73,15 @@ additive and an older guest answers `-EOPNOTSUPP`. Layouts are in
   verified with gdb: exit under the debugger reported as "exited normally", `kill`
   ending the process, gdb killed mid-run (the process kept running, a new gdb
   attached, no `SIGTRAP`), and Ctrl-C.
+
+* **Phase 2 evidence** (final BusyBox base, real gdb 17.2): Debug on start stopped
+  static, static-pie and dynamic programs at their entry before any user output;
+  `info threads` listed every thread and `stepi` moved one; `stepi` over `syscall`
+  and `rep movsb` ended on the next instruction; `hbreak`, `watch`, `awatch` fired
+  and a fifth `hbreak` was refused cleanly; signals were passed, dropped and
+  stepped into handlers; Stop of a debugged run ended it in about 1 s without the
+  SIGKILL escalation; a process core completed under a debug stop. A request costs
+  4 ms (22 ms in Phase 1). `debug-check p2` repeats all of it.
 * **Not yet** (later phases): debug on start, threads stepping while others run,
   hardware breakpoints and watchpoints, signals, fork/vfork/exec following,
   non-stop, reconnect that re-adopts a session. (The minimal in-app panel is
