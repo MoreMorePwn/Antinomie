@@ -6,8 +6,8 @@
 //! Guest paths are labels: nothing here resolves a guest link against the
 //! host, symbolic links are reported (target as text) and never followed, and
 //! the only host path written is `<out>/<request id>`.
-use super::glob;
 use super::protocol::*;
+use super::{content, diff, glob};
 use crate::disks::{Ext4State, read_state};
 use ext4_view::{DirEntry, Ext4, Ext4Error, FileType, Metadata};
 use md5::Md5;
@@ -23,7 +23,7 @@ use std::{
 /// Bytes read from a guest file at a time.
 const CHUNK: usize = 64 * 1024;
 
-fn map_error(error: Ext4Error) -> ReadError {
+pub(super) fn map_error(error: Ext4Error) -> ReadError {
     match error {
         Ext4Error::NotFound => ReadError::NotFound,
         Ext4Error::Incompatible(reason) => ReadError::Unsupported(reason.to_string()),
@@ -35,7 +35,7 @@ fn map_error(error: Ext4Error) -> ReadError {
     }
 }
 
-fn kind_of(kind: FileType) -> DiskEntryKind {
+pub(super) fn kind_of(kind: FileType) -> DiskEntryKind {
     match kind {
         FileType::Regular => DiskEntryKind::File,
         FileType::Directory => DiskEntryKind::Dir,
@@ -51,15 +51,23 @@ fn kind_of(kind: FileType) -> DiskEntryKind {
 /// then answers with that error).
 pub struct Image {
     fs: Result<Ext4, ReadError>,
+    /// The reference image of a diff (`/other`), when one is mounted.
+    other: Option<Result<Ext4, ReadError>>,
     image: PathBuf,
     out: PathBuf,
 }
 
 impl Image {
     pub fn open(image: &Path, out: &Path) -> Self {
+        Self::open_with(image, None, out)
+    }
+
+    /// [`Self::open`] with a reference image to diff against.
+    pub fn open_with(image: &Path, other: Option<&Path>, out: &Path) -> Self {
         let fs = Ext4::load_from_path(image).map_err(map_error);
         Self {
             fs,
+            other: other.map(|other| Ext4::load_from_path(other).map_err(map_error)),
             image: image.to_path_buf(),
             out: out.to_path_buf(),
         }
@@ -71,12 +79,53 @@ impl Image {
             DiskRequest::Probe => self.probe(fs).map(DiskAnswer::Probed),
             DiskRequest::List { path, offset } => list(fs, &path, offset).map(DiskAnswer::Listed),
             DiskRequest::Info { path, hash_cap } => info(fs, &path, hash_cap).map(DiskAnswer::Info),
-            DiskRequest::Find { query } => Ok(DiskAnswer::Found(find(fs, query))),
+            DiskRequest::Find { query } => {
+                find(fs, query, content::Limits::default()).map(DiskAnswer::Found)
+            }
+            DiskRequest::Diff => {
+                let before = match &self.other {
+                    Some(other) => other
+                        .as_ref()
+                        .map_err(|error| ReadError::Io(format!("the reference image: {error}")))?,
+                    None => return Err(ReadError::Io("no reference image is mounted".into())),
+                };
+                Ok(DiskAnswer::Diffed(diff::diff(
+                    before,
+                    fs,
+                    diff::Limits::default(),
+                )))
+            }
             DiskRequest::Extract { path, max_len } => {
                 extract(fs, &path, max_len, &self.out.join(id.to_string()))
                     .map(DiskAnswer::Extracted)
             }
         }
+    }
+
+    /// A search with smaller bounds (tests).
+    #[cfg(test)]
+    pub(super) fn find_limited(
+        &self,
+        query: FindQuery,
+        limits: content::Limits,
+    ) -> Result<FindResults, ReadError> {
+        find(self.fs.as_ref().map_err(Clone::clone)?, query, limits)
+    }
+
+    /// A comparison with smaller bounds (tests).
+    #[cfg(test)]
+    pub(super) fn diff_limited(&self, limits: diff::Limits) -> Result<DiffResults, ReadError> {
+        let before = self
+            .other
+            .as_ref()
+            .ok_or(ReadError::Io("no reference image".into()))?
+            .as_ref()
+            .map_err(Clone::clone)?;
+        Ok(diff::diff(
+            before,
+            self.fs.as_ref().map_err(Clone::clone)?,
+            limits,
+        ))
     }
 
     fn probe(&self, fs: &Ext4) -> Result<DiskImageInfo, ReadError> {
@@ -136,7 +185,7 @@ fn checked_path(fs: &Ext4, path: &str, leaf: Leaf) -> Result<String, ReadError> 
     Ok(normalized)
 }
 
-fn entry_of(name: &[u8], metadata: &Metadata, link_target: Option<String>) -> DiskEntry {
+pub(super) fn entry_of(name: &[u8], metadata: &Metadata, link_target: Option<String>) -> DiskEntry {
     let kind = kind_of(metadata.file_type());
     DiskEntry {
         name: String::from_utf8_lossy(name).into_owned(),
@@ -157,13 +206,13 @@ fn entry_of(name: &[u8], metadata: &Metadata, link_target: Option<String>) -> Di
     }
 }
 
-fn link_target(fs: &Ext4, path: &ext4_view::PathBuf) -> Option<String> {
+pub(super) fn link_target(fs: &Ext4, path: &ext4_view::PathBuf) -> Option<String> {
     fs.read_link(path)
         .ok()
         .map(|target| String::from_utf8_lossy(target.as_ref()).into_owned())
 }
 
-fn is_dot(name: &[u8]) -> bool {
+pub(super) fn is_dot(name: &[u8]) -> bool {
     name == b"." || name == b".."
 }
 
@@ -341,19 +390,47 @@ fn extract(
 }
 
 /// Walk the tree from `/`, bounded by matches, entries, depth and time.
-/// Symbolic links are listed, never descended.
-fn find(fs: &Ext4, query: FindQuery) -> FindResults {
-    let needle = query.pattern.to_lowercase();
-    let deadline = Instant::now() + Duration::from_secs(FIND_SECONDS);
+/// Symbolic links are listed, never descended. A content search also reads
+/// regular files, bounded per file, in total and by time.
+fn find(fs: &Ext4, query: FindQuery, limits: content::Limits) -> Result<FindResults, ReadError> {
+    let content = query.mode.is_content();
+    let needle = if content {
+        let bytes = query.pattern.as_bytes();
+        if !(CONTENT_NEEDLE_MIN..=CONTENT_NEEDLE_MAX).contains(&bytes.len()) {
+            return Err(ReadError::Limit(format!(
+                "the text to search for must be {CONTENT_NEEDLE_MIN} to {CONTENT_NEEDLE_MAX} bytes"
+            )));
+        }
+        if query.mode == FindMode::ContentAnyCase {
+            bytes.to_ascii_lowercase()
+        } else {
+            bytes.to_vec()
+        }
+    } else {
+        query.pattern.to_lowercase().into_bytes()
+    };
+    let any_case = query.mode == FindMode::ContentAnyCase;
+    let lowered = String::from_utf8_lossy(&needle).into_owned();
+    let seconds = limits.seconds.unwrap_or(if content {
+        CONTENT_SECONDS
+    } else {
+        FIND_SECONDS
+    });
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    let mut budget = content::Budget::new(deadline, limits);
     let mut results = FindResults {
         query: query.clone(),
         matches: Vec::new(),
         truncated: false,
         timed_out: false,
         scanned: 0,
+        files_read: 0,
+        bytes_read: 0,
+        partial_files: 0,
+        byte_limit_reached: false,
     };
     let Ok(root) = ext4_view::PathBuf::try_from("/") else {
-        return results;
+        return Ok(results);
     };
     let mut stack = vec![(root, 0usize)];
     'walk: while let Some((directory, depth)) = stack.pop() {
@@ -387,13 +464,28 @@ fn find(fs: &Ext4, query: FindQuery) -> FindResults {
             let full = entry.path();
             let full_text = String::from_utf8_lossy(full.as_ref()).into_owned();
             let name_text = String::from_utf8_lossy(&name).into_owned();
+            let mut found = None;
             let hit = match query.mode {
-                FindMode::Name => name_text.to_lowercase().contains(&needle),
-                FindMode::Path => full_text.to_lowercase().contains(&needle),
+                FindMode::Name => name_text.to_lowercase().contains(&lowered),
+                FindMode::Path => full_text.to_lowercase().contains(&lowered),
                 FindMode::Glob if query.pattern.contains('/') => {
                     glob::matches(&query.pattern, &full_text)
                 }
                 FindMode::Glob => glob::matches(&query.pattern, &name_text),
+                FindMode::Content | FindMode::ContentAnyCase => {
+                    if kind == FileType::Regular {
+                        found = content::search_file(fs, &full, &needle, any_case, &mut budget);
+                        if budget.timed_out {
+                            results.timed_out = true;
+                            break 'walk;
+                        }
+                        if budget.byte_limit {
+                            results.byte_limit_reached = true;
+                            break 'walk;
+                        }
+                    }
+                    found.is_some()
+                }
             };
             if hit {
                 if results.matches.len() >= FIND_MATCH_LIMIT {
@@ -402,9 +494,13 @@ fn find(fs: &Ext4, query: FindQuery) -> FindResults {
                 }
                 let mut path = full_text;
                 path.truncate(PATH_LIMIT);
+                let (offset, snippet) =
+                    found.map_or((None, None), |hit| (Some(hit.offset), Some(hit.snippet)));
                 results.matches.push(FoundEntry {
                     path,
                     kind: kind_of(kind),
+                    offset,
+                    snippet,
                 });
             }
             if kind.is_dir() && depth < FIND_DEPTH_LIMIT {
@@ -415,5 +511,8 @@ fn find(fs: &Ext4, query: FindQuery) -> FindResults {
         children.sort_by(|a, b| b.0.as_ref().cmp(a.0.as_ref()));
         stack.extend(children);
     }
-    results
+    results.files_read = budget.files_read;
+    results.bytes_read = budget.bytes_read;
+    results.partial_files = budget.partial_files;
+    Ok(results)
 }

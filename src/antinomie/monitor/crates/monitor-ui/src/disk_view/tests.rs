@@ -1116,15 +1116,15 @@ fn find_runs_off_the_ui_thread_and_reveals_a_match() {
     let matches = vec![
         FoundEntry {
             path: "/lib/x86_64/libc.so.6".into(),
-            kind: DiskEntryKind::File,
+            kind: DiskEntryKind::File, offset: None, snippet: None,
         },
         FoundEntry {
             path: "/lib/libm.so".into(),
-            kind: DiskEntryKind::File,
+            kind: DiskEntryKind::File, offset: None, snippet: None,
         },
         FoundEntry {
             path: "/usr/lib/libz.so".into(),
-            kind: DiskEntryKind::Symlink,
+            kind: DiskEntryKind::Symlink, offset: None, snippet: None,
         },
     ];
     view.accept(worker::Answer {
@@ -1137,7 +1137,7 @@ fn find_runs_off_the_ui_thread_and_reveals_a_match() {
             matches,
             truncated: true,
             timed_out: false,
-            scanned: 123,
+            scanned: 123, files_read: 0, bytes_read: 0, partial_files: 0, byte_limit_reached: false,
         }))),
         placed: None,
     });
@@ -1232,7 +1232,7 @@ fn find_errors_and_empty_results_are_shown() {
         matches: Vec::new(),
         truncated: false,
         timed_out: true,
-        scanned: 9,
+        scanned: 9, files_read: 0, bytes_read: 0, partial_files: 0, byte_limit_reached: false,
     }));
     let texts = scene.settle(&mut view, &ctx);
     assert!(has(&texts, "0 matches"), "{texts:?}");

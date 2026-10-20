@@ -18,7 +18,13 @@ fn sandbox_available() -> bool {
     fs::write(&image, b"x").unwrap();
     fs::create_dir(&out).unwrap();
     let account = Account::new().unwrap();
-    let mut command = sandbox_base(Path::new("/usr/bin/true"), &image, &out, account.passwd());
+    let mut command = sandbox_base(
+        Path::new("/usr/bin/true"),
+        &image,
+        None,
+        &out,
+        account.passwd(),
+    );
     command.arg("/usr/bin/true");
     command.output().is_ok_and(|output| output.status.success())
 }
@@ -37,6 +43,7 @@ fn the_command_line_uses_the_shared_profile_with_the_reader_binds() {
     let args: Vec<String> = sandbox_command(
         Path::new("/opt/antinomie-monitor"),
         Path::new("/data/root.ext4"),
+        Some(Path::new("/data/before.ext4")),
         Path::new("/data/out"),
         Path::new("/run/account/passwd"),
     )
@@ -61,6 +68,7 @@ fn the_command_line_uses_the_shared_profile_with_the_reader_binds() {
     // The reader's own binds: the image read-only, `/out` the only writable.
     assert!(has(&["--ro-bind", "/data/root.ext4", "/image"]));
     assert!(has(&["--ro-bind", "/opt/antinomie-monitor", "/worker"]));
+    assert!(has(&["--ro-bind", "/data/before.ext4", "/other"]));
     assert!(has(&["--bind", "/data/out", "/out"]));
     let writable: Vec<_> = args
         .windows(3)
@@ -115,7 +123,13 @@ echo "limits:$(/usr/bin/grep -E '^(Max address space|Max open files|Max core fil
         secret = secret.display()
     );
     let account = Account::new().unwrap();
-    let mut command = sandbox_base(Path::new("/usr/bin/true"), &image, &out, account.passwd());
+    let mut command = sandbox_base(
+        Path::new("/usr/bin/true"),
+        &image,
+        None,
+        &out,
+        account.passwd(),
+    );
     command.args(["/usr/bin/sh", "-c", &script]);
     let output = command.output().unwrap();
     let report = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -228,4 +242,44 @@ fn dropping_the_reader_stops_its_worker() {
     drop(reader);
     std::thread::sleep(Duration::from_millis(300));
     assert!(!process_running("41414"));
+}
+
+#[test]
+fn cancelling_a_diff_or_a_content_search_kills_its_reader_at_once() {
+    require_sandbox!();
+    let fixture = Fixture::new();
+    let (image, other) = (fixture.path("image"), fixture.path("other"));
+    fs::write(&image, b"x").unwrap();
+    fs::write(&other, b"y").unwrap();
+    // A worker that never answers, like a diff of two enormous images.
+    let worker = script_worker(&fixture, "exec /usr/bin/sleep 61616");
+    let mut reader =
+        Reader::with_executable_and_other(worker, &image, Some(&other), &fixture.path("out"))
+            .unwrap();
+    let abort = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    reader.set_abort_flag(abort.clone());
+    let flag = abort.clone();
+    let canceller = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(400));
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    });
+    let started = std::time::Instant::now();
+    let error = reader.request(DiskRequest::Diff).unwrap_err();
+    canceller.join().unwrap();
+    assert!(error.starts_with("cancelled"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(10));
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!process_running("61616"), "the reader was left running");
+    // The same flag stops a content search before it starts working.
+    let error = reader
+        .request(DiskRequest::Find {
+            query: FindQuery {
+                pattern: "needle".into(),
+                mode: FindMode::Content,
+            },
+        })
+        .unwrap_err();
+    assert!(error.starts_with("cancelled"), "{error}");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!process_running("61616"));
 }

@@ -10,6 +10,8 @@
 //! worker when it stops answering. [`image`] holds the filesystem logic and
 //! [`serve`] the line protocol, both usable without a sandbox in tests.
 pub mod client;
+mod content;
+mod diff;
 mod glob;
 pub mod image;
 pub mod protocol;
@@ -19,6 +21,8 @@ pub use client::Reader;
 pub use protocol::*;
 pub use serve::worker_main_if_requested;
 
+#[cfg(test)]
+mod content_diff_tests;
 #[cfg(test)]
 mod sandbox_tests;
 #[cfg(test)]

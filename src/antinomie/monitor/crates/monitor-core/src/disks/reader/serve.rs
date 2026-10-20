@@ -14,6 +14,8 @@ const REQUEST_LIMIT: u64 = 64 * 1024;
 /// Where the sandbox mounts the image and the extraction folder.
 const IMAGE_PATH: &str = "/image";
 const OUT_PATH: &str = "/out";
+/// The reference image of a diff, when one is mounted.
+const OTHER_PATH: &str = "/other";
 
 /// Answer requests until `input` ends.
 pub fn serve(image: &Image, mut input: impl BufRead, mut output: impl Write) -> io::Result<()> {
@@ -56,7 +58,10 @@ pub fn worker_main_if_requested() -> Option<i32> {
         {
             return Err("the disk reader requires its sandbox".into());
         }
-        let image = Image::open(Path::new(IMAGE_PATH), Path::new(OUT_PATH));
+        let other = Path::new(OTHER_PATH)
+            .is_file()
+            .then(|| Path::new(OTHER_PATH));
+        let image = Image::open_with(Path::new(IMAGE_PATH), other, Path::new(OUT_PATH));
         serve(&image, io::stdin().lock(), io::stdout().lock()).map_err(|error| error.to_string())
     })();
     if let Err(error) = &result {

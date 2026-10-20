@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! The parent's handle on the sandboxed reader worker.
-use super::protocol::{DiskRequest, Envelope, FIND_SECONDS, Reply};
+use super::protocol::{CONTENT_SECONDS, DIFF_SECONDS, DiskRequest, Envelope, FIND_SECONDS, Reply};
 use crate::disks::sandbox::Account;
 use std::{
     io::{BufRead, BufReader, Read, Write},
@@ -54,6 +54,8 @@ impl Live {
 pub struct Reader {
     executable: PathBuf,
     image: PathBuf,
+    /// The reference image of a diff, mounted at `/other`.
+    other: Option<PathBuf>,
     out: PathBuf,
     account: Account,
     live: Option<Live>,
@@ -66,10 +68,11 @@ pub struct Reader {
 pub(crate) fn sandbox_command(
     executable: &Path,
     image: &Path,
+    other: Option<&Path>,
     out: &Path,
     account: &Path,
 ) -> Command {
-    let mut command = sandbox_base(executable, image, out, account);
+    let mut command = sandbox_base(executable, image, other, out, account);
     command.args(["/worker", "--disk-reader"]);
     command
 }
@@ -78,7 +81,13 @@ pub(crate) fn sandbox_command(
 /// mounted read-only at `/image`, the program at `/worker` and one writable
 /// folder at `/out`: everything up to the program to run (tests run a shell
 /// there to probe the sandbox).
-pub(crate) fn sandbox_base(executable: &Path, image: &Path, out: &Path, account: &Path) -> Command {
+pub(crate) fn sandbox_base(
+    executable: &Path,
+    image: &Path,
+    other: Option<&Path>,
+    out: &Path,
+    account: &Path,
+) -> Command {
     let mut command = Command::new("/usr/bin/bwrap");
     crate::sandbox_profile::apply(&mut command, account, &[], TMP_SIZE);
     command
@@ -87,7 +96,11 @@ pub(crate) fn sandbox_base(executable: &Path, image: &Path, out: &Path, account:
         .arg("/worker")
         .arg("--ro-bind")
         .arg(image)
-        .arg("/image")
+        .arg("/image");
+    if let Some(other) = other {
+        command.arg("--ro-bind").arg(other).arg("/other");
+    }
+    command
         .arg("--bind")
         .arg(out)
         .arg("/out")
@@ -124,15 +137,38 @@ impl Reader {
 
     /// [`Self::open`] with an explicit worker program (tests).
     pub fn with_executable(executable: PathBuf, image: &Path, out: &Path) -> Result<Self, String> {
+        Self::with_executable_and_other(executable, image, None, out)
+    }
+
+    /// A reader that can also diff `image` against the reference `other`
+    /// (mounted read-only at `/other`).
+    pub fn open_with_other(image: &Path, other: &Path, out: &Path) -> Result<Self, String> {
+        Self::with_executable_and_other(
+            crate::analysis::jobs::worker_executable()?,
+            image,
+            Some(other),
+            out,
+        )
+    }
+
+    pub fn with_executable_and_other(
+        executable: PathBuf,
+        image: &Path,
+        other: Option<&Path>,
+        out: &Path,
+    ) -> Result<Self, String> {
         crate::dependencies::require_tool(Path::new("/usr/bin/bwrap"), "bubblewrap")?;
         crate::dependencies::require_tool(Path::new("/usr/bin/prlimit"), "util-linux")?;
         crate::storage::private_dir(out).map_err(|error| format!("{}: {error}", out.display()))?;
-        if !image.is_file() {
-            return Err(format!("{} is not a disk image", image.display()));
+        for path in std::iter::once(image).chain(other) {
+            if !path.is_file() {
+                return Err(format!("{} is not a disk image", path.display()));
+            }
         }
         Ok(Self {
             executable,
             image: image.to_path_buf(),
+            other: other.map(Path::to_path_buf),
             out: out.to_path_buf(),
             account: Account::new()?,
             live: None,
@@ -168,6 +204,7 @@ impl Reader {
         let mut command = sandbox_command(
             &self.executable,
             &self.image,
+            self.other.as_deref(),
             &self.out,
             self.account.passwd(),
         );
@@ -299,7 +336,11 @@ impl Drop for Reader {
 
 fn timeout_for(request: &DiskRequest) -> Duration {
     match request {
+        DiskRequest::Find { query } if query.mode.is_content() => {
+            Duration::from_secs(CONTENT_SECONDS + 30)
+        }
         DiskRequest::Find { .. } => Duration::from_secs(FIND_SECONDS + 30),
+        DiskRequest::Diff => Duration::from_secs(DIFF_SECONDS + 60),
         DiskRequest::Extract { .. } => Duration::from_secs(15 * 60),
         _ => Duration::from_secs(60),
     }
