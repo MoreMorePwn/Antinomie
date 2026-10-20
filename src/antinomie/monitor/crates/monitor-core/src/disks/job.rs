@@ -15,6 +15,7 @@ use super::{
     dump::{DiskDump, DiskImageFormat, PART_FILE, sha256_file, sweep_partial},
     measure, quota_error, read_state, scratch_dir, sweep_scratch, unix_ms,
 };
+use crate::process_tree::{KILLED_JOIN_WAIT, join_within, kill_leftovers, kill_tree};
 pub use import::ImportSpec;
 use std::{
     fs::{self, File},
@@ -372,6 +373,7 @@ impl Run {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        crate::process_tree::own_group(&mut command);
         let mut child = command
             .spawn()
             .map_err(|error| format!("qemu-img convert: {error}"))?;
@@ -422,6 +424,7 @@ impl Run {
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
+            crate::process_tree::own_group(&mut command);
             let mut child = command
                 .spawn()
                 .map_err(|error| format!("qemu-img convert: {error}"))?;
@@ -666,6 +669,7 @@ impl Run {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        crate::process_tree::own_group(&mut command);
         let mut child = command
             .spawn()
             .map_err(|error| format!("qemu-img convert: {error}"))?;
@@ -694,19 +698,17 @@ impl Run {
         });
         let status = loop {
             if self.cancel.load(Ordering::Relaxed) {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = progress.join();
-                let _ = errors.join();
+                kill_tree(child);
+                let _ = join_within(progress, KILLED_JOIN_WAIT);
+                let _ = join_within(errors, KILLED_JOIN_WAIT);
                 return Err("cancelled".into());
             }
             if let Some((path, limit)) = watch
                 && fs::metadata(path).is_ok_and(|metadata| metadata.blocks() * 512 > limit)
             {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = progress.join();
-                let _ = errors.join();
+                kill_tree(child);
+                let _ = join_within(progress, KILLED_JOIN_WAIT);
+                let _ = join_within(errors, KILLED_JOIN_WAIT);
                 return Err(format!(
                     "the converted image grew past {}, the free space left for it",
                     super::format_size(limit)
@@ -715,11 +717,16 @@ impl Run {
             match child.try_wait() {
                 Ok(Some(status)) => break status,
                 Ok(None) => thread::sleep(Duration::from_millis(25)),
-                Err(error) => return Err(error.to_string()),
+                Err(error) => {
+                    kill_tree(child);
+                    return Err(error.to_string());
+                }
             }
         };
-        let _ = progress.join();
-        let errors = errors.join().unwrap_or_default();
+        // Anything the tool left in its group is stopped so the pipes close.
+        kill_leftovers(child);
+        let _ = join_within(progress, KILLED_JOIN_WAIT);
+        let errors = join_within(errors, KILLED_JOIN_WAIT).unwrap_or_default();
         if status.success() {
             Ok(())
         } else {

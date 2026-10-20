@@ -2,6 +2,7 @@
 //! The parent's handle on the sandboxed reader worker.
 use super::protocol::{CONTENT_SECONDS, DIFF_SECONDS, DiskRequest, Envelope, FIND_SECONDS, Reply};
 use crate::disks::sandbox::Account;
+use crate::process_tree::{KILLED_JOIN_WAIT, join_within, kill_tree, own_group};
 use std::{
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
@@ -36,9 +37,10 @@ struct Live {
 impl Live {
     /// Kill the worker and return what it said on stderr.
     fn end(mut self) -> String {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = self.stderr_thread.join();
+        // The whole group: bubblewrap and anything it left behind. A holder
+        // that escaped it must not hang the caller on the stderr thread.
+        kill_tree(&mut self.child);
+        let _ = join_within(self.stderr_thread, KILLED_JOIN_WAIT);
         let tail = self
             .stderr
             .lock()
@@ -208,6 +210,7 @@ impl Reader {
             &self.out,
             self.account.passwd(),
         );
+        own_group(&mut command);
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
