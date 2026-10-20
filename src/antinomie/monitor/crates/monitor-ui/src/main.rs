@@ -190,7 +190,7 @@ fn native_options() -> eframe::NativeOptions {
         // not showing (idle, covered or minimized on WSLg's Wayland): the swap
         // of that one window then never returns and every window stops
         // answering. Without vsync a swap never waits.
-        vsync: false,
+        vsync: ui_performance::VSYNC,
         ..Default::default()
     }
 }

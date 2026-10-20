@@ -245,6 +245,29 @@ fn launch_command(exe: &Path, data: &Path) -> Result<String, &'static str> {
     ))
 }
 
+/// Whether buffer swaps wait for the compositor (see `native_options`).
+pub(crate) const VSYNC: bool = false;
+
+/// Shortest time between two frame starts while vsync is off: about 60 fps.
+/// Without vsync nothing else limits a spinner or a drag, which request a
+/// repaint every frame.
+pub(crate) const MIN_FRAME_INTERVAL: Duration = Duration::from_millis(16);
+
+/// How long to sleep before a frame that starts at `now`, given when the
+/// previous frame started. Zero for the first frame, after a long gap (idle
+/// repaints are a second apart) and when vsync paces the frames.
+pub(crate) fn throttle_sleep(
+    last_start: Option<Instant>,
+    now: Instant,
+    interval: Duration,
+    vsync: bool,
+) -> Duration {
+    match last_start {
+        Some(last) if !vsync => interval.saturating_sub(now.saturating_duration_since(last)),
+        _ => Duration::ZERO,
+    }
+}
+
 pub(crate) fn repaint_delay(active: bool) -> Duration {
     if active {
         Duration::from_millis(50)
@@ -268,6 +291,34 @@ mod tests {
         assert!(!software_renderer(""));
         assert_eq!(repaint_delay(true), Duration::from_millis(50));
         assert_eq!(repaint_delay(false), Duration::from_secs(1));
+    }
+    #[test]
+    fn frames_closer_than_the_interval_sleep_the_rest_and_only_without_vsync() {
+        let start = Instant::now();
+        let interval = Duration::from_millis(16);
+        let sleep = |ms: u64, vsync| {
+            throttle_sleep(
+                Some(start),
+                start + Duration::from_millis(ms),
+                interval,
+                vsync,
+            )
+        };
+        assert_eq!(throttle_sleep(None, start, interval, false), Duration::ZERO);
+        assert_eq!(sleep(0, false), Duration::from_millis(16));
+        assert_eq!(sleep(5, false), Duration::from_millis(11));
+        assert_eq!(sleep(16, false), Duration::ZERO);
+        assert_eq!(
+            sleep(1000, false),
+            Duration::ZERO,
+            "idle repaints are not delayed"
+        );
+        assert_eq!(sleep(5, true), Duration::ZERO);
+        // A clock that did not advance, or went back, never sleeps longer than the interval.
+        assert_eq!(
+            throttle_sleep(Some(start + interval), start, interval, false),
+            interval
+        );
     }
     fn feed(perf: &mut Performance, now: Instant, ago_ms: &[u64], ui_us: u64) {
         for ms in ago_ms {
