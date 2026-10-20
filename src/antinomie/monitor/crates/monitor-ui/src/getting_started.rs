@@ -198,6 +198,8 @@ pub(crate) struct GettingStarted {
     /// still to install, one at a time.
     pub rules_chosen: Option<BTreeSet<String>>,
     pub rule_queue: VecDeque<String>,
+    /// The engine tab of the rules step (an index of `ENGINES`).
+    pub rules_engine: usize,
 }
 
 #[cfg(test)]

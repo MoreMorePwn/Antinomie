@@ -424,22 +424,6 @@ impl MonitorApp {
         ui.label("Rules tell the scans what to look for: YARA for files, an IDS for network captures, Sigma for behaviour. Downloads only happen from this page, from the hosts named below.");
         let data_dir = self.options.data_dir.clone();
         let busy = self.rules_ui.is_busy();
-        ui.horizontal_wrapped(|ui| {
-            let ready = self.rules_ui.engines_with_packs();
-            for (id, label) in ENGINES {
-                if ready.contains(id) {
-                    ui.colored_label(
-                        theme::good(),
-                        format!("{} {label}", egui_phosphor::regular::CHECK),
-                    );
-                } else {
-                    ui.colored_label(
-                        theme::muted(),
-                        format!("{} {label}: no rules yet", egui_phosphor::regular::CIRCLE),
-                    );
-                }
-            }
-        });
         if !self.settings.outbound_catalog {
             crate::activity::warning(
                 ui,
@@ -486,45 +470,63 @@ impl MonitorApp {
             .rules_chosen
             .clone()
             .unwrap_or_default();
-        for (engine, label) in ENGINES {
-            let group: Vec<&Offer> = offers
+        // One tab per engine, with whether it has rules yet.
+        let ready = self.rules_ui.engines_with_packs();
+        let mut engine = ENGINES[self.getting_started.rules_engine.min(ENGINES.len() - 1)].0;
+        let items = ENGINES.map(|(id, label)| {
+            let (glyph, tone) = if ready.contains(id) {
+                (egui_phosphor::regular::CHECK_CIRCLE, Tone::Good)
+            } else {
+                (egui_phosphor::regular::CIRCLE, Tone::Neutral)
+            };
+            (id, TabItem::new(label).icon(glyph, tone))
+        });
+        if tabs(ui, items, &mut engine) {
+            self.getting_started.rules_engine = ENGINES
                 .iter()
-                .filter(|offer| offer.engine == engine)
-                .collect();
-            if group.is_empty() {
-                continue;
-            }
-            theme::section(ui, label);
-            for offer in group {
-                ui.horizontal_wrapped(|ui| {
-                    let mut on = chosen.contains(&offer.id) || offer.installed;
-                    if ui
-                        .add_enabled(
-                            !offer.installed && !busy,
-                            egui::Checkbox::new(&mut on, &offer.name),
-                        )
-                        .changed()
-                    {
-                        if on {
-                            chosen.insert(offer.id.clone());
-                        } else {
-                            chosen.remove(&offer.id);
-                        }
+                .position(|(id, _)| *id == engine)
+                .unwrap_or(0);
+        }
+        let group: Vec<&Offer> = offers
+            .iter()
+            .filter(|offer| offer.engine == engine)
+            .collect();
+        if group.is_empty() {
+            ui.weak(if offers.is_empty() {
+                "No catalog yet: allow downloads and check the catalog to see the packs."
+            } else {
+                "The catalog has no pack for this engine."
+            });
+        }
+        for offer in group {
+            ui.horizontal_wrapped(|ui| {
+                let mut on = chosen.contains(&offer.id) || offer.installed;
+                if ui
+                    .add_enabled(
+                        !offer.installed && !busy,
+                        egui::Checkbox::new(&mut on, &offer.name),
+                    )
+                    .changed()
+                {
+                    if on {
+                        chosen.insert(offer.id.clone());
+                    } else {
+                        chosen.remove(&offer.id);
                     }
-                    if offer.installed {
-                        ui.colored_label(theme::good(), "installed");
-                    }
-                    ui.weak(format!(
-                        "about {} rules · {} · {} · from {}",
-                        offer.rules,
-                        human_bytes(offer.size),
-                        offer.license,
-                        offer.hosts
-                    ));
-                });
-                for notice in &offer.notices {
-                    crate::activity::warning(ui, notice);
                 }
+                if offer.installed {
+                    crate::widgets::chip(ui, "Installed", Tone::Good);
+                }
+                ui.weak(format!(
+                    "about {} rules · {} · {} · from {}",
+                    offer.rules,
+                    human_bytes(offer.size),
+                    offer.license,
+                    offer.hosts
+                ));
+            });
+            for notice in &offer.notices {
+                crate::activity::warning(ui, notice);
             }
         }
         if !offers.is_empty() {

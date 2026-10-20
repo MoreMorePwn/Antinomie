@@ -468,3 +468,65 @@ fn the_rules_step_offers_catalog_packs_and_downloads_only_when_allowed() {
     assert_eq!(app.getting_started.rule_queue, ["yara-test"]);
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn the_rules_step_has_engine_tabs_and_a_pack_with_terms_starts_unticked() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let (mut app, root) = fresh_app("rules-tabs");
+    let (mut value, _) = crate::rules_window::source_tests::catalog_value();
+    value["packs"][0]["notices"] = serde_json::json!(["Read the terms before you download."]);
+    let catalog = antinomie_monitor_core::ruleset::validate_catalog(&value).unwrap();
+    app.rules_ui.set_catalog_for_test(catalog);
+    app.getting_started.open = true;
+    app.getting_started.step = Step::Rules;
+    let text = shown(&mut app, &ctx);
+    for engine in ["YARA", "IDS", "Sigma"] {
+        assert!(
+            text.iter().any(|label| label == engine),
+            "{engine}: {text:?}"
+        );
+    }
+    assert!(text.iter().any(|label| label == "Forge Core"), "{text:?}");
+    assert!(text.iter().any(|label| label.starts_with("Read the terms")));
+    // Another engine's tab shows its own packs.
+    click_label(&mut app, &ctx, SIZE, "IDS");
+    let text = shown(&mut app, &ctx);
+    assert!(!text.iter().any(|label| label == "Forge Core"), "{text:?}");
+    assert!(text
+        .iter()
+        .any(|label| label.contains("no pack for this engine")));
+    click_label(&mut app, &ctx, SIZE, "YARA");
+    // Terms to read: unticked, so even with downloads allowed nothing queues
+    // until the pack is ticked on purpose.
+    assert_eq!(app.getting_started.rules_chosen, Some(Default::default()));
+    app.settings.outbound_catalog = true;
+    click_label(&mut app, &ctx, SIZE, "Download selected");
+    assert!(app.getting_started.rule_queue.is_empty());
+    click_label(&mut app, &ctx, SIZE, "Forge Core");
+    click_label(&mut app, &ctx, SIZE, "Download selected");
+    assert_eq!(app.getting_started.rule_queue, ["forge-core"]);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn the_rules_step_still_asks_before_any_download() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let (mut app, root) = fresh_app("rules-consent");
+    app.getting_started.open = true;
+    app.getting_started.step = Step::Rules;
+    assert!(!app.settings.outbound_catalog);
+    let text = shown(&mut app, &ctx);
+    assert!(text
+        .iter()
+        .any(|label| label.starts_with("Downloads are off")));
+    click_label(&mut app, &ctx, SIZE, "Check the catalog");
+    assert!(
+        !app.rules_ui.is_busy(),
+        "checking needs the permission first"
+    );
+    click_label(&mut app, &ctx, SIZE, "Allow downloads");
+    assert!(app.settings.outbound_catalog);
+    let _ = std::fs::remove_dir_all(root);
+}

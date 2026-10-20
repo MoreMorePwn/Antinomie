@@ -3,7 +3,7 @@
 //! from, what it is licensed under, which hosts it contacts, and the install,
 //! update and remove buttons.
 use super::{theme, Done, Model};
-use antinomie_monitor_core::ruleset::{self, Catalog, InstalledPack, SourcePack};
+use antinomie_monitor_core::ruleset::{self, InstalledPack, SourcePack};
 use eframe::egui::{self, RichText};
 use std::{collections::BTreeSet, path::Path};
 
@@ -21,7 +21,7 @@ fn digits(value: u64) -> String {
 }
 
 /// A pin as people read it: a commit is shortened.
-fn short_revision(kind: &str, revision: &str) -> String {
+pub(super) fn short_revision(kind: &str, revision: &str) -> String {
     if kind == "commit" && revision.len() > 12 && revision.chars().all(|c| c.is_ascii_hexdigit()) {
         revision[..12].to_owned()
     } else {
@@ -84,30 +84,7 @@ impl Model {
         self.choices[&pack.id].clone()
     }
 
-    /// Catalog entries of schema 2 for the selected engine.
-    pub(super) fn source_catalog(
-        &mut self,
-        ui: &mut egui::Ui,
-        data_dir: &Path,
-        outbound: bool,
-        catalog: &Catalog,
-    ) {
-        let entries: Vec<_> = catalog
-            .sources
-            .iter()
-            .filter(|entry| entry.engine == self.engine)
-            .cloned()
-            .collect();
-        if entries.is_empty() {
-            ui.weak("The catalog has no pack for this engine.");
-        }
-        for pack in entries {
-            ui.add_space(4.0);
-            self.source_entry(ui, data_dir, outbound, &pack);
-        }
-    }
-
-    fn source_entry(
+    pub(super) fn source_entry(
         &mut self,
         ui: &mut egui::Ui,
         data_dir: &Path,

@@ -2,7 +2,7 @@
 //! What the Getting started window needs of the Rule manager: the catalog's
 //! packs, which of them are installed, and one install at a time on the
 //! manager's own worker. Nothing here opens the network by itself.
-use super::{Model, Ordering};
+use super::{sources::short_revision, Model, Ordering};
 use std::{collections::BTreeSet, path::Path};
 
 /// One pack the catalog offers, for any engine.
@@ -11,6 +11,8 @@ pub(crate) struct Offer {
     pub id: String,
     pub engine: String,
     pub name: String,
+    /// The pin or version, as the catalog table shows it.
+    pub version: String,
     pub rules: u64,
     pub size: u64,
     pub license: String,
@@ -83,6 +85,11 @@ impl Model {
                 id: pack.id.clone(),
                 engine: pack.engine.clone(),
                 name: pack.name.clone(),
+                version: format!(
+                    "{} {}",
+                    pack.revision_kind,
+                    short_revision(&pack.revision_kind, &pack.revision)
+                ),
                 rules: pack.rules,
                 size: pack.download_size(),
                 license: pack.license.clone(),
@@ -96,6 +103,7 @@ impl Model {
                 id: pack.id.clone(),
                 engine: pack.engine.clone(),
                 name: pack.name.clone(),
+                version: pack.version.clone(),
                 rules: pack.rules,
                 size: pack.size,
                 license: pack.license.clone(),
