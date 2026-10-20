@@ -63,34 +63,7 @@ impl Worker {
         }
         // QEMU keeps the guest paused while it writes a memory dump: a guest
         // command would only time out.
-        if self.snapshot.memory_dump.is_some()
-            && matches!(
-                command,
-                Command::Execute(_)
-                    | Command::TypeClipboard { .. }
-                    | Command::CancelProcessCore { .. }
-                    | Command::DumpProcessCore { .. }
-                    | Command::CancelCoreCapture { .. }
-                    | Command::Upload { .. }
-                    | Command::UploadSample { .. }
-                    | Command::AnalyzeOnly { .. }
-                    | Command::TerminalInput { .. }
-                    | Command::TerminalResize { .. }
-                    | Command::Signal { .. }
-                    | Command::StopRun { .. }
-                    | Command::RecorderStats
-                    | Command::ListProcesses { .. }
-                    | Command::AttachProcess { .. }
-                    | Command::CaptureAll
-                    | Command::StopCapture { .. }
-                    | Command::DebugAttach { .. }
-                    | Command::DebugDetach { .. }
-                    | Command::DebugUi(_)
-                    | Command::CreateVmSnapshot { .. }
-                    | Command::RestoreVmSnapshot { .. }
-                    | Command::ReconnectTransport
-            )
-        {
+        if self.snapshot.memory_dump.is_some() && command.needs_running_guest() {
             return Err(
                 "the VM is paused while its memory is written; try again in a moment".into(),
             );

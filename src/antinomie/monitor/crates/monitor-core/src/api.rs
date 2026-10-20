@@ -1521,6 +1521,39 @@ pub enum Command {
     Close,
 }
 
+impl Command {
+    /// Commands that talk to the guest. QEMU keeps the guest paused while it
+    /// writes a memory dump, so the backend refuses these until it is done.
+    pub fn needs_running_guest(&self) -> bool {
+        matches!(
+            self,
+            Command::Execute(_)
+                | Command::TypeClipboard { .. }
+                | Command::CancelProcessCore { .. }
+                | Command::DumpProcessCore { .. }
+                | Command::CancelCoreCapture { .. }
+                | Command::Upload { .. }
+                | Command::UploadSample { .. }
+                | Command::AnalyzeOnly { .. }
+                | Command::TerminalInput { .. }
+                | Command::TerminalResize { .. }
+                | Command::Signal { .. }
+                | Command::StopRun { .. }
+                | Command::RecorderStats
+                | Command::ListProcesses { .. }
+                | Command::AttachProcess { .. }
+                | Command::CaptureAll
+                | Command::StopCapture { .. }
+                | Command::DebugAttach { .. }
+                | Command::DebugDetach { .. }
+                | Command::DebugUi(_)
+                | Command::CreateVmSnapshot { .. }
+                | Command::RestoreVmSnapshot { .. }
+                | Command::ReconnectTransport
+        )
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Health {

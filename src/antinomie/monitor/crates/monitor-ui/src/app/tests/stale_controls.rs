@@ -77,3 +77,29 @@ fn run_program_cancel_works_while_the_vm_is_stopped() {
         "Cancel closes the dialog while the VM is stopped"
     );
 }
+
+#[test]
+fn guest_commands_are_held_quietly_while_the_ram_dump_pauses_the_vm() {
+    let mut app = running_app();
+    assert!(app.running());
+    app.snapshot.memory_dump = Some(antinomie_monitor_core::memory::DumpProgress {
+        completed: 41,
+        total: 100,
+        ..Default::default()
+    });
+    assert!(!app.running(), "Run, upload and captures are disabled");
+    let sent = app.submitted.len();
+    app.status = "ready".into();
+    app.send(Command::TerminalResize {
+        run_id: "run".into(),
+        rows: 24,
+        cols: 80,
+    });
+    assert_eq!(app.status, "ready", "automatic commands change nothing");
+    app.send(Command::ListProcesses { after_pid: 0 });
+    assert_eq!(app.status, "Writing RAM dump 41% - VM paused");
+    assert_eq!(app.submitted.len(), sent, "nothing reached the backend");
+    app.snapshot.memory_dump = None;
+    app.send(Command::ListProcesses { after_pid: 0 });
+    assert_eq!(app.submitted.len(), sent + 1);
+}

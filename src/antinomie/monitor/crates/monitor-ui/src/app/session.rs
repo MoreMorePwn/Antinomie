@@ -9,6 +9,9 @@ impl MonitorApp {
 
     /// Return the accepted request identity for workflows waiting on completion.
     pub(super) fn send_request(&mut self, command: Command) -> Option<u64> {
+        if self.held_for_memory_dump(&command) {
+            return None;
+        }
         let vm_snapshot = matches!(
             &command,
             Command::RefreshVmSnapshots { .. }
@@ -644,7 +647,10 @@ impl MonitorApp {
     }
 
     pub(super) fn running(&self) -> bool {
-        self.snapshot.state == VmState::Running && self.snapshot.active_vm == self.selected
+        // The guest is paused while its RAM is written.
+        self.snapshot.state == VmState::Running
+            && self.snapshot.active_vm == self.selected
+            && self.snapshot.memory_dump.is_none()
     }
 
     pub(super) fn resync_terminals(&mut self) {
