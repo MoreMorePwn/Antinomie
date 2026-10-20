@@ -161,13 +161,11 @@ No guest, image, shared-memory ABI, dependency or release-tag change is needed.
 - V7 no snapshot/reconnect. No next transport version. Existing transport API
   is opaque; frontend/backend never manage CPU rings.
 
-## Disks tab: the current disk of a stopped VM (0.7.0, phases 1 and 2)
+## Disks tab: the disks of a stopped VM (0.7.0, phases 1 to 3)
 
 Accepted design: the documentation checkout's "Disks Tab - Implementation
-Design" v2, phases 1 and 2 (the dumps are described after the limits below).
-Host only; no guest kernel change. Checkpoint sources, partition carving, diff
-and content search are a later phase and have seams only (`DiskSourceKind`, the
-entries list).
+Design" v2, phases 1 to 3 (the dumps are described after the limits below,
+phase 3 after them). Host only; no guest kernel change.
 
 **Mechanism.** The VM's qcow2 chain (`snapshots::active_disk`) is flattened by
 `qemu-img convert -p -f qcow2 -O raw` into a sparse raw ext4 image,
@@ -239,11 +237,11 @@ worker, report and quota accounting follow, with its own `Jobs` in the backend
 worker so it needs no VM. Settings: `disks.{extract_cap_mib, hash_cap_mib,
 hide_dotfiles, numeric_modes}`.
 
-**Limits of this phase.** `ext4-view` 1.0.0 exposes no inode numbers or link
-counts, so neither is shown and a directory cycle is bounded by the Find depth
-and entry limits instead of a visited-inode set. Whole-disk ext4 only: any
-other content gives "the disk does not hold an ext2/3/4 filesystem". The lease
-is held by one job per backend; the view itself holds nothing.
+**Limits.** `ext4-view` 1.0.0 exposes no inode numbers or link counts, so
+neither is shown and a directory cycle is bounded by the Find depth and entry
+limits instead of a visited-inode set. A filesystem other than ext2/3/4 is the
+"unsupported filesystem" state. The lease is held by one job per backend; the
+view itself holds nothing.
 
 ### Disk dumps (phase 2)
 
@@ -306,6 +304,107 @@ query engine, context menus). The list is scanned when the recording folders,
 a job's presence or `kept_as` change and on Refresh, never per frame. Whether
 an imported image moved is checked in the same scan. Verify and Save run on
 their own threads and are polled. Settings: `disks.{dump_hash, source_digests}`.
+
+### Checkpoint sources, partitions, diff, content search, qcow2 import (phase 3)
+
+**Sources (`DiskSourceSpec`).** `MeasureDisk`, `OpenCurrentDisk` and `DumpDisk`
+carry a source: `Current` (`snapshots::active_disk`), `Checkpoint(id)`
+(`snapshots::checkpoint_disk`: the saved, not deleted node's frozen layer,
+through the same `owned()` validation and the same "no unfinished snapshot
+operation" check, then `validate_disk` of that layer's whole chain against the
+pinned base) or `Base` (the VM's pinned `bundle.json` base). They differ only
+in the file `qemu-img` starts from, so measure, convert, lease, scratch
+folders, Keep as dump and the VM-off rule are the same code. The record
+(`DiskSourceKind::{Current, Imported, Checkpoint{id,name}, Base}`) lands in the
+view and in `dump.json`; older sidecars read as before. The UI lists the
+checkpoints of `Snapshot.vm_snapshot_trees` (which the backend fills at start
+and after every snapshot change).
+
+**Partitions (`disks/partition.rs`).** The measure step reads the first 64 KiB
+of the guest disk (`qemu-img convert --image-opts` of the byte range, which
+always writes its full length) and `partition::parse` decides: an ext
+superblock at 1024 means a whole-disk filesystem (the Antinomie bases, no
+table); a boot signature with a protective-MBR entry means GPT (header at LBA 1,
+at most 128 entries of 128 to 256 bytes inside the probed window; entries whose
+range is reversed, outside the usable range or outside the disk are dropped
+and counted); otherwise an MBR (four primary entries; an extended entry is
+listed as such, its logical partitions are not read). The filesystem of the
+first 16 partitions is read (the 512 bytes at partition start + 1024). The
+default partition is the GPT Linux root (x86-64 or arm64) that holds ext4, else
+the largest ext4 one. The estimate is `qemu-img map --image-opts` over the same
+carve, and the conversion is `qemu-img convert --image-opts
+driver=raw,offset=…,size=…,file.driver=qcow2,file.file.filename=…` (commas of
+the file name doubled), verified against `dd`. A partition that is not ext2/3/4
+(or a table with no ext4 partition) is `DiskMeasure::unsupported()`: Open and
+Dump are refused with the "unsupported filesystem" sentence. `SaveDiskPartition`
+carves any partition to a host file (written as a hidden `.part` beside it,
+synced, size-checked, renamed).
+
+**Reference image and diff.** `OpenDiskReference` flattens a source into a
+second scratch image beside the open view (`Snapshot.disk_reference`; a new
+scratch image does not sweep the view's folder); it is closed with the view, on
+the same triggers, and shares the one job slot and the VM-off rule. The UI
+reuses an existing reference of the same source. The diff itself is a request of
+the sandboxed reader: a reader started with a second image mounted read-only at
+`/other` (the "before"; `/image` is the "after") answers `Diff` (`reader/diff.rs`).
+Both trees are walked together by name; an entry in one tree only is added or
+deleted and its whole subtree with it; kinds that differ are a change of type
+and each side's subtree is added or deleted; directories are changed only by
+kind, mode or owner; files by size, mode, owner, modification time or link
+target, and when only the time differs (equal size) the bytes are compared up
+to 64 MiB to tell `Content` from `Time`. Equal metadata means equal: a guest
+that sets a file's time back after editing it is not seen (the Triage evidence
+or a hash comparison of dumps covers that). A rename is a deletion plus an
+addition. Bounds: 20,000 listed entries (totals keep counting), 2,000,000
+entries over both trees, 120 s, depth 64, 65,536 entries per directory;
+cancelling kills the reader. The UI keeps the results, filters them in a cached
+index list (recomputed when the filter or results change) and draws only the
+viewport's rows.
+
+**Triage links.** Triage keeps the absolute guest paths of the selected run's
+Changed files (`TriageView::changed_paths`, rebuilt when its index is). A diff
+row whose path is in the set is marked and its Details offer **Show in Triage ›
+Changed files**, which opens the Files section's Changed files tab filtered to
+`file.path == "…"`. The diff publishes its non-directory paths through egui's
+data store; Triage's Details of a Changed file show a link back that asks the
+Disks tab to select the path. Both say what kind of evidence they are (block
+evidence versus syscall evidence), never that one confirms the other.
+
+**Content search.** `FindMode::Content` / `ContentAnyCase` (ASCII letters in any
+case) in the reader's `Find`: regular files only, never through links, the first
+16 MiB of each file, 512 MiB read in all, 60 s, a needle of 2 to 256 bytes, one
+hit per file with its offset and a snippet in which every non-printable byte is
+a dot. The answer counts files read, bytes read and files read only in part, and
+says whether the byte limit or the time ended it. Cancel kills the search reader
+(the tree's reader is not touched) and a new one starts with the next search.
+
+**qcow2 import (`disks/job/import.rs`, `disks/sandbox.rs`).** A qcow2 image has
+attacker-controlled metadata, so `qemu-img` runs only as `bwrap` (the shared
+`sandbox_profile`: every namespace unshared, `/usr` read-only, a private
+`/etc/passwd`, a 64 MiB `/tmp`) with the file `--ro-bind` at `/input`, one writable
+folder at `/out`, `--remount-ro /`, and `prlimit --as=8 GiB --nofile=64
+--core=0`; `qemu-img` must be under `/usr`. Steps: `info --output=json` (refused:
+not qcow2, a `backing-filename`, an external `data-file`, encryption, a virtual
+size over 2 TiB or none), a free-space check, `convert -f qcow2 -O raw` to a
+temporary raw disk (the conversion is watched: the output's allocation may not
+pass the free space left, which stops a compressed image that expands), a
+partition probe of the raw disk and, for a partitioned image, a second sandboxed
+conversion that carves the default ext4 partition, then the same checks as any
+dump (size, ext4 magic and state), optional hash, and `dump.json` with
+`source.kind = imported`. Even without the pre-check the sandbox cannot see a
+backing file outside the image: the host path does not exist in it. The import
+job does not hold the VM's chain (`Job::holds_chain` is false), so the VM can run
+meanwhile, but it takes the one job slot.
+
+**Reader sandbox.** `disks/reader/client.rs` builds its command line from
+`sandbox_profile::apply` (with a private one-line account file from
+`disks/sandbox.rs`) and adds only `/worker`, `/image`, `/other` (a diff) and
+`/out`, then `prlimit --as=2147483648 --nofile=64 --core=0`.
+
+**Commands.** `MeasureDisk`, `OpenCurrentDisk`, `DumpDisk` (+ `source`,
+`partition`), `OpenDiskReference`, `CloseDiskReference`, `SaveDiskPartition`,
+`ImportQcow2Disk`; `Snapshot.disk_reference`. `DiskJobPurpose` gains
+`Reference`, `Carve` and `Import`. Settings are unchanged.
 
 ## Recording quota and pre-acknowledgement telemetry (0.6.2)
 

@@ -30,8 +30,8 @@ it runs.
   ever run on the host. All parsing of the guest's filesystem happens in a
   sandboxed worker (`antinomie-monitor --disk-reader`: bubblewrap with no
   network, the image mounted read-only, one writable extraction folder and
-  `prlimit` bounds) using the new `ext4-view` crate. Whole-disk ext4 only;
-  snapshot sources and partitions come later.
+  `prlimit` bounds) using the new `ext4-view` crate. Whole-disk ext4 only in
+  this first step; checkpoint sources and partitions are described below.
 
 - **Disks tab: disk dumps.** With the VM off, **Dump disk** flattens the
   current disk straight into a standalone sparse `root.ext4` under the VM's
@@ -55,14 +55,59 @@ it runs.
   browsable while the VM runs, because they are plain files read by the same
   sandboxed reader. Their Details show the record, and **Verify SHA-256**
   hashes the image again. **Import image…** takes a raw ext4 image made
-  elsewhere (qcow2 and partitioned disks are refused for now; a truncated or
-  non-ext4 file is refused with the reason); the file stays where it is.
+  elsewhere (a truncated or non-ext4 file is refused with the reason); the
+  file stays where it is. A qcow2 image is converted instead (below).
   **Save image to host…** writes a sparse raw copy (holes stay holes) or a
   compressed standalone qcow2 with `qemu-img`. **Delete…** uses the same
   confirmation and backend command as the Core dumps and Network capture
   deletes; the backend only deletes `disks/<id>` of the VM's recording folders
   (no links, no `..`, a folder that has a `dump.json`), removes the sidecar
   first, and never deletes an imported image's own file.
+
+- **Disks tab: checkpoint sources, partitions, diff, content search and qcow2
+  import.** The Current disk card has a **Source** menu: the current disk, any
+  saved (not deleted) checkpoint's frozen layer, or the installed base image.
+  Each is flattened by the same `qemu-img convert`, under the same rule (the VM
+  must be off) and the same lease; the entry, the view header and the dump
+  record say which source it is ("Disk at before-run"), and a checkpoint taken
+  while the VM ran usually reads as not cleanly unmounted. A disk with an MBR or
+  GPT partition table lists its partitions (type, name, size, ext2/3/4 or
+  "unsupported filesystem"); the root partition (or the largest ext4 one) is
+  the default, any ext4 partition can be chosen, and it is carved out in the
+  same conversion with `qemu-img --image-opts driver=raw,offset=…,size=…`.
+  Other filesystems cannot be opened or dumped (a clear message, never a
+  crash); **Save partition to host…** writes any partition's bytes to a file.
+  The table is read from the first 64 KiB of the guest disk by a small bounded
+  parser (at most 128 entries, entries outside the disk are dropped and
+  counted, logical partitions of an extended MBR partition are not read).
+  **Compare with…** (on an open view or a dump) diffs it against the installed
+  base image, a checkpoint, another dump or the open view: the sandboxed
+  reader walks both ext4 images and lists the added, deleted and changed
+  entries with +/−/~ badges, the reasons (type, size, content, mode, owner,
+  time, link target), totals, a status filter, a path filter and a filter that
+  hides time-, mode- and owner-only changes; **Details** show both sides of
+  each. A rename is a deletion and an addition. Two files with the same size,
+  mode, owner and modification time are equal without being read, and a
+  directory's own times are not compared; the comparison is bounded (20,000
+  listed differences with the totals kept counting, 2,000,000 entries, 120 s)
+  and can be cancelled. Where a path is also in Triage › Changed files for
+  the selected run, the diff row is marked, Details link to Triage (filtered to
+  that path) and Triage's Details link back; each says which kind of evidence
+  it is: the diff is block evidence (what differs between two disk images),
+  Changed files is syscall evidence (what the kernel was seen doing in one
+  run). **Find** gains **Content** and **Content (any case)**: bytes inside
+  regular files, reported with the byte offset and a clean snippet, bounded to
+  the first 16 MiB of each file, 512 MiB in all and 60 s (the result says how
+  many files were read and partly read, and which limit ended it) and
+  cancellable. **Import image…** also takes a **qcow2** image: `qemu-img` reads
+  it only inside the analysis sandbox (nothing of the host visible, the file
+  read-only, one writable folder, `prlimit`), after an inspection that refuses
+  an image with a backing file (the message names it), an external data file,
+  encryption or a size over 2 TiB; a partitioned image is carved to its ext4
+  partition, the conversion is watched so an image that expands cannot fill the
+  disk, and the result is a normal dump that does not depend on the original.
+  Separately, the reader's bubblewrap setup now uses the shared sandbox profile
+  of the analysis workers instead of repeating it.
 
 - **Code audit fixes (host).**
   - TShark runs in the analysis sandbox's minimal mount profile: only `/usr`,
