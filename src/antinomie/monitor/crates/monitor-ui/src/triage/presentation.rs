@@ -47,43 +47,20 @@ pub(super) fn heading_busy(ui: &mut egui::Ui, title: &str, subtitle: &str, busy:
 }
 
 pub(super) fn navigation(view: &mut TriageView, ui: &mut egui::Ui) {
-    egui::Frame::new()
-        .fill(theme::bg())
-        .inner_margin(5)
-        .corner_radius(5)
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(4.0, 5.0);
-                for (section, label) in [
-                    (Section::Summary, "Summary"),
-                    (Section::Properties, "Properties"),
-                    (Section::Detection, "Detection"),
-                    (Section::Process, "Process"),
-                    (Section::Files, "Files"),
-                    (Section::Network, "Network"),
-                    (Section::Bpf, "eBPF"),
-                ] {
-                    let selected = view.section == section;
-                    let text = RichText::new(label).strong().color(if selected {
-                        theme::blue()
-                    } else {
-                        theme::muted()
-                    });
-                    if ui
-                        .add(
-                            egui::Button::new(text)
-                                .selected(selected)
-                                .min_size(egui::vec2(0.0, 30.0)),
-                        )
-                        .clicked()
-                    {
-                        view.section = section;
-                    }
-                }
-            });
-        });
-    ui.add_space(10.0);
+    crate::widgets::tabs(
+        ui,
+        [
+            (Section::Summary, "Summary"),
+            (Section::Properties, "Properties"),
+            (Section::Detection, "Detection"),
+            (Section::Process, "Process"),
+            (Section::Files, "Files"),
+            (Section::Network, "Network"),
+            (Section::Bpf, "eBPF"),
+        ]
+        .map(|(section, label)| (section, label.into())),
+        &mut view.section,
+    );
 }
 
 /// Render complementary sections with a shared height, or stack in narrow panes.

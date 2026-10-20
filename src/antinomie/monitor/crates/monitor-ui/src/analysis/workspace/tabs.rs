@@ -137,7 +137,7 @@ pub(super) fn show(
 ) -> Option<ReportAction> {
     let mut action = header(ui, report, state);
     ui.add_space(4.0);
-    ui.horizontal_wrapped(|ui| {
+    crate::widgets::tab_row(ui, |ui| {
         for tab in Tab::ALL {
             let present = tab
                 .kind()
@@ -152,17 +152,11 @@ pub(super) fn show(
             } else {
                 tab.label().to_owned()
             };
-            let text = if present {
-                egui::RichText::new(title)
-            } else {
-                egui::RichText::new(title).weak()
-            };
-            let mut response = ui.selectable_label(state.tab == tab, text);
+            let mut item = crate::widgets::TabItem::new(title);
             if !present {
-                response = response
-                    .on_hover_text("Not part of this analysis; start one with this check selected");
+                item = item.dimmed("Not part of this analysis; start one with this check selected");
             }
-            if response.clicked() {
+            if crate::widgets::tab(ui, state.tab == tab, &item).clicked() {
                 state.tab = tab;
             }
         }
@@ -181,11 +175,12 @@ pub(super) fn show(
             ) {
                 state.symbols = Structure::Symbols;
             }
-            ui.horizontal_wrapped(|ui| {
-                for filter in [Structure::Symbols, Structure::Imports, Structure::Exports] {
-                    ui.selectable_value(&mut state.symbols, filter, filter.label());
-                }
-            });
+            crate::widgets::tabs(
+                ui,
+                [Structure::Symbols, Structure::Imports, Structure::Exports]
+                    .map(|filter| (filter, filter.label().into())),
+                &mut state.symbols,
+            );
             let filter = state.symbols;
             category(ui, report, state, listing, AnalysisKind::Structures, filter)
         }
@@ -271,7 +266,7 @@ fn file_info(
     state: &mut WorkspaceState,
     listing: Option<&Result<AnalysisListingPage, String>>,
 ) -> Option<ReportAction> {
-    ui.horizontal_wrapped(|ui| {
+    crate::widgets::tab_row(ui, |ui| {
         for view in FileInfo::ALL {
             let title = match view.target() {
                 Some((kind, _)) if pending(report, kind) => {
@@ -283,7 +278,15 @@ fn file_info(
                 }
                 _ => view.label().to_owned(),
             };
-            ui.selectable_value(&mut state.file_info, view, title);
+            if crate::widgets::tab(
+                ui,
+                state.file_info == view,
+                &crate::widgets::TabItem::new(title),
+            )
+            .clicked()
+            {
+                state.file_info = view;
+            }
         }
     });
     match state.file_info.target() {

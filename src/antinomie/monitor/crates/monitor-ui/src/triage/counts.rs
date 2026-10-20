@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Whole-run section totals, independent of table filters and preview pages.
 use super::*;
+use crate::widgets::{self, TabItem, Tone};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Count {
@@ -18,21 +19,23 @@ impl Count {
         }
     }
 
-    fn color(self, accent: bool) -> egui::Color32 {
+    /// The badge tone: accent (or plain) when there is something to see.
+    fn tone(self, accent: bool) -> Tone {
         match self {
             Self::Ready(count) if count > 0 => {
                 if accent {
-                    theme::blue()
+                    Tone::Accent
                 } else {
-                    theme::text()
+                    Tone::Plain
                 }
             }
-            _ => theme::muted(),
+            _ => Tone::Neutral,
         }
     }
 }
 
-/// One wrapping navigation unit, with a separate rounded count badge.
+/// One navigation unit: a thin-bordered tab with a count badge. Call it
+/// inside `widgets::tab_row`.
 pub(super) fn tab(
     ui: &mut egui::Ui,
     selected: bool,
@@ -40,60 +43,14 @@ pub(super) fn tab(
     count: Count,
     accent: bool,
 ) -> bool {
-    let label = count.label();
-    let font = egui::TextStyle::Button.resolve(ui.style());
-    let small = egui::TextStyle::Small.resolve(ui.style());
-    let measure = |text: &str, font| {
-        ui.fonts(|fonts| {
-            fonts
-                .layout_no_wrap(text.into(), font, theme::text())
-                .size()
-                .x
-        })
-    };
-    let badge_width = measure(&label, small) + 14.0;
-    let natural = measure(title, font) + ui.spacing().button_padding.x * 2.0 + badge_width + 4.0;
-    let width = natural.min(ui.max_rect().width()).max(badge_width + 4.0);
-    let height = ui.spacing().interact_size.y.max(30.0);
-    let output = ui.allocate_ui_with_layout(
-        egui::vec2(width, height),
-        egui::Layout::left_to_right(egui::Align::Center),
-        |ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            let clicked = ui
-                .add_sized(
-                    egui::vec2((width - badge_width - 4.0).max(0.0), height),
-                    egui::Button::new(RichText::new(title).strong().color(if selected {
-                        theme::palette().primary_text
-                    } else {
-                        theme::text()
-                    }))
-                    .selected(selected)
-                    .truncate(),
-                )
-                .on_hover_text(title)
-                .clicked();
-            let color = count.color(accent);
-            let badge = egui::Frame::new()
-                .fill(color.gamma_multiply(0.12))
-                .corner_radius(4)
-                .inner_margin(egui::Margin::symmetric(7, 3))
-                .show(ui, |ui| {
-                    ui.label(RichText::new(label).small().strong().color(color));
-                });
-            let response =
-                badge
-                    .response
-                    .interact(egui::Sense::click())
-                    .on_hover_text(match count {
-                        Count::Pending => "Updating the whole-run count",
-                        Count::Unavailable => "No whole-run count is available",
-                        Count::Ready(_) => "Whole-run count before table filters and pagination",
-                    });
-            clicked || response.clicked()
-        },
-    );
-    output.inner
+    let item = TabItem::new(title)
+        .badge(count.label(), count.tone(accent))
+        .tooltip(match count {
+            Count::Pending => "Updating the whole-run count",
+            Count::Unavailable => "No whole-run count is available",
+            Count::Ready(_) => "Whole-run count before table filters and pagination",
+        });
+    widgets::tab(ui, selected, &item).clicked()
 }
 
 #[derive(Clone, Copy)]
@@ -142,8 +99,16 @@ impl TriageView {
 
     pub(super) fn process_tabs(&mut self, ui: &mut egui::Ui) {
         let count = self.section_count(Metric::Findings);
-        ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.process, ProcessTab::Tree, "Process tree");
+        widgets::tab_row(ui, |ui| {
+            if widgets::tab(
+                ui,
+                self.process == ProcessTab::Tree,
+                &TabItem::new("Process tree"),
+            )
+            .clicked()
+            {
+                self.process = ProcessTab::Tree;
+            }
             if tab(
                 ui,
                 self.process == ProcessTab::Suspicious,
@@ -157,7 +122,7 @@ impl TriageView {
     }
 
     pub(super) fn file_tabs(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
+        widgets::tab_row(ui, |ui| {
             for value in FileTab::ALL {
                 let metric = match value {
                     FileTab::Opened => Metric::Opened,
@@ -179,7 +144,7 @@ impl TriageView {
     }
 
     pub(super) fn network_tabs(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
+        widgets::tab_row(ui, |ui| {
             for (value, title, metric) in [
                 (NetTab::Ips, "IPs", Metric::Ips),
                 (NetTab::Hosts, "Hosts", Metric::Hosts),

@@ -117,13 +117,17 @@ impl CoreView {
                     }
                 });
         }
-        ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.tab, Tab::Context, "Context");
-            ui.selectable_value(&mut self.tab, Tab::Mappings, "Memory mappings");
-            ui.selectable_value(&mut self.tab, Tab::Code, "Disassembly");
-            ui.selectable_value(&mut self.tab, Tab::Notes, "Recovered notes");
-        });
-        ui.separator();
+        crate::widgets::tabs(
+            ui,
+            [
+                (Tab::Context, "Context"),
+                (Tab::Mappings, "Memory mappings"),
+                (Tab::Code, "Disassembly"),
+                (Tab::Notes, "Recovered notes"),
+            ]
+            .map(|(tab, label)| (tab, label.into())),
+            &mut self.tab,
+        );
         match self.tab {
             Tab::Context => self.context(ui, &record),
             Tab::Mappings => self.mappings(ui, &record),
@@ -730,6 +734,7 @@ fn notes_table(ui: &mut egui::Ui, record: &CoreRecord, query: &mut String) {
     let header_height =
         ui.text_style_height(&egui::TextStyle::Body).max(20.0) + ui.spacing().item_spacing.y;
     let table_height = (ui.available_height() - detail_height - header_height).max(80.0);
+    crate::widgets::table::begin(ui);
     TableBuilder::new(ui)
         .max_scroll_height(table_height)
         .striped(true)
@@ -742,9 +747,7 @@ fn notes_table(ui: &mut egui::Ui, record: &CoreRecord, query: &mut String) {
         .column(Column::auto().at_least(88.0))
         .header(20.0, |mut header| {
             for title in ["Kind", "Name", "Thread", "Value", "Source", "Availability"] {
-                header.col(|ui| {
-                    ui.strong(title);
-                });
+                header.col(|ui| crate::widgets::table::head(ui, title));
             }
         })
         .body(|body| {

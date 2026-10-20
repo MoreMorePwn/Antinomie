@@ -48,16 +48,19 @@ impl MonitorApp {
             ui.colored_label(theme::muted(), "No VM selected");
             return;
         };
-        ui.horizontal_wrapped(|ui| {
-            if ui.selectable_label(!self.capture_tab, "Runs").clicked() && self.capture_tab {
-                self.capture_tab = false;
+        let mut captures = self.capture_tab;
+        if crate::widgets::tabs(
+            ui,
+            [(false, "Runs"), (true, "Captures")].map(|(value, label)| (value, label.into())),
+            &mut captures,
+        ) {
+            self.capture_tab = captures;
+            if captures {
+                self.refresh_captures();
+            } else {
                 self.refresh_history();
             }
-            if ui.selectable_label(self.capture_tab, "Captures").clicked() && !self.capture_tab {
-                self.capture_tab = true;
-                self.refresh_captures();
-            }
-        });
+        }
         if self.capture_tab {
             self.capture_history_view(ui, &vm_id);
             return;
@@ -68,7 +71,12 @@ impl MonitorApp {
                 (RunFilter::Live, "Live"),
                 (RunFilter::Past, "Past"),
             ] {
-                ui.selectable_value(&mut self.run_filter, filter, label);
+                if ui
+                    .selectable_label(self.run_filter == filter, label)
+                    .clicked()
+                {
+                    self.run_filter = filter;
+                }
             }
             if icon(
                 ui,
@@ -200,6 +208,7 @@ impl MonitorApp {
             egui::vec2(ui.available_width(), height + 28.0),
             egui::Layout::top_down(egui::Align::Min),
             |ui| {
+                crate::widgets::table::begin(ui);
                 let mut table = TableBuilder::new(ui)
                     .id_salt("run_history")
                     .column(Column::initial(225.0).at_least(150.0))
@@ -217,9 +226,7 @@ impl MonitorApp {
                 if let Some(index) = navigation { table = table.scroll_to_row(index, Some(egui::Align::Center)); }
                 table.header(28.0, |mut header| {
                         for name in ["Start time", "Executable", "Arguments", "Tree status", "Root exit", ""] {
-                            header.col(|ui| {
-                                ui.strong(name);
-                            });
+                            header.col(|ui| crate::widgets::table::head(ui, name));
                         }
                     })
                     .body(|body| {

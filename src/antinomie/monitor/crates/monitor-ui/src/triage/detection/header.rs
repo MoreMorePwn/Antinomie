@@ -92,7 +92,7 @@ impl View {
     }
 
     pub(super) fn engine_tabs(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
+        crate::widgets::tab_row(ui, |ui| {
             for (index, engine) in ENGINES.into_iter().enumerate() {
                 let selected = self.selected == engine;
                 let count = self.tab_count(index);
