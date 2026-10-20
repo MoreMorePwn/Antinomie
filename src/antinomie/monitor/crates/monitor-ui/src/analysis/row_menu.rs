@@ -128,7 +128,7 @@ impl RowWindows {
                 .open(&mut open)
                 .default_size([420.0, 320.0])
                 .default_pos([(screen.right() - 440.0).max(0.0), screen.top() + 96.0])
-                .show(ctx, |ui| details(ui, report, entry));
+                .show(ctx, |ui| details(ui, report.specimen_len, entry));
             if !open {
                 self.details = None;
             }
@@ -190,7 +190,7 @@ fn copy_value(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.add(egui::Label::new(egui::RichText::new(value).monospace()).wrap());
 }
 
-fn details(ui: &mut egui::Ui, report: &AnalysisReport, entry: &AnalysisEntry) {
+pub(super) fn details(ui: &mut egui::Ui, specimen_len: Option<u64>, entry: &AnalysisEntry) {
     egui::ScrollArea::both()
         .id_salt("analysis-item-detail")
         .auto_shrink([false, false])
@@ -247,7 +247,7 @@ fn details(ui: &mut egui::Ui, report: &AnalysisReport, entry: &AnalysisEntry) {
                     ui.monospace(format!("File offset: 0x{offset:x}"));
                 }
             }
-            if records::file_range(entry, report.specimen_len).is_none() {
+            if records::file_range(entry, specimen_len).is_none() {
                 ui.separator();
                 ui.weak("No proven retained file range for byte preview.");
             }

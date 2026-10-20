@@ -500,6 +500,7 @@ impl MonitorApp {
                 crate::workspace::DetailsOf::Triage => self.show_triage_details(ui),
                 crate::workspace::DetailsOf::Syscall => self.details(ui),
                 crate::workspace::DetailsOf::Core => self.core_view.details(ui),
+                crate::workspace::DetailsOf::Static => crate::analysis::details(ui),
             },
             Panel::Activity => self.activity(ui),
             Panel::Terminal(id) => {

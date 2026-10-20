@@ -6,6 +6,31 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **Core dumps and Static analysis in the new layout; a Strings tab for cores;
+  functions count lines.** The Cores view keeps its list on the left and its tabs
+  (Context, Memory mappings, Disassembly, Strings, Recovered notes, with counts
+  on the tabs that have them). Registers sit in two cards (instruction pointer
+  and stack; general) under a thread row with Copy all, with the note that a
+  saved core has no unwinding. The mappings are a sortable table you click to
+  choose a mapping; the hex view below it is unchanged. Disassembly and
+  Decompilation share one function sidebar and one listing with Static analysis,
+  and a function now reads `0x401c20 · 12 lines` instead of its size in bytes or
+  octets: its instructions in Disassembly, its source lines in Decompilation
+  (`– lines` for a core function not disassembled yet). A core's Disassembly
+  has a Disassembly / Decompilation switch, and decompiling no longer replaces
+  the disassembly you had decoded. The new **Strings** tab lists the printable
+  ASCII and UTF-16LE strings of the core's captured memory (four or more
+  characters, as in Static analysis) with address, file offset, encoding,
+  length and the mapped file or `[anonymous rw-]`. The search, the filter and
+  the sort run on worker threads, with the spinner and a Cancel while it reads;
+  the table shows 500 strings a page and lists at most 200,000. Static analysis
+  keeps every category and table: the File Info views are a segmented control,
+  the Summary has Identity and Categories cards (Identity links to Triage ›
+  Properties), categories the report lacks are disabled with a tooltip instead
+  of dimmed, tabs show row counts, and tables sort from their headers with the
+  same arrows as elsewhere. The Details panel now follows the Cores and Static
+  analysis tabs and shows the function, mapping, string, note or row you
+  selected; the floating details and bytes windows stay in the row menu.
 - **Detection rules: engines, Installed and Catalog tabs, and every rule of a
   pack.** The page has **YARA / IDS / Sigma** tabs and, inside each, **Installed**
   and **Catalog** tabs. Installed lists the packs and custom groups of the engine

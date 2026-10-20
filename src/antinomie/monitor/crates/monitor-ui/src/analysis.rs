@@ -16,7 +16,7 @@ pub(crate) use listing_view::{listing_fields, listing_row_with};
 #[cfg(test)]
 pub(crate) use source::ARGUMENT_PLACEHOLDER;
 pub(crate) use source::{LaunchSource, ProgramSource, SourceOutcome, UploadFields};
-pub(crate) use workspace::{workspace, workspace_section, WorkspaceState};
+pub(crate) use workspace::{details, workspace, workspace_section, WorkspaceState};
 
 #[derive(Clone, Copy)]
 pub(crate) struct LaunchCapabilities {
@@ -462,6 +462,8 @@ pub(crate) enum ReportAction {
     },
     /// Open Tools > Analysis tools to install a missing tool.
     OpenAnalysisTools,
+    /// Show the same file's identity in Triage › Properties.
+    OpenTriageProperties,
     /// Read a page of a category's full listing, filtered by `query`.
     ReadListing {
         report_id: String,

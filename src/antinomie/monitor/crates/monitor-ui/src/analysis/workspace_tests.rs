@@ -1060,7 +1060,8 @@ fn unfinished_analysis_shows_progress_until_it_completes() {
             .any(|text| text == "Analysis in progress: Entropy"),
         "{shown:?}"
     );
-    assert!(shown.iter().any(|text| text == "Running… / 0 rows"));
+    assert!(shown.iter().any(|text| text == "Running…"));
+    assert!(shown.iter().any(|text| text == "0 rows"));
     assert!(shown
         .iter()
         .any(|text| text == &format!("{} Entropy", egui_phosphor::regular::HOURGLASS_MEDIUM)));
@@ -1532,5 +1533,350 @@ fn both_hosts_draw_the_sidebar_with_the_shared_widget() {
     assert!(
         static_texts.iter().any(|(text, _)| *text == detail),
         "{static_texts:?}"
+    );
+}
+
+fn file_info_report() -> AnalysisReport {
+    let mut report = fixture();
+    report
+        .sections
+        .push(AnalysisSection::new(AnalysisKind::Entropy));
+    report
+}
+
+fn hover(
+    ctx: &egui::Context,
+    report: &AnalysisReport,
+    state: &mut WorkspaceState,
+    at: egui::Pos2,
+) -> Vec<(String, egui::Rect)> {
+    ctx.style_mut(|style| {
+        style.interaction.tooltip_delay = 0.0;
+        style.interaction.tooltip_grace_time = 0.0;
+    });
+    let size = egui::vec2(1280.0, 820.0);
+    let mut output = egui::FullOutput::default();
+    for frame_number in 0..4 {
+        let events = if frame_number == 0 {
+            vec![egui::Event::PointerMoved(at)]
+        } else {
+            Vec::new()
+        };
+        output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                events,
+                time: Some(f64::from(frame_number)),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    workspace(ui, Some(report), state, None, None);
+                });
+            },
+        );
+    }
+    texts(&output)
+}
+
+#[test]
+fn categories_the_report_lacks_are_disabled_with_a_tooltip_and_the_others_count_rows() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let report = fixture();
+    let mut state = WorkspaceState::default();
+    let size = egui::vec2(1280.0, 820.0);
+    let mut output = egui::FullOutput::default();
+    for _ in 0..3 {
+        output = frame(
+            &ctx,
+            &report,
+            &mut state,
+            None,
+            size,
+            Vec::new(),
+            (None, None),
+        )
+        .0;
+    }
+    let shown = texts(&output);
+    let at = |label: &str| {
+        shown
+            .iter()
+            .find(|(text, _)| text == label)
+            .unwrap_or_else(|| panic!("{label}: {shown:?}"))
+            .1
+    };
+    // Strings has 1024 rows; Binwalk is not in this report.
+    assert!(shown.iter().any(|(text, _)| text == "1024"), "{shown:?}");
+    let tip = hover(&ctx, &report, &mut state, at("Binwalk").center());
+    assert!(
+        tip.iter().any(
+            |(text, _)| text == "Not part of this analysis; start one with this check selected"
+        ),
+        "{tip:?}"
+    );
+    state.tab = Tab::Strings;
+    let before = state.tab;
+    let pressed = press(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        size,
+        (egui::PointerButton::Primary, at("Disassembly").center()),
+        (None, None),
+    );
+    assert!(pressed.action.is_none());
+    assert_eq!(state.tab, before, "a disabled category takes no click");
+}
+
+#[test]
+fn file_info_views_are_a_segmented_control_that_disables_the_missing_ones() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let report = file_info_report();
+    let mut state = WorkspaceState::default();
+    let size = egui::vec2(1280.0, 820.0);
+    let mut output = egui::FullOutput::default();
+    for _ in 0..3 {
+        output = frame(
+            &ctx,
+            &report,
+            &mut state,
+            None,
+            size,
+            Vec::new(),
+            (None, None),
+        )
+        .0;
+    }
+    let shown = texts(&output);
+    let labels = [
+        "Summary",
+        "Headers",
+        "Sections",
+        "Segments",
+        "Hardening",
+        "Identification",
+        "Entropy",
+    ];
+    for label in labels {
+        assert!(
+            shown.iter().any(|(text, _)| text == label),
+            "{label}: {shown:?}"
+        );
+    }
+    // Hardening is not in the fixture: its segment says why.
+    let hardening = shown
+        .iter()
+        .find(|(text, _)| text == "Hardening")
+        .unwrap()
+        .1
+        .center();
+    let tip = hover(&ctx, &report, &mut state, hardening);
+    assert!(tip
+        .iter()
+        .any(|(text, _)| text.starts_with("Not part of this analysis")));
+    assert_eq!(state.file_info, FileInfo::Summary);
+    let sections = shown
+        .iter()
+        .find(|(text, _)| text == "Sections")
+        .unwrap()
+        .1
+        .center();
+    let click = press(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        size,
+        (egui::PointerButton::Primary, sections),
+        (None, None),
+    );
+    assert!(click.action.is_none());
+    assert_eq!(
+        state.file_info,
+        FileInfo::Sections,
+        "a segment selects its view"
+    );
+    let hardening = texts(&click.output)
+        .into_iter()
+        .find(|(text, _)| text == "Hardening")
+        .unwrap()
+        .1
+        .center();
+    press(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        size,
+        (egui::PointerButton::Primary, hardening),
+        (None, None),
+    );
+    assert_eq!(
+        state.file_info,
+        FileInfo::Sections,
+        "a missing view cannot be selected"
+    );
+}
+
+#[test]
+fn the_identity_card_links_to_triage_properties() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let report = fixture();
+    let mut state = WorkspaceState::default();
+    let size = egui::vec2(1280.0, 820.0);
+    let mut output = egui::FullOutput::default();
+    for _ in 0..3 {
+        output = frame(
+            &ctx,
+            &report,
+            &mut state,
+            None,
+            size,
+            Vec::new(),
+            (None, None),
+        )
+        .0;
+    }
+    let shown = texts(&output);
+    for card in ["Identity", "Categories"] {
+        assert!(
+            shown.iter().any(|(text, _)| text == card),
+            "{card}: {shown:?}"
+        );
+    }
+    let link = shown
+        .iter()
+        .find(|(text, _)| text == "Triage › Properties")
+        .unwrap()
+        .1
+        .center();
+    let click = press(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        size,
+        (egui::PointerButton::Primary, link),
+        (None, None),
+    );
+    assert_eq!(click.action, Some(ReportAction::OpenTriageProperties));
+    // The categories card lists the ones the report lacks as not requested.
+    assert!(shown.iter().any(|(text, _)| text == "Not requested"));
+}
+
+#[test]
+fn selecting_a_row_hands_it_to_the_details_panel_once() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let report = fixture();
+    let mut state = WorkspaceState::default();
+    let size = egui::vec2(1280.0, 820.0);
+    let mut output = egui::FullOutput::default();
+    for _ in 0..3 {
+        output = render(&ctx, &report, &mut state, size, Vec::new(), None).0;
+    }
+    let first = texts(&output)
+        .into_iter()
+        .find(|(text, _)| text == "0x0")
+        .unwrap()
+        .1
+        .center();
+    click(&ctx, &report, &mut state, size, first);
+    render(&ctx, &report, &mut state, size, Vec::new(), None);
+    let panel = |ctx: &egui::Context| {
+        texts(&ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, details);
+        }))
+    };
+    let shown = panel(&ctx);
+    assert!(
+        shown
+            .iter()
+            .any(|(text, _)| text == "from Static · Strings"),
+        "{shown:?}"
+    );
+    assert!(shown.iter().any(|(text, _)| text == "fixture string 0"));
+    let fresh = egui::Context::default();
+    crate::theme::install(&fresh);
+    assert!(panel(&fresh)
+        .iter()
+        .any(|(text, _)| text.starts_with("Nothing selected.")));
+}
+
+#[test]
+fn a_tables_headers_sort_its_rows_ascending_then_descending() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let report = fixture();
+    let mut state = WorkspaceState::default();
+    let size = egui::vec2(1280.0, 820.0);
+    // The first frame binds the state to the report; then pick the view.
+    frame(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        size,
+        Vec::new(),
+        (None, None),
+    );
+    state.tab = Tab::FileInfo;
+    state.file_info = FileInfo::Sections;
+    let order = |output: &egui::FullOutput| {
+        let mut rows: Vec<_> = texts(output)
+            .into_iter()
+            .filter(|(text, _)| text.starts_with(".fixture"))
+            .collect();
+        rows.sort_by(|a, b| a.1.top().total_cmp(&b.1.top()));
+        rows.into_iter().map(|(text, _)| text).collect::<Vec<_>>()
+    };
+    let mut output = egui::FullOutput::default();
+    for _ in 0..3 {
+        output = frame(
+            &ctx,
+            &report,
+            &mut state,
+            None,
+            size,
+            Vec::new(),
+            (None, None),
+        )
+        .0;
+    }
+    assert_eq!(order(&output)[..3], [".fixture0", ".fixture1", ".fixture2"]);
+    let name = texts(&output)
+        .into_iter()
+        .find(|(text, _)| text.starts_with("Name"))
+        .unwrap()
+        .1
+        .center();
+    let primary = egui::PointerButton::Primary;
+    press(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        size,
+        (primary, name),
+        (None, None),
+    );
+    let second = press(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        size,
+        (primary, name),
+        (None, None),
+    );
+    assert_eq!(
+        order(&second.output)[..3],
+        [".fixture9", ".fixture8", ".fixture7"],
+        "descending by name"
     );
 }

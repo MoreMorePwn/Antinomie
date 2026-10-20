@@ -312,6 +312,11 @@ impl TriageView {
         self.changed_paths.clone()
     }
 
+    /// Show the Properties section.
+    pub(crate) fn show_properties(&mut self) {
+        self.section = Section::Properties;
+    }
+
     /// Show one path in Files › Changed files: the table is filtered to it.
     pub(crate) fn show_changed_path(&mut self, ctx: &egui::Context, path: &str) {
         self.section = Section::Files;
