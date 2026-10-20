@@ -2,6 +2,7 @@
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Upload controls and the correlated, non-executing Run program handoff.
 use super::*;
+use crate::analysis::LaunchSource;
 
 pub(super) struct Intent {
     source: PathBuf,
@@ -35,7 +36,11 @@ impl MonitorApp {
 
     pub(super) fn close_upload(&mut self) {
         self.upload_open = false;
-        // Closing hides the dialog and cancels the handoff, not the guest write.
+        self.cancel_upload_handoff();
+    }
+
+    /// Closing a dialog hides it and cancels the handoff, not the guest write.
+    pub(super) fn cancel_upload_handoff(&mut self) {
         if let Some(upload) = &mut self.pending_upload {
             upload.intent.run_after = false;
         }
@@ -135,7 +140,7 @@ impl MonitorApp {
     }
 
     pub(super) fn accept_upload_file(&mut self, generation: u64, path: PathBuf) {
-        if !self.upload_open
+        if !(self.upload_open || self.launch_open && self.launch_source == LaunchSource::Upload)
             || self.pending_upload.is_some()
             || generation != self.upload_browser.generation
         {
@@ -231,6 +236,8 @@ impl MonitorApp {
         self.exec.path = upload.intent.destination;
         self.upload_open = false;
         self.launch_open = true;
+        // The file is in the guest now: the dialog continues from its path.
+        self.launch_source = LaunchSource::Guest;
         self.status = "Uploaded: review program settings, then press Run".into();
     }
 }

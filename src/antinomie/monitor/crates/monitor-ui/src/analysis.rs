@@ -9,9 +9,13 @@ mod listing_view;
 mod meaning;
 mod records;
 mod row_menu;
+mod source;
 mod workspace;
 pub(crate) use listing_view::{export_ghidra_text, index_ghidra_markers};
 pub(crate) use listing_view::{listing_fields, listing_row_with};
+#[cfg(test)]
+pub(crate) use source::ARGUMENT_PLACEHOLDER;
+pub(crate) use source::{LaunchSource, ProgramSource, SourceOutcome, UploadFields};
 pub(crate) use workspace::{workspace, workspace_section, WorkspaceState};
 
 #[derive(Clone, Copy)]
@@ -30,9 +34,16 @@ pub(crate) fn remembered_budget_id() -> egui::Id {
     egui::Id::new("remembered-core-budget")
 }
 
-/// Program fields and the analysis selection; true when the user asked to
-/// install a missing analysis tool. `capabilities.graphical` offers the Run in choice,
-/// which only a graphical base's session can use.
+/// What the Run form asks for besides editing its fields.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct LaunchOutcome {
+    /// The user asked to install a missing analysis tool.
+    pub install: bool,
+    pub source: SourceOutcome,
+}
+
+/// Program fields and the analysis selection. `capabilities.graphical`
+/// offers the Run in choice, which only a graphical base's session can use.
 pub(crate) fn launch_fields(
     ui: &mut egui::Ui,
     request: &mut ExecRequest,
@@ -40,27 +51,40 @@ pub(crate) fn launch_fields(
     env: &mut String,
     tools: &[ToolStatus],
     capabilities: LaunchCapabilities,
-) -> bool {
-    let mut install = false;
+    source: ProgramSource<'_>,
+) -> LaunchOutcome {
+    let mut outcome = LaunchOutcome::default();
     let spacing = ui.spacing().item_spacing.x;
     let min_pane = ui.text_style_height(&egui::TextStyle::Body) * 22.0;
     if ui.available_width() >= min_pane * 2.0 + spacing {
         ui.columns(2, |columns| {
-            fields(&mut columns[0], request, args, env, capabilities.graphical);
+            outcome.source = fields(
+                &mut columns[0],
+                request,
+                args,
+                env,
+                capabilities.graphical,
+                source,
+            );
             crate::theme::section(&mut columns[1], "Analysis");
-            selection(&mut columns[1], &mut request.analysis, tools, &mut install);
+            selection(
+                &mut columns[1],
+                &mut request.analysis,
+                tools,
+                &mut outcome.install,
+            );
             capture_selection(&mut columns[1], request, capabilities);
             debugger_selection(&mut columns[1], request, capabilities.debug_on_start);
         });
     } else {
-        fields(ui, request, args, env, capabilities.graphical);
+        outcome.source = fields(ui, request, args, env, capabilities.graphical, source);
         ui.add_space(6.0);
         crate::theme::section(ui, "Analysis");
-        selection(ui, &mut request.analysis, tools, &mut install);
+        selection(ui, &mut request.analysis, tools, &mut outcome.install);
         capture_selection(ui, request, capabilities);
         debugger_selection(ui, request, capabilities.debug_on_start);
     }
-    install
+    outcome
 }
 
 fn capture_selection(
@@ -178,23 +202,25 @@ fn fields(
     args: &mut String,
     env: &mut String,
     graphical: bool,
-) {
+    source: ProgramSource<'_>,
+) -> SourceOutcome {
     crate::theme::section(ui, "Program");
     let label_width = ui.text_style_height(&egui::TextStyle::Body) * 8.5;
+    let mut outcome = SourceOutcome::default();
     egui::Grid::new("run-program-fields")
         .num_columns(2)
         .spacing([12.0, 8.0])
         .min_col_width(label_width)
         .show(ui, |ui| {
-            for (label, value, multiline, hint) in [
-                ("Executable", &mut request.path, false, "/path/in/guest"),
-                ("Arguments", args, true, "One argument per line"),
-                ("Working directory", &mut request.cwd, false, "/"),
-                ("Environment", env, true, "One NAME=value entry per line"),
+            outcome = source::rows(ui, &mut request.path, source);
+            for (label, value, rows, hint) in [
+                ("Arguments", &mut *args, 4, source::ARGUMENT_PLACEHOLDER),
+                ("Working directory", &mut request.cwd, 1, "/"),
+                ("Environment", &mut *env, 3, "One NAME=value entry per line"),
             ] {
                 let label_response = ui.label(label);
-                let edit = if multiline {
-                    egui::TextEdit::multiline(value).desired_rows(3)
+                let edit = if rows > 1 {
+                    egui::TextEdit::multiline(value).desired_rows(rows)
                 } else {
                     egui::TextEdit::singleline(value)
                 };
@@ -204,12 +230,7 @@ fn fields(
                         .hint_text(crate::theme::hint_text(hint))
                         .desired_width(f32::INFINITY),
                 )
-                .labelled_by(label_response.id)
-                .on_hover_text(match label {
-                    "Arguments" => "One argument per line",
-                    "Environment" => "One NAME=value entry per line",
-                    _ => label,
-                });
+                .labelled_by(label_response.id);
                 ui.end_row();
             }
             ui.label("User");
@@ -221,6 +242,7 @@ fn fields(
         crate::theme::section(ui, "Session");
         run_in(ui, &mut request.run_in, request.uid);
     }
+    outcome
 }
 
 fn identity_fields(ui: &mut egui::Ui, request: &mut ExecRequest) {

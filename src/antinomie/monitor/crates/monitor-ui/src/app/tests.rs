@@ -18,6 +18,7 @@ mod history;
 mod large_runs;
 mod launch;
 mod layout;
+mod launch_source;
 mod memory_probe;
 mod network;
 mod pending;
@@ -63,6 +64,7 @@ pub(crate) fn app() -> MonitorApp {
         launch_open: false,
         upload_open: false,
         draft: VmConfig::default(),
+        launch_source: Default::default(),
         confirm: None,
         clipboard_request: None,
         pending_kill: None,

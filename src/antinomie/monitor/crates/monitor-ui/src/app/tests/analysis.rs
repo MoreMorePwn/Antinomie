@@ -101,7 +101,10 @@ fn run_setup_keeps_final_actions_visible_and_dispatches_a_selection_snapshot() {
         let _ = action("Analyze Only");
         let (run_rect, analyze_rect) = app.launch_action_rects.unwrap();
         assert!((analyze_rect.center().y - run_rect.center().y).abs() < 1.0);
-        assert!(run_rect.right() < analyze_rect.left());
+        assert!(
+            analyze_rect.right() < run_rect.left(),
+            "the main action is rightmost"
+        );
         for pressed in [true, false] {
             let _ = ctx.run(
                 egui::RawInput {
