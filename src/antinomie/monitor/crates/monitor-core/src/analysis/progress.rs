@@ -93,6 +93,36 @@ pub(super) fn salvage(directory: &Path, report: &mut AnalysisReport) -> bool {
     finished
 }
 
+impl super::jobs::Job {
+    /// A deadline stops the worker, not the sections it already finished:
+    /// adopt them (and their validated listings) before the rest is marked
+    /// unfinished.
+    pub(super) fn keep_finished_sections(&mut self) {
+        if progress::salvage(&self.directory, &mut self.report) {
+            super::jobs::adopt_listings(&self.directory, &mut self.report);
+        }
+    }
+}
+
+pub(crate) fn worker_deadline(report: &AnalysisReport) -> Duration {
+    // The sum of the sections' own budgets, so one slow tool (capa at 4
+    // minutes) cannot use up the time of a later one (decompilation); this is
+    // the hard backstop behind each tool's own timeout.
+    let seconds: u64 = report
+        .sections
+        .iter()
+        .map(|section| match section.kind {
+            AnalysisKind::Decompilation => super::worker::DECOMPILER_SECONDS + 120,
+            AnalysisKind::Capabilities => 300,
+            AnalysisKind::Embedded => 200,
+            AnalysisKind::Identification => 160,
+            AnalysisKind::Disassembly | AnalysisKind::Rules => 90,
+            _ => 20,
+        })
+        .sum();
+    Duration::from_secs(seconds.max(60))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
