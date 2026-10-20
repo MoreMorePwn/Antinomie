@@ -2,7 +2,10 @@
 //! The architecture-neutral view of a debuggable target. Everything the RSP
 //! server needs is expressed here, so the Linux kernel engine and a future
 //! QEMU-gdbstub backend are interchangeable.
-use super::regs::TargetDescription;
+use super::{
+    regs::TargetDescription,
+    view::{BreakpointKind, WatchAccess},
+};
 use std::fmt;
 
 /// Architecture tag carried on every debug message: the ELF `e_machine`.
@@ -55,6 +58,16 @@ pub struct DebugCaps {
     pub hardware_single_step: bool,
     pub shadow_reads: bool,
     pub multi_thread: bool,
+    /// Signals stop the group before delivery, and a resume can pass or drop
+    /// them (guest Phase 2).
+    pub signals: bool,
+    /// Several register sets in one request.
+    pub batch_regs: bool,
+    /// A launch can park the new program before its first instruction (guest
+    /// Phase 2).
+    pub debug_on_start: bool,
+    /// The program's auxiliary vector can be read.
+    pub auxv: bool,
     pub hardware_breakpoints: u32,
     pub hardware_watchpoints: u32,
     /// Bit `n - 1` set: a software breakpoint of `n` bytes is supported.
@@ -82,10 +95,16 @@ pub struct RegsetBlob {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResumeAction {
-    /// Resume every thread.
+    /// Resume every thread. A signal a thread stopped on is dropped.
     Continue,
     /// Execute one user instruction of one thread; the others stay stopped.
     Step { tid: u32 },
+    /// Resume every thread; `tid` delivers the Linux signal `signal` (0 drops
+    /// the one it stopped on, another number replaces it).
+    ContinueSignal { tid: u32, signal: u32 },
+    /// Step `tid` while it delivers `signal`: it stops at the handler's first
+    /// instruction, or one instruction on when the signal has no handler.
+    StepSignal { tid: u32, signal: u32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,6 +115,23 @@ pub enum StopKind {
         addr: u64,
     },
     Step,
+    /// Debug on start: the launched program is parked before its first user
+    /// instruction (the loader's entry for a dynamic program).
+    Entry,
+    /// The thread was about to receive this Linux signal; it has not yet.
+    Signal {
+        signal: u32,
+    },
+    /// A debug-register instruction breakpoint, before the instruction ran.
+    HardwareBreakpoint {
+        addr: u64,
+    },
+    /// A debug-register data breakpoint, after the access (`pc` is past it).
+    /// `addr` is the watched location's start, `access` Write or Access.
+    Watchpoint {
+        addr: u64,
+        access: WatchAccess,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,6 +162,8 @@ pub struct ThreadInfo {
     pub tid: u32,
     pub stopped: bool,
     pub pc: u64,
+    /// The Linux signal a stopped thread has not yet received, else 0.
+    pub signal: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,6 +210,8 @@ pub enum DebugError {
     Gone,
     /// The address is not readable or writable.
     Fault,
+    /// The debug registers are all in use.
+    NoSlots,
     Invalid(String),
     Guest {
         errno: i32,
@@ -187,6 +227,10 @@ impl fmt::Display for DebugError {
             Self::Stale => write!(formatter, "the process resumed since that stop"),
             Self::Gone => write!(formatter, "no such thread or process"),
             Self::Fault => write!(formatter, "address not accessible"),
+            Self::NoSlots => write!(
+                formatter,
+                "no hardware breakpoint slot is free (the debug registers are in use)"
+            ),
             Self::Invalid(what) => write!(formatter, "invalid request: {what}"),
             Self::Guest { errno, message } => write!(formatter, "guest error {errno}: {message}"),
             Self::Transport(what) => write!(formatter, "transport: {what}"),
@@ -204,12 +248,53 @@ pub trait DebugBackend: Send {
     fn interrupt(&mut self) -> Result<(), DebugError>;
     fn resume(&mut self, action: ResumeAction) -> Result<(), DebugError>;
     fn read_regset(&mut self, tid: u32, nt_type: u32) -> Result<RegsetBlob, DebugError>;
+    /// Several register sets of one thread; one request when the guest can.
+    fn read_regsets(&mut self, tid: u32, nt_types: &[u32]) -> Result<Vec<RegsetBlob>, DebugError> {
+        nt_types
+            .iter()
+            .map(|nt_type| self.read_regset(tid, *nt_type))
+            .collect()
+    }
     fn write_regset(&mut self, tid: u32, blob: &RegsetBlob) -> Result<(), DebugError>;
     /// Short reads end at the first unreadable byte; none readable is `Fault`.
     fn read_memory(&mut self, addr: u64, len: usize) -> Result<Vec<u8>, DebugError>;
     fn write_memory(&mut self, addr: u64, data: &[u8]) -> Result<(), DebugError>;
     fn set_breakpoint(&mut self, addr: u64, len: u32) -> Result<(), DebugError>;
     fn clear_breakpoint(&mut self, addr: u64, len: u32) -> Result<(), DebugError>;
+    /// A breakpoint of any kind. `len` is 1 for a software or hardware
+    /// breakpoint and 1, 2, 4 or 8 (with `addr` aligned to it) for a watchpoint.
+    /// The debug registers are a pool shared by every hardware kind:
+    /// `DebugError::NoSlots` when none is free.
+    fn insert_breakpoint(
+        &mut self,
+        kind: BreakpointKind,
+        addr: u64,
+        len: u32,
+    ) -> Result<(), DebugError> {
+        match kind {
+            BreakpointKind::Software => self.set_breakpoint(addr, len),
+            _ => Err(DebugError::Unsupported(
+                "hardware breakpoints and watchpoints".into(),
+            )),
+        }
+    }
+    fn remove_breakpoint(
+        &mut self,
+        kind: BreakpointKind,
+        addr: u64,
+        len: u32,
+    ) -> Result<(), DebugError> {
+        match kind {
+            BreakpointKind::Software => self.clear_breakpoint(addr, len),
+            _ => Ok(()),
+        }
+    }
+    /// The auxiliary vector the kernel gave the program (pairs of 64-bit words
+    /// ending with `AT_NULL`): where a position independent program and its
+    /// loader were mapped.
+    fn auxv(&mut self) -> Result<Vec<u8>, DebugError> {
+        Err(DebugError::Unsupported("the auxiliary vector".into()))
+    }
     fn detach(&mut self, mode: DetachMode) -> Result<(), DebugError>;
     /// Why the last stop or resume request did not take effect, once: for
     /// example a thread that could not be stopped in time.

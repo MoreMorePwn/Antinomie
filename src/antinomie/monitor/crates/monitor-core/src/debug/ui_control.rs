@@ -23,7 +23,8 @@ use super::{
     view::{
         BreakpointKind, BreakpointList, CODE_AFTER_SIZE, CODE_BEFORE_SIZE, Controller, DebugAction,
         DebugRequest, DebugThread, DebugView, MAX_READ_SIZE, MemoryWindow, Pending, RegisterEntry,
-        RegisterSnapshot, RunState, STACK_WINDOW_SIZE, StopReason, ViewCaps, WindowKind,
+        RegisterSnapshot, RunState, STACK_WINDOW_SIZE, StopReason, ViewCaps, WatchAccess,
+        WindowKind,
     },
 };
 use std::{
@@ -35,6 +36,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Bytes a panel watchpoint covers from its address.
+const WATCH_SIZE: u64 = 8;
 /// Requests the panel may have queued at once; further ones are refused.
 const QUEUE_LIMIT: usize = 32;
 /// How often a freely running process is checked for a stop.
@@ -370,8 +373,15 @@ impl PanelControl {
         let mut file = RegisterFile::new();
         let mut registers = Ok(());
         if let Some(nt_type) = description.regsets.first() {
-            match target.backend().read_regset(tid, *nt_type) {
-                Ok(blob) => file.insert(blob),
+            // The general registers with the floating-point set in the same
+            // request when the guest can (one round trip, not two).
+            let wanted: &[u32] = if self.caps.batch_regs {
+                &description.regsets
+            } else {
+                std::slice::from_ref(nt_type)
+            };
+            match target.backend().read_regsets(tid, wanted) {
+                Ok(blobs) => blobs.into_iter().for_each(|blob| file.insert(blob)),
                 Err(error) => registers = Err(error),
             }
         }
@@ -565,13 +575,27 @@ impl PanelControl {
             return Ok(());
         }
         match &request.action {
-            DebugAction::Continue => self.resume(target, ResumeAction::Continue, Pending::Nothing),
+            DebugAction::Continue => {
+                let action = match self.stopped_signal() {
+                    Some((tid, signal)) => ResumeAction::ContinueSignal { tid, signal },
+                    None => ResumeAction::Continue,
+                };
+                self.resume(target, action, Pending::Nothing)
+            }
             DebugAction::Step { tid } => {
                 if !self.caps.hardware_single_step {
                     self.view.notice = Some("This guest cannot single-step.".into());
                     return Ok(());
                 }
-                self.resume(target, ResumeAction::Step { tid: *tid }, Pending::Stepping)
+                // A thread stopped on a signal receives it, as under gdb: the
+                // step then ends at the handler's first instruction.
+                let action = match self.stopped_signal() {
+                    Some((signal_tid, signal)) if signal_tid == *tid => {
+                        ResumeAction::StepSignal { tid: *tid, signal }
+                    }
+                    _ => ResumeAction::Step { tid: *tid },
+                };
+                self.resume(target, action, Pending::Stepping)
             }
             DebugAction::Stop => self.stop(target),
             DebugAction::Refresh => {
@@ -615,6 +639,22 @@ impl PanelControl {
                 self.view.memory = Some(window);
                 Ok(())
             }
+        }
+    }
+
+    /// The signal the stopped thread has not yet received, to pass on a resume.
+    /// SIGTRAP and SIGINT stops are the debugger's own kind and are not passed.
+    fn stopped_signal(&self) -> Option<(u32, u32)> {
+        if !self.caps.signals {
+            return None;
+        }
+        match self.view.run {
+            RunState::Stopped {
+                reason: StopReason::Signal { number },
+                tid,
+                ..
+            } if number != 5 && number != 2 && number != 0 => Some((tid, u32::from(number))),
+            _ => None,
         }
     }
 
@@ -682,9 +722,14 @@ impl PanelControl {
         addr: u64,
         kind: BreakpointKind,
     ) -> Result<(), String> {
-        if kind != BreakpointKind::Software || !self.caps.software_breakpoints {
+        let offered = match kind {
+            BreakpointKind::Software => self.caps.software_breakpoints,
+            BreakpointKind::Hardware => self.caps.hardware_breakpoints > 0,
+            BreakpointKind::Watch(_) => self.caps.hardware_watchpoints > 0,
+        };
+        if !offered {
             self.view.notice = Some(format!(
-                "{} breakpoints are not available in this guest yet.",
+                "{} breakpoints are not available in this guest.",
                 kind.label()
             ));
             return Ok(());
@@ -696,7 +741,7 @@ impl PanelControl {
             self.view.notice = Some(message);
             return Ok(());
         }
-        if let Err(error) = target.panel_breakpoint(addr, true) {
+        if let Err(error) = self.panel_apply(target, addr, kind, true) {
             self.list.remove(addr);
             self.view.notice = Some(format!("cannot set a breakpoint at {addr:#x}: {error}"));
             return self.gone_only(error);
@@ -704,14 +749,39 @@ impl PanelControl {
         Ok(())
     }
 
+    /// Register or release one list entry with the guest. A watchpoint covers
+    /// eight bytes from its address (split into aligned pieces); a read watch
+    /// is an access watch, the debug registers having no read-only mode.
+    fn panel_apply(
+        &mut self,
+        target: &mut RspTarget,
+        addr: u64,
+        kind: BreakpointKind,
+        on: bool,
+    ) -> Result<(), DebugError> {
+        match kind {
+            BreakpointKind::Software => target.panel_breakpoint(addr, on),
+            BreakpointKind::Hardware => target.panel_hardware(kind, addr, 1, on),
+            BreakpointKind::Watch(WatchAccess::Write) => {
+                target.panel_hardware(kind, addr, WATCH_SIZE, on)
+            }
+            BreakpointKind::Watch(_) => target.panel_hardware(
+                BreakpointKind::Watch(WatchAccess::Access),
+                addr,
+                WATCH_SIZE,
+                on,
+            ),
+        }
+    }
+
     fn remove_breakpoint(&mut self, target: &mut RspTarget, addr: u64) -> Result<(), String> {
         if !self.require_stopped() {
             return Ok(());
         }
-        if self.list.get(addr).is_none() {
+        let Some(kind) = self.list.get(addr).map(|entry| entry.kind) else {
             return Ok(());
-        }
-        if let Err(error) = target.panel_breakpoint(addr, false) {
+        };
+        if let Err(error) = self.panel_apply(target, addr, kind, false) {
             self.view.notice = Some(format!("cannot clear the breakpoint at {addr:#x}: {error}"));
             return self.gone_only(error);
         }
@@ -728,10 +798,10 @@ impl PanelControl {
         if !self.require_stopped() {
             return Ok(());
         }
-        if self.list.get(addr).is_none() {
+        let Some(kind) = self.list.get(addr).map(|entry| entry.kind) else {
             return Ok(());
-        }
-        if let Err(error) = target.panel_breakpoint(addr, enabled) {
+        };
+        if let Err(error) = self.panel_apply(target, addr, kind, enabled) {
             self.view.notice = Some(format!(
                 "cannot change the breakpoint at {addr:#x}: {error}"
             ));

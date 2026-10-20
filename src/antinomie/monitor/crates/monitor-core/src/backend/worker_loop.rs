@@ -387,7 +387,7 @@ impl Worker {
                     mpsc::TryRecvError::Empty => mpsc::RecvTimeoutError::Timeout,
                     mpsc::TryRecvError::Disconnected => mpsc::RecvTimeoutError::Disconnected,
                 })
-            } else if self.debug.is_active() {
+            } else if self.debug.is_busy() {
                 self.receiver.recv_timeout(Duration::from_millis(1))
             } else {
                 self.receiver.recv_timeout(Duration::from_millis(10))

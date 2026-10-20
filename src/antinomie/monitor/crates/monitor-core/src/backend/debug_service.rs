@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 
 /// Guest debug opcodes the server thread may send; everything else is refused.
 fn allowed(opcode: u32) -> bool {
-    (wire::CAPS..=wire::BP_CLEAR).contains(&opcode)
+    (wire::CAPS..=wire::AUXV).contains(&opcode)
 }
 
 /// Longest the transport thread spends on one debug request.
@@ -48,10 +48,10 @@ impl GuestLink for DebugLink {
 
 /// The transport thread's own path to the guest, used while it executes the
 /// attach command (it cannot wait for itself).
-struct WorkerLink<'a> {
-    session: &'a mut Session,
-    snapshot: &'a mut Snapshot,
-    sender: &'a SyncSender<Notification>,
+pub(super) struct WorkerLink<'a> {
+    pub(super) session: &'a mut Session,
+    pub(super) snapshot: &'a mut Snapshot,
+    pub(super) sender: &'a SyncSender<Notification>,
 }
 impl GuestLink for WorkerLink<'_> {
     fn request(&mut self, opcode: u32, args: &[u8]) -> Result<Vec<u8>, LinkError> {
@@ -99,6 +99,10 @@ pub(super) struct DebugService {
     last_shown: Option<DebugSessionInfo>,
     /// The panel view last published, by epoch.
     last_view: Option<u64>,
+    /// When a debug client last had a request served. A client of the debug link
+    /// that is not the loopback server (the in-app debugger, a test) keeps the
+    /// worker loop on its short wait for a while after each request.
+    last_served: Option<Instant>,
 }
 impl DebugService {
     pub(super) fn new() -> (Self, DebugLink) {
@@ -111,12 +115,21 @@ impl DebugService {
                 active: None,
                 last_shown: None,
                 last_view: None,
+                last_served: None,
             },
             link,
         )
     }
     pub(super) fn is_active(&self) -> bool {
         self.active.is_some()
+    }
+    /// The worker loop should wait briefly between passes: a debugger's round
+    /// trips each wait for it.
+    pub(super) fn is_busy(&self) -> bool {
+        self.active.is_some()
+            || self
+                .last_served
+                .is_some_and(|served| served.elapsed() < Duration::from_secs(2))
     }
 }
 
@@ -144,6 +157,7 @@ impl Worker {
             let Ok(request) = self.debug.requests.try_recv() else {
                 return;
             };
+            self.debug.last_served = Some(Instant::now());
             let result = match self.session.as_mut() {
                 Some(session) => guest_request(
                     session,
@@ -162,6 +176,7 @@ impl Worker {
         &mut self,
         identity: crate::observation::GuestProcessIdentity,
     ) -> Result<String, String> {
+        self.debug_reap_ended();
         if self.debug.active.is_some() {
             return Err("a debugger is already attached; detach it first".into());
         }
@@ -229,6 +244,17 @@ impl Worker {
             .ok_or("no debugger is attached")?;
         active.server.panel().submit(request)?;
         Ok(String::new())
+    }
+
+    /// A debugger whose target ended (the process exited or was killed) is not
+    /// holding the slot: finish it so another program can be debugged.
+    pub(super) fn debug_reap_ended(&mut self) {
+        let ended = self.debug.active.as_ref().is_some_and(|active| {
+            active.server.status().ended.is_some() || active.server.is_finished()
+        });
+        if ended {
+            let _ = self.debug_detach(false);
+        }
     }
 
     pub(super) fn debug_detach(&mut self, kill: bool) -> Result<String, String> {

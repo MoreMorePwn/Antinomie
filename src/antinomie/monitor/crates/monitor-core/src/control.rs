@@ -4,6 +4,8 @@ pub(crate) const UPLOAD_CHUNK: u32 = 0x1002;
 pub(crate) const UPLOAD_COMMIT: u32 = 0x1003;
 pub(crate) const UPLOAD_ABORT: u32 = 0x1004;
 pub(crate) const EXEC: u32 = 0x1010;
+/// EXEC flag: park the new program before its first instruction for a debugger.
+pub(crate) const EXEC_DEBUG: u32 = 4;
 pub(crate) const INPUT: u32 = 0x1011;
 pub(crate) const READ: u32 = 0x1012;
 pub(crate) const RESIZE: u32 = 0x1013;
@@ -282,6 +284,11 @@ pub(crate) fn execute_analysis(r: &ExecRequest, supported: bool) -> Result<Vec<u
         encoded.extend(SPECIMEN_MAX_SIZE.to_le_bytes());
         encoded.extend(5000u32.to_le_bytes());
     }
+    if r.debug_on_start {
+        // No request bytes follow the flag; the reply carries the start time.
+        let flags = u32::from_le_bytes(encoded[4..8].try_into().expect("flags")) | EXEC_DEBUG;
+        encoded[4..8].copy_from_slice(&flags.to_le_bytes());
+    }
     Ok(encoded)
 }
 pub(crate) fn acquire(path: &str, uid: u32, gid: u32) -> Result<Vec<u8>, String> {
@@ -450,6 +457,21 @@ pub(crate) fn info(reply: &[u8]) -> Result<crate::api::GuestKernel, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn debug_on_start_is_a_flag_without_request_bytes() {
+        let mut request = ExecRequest::default();
+        let legacy = execute(&request).unwrap();
+        request.debug_on_start = true;
+        let debug = execute_analysis(&request, true).unwrap();
+        assert_eq!(debug.len(), legacy.len(), "the flag adds no request bytes");
+        assert_eq!(&debug[4..8], &EXEC_DEBUG.to_le_bytes());
+        request.analysis.enabled = true;
+        request.core_dump_on_exit = true;
+        let all = execute_analysis(&request, true).unwrap();
+        assert_eq!(&all[4..8], &7u32.to_le_bytes());
+        assert_eq!(all.len(), legacy.len() + 16);
+    }
+
     #[test]
     fn core_exec_trailer_follows_optional_specimen_without_changing_legacy_wire() {
         let mut request = ExecRequest::default();

@@ -3,6 +3,7 @@
 //! Pure functions: no transport, so every layout is unit-tested against the
 //! shared header. All integers are little endian.
 use super::target::{ArchTag, DebugCaps, RegsetBlob, RegsetInfo, StopEvent, StopKind};
+use super::view::{BreakpointKind, WatchAccess};
 use crate::control::header;
 
 pub const CAPS: u32 = 0x1080;
@@ -18,6 +19,7 @@ pub const MEM_READ: u32 = 0x1089;
 pub const MEM_WRITE: u32 = 0x108a;
 pub const BP_SET: u32 = 0x108b;
 pub const BP_CLEAR: u32 = 0x108c;
+pub const AUXV: u32 = 0x108d;
 
 pub const ABI: u32 = 1;
 pub const CAPS_SIZE: usize = 48;
@@ -31,6 +33,7 @@ pub const THREADS_MAX: usize = 256;
 pub const ATTACH_STOP: u32 = 1;
 pub const DETACH_KILL: u32 = 1;
 pub const CONT_STEP: u32 = 1;
+pub const REGS_ALL: u32 = 1;
 
 pub const CAP_SW_BREAKPOINT: u32 = 1;
 pub const CAP_HW_SINGLE_STEP: u32 = 2;
@@ -38,6 +41,10 @@ pub const CAP_SHADOW_READS: u32 = 4;
 pub const CAP_MULTI_THREAD: u32 = 8;
 pub const CAP_HW_BREAKPOINT: u32 = 16;
 pub const CAP_HW_WATCHPOINT: u32 = 32;
+pub const CAP_SIGNALS: u32 = 64;
+pub const CAP_BATCH_REGS: u32 = 128;
+pub const CAP_START: u32 = 256;
+pub const CAP_AUXV: u32 = 512;
 
 pub const STATE_RUNNING: u32 = 1;
 pub const STATE_STOPPING: u32 = 2;
@@ -53,8 +60,15 @@ pub const EVENT_BREAKPOINT: u32 = 2;
 pub const EVENT_STEP: u32 = 3;
 pub const EVENT_EXIT: u32 = 4;
 pub const EVENT_EXEC: u32 = 5;
+pub const EVENT_SIGNAL: u32 = 6;
+pub const EVENT_HWBREAK: u32 = 7;
+pub const EVENT_WATCH: u32 = 8;
+pub const EVENT_ENTRY: u32 = 9;
 
 pub const BP_SOFTWARE: u32 = 1;
+pub const BP_HW_EXEC: u32 = 2;
+pub const BP_HW_WRITE: u32 = 3;
+pub const BP_HW_ACCESS: u32 = 4;
 
 fn u32_at(data: &[u8], offset: usize) -> Result<u32, String> {
     data.get(offset..offset + 4)
@@ -91,7 +105,11 @@ pub fn parse_caps(reply: &[u8]) -> Result<DebugCaps, String> {
         | CAP_SHADOW_READS
         | CAP_MULTI_THREAD
         | CAP_HW_BREAKPOINT
-        | CAP_HW_WATCHPOINT;
+        | CAP_HW_WATCHPOINT
+        | CAP_SIGNALS
+        | CAP_BATCH_REGS
+        | CAP_START
+        | CAP_AUXV;
     if flags & !known != 0 || reply[40..48] != [0; 8] {
         return Err("debug capability reply has unknown fields".into());
     }
@@ -123,6 +141,10 @@ pub fn parse_caps(reply: &[u8]) -> Result<DebugCaps, String> {
         hardware_single_step: flags & CAP_HW_SINGLE_STEP != 0,
         shadow_reads: flags & CAP_SHADOW_READS != 0,
         multi_thread: flags & CAP_MULTI_THREAD != 0,
+        signals: flags & CAP_SIGNALS != 0,
+        batch_regs: flags & CAP_BATCH_REGS != 0,
+        debug_on_start: flags & CAP_START != 0,
+        auxv: flags & CAP_AUXV != 0,
         hardware_breakpoints: u32_at(reply, 16)?,
         hardware_watchpoints: u32_at(reply, 20)?,
         breakpoint_len_mask: u32_at(reply, 12)?,
@@ -196,11 +218,19 @@ pub fn threads_request(session: u64) -> Vec<u8> {
 pub fn detach_request(session: u64, kill: bool) -> Vec<u8> {
     with_session(if kill { DETACH_KILL } else { 0 }, session)
 }
-pub fn cont_request(session: u64, step_tid: Option<u32>, generation: u64) -> Vec<u8> {
+/// `signal` is the Linux signal number to deliver and the thread to deliver it
+/// to (`None` drops the signal a thread stopped on).
+pub fn cont_request(
+    session: u64,
+    step_tid: Option<u32>,
+    generation: u64,
+    signal: Option<(u32, u32)>,
+) -> Vec<u8> {
     let mut args = with_session(if step_tid.is_some() { CONT_STEP } else { 0 }, session);
     args.extend(u64::from(step_tid.unwrap_or(0)).to_le_bytes());
-    args.extend(0u32.to_le_bytes());
-    args.extend(0u32.to_le_bytes());
+    let (tid, number) = signal.unwrap_or((0, 0));
+    args.extend(number.to_le_bytes());
+    args.extend(tid.to_le_bytes());
     args.extend(generation.to_le_bytes());
     args
 }
@@ -220,6 +250,10 @@ pub struct SessionStatus {
     pub last_error: i32,
     pub event_sequence: u32,
     pub breakpoints: u32,
+    /// The Linux signal number of a signal stop.
+    pub event_signal: u32,
+    /// The breakpoint kind (`BP_HW_*`) that fired, for a watchpoint stop.
+    pub event_access: u32,
 }
 impl SessionStatus {
     pub fn stop_event(&self) -> Option<StopEvent> {
@@ -229,6 +263,21 @@ impl SessionStatus {
                 addr: self.event_addr,
             },
             EVENT_STEP => StopKind::Step,
+            EVENT_ENTRY => StopKind::Entry,
+            EVENT_SIGNAL => StopKind::Signal {
+                signal: self.event_signal,
+            },
+            EVENT_HWBREAK => StopKind::HardwareBreakpoint {
+                addr: self.event_addr,
+            },
+            EVENT_WATCH => StopKind::Watchpoint {
+                addr: self.event_addr,
+                access: if self.event_access == BP_HW_WRITE {
+                    WatchAccess::Write
+                } else {
+                    WatchAccess::Access
+                },
+            },
             _ => return None,
         };
         Some(StopEvent {
@@ -240,7 +289,7 @@ impl SessionStatus {
     }
 }
 pub fn parse_status(reply: &[u8]) -> Result<SessionStatus, String> {
-    if reply.len() != STATUS_SIZE || reply[72..96] != [0; 24] || u32_at(reply, 20)? != 0 {
+    if reply.len() != STATUS_SIZE || reply[80..96] != [0; 16] || u32_at(reply, 20)? != 0 {
         return Err("debug status reply is malformed".into());
     }
     let state = u32_at(reply, 16)?;
@@ -261,6 +310,8 @@ pub fn parse_status(reply: &[u8]) -> Result<SessionStatus, String> {
         last_error: u32_at(reply, 60)? as i32,
         event_sequence: u32_at(reply, 64)?,
         breakpoints: u32_at(reply, 68)?,
+        event_signal: u32_at(reply, 72)?,
+        event_access: u32_at(reply, 76)?,
     })
 }
 
@@ -276,6 +327,8 @@ pub struct ThreadEntry {
     pub tid: u32,
     pub stopped: bool,
     pub stop_reason: u32,
+    /// The Linux signal number the thread is stopped on, else 0.
+    pub signal: u32,
     pub pc: u64,
 }
 pub fn parse_threads(reply: &[u8]) -> Result<Vec<ThreadEntry>, String> {
@@ -296,6 +349,7 @@ pub fn parse_threads(reply: &[u8]) -> Result<Vec<ThreadEntry>, String> {
                 tid,
                 stopped: state == 2,
                 stop_reason: u32_at(reply, entry + 8)?,
+                signal: u32_at(reply, entry + 12)?,
                 pc: u64_at(reply, entry + 16)?,
             })
         })
@@ -311,6 +365,38 @@ fn regs_header(session: u64, tid: u32, nt_type: u32, generation: u64) -> Vec<u8>
 }
 pub fn regs_read_request(session: u64, tid: u32, nt_type: u32, generation: u64) -> Vec<u8> {
     regs_header(session, tid, nt_type, generation)
+}
+/// Several register sets in one request: `mask` has bit `n` set for the `n`th
+/// entry of the capability table.
+pub fn regs_read_many_request(session: u64, tid: u32, mask: u32, generation: u64) -> Vec<u8> {
+    let mut args = header(REGS_ALL);
+    args.extend(session.to_le_bytes());
+    args.extend(tid.to_le_bytes());
+    args.extend(mask.to_le_bytes());
+    args.extend(generation.to_le_bytes());
+    args
+}
+pub fn parse_regs_many(reply: &[u8], expected: &[u32]) -> Result<Vec<RegsetBlob>, String> {
+    let count = u32_at(reply, 0)? as usize;
+    if reply.len() < 16 || count != expected.len() || reply[4..16] != [0; 12] {
+        return Err("debug register reply is malformed".into());
+    }
+    let mut at = 16;
+    let mut blobs = Vec::with_capacity(count);
+    for nt_type in expected {
+        let part = reply.get(at..).ok_or("debug register reply is short")?;
+        let length = u32_at(part, 4)? as usize;
+        let end = 16usize
+            .checked_add(length)
+            .filter(|end| *end <= part.len())
+            .ok_or("debug register reply is short")?;
+        blobs.push(parse_regs(&part[..end], *nt_type)?);
+        at += end;
+    }
+    if at != reply.len() {
+        return Err("debug register reply has trailing bytes".into());
+    }
+    Ok(blobs)
 }
 pub fn regs_write_request(
     session: u64,
@@ -386,10 +472,43 @@ pub fn parse_mem_write(reply: &[u8], requested: usize) -> Result<(), String> {
 }
 
 pub fn breakpoint_request(session: u64, addr: u64, len: u32, generation: u64) -> Vec<u8> {
+    breakpoint_kind_request(session, BreakpointKind::Software, addr, len, generation)
+}
+pub fn breakpoint_kind_request(
+    session: u64,
+    kind: BreakpointKind,
+    addr: u64,
+    len: u32,
+    generation: u64,
+) -> Vec<u8> {
     let mut args = with_session(0, session);
-    args.extend(BP_SOFTWARE.to_le_bytes());
+    args.extend(
+        match kind {
+            BreakpointKind::Software => BP_SOFTWARE,
+            BreakpointKind::Hardware => BP_HW_EXEC,
+            BreakpointKind::Watch(WatchAccess::Write) => BP_HW_WRITE,
+            // The debug registers cannot watch for reads alone: a read watch is
+            // an access watch (the caller reports what it asked for).
+            BreakpointKind::Watch(_) => BP_HW_ACCESS,
+        }
+        .to_le_bytes(),
+    );
     args.extend(len.to_le_bytes());
     args.extend(addr.to_le_bytes());
     args.extend(generation.to_le_bytes());
     args
+}
+
+pub fn auxv_request(session: u64, generation: u64) -> Vec<u8> {
+    let mut args = with_session(0, session);
+    args.extend(generation.to_le_bytes());
+    args
+}
+/// The auxiliary vector: pairs of u64 ending with `AT_NULL`.
+pub fn parse_auxv(reply: &[u8]) -> Result<Vec<u8>, String> {
+    let length = u32_at(reply, 0)? as usize;
+    if reply.len() != 8 + length || length % 16 != 0 || u32_at(reply, 4)? != 0 {
+        return Err("debug auxiliary vector reply is malformed".into());
+    }
+    Ok(reply[8..].to_vec())
 }

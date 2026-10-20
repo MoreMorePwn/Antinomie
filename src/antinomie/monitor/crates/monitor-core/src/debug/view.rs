@@ -38,6 +38,10 @@ pub enum BreakpointKind {
     Watch(WatchAccess),
 }
 impl BreakpointKind {
+    /// Uses a debug register, and so one of the few slots.
+    pub fn is_hardware(self) -> bool {
+        self != Self::Software
+    }
     pub fn label(self) -> &'static str {
         match self {
             Self::Software => "sw",
@@ -79,7 +83,17 @@ impl StopReason {
                 addr,
                 kind: BreakpointKind::Software,
             },
+            StopKind::HardwareBreakpoint { addr } => Self::Breakpoint {
+                addr,
+                kind: BreakpointKind::Hardware,
+            },
+            StopKind::Watchpoint { addr, access } => Self::Watchpoint { addr, access },
             StopKind::Step => Self::Step,
+            // The Linux number; only the signals 1..=64 exist.
+            StopKind::Signal { signal } => Self::Signal {
+                number: u8::try_from(signal).unwrap_or(0),
+            },
+            StopKind::Entry => Self::Entry,
         }
     }
 }

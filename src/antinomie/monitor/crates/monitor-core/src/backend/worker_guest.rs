@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! Commands executed inside the running guest.
 use super::*;
+use crate::debug::KernelDebugBackend;
 
 impl Worker {
     pub(super) fn guest_command(&mut self, command: Command) -> Result<String, String> {
+        if matches!(&command, Command::Execute(request) if request.debug_on_start) {
+            self.debug_reap_ended();
+        }
         let session = self.session.as_mut().ok_or("VM is stopped")?;
         let timeout = Duration::from_secs(10);
         if matches!(
@@ -167,6 +171,24 @@ impl Worker {
                 if request.core_dump_on_exit && request.run_in.guest_desktop() {
                     return Err("process Core Dump on Exit currently requires App Terminal; desktop wrappers do not identify the selected executable as the root group".into());
                 }
+                if request.debug_on_start {
+                    if request.run_in.guest_desktop() {
+                        return Err("Debug on start needs Run in: App terminal; a desktop launcher runs a shell wrapper, which is what would stop".into());
+                    }
+                    if self.debug.is_active() {
+                        return Err("a debugger is already attached; detach it before debugging another program from its start".into());
+                    }
+                    let caps = KernelDebugBackend::probe(&mut debug_service::WorkerLink {
+                        session,
+                        snapshot: &mut self.snapshot,
+                        sender: &self.sender,
+                    })
+                    .map_err(|error| error.to_string())?;
+                    if !caps.debug_on_start {
+                        return Err("this base's debugger cannot stop a program at its start; rebuild the base for Antinomie 0.7.0 (Debug on start is a Phase 2 feature)".into());
+                    }
+                }
+                let boot_id = session.boot_id.clone();
                 if session.run_artifacts.contains_key(&0) {
                     return Err("a failed launch still owns an unresolved network capture; wait for cleanup or restart the VM".into());
                 }
@@ -265,6 +287,7 @@ impl Worker {
                             != 24
                                 + usize::from(inline_acquisition) * 24
                                 + usize::from(request.core_dump_on_exit) * 24
+                                + usize::from(request.debug_on_start) * 16
                             || u32_at(&reply, 20).map_err(|e| e.to_string())? != 0
                         {
                             return Err("invalid execution reply".to_string());
@@ -389,7 +412,45 @@ impl Worker {
                 session.runs.insert(cookie, run);
                 session.update_runs(&mut self.snapshot);
                 self.emit(Notification::RunStarted(summary));
-                Ok(format!("launched pid {pid}, terminal session {id}"))
+                let launched = format!("launched pid {pid}, terminal session {id}");
+                if !request.debug_on_start {
+                    return Ok(launched);
+                }
+                // The guest parked the new program before its first instruction;
+                // the debugger takes over that session.
+                let start_offset = 24
+                    + usize::from(inline_acquisition) * 24
+                    + usize::from(request.core_dump_on_exit) * 24;
+                let identity = crate::observation::GuestProcessIdentity {
+                    boot_id: boot_id.clone(),
+                    task_cookie: cookie,
+                    tgid: pid,
+                    start_boot_ns: u64_at(&reply, start_offset).map_err(|e| e.to_string())?,
+                };
+                match self.debug_attach(identity) {
+                    Ok(attached) => Ok(format!(
+                        "{launched}; stopped before its first instruction; {attached}"
+                    )),
+                    Err(error) => {
+                        // A parked program nobody can debug must not wait for ever.
+                        if let Some(session) = self.session.as_mut() {
+                            let mut args = control::header(0);
+                            args.extend(cookie.to_le_bytes());
+                            let _ = session.request(
+                                0x1015,
+                                &args,
+                                &mut self.snapshot,
+                                &self.sender,
+                                timeout,
+                            );
+                        }
+                        let message = format!(
+                            "{launched}, but the debugger could not attach ({error}); the program was stopped"
+                        );
+                        self.snapshot.last_error = Some(message.clone());
+                        Ok(message)
+                    }
+                }
             }
             Command::CancelProcessCore { run_id } => {
                 session.cancel_core(&run_id, &mut self.snapshot, &self.sender)

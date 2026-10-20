@@ -265,6 +265,11 @@ impl MonitorApp {
                 .guest_kernel
                 .as_ref()
                 .is_some_and(|kernel| kernel.revision.is_some_and(|revision| revision >= 15));
+            let debug_on_start = self
+                .snapshot
+                .guest_kernel
+                .as_ref()
+                .is_some_and(|kernel| kernel.revision.is_some_and(|revision| revision >= 17));
             let footer = ui.spacing().interact_size.y
                 + 24.0
                 + if selection_error.is_some() {
@@ -287,6 +292,7 @@ impl MonitorApp {
                             crate::analysis::LaunchCapabilities {
                                 graphical,
                                 core_on_exit,
+                                debug_on_start,
                             },
                         ) {
                             self.tools_open = true;
