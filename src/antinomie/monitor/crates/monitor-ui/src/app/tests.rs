@@ -48,6 +48,7 @@ pub(crate) fn app() -> MonitorApp {
     layout.focus(Panel::Trace);
     MonitorApp {
         performance: Default::default(),
+        last_frame_start: None,
         backend: None,
         snapshot: Snapshot::default(),
         selected: None,

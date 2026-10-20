@@ -294,6 +294,7 @@ impl CredentialForm {
 
 pub struct MonitorApp {
     performance: crate::ui_performance::Performance,
+    last_frame_start: Option<Instant>,
     backend: Option<Backend>,
     snapshot: Snapshot,
     selected: Option<String>,
@@ -486,6 +487,7 @@ impl MonitorApp {
         }
         let mut app = Self {
             performance: crate::ui_performance::Performance::new(cc.gl.as_deref()),
+            last_frame_start: None,
             backend,
             snapshot: Snapshot::default(),
             selected: None,
@@ -642,7 +644,18 @@ impl eframe::App for MonitorApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let frame_started = Instant::now();
+        let mut frame_started = Instant::now();
+        let pause = crate::ui_performance::throttle_sleep(
+            self.last_frame_start,
+            frame_started,
+            crate::ui_performance::MIN_FRAME_INTERVAL,
+            crate::ui_performance::VSYNC,
+        );
+        if !pause.is_zero() {
+            std::thread::sleep(pause);
+            frame_started = Instant::now();
+        }
+        self.last_frame_start = Some(frame_started);
         self.dependencies.poll();
         self.drain();
         self.getting_started_tick();
