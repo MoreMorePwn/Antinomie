@@ -6,6 +6,18 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **Detection rules: engines, Installed and Catalog tabs, and every rule of a
+  pack.** The page has **YARA / IDS / Sigma** tabs and, inside each, **Installed**
+  and **Catalog** tabs. Installed lists the packs and custom groups of the engine
+  in a sortable table (enable, version, update available); selecting one lists
+  all of its rules in a sortable table with a filter, and a click on a rule
+  shows its name, metadata and its own source text, cut from the installed file.
+  Catalog lists the packs on offer with their rules, size, license and state;
+  selecting one shows the catalog's facts (source, license, hosts, options) and
+  says the rule list is available only after install; nothing is fetched to
+  show it. The rules step of **Getting started** now has the same engine tabs
+  with a row per pack; it still needs the explicit Allow downloads, and a pack
+  with terms to read still starts unticked.
 - **The sidebar gets a Library; base images, detection rules and analysis tools
   are pages.** The *Base images* list is now a **Library** section with three
   entries: **Base images** (the image count), **Detection rules** (the number of

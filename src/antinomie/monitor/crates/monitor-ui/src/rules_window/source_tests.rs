@@ -47,7 +47,7 @@ impl Fetcher for Served {
     }
 }
 
-fn catalog_value() -> (serde_json::Value, Vec<u8>) {
+pub(crate) fn catalog_value() -> (serde_json::Value, Vec<u8>) {
     let text = rules_text();
     let archive = text.clone().into_bytes();
     let sha = |bytes: &[u8]| antinomie_monitor_core::storage::sha256_hex(bytes);
@@ -74,7 +74,7 @@ fn catalog_value() -> (serde_json::Value, Vec<u8>) {
     (value, archive)
 }
 
-fn render(
+pub(super) fn render(
     ctx: &egui::Context,
     model: &mut Model,
     dir: &Path,
@@ -100,7 +100,7 @@ fn render(
     texts(&output)
 }
 
-fn texts(output: &egui::FullOutput) -> Vec<(String, egui::Rect, egui::Rect)> {
+pub(super) fn texts(output: &egui::FullOutput) -> Vec<(String, egui::Rect, egui::Rect)> {
     fn collect(
         shape: &egui::epaint::Shape,
         clip: egui::Rect,
@@ -127,7 +127,7 @@ fn texts(output: &egui::FullOutput) -> Vec<(String, egui::Rect, egui::Rect)> {
     found
 }
 
-fn joined(shown: &[(String, egui::Rect, egui::Rect)]) -> String {
+pub(super) fn joined(shown: &[(String, egui::Rect, egui::Rect)]) -> String {
     shown
         .iter()
         .map(|(text, _, _)| text.as_str())
@@ -135,7 +135,7 @@ fn joined(shown: &[(String, egui::Rect, egui::Rect)]) -> String {
         .join("\n")
 }
 
-fn click(
+pub(super) fn click(
     ctx: &egui::Context,
     model: &mut Model,
     dir: &Path,
@@ -157,11 +157,13 @@ fn click(
     }
 }
 
-fn model_for(dir: &Path, catalog: &serde_json::Value) -> Model {
+pub(super) fn model_for(dir: &Path, catalog: &serde_json::Value) -> Model {
     ruleset::store_catalog(dir, &ruleset::validate_catalog(catalog).unwrap()).unwrap();
     Model {
         loaded: true,
         engine: "yara".into(),
+        tab: Tab::Catalog,
+        catalog_pick: catalog["packs"][0]["id"].as_str().unwrap().into(),
         catalog: ruleset::load_catalog(dir).unwrap(),
         registry: ruleset::load_registry(dir).unwrap(),
         ..Default::default()
@@ -274,11 +276,22 @@ fn the_manager_shows_source_license_hosts_and_the_off_by_default_option() {
         &mut outbound,
     ));
     assert!(text.contains("Forge Core"), "{text}");
+    assert!(text.contains("installed"), "{text}");
+    assert!(!text.contains("Download and install"), "{text}");
+    // The installed card is on the Installed tab.
+    model.tab = Tab::Installed;
+    let text = joined(&render(
+        &ctx,
+        &mut model,
+        &dir,
+        wide,
+        Vec::new(),
+        &mut outbound,
+    ));
     assert!(
         text.contains("github.com/example/forge · release 1 ·"),
         "{text}"
     );
-    assert!(text.contains("installed"), "{text}");
     assert!(text.contains("Remove"), "{text}");
     assert!(text.contains("Source, license and hashes"), "{text}");
     let _ = std::fs::remove_dir_all(&dir);
