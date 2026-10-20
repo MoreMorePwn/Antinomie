@@ -109,12 +109,20 @@ injection, multiprocess, host I/O.
 
 Debug on start, per-thread stepping with the others running, hardware
 breakpoints and watchpoints, signal stops and injection, fork/vfork/exec
-following, non-stop, the in-app register/memory/disassembly UI, manual core under
+following, non-stop, manual core under
 a debug stop, kill of a stopped task by `STOP_RUN` (only the SIGKILL escalation
 after the Stop grace period reaches a task stopped by the engine), reconnect that re-adopts a
 session across a snapshot. A breakpoint left in memory is inherited by a
 `fork` child while the group runs; stepping with a signal pending can lose the
 step (the engine times out after 2 s and lets the thread run).
+
+## In-app panel
+
+The Debugger window in the app is a second controller of the same engine, on the
+RSP server thread, never through our own socket. See "Accepted in-app debugger
+panel" in `docs/implementation.md` for the messages and the rule: one controller
+at a time, a connecting client takes the process and the panel is read-only
+("controlled by gdb") until it leaves. A client leaving still resumes the process.
 
 ## Qualification
 

@@ -260,10 +260,29 @@ it runs.
   breakpoints removed. First release: all-stop, one process, software
   breakpoints, single-step of one thread, x86-64. Guest contract revision 17
   (unchanged; older bases say the debugger is unavailable). Debug on start,
-  hardware breakpoints, signals, fork/exec following and the in-app views come
-  next. New dependency: `gdbstub 0.7.10` (MIT OR Apache-2.0) for the protocol.
+  hardware breakpoints, signals and fork/exec following come next (the minimal
+  in-app panel is in the next entry). New dependency: `gdbstub 0.7.10` (MIT OR Apache-2.0) for the protocol.
   Every guest request costs about one 10 ms control poll, so registers take
   about 44 ms and a step about 44 ms; see `protocol/debugger.md`.
+- **The debugger has a panel in the app.** After **Attach debugger…** the
+  Debugger window shows the process, a thread selector, the stop reason and
+  address, and **Continue**, **Step**, **Stop**, **Refresh** and **Detach**
+  buttons, with the gdb command and a copy button above. Threads and
+  breakpoints are on the left (add a breakpoint by address, enable or disable
+  it, remove it, or click the dot beside an instruction); the middle column
+  disassembles around the instruction pointer with the same decoder as the
+  static listing; the right column has the registers with `rflags` decoded
+  (`[PF ZF IF]`), `fs_base`, `gs_base` and `orig_rax`, 256 bytes of stack
+  from `rsp`, and a memory range you can read by address (up to 4 KiB per
+  read). The panel reads only when the process stops or you press Refresh, in
+  bounded ranges; each part appears as it arrives, with a spinner beside the
+  text still loading. One controller at a time: while the panel drives the
+  process, a connecting gdb takes control (the process is stopped for it, as
+  gdb expects) and the panel turns read-only, saying it is controlled by gdb,
+  until gdb disconnects (which leaves the process running); breakpoints set in
+  the panel stay set. Breakpoints can be changed only while the process is
+  stopped. Saved process cores keep their own viewer (registers, memory
+  mappings and disassembly in Core dumps); they are not opened in the debugger.
 - **The guest tracer records who a task ran as and what a file contained.**
   Guest contract revision 17 (no new revision) adds two records to the
   syscall trace. Credentials: every traced task's uid, euid, suid, fsuid, the
