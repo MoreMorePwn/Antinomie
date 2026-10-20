@@ -32,6 +32,20 @@ it runs.
   Getting started open the pages. The VM list stays flat under Virtual
   machines. The saved fold state of the old Base images section now folds the
   Library.
+- **Process, Files and Network triage in the new layout.** Process tree and
+  Suspicious activity are one segmented control with counts, and a process with
+  suspicious observations shows their count as a small warning chip; its Details
+  list those observations and offer **Filter Trace to this process**, **Files
+  it touched** and **Suspicious activity** for its PID. In Files, **Hide
+  stdio**, **Hide library** and **Failed attempts** are toggle chips in the
+  filter bar (the first two still start on), and a file under a hidden
+  directory, a persistence path or a credentials path gets a warning bar and a
+  warning-coloured Location. Network gets an **Open Packets** button that shows
+  the run's capture in Packets, and the DNS table gets the Time column HTTP
+  already had. The "Refresh, Every, Refreshed N s ago" row of these three
+  sections is one status at the right of the tab bar; its menu has Refresh now
+  and the interval, and the refresh itself is unchanged. Table columns and rows
+  are otherwise unchanged and every header still sorts.
 - **Process cores are no longer limited to 64 MiB.** Core Dump on Exit and Dump
   core now have a **Budget** (64 MiB to 1 GiB) and a **Deadline** (up to 60 s).
   The budget bounds the bytes the guest *stores*: untouched mappings cost

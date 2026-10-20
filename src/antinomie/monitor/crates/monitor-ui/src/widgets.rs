@@ -19,7 +19,7 @@
 //!   with [`table::row_mark`] in the first cell. Row height comes from
 //!   [`table::row_height`] and the header from [`table::header_height`].
 //!   Zebra, hover and selection fills come from the active theme's visuals.
-//! - Status words: [`chip`] with a [`Tone`].
+//! - Status words: [`chip`] with a [`Tone`]; filter-bar switches: [`toggle_chip`].
 //!
 //! Nothing here holds a literal color; add new ones to `theme::Palette`.
 // Parts of the kit (chip, footer_split, row marks) are adopted screen by
@@ -32,7 +32,7 @@ mod tone;
 mod window;
 
 pub use tabs::{segmented, tab, tab_row, tabs, TabItem};
-pub use tone::{chip, Tone};
+pub use tone::{chip, toggle_chip, Tone};
 pub use window::{footer, footer_split, window, Dialog};
 
 #[cfg(test)]

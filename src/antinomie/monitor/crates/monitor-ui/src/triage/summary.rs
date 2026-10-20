@@ -174,7 +174,7 @@ mod tests {
                         run_finished: true,
                         ..TriageInput::empty()
                     };
-                    presentation::navigation(&mut self.view, ui);
+                    presentation::navigation(&mut self.view, ui, &input);
                     if self.detection {
                         self.view.detection.show(ui, self.view.scan.as_ref());
                     } else {

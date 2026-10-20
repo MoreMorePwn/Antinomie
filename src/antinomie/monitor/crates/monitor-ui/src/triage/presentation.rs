@@ -46,10 +46,16 @@ pub(super) fn heading_busy(ui: &mut egui::Ui, title: &str, subtitle: &str, busy:
     ui.add_space(8.0);
 }
 
-pub(super) fn navigation(view: &mut TriageView, ui: &mut egui::Ui) {
-    crate::widgets::tabs(
-        ui,
-        [
+pub(super) fn navigation(view: &mut TriageView, ui: &mut egui::Ui, input: &TriageInput<'_>) {
+    // Process, Files and Network keep their refresh status at the right of
+    // the bar; the other sections have none or their own row.
+    let trail = matches!(
+        view.section,
+        Section::Process | Section::Files | Section::Network
+    );
+    let mut fits = true;
+    crate::widgets::tab_row(ui, |ui| {
+        for (section, label) in [
             (Section::Summary, "Summary"),
             (Section::Properties, "Properties"),
             (Section::Detection, "Detection"),
@@ -57,10 +63,26 @@ pub(super) fn navigation(view: &mut TriageView, ui: &mut egui::Ui) {
             (Section::Files, "Files"),
             (Section::Network, "Network"),
             (Section::Bpf, "eBPF"),
-        ]
-        .map(|(section, label)| (section, label.into())),
-        &mut view.section,
-    );
+        ] {
+            if crate::widgets::tab(ui, view.section == section, &label.into()).clicked() {
+                view.section = section;
+            }
+        }
+        let room = ui.available_width();
+        if trail && room >= 120.0 {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                fits = view.refresh_trail(ui, input, Some(room));
+            });
+        } else {
+            fits = !trail;
+        }
+    });
+    // A narrow pane puts the status under the bar instead.
+    if !fits {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            view.refresh_trail(ui, input, None);
+        });
+    }
 }
 
 /// Render complementary sections with a shared height, or stack in narrow panes.

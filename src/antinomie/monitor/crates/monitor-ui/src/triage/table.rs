@@ -189,6 +189,18 @@ pub(super) fn request_evidence_jump(ctx: &egui::Context, values: &[(&str, RowVal
     }
 }
 
+/// The bar at a row's left edge: the selection, else a flagged file path.
+fn mark_of(selected: bool, first: &Cell) -> crate::widgets::table::Mark {
+    use crate::widgets::table::Mark;
+    if selected {
+        Mark::Selected
+    } else if file_category::row_flagged(&first.values) {
+        Mark::Flagged
+    } else {
+        Mark::None
+    }
+}
+
 pub(super) fn table_rows(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[Vec<Cell>]) {
     table_rows_with(ui, id, headers, rows, None);
 }
@@ -211,6 +223,10 @@ fn table_rows_with(
     let branches = branches.filter(|_| order.is_none());
     let branch_font = egui::TextStyle::Monospace.resolve(ui.style());
     let branch_char = crate::tree_lines::char_width(ui, &branch_font);
+    // Room for the suspicious-count chip of the process cell.
+    if let (true, Some(first)) = (id == "triage-process", widths.first_mut()) {
+        *first += 40.0;
+    }
     if let (Some(branches), Some(first)) = (branches, widths.first_mut()) {
         let deepest = branches.iter().map(|prefix| prefix.width(branch_char));
         *first += deepest.fold(0.0, f32::max).min(branch_char * 64.0);
@@ -268,11 +284,8 @@ fn table_rows_with(
                 let branch = branches.map(|branches| &branches[row.index()]);
                 for (column, cell) in cells.iter().enumerate() {
                     row.col(|ui| {
-                        if column == 0 && row_selected {
-                            crate::widgets::table::row_mark(
-                                ui,
-                                crate::widgets::table::Mark::Selected,
-                            );
+                        if column == 0 {
+                            crate::widgets::table::row_mark(ui, mark_of(row_selected, cell));
                         }
                         let indent = branch.filter(|_| column == 0).map(|branch| {
                             let reach = ui.spacing().item_spacing.y * 0.5;
@@ -288,7 +301,7 @@ fn table_rows_with(
                             .truncate()
                             .selectable(false)
                             .sense(egui::Sense::hover());
-                        match indent {
+                        let draw = |ui: &mut egui::Ui| match indent {
                             Some(width) => {
                                 let mut rect = ui.max_rect();
                                 rect.min.x += width;
@@ -299,6 +312,31 @@ fn table_rows_with(
                             None => {
                                 ui.add(label);
                             }
+                        };
+                        // The count of suspicious observations is a chip at the
+                        // right of the process cell; the label takes the rest.
+                        let suspect = (column == 0 && id == "triage-process")
+                            .then(|| files::number(&cell.values, "process.suspicious"))
+                            .flatten()
+                            .filter(|count| *count > 0);
+                        if let Some(count) = suspect {
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    crate::widgets::chip(
+                                        ui,
+                                        count.to_string(),
+                                        crate::widgets::Tone::Warn,
+                                    )
+                                    .on_hover_text("Suspicious observations in this process");
+                                    ui.with_layout(
+                                        egui::Layout::left_to_right(egui::Align::Center),
+                                        draw,
+                                    );
+                                },
+                            );
+                        } else {
+                            draw(ui);
                         }
                     });
                 }

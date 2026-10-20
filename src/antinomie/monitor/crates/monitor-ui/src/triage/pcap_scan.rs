@@ -100,6 +100,7 @@ pub(super) const HTTP_HEADERS: &[&str] = &[
 
 pub(super) const DNS_HEADERS: &[&str] = &[
     "Frame",
+    "Time",
     "Endpoint",
     "Qname",
     "Qtype",
@@ -614,7 +615,7 @@ pub(super) fn scan_pcap_query_observed(
                     .cloned()
                     .collect();
                 inventory.host(name, frame, time, &addresses, "DNS lookup");
-                for at in [11, 7, 6, 3, 1] {
+                for at in [11, 7, 6, 3] {
                     row.remove(at);
                 }
                 observe(

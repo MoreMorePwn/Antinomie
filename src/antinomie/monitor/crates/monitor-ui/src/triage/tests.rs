@@ -2,6 +2,7 @@
 use super::*;
 
 mod async_previews;
+mod layout;
 
 #[test]
 #[ignore = "requires X11 native rendering; synthetic triage evidence fixture"]
@@ -114,6 +115,10 @@ fn native_triage_fixture() {
             view.section = Section::Process;
             view.process = ProcessTab::Suspicious;
         }
+        "opened" => {
+            view.section = Section::Files;
+            view.files = FileTab::Opened;
+        }
         "read" => {
             view.section = Section::Files;
             view.files = FileTab::Read;
@@ -138,17 +143,33 @@ fn native_triage_fixture() {
             view.section = Section::Process;
         }
     }
-    let width = std::env::var("ANTINOMIE_TRIAGE_QA_WIDTH")
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok())
+    // ANTINOMIE_QA_SIZE = 1280x820 and ANTINOMIE_QA_THEME = dark | light | blue
+    // are the screenshot controls; the width variable stays for the narrow QA.
+    let size = std::env::var("ANTINOMIE_QA_SIZE").ok().and_then(|value| {
+        let (w, h) = value.split_once('x')?;
+        Some((w.parse::<u32>().ok()?, h.parse::<f32>().ok()?))
+    });
+    let width = size
+        .map(|size| size.0)
+        .or_else(|| {
+            std::env::var("ANTINOMIE_TRIAGE_QA_WIDTH")
+                .ok()
+                .and_then(|value| value.parse::<u32>().ok())
+        })
         .unwrap_or(1280)
         .clamp(420, 1920);
+    let height = size.map_or(880.0, |size| size.1);
+    let palette = match std::env::var("ANTINOMIE_QA_THEME").as_deref() {
+        Ok("light") => theme::Theme::Light,
+        Ok("blue") => theme::Theme::Blue,
+        _ => theme::Theme::Dark,
+    };
     let font = if width < 700 { 24.0 } else { 16.0 };
     eframe::run_native(
         "Antinomie Triage QA",
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
-                .with_inner_size([width as f32, 880.0])
+                .with_inner_size([width as f32, height])
                 .with_position([16.0, 16.0]),
             persist_window: false,
             persistence_path: Some(temp.directory.join("native-ui.ron")),
@@ -160,6 +181,7 @@ fn native_triage_fixture() {
         },
         Box::new(move |cc| {
             theme::install(&cc.egui_ctx);
+            theme::apply_theme(&cc.egui_ctx, palette);
             theme::text_size(&cc.egui_ctx, font);
             let initial = view.scan.as_ref().and_then(|scan| match scene.as_str() {
                 "changed" => scan.changed.first().cloned().map(|row| {
@@ -456,12 +478,16 @@ fn real_tshark_dns_ipv4_ipv6_and_retry_rows_preserve_original_frames_and_respons
                 .collect::<Vec<_>>(),
             ["#1", "#2", "#4"]
         );
-        assert!(index.dns.iter().all(|row| row[2].text == "example.com"));
-        assert_eq!(index.dns[0][6].text, "3");
-        assert_eq!(index.dns[2][6].text, "5");
-        assert!(index.dns[0][5].text.contains("93.184.216.34"));
-        assert!(index.dns[2][1].text.contains("::1"));
-        assert_eq!(index.dns[0][3].text, "A");
+        // The Time column sits after Frame, as in the HTTP table.
+        assert_eq!(DNS_HEADERS[..2], ["Frame", "Time"]);
+        assert!(index.dns.iter().all(|row| row.len() == DNS_HEADERS.len()));
+        assert!(index.dns.iter().all(|row| !row[1].text.is_empty()));
+        assert!(index.dns.iter().all(|row| row[3].text == "example.com"));
+        assert_eq!(index.dns[0][7].text, "3");
+        assert_eq!(index.dns[2][7].text, "5");
+        assert!(index.dns[0][6].text.contains("93.184.216.34"));
+        assert!(index.dns[2][2].text.contains("::1"));
+        assert_eq!(index.dns[0][4].text, "A");
         assert!(!index.ips.is_empty());
         assert_eq!(index.hosts.len(), 1);
         assert!(index.dns[1][0]

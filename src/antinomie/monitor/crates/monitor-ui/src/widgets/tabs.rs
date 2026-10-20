@@ -242,7 +242,8 @@ pub fn tab(ui: &mut egui::Ui, selected: bool, item: &TabItem) -> Response {
 }
 
 /// Mutually exclusive choices in one bordered group (Graph / Tree,
-/// Table / Text). Returns whether the selection changed.
+/// Table / Text); a choice's badge is a count after its label. Returns
+/// whether the selection changed.
 pub fn segmented<T: Copy + PartialEq>(
     ui: &mut egui::Ui,
     items: impl IntoIterator<Item = (T, TabItem)>,
@@ -260,11 +261,25 @@ pub fn segmented<T: Copy + PartialEq>(
             ui.horizontal(|ui| {
                 for (value, item) in items {
                     let active = *selected == value;
-                    let text = RichText::new(&item.label).color(if active {
-                        palette.text
-                    } else {
-                        palette.muted
-                    });
+                    let color = if active { palette.text } else { palette.muted };
+                    // A badge is a count after the label, in its tone's color.
+                    let mut text = egui::text::LayoutJob::default();
+                    let font = TextStyle::Button.resolve(ui.style());
+                    text.append(
+                        &item.label,
+                        0.0,
+                        egui::TextFormat::simple(font.clone(), color),
+                    );
+                    if let Some((badge, tone)) = &item.badge {
+                        text.append(
+                            badge,
+                            8.0,
+                            egui::TextFormat::simple(
+                                TextStyle::Small.resolve(ui.style()),
+                                tone.fg(),
+                            ),
+                        );
+                    }
                     let mut button = egui::Button::new(text).corner_radius(3);
                     button = if active {
                         button

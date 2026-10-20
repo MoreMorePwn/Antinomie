@@ -186,6 +186,8 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
             } else {
                 crate::activity::warning(ui, "This file's retained differences are no longer available in the current index.");
             }
+        } else if selected.table == "triage-process" {
+            process_details::show(view, ui, values);
         } else if selected.table == "triage-bpf" {
             if let Some(note) = view.scan.as_ref().and_then(|scan| scan.bpf.iter().find(|note| evidence_key(&bpf_row(note, scan_clock(view))) == selected.key)) {
                 bpf_detail(ui, note, view.details_directory.as_deref(), &mut view.bpf_export_status);

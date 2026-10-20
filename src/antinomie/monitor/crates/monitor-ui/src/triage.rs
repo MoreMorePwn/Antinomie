@@ -51,6 +51,7 @@ mod network_index;
 mod normalized;
 mod pcap_scan;
 mod presentation;
+mod process_details;
 mod process_tree;
 mod properties;
 mod refresh;
@@ -80,6 +81,18 @@ enum Section {
     Files,
     Network,
     Bpf,
+}
+
+/// What a table's filter bar holds besides the filter and the pager.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Bar {
+    Plain,
+    /// The Hide stdio, Hide library and Failed attempts toggles.
+    Files,
+    /// The Open Packets button, enabled when the run has a capture.
+    Network {
+        packets: bool,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -167,6 +180,10 @@ pub(crate) struct TriageView {
     filter_drafts: [String; SLOTS],
     packet_jump: Option<u64>,
     packet_capture: Option<std::path::PathBuf>,
+    /// Open Packets was pressed: show the run's capture, no frame chosen.
+    open_packets: bool,
+    /// A process Details asked to filter Trace to that process: the filter.
+    trace_scope: Option<String>,
     context_key: Option<String>,
     details_directory: Option<std::path::PathBuf>,
     /// Absolute guest paths in the run's Changed files, for the Disks tab.
@@ -204,6 +221,8 @@ impl Default for TriageView {
             filter_drafts: Default::default(),
             packet_jump: None,
             packet_capture: None,
+            open_packets: false,
+            trace_scope: None,
             context_key: None,
             details_directory: None,
             changed_paths: Arc::default(),
@@ -386,7 +405,7 @@ impl TriageView {
             return None;
         }
         self.mark_shown(ui.ctx());
-        presentation::navigation(self, ui);
+        presentation::navigation(self, ui, &input);
         self.tick(ui.ctx(), input);
         if self.section == Section::Summary {
             summary::show(self, ui, &input);
@@ -400,56 +419,9 @@ impl TriageView {
             self.detection.show(ui, self.scan.as_ref());
             return self.take_navigation(ui.ctx());
         }
-        ui.horizontal_wrapped(|ui| {
-            if self.section == Section::Files {
-                let visibility = &mut self.scan_request.file_visibility;
-                let failed = self.scan.as_ref().map_or(0, |scan| scan.counts.failed_attempts);
-                let changed = ui.checkbox(&mut visibility.hide_standard_io, "Hide stdin, stdout, stderr").changed()
-                    | ui.checkbox(&mut visibility.hide_libraries, "Hide library").changed()
-                    | ui.checkbox(&mut visibility.show_failed, format!("Show failed attempts ({failed})")).on_hover_text("Calls the kernel refused, in the change tabs and Changed files. They do not count as changes. Opened and Read always list failed attempts with their result.").changed();
-                if changed {
-                    for index in file_tabs::file_slots() { self.scan_request.offsets[index] = 0; }
-                    self.request_query_refresh();
-                }
-            }
-            if ui
-                .add_enabled(input.archive.is_some(), egui::Button::new("Refresh"))
-                .on_disabled_hover_text("A whole-run index starts after the recording is saved")
-                .clicked()
-            {
-                self.request_refresh();
-                self.ensure_scan(
-                    input.archive,
-                    input.pcap,
-                    input.pcap_open,
-                    input.vm_id,
-                    input.boot_id,
-                    input.run_id,
-                );
-            }
-            ui.label("Every");
-            if ui
-                .add(
-                    egui::DragValue::new(&mut self.refresh_seconds)
-                        .range(1..=300)
-                        .suffix(" s"),
-                )
-                .changed()
-            {
-                self.refresh_seconds = self.refresh_seconds.clamp(1, 300);
-                self.next_refresh =
-                    Some(self.clock.now() + Duration::from_secs(self.refresh_seconds));
-            }
-            if self.scan_rx.is_some() {
-                theme::spinner(ui);
-            }
-            ui.colored_label(theme::muted(), self.refresh_status(&input));
-            if self.section == Section::Network {
-                ui.weak("PCAP time").on_hover_text("Packet timestamps use QEMU's capture clock, displayed in the host timezone. They may differ from the host run clock; capture ownership determines which run is indexed.");
-            } else {
-                ui.weak("Host time").on_hover_text("Times use the host timezone. ~ marks a guest event time estimated from a host receipt/start anchor, including transport latency.");
-            }
-        });
+        if self.section == Section::Bpf {
+            self.refresh_row(ui, &input);
+        }
         let jump = match self.section {
             Section::Summary | Section::Properties | Section::Detection => None,
             Section::Process => {
@@ -510,6 +482,12 @@ impl TriageView {
         self.packet_capture = ctx.data_mut(|data| {
             data.remove_temp::<std::path::PathBuf>(egui::Id::new("triage-packet-capture"))
         });
+        self.open_packets = ctx
+            .data_mut(|data| data.remove_temp::<bool>(egui::Id::new(network::OPEN_PACKETS)))
+            .unwrap_or(false);
+        self.trace_scope = ctx.data_mut(|data| {
+            data.remove_temp::<String>(egui::Id::new(process_details::TRACE_SCOPE))
+        });
         ctx.data_mut(|data| {
             data.remove_temp::<trace::InvocationKey>(egui::Id::new("triage-call-jump"))
         })
@@ -518,6 +496,14 @@ impl TriageView {
     /// Original PCAP frame requested from a selected HTTP/DNS evidence row.
     pub(crate) fn take_packet_jump(&mut self) -> Option<u64> {
         self.packet_jump.take()
+    }
+    /// The Open Packets button was pressed.
+    pub(crate) fn take_open_packets(&mut self) -> bool {
+        std::mem::take(&mut self.open_packets)
+    }
+    /// The Trace filter a process's Details asked for.
+    pub(crate) fn take_trace_scope(&mut self) -> Option<String> {
+        self.trace_scope.take()
     }
     pub(crate) fn take_packet_capture(&mut self) -> Option<std::path::PathBuf> {
         self.packet_capture.take()
@@ -556,9 +542,23 @@ impl TriageView {
         match self.process {
             ProcessTab::Tree => {
                 if let Some(scan) = &self.scan {
-                    process_tree_nodes(ui, &scan.process, scan.clock_anchor.or(input.clock_anchor));
+                    process_tree_nodes(
+                        ui,
+                        &scan.process,
+                        scan.clock_anchor.or(input.clock_anchor),
+                        &scan.suspicious,
+                    );
                 } else {
-                    process_tree_nodes(ui, &process_nodes(input.invocations), input.clock_anchor);
+                    let mut suspicious = Suspicious::new();
+                    for finding in suspicious_rows(input.invocations) {
+                        tally(&mut suspicious, &finding.values);
+                    }
+                    process_tree_nodes(
+                        ui,
+                        &process_nodes(input.invocations),
+                        input.clock_anchor,
+                        &suspicious,
+                    );
                 }
                 None
             }
@@ -605,7 +605,15 @@ impl TriageView {
                 NetTab::Dns => (scan.dns.len(), scan.dns_omitted),
                 NetTab::Sessions => (scan.sessions.len(), scan.sessions_omitted),
             });
-        self.query_controls(ui, index, fields, example, count, count as u64 + omitted);
+        let packets = input.pcap.is_some();
+        self.query_bar(
+            ui,
+            index,
+            fields,
+            example,
+            (count, count as u64 + omitted),
+            Bar::Network { packets },
+        );
         let Some(scan) = &self.scan else {
             theme::loading_weak(ui, "Indexing this run’s capture…");
             return;
@@ -647,7 +655,6 @@ impl TriageView {
                 table(ui, "triage-sessions", SESSION_HEADERS, &scan.sessions)
             }
         }
-        let _ = input;
     }
 
     fn suspicious(
@@ -727,6 +734,20 @@ impl TriageView {
         retained: usize,
         total: u64,
     ) {
+        self.query_bar(ui, index, fields, example, (retained, total), Bar::Plain);
+    }
+
+    /// The filter bar of a table: the filter, then one row with the section's
+    /// own controls (`bar`) and the pager.
+    fn query_bar(
+        &mut self,
+        ui: &mut egui::Ui,
+        index: usize,
+        fields: &[FieldSpec<'_>],
+        example: &str,
+        (retained, total): (usize, u64),
+        bar: Bar,
+    ) {
         let draft_id = egui::Id::new(("triage-filter-draft", index));
         if let Some(draft) = ui
             .ctx()
@@ -784,38 +805,50 @@ impl TriageView {
             self.scan_request.offsets[index] = 0;
             self.request_query_refresh();
         }
-        if self.scan_key.is_some() {
-            let offset = self.scan_request.offsets[index];
+        if self.scan_key.is_some() || bar != Bar::Plain {
             ui.horizontal_wrapped(|ui| {
-                ui.colored_label(
-                    theme::muted(),
-                    format!(
-                        "{}–{} of {total} matched; page size {STORED_ROWS}",
-                        if retained == 0 { 0 } else { offset + 1 },
-                        offset + retained
-                    ),
-                );
-                if ui
-                    .add_enabled(
-                        offset > 0 && self.scan_rx.is_none(),
-                        egui::Button::new("Previous"),
-                    )
-                    .clicked()
-                {
-                    self.scan_request.offsets[index] = offset.saturating_sub(STORED_ROWS);
-                    self.request_query_refresh();
+                if bar == Bar::Files {
+                    self.file_toggles(ui);
                 }
-                if ui
-                    .add_enabled(
-                        (offset + retained) < total as usize && self.scan_rx.is_none(),
-                        egui::Button::new("Next"),
-                    )
-                    .clicked()
-                {
-                    self.scan_request.offsets[index] = offset + STORED_ROWS;
-                    self.request_query_refresh();
+                if self.scan_key.is_some() {
+                    self.pager(ui, index, retained, total);
+                }
+                if let Bar::Network { packets } = bar {
+                    network::open_packets_button(ui, packets);
                 }
             });
+        }
+    }
+
+    fn pager(&mut self, ui: &mut egui::Ui, index: usize, retained: usize, total: u64) {
+        let offset = self.scan_request.offsets[index];
+        ui.colored_label(
+            theme::muted(),
+            format!(
+                "{}–{} of {total} matched; page size {STORED_ROWS}",
+                if retained == 0 { 0 } else { offset + 1 },
+                offset + retained
+            ),
+        );
+        if ui
+            .add_enabled(
+                offset > 0 && self.scan_rx.is_none(),
+                egui::Button::new("Previous"),
+            )
+            .clicked()
+        {
+            self.scan_request.offsets[index] = offset.saturating_sub(STORED_ROWS);
+            self.request_query_refresh();
+        }
+        if ui
+            .add_enabled(
+                (offset + retained) < total as usize && self.scan_rx.is_none(),
+                egui::Button::new("Next"),
+            )
+            .clicked()
+        {
+            self.scan_request.offsets[index] = offset + STORED_ROWS;
+            self.request_query_refresh();
         }
     }
 }
@@ -858,6 +891,10 @@ const PROCESS_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::number("process.pid", "Observed TGID"),
     FieldSpec::number("process.tid", "Observed thread ID"),
     FieldSpec::number("process.cookie", "Stable task cookie"),
+    FieldSpec::number(
+        "process.suspicious",
+        "Suspicious observations in this process",
+    ),
     FieldSpec::text("process.exe", "Latest successful captured executable"),
     FieldSpec::tags("process.argv", "Captured exec argument strings"),
     FieldSpec::text(
@@ -1051,6 +1088,8 @@ struct ArchiveScan {
     read_omitted: u64,
     partial: bool,
     process: Vec<ProcessNode>,
+    /// Suspicious observations per task, before the findings filter and page.
+    suspicious: Suspicious,
     findings: Vec<Finding>,
     findings_omitted: u64,
     opened: Vec<Vec<Cell>>,

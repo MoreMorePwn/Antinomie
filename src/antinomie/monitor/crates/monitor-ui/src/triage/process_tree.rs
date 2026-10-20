@@ -2,10 +2,23 @@
 //! The process tree rebuilt from fork, clone and exec calls.
 use super::*;
 
+/// Suspicious observations per task, as `(task cookie, pid)`.
+pub(super) type Suspicious = std::collections::BTreeMap<(u64, u32), u64>;
+
+/// Count one finding for the task it was observed in.
+pub(super) fn tally(counts: &mut Suspicious, values: &[(&'static str, RowValue)]) {
+    let cookie = files::number(values, "process.cookie");
+    let pid = files::number(values, "process.pid");
+    if let (Some(cookie), Some(pid)) = (cookie, pid) {
+        *counts.entry((cookie, pid as u32)).or_default() += 1;
+    }
+}
+
 pub(super) fn process_tree_nodes(
     ui: &mut egui::Ui,
     nodes: &[ProcessNode],
     clock: Option<antinomie_monitor_core::HostClockAnchor>,
+    suspicious: &Suspicious,
 ) {
     let rows = nodes
         .iter()
@@ -45,6 +58,15 @@ pub(super) fn process_tree_nodes(
                 ("process.pid", RowValue::Number(i128::from(node.pid))),
                 ("process.tid", RowValue::Number(i128::from(node.tid))),
                 ("process.cookie", RowValue::Number(i128::from(node.cookie))),
+                (
+                    "process.suspicious",
+                    RowValue::Number(i128::from(
+                        suspicious
+                            .get(&(node.cookie, node.pid))
+                            .copied()
+                            .unwrap_or(0),
+                    )),
+                ),
                 ("process.depth", RowValue::Number(node.depth as i128)),
                 (
                     "process.ppid",
