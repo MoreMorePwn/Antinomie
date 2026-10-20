@@ -27,6 +27,7 @@ impl Worker {
                 Ok(message)
             }
             Command::DebugDetach { kill } => self.debug_detach(kill),
+            Command::DebugUi(request) => self.debug_panel_request(request),
             Command::DumpProcessCore { request } => {
                 if !self
                     .snapshot

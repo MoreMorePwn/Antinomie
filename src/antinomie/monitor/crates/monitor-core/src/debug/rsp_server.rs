@@ -7,6 +7,7 @@
 use super::{
     rsp_target::{PACKET_BUFFER, RspTarget},
     target::{DebugBackend, DebugError, DetachMode, TargetState},
+    ui_control::{PanelControl, PanelHandle, Pump},
 };
 use gdbstub::{
     conn::Connection,
@@ -34,6 +35,8 @@ const GONE: &str = "the guest ended the debug session";
 const INTERRUPT_DEADLINE: Duration = Duration::from_secs(5);
 const IDLE_POLL: Duration = Duration::from_millis(50);
 const RUNNING_POLL: Duration = Duration::from_millis(2);
+/// How often the in-app panel's controller runs while no client is connected.
+const PANEL_TICK: Duration = Duration::from_millis(10);
 
 /// Where a debugger connects.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,6 +85,7 @@ pub struct DebugServer {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
     detach_mode: Arc<Mutex<DetachMode>>,
+    panel: PanelHandle,
 }
 
 impl DebugServer {
@@ -106,6 +110,7 @@ impl DebugServer {
             }),
         });
         let detach_mode = Arc::new(Mutex::new(DetachMode::Resume));
+        let (mut panel_control, panel) = PanelControl::new(backend.caps());
         let thread = {
             let shared = shared.clone();
             let detach_mode = detach_mode.clone();
@@ -115,7 +120,7 @@ impl DebugServer {
                 .name("antinomie-debug".into())
                 .spawn(move || {
                     let mut target = RspTarget::new(backend);
-                    serve(&mut target, &unix, &tcp, &shared);
+                    serve(&mut target, &mut panel_control, &unix, &tcp, &shared);
                     // A stopped process the client left behind is released.
                     release(&mut target);
                     let mode = detach_mode
@@ -146,11 +151,16 @@ impl DebugServer {
             shared,
             thread: Some(thread),
             detach_mode,
+            panel,
         })
     }
 
     pub fn endpoints(&self) -> &DebugEndpoints {
         &self.endpoints
+    }
+    /// The in-app panel's side of the server: its requests and its view.
+    pub fn panel(&self) -> &PanelHandle {
+        &self.panel
     }
     pub fn status(&self) -> ServerStatus {
         self.shared
@@ -363,12 +373,28 @@ pub(super) fn tcp_peer_is_this_user(peer: &SocketAddr, local: &SocketAddr) -> bo
     })
 }
 
-fn serve(target: &mut RspTarget, unix: &UnixListener, tcp: &TcpListener, shared: &Shared) {
+fn serve(
+    target: &mut RspTarget,
+    panel: &mut PanelControl,
+    unix: &UnixListener,
+    tcp: &TcpListener,
+    shared: &Shared,
+) {
     while !shared.stop.load(Ordering::Acquire) {
+        if let Pump::Ended(why) = panel.pump(target) {
+            shared.update(|status| {
+                status.target = "ended".into();
+                status.ended = Some(why);
+            });
+            return;
+        }
         let Some(stream) = accept(unix, tcp) else {
-            thread::sleep(Duration::from_millis(20));
+            thread::sleep(PANEL_TICK);
             continue;
         };
+        // One controller at a time: the client takes the process, the panel
+        // goes read-only until it leaves.
+        panel.client_arrived();
         shared.update(|status| {
             status.client_connected = true;
             status.clients_served += 1;
@@ -383,6 +409,7 @@ fn serve(target: &mut RspTarget, unix: &UnixListener, tcp: &TcpListener, shared:
             Outcome::Shutdown => return,
             Outcome::ClientGone(why) => {
                 release(target);
+                panel.client_left();
                 shared.update(|status| status.target = format!("running ({why})"));
             }
             Outcome::TargetGone(why) => {
@@ -408,7 +435,7 @@ fn release(target: &mut RspTarget) {
         }
     }
     if !target.is_running() {
-        target.clear_all_breakpoints();
+        target.clear_client_breakpoints();
         let _ = target.resume_plain();
     }
 }
@@ -517,7 +544,7 @@ fn session(target: &mut RspTarget, conn: Conn, shared: &Shared) -> Outcome {
                 return match inner.get_reason() {
                     DisconnectReason::Disconnect => Outcome::ClientGone("detached".into()),
                     DisconnectReason::Kill => {
-                        target.clear_all_breakpoints();
+                        target.clear_client_breakpoints();
                         let _ = target.backend().detach(DetachMode::Kill);
                         Outcome::TargetGone("killed by the debugger".into())
                     }
