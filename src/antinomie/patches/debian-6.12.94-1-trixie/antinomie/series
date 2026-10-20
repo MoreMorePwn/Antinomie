@@ -36,3 +36,7 @@
 0032-antinomie-bound-the-spin-of-a-telemetry-sender-that-may-not-sleep.patch
 0033-antinomie-escalate-stop-to-sigkill-for-the-whole-run-after-a-grace-period.patch
 0034-antinomie-keep-process-cores-sparse-so-holes-do-not-use-up-the-size-limit.patch
+0035-antinomie-debug-engine-signal-stops-exact-steps-over-syscalls-and-string-loops-batched-registers.patch
+0036-antinomie-debug-engine-hardware-breakpoints-and-watchpoints.patch
+0037-antinomie-debug-engine-debug-on-start-and-the-auxiliary-vector.patch
+0038-antinomie-debug-engine-process-core-and-stop-under-a-debug-stop-signals-before-fatal-exits.patch
