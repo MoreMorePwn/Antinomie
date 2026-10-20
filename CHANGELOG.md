@@ -6,6 +6,25 @@ it runs.
 
 ## 0.7.0 — Unreleased
 
+- **Process cores are no longer limited to 64 MiB.** Core Dump on Exit and Dump
+  core now have a **Budget** (64 MiB to 1 GiB) and a **Deadline** (up to 60 s).
+  The budget bounds the bytes the guest *stores*: untouched mappings cost
+  nothing, so a 256 MiB budget (the new default, also set under Settings >
+  Process cores) is free for a small process. The guest tells the app what it
+  accepts, from its RAM (half of RAM less 128 MiB, 64 MiB to 1 GiB), and the
+  list shows it with the guest's available memory; a base built before this
+  release accepts 64 MiB only and says so. The guest buffer now grows in 8 MiB
+  chunks, so running out of guest memory gives a labelled partial core instead of
+  a failed allocation. Every core records what was requested, accepted, expected
+  and saved, and why it is incomplete (budget reached, guest memory, deadline,
+  recording quota, host disk, canceled...), shown in the list ("Partial · 64 MiB
+  of 128.4 MiB · budget reached"), in the details and as `capture.reason`,
+  `capture.requested_size`, `capture.saved_size` filter fields. A core that the
+  host disk cannot hold is refused before anything is written. Saving a core is
+  several times faster: reads are pipelined and the guest polls every tick
+  while a core is read. Needs a base built for this release; the contract
+  revision stays 17 and earlier bases and apps keep working.
+
 - **A Disks tab shows what is on a stopped VM's disk.** The new tab sits
   between Memory and Core dumps. Its **Current disk (VM off)** entry is
   disabled while the VM runs, with a **Stop VM** button that does what the
