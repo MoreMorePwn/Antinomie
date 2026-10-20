@@ -1322,6 +1322,7 @@ fn group_migration_reconciles_only_the_selected_revision() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+mod rule_text;
 mod source_catalog;
 mod source_fixture;
 mod source_install;
