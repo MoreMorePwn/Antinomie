@@ -374,10 +374,11 @@ fn the_settings_offer_the_dump_hash_and_source_digest_toggles() {
     let mut app = app();
     stopped_vm(&mut app);
     app.settings_open = true;
+    app.settings_page = super::super::settings_window::SettingsPage::Disks;
     let ctx = egui::Context::default();
     theme::install(&ctx);
     let shown = shown_texts(&mut app, &ctx, egui::vec2(1600.0, 1000.0));
-    for label in ["Disks: dump hash", "Disks: source digests"] {
+    for label in ["SHA-256 of each disk dump", "SHA-256 of each source layer"] {
         assert!(shown.iter().any(|text| text == label), "{label}: {shown:?}");
     }
     assert!(app.settings.disks.dump_hash && !app.settings.disks.source_digests);

@@ -27,6 +27,7 @@ mod run_kill;
 mod run_labels;
 mod run_selector;
 mod session;
+mod settings_window;
 mod sidebar;
 mod stealth;
 mod trace_paging;
@@ -303,6 +304,7 @@ pub struct MonitorApp {
     settings: Settings,
     options: BackendOptions,
     settings_open: bool,
+    settings_page: settings_window::SettingsPage,
     create_open: bool,
     config_open: bool,
     launch_open: bool,
@@ -497,6 +499,7 @@ impl MonitorApp {
             settings_open: false,
             create_open: false,
             config_open: false,
+            settings_page: Default::default(),
             launch_open: false,
             upload_open: false,
             draft: VmConfig::default(),

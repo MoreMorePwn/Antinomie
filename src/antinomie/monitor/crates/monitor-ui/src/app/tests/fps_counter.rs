@@ -109,6 +109,7 @@ fn settings_offers_the_option_under_debug() {
     let ctx = context();
     let mut app = app();
     app.settings_open = true;
+    app.settings_page = super::super::settings_window::SettingsPage::Advanced;
     for _ in 0..3 {
         render(&mut app, &ctx, SIZE);
     }
@@ -120,5 +121,5 @@ fn settings_offers_the_option_under_debug() {
         shown.iter().any(|text| text == "Show FPS counter"),
         "{shown:?}"
     );
-    assert!(shown.iter().any(|text| text.eq_ignore_ascii_case("debug")));
+    assert!(shown.iter().any(|text| text == "Advanced"));
 }
