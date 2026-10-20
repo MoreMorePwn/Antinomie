@@ -5,7 +5,7 @@ use std::{
     io::Read,
     os::unix::process::{CommandExt, ExitStatusExt},
     path::Path,
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc,
@@ -192,12 +192,12 @@ pub(crate) fn run_cancellable(
         match child.try_wait().map_err(|e| format!("{path}: {e}"))? {
             Some(status) => break status,
             None if cancel.load(Ordering::Relaxed) => {
-                kill_group(&mut child);
+                crate::process_tree::kill_tree(&mut child);
                 return Err("cancelled".into());
             }
             None if Instant::now() >= deadline => {
                 timed_out = true;
-                kill_group(&mut child);
+                crate::process_tree::kill_tree(&mut child);
                 break child.wait().map_err(|e| format!("{path}: {e}"))?;
             }
             None => thread::sleep(Duration::from_millis(50)),
@@ -205,7 +205,7 @@ pub(crate) fn run_cancellable(
     };
     // The tool exited; anything it left behind in its group is stopped so the
     // pipes reach end of file.
-    let _ = rustix::process::kill_process_group(group(&child), rustix::process::Signal::KILL);
+    crate::process_tree::kill_leftovers(&child);
     let output_wait = if timed_out {
         KILLED_PIPE_WAIT
     } else {
@@ -254,17 +254,6 @@ fn read_pipe(mut pipe: impl Read + Send + 'static, max_output: usize) -> PipeRea
         let _ = std::io::copy(&mut pipe, &mut std::io::sink());
     });
     PipeReader(receive)
-}
-
-fn group(child: &Child) -> rustix::process::Pid {
-    rustix::process::Pid::from_raw(child.id() as i32).expect("child pid is positive")
-}
-
-/// SIGKILL the tool's whole process group, then reap the tool.
-fn kill_group(child: &mut Child) {
-    let _ = rustix::process::kill_process_group(group(child), rustix::process::Signal::KILL);
-    let _ = child.kill();
-    let _ = child.wait();
 }
 
 /// The first line a tool prints for `args` (its version), or the tool name.
