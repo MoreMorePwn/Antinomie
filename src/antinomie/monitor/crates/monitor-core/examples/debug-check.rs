@@ -5,15 +5,19 @@
 //!   debug-check spike BUNDLE NEW_DATA_DIR FIXTURE   (P0: engine through the backend trait)
 //!   debug-check gdb   BUNDLE NEW_DATA_DIR FIXTURE   (P1: a real gdb through the RSP server)
 //!   debug-check stress BUNDLE NEW_DATA_DIR FIXTURE  (thread churn, soak, vfork timeout, exec)
+//!   debug-check p2 BUNDLE NEW_DATA_DIR FIXTURE_DIR [test ...]   (phase 2, see debug-p2/mod.rs)
 //!
 //! FIXTURE is the static `tests/monitor/debug-fixture` program. The data folder
 //! must be new and disposable. One BusyBox VM, one vCPU.
 use antinomie_monitor_core::{
     debug::{
-        DebugBackend, DetachMode, KernelDebugBackend, ResumeAction, StopKind, TargetState, amd64,
+        BreakpointKind, DebugBackend, DebugError, DetachMode, KernelDebugBackend, ResumeAction,
+        StopKind, TargetState, WatchAccess, amd64,
     },
     *,
 };
+#[path = "debug-p2/mod.rs"]
+mod p2;
 use std::{
     collections::BTreeMap,
     fs,
@@ -128,7 +132,8 @@ fn symbol(line: &str, name: &str) -> Result<u64, String> {
     u64::from_str_radix(value, 16).map_err(|e| e.to_string())
 }
 
-fn setup(bundle: &str, data: &str, fixture: &str, ticks: u32) -> Result<Setup, String> {
+/// A running disposable VM with the BusyBox base, one vCPU.
+fn boot(bundle: &str, data: &str) -> Result<Driver, String> {
     let data = PathBuf::from(data);
     if data.exists() {
         return Err("qualification needs a new disposable data folder".into());
@@ -167,6 +172,11 @@ fn setup(bundle: &str, data: &str, fixture: &str, ticks: u32) -> Result<Setup, S
                 .and_then(|path| fs::read(path).ok())
                 .is_some_and(|log| log.windows(19).any(|part| part == b"BusyBox guest ready"))
     })?;
+    Ok(driver)
+}
+
+fn setup(bundle: &str, data: &str, fixture: &str, ticks: u32) -> Result<Setup, String> {
+    let mut driver = boot(bundle, data)?;
     driver.command(Command::Upload {
         source: PathBuf::from(fixture),
         destination: "/tmp/debug-fixture".into(),
@@ -202,6 +212,22 @@ fn launch_with(
     workers: u32,
     mode: &str,
 ) -> Result<Launched, String> {
+    launch_program(
+        driver,
+        "/tmp/debug-fixture",
+        vec![ticks.to_string(), workers.to_string(), mode.into()],
+        false,
+    )
+}
+
+/// Start a program of the guest and find its exact identity. `debug_on_start`
+/// stops it before its first user instruction, so it prints no symbols line.
+fn launch_program(
+    driver: &mut Driver,
+    path: &str,
+    args: Vec<String>,
+    debug_on_start: bool,
+) -> Result<Launched, String> {
     let known: Vec<String> = driver
         .snapshot
         .runs
@@ -209,10 +235,11 @@ fn launch_with(
         .map(|run| run.id.clone())
         .collect();
     driver.command(Command::Execute(ExecRequest {
-        path: "/tmp/debug-fixture".into(),
-        args: vec![ticks.to_string(), workers.to_string(), mode.into()],
+        path: path.into(),
+        args,
         uid: 0,
         gid: 0,
+        debug_on_start,
         ..Default::default()
     }))?;
     driver.wait("fixture run", 10, |snapshot| {
@@ -226,7 +253,9 @@ fn launch_with(
         .ok_or("new run missing")?
         .id
         .clone();
-    driver.wait_text(&run_id, "symbols hot=", 20)?;
+    if !debug_on_start {
+        driver.wait_text(&run_id, "symbols ", 20)?;
+    }
     driver.wait("run identity", 10, |snapshot| {
         snapshot
             .runs
@@ -244,7 +273,7 @@ fn launch_with(
         .output(&run.id)
         .lines()
         .find(|line| line.starts_with("symbols "))
-        .ok_or("symbols line")?
+        .unwrap_or_default()
         .to_string();
     driver.command(Command::ListProcesses { after_pid: 0 })?;
     driver.wait("process identity", 10, |snapshot| {
@@ -735,6 +764,15 @@ fn gdb(bundle: &str, data: &str, fixture: &str) -> Result<(), String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let [mode, bundle, data, dir, only @ ..] = args.as_slice()
+        && mode == "p2"
+    {
+        if let Err(error) = p2::run(bundle, data, dir, only) {
+            eprintln!("FAIL {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let [mode, bundle, data, fixture] = args.as_slice() else {
         eprintln!("usage: debug-check spike|gdb|stress BUNDLE NEW_DATA_DIR FIXTURE");
         std::process::exit(2);
