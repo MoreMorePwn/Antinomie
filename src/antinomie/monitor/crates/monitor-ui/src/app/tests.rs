@@ -29,6 +29,7 @@ mod startup;
 mod stealth;
 mod terminal_windows;
 mod terminals;
+mod theme_setting;
 mod trace_filters;
 mod trace_paging;
 mod trace_run_selector;

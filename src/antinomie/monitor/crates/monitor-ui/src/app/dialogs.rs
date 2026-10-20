@@ -25,7 +25,7 @@ impl MonitorApp {
             let mut open = true;
             let mut import = false;
             let mut cancel = false;
-            egui::Window::new("Import base")
+            crate::widgets::window("Import base")
                 .id(Dialog::Import.window_id())
                 .open(&mut open)
                 .collapsible(false)
@@ -164,7 +164,7 @@ impl MonitorApp {
         self.getting_started_window(ctx);
         if self.about_open {
             let mut open = true;
-            egui::Window::new("About Antinomie")
+            crate::widgets::window("About Antinomie")
                 .id(Dialog::About.window_id())
                 .open(&mut open)
                 .collapsible(false)
@@ -196,7 +196,7 @@ impl MonitorApp {
             let mut open = true;
             let build = self.snapshot.build.clone();
             let mut action = None;
-            egui::Window::new("Build base")
+            crate::widgets::window("Build base")
                 .id(Dialog::Build.window_id())
                 .open(&mut open)
                 .collapsible(false)
@@ -221,7 +221,7 @@ impl MonitorApp {
             let mut open = true;
             let mut save = false;
             let mut cancel = false;
-            egui::Window::new(if *duplicate { "Duplicate VM" } else { "Rename VM" })
+            crate::widgets::window(if *duplicate { "Duplicate VM" } else { "Rename VM" })
                 .id(Dialog::Name.window_id())
                 .collapsible(false)
                 .resizable(false)
@@ -275,7 +275,7 @@ impl MonitorApp {
             let mut open = true;
             let viewport = ctx.screen_rect();
             let width = 1000.0_f32.min((viewport.width() - 50.0).max(300.0));
-            egui::Window::new("Run program")
+            crate::widgets::window("Run program")
                 .id(Dialog::Launch.window_id())
                 .open(&mut open)
                 .collapsible(false)
@@ -296,7 +296,7 @@ impl MonitorApp {
         }
         if self.upload_open {
             let mut open = true;
-            egui::Window::new("Upload file")
+            crate::widgets::window("Upload file")
                 .id(Dialog::Upload.window_id())
                 .open(&mut open)
                 .collapsible(false)
@@ -495,7 +495,7 @@ impl MonitorApp {
         let mut open = true;
         let mut save = false;
         let mut cancel = false;
-        egui::Window::new("Settings")
+        crate::widgets::window("Settings")
             .id(Dialog::Settings.window_id())
             .open(&mut open)
             .collapsible(false)
@@ -508,15 +508,18 @@ impl MonitorApp {
                     dialog_section(ui, "Appearance");
                     form_grid("settings_appearance", ui).show(ui, |ui| {
                         ui.label("Theme");
-                        ui.horizontal(|ui| {
-                            let before = self.settings.light_theme;
-                            ui.selectable_value(&mut self.settings.light_theme, false, "Dark");
-                            ui.selectable_value(&mut self.settings.light_theme, true, "Light");
-                            if self.settings.light_theme != before {
-                                theme::apply(ctx, self.settings.light_theme);
-                                theme::text_size(ctx, self.settings.font_size);
-                            }
-                        });
+                        let mut chosen = self.settings.active_theme();
+                        if crate::widgets::segmented(
+                            ui,
+                            theme::Theme::ALL
+                                .into_iter()
+                                .map(|theme| (theme, crate::widgets::TabItem::new(theme.label()))),
+                            &mut chosen,
+                        ) {
+                            self.settings.set_theme(chosen);
+                            theme::apply_theme(ctx, chosen);
+                            theme::text_size(ctx, self.settings.font_size);
+                        }
                         ui.end_row();
                         ui.label("Text size");
                         let before = self.settings.font_size;
@@ -889,11 +892,9 @@ pub(super) fn form_grid(id: &str, ui: &egui::Ui) -> egui::Grid {
         .min_col_width(form_label_width(ui.ctx()))
 }
 
-/// A separator and the dialog's buttons, main action first.
+/// A soft rule and the dialog's buttons, main action first.
 pub(super) fn dialog_footer(ui: &mut egui::Ui, buttons: impl FnOnce(&mut egui::Ui)) {
-    ui.add_space(4.0);
-    ui.separator();
-    ui.horizontal(buttons);
+    crate::widgets::footer(ui, buttons);
 }
 
 /// Settings > Text size: smaller and larger buttons around the size, and a

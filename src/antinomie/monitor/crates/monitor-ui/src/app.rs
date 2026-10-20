@@ -107,7 +107,11 @@ struct Settings {
     trace_page_size: usize,
     /// Syscall groups hidden from the trace.
     hidden_trace_categories: Vec<SyscallGroup>,
-    /// Light palette instead of the dark one.
+    /// The chosen theme (Settings > Appearance). `None` on settings saved
+    /// before themes were selectable, which only have `light_theme`.
+    theme: Option<theme::Theme>,
+    /// Light palette instead of the dark one; kept so an older build reads
+    /// the choice too.
     light_theme: bool,
     /// Compact spacing and table rows (Comfortable when false).
     compact: bool,
@@ -145,6 +149,22 @@ struct LastRun {
     started: u64,
 }
 
+impl Settings {
+    /// The theme to show: the chosen one, else the legacy light/dark flag.
+    fn active_theme(&self) -> theme::Theme {
+        self.theme.unwrap_or(if self.light_theme {
+            theme::Theme::Light
+        } else {
+            theme::Theme::Dark
+        })
+    }
+
+    fn set_theme(&mut self, theme: theme::Theme) {
+        self.theme = Some(theme);
+        self.light_theme = theme.is_light();
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -157,6 +177,7 @@ impl Default for Settings {
             trace_colors: true,
             trace_page_size: 100,
             hidden_trace_categories: Vec::new(),
+            theme: None,
             light_theme: false,
             compact: true,
             memory_online_symbols: true,
@@ -440,7 +461,7 @@ impl MonitorApp {
             settings.bundle = options.bundle_dir.to_string_lossy().into_owned();
         }
         settings.font_size = settings.font_size.clamp(12.0, 24.0);
-        theme::apply(&cc.egui_ctx, settings.light_theme);
+        theme::apply_theme(&cc.egui_ctx, settings.active_theme());
         theme::set_compact(&cc.egui_ctx, settings.compact);
         theme::text_size(&cc.egui_ctx, settings.font_size);
         options.bundle_dir = crate::folders::user_path(&settings.bundle);

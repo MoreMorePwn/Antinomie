@@ -4,125 +4,48 @@
 //! readable, and tables size their rows from the density setting.
 // The value colors, headings and density are adopted view by view.
 use eframe::egui::{self, Color32, FontData, FontFamily, FontId, Stroke, TextStyle};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-/// One palette. Backgrounds go from `bg` (deepest: text fields, lists) to
-/// `raised` (windows, buttons); `heading` names sections.
-#[derive(Clone, Copy, Debug)]
-pub struct Palette {
-    pub bg: Color32,
-    pub panel: Color32,
-    pub raised: Color32,
-    pub hover: Color32,
-    pub line: Color32,
-    pub text: Color32,
-    pub muted: Color32,
-    /// Placeholder text in empty inputs: grayer than `muted`, still legible.
-    pub hint: Color32,
-    pub accent: Color32,
-    pub heading: Color32,
-    pub primary: Color32,
-    pub primary_text: Color32,
-    pub selection: Color32,
-    pub good: Color32,
-    pub warn: Color32,
-    pub error: Color32,
-    pub info: Color32,
-    pub terminal: Color32,
-    /// Syntax colors for values.
-    pub number: Color32,
-    pub string: Color32,
-    pub pointer: Color32,
-    pub flag: Color32,
-    pub name: Color32,
-    /// Branch colors of tree views, one per level, cycling.
-    pub tree: [Color32; TREE_COLOR_COUNT],
+mod palettes;
+pub use palettes::{Palette, Theme, TREE_COLOR_COUNT};
+#[cfg(test)]
+pub use palettes::{BLUE, DARK, LIGHT};
+
+#[cfg(not(test))]
+static THEME: AtomicU8 = AtomicU8::new(0);
+// Tests run in parallel threads, each with its own egui context: the active
+// theme is per thread there, so one test's Light never restyles another's.
+#[cfg(test)]
+thread_local! {
+    static THEME: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
 
-/// How many distinct branch colors a tree cycles through.
-pub const TREE_COLOR_COUNT: usize = 6;
+fn load_theme() -> u8 {
+    #[cfg(not(test))]
+    return THEME.load(Ordering::Relaxed);
+    #[cfg(test)]
+    return THEME.with(std::cell::Cell::get);
+}
 
-pub const DARK: Palette = Palette {
-    bg: Color32::from_rgb(22, 24, 29),
-    panel: Color32::from_rgb(30, 33, 40),
-    raised: Color32::from_rgb(39, 43, 52),
-    hover: Color32::from_rgb(50, 56, 68),
-    line: Color32::from_rgb(58, 64, 78),
-    text: Color32::from_rgb(222, 226, 234),
-    muted: Color32::from_rgb(146, 156, 174),
-    hint: Color32::from_rgb(110, 117, 131),
-    accent: Color32::from_rgb(110, 176, 255),
-    heading: Color32::from_rgb(130, 196, 255),
-    primary: Color32::from_rgb(46, 110, 196),
-    primary_text: Color32::from_rgb(242, 246, 252),
-    selection: Color32::from_rgb(38, 79, 135),
-    good: Color32::from_rgb(110, 214, 150),
-    warn: Color32::from_rgb(246, 192, 92),
-    error: Color32::from_rgb(255, 120, 120),
-    info: Color32::from_rgb(98, 214, 226),
-    terminal: Color32::from_rgb(16, 18, 22),
-    number: Color32::from_rgb(120, 214, 236),
-    string: Color32::from_rgb(242, 176, 112),
-    pointer: Color32::from_rgb(196, 160, 255),
-    flag: Color32::from_rgb(120, 172, 255),
-    name: Color32::from_rgb(255, 214, 128),
-    tree: [
-        Color32::from_rgb(110, 176, 255),
-        Color32::from_rgb(246, 168, 84),
-        Color32::from_rgb(110, 214, 150),
-        Color32::from_rgb(244, 134, 190),
-        Color32::from_rgb(98, 214, 226),
-        Color32::from_rgb(200, 140, 255),
-    ],
-};
-
-pub const LIGHT: Palette = Palette {
-    bg: Color32::from_rgb(255, 255, 255),
-    panel: Color32::from_rgb(244, 246, 250),
-    raised: Color32::from_rgb(233, 237, 244),
-    hover: Color32::from_rgb(220, 228, 240),
-    line: Color32::from_rgb(200, 207, 220),
-    text: Color32::from_rgb(28, 32, 40),
-    muted: Color32::from_rgb(96, 106, 124),
-    hint: Color32::from_rgb(140, 147, 160),
-    accent: Color32::from_rgb(20, 104, 204),
-    heading: Color32::from_rgb(18, 88, 176),
-    primary: Color32::from_rgb(28, 108, 208),
-    primary_text: Color32::from_rgb(255, 255, 255),
-    selection: Color32::from_rgb(190, 216, 250),
-    good: Color32::from_rgb(20, 132, 66),
-    warn: Color32::from_rgb(170, 104, 0),
-    error: Color32::from_rgb(196, 36, 44),
-    info: Color32::from_rgb(0, 126, 146),
-    terminal: Color32::from_rgb(250, 250, 252),
-    number: Color32::from_rgb(0, 116, 150),
-    string: Color32::from_rgb(166, 82, 0),
-    pointer: Color32::from_rgb(112, 64, 196),
-    flag: Color32::from_rgb(28, 92, 196),
-    name: Color32::from_rgb(140, 92, 0),
-    tree: [
-        Color32::from_rgb(28, 92, 196),
-        Color32::from_rgb(190, 86, 0),
-        Color32::from_rgb(20, 132, 66),
-        Color32::from_rgb(190, 40, 130),
-        Color32::from_rgb(0, 122, 142),
-        Color32::from_rgb(130, 60, 200),
-    ],
-};
-
-static LIGHT_THEME: AtomicBool = AtomicBool::new(false);
+fn store_theme(index: u8) {
+    #[cfg(not(test))]
+    THEME.store(index, Ordering::Relaxed);
+    #[cfg(test)]
+    THEME.with(|cell| cell.set(index));
+}
 static COMPACT: AtomicBool = AtomicBool::new(true);
 
 /// The active palette.
 pub fn palette() -> &'static Palette {
-    if LIGHT_THEME.load(Ordering::Relaxed) {
-        &LIGHT
-    } else {
-        &DARK
-    }
+    theme().palette()
 }
+/// The active theme.
+pub fn theme() -> Theme {
+    Theme::from_index(load_theme())
+}
+/// Whether the active theme is the light one (blue and dark are both dark).
 pub fn is_light() -> bool {
-    LIGHT_THEME.load(Ordering::Relaxed)
+    theme().is_light()
 }
 
 pub fn bg() -> Color32 {
@@ -133,6 +56,14 @@ pub fn panel() -> Color32 {
 }
 pub fn raised() -> Color32 {
     palette().raised
+}
+/// Hairlines inside a surface (table rules, tab strips, footers).
+pub fn line_soft() -> Color32 {
+    palette().line_soft
+}
+/// Default text color of terminals and listings.
+pub fn terminal_text() -> Color32 {
+    palette().terminal_text
 }
 pub fn line() -> Color32 {
     palette().line
@@ -153,11 +84,7 @@ pub fn hint() -> Color32 {
 }
 /// Fill of a bright call-to-action button; text on it is `primary_text`.
 pub fn bright_blue() -> Color32 {
-    if is_light() {
-        Color32::from_rgb(10, 100, 230)
-    } else {
-        Color32::from_rgb(30, 130, 255)
-    }
+    palette().cta
 }
 /// Links, focus and accents.
 pub fn blue() -> Color32 {
@@ -371,9 +298,15 @@ pub fn install(ctx: &egui::Context) {
     text_size(ctx, 16.0);
 }
 
-/// Switch palette (light or dark) and restyle every widget.
+/// Switch between the dark and light themes (see `apply_theme`).
 pub fn apply(ctx: &egui::Context, light: bool) {
-    LIGHT_THEME.store(light, Ordering::Relaxed);
+    apply_theme(ctx, if light { Theme::Light } else { Theme::Dark });
+}
+
+/// Make `theme` the active theme and restyle every widget.
+pub fn apply_theme(ctx: &egui::Context, theme: Theme) {
+    store_theme(theme.index());
+    let light = theme.is_light();
     let palette = palette();
     let mut style = (*ctx.style()).clone();
     style.visuals = if light {
@@ -384,7 +317,7 @@ pub fn apply(ctx: &egui::Context, light: bool) {
     style.visuals.panel_fill = palette.panel;
     style.visuals.window_fill = palette.raised;
     style.visuals.extreme_bg_color = palette.bg;
-    style.visuals.faint_bg_color = palette.panel;
+    style.visuals.faint_bg_color = palette.stripe;
     style.visuals.code_bg_color = palette.bg;
     style.visuals.override_text_color = Some(palette.text);
     style.visuals.hyperlink_color = palette.accent;
@@ -393,8 +326,17 @@ pub fn apply(ctx: &egui::Context, light: bool) {
     style.visuals.selection.bg_fill = palette.selection;
     style.visuals.selection.stroke = Stroke::new(1.0_f32, palette.accent);
     style.visuals.window_stroke = Stroke::new(1.0_f32, palette.line);
-    style.visuals.window_corner_radius = 6.into();
+    // Windows: 8 px corners, a 1 px line and a soft shadow (the mockup's
+    // `.modal`); menus keep 6.
+    style.visuals.window_corner_radius = 8.into();
     style.visuals.menu_corner_radius = 6.into();
+    style.visuals.window_shadow = egui::Shadow {
+        offset: [0, 8],
+        blur: 28,
+        spread: 0,
+        color: palette.shadow,
+    };
+    style.visuals.popup_shadow = style.visuals.window_shadow;
     for widgets in [
         &mut style.visuals.widgets.noninteractive,
         &mut style.visuals.widgets.inactive,
@@ -453,43 +395,26 @@ pub(crate) fn text_size(ctx: &egui::Context, size: f32) {
 }
 
 /// Row tint of a syscall group in the trace (Wireshark-style coloring): dark
-/// shades that keep the normal text readable. Info queries stay untinted.
+/// shades in the dark themes and pastels in the light one, so the normal text
+/// stays readable. Info queries stay untinted.
 pub fn syscall_tint(
     group: antinomie_monitor_core::syscall_groups::SyscallGroup,
 ) -> Option<Color32> {
-    let tint = dark_syscall_tint(group)?;
-    Some(if is_light() { lighten(tint) } else { tint })
-}
-
-/// A light-theme version of a dark tint: the same hue as a pale pastel, so
-/// dark text stays readable on it.
-pub fn lighten(tint: Color32) -> Color32 {
-    // Pale, as Wireshark's light rules: hue kept, little chroma.
-    let mix = |channel: u8| (250.0 - (120.0 - f32::from(channel).min(120.0)) * 0.32) as u8;
-    let (r, g, b) = (tint.r(), tint.g(), tint.b());
-    let max = r.max(g).max(b).max(1);
-    // Keep the hue: scale so the strongest channel sits near white.
-    let scale = |channel: u8| (f32::from(channel) / f32::from(max) * 120.0) as u8;
-    Color32::from_rgb(mix(scale(r)), mix(scale(g)), mix(scale(b)))
-}
-
-fn dark_syscall_tint(
-    group: antinomie_monitor_core::syscall_groups::SyscallGroup,
-) -> Option<Color32> {
     use antinomie_monitor_core::syscall_groups::SyscallGroup as G;
-    Some(match group {
-        G::Process => Color32::from_rgb(70, 50, 96),
-        G::File => Color32::from_rgb(38, 58, 92),
-        G::Network => Color32::from_rgb(36, 78, 52),
-        G::Memory => Color32::from_rgb(30, 74, 68),
-        G::Ipc => Color32::from_rgb(84, 76, 32),
-        G::Signal => Color32::from_rgb(98, 62, 30),
-        G::Polling => Color32::from_rgb(28, 76, 98),
-        G::Security => Color32::from_rgb(110, 40, 46),
-        G::System => Color32::from_rgb(78, 28, 38),
-        G::Time => Color32::from_rgb(58, 58, 64),
+    let index = match group {
+        G::Process => 0,
+        G::File => 1,
+        G::Network => 2,
+        G::Memory => 3,
+        G::Ipc => 4,
+        G::Signal => 5,
+        G::Polling => 6,
+        G::Security => 7,
+        G::System => 8,
+        G::Time => 9,
         G::Info => return None,
-    })
+    };
+    Some(palette().syscall[index])
 }
 
 /// Row colors of the network packet list, in the order the rules apply
@@ -526,27 +451,19 @@ impl PacketColor {
     /// Dark shades that keep the normal text readable (pastels in the
     /// light theme).
     pub fn tint(self) -> Color32 {
-        let tint = self.dark_tint();
-        if is_light() {
-            lighten(tint)
-        } else {
-            tint
-        }
-    }
-
-    fn dark_tint(self) -> Color32 {
-        match self {
-            PacketColor::TcpReset => Color32::from_rgb(112, 34, 40),
-            PacketColor::TcpSynFin => Color32::from_rgb(66, 66, 72),
-            PacketColor::Http => Color32::from_rgb(36, 80, 50),
-            PacketColor::Tls => Color32::from_rgb(74, 48, 100),
-            PacketColor::Dns => Color32::from_rgb(22, 74, 80),
-            PacketColor::Dhcp => Color32::from_rgb(80, 74, 26),
-            PacketColor::Arp => Color32::from_rgb(100, 64, 26),
-            PacketColor::Icmp => Color32::from_rgb(98, 38, 78),
-            PacketColor::Tcp => Color32::from_rgb(46, 52, 96),
-            PacketColor::Udp => Color32::from_rgb(24, 60, 102),
-        }
+        let index = match self {
+            PacketColor::TcpReset => 0,
+            PacketColor::TcpSynFin => 1,
+            PacketColor::Http => 2,
+            PacketColor::Tls => 3,
+            PacketColor::Dns => 4,
+            PacketColor::Dhcp => 5,
+            PacketColor::Arp => 6,
+            PacketColor::Icmp => 7,
+            PacketColor::Tcp => 8,
+            PacketColor::Udp => 9,
+        };
+        palette().packet[index]
     }
 }
 
@@ -573,6 +490,165 @@ pub(crate) fn spinners_in(shapes: &[egui::epaint::ClippedShape]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn luminance(color: Color32) -> f32 {
+        let linear = |channel: u8| {
+            let c = f32::from(channel) / 255.0;
+            if c <= 0.03928 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(color.r()) + 0.7152 * linear(color.g()) + 0.0722 * linear(color.b())
+    }
+
+    fn contrast(a: Color32, b: Color32) -> f32 {
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    /// Every token of every theme is set, opaque where it must be, and
+    /// readable on the surfaces it is used on.
+    #[test]
+    fn every_theme_has_a_complete_readable_token_set() {
+        for theme in Theme::ALL {
+            let p = theme.palette();
+            let name = theme.label();
+            let surfaces = [p.bg, p.panel, p.raised, p.hover];
+            for (i, a) in surfaces.iter().enumerate() {
+                for b in &surfaces[i + 1..] {
+                    assert_ne!(a, b, "{name}: surfaces must differ");
+                }
+            }
+            assert_ne!(p.line, p.line_soft, "{name}");
+            for color in [
+                p.bg,
+                p.panel,
+                p.raised,
+                p.hover,
+                p.line,
+                p.line_soft,
+                p.text,
+                p.muted,
+                p.hint,
+                p.accent,
+                p.heading,
+                p.primary,
+                p.primary_text,
+                p.cta,
+                p.selection,
+                p.good,
+                p.warn,
+                p.error,
+                p.info,
+                p.live,
+                p.terminal,
+                p.terminal_text,
+                p.number,
+                p.string,
+                p.pointer,
+                p.flag,
+                p.name,
+            ] {
+                assert_eq!(color.a(), 255, "{name}: {color:?} must be opaque");
+            }
+            for color in [
+                p.selection_soft,
+                p.stripe,
+                p.good_bg,
+                p.warn_bg,
+                p.error_bg,
+                p.info_bg,
+                p.neutral_bg,
+                p.shadow,
+            ] {
+                assert!(
+                    color.a() > 0 && color.a() < 255,
+                    "{name}: {color:?} must be translucent"
+                );
+            }
+            for ground in [p.bg, p.panel, p.raised] {
+                assert!(
+                    contrast(p.text, ground) >= 7.0,
+                    "{name}: text on {ground:?}"
+                );
+                assert!(
+                    contrast(p.muted, ground) >= 3.5,
+                    "{name}: muted on {ground:?}"
+                );
+                for color in [
+                    p.accent, p.heading, p.good, p.warn, p.error, p.info, p.live, p.number,
+                    p.string, p.pointer, p.flag, p.name,
+                ] {
+                    assert!(
+                        contrast(color, ground) >= 3.5,
+                        "{name}: {color:?} on {ground:?}"
+                    );
+                }
+            }
+            assert!(contrast(p.hint, p.bg) >= 2.5, "{name}: hint");
+            assert!(
+                contrast(p.primary_text, p.primary) >= 4.5,
+                "{name}: primary button"
+            );
+            assert!(contrast(p.text, p.selection) >= 4.5, "{name}: selected row");
+            assert!(
+                contrast(p.terminal_text, p.terminal) >= 7.0,
+                "{name}: terminal"
+            );
+            let tints: std::collections::HashSet<_> = p.syscall.iter().collect();
+            assert_eq!(tints.len(), p.syscall.len(), "{name}: syscall tints");
+            let packets: std::collections::HashSet<_> = p.packet.iter().collect();
+            assert_eq!(packets.len(), p.packet.len(), "{name}: packet tints");
+            // Row text stays readable on every tint.
+            for tint in p.syscall.iter().chain(&p.packet) {
+                assert!(contrast(p.text, *tint) >= 4.5, "{name}: text on {tint:?}");
+            }
+        }
+        // Blue is a dark theme on navy surfaces, not the grey ones.
+        assert!(BLUE.bg.b() > BLUE.bg.r() + 10 && BLUE.panel.b() > BLUE.panel.r() + 15);
+        assert!(luminance(BLUE.bg) < 0.05 && luminance(LIGHT.bg) > 0.9);
+    }
+
+    #[test]
+    fn applying_a_theme_sets_the_visuals_and_the_active_palette() {
+        for theme_choice in Theme::ALL {
+            let ctx = egui::Context::default();
+            install(&ctx);
+            apply_theme(&ctx, theme_choice);
+            let palette = theme_choice.palette();
+            let style = ctx.style();
+            assert_eq!(theme(), theme_choice);
+            assert_eq!(is_light(), theme_choice == Theme::Light);
+            assert_eq!(style.visuals.dark_mode, theme_choice != Theme::Light);
+            assert_eq!(style.visuals.panel_fill, palette.panel);
+            assert_eq!(style.visuals.window_fill, palette.raised);
+            assert_eq!(style.visuals.extreme_bg_color, palette.bg);
+            assert_eq!(style.visuals.window_stroke.color, palette.line);
+            assert_eq!(style.visuals.selection.bg_fill, palette.selection);
+            assert_eq!(bright_blue(), palette.cta);
+            assert_eq!(
+                syscall_tint(antinomie_monitor_core::syscall_groups::SyscallGroup::File),
+                Some(palette.syscall[1])
+            );
+            assert_eq!(PacketColor::Dns.tint(), palette.packet[4]);
+        }
+        apply(&egui::Context::default(), false);
+    }
+
+    #[test]
+    fn theme_keys_are_stable_and_round_trip() {
+        let keys: Vec<String> = Theme::ALL
+            .iter()
+            .map(|theme| serde_json::to_string(theme).unwrap())
+            .collect();
+        assert_eq!(keys, [r#""dark""#, r#""light""#, r#""blue""#]);
+        for theme in Theme::ALL {
+            assert_eq!(Theme::from_index(theme.index()), theme);
+        }
+        assert_eq!(Theme::from_index(200), Theme::Dark);
+    }
 
     #[test]
     fn syscall_groups_have_distinct_dark_tints_except_info() {
