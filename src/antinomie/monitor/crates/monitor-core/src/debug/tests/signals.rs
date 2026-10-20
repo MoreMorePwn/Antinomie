@@ -1,25 +1,44 @@
 // SPDX-License-Identifier: MIT
 use super::super::signals::{gdb_to_linux, linux_to_gdb};
-use gdbstub::common::Signal;
+/// GDB's own numbers (`include/gdb/signals.def`), written out: the oracle for the
+/// mapping.
+mod gdb {
+    pub const SIGTRAP: u8 = 5;
+    pub const SIGBUS: u8 = 10;
+    pub const SIGSEGV: u8 = 11;
+    pub const SIGSYS: u8 = 12;
+    pub const SIGTERM: u8 = 15;
+    pub const SIGURG: u8 = 16;
+    pub const SIGSTOP: u8 = 17;
+    pub const SIGCONT: u8 = 19;
+    pub const SIGCHLD: u8 = 20;
+    pub const SIGIO: u8 = 23;
+    pub const SIGUSR1: u8 = 30;
+    pub const SIGUSR2: u8 = 31;
+    pub const SIGPWR: u8 = 32;
+    pub const SIG34: u8 = 46;
+    pub const SIG32: u8 = 77;
+    pub const SIG64: u8 = 78;
+}
 
 #[test]
 fn the_signals_programs_get_map_to_gdbs_numbers() {
-    assert_eq!(linux_to_gdb(11), Some(Signal::SIGSEGV.0));
-    assert_eq!(linux_to_gdb(7), Some(Signal::SIGBUS.0));
-    assert_eq!(linux_to_gdb(10), Some(Signal::SIGUSR1.0));
-    assert_eq!(linux_to_gdb(12), Some(Signal::SIGUSR2.0));
-    assert_eq!(linux_to_gdb(17), Some(Signal::SIGCHLD.0));
-    assert_eq!(linux_to_gdb(19), Some(Signal::SIGSTOP.0));
-    assert_eq!(linux_to_gdb(18), Some(Signal::SIGCONT.0));
-    assert_eq!(linux_to_gdb(23), Some(Signal::SIGURG.0));
-    assert_eq!(linux_to_gdb(29), Some(Signal::SIGIO.0));
-    assert_eq!(linux_to_gdb(30), Some(Signal::SIGPWR.0));
-    assert_eq!(linux_to_gdb(31), Some(Signal::SIGSYS.0));
-    assert_eq!(linux_to_gdb(5), Some(Signal::SIGTRAP.0));
-    assert_eq!(linux_to_gdb(15), Some(Signal::SIGTERM.0));
-    assert_eq!(linux_to_gdb(34), Some(Signal::SIG34.0));
-    assert_eq!(linux_to_gdb(32), Some(Signal::SIG32.0));
-    assert_eq!(linux_to_gdb(64), Some(Signal::SIG64.0));
+    assert_eq!(linux_to_gdb(11), Some(gdb::SIGSEGV));
+    assert_eq!(linux_to_gdb(7), Some(gdb::SIGBUS));
+    assert_eq!(linux_to_gdb(10), Some(gdb::SIGUSR1));
+    assert_eq!(linux_to_gdb(12), Some(gdb::SIGUSR2));
+    assert_eq!(linux_to_gdb(17), Some(gdb::SIGCHLD));
+    assert_eq!(linux_to_gdb(19), Some(gdb::SIGSTOP));
+    assert_eq!(linux_to_gdb(18), Some(gdb::SIGCONT));
+    assert_eq!(linux_to_gdb(23), Some(gdb::SIGURG));
+    assert_eq!(linux_to_gdb(29), Some(gdb::SIGIO));
+    assert_eq!(linux_to_gdb(30), Some(gdb::SIGPWR));
+    assert_eq!(linux_to_gdb(31), Some(gdb::SIGSYS));
+    assert_eq!(linux_to_gdb(5), Some(gdb::SIGTRAP));
+    assert_eq!(linux_to_gdb(15), Some(gdb::SIGTERM));
+    assert_eq!(linux_to_gdb(34), Some(gdb::SIG34));
+    assert_eq!(linux_to_gdb(32), Some(gdb::SIG32));
+    assert_eq!(linux_to_gdb(64), Some(gdb::SIG64));
 }
 
 #[test]

@@ -6,7 +6,7 @@ use crate::debug::{
     ArchTag, DebugBackend, DebugCaps, DebugError, DebugServer, DetachMode, RegsetBlob, RegsetInfo,
     ResumeAction, StopEvent, StopKind, TargetState, ThreadInfo,
     amd64::{FXSAVE_SIZE, NT_PRFPREG, NT_PRSTATUS, USER_REGS_SIZE},
-    rsp_target::RspTarget,
+    debugger::Debugger,
     ui_control::{PanelControl, PanelHandle, Pump},
     view::{
         BreakpointKind, Controller, DebugAction, DebugRequest, DebugView, Pending, RunState,
@@ -75,6 +75,10 @@ fn caps() -> DebugCaps {
         batch_regs: false,
         debug_on_start: false,
         auxv: false,
+        follow: false,
+        nonstop: false,
+        adopt: false,
+        thread_hw: false,
         hardware_breakpoints: 0,
         hardware_watchpoints: 0,
         breakpoint_len_mask: 1,
@@ -113,12 +117,14 @@ impl DebugBackend for Fake {
                 stopped: true,
                 pc: engine.pc,
                 signal: 0,
+                vfork_wait: false,
             },
             ThreadInfo {
                 tid: TID + 1,
                 stopped: true,
                 pc: 0x40_1100,
                 signal: 0,
+                vfork_wait: false,
             },
         ])
     }
@@ -232,17 +238,9 @@ impl DebugBackend for Fake {
     }
 }
 
-/// A breakpoint request's outcome (its error type has no `Debug`).
-fn done<T>(result: Result<T, gdbstub::target::TargetError<DebugError>>) -> T {
-    match result {
-        Ok(value) => value,
-        Err(_) => panic!("the breakpoint request failed"),
-    }
-}
-
 struct Rig {
     engine: Arc<Mutex<Engine>>,
-    target: RspTarget,
+    target: Debugger,
     control: PanelControl,
     handle: PanelHandle,
     next: u64,
@@ -267,7 +265,7 @@ impl Rig {
         control.timing(Duration::ZERO, Duration::ZERO, Duration::from_secs(5));
         Self {
             engine,
-            target: RspTarget::new(Box::new(fake)),
+            target: Debugger::new(Box::new(fake)),
             control,
             handle,
             next: 1,
@@ -518,26 +516,50 @@ fn breakpoints_change_only_while_stopped_and_refused_ones_are_not_kept() {
 
 #[test]
 fn the_panel_and_a_client_share_one_breakpoint_table() {
-    use gdbstub::target::ext::breakpoints::SwBreakpoint;
     let mut rig = Rig::new();
     rig.stopped();
-    rig.target.panel_breakpoint(CODE + 8, true).unwrap();
+    let pid = rig.target.current;
+    let inferior = rig.target.get(pid).unwrap();
+    inferior
+        .with_registry(|registry, backend| registry.panel_breakpoint(backend, CODE + 8, true))
+        .unwrap();
     // The client sets and removes the same address: the guest's stays.
-    let kind = || crate::debug::amd64::BreakpointLen(1);
-    assert!(done(rig.target.add_sw_breakpoint(CODE + 8, kind())));
+    assert!(
+        inferior
+            .with_registry(|r, b| r.client_add_sw(b, CODE + 8, 1))
+            .is_ok()
+    );
     assert_eq!(rig.count("set"), 1, "the guest was asked once");
-    assert!(done(rig.target.remove_sw_breakpoint(CODE + 8, kind())));
+    let inferior = rig.target.get(pid).unwrap();
+    assert!(
+        inferior
+            .with_registry(|r, b| r.client_remove_sw(b, CODE + 8, 1))
+            .unwrap()
+    );
     assert_eq!(rig.engine.lock().unwrap().breakpoints, [CODE + 8]);
     // A client's own breakpoint goes when it leaves; the panel's does not.
-    assert!(done(rig.target.add_sw_breakpoint(CODE + 12, kind())));
-    rig.target.clear_client_breakpoints();
+    let inferior = rig.target.get(pid).unwrap();
+    inferior
+        .with_registry(|r, b| r.client_add_sw(b, CODE + 12, 1))
+        .unwrap();
+    inferior.with_registry(|r, b| r.clear_client(b));
     assert_eq!(rig.engine.lock().unwrap().breakpoints, [CODE + 8]);
     // Releasing the panel's interest clears the guest's.
-    rig.target.panel_breakpoint(CODE + 8, false).unwrap();
+    let inferior = rig.target.get(pid).unwrap();
+    inferior
+        .with_registry(|r, b| r.panel_breakpoint(b, CODE + 8, false))
+        .unwrap();
     assert!(rig.engine.lock().unwrap().breakpoints.is_empty());
     // A client cannot remove one it never set.
-    rig.target.panel_breakpoint(CODE + 20, true).unwrap();
-    assert!(!done(rig.target.remove_sw_breakpoint(CODE + 20, kind())));
+    let inferior = rig.target.get(pid).unwrap();
+    inferior
+        .with_registry(|r, b| r.panel_breakpoint(b, CODE + 20, true))
+        .unwrap();
+    assert!(
+        !inferior
+            .with_registry(|r, b| r.client_remove_sw(b, CODE + 20, 1))
+            .unwrap()
+    );
     assert_eq!(rig.engine.lock().unwrap().breakpoints, [CODE + 20]);
 }
 
@@ -673,7 +695,7 @@ fn a_client_takes_control_and_the_panel_becomes_read_only() {
     // The client leaves (the server resumes the process); the panel reads the
     // state again and is back in control.
     rig.engine.lock().unwrap().state = TargetState::Running;
-    rig.control.client_left();
+    rig.control.client_left(&mut rig.target);
     rig.pump();
     let view = rig.view();
     assert_eq!(view.controller, Controller::App);

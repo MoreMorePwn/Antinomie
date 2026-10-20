@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! The left column: the threads of the stopped process and the breakpoint list.
 use super::*;
+use antinomie_monitor_core::debug::signal_policy::signal_name;
 use antinomie_monitor_core::debug::view::BreakpointKind;
 
 pub(super) fn show(
@@ -14,6 +15,8 @@ pub(super) fn show(
     egui::ScrollArea::vertical()
         .id_salt("debugger-left")
         .show(ui, |ui| {
+            processes::section(ui, view, actions);
+            ui.add_space(8.0);
             theme::section(ui, "Threads");
             if view.threads.is_empty() {
                 if view.loading {
@@ -24,14 +27,13 @@ pub(super) fn show(
             }
             for thread in &view.threads {
                 let selected = view.selected_tid == Some(thread.tid);
-                let text = format!(
-                    "{}{}  {}  {:#x}",
-                    if selected { ">" } else { " " },
-                    thread.tid,
-                    if thread.stopped { "stop" } else { "run" },
-                    thread.pc
-                );
-                let response = ui.selectable_label(selected, RichText::new(text).monospace());
+                let text = RichText::new(thread_text(thread, selected)).monospace();
+                let text = if thread.stopped {
+                    text
+                } else {
+                    text.color(theme::muted())
+                };
+                let response = ui.selectable_label(selected, text);
                 if response.clicked() && editable && !selected {
                     actions.push(PanelAction::Debug(DebugAction::SelectThread {
                         tid: thread.tid,
@@ -41,7 +43,32 @@ pub(super) fn show(
             ui.add_space(8.0);
             theme::section(ui, "Breakpoints");
             breakpoints(ui, panel, view, editable, actions);
+            ui.add_space(8.0);
+            signals::section(ui, view, actions);
         });
+}
+
+/// One thread row: id, running or stopped (with the signal it has yet to
+/// receive) and the instruction pointer.
+pub(crate) fn thread_text(
+    thread: &antinomie_monitor_core::debug::view::DebugThread,
+    selected: bool,
+) -> String {
+    let state = if !thread.stopped {
+        "running".to_string()
+    } else if thread.signal != 0 {
+        let number = u8::try_from(thread.signal).unwrap_or(0);
+        format!("stopped {}", signal_name(number))
+    } else {
+        "stopped".to_string()
+    };
+    format!(
+        "{}{}  {}  {:#x}",
+        if selected { ">" } else { " " },
+        thread.tid,
+        state,
+        thread.pc
+    )
 }
 
 fn breakpoints(

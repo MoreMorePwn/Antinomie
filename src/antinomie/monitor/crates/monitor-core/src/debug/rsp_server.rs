@@ -5,13 +5,11 @@
 //! away (or detaches) leaves the process running: breakpoints are removed and
 //! the group resumed, and the server keeps listening until it is shut down.
 use super::{
-    rsp_target::{PACKET_BUFFER, RspTarget},
-    target::{DebugBackend, DebugError, DetachMode, TargetState},
+    debugger::{AdoptedChild, Debugger},
+    inferior::RunState,
+    rsp_client::{self, Outcome, Wire},
+    target::{DebugBackend, DebugError, DetachMode, ResumeAction, TargetState},
     ui_control::{PanelControl, PanelHandle, Pump},
-};
-use gdbstub::{
-    conn::Connection,
-    stub::{DisconnectReason, GdbStub, MultiThreadStopReason, state_machine::GdbStubStateMachine},
 };
 use std::{
     collections::VecDeque,
@@ -31,9 +29,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const GONE: &str = "the guest ended the debug session";
 const INTERRUPT_DEADLINE: Duration = Duration::from_secs(5);
-const IDLE_POLL: Duration = Duration::from_millis(50);
 const RUNNING_POLL: Duration = Duration::from_millis(2);
 /// How often the in-app panel's controller runs while no client is connected.
 const PANEL_TICK: Duration = Duration::from_millis(10);
@@ -68,9 +64,18 @@ pub struct ServerStatus {
     pub ended: Option<String>,
 }
 
+struct Resync {
+    reason: String,
+    leave: bool,
+}
+
 struct Shared {
     stop: AtomicBool,
     status: Mutex<ServerStatus>,
+    /// The guest's state may have moved under us (a restored snapshot, a
+    /// reconnect): what we believe is read again. `leave`: the guest went back in
+    /// time, so a connected client's picture of it is wrong.
+    resync: Mutex<Option<Resync>>,
 }
 impl Shared {
     fn update(&self, change: impl FnOnce(&mut ServerStatus)) {
@@ -92,6 +97,16 @@ impl DebugServer {
     /// Start serving `backend`. `directory` must be private to the user (the
     /// run's runtime directory); the socket inside gets mode 0600.
     pub fn start(backend: Box<dyn DebugBackend>, directory: &Path) -> Result<Self, String> {
+        Self::start_with(backend, None, directory)
+    }
+
+    /// Like `start`; with `adopted` the session is one the guest already had and the
+    /// list is the other processes it held.
+    pub(crate) fn start_with(
+        backend: Box<dyn DebugBackend>,
+        adopted: Option<Vec<AdoptedChild>>,
+        directory: &Path,
+    ) -> Result<Self, String> {
         let (unix_socket, temporary) = socket_path(directory)?;
         let _ = std::fs::remove_file(&unix_socket);
         let unix = UnixListener::bind(&unix_socket).map_err(|e| format!("debug socket: {e}"))?;
@@ -108,6 +123,7 @@ impl DebugServer {
                 target: "attached".into(),
                 ..ServerStatus::default()
             }),
+            resync: Mutex::new(None),
         });
         let detach_mode = Arc::new(Mutex::new(DetachMode::Resume));
         let (mut panel_control, panel) = PanelControl::new(backend.caps());
@@ -119,18 +135,24 @@ impl DebugServer {
             thread::Builder::new()
                 .name("antinomie-debug".into())
                 .spawn(move || {
-                    let mut target = RspTarget::new(backend);
-                    serve(&mut target, &mut panel_control, &unix, &tcp, &shared);
+                    let mut debugger = Debugger::new(backend);
+                    if let Some(children) = adopted {
+                        debugger.adopt_existing(children);
+                        let _ = debugger.leave_nonstop();
+                    }
+                    serve(&mut debugger, &mut panel_control, &unix, &tcp, &shared);
                     // A stopped process the client left behind is released.
-                    release(&mut target);
+                    release(&mut debugger);
                     let mode = detach_mode
                         .lock()
                         .map(|mode| *mode)
                         .unwrap_or(DetachMode::Resume);
-                    if let Err(error) = target.backend().detach(mode) {
-                        shared.update(|status| {
-                            status.ended.get_or_insert(format!("detach: {error}"));
-                        });
+                    for pid in debugger.pids() {
+                        if let Err(error) = debugger.detach(pid, mode, true) {
+                            shared.update(|status| {
+                                status.ended.get_or_insert(format!("detach: {error}"));
+                            });
+                        }
                     }
                     let _ = std::fs::remove_file(&socket);
                     if let Some(directory) = temporary {
@@ -161,6 +183,18 @@ impl DebugServer {
     /// The in-app panel's side of the server: its requests and its view.
     pub fn panel(&self) -> &PanelHandle {
         &self.panel
+    }
+    /// The guest was restored from a snapshot (`time_travel`) or reconnected: read
+    /// its state again and make its breakpoints what we registered. After a restore
+    /// a connected client's session ends (its picture of the target is from another
+    /// time); a reconnect changed nothing a client can see.
+    pub fn request_resync(&self, reason: &str, time_travel: bool) {
+        if let Ok(mut slot) = self.shared.resync.lock() {
+            *slot = Some(Resync {
+                reason: reason.to_string(),
+                leave: time_travel || slot.as_ref().is_some_and(|earlier| earlier.leave),
+            });
+        }
     }
     pub fn status(&self) -> ServerStatus {
         self.shared
@@ -239,7 +273,6 @@ enum Stream {
 struct Conn {
     stream: Stream,
     incoming: VecDeque<u8>,
-    outgoing: Vec<u8>,
 }
 impl Conn {
     fn new(stream: Stream) -> io::Result<Self> {
@@ -253,7 +286,6 @@ impl Conn {
         Ok(Self {
             stream,
             incoming: VecDeque::new(),
-            outgoing: Vec::new(),
         })
     }
     /// The next byte from the client, waiting up to `timeout`. `Err` is a closed
@@ -294,36 +326,21 @@ impl Conn {
         }
     }
 }
-impl Connection for Conn {
-    type Error = io::Error;
-    fn write(&mut self, byte: u8) -> Result<(), Self::Error> {
-        self.outgoing.push(byte);
-        Ok(())
+impl Wire for Conn {
+    fn read_byte(&mut self, timeout: Duration) -> io::Result<Option<u8>> {
+        Conn::read_byte(self, timeout)
     }
-    fn write_all(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
-        self.outgoing.extend_from_slice(buf);
-        Ok(())
-    }
-    fn flush(&mut self) -> Result<(), Self::Error> {
-        let data = std::mem::take(&mut self.outgoing);
+    fn send(&mut self, data: &[u8]) -> io::Result<()> {
         let socket: &mut dyn Write = match &mut self.stream {
             Stream::Unix(socket) => socket,
             Stream::Tcp(socket) => socket,
         };
-        socket.write_all(&data)?;
+        socket.write_all(data)?;
         socket.flush()
     }
 }
 
 // ---- serving ------------------------------------------------------------
-
-enum Outcome {
-    /// The client left; the process lives on.
-    ClientGone(String),
-    /// The target ended or the client killed it: nothing more to debug.
-    TargetGone(String),
-    Shutdown,
-}
 
 fn accept(unix: &UnixListener, tcp: &TcpListener) -> Option<Stream> {
     if let Ok((socket, _)) = unix.accept() {
@@ -374,14 +391,30 @@ pub(super) fn tcp_peer_is_this_user(peer: &SocketAddr, local: &SocketAddr) -> bo
 }
 
 fn serve(
-    target: &mut RspTarget,
+    debugger: &mut Debugger,
     panel: &mut PanelControl,
     unix: &UnixListener,
     tcp: &TcpListener,
     shared: &Shared,
 ) {
     while !shared.stop.load(Ordering::Acquire) {
-        if let Pump::Ended(why) = panel.pump(target) {
+        if let Some(Resync { reason, .. }) =
+            shared.resync.lock().ok().and_then(|mut slot| slot.take())
+        {
+            let notes = resync(debugger);
+            panel.invalidate(debugger);
+            shared.update(|status| {
+                status.target = format!(
+                    "{reason}{}",
+                    if notes.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({notes})")
+                    }
+                );
+            });
+        }
+        if let Pump::Ended(why) = panel.pump(debugger) {
             shared.update(|status| {
                 status.target = "ended".into();
                 status.ended = Some(why);
@@ -401,15 +434,36 @@ fn serve(
             status.target = "connecting".into();
         });
         let outcome = match Conn::new(stream) {
-            Ok(conn) => session(target, conn, shared),
+            Ok(mut conn) => {
+                let mut on_state = |state: &str| {
+                    shared.update(|status| status.target = state.to_string());
+                };
+                let mut on_idle = |debugger: &mut Debugger| panel.observe(debugger);
+                let leave = || {
+                    let mut slot = shared.resync.lock().ok()?;
+                    let leaving = slot.as_ref().is_some_and(|resync| resync.leave);
+                    leaving.then(|| slot.take().map(|resync| resync.reason))?
+                };
+                rsp_client::serve(
+                    debugger,
+                    &mut conn,
+                    &shared.stop,
+                    rsp_client::Hooks {
+                        on_state: &mut on_state,
+                        on_idle: &mut on_idle,
+                        leave: &leave,
+                    },
+                )
+            }
             Err(error) => Outcome::ClientGone(format!("connection setup: {error}")),
         };
         shared.update(|status| status.client_connected = false);
         match outcome {
             Outcome::Shutdown => return,
             Outcome::ClientGone(why) => {
-                release(target);
-                panel.client_left();
+                resync(debugger);
+                release(debugger);
+                panel.client_left(debugger);
                 shared.update(|status| status.target = format!("running ({why})"));
             }
             Outcome::TargetGone(why) => {
@@ -423,143 +477,69 @@ fn serve(
     }
 }
 
-/// Take breakpoints out and let the process run, whatever state it is in.
-fn release(target: &mut RspTarget) {
-    if target.is_running() && target.interrupt().is_ok() {
-        let until = Instant::now() + INTERRUPT_DEADLINE;
-        while Instant::now() < until {
-            match target.poll() {
-                Ok(Some(_)) | Err(_) => break,
-                Ok(None) => thread::sleep(RUNNING_POLL),
+/// Read every process's state again and make the guest's breakpoints what the
+/// session registered. Returns what had to be fixed.
+fn resync(debugger: &mut Debugger) -> String {
+    let mut notes = Vec::new();
+    for pid in debugger.pids() {
+        let Some(inferior) = debugger.get(pid) else {
+            continue;
+        };
+        match inferior.backend.state() {
+            Ok(TargetState::Stopped(event)) => {
+                inferior.run = RunState::Stopped(event);
+                inferior.current_tid = event.tid;
+                inferior.invalidate();
+                inferior.auxv = None;
+                inferior.refresh_auxv();
+            }
+            Ok(TargetState::Running | TargetState::Transition) => inferior.run = RunState::Running,
+            Ok(TargetState::Exited { wait_status }) => inferior.run = RunState::Exited(wait_status),
+            Ok(TargetState::Replaced) | Err(DebugError::Gone) => {
+                inferior.run = RunState::Exited(0);
+                notes.push(format!("process {pid} is gone"));
+                continue;
+            }
+            Err(error) => {
+                notes.push(format!("process {pid}: {error}"));
+                continue;
+            }
+        }
+        if inferior.is_stopped() || inferior.nonstop {
+            match inferior.with_registry(|registry, backend| registry.reconcile(backend)) {
+                Ok(fixed) if !fixed.is_empty() => notes.push(format!("process {pid}: {fixed}")),
+                Ok(_) => {}
+                Err(error) => notes.push(format!("process {pid}: breakpoints: {error}")),
             }
         }
     }
-    if !target.is_running() {
-        target.clear_client_breakpoints();
-        let _ = target.resume_plain();
-    }
+    notes.join("; ")
 }
 
-fn wait_for_stop(
-    target: &mut RspTarget,
-    stop: &AtomicBool,
-) -> Result<MultiThreadStopReason<u64>, DebugError> {
-    let until = Instant::now() + INTERRUPT_DEADLINE;
-    loop {
-        if let Some(reason) = target.poll()? {
-            return Ok(reason);
+/// Take breakpoints out and let every process run, whatever state it is in.
+fn release(debugger: &mut Debugger) {
+    let _ = debugger.leave_nonstop();
+    for pid in debugger.pids() {
+        if let Some(inferior) = debugger.get(pid)
+            && inferior.is_running()
+        {
+            let _ = inferior.backend.interrupt();
         }
-        if stop.load(Ordering::Acquire) || Instant::now() >= until {
-            let why = target
-                .backend()
-                .take_failure()
-                .unwrap_or_else(|| "the process did not stop in time".into());
-            return Err(DebugError::Transport(why));
+    }
+    let until = Instant::now() + INTERRUPT_DEADLINE;
+    while debugger.any_running() && Instant::now() < until {
+        if debugger.poll().is_err() {
+            break;
         }
         thread::sleep(RUNNING_POLL);
     }
-}
-
-fn describe(reason: &MultiThreadStopReason<u64>) -> String {
-    match reason {
-        MultiThreadStopReason::Exited(code) => format!("exited with status {code}"),
-        MultiThreadStopReason::Terminated(signal) => format!("killed by signal {}", signal.0),
-        _ => "stopped".into(),
-    }
-}
-
-fn session(target: &mut RspTarget, conn: Conn, shared: &Shared) -> Outcome {
-    // A debugger expects a stopped target at connect.
-    match target.adopt() {
-        Ok(TargetState::Stopped(_)) => {}
-        Ok(TargetState::Exited { .. } | TargetState::Replaced) => {
-            return Outcome::TargetGone("the process has already ended".into());
-        }
-        Ok(TargetState::Running | TargetState::Transition) => {
-            if let Err(error) = target.interrupt() {
-                return Outcome::ClientGone(format!("cannot stop the process: {error}"));
-            }
-            if let Err(error) = wait_for_stop(target, &shared.stop) {
-                return Outcome::ClientGone(error.to_string());
-            }
-        }
-        Err(DebugError::Gone) => return Outcome::TargetGone(GONE.into()),
-        Err(error) => return Outcome::ClientGone(error.to_string()),
-    }
-    let stub = match GdbStub::builder(conn)
-        .packet_buffer_size(PACKET_BUFFER)
-        .build()
-    {
-        Ok(stub) => stub,
-        Err(error) => return Outcome::ClientGone(format!("{error:?}")),
-    };
-    let mut machine = match stub.run_state_machine(target) {
-        Ok(machine) => machine,
-        Err(error) => return Outcome::ClientGone(error.to_string()),
-    };
-    shared.update(|status| status.target = "stopped".into());
-    loop {
-        if shared.stop.load(Ordering::Acquire) {
-            return Outcome::Shutdown;
-        }
-        let next = match machine {
-            GdbStubStateMachine::Idle(mut inner) => {
-                match inner.borrow_conn().read_byte(IDLE_POLL) {
-                    Ok(Some(byte)) => inner.incoming_data(target, byte),
-                    Ok(None) => Ok(inner.into()),
-                    Err(error) => return Outcome::ClientGone(error.to_string()),
-                }
-            }
-            GdbStubStateMachine::Running(mut inner) => {
-                match inner.borrow_conn().read_byte(RUNNING_POLL) {
-                    Ok(Some(byte)) => inner.incoming_data(target, byte),
-                    Ok(None) => match target.poll() {
-                        Ok(Some(reason)) => {
-                            shared.update(|status| status.target = describe(&reason));
-                            inner.report_stop(target, reason)
-                        }
-                        Ok(None) => Ok(inner.into()),
-                        Err(DebugError::Gone) => return Outcome::TargetGone(GONE.into()),
-                        Err(error) => return Outcome::ClientGone(error.to_string()),
-                    },
-                    Err(error) => return Outcome::ClientGone(error.to_string()),
-                }
-            }
-            GdbStubStateMachine::CtrlCInterrupt(inner) => {
-                let was_running = target.is_running();
-                if was_running && let Err(error) = target.interrupt() {
-                    return Outcome::ClientGone(format!("interrupt: {error}"));
-                }
-                let reason = if was_running {
-                    match wait_for_stop(target, &shared.stop) {
-                        Ok(reason) => Some(reason),
-                        Err(error) => return Outcome::ClientGone(error.to_string()),
-                    }
-                } else {
-                    None
-                };
-                inner.interrupt_handled(target, reason)
-            }
-            GdbStubStateMachine::Disconnected(inner) => {
-                return match inner.get_reason() {
-                    DisconnectReason::Disconnect => Outcome::ClientGone("detached".into()),
-                    DisconnectReason::Kill => {
-                        target.clear_client_breakpoints();
-                        let _ = target.backend().detach(DetachMode::Kill);
-                        Outcome::TargetGone("killed by the debugger".into())
-                    }
-                    DisconnectReason::TargetExited(code) => {
-                        Outcome::TargetGone(format!("exited with status {code}"))
-                    }
-                    DisconnectReason::TargetTerminated(signal) => {
-                        Outcome::TargetGone(format!("killed by signal {}", signal.0))
-                    }
-                };
-            }
+    for pid in debugger.pids() {
+        let Some(inferior) = debugger.get(pid) else {
+            continue;
         };
-        machine = match next {
-            Ok(machine) => machine,
-            Err(error) => return Outcome::ClientGone(error.to_string()),
-        };
+        if inferior.is_stopped() {
+            inferior.with_registry(|registry, backend| registry.clear_client(backend));
+            let _ = debugger.resume(pid, ResumeAction::Continue);
+        }
     }
 }

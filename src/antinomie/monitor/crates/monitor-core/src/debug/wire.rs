@@ -2,7 +2,10 @@
 //! Encoders and decoders for the guest debug opcodes (`protocol/control.h`).
 //! Pure functions: no transport, so every layout is unit-tested against the
 //! shared header. All integers are little endian.
-use super::target::{ArchTag, DebugCaps, RegsetBlob, RegsetInfo, StopEvent, StopKind};
+use super::target::{
+    ArchTag, ChildRef, DebugCaps, GuestBreakpoint, RegsetBlob, RegsetInfo, SessionInfo,
+    SessionOptions, StopEvent, StopKind, ThreadAction,
+};
 use super::view::{BreakpointKind, WatchAccess};
 use crate::control::header;
 
@@ -20,6 +23,11 @@ pub const MEM_WRITE: u32 = 0x108a;
 pub const BP_SET: u32 = 0x108b;
 pub const BP_CLEAR: u32 = 0x108c;
 pub const AUXV: u32 = 0x108d;
+pub const CONFIG: u32 = 0x108e;
+pub const EVENTS: u32 = 0x108f;
+pub const THREAD_CTL: u32 = 0x1090;
+pub const SESSIONS: u32 = 0x1091;
+pub const BP_LIST: u32 = 0x1092;
 
 pub const ABI: u32 = 1;
 pub const CAPS_SIZE: usize = 48;
@@ -31,6 +39,24 @@ pub const TRANSFER_MAX: usize = 16000;
 pub const THREADS_MAX: usize = 256;
 
 pub const ATTACH_STOP: u32 = 1;
+pub const ATTACH_ADOPT: u32 = 2;
+pub const CAPS_EXT: u32 = 1;
+pub const EVENT_ENTRY_SIZE: usize = 336;
+pub const EVENT_PATH_SIZE: usize = 256;
+pub const EVENT_MAX: usize = 8;
+pub const SESSION_ENTRY_SIZE: usize = 72;
+pub const BP_ENTRY_SIZE: usize = 24;
+pub const TCTL_STOP: u32 = 1;
+pub const TCTL_CONT: u32 = 2;
+pub const TCTL_STEP: u32 = 3;
+pub const OPT_FORK: u32 = 1;
+pub const OPT_EXEC: u32 = 2;
+pub const OPT_NONSTOP: u32 = 4;
+pub const EVF_SHARED_MM: u32 = 1;
+pub const SF_CHILD_PENDING: u32 = 1;
+pub const SF_SHARED_MM: u32 = 2;
+pub const SF_NONSTOP: u32 = 4;
+pub const TF_VFORK_WAIT: u32 = 1;
 pub const DETACH_KILL: u32 = 1;
 pub const CONT_STEP: u32 = 1;
 pub const REGS_ALL: u32 = 1;
@@ -45,6 +71,11 @@ pub const CAP_SIGNALS: u32 = 64;
 pub const CAP_BATCH_REGS: u32 = 128;
 pub const CAP_START: u32 = 256;
 pub const CAP_AUXV: u32 = 512;
+
+pub const CAP2_FOLLOW: u32 = 1;
+pub const CAP2_NONSTOP: u32 = 2;
+pub const CAP2_ADOPT: u32 = 4;
+pub const CAP2_THREAD_HW: u32 = 8;
 
 pub const STATE_RUNNING: u32 = 1;
 pub const STATE_STOPPING: u32 = 2;
@@ -64,6 +95,10 @@ pub const EVENT_SIGNAL: u32 = 6;
 pub const EVENT_HWBREAK: u32 = 7;
 pub const EVENT_WATCH: u32 = 8;
 pub const EVENT_ENTRY: u32 = 9;
+pub const EVENT_FORK: u32 = 10;
+pub const EVENT_VFORK: u32 = 11;
+pub const EVENT_VFORK_DONE: u32 = 12;
+pub const EVENT_CHILD: u32 = 13;
 
 pub const BP_SOFTWARE: u32 = 1;
 pub const BP_HW_EXEC: u32 = 2;
@@ -84,8 +119,17 @@ fn u64_at(data: &[u8], offset: usize) -> Result<u64, String> {
 pub fn caps_request() -> Vec<u8> {
     header(0)
 }
+/// The request that also asks for the second capability word (a guest of the
+/// phase 2 refuses it with `EINVAL`: ask again with `caps_request`).
+pub fn caps_request_ext() -> Vec<u8> {
+    let mut args = header(0);
+    args.extend(CAPS_EXT.to_le_bytes());
+    args.extend(0u32.to_le_bytes());
+    args
+}
 
-pub fn parse_caps(reply: &[u8]) -> Result<DebugCaps, String> {
+/// Parse a capability reply; `ext` says the request asked for the second word.
+pub fn parse_caps(reply: &[u8], ext: bool) -> Result<DebugCaps, String> {
     if reply.len() < CAPS_SIZE {
         return Err("debug capability reply is too short".into());
     }
@@ -110,7 +154,13 @@ pub fn parse_caps(reply: &[u8]) -> Result<DebugCaps, String> {
         | CAP_BATCH_REGS
         | CAP_START
         | CAP_AUXV;
-    if flags & !known != 0 || reply[40..48] != [0; 8] {
+    let flags2 = u32_at(reply, 40)?;
+    let known2 = if ext {
+        CAP2_FOLLOW | CAP2_NONSTOP | CAP2_ADOPT | CAP2_THREAD_HW
+    } else {
+        0
+    };
+    if flags & !known != 0 || flags2 & !known2 != 0 || reply[44..48] != [0; 4] {
         return Err("debug capability reply has unknown fields".into());
     }
     let count = u32_at(reply, 36)? as usize;
@@ -145,6 +195,10 @@ pub fn parse_caps(reply: &[u8]) -> Result<DebugCaps, String> {
         batch_regs: flags & CAP_BATCH_REGS != 0,
         debug_on_start: flags & CAP_START != 0,
         auxv: flags & CAP_AUXV != 0,
+        follow: flags2 & CAP2_FOLLOW != 0,
+        nonstop: flags2 & CAP2_NONSTOP != 0,
+        adopt: flags2 & CAP2_ADOPT != 0,
+        thread_hw: flags2 & CAP2_THREAD_HW != 0,
         hardware_breakpoints: u32_at(reply, 16)?,
         hardware_watchpoints: u32_at(reply, 20)?,
         breakpoint_len_mask: u32_at(reply, 12)?,
@@ -162,12 +216,16 @@ pub struct AttachRequest {
     pub arch: ArchTag,
     pub nonce: [u64; 2],
     pub stop_now: bool,
+    /// Take over a live session of this identity (a child, or a session this
+    /// debugger lost across a reconnect or a restored snapshot).
+    pub adopt: bool,
 }
 pub fn attach_request(request: &AttachRequest) -> Result<Vec<u8>, String> {
     if request.task_cookie == 0 || request.tgid == 0 || request.nonce == [0, 0] {
         return Err("debug attach needs a task cookie, PID and a nonzero nonce".into());
     }
-    let mut args = header(if request.stop_now { ATTACH_STOP } else { 0 });
+    let mut args =
+        header(u32::from(request.stop_now) * ATTACH_STOP + u32::from(request.adopt) * ATTACH_ADOPT);
     args.extend(request.task_cookie.to_le_bytes());
     args.extend(request.start_boot_ns.to_le_bytes());
     args.extend(request.tgid.to_le_bytes());
@@ -254,8 +312,16 @@ pub struct SessionStatus {
     pub event_signal: u32,
     /// The breakpoint kind (`BP_HW_*`) that fired, for a watchpoint stop.
     pub event_access: u32,
+    /// Session options and flags; zero unless the debugger set options or the
+    /// session is a followed child.
+    pub options: u32,
+    pub flags: u32,
+    pub parent_session: u64,
 }
 impl SessionStatus {
+    pub fn is_child_pending(&self) -> bool {
+        self.flags & SF_CHILD_PENDING != 0
+    }
     pub fn stop_event(&self) -> Option<StopEvent> {
         let kind = match self.event_kind {
             EVENT_INTERRUPT => StopKind::Interrupt,
@@ -264,6 +330,7 @@ impl SessionStatus {
             },
             EVENT_STEP => StopKind::Step,
             EVENT_ENTRY => StopKind::Entry,
+            EVENT_EXEC if self.state != STATE_EXEC => StopKind::Exec,
             EVENT_SIGNAL => StopKind::Signal {
                 signal: self.event_signal,
             },
@@ -289,7 +356,11 @@ impl SessionStatus {
     }
 }
 pub fn parse_status(reply: &[u8]) -> Result<SessionStatus, String> {
-    if reply.len() != STATUS_SIZE || reply[80..96] != [0; 16] || u32_at(reply, 20)? != 0 {
+    if reply.len() != STATUS_SIZE
+        || u32_at(reply, 20)? != 0
+        || u32_at(reply, 80)? & !(OPT_FORK | OPT_EXEC | OPT_NONSTOP) != 0
+        || u32_at(reply, 84)? & !(SF_CHILD_PENDING | SF_SHARED_MM | SF_NONSTOP) != 0
+    {
         return Err("debug status reply is malformed".into());
     }
     let state = u32_at(reply, 16)?;
@@ -312,6 +383,9 @@ pub fn parse_status(reply: &[u8]) -> Result<SessionStatus, String> {
         breakpoints: u32_at(reply, 68)?,
         event_signal: u32_at(reply, 72)?,
         event_access: u32_at(reply, 76)?,
+        options: u32_at(reply, 80)?,
+        flags: u32_at(reply, 84)?,
+        parent_session: u64_at(reply, 88)?,
     })
 }
 
@@ -330,6 +404,8 @@ pub struct ThreadEntry {
     /// The Linux signal number the thread is stopped on, else 0.
     pub signal: u32,
     pub pc: u64,
+    /// Asleep in vfork until its child lets go (counted as stopped).
+    pub vfork_wait: bool,
 }
 pub fn parse_threads(reply: &[u8]) -> Result<Vec<ThreadEntry>, String> {
     let count = u32_at(reply, 0)? as usize;
@@ -342,7 +418,12 @@ pub fn parse_threads(reply: &[u8]) -> Result<Vec<ThreadEntry>, String> {
             let entry = 8 + index * THREAD_ENTRY_SIZE;
             let tid = u32_at(reply, entry)?;
             let state = u32_at(reply, entry + 4)?;
-            if tid == 0 || !(1..=2).contains(&state) || reply[entry + 24..entry + 32] != [0; 8] {
+            let flags = u32_at(reply, entry + 24)?;
+            if tid == 0
+                || !(1..=2).contains(&state)
+                || flags & !TF_VFORK_WAIT != 0
+                || reply[entry + 28..entry + 32] != [0; 4]
+            {
                 return Err("debug thread entry is malformed".to_string());
             }
             Ok(ThreadEntry {
@@ -351,6 +432,7 @@ pub fn parse_threads(reply: &[u8]) -> Result<Vec<ThreadEntry>, String> {
                 stop_reason: u32_at(reply, entry + 8)?,
                 signal: u32_at(reply, entry + 12)?,
                 pc: u64_at(reply, entry + 16)?,
+                vfork_wait: flags & TF_VFORK_WAIT != 0,
             })
         })
         .collect()
@@ -511,4 +593,195 @@ pub fn parse_auxv(reply: &[u8]) -> Result<Vec<u8>, String> {
         return Err("debug auxiliary vector reply is malformed".into());
     }
     Ok(reply[8..].to_vec())
+}
+
+// ---- phase 3 ----------------------------------------------------------------
+
+pub fn config_request(session: u64, options: SessionOptions) -> Vec<u8> {
+    let bits = u32::from(options.fork) * OPT_FORK
+        + u32::from(options.exec) * OPT_EXEC
+        + u32::from(options.nonstop) * OPT_NONSTOP;
+    let mut args = with_session(0, session);
+    args.extend(bits.to_le_bytes());
+    args.extend((OPT_FORK | OPT_EXEC | OPT_NONSTOP).to_le_bytes());
+    args
+}
+pub fn parse_config(reply: &[u8]) -> Result<SessionOptions, String> {
+    if reply.len() != 8 {
+        return Err("debug configuration reply has the wrong length".into());
+    }
+    Ok(options_from(u32_at(reply, 0)?))
+}
+pub fn options_from(bits: u32) -> SessionOptions {
+    SessionOptions {
+        fork: bits & OPT_FORK != 0,
+        exec: bits & OPT_EXEC != 0,
+        nonstop: bits & OPT_NONSTOP != 0,
+    }
+}
+
+/// `current`: the event of an all-stop session's stop; else the unacknowledged
+/// events of a non-stop session after `acknowledged`.
+pub fn events_request(session: u64, acknowledged: u32, current: bool) -> Vec<u8> {
+    let mut args = with_session(0, session);
+    args.extend(acknowledged.to_le_bytes());
+    args.extend((EVENT_MAX as u32).to_le_bytes());
+    args.extend(u32::from(current).to_le_bytes());
+    args.extend(0u32.to_le_bytes());
+    args
+}
+
+/// One event of the guest, with the exec path when it has one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EventEntry {
+    pub event: StopEvent,
+    pub path: Option<String>,
+}
+pub fn parse_events(reply: &[u8]) -> Result<(Vec<EventEntry>, u32), String> {
+    let count = u32_at(reply, 0)? as usize;
+    let dropped = u32_at(reply, 4)?;
+    if count > EVENT_MAX || reply.len() != 16 + count * EVENT_ENTRY_SIZE || reply[8..16] != [0; 8] {
+        return Err("debug event list is malformed".into());
+    }
+    let mut events = Vec::with_capacity(count);
+    for index in 0..count {
+        let at = 16 + index * EVENT_ENTRY_SIZE;
+        let entry = &reply[at..at + EVENT_ENTRY_SIZE];
+        let kind = u32_at(entry, 4)?;
+        let path_len = u32_at(entry, 72)? as usize;
+        if path_len >= EVENT_PATH_SIZE {
+            return Err("debug event path is too long".into());
+        }
+        let child = ChildRef {
+            session: u64_at(entry, 48)?,
+            tgid: u32_at(entry, 40)?,
+            task_cookie: u64_at(entry, 56)?,
+            start_boot_ns: u64_at(entry, 64)?,
+            shared_memory: u32_at(entry, 36)? & EVF_SHARED_MM != 0,
+        };
+        let stop_kind = match kind {
+            EVENT_INTERRUPT => StopKind::Interrupt,
+            EVENT_BREAKPOINT => StopKind::Breakpoint {
+                addr: u64_at(entry, 24)?,
+            },
+            EVENT_STEP => StopKind::Step,
+            EVENT_ENTRY => StopKind::Entry,
+            EVENT_SIGNAL => StopKind::Signal {
+                signal: u32_at(entry, 12)?,
+            },
+            EVENT_HWBREAK => StopKind::HardwareBreakpoint {
+                addr: u64_at(entry, 24)?,
+            },
+            EVENT_WATCH => StopKind::Watchpoint {
+                addr: u64_at(entry, 24)?,
+                access: if u32_at(entry, 32)? == BP_HW_WRITE {
+                    WatchAccess::Write
+                } else {
+                    WatchAccess::Access
+                },
+            },
+            EVENT_FORK => StopKind::Fork { child },
+            EVENT_VFORK => StopKind::Vfork { child },
+            EVENT_VFORK_DONE => StopKind::VforkDone {
+                child_tgid: child.tgid,
+            },
+            EVENT_EXEC => StopKind::Exec,
+            _ => return Err(format!("debug event of unknown kind {kind}")),
+        };
+        events.push(EventEntry {
+            event: StopEvent {
+                sequence: u32_at(entry, 0)?,
+                kind: stop_kind,
+                tid: u32_at(entry, 8)?,
+                pc: u64_at(entry, 16)?,
+            },
+            path: (path_len > 0)
+                .then(|| String::from_utf8_lossy(&entry[80..80 + path_len]).into_owned()),
+        });
+    }
+    Ok((events, dropped))
+}
+
+pub fn thread_ctl_request(session: u64, tid: Option<u32>, action: ThreadAction) -> Vec<u8> {
+    let (code, signal) = match action {
+        ThreadAction::Stop => (TCTL_STOP, 0),
+        ThreadAction::Continue { signal } => (TCTL_CONT, signal),
+        ThreadAction::Step { signal } => (TCTL_STEP, signal),
+    };
+    let mut args = with_session(0, session);
+    args.extend(tid.unwrap_or(0).to_le_bytes());
+    args.extend(code.to_le_bytes());
+    args.extend(signal.to_le_bytes());
+    args.extend(0u32.to_le_bytes());
+    args
+}
+pub fn parse_thread_ctl(reply: &[u8]) -> Result<u32, String> {
+    if reply.len() != 8 || u32_at(reply, 4)? != 0 {
+        return Err("debug thread control reply is malformed".into());
+    }
+    u32_at(reply, 0)
+}
+
+pub fn sessions_request() -> Vec<u8> {
+    header(0)
+}
+pub fn parse_sessions(reply: &[u8]) -> Result<Vec<SessionInfo>, String> {
+    let count = u32_at(reply, 0)? as usize;
+    if count > 64 || reply.len() != 8 + count * SESSION_ENTRY_SIZE || u32_at(reply, 4)? != 0 {
+        return Err("debug session list is malformed".into());
+    }
+    (0..count)
+        .map(|index| {
+            let at = 8 + index * SESSION_ENTRY_SIZE;
+            let entry = &reply[at..at + SESSION_ENTRY_SIZE];
+            let flags = u32_at(entry, 20)?;
+            Ok(SessionInfo {
+                session: u64_at(entry, 0)?,
+                state: u32_at(entry, 8)?,
+                options: options_from(u32_at(entry, 12)?),
+                tgid: u32_at(entry, 16)?,
+                child_pending: flags & SF_CHILD_PENDING != 0,
+                shared_memory: flags & SF_SHARED_MM != 0,
+                nonstop: flags & SF_NONSTOP != 0,
+                task_cookie: u64_at(entry, 24)?,
+                start_boot_ns: u64_at(entry, 32)?,
+                parent_session: u64_at(entry, 40)?,
+                event_kind: u32_at(entry, 48)?,
+                event_sequence: u32_at(entry, 52)?,
+                threads: u32_at(entry, 56)?,
+                stopped_threads: u32_at(entry, 60)?,
+            })
+        })
+        .collect()
+}
+
+pub fn bp_list_request(session: u64) -> Vec<u8> {
+    let mut args = with_session(0, session);
+    args.extend(0u64.to_le_bytes());
+    args
+}
+pub fn parse_bp_list(reply: &[u8]) -> Result<Vec<GuestBreakpoint>, String> {
+    let count = u32_at(reply, 0)? as usize;
+    if count > 512 || reply.len() != 8 + count * BP_ENTRY_SIZE || u32_at(reply, 4)? != 0 {
+        return Err("debug breakpoint list is malformed".into());
+    }
+    (0..count)
+        .map(|index| {
+            let at = 8 + index * BP_ENTRY_SIZE;
+            let entry = &reply[at..at + BP_ENTRY_SIZE];
+            let kind = match u32_at(entry, 0)? {
+                BP_SOFTWARE => BreakpointKind::Software,
+                BP_HW_EXEC => BreakpointKind::Hardware,
+                BP_HW_WRITE => BreakpointKind::Watch(WatchAccess::Write),
+                BP_HW_ACCESS => BreakpointKind::Watch(WatchAccess::Access),
+                other => return Err(format!("debug breakpoint of unknown kind {other}")),
+            };
+            Ok(GuestBreakpoint {
+                kind,
+                len: u32_at(entry, 4)?,
+                addr: u64_at(entry, 8)?,
+                active: u32_at(entry, 16)? & 1 != 0,
+            })
+        })
+        .collect()
 }

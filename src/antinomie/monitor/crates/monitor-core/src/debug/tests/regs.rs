@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::debug::{
     ArchTag, RegKind, RegisterFile, RegsetBlob,
-    amd64::{self, FXSAVE_SIZE, NT_PRFPREG, NT_PRSTATUS, USER_REGS_SIZE, full_tag_word},
+    amd64::{FXSAVE_SIZE, NT_PRFPREG, NT_PRSTATUS, USER_REGS_SIZE, full_tag_word},
 };
 
 fn file() -> RegisterFile {
@@ -222,6 +222,5 @@ fn register_view_carries_names_and_groups() {
     assert_eq!(rip.feature, "org.gnu.gdb.i386.core");
     let xmm = view.iter().find(|value| value.name == "xmm0").unwrap();
     assert_eq!((xmm.bits, xmm.group), (128, Some("vector")));
-    let gdb = amd64::Amd64Registers::default();
-    assert_eq!(gdb.image.len(), 560);
+    assert_eq!(description.image_len(), 560);
 }

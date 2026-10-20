@@ -6,6 +6,7 @@
 //!   debug-check gdb   BUNDLE NEW_DATA_DIR FIXTURE   (P1: a real gdb through the RSP server)
 //!   debug-check stress BUNDLE NEW_DATA_DIR FIXTURE  (thread churn, soak, vfork timeout, exec)
 //!   debug-check p2 BUNDLE NEW_DATA_DIR FIXTURE_DIR [test ...]   (phase 2, see debug-p2/mod.rs)
+//!   debug-check p3 BUNDLE NEW_DATA_DIR FIXTURE_DIR [test ...]   (phase 3, see debug-p3/mod.rs)
 //!
 //! FIXTURE is the static `tests/monitor/debug-fixture` program. The data folder
 //! must be new and disposable. One BusyBox VM, one vCPU.
@@ -18,6 +19,8 @@ use antinomie_monitor_core::{
 };
 #[path = "debug-p2/mod.rs"]
 mod p2;
+#[path = "debug-p3/mod.rs"]
+mod p3;
 use std::{
     collections::BTreeMap,
     fs,
@@ -134,6 +137,10 @@ fn symbol(line: &str, name: &str) -> Result<u64, String> {
 
 /// A running disposable VM with the BusyBox base, one vCPU.
 fn boot(bundle: &str, data: &str) -> Result<Driver, String> {
+    boot_with(bundle, data, None)
+}
+
+fn boot_with(bundle: &str, data: &str, stop_grace: Option<Duration>) -> Result<Driver, String> {
     let data = PathBuf::from(data);
     if data.exists() {
         return Err("qualification needs a new disposable data folder".into());
@@ -144,6 +151,7 @@ fn boot(bundle: &str, data: &str) -> Result<Driver, String> {
             data_dir: data,
             headless: true,
             capture_quota_size: 512 * 1024 * 1024,
+            stop_grace,
             ..Default::default()
         })?,
         snapshot: Snapshot::default(),
@@ -765,9 +773,14 @@ fn gdb(bundle: &str, data: &str, fixture: &str) -> Result<(), String> {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let [mode, bundle, data, dir, only @ ..] = args.as_slice()
-        && mode == "p2"
+        && (mode == "p2" || mode == "p3")
     {
-        if let Err(error) = p2::run(bundle, data, dir, only) {
+        let result = if mode == "p2" {
+            p2::run(bundle, data, dir, only)
+        } else {
+            p3::run(bundle, data, dir, only)
+        };
+        if let Err(error) = result {
             eprintln!("FAIL {error}");
             std::process::exit(1);
         }

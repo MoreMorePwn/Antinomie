@@ -4,18 +4,24 @@
 //! thread (which alone owns the transport). The server thread never touches the
 //! transport; it sends `LinkRequest`s here, restricted to the debug opcodes.
 use super::*;
-use crate::debug::{DebugServer, DetachMode, GuestLink, KernelDebugBackend, LinkError, wire};
+use crate::debug::{
+    AdoptedChild, DebugBackend, DebugServer, DetachMode, GuestLink, KernelDebugBackend, LinkError,
+    SessionInfo, wire,
+};
 use sha2::{Digest, Sha256};
+use std::sync::atomic::AtomicBool;
 
 /// Guest debug opcodes the server thread may send; everything else is refused.
 fn allowed(opcode: u32) -> bool {
-    (wire::CAPS..=wire::AUXV).contains(&opcode)
+    (wire::CAPS..=wire::BP_LIST).contains(&opcode)
 }
 
 /// Longest the transport thread spends on one debug request.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long the server thread may wait for an answer before giving up.
 const LINK_DEADLINE: Duration = Duration::from_secs(15);
+/// How often a waiting request looks at whether the guest is paused.
+const LINK_SLICE: Duration = Duration::from_millis(100);
 
 pub(super) struct LinkRequest {
     opcode: u32,
@@ -27,6 +33,9 @@ pub(super) struct LinkRequest {
 #[derive(Clone)]
 pub struct DebugLink {
     requests: SyncSender<LinkRequest>,
+    /// The guest is being snapshotted, restored or reconnected: a request waits
+    /// for it (the wait does not count against its deadline).
+    paused: Arc<AtomicBool>,
 }
 impl GuestLink for DebugLink {
     fn request(&mut self, opcode: u32, args: &[u8]) -> Result<Vec<u8>, LinkError> {
@@ -38,11 +47,39 @@ impl GuestLink for DebugLink {
                 reply,
             })
             .map_err(|_| LinkError::transport("the app is closing"))?;
-        answer.recv_timeout(LINK_DEADLINE).map_err(|_| LinkError {
-            errno: None,
-            message: "the app did not answer the debug request".into(),
-            outcome_unknown: true,
-        })?
+        let mut waited = Duration::ZERO;
+        loop {
+            match answer.recv_timeout(LINK_SLICE) {
+                Ok(result) => return result,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(LinkError::transport("the app is closing"));
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if !self.paused.load(Ordering::Acquire) {
+                        waited += LINK_SLICE;
+                    }
+                    if waited >= LINK_DEADLINE {
+                        return Err(LinkError {
+                            errno: None,
+                            message: "the app did not answer the debug request".into(),
+                            outcome_unknown: true,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    fn duplicate(&self) -> Option<Box<dyn GuestLink + Send>> {
+        Some(Box::new(self.clone()))
+    }
+}
+
+/// While alive, debug requests wait instead of timing out: the guest is being
+/// snapshotted, restored or reconnected.
+pub(super) struct DebugPause(Arc<AtomicBool>);
+impl Drop for DebugPause {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
     }
 }
 
@@ -99,6 +136,8 @@ pub(super) struct DebugService {
     last_shown: Option<DebugSessionInfo>,
     /// The panel view last published, by epoch.
     last_view: Option<u64>,
+    /// Debug requests wait while the guest moves (snapshot, restore, reconnect).
+    paused: Arc<AtomicBool>,
     /// When a debug client last had a request served. A client of the debug link
     /// that is not the loopback server (the in-app debugger, a test) keeps the
     /// worker loop on its short wait for a while after each request.
@@ -107,7 +146,11 @@ pub(super) struct DebugService {
 impl DebugService {
     pub(super) fn new() -> (Self, DebugLink) {
         let (sender, requests) = mpsc::sync_channel(64);
-        let link = DebugLink { requests: sender };
+        let paused = Arc::new(AtomicBool::new(false));
+        let link = DebugLink {
+            requests: sender,
+            paused: paused.clone(),
+        };
         (
             Self {
                 requests,
@@ -115,6 +158,7 @@ impl DebugService {
                 active: None,
                 last_shown: None,
                 last_view: None,
+                paused,
                 last_served: None,
             },
             link,
@@ -122,6 +166,11 @@ impl DebugService {
     }
     pub(super) fn is_active(&self) -> bool {
         self.active.is_some()
+    }
+    /// Hold debug requests until the returned guard is dropped.
+    pub(super) fn pause(&self) -> DebugPause {
+        self.paused.store(true, Ordering::Release);
+        DebugPause(self.paused.clone())
     }
     /// The worker loop should wait briefly between passes: a debugger's round
     /// trips each wait for it.
@@ -345,12 +394,110 @@ impl Worker {
         }
     }
 
-    /// A VM snapshot would capture a stopped, instrumented process.
-    pub(super) fn debug_snapshot_guard(&self) -> Result<(), String> {
-        if self.debug.active.is_some() {
-            return Err("detach the debugger before taking or restoring a VM snapshot".into());
+    /// The guest moved under the debugger: a snapshot was restored or the
+    /// transport reconnected. A session of ours is read again (its breakpoints made
+    /// what we registered, a connected client told to go: its picture of the target
+    /// is from another time); without one, sessions the guest holds are adopted.
+    pub(super) fn debug_guest_moved(&mut self, reason: &str, time_travel: bool) {
+        self.debug_reap_ended();
+        if let Some(active) = self.debug.active.as_ref() {
+            active.server.request_resync(reason, time_travel);
+            return;
         }
-        Ok(())
+        if let Some(message) = self.debug_adopt_existing() {
+            self.emit(Notification::CommandResult {
+                id: 0,
+                success: true,
+                message,
+            });
+        }
+    }
+
+    /// Find the sessions the guest holds and make a debugger of them: the
+    /// breakpoints and the stopped threads are still there.
+    fn debug_adopt_existing(&mut self) -> Option<String> {
+        if self.debug.active.is_some() {
+            return None;
+        }
+        let session = self.session.as_mut()?;
+        let revision = self
+            .snapshot
+            .guest_kernel
+            .as_ref()
+            .and_then(|kernel| kernel.revision)?;
+        if revision < 17 {
+            return None;
+        }
+        let boot_id = self.snapshot.boot_id.clone().unwrap_or_default();
+        let mut link = WorkerLink {
+            session,
+            snapshot: &mut self.snapshot,
+            sender: &self.sender,
+        };
+        let caps = KernelDebugBackend::probe(&mut link).ok()?;
+        if !caps.adopt {
+            return None;
+        }
+        let live: Vec<SessionInfo> = KernelDebugBackend::list_sessions(&mut link)
+            .ok()?
+            .into_iter()
+            .filter(|info| info.state != wire::STATE_EXITED && info.state != wire::STATE_EXEC)
+            .collect();
+        let root = live.iter().find(|info| info.parent_session == 0)?.clone();
+        let identity_of = |info: &SessionInfo| crate::observation::GuestProcessIdentity {
+            boot_id: boot_id.clone(),
+            task_cookie: info.task_cookie,
+            tgid: info.tgid,
+            start_boot_ns: info.start_boot_ns,
+        };
+        let mut adopt = |info: &SessionInfo| -> Option<KernelDebugBackend> {
+            let identity = identity_of(info);
+            let attached = KernelDebugBackend::adopt_session(
+                &mut link,
+                caps.clone(),
+                &identity,
+                nonce(&identity),
+            )
+            .ok()?;
+            Some(KernelDebugBackend::adopted(
+                Box::new(self.debug.link.clone()),
+                attached,
+                info,
+            ))
+        };
+        let root_backend = adopt(&root)?;
+        let architecture = caps.arch.name();
+        let mut children = Vec::new();
+        for info in live.iter().filter(|info| info.session != root.session) {
+            if let Some(backend) = adopt(info) {
+                children.push(AdoptedChild {
+                    backend: Box::new(backend),
+                    parent_session: info.parent_session,
+                    shared_memory: info.shared_memory,
+                    nonstop: info.nonstop,
+                });
+            }
+        }
+        let directory = self.session.as_ref()?.process.runtime_dir.clone();
+        let count = children.len() + 1;
+        let server = DebugServer::start_with(
+            Box::new(root_backend) as Box<dyn DebugBackend>,
+            Some(children),
+            &directory,
+        )
+        .ok()?;
+        let message = format!(
+            "debugger re-attached to {count} process(es) the guest still had under debug: {}",
+            server.endpoints().gdb_command()
+        );
+        self.debug.active = Some(ActiveDebug {
+            server,
+            target: identity_of(&root),
+            architecture,
+        });
+        self.refresh_debug_info();
+        self.publish();
+        Some(message)
     }
 }
 

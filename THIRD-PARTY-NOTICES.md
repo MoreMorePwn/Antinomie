@@ -134,20 +134,14 @@ publication. Release notes must provide the verified source location before
 the release is published. The source inventory associates each distributed
 base with its exact kernel configuration, patch series and package versions.
 
-The 0.7.0 debugger serves the GDB Remote Serial Protocol with `gdbstub 0.7.10`
-(Daniel Prilik; MIT OR Apache-2.0, MIT option selected; notice in
-[gdbstub-MIT.txt](LICENSES/third-party/gdbstub-MIT.txt)) and its two small
-dependencies new to this lock: `managed 0.8.0` (0BSD; notice in
-[managed-0BSD.txt](LICENSES/third-party/managed-0BSD.txt)) and `pastey 0.2.3`
-(MIT OR Apache-2.0, MIT option selected; the published package carries its
-terms without a copyright line, retained unchanged in
-[pastey-MIT.txt](LICENSES/third-party/pastey-MIT.txt)). The crate is pinned to
-that exact version and built with only its `std` feature. The RSP server is
-original code on top of it; nothing was copied from gdb, gdbserver (GPL-3.0),
-QEMU's gdbstub or any other implementation. GDB, IDA, Ghidra and radare2 are
-separate programs the user runs and connects to the local socket; none is
-bundled or linked. The kernel debug engine (`kernel/antinomie/debug*.c`) is
-original GPL-2.0-only code.
+The 0.7.0 debugger serves the GDB Remote Serial Protocol with original code:
+the framing, packet dispatch, process-qualified thread ids, all-stop and non-stop
+modes and the stop-reply grammar are written from GDB's published protocol
+documentation, with no third-party protocol library, and nothing was copied from
+gdb, gdbserver (GPL-3.0), QEMU's gdbstub or any other implementation. GDB, IDA,
+Ghidra and radare2 are separate programs the user runs and connects to the local
+socket; none is bundled or linked. The kernel debug engine
+(`kernel/antinomie/debug*.c`) is original GPL-2.0-only code.
 
 Static-analysis executable parsing uses `object 0.40.0` with read/std features
 only (no write, build or automatic compression). The MIT option is selected;

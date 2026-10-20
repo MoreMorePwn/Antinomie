@@ -5,9 +5,10 @@
 //! `p2fix` (static), `p2pie` (static-pie) and, when the dynamic test runs,
 //! `p2dyn` with `dbgroot/` (the host's ld.so and libc).
 use super::*;
+use antinomie_monitor_core::debug::signal_policy;
 
 mod engine;
-mod gdb;
+pub(crate) mod gdb;
 
 type Symbols = BTreeMap<String, u64>;
 type Test = fn(&mut Context) -> Result<String, String>;

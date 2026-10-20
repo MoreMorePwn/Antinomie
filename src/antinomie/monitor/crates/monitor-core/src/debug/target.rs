@@ -68,6 +68,16 @@ pub struct DebugCaps {
     pub debug_on_start: bool,
     /// The program's auxiliary vector can be read.
     pub auxv: bool,
+    /// Phase 3: fork and exec events with child sessions, session options, the
+    /// event list (`CONFIG`, `EVENTS`).
+    pub follow: bool,
+    /// Phase 3: threads stop and run one at a time (`THREAD_CTL`).
+    pub nonstop: bool,
+    /// Phase 3: sessions can be listed and adopted, breakpoints listed.
+    pub adopt: bool,
+    /// Phase 3: threads created while the group runs get the hardware
+    /// breakpoints before their first instruction.
+    pub thread_hw: bool,
     pub hardware_breakpoints: u32,
     pub hardware_watchpoints: u32,
     /// Bit `n - 1` set: a software breakpoint of `n` bytes is supported.
@@ -91,6 +101,29 @@ impl DebugCaps {
 pub struct RegsetBlob {
     pub nt_type: u32,
     pub data: Vec<u8>,
+}
+
+/// Options of a guest session (`CONFIG`). The defaults are the phase 2 behavior.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SessionOptions {
+    /// A fork or vfork is an event; the child gets a session parked at its start.
+    pub fork: bool,
+    /// An exec is an event and the session continues in the new image.
+    pub exec: bool,
+    /// Threads stop and resume one at a time.
+    pub nonstop: bool,
+}
+
+/// A process created by a fork or vfork of a debugged program, held parked by
+/// the guest until a debugger adopts it or lets it go.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChildRef {
+    pub session: u64,
+    pub tgid: u32,
+    pub task_cookie: u64,
+    pub start_boot_ns: u64,
+    /// A vfork child, which shares its parent's memory until it execs.
+    pub shared_memory: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,6 +165,23 @@ pub enum StopKind {
         addr: u64,
         access: WatchAccess,
     },
+    /// The thread `tid` made a process with fork and has returned; the guest
+    /// holds the child (`SessionOptions::fork`).
+    Fork {
+        child: ChildRef,
+    },
+    /// The thread `tid` is in vfork; the child shares its memory.
+    Vfork {
+        child: ChildRef,
+    },
+    /// The vfork child of the thread `tid` execed or exited.
+    VforkDone {
+        child_tgid: u32,
+    },
+    /// The process executed a new image and the session continues in it
+    /// (`SessionOptions::exec`); the path is `DebugBackend::exec_path`. The
+    /// thread that executed it is now the thread group leader.
+    Exec,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -164,6 +214,59 @@ pub struct ThreadInfo {
     pub pc: u64,
     /// The Linux signal a stopped thread has not yet received, else 0.
     pub signal: u32,
+    /// Asleep in vfork until the child lets go: counted as stopped.
+    pub vfork_wait: bool,
+}
+
+/// What a debugger asks of one thread of a non-stop session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThreadAction {
+    /// Stop it (its stop is an event, kind `Interrupt`).
+    Stop,
+    /// Run it; `signal` is delivered (0 drops the one it stopped on).
+    Continue { signal: u32 },
+    /// Execute one instruction; `signal` as for `Continue`.
+    Step { signal: u32 },
+}
+
+/// The events of a non-stop session the debugger has not acknowledged.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EventBatch {
+    pub events: Vec<StopEvent>,
+    /// Events lost because the debugger did not keep up.
+    pub dropped: u32,
+    /// The process ended (its wait status).
+    pub exited: Option<u32>,
+}
+
+/// One session of the guest, from the list of live sessions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionInfo {
+    pub session: u64,
+    pub state: u32,
+    pub options: SessionOptions,
+    pub tgid: u32,
+    pub task_cookie: u64,
+    pub start_boot_ns: u64,
+    pub parent_session: u64,
+    /// A child nobody has adopted yet.
+    pub child_pending: bool,
+    pub shared_memory: bool,
+    pub nonstop: bool,
+    pub event_kind: u32,
+    pub event_sequence: u32,
+    pub threads: u32,
+    pub stopped_threads: u32,
+}
+
+/// A breakpoint the guest holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GuestBreakpoint {
+    pub kind: BreakpointKind,
+    pub addr: u64,
+    pub len: u32,
+    /// The byte is in memory / the debug register is set.
+    pub active: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -196,6 +299,10 @@ impl LinkError {
 /// implementation that forwards to it.
 pub trait GuestLink {
     fn request(&mut self, opcode: u32, args: &[u8]) -> Result<Vec<u8>, LinkError>;
+    /// Another handle to the same path, for the backend of a followed child.
+    fn duplicate(&self) -> Option<Box<dyn GuestLink + Send>> {
+        None
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -300,5 +407,46 @@ pub trait DebugBackend: Send {
     /// example a thread that could not be stopped in time.
     fn take_failure(&mut self) -> Option<String> {
         None
+    }
+
+    // ---- phase 3 ------------------------------------------------------------
+
+    /// The guest's id of this session.
+    fn session_id(&self) -> u64 {
+        0
+    }
+    /// The process the session debugs (its thread group id in the guest).
+    fn target_pid(&self) -> u32 {
+        1
+    }
+    /// Set the session options; returns the options now in force.
+    fn configure(&mut self, options: SessionOptions) -> Result<SessionOptions, DebugError> {
+        let _ = options;
+        Err(DebugError::Unsupported("session options".into()))
+    }
+    /// The path of the program of the last `Exec` stop.
+    fn exec_path(&mut self) -> Option<String> {
+        None
+    }
+    /// A backend for a child the guest holds, sharing this one's path to the
+    /// guest. The child is adopted (this debugger owns its session from now on).
+    fn adopt_child(&mut self, child: &ChildRef) -> Result<Box<dyn DebugBackend>, DebugError> {
+        let _ = child;
+        Err(DebugError::Unsupported("following children".into()))
+    }
+    /// Non-stop: events after the ones up to `acknowledged`, which are forgotten.
+    fn events(&mut self, acknowledged: u32) -> Result<EventBatch, DebugError> {
+        let _ = acknowledged;
+        Err(DebugError::Unsupported("non-stop events".into()))
+    }
+    /// Non-stop: stop, run or step one thread (`None`: every thread). Returns how
+    /// many threads it applied to.
+    fn thread_action(&mut self, tid: Option<u32>, action: ThreadAction) -> Result<u32, DebugError> {
+        let _ = (tid, action);
+        Err(DebugError::Unsupported("non-stop thread control".into()))
+    }
+    /// The breakpoints the guest holds for this session.
+    fn guest_breakpoints(&mut self) -> Result<Vec<GuestBreakpoint>, DebugError> {
+        Err(DebugError::Unsupported("listing breakpoints".into()))
     }
 }

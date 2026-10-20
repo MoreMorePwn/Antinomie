@@ -5,8 +5,9 @@
 //! made against a stop that has since ended is refused, never misapplied.
 use super::{
     target::{
-        ArchTag, DebugBackend, DebugCaps, DebugError, DetachMode, GuestLink, LinkError, RegsetBlob,
-        ResumeAction, StopEvent, StopKind, TargetState, ThreadInfo,
+        ArchTag, ChildRef, DebugBackend, DebugCaps, DebugError, DetachMode, EventBatch,
+        GuestBreakpoint, GuestLink, LinkError, RegsetBlob, ResumeAction, SessionInfo,
+        SessionOptions, StopEvent, StopKind, TargetState, ThreadAction, ThreadInfo,
     },
     view::BreakpointKind,
     wire,
@@ -47,6 +48,7 @@ pub struct AttachedSession {
     pub caps: DebugCaps,
     pub session: u64,
     pub generation: u64,
+    pub tgid: u32,
 }
 
 pub struct KernelDebugBackend {
@@ -56,20 +58,47 @@ pub struct KernelDebugBackend {
     generation: u64,
     failure: Option<String>,
     reported_error: i32,
+    tgid: u32,
+    options: SessionOptions,
+    /// Non-stop: the newest event sequence seen in STATUS, and the one fetched.
+    seen_sequence: u32,
+    fetched_sequence: u32,
+    /// The details of the stop being reported (fork, vfork and exec carry more
+    /// than STATUS does), by event sequence.
+    detail: Option<(u32, StopEvent, Option<String>)>,
 }
 
 impl KernelDebugBackend {
-    /// What the guest's debugger can do, without attaching to anything.
+    /// What the guest's debugger can do, without attaching to anything. A guest of
+    /// phase 3 also reports what it adds; an earlier one refuses that request and
+    /// is asked in the earlier form.
     pub fn probe(link: &mut dyn GuestLink) -> Result<DebugCaps, DebugError> {
+        match link.request(wire::CAPS, &wire::caps_request_ext()) {
+            Ok(reply) => return wire::parse_caps(&reply, true).map_err(protocol),
+            Err(error) if error.errno == Some(EINVAL) => {}
+            Err(error) => return Err(Self::caps_error(error)),
+        }
         let reply = link
             .request(wire::CAPS, &wire::caps_request())
-            .map_err(|error| match error.errno {
-                Some(EOPNOTSUPP) => DebugError::Unsupported(
-                    "this guest has no debugger; its base is older than this feature".into(),
-                ),
-                _ => map_link(error),
-            })?;
-        wire::parse_caps(&reply).map_err(protocol)
+            .map_err(Self::caps_error)?;
+        wire::parse_caps(&reply, false).map_err(protocol)
+    }
+    fn caps_error(error: LinkError) -> DebugError {
+        match error.errno {
+            Some(EOPNOTSUPP) => DebugError::Unsupported(
+                "this guest has no debugger; its base is older than this feature".into(),
+            ),
+            _ => map_link(error),
+        }
+    }
+
+    /// The live sessions of the guest (phase 3): what a debugger that lost its own
+    /// finds again after a reconnect or a restored snapshot.
+    pub fn list_sessions(link: &mut dyn GuestLink) -> Result<Vec<SessionInfo>, DebugError> {
+        let reply = link
+            .request(wire::SESSIONS, &wire::sessions_request())
+            .map_err(map_link)?;
+        wire::parse_sessions(&reply).map_err(protocol)
     }
 
     /// Attach to one process of the guest. The nonce makes a repeated attach
@@ -86,6 +115,28 @@ impl KernelDebugBackend {
                 "the guest debugger lacks software breakpoints".into(),
             ));
         }
+        Self::attach_with(link, caps, identity, nonce, stop_now, false)
+    }
+
+    /// Take over a live session of the guest (a followed child, or the session of
+    /// a debugger that lost it) with a nonce of our own.
+    pub fn adopt_session(
+        link: &mut dyn GuestLink,
+        caps: DebugCaps,
+        identity: &GuestProcessIdentity,
+        nonce: [u64; 2],
+    ) -> Result<AttachedSession, DebugError> {
+        Self::attach_with(link, caps, identity, nonce, false, true)
+    }
+
+    fn attach_with(
+        link: &mut dyn GuestLink,
+        caps: DebugCaps,
+        identity: &GuestProcessIdentity,
+        nonce: [u64; 2],
+        stop_now: bool,
+        adopt: bool,
+    ) -> Result<AttachedSession, DebugError> {
         let request = wire::attach_request(&wire::AttachRequest {
             task_cookie: identity.task_cookie,
             start_boot_ns: identity.start_boot_ns,
@@ -93,6 +144,7 @@ impl KernelDebugBackend {
             arch: caps.arch,
             nonce,
             stop_now,
+            adopt,
         })
         .map_err(DebugError::Invalid)?;
         let reply = link
@@ -106,6 +158,7 @@ impl KernelDebugBackend {
             caps,
             session: reply.session,
             generation: reply.generation,
+            tgid: identity.tgid,
         })
     }
 
@@ -118,7 +171,54 @@ impl KernelDebugBackend {
             generation: attached.generation,
             failure: None,
             reported_error: 0,
+            tgid: attached.tgid,
+            options: SessionOptions::default(),
+            seen_sequence: 0,
+            fetched_sequence: 0,
+            detail: None,
         }
+    }
+
+    /// The generation to send: non-stop sessions have no group stop to name.
+    fn generation(&self) -> u64 {
+        if self.options.nonstop {
+            0
+        } else {
+            self.generation
+        }
+    }
+
+    /// The fork, vfork and exec details STATUS does not carry, from the guest's
+    /// event list, once per event.
+    fn event_detail(&mut self, sequence: u32) -> Option<(StopEvent, Option<String>)> {
+        if let Some((cached, event, path)) = &self.detail
+            && *cached == sequence
+        {
+            return Some((*event, path.clone()));
+        }
+        let request = wire::events_request(self.session, 0, true);
+        let reply = self.call(wire::EVENTS, &request).ok()?;
+        let (mut entries, _) = wire::parse_events(&reply).ok()?;
+        let entry = entries.pop()?;
+        if entry.event.sequence != sequence {
+            return None;
+        }
+        self.detail = Some((sequence, entry.event, entry.path.clone()));
+        Some((entry.event, entry.path))
+    }
+
+    /// A backend for a session found in the guest's list and adopted.
+    pub fn adopted(
+        link: Box<dyn GuestLink + Send>,
+        attached: AttachedSession,
+        info: &SessionInfo,
+    ) -> Self {
+        let mut backend = Self::new(link, attached);
+        backend.options = info.options;
+        if info.options.nonstop {
+            backend.generation = 0;
+        }
+        backend
     }
 
     pub fn attach(
@@ -188,6 +288,13 @@ impl DebugBackend for KernelDebugBackend {
             }
             wire::STATE_STOPPED => {
                 self.generation = status.generation;
+                if matches!(
+                    status.event_kind,
+                    wire::EVENT_FORK | wire::EVENT_VFORK | wire::EVENT_VFORK_DONE
+                ) && let Some((event, _)) = self.event_detail(status.event_sequence)
+                {
+                    return Ok(TargetState::Stopped(event));
+                }
                 TargetState::Stopped(status.stop_event().unwrap_or(StopEvent {
                     sequence: status.event_sequence,
                     kind: StopKind::Interrupt,
@@ -213,6 +320,7 @@ impl DebugBackend for KernelDebugBackend {
                 stopped: entry.stopped,
                 pc: entry.pc,
                 signal: entry.signal,
+                vfork_wait: entry.vfork_wait,
             })
             .collect())
     }
@@ -236,7 +344,7 @@ impl DebugBackend for KernelDebugBackend {
         }
         let reply = self.call(
             wire::CONT,
-            &wire::cont_request(self.session, step, self.generation, signal),
+            &wire::cont_request(self.session, step, self.generation(), signal),
         )?;
         wire::parse_cont(&reply).map_err(protocol)?;
         Ok(())
@@ -250,7 +358,7 @@ impl DebugBackend for KernelDebugBackend {
         }
         let reply = self.call(
             wire::REGS_READ,
-            &wire::regs_read_request(self.session, tid, nt_type, self.generation),
+            &wire::regs_read_request(self.session, tid, nt_type, self.generation()),
         )?;
         wire::parse_regs(&reply, nt_type).map_err(protocol)
     }
@@ -290,7 +398,7 @@ impl DebugBackend for KernelDebugBackend {
         }
         let reply = self.call(
             wire::REGS_READ,
-            &wire::regs_read_many_request(self.session, tid, mask, self.generation),
+            &wire::regs_read_many_request(self.session, tid, mask, self.generation()),
         )?;
         let mut blobs = wire::parse_regs_many(&reply, &table).map_err(protocol)?;
         Ok(nt_types
@@ -315,7 +423,7 @@ impl DebugBackend for KernelDebugBackend {
                 blob.nt_type
             )));
         }
-        let request = wire::regs_write_request(self.session, tid, blob, self.generation)
+        let request = wire::regs_write_request(self.session, tid, blob, self.generation())
             .map_err(DebugError::Invalid)?;
         self.call(wire::REGS_WRITE, &request).map(|_| ())
     }
@@ -328,7 +436,7 @@ impl DebugBackend for KernelDebugBackend {
             let at = addr
                 .checked_add(data.len() as u64)
                 .ok_or(DebugError::Fault)?;
-            let request = wire::mem_read_request(self.session, at, want, self.generation)
+            let request = wire::mem_read_request(self.session, at, want, self.generation())
                 .map_err(DebugError::Invalid)?;
             let part = match self.call(wire::MEM_READ, &request) {
                 Ok(reply) => wire::parse_mem_read(&reply, want).map_err(protocol)?,
@@ -350,7 +458,7 @@ impl DebugBackend for KernelDebugBackend {
             let at = addr
                 .checked_add((index * chunk) as u64)
                 .ok_or(DebugError::Fault)?;
-            let request = wire::mem_write_request(self.session, at, part, self.generation)
+            let request = wire::mem_write_request(self.session, at, part, self.generation())
                 .map_err(DebugError::Invalid)?;
             let reply = self.call(wire::MEM_WRITE, &request)?;
             wire::parse_mem_write(&reply, part.len()).map_err(protocol)?;
@@ -364,12 +472,12 @@ impl DebugBackend for KernelDebugBackend {
                 "{len}-byte software breakpoints"
             )));
         }
-        let request = wire::breakpoint_request(self.session, addr, len, self.generation);
+        let request = wire::breakpoint_request(self.session, addr, len, self.generation());
         self.call(wire::BP_SET, &request).map(|_| ())
     }
 
     fn clear_breakpoint(&mut self, addr: u64, len: u32) -> Result<(), DebugError> {
-        let request = wire::breakpoint_request(self.session, addr, len, self.generation);
+        let request = wire::breakpoint_request(self.session, addr, len, self.generation());
         self.call(wire::BP_CLEAR, &request).map(|_| ())
     }
 
@@ -383,7 +491,8 @@ impl DebugBackend for KernelDebugBackend {
             return self.set_breakpoint(addr, len);
         }
         self.check_hardware(kind, len)?;
-        let request = wire::breakpoint_kind_request(self.session, kind, addr, len, self.generation);
+        let request =
+            wire::breakpoint_kind_request(self.session, kind, addr, len, self.generation());
         self.call(wire::BP_SET, &request).map(|_| ())
     }
 
@@ -396,7 +505,8 @@ impl DebugBackend for KernelDebugBackend {
         if kind == BreakpointKind::Software {
             return self.clear_breakpoint(addr, len);
         }
-        let request = wire::breakpoint_kind_request(self.session, kind, addr, len, self.generation);
+        let request =
+            wire::breakpoint_kind_request(self.session, kind, addr, len, self.generation());
         self.call(wire::BP_CLEAR, &request).map(|_| ())
     }
 
@@ -408,7 +518,7 @@ impl DebugBackend for KernelDebugBackend {
         }
         let reply = self.call(
             wire::AUXV,
-            &wire::auxv_request(self.session, self.generation),
+            &wire::auxv_request(self.session, self.generation()),
         )?;
         wire::parse_auxv(&reply).map_err(protocol)
     }
@@ -450,5 +560,163 @@ impl DebugBackend for KernelDebugBackend {
 
     fn take_failure(&mut self) -> Option<String> {
         self.failure.take()
+    }
+
+    fn session_id(&self) -> u64 {
+        self.session
+    }
+
+    fn target_pid(&self) -> u32 {
+        self.tgid
+    }
+
+    fn configure(&mut self, options: SessionOptions) -> Result<SessionOptions, DebugError> {
+        if (options.fork || options.exec) && !self.caps.follow
+            || options.nonstop && !self.caps.nonstop
+        {
+            return Err(DebugError::Unsupported(
+                "this guest cannot follow forks or run threads one at a time".into(),
+            ));
+        }
+        let reply = self.call(wire::CONFIG, &wire::config_request(self.session, options))?;
+        let now = wire::parse_config(&reply).map_err(protocol)?;
+        self.options = now;
+        if now.nonstop {
+            // No group stop to name: requests carry generation 0.
+            self.generation = 0;
+        }
+        Ok(now)
+    }
+
+    fn exec_path(&mut self) -> Option<String> {
+        let sequence = self
+            .detail
+            .as_ref()
+            .filter(|(_, event, _)| event.kind == StopKind::Exec)
+            .map(|(sequence, _, _)| *sequence);
+        if let Some(sequence) = sequence
+            && let Some((_, path)) = self.event_detail(sequence)
+        {
+            return path;
+        }
+        // Not fetched yet: ask for the current event.
+        let reply = self
+            .call(wire::EVENTS, &wire::events_request(self.session, 0, true))
+            .ok()?;
+        let (mut entries, _) = wire::parse_events(&reply).ok()?;
+        let entry = entries.pop()?;
+        let path = entry.path.clone();
+        self.detail = Some((entry.event.sequence, entry.event, entry.path));
+        path
+    }
+
+    fn adopt_child(&mut self, child: &ChildRef) -> Result<Box<dyn DebugBackend>, DebugError> {
+        let mut link = self
+            .link
+            .duplicate()
+            .ok_or_else(|| DebugError::Unsupported("this link cannot be shared".into()))?;
+        let identity = GuestProcessIdentity {
+            boot_id: String::new(),
+            task_cookie: child.task_cookie,
+            start_boot_ns: child.start_boot_ns,
+            tgid: child.tgid,
+        };
+        let nonce = [
+            (child.session << 1) | 1,
+            child.task_cookie ^ child.start_boot_ns,
+        ];
+        let attached = Self::adopt_session(link.as_mut(), self.caps.clone(), &identity, nonce)?;
+        if attached.session != child.session {
+            return Err(protocol("the guest adopted another session".into()));
+        }
+        let mut backend = Self::new(link, attached);
+        backend.tgid = child.tgid;
+        backend.options = self.options;
+        if self.options.nonstop {
+            backend.generation = 0;
+        }
+        if !child.shared_memory {
+            // The copy of the parent's memory holds the parent's breakpoint
+            // bytes and the guest's table remembers them; whoever controls the
+            // child sets its own.
+            if !self.options.nonstop {
+                let deadline = Instant::now() + Duration::from_secs(3);
+                loop {
+                    match backend.state()? {
+                        TargetState::Stopped(_) => break,
+                        TargetState::Exited { .. } | TargetState::Replaced => {
+                            return Ok(Box::new(backend));
+                        }
+                        _ => {}
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(DebugError::Transport(
+                            "the followed child did not stop".into(),
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+            for held in backend.guest_breakpoints()? {
+                if held.kind == BreakpointKind::Software {
+                    backend.clear_breakpoint(held.addr, held.len)?;
+                }
+            }
+        }
+        Ok(Box::new(backend))
+    }
+
+    fn events(&mut self, acknowledged: u32) -> Result<EventBatch, DebugError> {
+        // STATUS is one cheap request that says whether anything is new.
+        let reply = self.call(wire::STATUS, &wire::status_request(self.session))?;
+        let status = wire::parse_status(&reply).map_err(protocol)?;
+        if status.state == wire::STATE_EXITED {
+            return Ok(EventBatch {
+                exited: Some(status.wait_status),
+                ..EventBatch::default()
+            });
+        }
+        if status.state == wire::STATE_EXEC {
+            return Err(DebugError::Gone);
+        }
+        self.seen_sequence = status.event_sequence;
+        if status.event_sequence == self.fetched_sequence && self.fetched_sequence <= acknowledged {
+            return Ok(EventBatch::default());
+        }
+        let reply = self.call(
+            wire::EVENTS,
+            &wire::events_request(self.session, acknowledged, false),
+        )?;
+        let (entries, dropped) = wire::parse_events(&reply).map_err(protocol)?;
+        if let Some(last) = entries.last() {
+            self.fetched_sequence = last.event.sequence;
+        } else {
+            self.fetched_sequence = status.event_sequence;
+        }
+        if let Some(entry) = entries
+            .iter()
+            .rev()
+            .find(|entry| entry.event.kind == StopKind::Exec)
+        {
+            self.detail = Some((entry.event.sequence, entry.event, entry.path.clone()));
+        }
+        Ok(EventBatch {
+            events: entries.into_iter().map(|entry| entry.event).collect(),
+            dropped,
+            exited: None,
+        })
+    }
+
+    fn thread_action(&mut self, tid: Option<u32>, action: ThreadAction) -> Result<u32, DebugError> {
+        let reply = self.call(
+            wire::THREAD_CTL,
+            &wire::thread_ctl_request(self.session, tid, action),
+        )?;
+        wire::parse_thread_ctl(&reply).map_err(protocol)
+    }
+
+    fn guest_breakpoints(&mut self) -> Result<Vec<GuestBreakpoint>, DebugError> {
+        let reply = self.call(wire::BP_LIST, &wire::bp_list_request(self.session))?;
+        wire::parse_bp_list(&reply).map_err(protocol)
     }
 }

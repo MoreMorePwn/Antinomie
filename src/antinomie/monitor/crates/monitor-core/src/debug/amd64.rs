@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! x86-64 target description and the gdbstub `Arch` built from it.
+//! The x86-64 target description.
 //!
 //! The register image follows GDB's amd64-linux feature order, which this file
 //! also publishes as the target description, so the two cannot disagree:
@@ -8,8 +8,7 @@
 //! `NT_PRSTATUS` (`struct user_regs_struct`) and `NT_PRFPREG` (the 512-byte
 //! FXSAVE image).
 use super::regs::{FeatureSpec, RegKind, RegSource, RegSpec, RegisterFile, TargetDescription};
-use gdbstub::arch::{Arch, BreakpointKind, RegId, Registers};
-use std::{num::NonZeroUsize, sync::OnceLock};
+use std::sync::OnceLock;
 
 pub const NT_PRSTATUS: u32 = 1;
 pub const NT_PRFPREG: u32 = 2;
@@ -348,79 +347,4 @@ fn build() -> TargetDescription {
 pub fn description() -> &'static TargetDescription {
     static DESCRIPTION: OnceLock<TargetDescription> = OnceLock::new();
     DESCRIPTION.get_or_init(build)
-}
-
-fn xml() -> &'static str {
-    static XML: OnceLock<String> = OnceLock::new();
-    XML.get_or_init(|| description().xml())
-}
-
-// ---- gdbstub glue ---------------------------------------------------------
-
-/// The full register image in GDB order, as one byte string.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Amd64Registers {
-    pub image: Vec<u8>,
-}
-impl Default for Amd64Registers {
-    fn default() -> Self {
-        Self {
-            image: vec![0; description().image_len()],
-        }
-    }
-}
-impl Registers for Amd64Registers {
-    type ProgramCounter = u64;
-    fn pc(&self) -> u64 {
-        let (offset, _) = description().find("rip").expect("rip is described");
-        u64::from_le_bytes(
-            self.image[offset..offset + 8]
-                .try_into()
-                .expect("eight bytes"),
-        )
-    }
-    fn gdb_serialize(&self, mut write_byte: impl FnMut(Option<u8>)) {
-        for byte in &self.image {
-            write_byte(Some(*byte));
-        }
-    }
-    fn gdb_deserialize(&mut self, bytes: &[u8]) -> Result<(), ()> {
-        if bytes.len() != description().image_len() {
-            return Err(());
-        }
-        self.image.copy_from_slice(bytes);
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub struct Amd64RegId(pub usize);
-impl RegId for Amd64RegId {
-    fn from_raw_id(id: usize) -> Option<(Self, Option<NonZeroUsize>)> {
-        let reg = description().regs.get(id)?;
-        Some((Self(id), NonZeroUsize::new(reg.bytes())))
-    }
-    fn to_raw_id(&self) -> Option<usize> {
-        Some(self.0)
-    }
-}
-
-/// Software breakpoints are `kind` bytes long (1 on x86-64).
-#[derive(Debug)]
-pub struct BreakpointLen(pub usize);
-impl BreakpointKind for BreakpointLen {
-    fn from_usize(kind: usize) -> Option<Self> {
-        Some(Self(kind))
-    }
-}
-
-pub enum Amd64 {}
-impl Arch for Amd64 {
-    type Usize = u64;
-    type Registers = Amd64Registers;
-    type BreakpointKind = BreakpointLen;
-    type RegId = Amd64RegId;
-    fn target_description_xml() -> Option<&'static str> {
-        Some(xml())
-    }
 }

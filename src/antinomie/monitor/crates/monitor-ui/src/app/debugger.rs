@@ -13,9 +13,13 @@ use antinomie_monitor_core::{
 mod code;
 mod data;
 mod header;
-mod lists;
+pub(super) mod lists;
+pub(super) mod prefs;
+mod processes;
+mod signals;
 mod state;
 
+pub(crate) use prefs::DebuggerPrefs;
 pub(crate) use state::DebuggerPanel;
 
 /// Something the panel asks of the app once the window has been drawn.
@@ -64,6 +68,14 @@ impl MonitorApp {
         self.debugger.track_session(Some(u64::from(info.tcp_port)));
         let view = self.debug_view();
         if let Some(view) = &view {
+            if view.app_controls() && self.debugger.take_announce() {
+                let prefs = self.settings.debugger.clone();
+                let policy = prefs.fork_policy();
+                self.debug_action_quiet(view, DebugAction::SetSignalTable(prefs.signals));
+                self.debug_action_quiet(view, DebugAction::SetForkPolicy(policy));
+            }
+        }
+        if let Some(view) = &view {
             self.debugger.prune(view);
         }
         let mut actions = Vec::new();
@@ -88,10 +100,26 @@ impl MonitorApp {
                 PanelAction::Detach { kill } => self.send(Command::DebugDetach { kill }),
                 PanelAction::Debug(action) => {
                     if let Some(view) = &view {
+                        self.remember_debug_choice(&action);
                         self.debug_action(view, action);
                     }
                 }
             }
+        }
+    }
+}
+
+impl MonitorApp {
+    /// Keep a signal or fork choice the user made for later sessions.
+    pub(super) fn remember_debug_choice(&mut self, action: &DebugAction) {
+        let prefs = &mut self.settings.debugger;
+        match action {
+            DebugAction::SetSignalPolicy { signal, action } => {
+                prefs.signals.set(*signal, *action);
+            }
+            DebugAction::SetSignalTable(table) => prefs.signals = table.clone().sanitized(),
+            DebugAction::SetForkPolicy(policy) => prefs.remember_policy(*policy),
+            _ => {}
         }
     }
 }
@@ -119,6 +147,7 @@ fn show(
     if let Some(problem) = panel.input_error.clone() {
         crate::activity::warning(ui, problem);
     }
+    processes::fork_prompt(ui, panel, view, actions);
     ui.separator();
     use egui_extras::{Size, StripBuilder};
     StripBuilder::new(ui)

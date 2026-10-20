@@ -12,7 +12,7 @@ use std::{
     sync::{Arc, Condvar, Mutex},
 };
 
-struct Gdb {
+pub(crate) struct Gdb {
     child: Child,
     stdin: ChildStdin,
     output: Arc<(Mutex<String>, Condvar)>,
@@ -21,7 +21,7 @@ struct Gdb {
 }
 
 impl Gdb {
-    fn start(directory: &std::path::Path) -> Result<Self, String> {
+    pub(crate) fn start(directory: &std::path::Path) -> Result<Self, String> {
         let mut child = Process::new("sh")
             .arg("-c")
             .arg("exec gdb -nx -q 2>&1")
@@ -65,7 +65,7 @@ impl Gdb {
         Ok(gdb)
     }
     /// Send commands without waiting for them; `wait` collects the output.
-    fn send(&mut self, commands: &str) -> Result<String, String> {
+    pub(crate) fn send(&mut self, commands: &str) -> Result<String, String> {
         self.mark += 1;
         let marker = format!("<<<DONE-{}>>>", self.mark);
         write!(self.stdin, "{commands}\necho {marker}\\n\n")
@@ -73,16 +73,32 @@ impl Gdb {
         self.stdin.flush().map_err(|e| e.to_string())?;
         Ok(marker)
     }
-    fn wait(&mut self, marker: &str, seconds: u64) -> Result<String, String> {
+    pub(crate) fn wait(&mut self, marker: &str, seconds: u64) -> Result<String, String> {
         let until = Instant::now() + Duration::from_secs(seconds);
         let (lock, signal) = &*self.output;
         let mut text = lock.lock().expect("gdb output");
         while !text.contains(marker) {
             if Instant::now() >= until {
+                if let Some(path) = std::env::var_os("P3_TRACE_FILE") {
+                    use std::io::Write as _;
+                    if let Ok(mut file) =
+                        fs::OpenOptions::new().append(true).create(true).open(path)
+                    {
+                        let _ =
+                            writeln!(file, "{}", text.chars().take(300_000).collect::<String>());
+                    }
+                }
                 self.transcript.push_str(&text);
                 return Err(format!(
                     "gdb did not finish a command group in {seconds} s; output so far:\n{}",
-                    tail(&self.transcript, 1500)
+                    tail(
+                        &self.transcript,
+                        if std::env::var_os("P3_TRACE").is_some() {
+                            60000
+                        } else {
+                            1500
+                        }
+                    )
                 ));
             }
             let (guard, _) = signal
@@ -92,14 +108,20 @@ impl Gdb {
         }
         let at = text.find(marker).expect("marker") + marker.len();
         let taken: String = text.drain(..at).collect();
+        if let Some(path) = std::env::var_os("P3_TRACE_FILE") {
+            use std::io::Write as _;
+            if let Ok(mut file) = fs::OpenOptions::new().append(true).create(true).open(path) {
+                let _ = writeln!(file, "{}", taken.chars().take(200_000).collect::<String>());
+            }
+        }
         self.transcript.push_str(&taken);
         Ok(taken)
     }
-    fn run(&mut self, commands: &str, seconds: u64) -> Result<String, String> {
+    pub(crate) fn run(&mut self, commands: &str, seconds: u64) -> Result<String, String> {
         let marker = self.send(commands)?;
         self.wait(&marker, seconds)
     }
-    fn close(mut self, seconds: u64) -> String {
+    pub(crate) fn close(mut self, seconds: u64) -> String {
         let _ = writeln!(self.stdin, "quit");
         let _ = self.stdin.flush();
         let until = Instant::now() + Duration::from_secs(seconds);
@@ -127,7 +149,7 @@ impl Drop for Gdb {
     }
 }
 
-fn expect(text: &str, needles: &[&str], what: &str) -> Result<(), String> {
+pub(crate) fn expect(text: &str, needles: &[&str], what: &str) -> Result<(), String> {
     for needle in needles {
         if !text.contains(needle) {
             return Err(format!(
@@ -138,7 +160,7 @@ fn expect(text: &str, needles: &[&str], what: &str) -> Result<(), String> {
     }
     Ok(())
 }
-fn refuse(text: &str, needles: &[&str], what: &str) -> Result<(), String> {
+pub(crate) fn refuse(text: &str, needles: &[&str], what: &str) -> Result<(), String> {
     for needle in needles {
         if text.contains(needle) {
             return Err(format!(
