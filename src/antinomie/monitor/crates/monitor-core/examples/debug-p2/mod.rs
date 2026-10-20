@@ -10,6 +10,7 @@ mod engine;
 mod gdb;
 
 type Symbols = BTreeMap<String, u64>;
+type Test = fn(&mut Context) -> Result<String, String>;
 
 /// A running fixture with a debug session attached through the backend trait.
 struct Prog {
@@ -167,7 +168,7 @@ pub fn run(bundle: &str, data: &str, dir: &str, only: &[String]) -> Result<(), S
         dir,
         seed: 0x2000,
     };
-    let tests: &[(&str, fn(&mut Context) -> Result<String, String>)] = &[
+    let tests: &[(&str, Test)] = &[
         ("start", gdb::start),
         ("pie", gdb::pie),
         ("dynamic", gdb::dynamic),

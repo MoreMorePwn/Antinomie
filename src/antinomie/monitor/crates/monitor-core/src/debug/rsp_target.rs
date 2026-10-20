@@ -546,7 +546,7 @@ fn watch_pieces(mut addr: u64, mut len: u64) -> Vec<(u64, u32)> {
     while len > 0 {
         let size = [8u64, 4, 2, 1]
             .into_iter()
-            .find(|size| *size <= len && addr % size == 0)
+            .find(|size| *size <= len && addr.is_multiple_of(*size))
             .unwrap_or(1);
         pieces.push((addr, size as u32));
         addr += size;

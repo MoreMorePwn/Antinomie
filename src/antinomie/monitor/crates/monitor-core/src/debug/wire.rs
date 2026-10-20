@@ -507,7 +507,7 @@ pub fn auxv_request(session: u64, generation: u64) -> Vec<u8> {
 /// The auxiliary vector: pairs of u64 ending with `AT_NULL`.
 pub fn parse_auxv(reply: &[u8]) -> Result<Vec<u8>, String> {
     let length = u32_at(reply, 0)? as usize;
-    if reply.len() != 8 + length || length % 16 != 0 || u32_at(reply, 4)? != 0 {
+    if reply.len() != 8 + length || !length.is_multiple_of(16) || u32_at(reply, 4)? != 0 {
         return Err("debug auxiliary vector reply is malformed".into());
     }
     Ok(reply[8..].to_vec())
