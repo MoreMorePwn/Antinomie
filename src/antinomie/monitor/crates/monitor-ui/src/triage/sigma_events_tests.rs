@@ -765,3 +765,58 @@ fn a_recorded_run_reaches_the_journal_with_credentials_and_hashes() {
         && event["fields"]["euid"] == "0"
         && event["fields"]["uid"] == "1000"));
 }
+
+/// A call the task ended in: no Exit, and the task-exit record attached.
+fn ending(pid: u32, tid: u32, raw_status: u64) -> InvocationSummary {
+    let mut row = tests::call(pid, 231, "exit_group", 0);
+    row.exit = None;
+    let mut ended = row.entry.clone().unwrap();
+    ended.phase = 0;
+    ended.event_seq = 3;
+    ended.tid = tid;
+    ended.timestamp_ns = 777;
+    ended.fields = vec![tests::captured(
+        "lifecycle.task_exit",
+        "",
+        &raw_status.to_le_bytes(),
+    )];
+    row.task_exit = Some(ended);
+    row
+}
+
+#[test]
+fn a_process_that_ended_gives_a_termination_event_with_what_the_trace_recorded() {
+    let mut files = FdState::default();
+    let calls = [exec(5, "/bin/sleep", &["sleep", "1"]), ending(5, 5, 0)];
+    let events = run(&mut files, &calls);
+    let ended = of(&events, "process_termination");
+    assert_eq!(ended.len(), 1);
+    let fields = &ended[0]["fields"];
+    assert_eq!(fields["ProcessId"], 5);
+    assert_eq!(fields["Image"], "/bin/sleep");
+    // The ending call's own name is not what happened to the process.
+    assert!(fields.get("Syscall").is_none() && fields.get("Result").is_none());
+    assert!(
+        fields.get("ProcessGuid").is_none(),
+        "the trace has no GUID to report"
+    );
+    assert_eq!(
+        ended[0]["time"],
+        serde_json::json!({"clock": "guest_ns", "value": 777})
+    );
+    assert_eq!(ended[0]["evidence"]["kind"], "call");
+}
+
+#[test]
+fn a_thread_that_ended_is_not_a_process_termination() {
+    let mut files = FdState::default();
+    let events = run(&mut files, &[ending(5, 6, 0)]);
+    assert!(of(&events, "process_termination").is_empty());
+}
+
+#[test]
+fn a_call_without_a_task_exit_gives_no_termination_event() {
+    let mut files = FdState::default();
+    let events = run(&mut files, &[tests::call(5, 231, "exit_group", 0)]);
+    assert!(of(&events, "process_termination").is_empty());
+}

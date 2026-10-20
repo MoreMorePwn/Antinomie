@@ -170,10 +170,13 @@ it runs.
     and rule downloads and status messages read "N bytes (X.Y KB)".
   - Sigma auditd records now include `CWD` (`cwd`) and `PROCTITLE`
     (`proctitle`, the arguments joined with NULs, hex-encoded and cut at 128
-    bytes as the kernel does). `process_termination` events were not added:
-    no rule in the installed SigmaHQ Linux pack uses that category (it has
-    `process_creation`, `file_event` and `network_connection` rules, and 53
-    `service: auditd` ones).
+    bytes as the kernel does).
+  - Sigma `process_termination` events (Sysmon event 5) are built from the
+    task-exit records in the trace, one per process that ended, with `Image`,
+    `ProcessId`, `ThreadId` and `User` where the trace has them. A thread that
+    ended is not reported, and there is no `ProcessGuid`; the event time is
+    kept in the journal. Journal format 3 is unchanged and older journals still
+    load. No rule in the installed SigmaHQ Linux pack uses the category yet.
   - The guest's count of dropped credential and hash records is shown in the
     run summary health, counts as observed loss, and is named in the TRL
     hover.

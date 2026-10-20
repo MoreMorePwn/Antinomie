@@ -692,6 +692,10 @@ run, because the join is lexical). `file_event` covers `O_CREAT|O_EXCL`,
 `O_CREAT|O_TRUNC` and `creat()` opens, `O_TMPFILE`, `mkdir*`, `mknod*`,
 `link*` and `symlink*`; a truncating create counts as new only when the path
 was not seen to exist earlier in the run, which is inferred and marked so.
+Sigma `process_termination` events come from the task-exit record the trace
+attaches to the call a process ended in: one per thread-group leader, with
+`Image`, `ProcessId`, `ThreadId` and `User` where known. There is no
+`ProcessGuid`, and the exit time travels as the event's time.
 Sigma `service: auditd` rules are evaluated against auditd-style records under
 the journal category `auditd`: `SYSCALL` (`Syscall`, `a0`..`a3` as hex, `exit`,
 `success`, `pid`, `ppid`, `exe`, `comm`), `CWD` (`cwd`), `PROCTITLE` (`proctitle`:

@@ -127,12 +127,26 @@ class AdapterTests(unittest.TestCase):
         _, _, evaluated, _, _, _ = adapter.matching_rows(connection, ["SELECT * FROM logs WHERE type='SYSCALL' AND `key`='network_connect_4'"], "auditd")
         self.assertEqual(evaluated, 0)
 
+    def test_process_termination_events_load_and_are_matched_by_their_own_category(self):
+        connection = self.journal([
+            ("process_creation", {"Image": "/bin/sleep", "ProcessId": 5}),
+            ("process_termination", {"Image": "/bin/sleep", "ProcessId": 5, "ThreadId": 5, "User": "1000"}),
+            ("process_termination", {"ProcessId": 6}),
+        ], version=3)
+        query = "SELECT * FROM logs WHERE Image LIKE '%/sleep'"
+        self.assertEqual(adapter.matching_rows(connection, [query], "process_termination")[0], 1)
+        # The two categories are separate: the creation is not a termination.
+        self.assertEqual(adapter.matching_rows(connection, [query], "process_creation")[0], 1)
+        _, _, evaluated, missing, _, _ = adapter.matching_rows(connection, ["SELECT * FROM logs WHERE NOT COALESCE(Image LIKE '%/sleep', 0)"], "process_termination")
+        self.assertEqual((evaluated, missing), (1, 1))
+
     def test_logsource_mapping_covers_auditd_and_keeps_keyword_and_other_services_out(self):
         class Source:
             def __init__(self, category=None, product="linux", service=None):
                 self.category, self.product, self.service = category, product, service
         self.assertEqual(adapter.logsource_category(Source(service="auditd")), "auditd")
         self.assertEqual(adapter.logsource_category(Source("process_creation")), "process_creation")
+        self.assertEqual(adapter.logsource_category(Source("process_termination")), "process_termination")
         self.assertIsNone(adapter.logsource_category(Source("process_creation", service="auditd")))
         self.assertIsNone(adapter.logsource_category(Source(service="syslog")))
         self.assertIsNone(adapter.logsource_category(Source()))
