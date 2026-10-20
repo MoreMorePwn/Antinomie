@@ -33,6 +33,7 @@ mod kit;
 mod locations;
 pub mod malshare;
 pub mod memory;
+pub mod mitre;
 pub mod network;
 mod object_pack;
 pub mod observation;

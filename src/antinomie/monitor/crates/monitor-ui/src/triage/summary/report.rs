@@ -396,7 +396,11 @@ pub(super) fn content(
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new("MITRE ATT&CK").small().color(theme::muted()));
                     for reference in view.detection.references.iter().take(16) {
-                        presentation::badge(ui, reference, theme::blue());
+                        presentation::badge(
+                            ui,
+                            &antinomie_monitor_core::mitre::technique_label(reference),
+                            theme::blue(),
+                        );
                     }
                     if view.detection.references.len() > 16 {
                         ui.label(format!(
