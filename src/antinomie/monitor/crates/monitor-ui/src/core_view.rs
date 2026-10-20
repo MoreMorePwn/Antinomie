@@ -21,10 +21,12 @@ use std::{
 
 mod catalog;
 mod decompile;
+mod details;
 mod disassembly;
 mod inspect;
 mod list;
 mod sizes;
+mod strings;
 
 use self::{catalog::*, decompile::*, inspect::*, sizes::manual_status};
 
@@ -147,6 +149,7 @@ enum Tab {
     Context,
     Mappings,
     Code,
+    Strings,
     Notes,
 }
 
@@ -200,6 +203,15 @@ pub(crate) struct CoreView {
     /// Managed tools directory. Empty keeps the default data-dir fallback.
     tools_dir: PathBuf,
     notes_query: String,
+    /// Instructions each function has in the disassembly decoded so far,
+    /// by function address, kept when a later decode replaces the text.
+    asm_counts: std::collections::BTreeMap<u64, u64>,
+    /// Addresses of the instructions in `code`, with the length of the text
+    /// they were read from.
+    asm_index: std::cell::RefCell<(usize, Vec<u64>)>,
+    /// What the shared Details panel shows: the row chosen last.
+    detail: Option<details::CoreDetail>,
+    strings: strings::StringsState,
 }
 impl CoreView {
     fn fail(&mut self, message: String) {
@@ -387,6 +399,10 @@ impl CoreView {
                 self.pending_function_decode = None;
                 self.function_decode_at = None;
                 self.symbol_status.clear();
+                self.asm_counts.clear();
+                self.detail = None;
+                self.strings.reset();
+                self.remember_asm_counts();
                 self.status = "Core is referenced in place; retain its original file.".into();
                 let directory = self.selected.as_ref().map(|record| record.dir.clone());
                 if let Some(text) = directory.as_deref().and_then(saved_decompilation) {
@@ -395,13 +411,13 @@ impl CoreView {
                     self.function_bodies = bodies;
                     self.code_function = self.functions.first().map(|_| 0);
                     self.show_decompiled = true;
-                    self.code = text;
                     self.symbol_status = format!("{} Ghidra functions", self.functions.len());
                 }
             }
             Ok(Reply::Page(address, data)) => self.page = Some((address, data)),
             Ok(Reply::Code(code)) => {
                 self.code = code;
+                self.remember_asm_counts();
                 self.show_decompiled = false;
                 self.status = "Disassembly saved in the result directory.".into();
             }
@@ -411,7 +427,6 @@ impl CoreView {
                 self.function_bodies = bodies;
                 self.code_function = self.functions.first().map(|_| 0);
                 self.show_decompiled = true;
-                self.code = text;
                 self.symbol_status = format!("{} Ghidra functions", self.functions.len());
                 self.status = "Decompilation saved in the result directory.".into();
             }
@@ -462,6 +477,10 @@ impl CoreView {
             ui.ctx().request_repaint_after(delay);
         }
         if self.job.is_some() {
+            ui.ctx().request_repaint_after(Duration::from_millis(75));
+        }
+        self.strings.poll();
+        if self.strings.running() {
             ui.ctx().request_repaint_after(Duration::from_millis(75));
         }
         let mut action = None;
@@ -568,5 +587,7 @@ impl Drop for CoreView {
     }
 }
 
+#[cfg(test)]
+mod layout_tests;
 #[cfg(test)]
 mod tests;

@@ -246,3 +246,34 @@ fn toggle_chips_show_their_state_and_count_and_segmented_shows_badges() {
     assert!(shown.iter().any(|(text, _)| text == "Tree5"));
     assert!(shown.iter().any(|(text, _)| text == "Suspicious3"));
 }
+
+#[test]
+fn a_card_shows_its_title_header_and_body_inside_the_width_it_is_given() {
+    let ctx = context();
+    let size = egui::vec2(600.0, 300.0);
+    let mut output = None;
+    for _ in 0..3 {
+        output = Some(run(&ctx, vec![], size, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                card(
+                    ui,
+                    "Identity",
+                    |ui| {
+                        ui.label("link");
+                    },
+                    |ui| {
+                        ui.label("body text");
+                    },
+                );
+            });
+        }));
+    }
+    let shown = text_rects(&output.unwrap());
+    let rect = |label: &str| shown.iter().find(|(text, _)| text == label).unwrap().1;
+    assert!(
+        rect("Identity").min.x < rect("link").min.x,
+        "the header sits at the right"
+    );
+    assert!(rect("body text").min.y > rect("Identity").max.y);
+    assert!(rect("link").max.x <= size.x);
+}

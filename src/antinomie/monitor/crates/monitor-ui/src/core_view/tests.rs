@@ -2,9 +2,9 @@
 use super::*;
 use antinomie_monitor_core::core_dump::{CoreMapping, CoreThread, MappedFile};
 
-struct Fixture {
-    view: CoreView,
-    directory: PathBuf,
+pub(super) struct Fixture {
+    pub(super) view: CoreView,
+    pub(super) directory: PathBuf,
 }
 
 fn wait_catalog(view: &mut CoreView) {
@@ -545,7 +545,7 @@ fn reopening_acquired_core_reuses_its_directory_and_available_prefix() {
         .contains("identity does not match"));
 }
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let directory = std::env::temp_dir().join(format!(
             "antinomie-core-ui-{}-{}",
             std::process::id(),
@@ -616,7 +616,7 @@ impl Drop for Fixture {
     }
 }
 
-fn texts(output: &egui::FullOutput) -> Vec<(String, egui::Rect)> {
+pub(super) fn texts(output: &egui::FullOutput) -> Vec<(String, egui::Rect)> {
     fn collect(shape: &egui::epaint::Shape, result: &mut Vec<(String, egui::Rect)>) {
         match shape {
             egui::epaint::Shape::Text(text) => result.push((
@@ -637,7 +637,7 @@ fn texts(output: &egui::FullOutput) -> Vec<(String, egui::Rect)> {
     }
     result
 }
-fn render(
+pub(super) fn render(
     ctx: &egui::Context,
     view: &mut CoreView,
     size: egui::Vec2,
@@ -669,14 +669,23 @@ fn render(
         },
     )
 }
-fn settle(ctx: &egui::Context, view: &mut CoreView, size: egui::Vec2) -> egui::FullOutput {
+pub(super) fn settle(
+    ctx: &egui::Context,
+    view: &mut CoreView,
+    size: egui::Vec2,
+) -> egui::FullOutput {
     let mut output = render(ctx, view, size, Vec::new());
     for _ in 0..3 {
         output = render(ctx, view, size, Vec::new());
     }
     output
 }
-fn click(ctx: &egui::Context, view: &mut CoreView, size: egui::Vec2, position: egui::Pos2) {
+pub(super) fn click(
+    ctx: &egui::Context,
+    view: &mut CoreView,
+    size: egui::Vec2,
+    position: egui::Pos2,
+) {
     for events in [
         vec![egui::Event::PointerMoved(position)],
         vec![egui::Event::PointerButton {

@@ -4,6 +4,7 @@ use super::*;
 
 impl CoreView {
     pub(super) fn disassembly(&mut self, ui: &mut egui::Ui, record: &CoreRecord) {
+        let view = self.listing_view();
         let mut filtered_without_selection = false;
         egui::SidePanel::left("core_function_list")
             .resizable(true)
@@ -31,11 +32,7 @@ impl CoreView {
                     .filter(|(_, function)| filter.keep_table(&function_filter_row(function)))
                     .map(|(index, _)| index)
                     .collect();
-                ui.weak(format!(
-                    "{} / {} functions",
-                    shown.len(),
-                    self.functions.len()
-                ));
+                crate::code_listing::heading(ui, shown.len(), self.functions.len());
                 if self
                     .code_function
                     .is_some_and(|index| !shown.contains(&index))
@@ -57,37 +54,41 @@ impl CoreView {
                 if self.functions.is_empty() {
                     ui.add(egui::Label::new("No functions indexed").wrap());
                 }
-                let row_height = ui.text_style_height(&egui::TextStyle::Body) * 4.0
-                    + ui.spacing().item_spacing.y * 2.0;
-                egui::ScrollArea::vertical()
-                    .id_salt("core-functions")
-                    .show_rows(ui, row_height, shown.len(), |ui, range| {
-                        for slot in range {
-                            let index = shown[slot];
-                            let function = &self.functions[index];
-                            let label = format!(
-                                "symbol {}\naddress {:x}\nmodule not recorded\n{} octets",
-                                function.name, function.address, function.size
-                            );
-                            let response =
-                                ui.selectable_label(self.code_function == Some(index), label);
-                            response.context_menu(|ui| {
-                                crate::query::table_row_menu(
-                                    ui,
-                                    filter_id,
-                                    &function_filter_row(function),
-                                )
-                            });
-                            if response.clicked() {
-                                let address = function.address;
-                                self.code_function = Some(index);
-                                self.code_address = format!("{address:x}");
-                                if !self.show_decompiled {
-                                    self.pending_function_decode = Some(address);
-                                }
-                            }
+                let selected = self
+                    .code_function
+                    .and_then(|index| shown.iter().position(|&slot| slot == index));
+                let chosen = crate::code_listing::function_list(
+                    ui,
+                    "core",
+                    shown.len(),
+                    |slot| {
+                        let index = shown[slot];
+                        let function = &self.functions[index];
+                        crate::code_listing::Function {
+                            name: &function.name,
+                            address: function.address,
+                            lines: self.function_lines(view, index),
                         }
-                    });
+                    },
+                    selected,
+                    |ui, slot| {
+                        crate::query::table_row_menu(
+                            ui,
+                            filter_id,
+                            &function_filter_row(&self.functions[shown[slot]]),
+                        )
+                    },
+                );
+                if let Some(slot) = chosen {
+                    let index = shown[slot];
+                    let address = self.functions[index].address;
+                    self.code_function = Some(index);
+                    self.code_address = format!("{address:x}");
+                    self.detail = Some(self.function_detail(index));
+                    if !self.show_decompiled {
+                        self.pending_function_decode = Some(address);
+                    }
+                }
             });
         egui::CentralPanel::default()
             .frame(
@@ -104,6 +105,7 @@ impl CoreView {
                     return;
                 }
                 self.follow_function_decode(record);
+                self.listing_toolbar(ui, record);
                 let idle = self.code.is_empty() && !self.show_decompiled;
                 if idle {
                     ui.vertical_centered(|ui| {
@@ -121,31 +123,9 @@ impl CoreView {
                         } else if !self.status.is_empty() {
                             self.show_status(ui);
                         }
-                        if ui
-                            .add_enabled(
-                                self.job.is_none(),
-                                egui::Button::new(self.disassemble_label()),
-                            )
-                            .clicked()
-                        {
-                            self.decode_window(record);
-                        }
-                        self.ghidra_button(ui, record);
                     });
                     return;
                 }
-                ui.horizontal_wrapped(|ui| {
-                    if ui
-                        .add_enabled(
-                            self.job.is_none(),
-                            egui::Button::new(self.disassemble_label()),
-                        )
-                        .clicked()
-                    {
-                        self.decode_window(record);
-                    }
-                    self.ghidra_button(ui, record);
-                });
                 if !self.symbol_status.is_empty() {
                     ui.label(&self.symbol_status);
                 }
@@ -169,12 +149,124 @@ impl CoreView {
                             .auto_shrink([false, false])
                             .show_rows(ui, row_height, lines.len(), |ui, range| {
                                 for index in range {
-                                    paint_asm(ui, lines[index]);
+                                    crate::code_listing::text_instruction(ui, lines[index]);
                                 }
                             });
                     }
                 }
             });
+    }
+
+    /// What the listing shows: the decompilation after Ghidra ran and was
+    /// chosen, the disassembly otherwise.
+    pub(super) fn listing_view(&self) -> crate::code_listing::View {
+        if self.show_decompiled {
+            crate::code_listing::View::Decompilation
+        } else {
+            crate::code_listing::View::Disassembly
+        }
+    }
+
+    /// The row above the listing: the view switch, then the on-demand actions.
+    fn listing_toolbar(&mut self, ui: &mut egui::Ui, record: &CoreRecord) {
+        use crate::code_listing::View;
+        let decompiled = !self.function_bodies.is_empty();
+        let mut view = self.listing_view();
+        let choices = [
+            (
+                View::Disassembly,
+                crate::widgets::TabItem::new(View::Disassembly.label()),
+            ),
+            (
+                View::Decompilation,
+                if decompiled {
+                    crate::widgets::TabItem::new(View::Decompilation.label())
+                } else {
+                    crate::widgets::TabItem::new(View::Decompilation.label())
+                        .disabled("Decompile this core with Ghidra to read it as source.")
+                },
+            ),
+        ];
+        // A scroll area, so a narrow pane clips the switch instead of widening the pane.
+        let switched = egui::ScrollArea::horizontal()
+            .id_salt("core-listing-view")
+            .auto_shrink([false, true])
+            .show(ui, |ui| crate::widgets::segmented(ui, choices, &mut view))
+            .inner;
+        if switched {
+            self.show_decompiled = view == View::Decompilation;
+            if !self.show_decompiled {
+                if let Some(address) = self
+                    .code_function
+                    .and_then(|index| self.functions.get(index))
+                    .map(|function| function.address)
+                {
+                    self.pending_function_decode = Some(address);
+                }
+            }
+        }
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(
+                    self.job.is_none(),
+                    egui::Button::new(self.disassemble_label()),
+                )
+                .clicked()
+            {
+                self.show_decompiled = false;
+                self.decode_window(record);
+            }
+            self.ghidra_button(ui, record);
+        });
+    }
+
+    /// Lines `function` has in `view`: its source lines once decompiled; its
+    /// instructions once its code has been decoded, None before.
+    pub(super) fn function_lines(
+        &self,
+        view: crate::code_listing::View,
+        index: usize,
+    ) -> Option<u64> {
+        match view {
+            crate::code_listing::View::Decompilation => self
+                .function_bodies
+                .get(index)
+                .map(|body| body.lines().count() as u64),
+            crate::code_listing::View::Disassembly => {
+                let function = self.functions.get(index)?;
+                self.live_asm_lines(function)
+                    .or_else(|| self.asm_counts.get(&function.address).copied())
+            }
+        }
+    }
+
+    /// Instructions of `function` in the text decoded now, when that text
+    /// reaches its first instruction.
+    fn live_asm_lines(&self, function: &CoreFunction) -> Option<u64> {
+        let mut index = self.asm_index.borrow_mut();
+        if index.0 != self.code.len() {
+            *index = (self.code.len(), asm_addresses(&self.code));
+        }
+        let addresses = &index.1;
+        let (first, last) = (*addresses.first()?, *addresses.last()?);
+        if function.address < first || function.address > last {
+            return None;
+        }
+        let end = function.address.saturating_add(function.size.max(1));
+        let from = addresses.partition_point(|&at| at < function.address);
+        let to = addresses.partition_point(|&at| at < end);
+        Some((to - from) as u64)
+    }
+
+    /// Keep the counts of the functions the text just decoded covers, so
+    /// they stay known when another function is decoded.
+    pub(super) fn remember_asm_counts(&mut self) {
+        let counts: Vec<_> = self
+            .functions
+            .iter()
+            .filter_map(|function| Some((function.address, self.live_asm_lines(function)?)))
+            .collect();
+        self.asm_counts.extend(counts);
     }
 
     fn asm_lines(&self) -> Vec<&str> {
@@ -288,78 +380,25 @@ impl CoreView {
     }
 }
 
-fn paint_asm(ui: &mut egui::Ui, line: &str) {
-    let (address, rest) = line.split_once("  ").unwrap_or(("", line));
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
-        if !address.is_empty() {
-            ui.label(
-                RichText::new(address)
-                    .monospace()
-                    .color(crate::theme::value(crate::theme::ValueKind::Pointer)),
-            );
-        }
-        let mut parts = rest.splitn(2, char::is_whitespace);
-        let mnemonic = parts.next().unwrap_or("");
-        let operands = parts.next().unwrap_or("").trim_start();
-        let mnemonic_color = if mnemonic.starts_with('j') || mnemonic == "call" || mnemonic == "ret"
-        {
-            crate::theme::warn()
-        } else {
-            crate::theme::value(crate::theme::ValueKind::Name)
-        };
-        ui.label(RichText::new(mnemonic).monospace().color(mnemonic_color));
-        ui.label(
-            RichText::new(operands)
-                .monospace()
-                .color(crate::theme::text()),
-        );
-    });
+/// Addresses of the decoded instructions, in order.
+fn asm_addresses(code: &str) -> Vec<u64> {
+    code.lines()
+        .filter_map(|line| u64::from_str_radix(line.split_whitespace().next()?, 16).ok())
+        .collect()
 }
 
 fn paint_source(ui: &mut egui::Ui, body: &str) {
+    let font = egui::TextStyle::Monospace.resolve(ui.style());
+    let lines: Vec<&str> = body.lines().collect();
+    let row_height = ui.text_style_height(&egui::TextStyle::Monospace) + 2.0;
     egui::ScrollArea::both()
         .id_salt("core-decomp")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
-            for line in body.lines() {
-                let mut job = egui::text::LayoutJob::default();
-                for word in line.split_inclusive(|character: char| {
-                    !character.is_ascii_alphanumeric() && character != '_'
-                }) {
-                    let color = if matches!(
-                        word,
-                        "if "
-                            | "else "
-                            | "return "
-                            | "while "
-                            | "for "
-                            | "int "
-                            | "void "
-                            | "char "
-                            | "long "
-                    ) {
-                        crate::theme::error()
-                    } else if word
-                        .chars()
-                        .next()
-                        .is_some_and(|character| character.is_ascii_digit())
-                    {
-                        crate::theme::warn()
-                    } else {
-                        crate::theme::text()
-                    };
-                    job.append(
-                        word,
-                        0.0,
-                        egui::TextFormat {
-                            font_id: egui::TextStyle::Monospace.resolve(ui.style()),
-                            color,
-                            ..Default::default()
-                        },
-                    );
-                }
-                ui.add(egui::Label::new(job).extend());
+        .show_rows(ui, row_height, lines.len(), |ui, range| {
+            for index in range {
+                ui.add(
+                    egui::Label::new(crate::code_listing::highlight(lines[index], &font)).extend(),
+                );
             }
         });
 }

@@ -290,7 +290,11 @@ pub fn segmented<T: Copy + PartialEq>(
                     };
                     let mut response = ui.add_enabled(item.enabled, button);
                     if let Some(tip) = &item.tooltip {
-                        response = response.on_hover_text(tip);
+                        response = if item.enabled {
+                            response.on_hover_text(tip)
+                        } else {
+                            response.on_disabled_hover_text(tip)
+                        };
                     }
                     if response.clicked() && !active {
                         *selected = value;
