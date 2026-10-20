@@ -27,6 +27,7 @@ mod run_selection;
 mod scanned_inputs;
 mod startup;
 mod stealth;
+mod settings_window;
 mod terminal_windows;
 mod terminals;
 mod theme_setting;
@@ -58,6 +59,7 @@ pub(crate) fn app() -> MonitorApp {
         settings_open: false,
         create_open: false,
         config_open: false,
+        settings_page: Default::default(),
         launch_open: false,
         upload_open: false,
         draft: VmConfig::default(),
