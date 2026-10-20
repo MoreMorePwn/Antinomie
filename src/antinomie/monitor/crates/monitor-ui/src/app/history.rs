@@ -86,15 +86,6 @@ impl MonitorApp {
             ) {
                 self.refresh_history();
             }
-            if ui
-                .selectable_label(
-                    self.selected_run.is_none() && self.selected_capture.is_none(),
-                    "All live traces",
-                )
-                .clicked()
-            {
-                self.select_run(None);
-            }
         });
         let fields = crate::run_filter::fields();
         crate::query::filter_edit_fields(
@@ -503,15 +494,6 @@ impl MonitorApp {
                 true,
             ) {
                 self.refresh_captures();
-            }
-            if ui
-                .selectable_label(
-                    self.selected_capture.is_none() && self.selected_run.is_none(),
-                    "All live traces",
-                )
-                .clicked()
-            {
-                self.select_run(None);
             }
         });
         let mut items: Vec<_> = self
