@@ -57,6 +57,7 @@
 #define ANTC_SPECIMEN_RELEASE 0x1042
 #define ANTC_EXEC_SPECIMEN 1
 #define ANTC_EXEC_CORE 2
+#define ANTC_EXEC_DEBUG 4
 #define ANTC_CORE_STATUS 0x1060
 #define ANTC_CORE_READ 0x1061
 #define ANTC_CORE_RELEASE 0x1062
@@ -98,6 +99,7 @@
 #define ANTC_DEBUG_MEM_WRITE 0x108a
 #define ANTC_DEBUG_BP_SET 0x108b
 #define ANTC_DEBUG_BP_CLEAR 0x108c
+#define ANTC_DEBUG_AUXV 0x108d
 #define ANTC_DEBUG_ABI 1
 #define ANTC_DEBUG_CAPS_SIZE 48
 #define ANTC_DEBUG_REGSET_SIZE 16
@@ -108,6 +110,7 @@
 #define ANTC_DEBUG_ATTACH_STOP 1
 #define ANTC_DEBUG_DETACH_KILL 1
 #define ANTC_DEBUG_CONT_STEP 1
+#define ANTC_DEBUG_REGS_ALL 1
 /* capability flags */
 #define ANTC_DEBUG_CAP_SW_BREAKPOINT 1
 #define ANTC_DEBUG_CAP_HW_SINGLE_STEP 2
@@ -115,6 +118,10 @@
 #define ANTC_DEBUG_CAP_MULTI_THREAD 8
 #define ANTC_DEBUG_CAP_HW_BREAKPOINT 16
 #define ANTC_DEBUG_CAP_HW_WATCHPOINT 32
+#define ANTC_DEBUG_CAP_SIGNALS 64
+#define ANTC_DEBUG_CAP_BATCH_REGS 128
+#define ANTC_DEBUG_CAP_START 256
+#define ANTC_DEBUG_CAP_AUXV 512
 /* session states */
 #define ANTC_DEBUG_RUNNING 1
 #define ANTC_DEBUG_STOPPING 2
@@ -130,12 +137,19 @@
 #define ANTC_DEBUG_EVENT_STEP 3
 #define ANTC_DEBUG_EVENT_EXIT 4
 #define ANTC_DEBUG_EVENT_EXEC 5
+#define ANTC_DEBUG_EVENT_SIGNAL 6
+#define ANTC_DEBUG_EVENT_HWBREAK 7
+#define ANTC_DEBUG_EVENT_WATCH 8
+#define ANTC_DEBUG_EVENT_ENTRY 9
 /* per-thread states */
 #define ANTC_DEBUG_THREAD_RUNNING 1
 #define ANTC_DEBUG_THREAD_STOPPED 2
 #define ANTC_DEBUG_THREAD_GONE 3
 /* breakpoint kinds */
 #define ANTC_DEBUG_BP_SOFTWARE 1
+#define ANTC_DEBUG_BP_HW_EXEC 2
+#define ANTC_DEBUG_BP_HW_WRITE 3
+#define ANTC_DEBUG_BP_HW_ACCESS 4
 /* Telemetry lifecycle records (no control command): phase-3 events whose one
  * field is a fixed little-endian structure. Layout names are versioned.
  * lifecycle.creds, layout "antinomie.creds/2", 96 bytes: u32 uid, euid, suid,
@@ -215,6 +229,15 @@
  * EXEC_CORE appends u32 max_size (1..64MiB), u32 timeout_ms (1..5000),
  * after the optional specimen trailer. Reply appends u64 core_id, u64
  * max_size, i32 status, u32 reserved=0 after optional specimen reply.
+ * EXEC_DEBUG (Debug on start; capability DEBUG_START) opens a debug session on
+ * the new process before it runs: it parks at its first return to user mode,
+ * before its first user instruction (the loader's entry for a dynamic program,
+ * the ELF entry for a static one), with event ENTRY. It adds no request bytes.
+ * The reply appends u64 start_boot_ns, u64 reserved=0 (16 bytes, after any core
+ * reply), the identity ATTACH needs; ATTACH then adopts the session (any nonce)
+ * instead of creating one. -EBUSY when another session is live. The program
+ * stays parked until the debugger continues it or detaches; STOP_RUN and the
+ * Stop escalation end it.
  * Arm failure has id/size=0 and negative errno; execution still succeeds.
  * Only the launched root thread group is eligible, native Linux ELF64.
  * CORE_STATUS: header flags=0, u64 id at 8, 16 bytes total. Reply80:
@@ -385,17 +408,36 @@
  * u64 generation at 8, u32 state at 16, u32 flags at 20, u32 live threads at 24,
  * u32 stopped threads at 28, u32 event kind at 32, u32 event tid at 36, u64
  * event pc at 40, u64 event address at 48, u32 wait status (EXITED) at 56,
- * s32 last_error at 60, u32 event sequence at 64, u32 breakpoints at 68, zero.
+ * s32 last_error at 60, u32 event sequence at 64, u32 breakpoints at 68, u32
+ * event signal at 72 (SIGNAL events), u32 event access at 76 (WATCH events: the
+ * BP kind that fired), zero at 80..96. BREAKPOINTS counts every kind.
  * STOP: session_id at 8; asynchronous group stop, reply u64 generation. A
  * breakpoint, step or exit stops the group by itself (all-stop).
  * CONT: flags bit0 STEP, u64 session_id at 8, u64 tid at 16 (STEP: the thread to
- * step, others stay stopped; 0 continue), u32 signal at 24 (must be 0), u32 0 at
+ * step, others stay stopped; 0 continue), u32 signal at 24, u32 signal_tid at
  * 28, u64 generation at 32 (40 bytes). Asynchronous; reply u64 generation. A
- * breakpoint under a thread is stepped over with the group stopped.
+ * breakpoint under a thread is stepped over with the group stopped. A step is
+ * exactly one user instruction: a syscall instruction or a repeated string
+ * instruction runs to the instruction after it (a temporary breakpoint, with the
+ * rest of the group stopped), never kernel instructions or one iteration.
+ * Signals (capability SIGNALS): every signal about to be delivered to a thread
+ * of the group stops the group first (event SIGNAL, the number in STATUS and in
+ * the thread entry), before the handler frame exists, so the sample never sees
+ * the engine's trap flag in it. signal is the number to deliver to signal_tid
+ * (0: the thread that reported the stop) when the group resumes; 0 drops the
+ * signal that thread stopped on, another number replaces it. A thread stopped on
+ * a different signal than the reported one delivers its own. For a thread not
+ * stopped on a signal the number is queued to it. STEP with a signal delivered
+ * to a handler stops at the handler's first instruction.
  * THREADS: session_id at 8. Reply u32 count at 0, u32 total at 4, then 32-byte
- * entries {u32 tid, u32 state, u32 stop reason, u32 0, u64 pc, u64 0}.
+ * entries {u32 tid, u32 state, u32 stop reason, u32 signal (when stopped on
+ * one), u64 pc, u64 0}.
  * REGS_READ: session_id at 8, u32 tid at 16, u32 nt_type at 20, u64 generation
- * at 24 (32 bytes). Reply u32 nt_type, u32 length, u64 0, then the blob.
+ * at 24 (32 bytes). Reply u32 nt_type, u32 length, u64 0, then the blob. With
+ * flags bit0 REGS_ALL (capability BATCH_REGS) u32 at 20 is instead a mask of
+ * CAPS register-set table indexes, and the reply is u32 count, u32 0, u64 0
+ * followed by, for each selected set in table order, the 16-byte header and
+ * blob of the single form.
  * REGS_WRITE: the same 32 bytes, u32 length at 32, u32 0 at 36, blob at 40.
  * The kernel validates the blob like its own regset writer. Empty reply.
  * MEM_READ: session_id at 8, u64 address at 16, u32 length (1..16000) at 24,
@@ -403,11 +445,29 @@
  * 8. Short reads end at the first unreadable byte; none readable is -EFAULT.
  * MEM_WRITE: the same 40 bytes with the length at 24, bytes at 40. Reply u32
  * count, u32 0. Writes break copy-on-write like a debugger's poke.
- * BP_SET / BP_CLEAR: session_id at 8, u32 kind (1 software) at 16, u32 length
- * at 20, u64 address at 24, u64 generation at 32 (40 bytes), empty reply. A
- * software breakpoint is written only while the group runs and removed at every
- * stop; the sample's own reads through /proc/self/mem see the original bytes.
- * A direct load from its own code can still see the engine's breakpoint byte.
+ * BP_SET / BP_CLEAR: session_id at 8, u32 kind (1 software, 2 hardware execute,
+ * 3 hardware write, 4 hardware access) at 16, u32 length at 20, u64 address at
+ * 24, u64 generation at 32 (40 bytes), empty reply. A software breakpoint is
+ * written only while the group runs and removed at every stop, and only where
+ * the engine's byte is still in place (code the program rewrote is left alone);
+ * the sample's own reads through /proc/self/mem see the original bytes. A direct
+ * load from its own code can still see the engine's breakpoint byte.
+ * Hardware kinds (capabilities HW_BREAKPOINT, HW_WATCHPOINT) use the debug
+ * registers through the kernel's own breakpoint facility, per thread and for
+ * every thread of the group, and leave no byte in memory: execute has length 1,
+ * write and access have length 1, 2, 4 or 8 and an address aligned to it. CAPS
+ * hw_breakpoints / hw_watchpoints (4) are one pool of slots shared by all hardware
+ * kinds; BP_SET with none left is -ENOSPC, an unsupported or misaligned request
+ * -EINVAL / -EOPNOTSUPP. A hit stops the group (events HWBREAK, WATCH; the
+ * address is the breakpoint's, the pc is after the access for a watchpoint). The
+ * sample cannot see them: they are not ptrace's virtual debug registers, so a
+ * tracer of the sample reads zeros, and no SIGTRAP is raised. A thread created
+ * while the group runs gets them at the next stop. A hit by a hardware
+ * breakpoint does not retrigger when the thread resumes.
+ * AUXV: session_id at 8, u64 generation at 16 (24 bytes), session STOPPED (capability
+ * AUXV). Reply u32 length, u32 0, then the auxiliary vector the kernel gave the
+ * program at exec (pairs of u64, ending with AT_NULL): the base address of a
+ * position independent program and of its loader.
  * SHUTDOWN: header only; empty success reply, delayed kernel_power_off.
  */
 #endif
