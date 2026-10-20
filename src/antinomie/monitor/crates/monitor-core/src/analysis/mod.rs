@@ -13,6 +13,7 @@ pub mod detection;
 mod disasm;
 mod ident;
 mod listing;
+mod progress;
 pub mod properties;
 mod rules;
 mod segments;

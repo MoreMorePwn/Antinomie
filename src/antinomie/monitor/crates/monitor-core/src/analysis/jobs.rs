@@ -57,6 +57,7 @@ pub(crate) struct Job {
     worker_len: u64,
     report_len: u64,
     specimen_publication: Option<storage::JsonReceipt>,
+    progress: progress::Watch,
 }
 #[derive(Default)]
 pub(crate) struct Jobs {
@@ -114,6 +115,16 @@ pub(crate) fn fail(report: &mut AnalysisReport, state: AnalysisState, reason: im
         if section.state == AnalysisSectionState::Pending {
             section.state = AnalysisSectionState::Unavailable;
             section.summary = report.reason.clone().unwrap_or_default();
+        }
+    }
+}
+impl Job {
+    /// A deadline stops the worker, not the sections it already finished:
+    /// adopt them (and their validated listings) before the rest is marked
+    /// unfinished.
+    fn keep_finished_sections(&mut self) {
+        if progress::salvage(&self.directory, &mut self.report) {
+            adopt_listings(&self.directory, &mut self.report);
         }
     }
 }
@@ -202,6 +213,7 @@ impl Jobs {
                 worker_len: 0,
                 report_len: 0,
                 specimen_publication: None,
+                progress: Default::default(),
             };
             self.queue.push_back(job);
             Ok(())
@@ -329,6 +341,9 @@ impl Jobs {
             return None;
         }
         if Instant::now() >= job.deadline {
+            if job.child.is_some() {
+                job.keep_finished_sections();
+            }
             fail(
                 &mut job.report,
                 AnalysisState::Partial,
@@ -342,7 +357,11 @@ impl Jobs {
                 Ok(Some(status)) => {
                     job.child = None;
                     if status.success() {
-                        match read_report(&job.directory.join("output/report.json"), &job.report) {
+                        match read_report(
+                            &job.directory.join("output/report.json"),
+                            &job.report,
+                            true,
+                        ) {
                             Ok(report) => {
                                 job.report = report;
                                 adopt_listings(&job.directory, &mut job.report);
@@ -350,9 +369,17 @@ impl Jobs {
                             Err(error) => fail(&mut job.report, AnalysisState::Unavailable, error),
                         }
                     } else {
+                        let kept = progress::salvage(&job.directory, &mut job.report);
+                        if kept {
+                            adopt_listings(&job.directory, &mut job.report);
+                        }
                         fail(
                             &mut job.report,
-                            AnalysisState::Unavailable,
+                            if kept {
+                                AnalysisState::Partial
+                            } else {
+                                AnalysisState::Unavailable
+                            },
                             format!("mandatory isolated worker failed ({status}); see worker.log"),
                         );
                     }
@@ -360,6 +387,10 @@ impl Jobs {
                     return None;
                 }
                 Ok(None) => {
+                    if let Some(progress) = job.progress.changed(&job.directory, &job.report) {
+                        progress::merge(&mut job.report, progress, false);
+                        self.updates.push((job.run_id.clone(), job.report.clone()));
+                    }
                     self.active = Some(job);
                     return None;
                 }
@@ -427,6 +458,11 @@ impl Jobs {
                 );
                 job.child = Some(child);
                 job.report.state = AnalysisState::Running;
+                for section in &mut job.report.sections {
+                    if section.state == AnalysisSectionState::Pending {
+                        section.summary = "waiting for the analysis worker".into();
+                    }
+                }
                 job.deadline = Instant::now() + worker_deadline(&job.report);
                 self.updates.push((job.run_id.clone(), job.report.clone()));
                 self.active = Some(job);
@@ -610,14 +646,22 @@ impl Drop for Jobs {
 const TRANSFER_DEADLINE: Duration = Duration::from_secs(120);
 
 pub(crate) fn worker_deadline(report: &AnalysisReport) -> Duration {
-    let has = |kind| report.sections.iter().any(|s| s.kind == kind);
-    Duration::from_secs(if has(AnalysisKind::Decompilation) {
-        super::worker::DECOMPILER_SECONDS + 120
-    } else if has(AnalysisKind::Disassembly) || has(AnalysisKind::Capabilities) {
-        300
-    } else {
-        60
-    })
+    // The sum of the sections' own budgets, so one slow tool (capa at 4
+    // minutes) cannot use up the time of a later one (decompilation); this is
+    // the hard backstop behind each tool's own timeout.
+    let seconds: u64 = report
+        .sections
+        .iter()
+        .map(|section| match section.kind {
+            AnalysisKind::Decompilation => super::worker::DECOMPILER_SECONDS + 120,
+            AnalysisKind::Capabilities => 300,
+            AnalysisKind::Embedded => 200,
+            AnalysisKind::Identification => 160,
+            AnalysisKind::Disassembly | AnalysisKind::Rules => 90,
+            _ => 20,
+        })
+        .sum();
+    Duration::from_secs(seconds.max(60))
 }
 /// Move validated worker listings next to the report; a listing that fails
 /// validation is dropped and its category marked partial.
@@ -1095,7 +1139,13 @@ impl SandboxLog {
     }
 }
 
-fn read_report(path: &Path, expected: &AnalysisReport) -> Result<AnalysisReport, String> {
+/// `last` is the worker's final report; otherwise a progress snapshot, which
+/// may still be running with sections pending.
+pub(super) fn read_report(
+    path: &Path,
+    expected: &AnalysisReport,
+    last: bool,
+) -> Result<AnalysisReport, String> {
     let mut encoded = Vec::new();
     crate::archive_io::open_regular(path.parent().ok_or("worker report has no directory")?, path)
         .and_then(|f| {
@@ -1125,10 +1175,17 @@ fn read_report(path: &Path, expected: &AnalysisReport) -> Result<AnalysisReport,
                         .iter()
                         .any(|e| e.label.len() > 4096 || e.value.len() > 4096)
             })
-        || !matches!(
-            report.state,
-            AnalysisState::Complete | AnalysisState::Partial
-        )
+        || !(if last {
+            matches!(
+                report.state,
+                AnalysisState::Complete | AnalysisState::Partial
+            )
+        } else {
+            matches!(
+                report.state,
+                AnalysisState::Running | AnalysisState::Partial
+            )
+        })
         || report.specimen_sha256 != expected.specimen_sha256
     {
         return Err("worker report violates normalized identity/bounds contract".into());
@@ -1268,6 +1325,7 @@ mod tests {
                     worker_len: 0,
                     report_len: 0,
                     specimen_publication: None,
+                    progress: Default::default(),
                 }),
                 queue: VecDeque::new(),
                 release: VecDeque::new(),
@@ -1576,6 +1634,7 @@ time.sleep(30)
             worker_len: 0,
             report_len: 0,
             specimen_publication: None,
+            progress: Default::default(),
         };
         let started = Instant::now();
         let mut child = spawn_worker_binary(
@@ -1602,7 +1661,8 @@ time.sleep(30)
             "worker failed; see {}/worker.log",
             directory.display()
         );
-        let mut report = read_report(&directory.join("output/report.json"), &job.report).unwrap();
+        let mut report =
+            read_report(&directory.join("output/report.json"), &job.report, true).unwrap();
         adopt_listings(&directory, &mut report);
         persist_report(&directory, &report).unwrap();
         for section in &report.sections {
@@ -1714,6 +1774,7 @@ time.sleep(30)
             worker_len: 0,
             report_len: 0,
             specimen_publication: None,
+            progress: Default::default(),
         };
         let mut child = spawn_worker_binary(
             &job,
@@ -1739,7 +1800,7 @@ time.sleep(30)
             "worker failed; inspect {}",
             directory.join("worker.log").display()
         );
-        let report = read_report(&directory.join("output/report.json"), &job.report).unwrap();
+        let report = read_report(&directory.join("output/report.json"), &job.report, true).unwrap();
         persist_report(&directory, &report).unwrap();
         assert!(
             report

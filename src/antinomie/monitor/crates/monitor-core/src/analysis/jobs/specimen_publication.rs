@@ -71,6 +71,7 @@ mod tests {
             worker_len: 0,
             report_len: 0,
             specimen_publication: None,
+            progress: Default::default(),
         }
     }
 

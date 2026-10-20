@@ -87,9 +87,15 @@ fn worker_main() -> Result<(), String> {
     }
     report.specimen_sha256 = Some(format!("{:x}", Sha256::digest(&specimen)));
     report.specimen_len = Some(specimen.len() as u64);
-    for section in &mut report.sections {
-        analyze_section(section, &specimen, Path::new("/output/listings"));
+    for index in 0..report.sections.len() {
+        super::progress::publish(Path::new("/output"), &report, Some(index));
+        analyze_section(
+            &mut report.sections[index],
+            &specimen,
+            Path::new("/output/listings"),
+        );
     }
+    super::progress::publish(Path::new("/output"), &report, None);
     report.state = if report
         .sections
         .iter()
@@ -105,7 +111,7 @@ fn worker_main() -> Result<(), String> {
         .and_then(|mut f| f.write_all(&encoded).and_then(|_| f.sync_all()))
         .map_err(|e| e.to_string())
 }
-fn bounded_report(report: &mut AnalysisReport) -> Result<Vec<u8>, String> {
+pub(super) fn bounded_report(report: &mut AnalysisReport) -> Result<Vec<u8>, String> {
     let mut encoded = serde_json::to_vec(&report).map_err(|e| e.to_string())?;
     // Rows of a category with a full listing are only a preview: shorten
     // those first, without calling anything partial.
