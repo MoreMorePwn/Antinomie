@@ -292,6 +292,26 @@ pub(crate) const CAPTURE_FIELDS: &[FieldSpec<'static>] = &[
         "capture.expected_size",
         "Expected extent in octets; missing when not recorded",
     ),
+    FieldSpec::number(
+        "capture.requested_size",
+        "Process-core budget asked for in octets; missing when not recorded",
+    ),
+    FieldSpec::number(
+        "capture.accepted_size",
+        "Process-core budget the guest accepted in octets; missing when not recorded",
+    ),
+    FieldSpec::number(
+        "capture.saved_size",
+        "Process-core bytes stored on the host disk, holes excluded; missing when not recorded",
+    ),
+    FieldSpec::number(
+        "capture.logical_size",
+        "Process-core file size in octets, holes included; missing when not recorded",
+    ),
+    FieldSpec::text(
+        "capture.reason",
+        "Why a process core is incomplete: budget, guest_memory, deadline, quota, host_disk...",
+    ),
     FieldSpec::boolean("capture.complete", "Recorded capture completeness"),
     FieldSpec::text("capture.state", "Recorded capture state"),
     FieldSpec::text(

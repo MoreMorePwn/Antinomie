@@ -293,9 +293,16 @@ impl MonitorApp {
                                 graphical,
                                 core_on_exit,
                                 debug_on_start,
+                                core_limits: self.snapshot.guest_core_limits,
+                                core_default_mib: self.settings.core_budget_mib,
                             },
                         ) {
                             self.tools_open = true;
+                        }
+                        if let Some(size) = ui.data_mut(|data| {
+                            data.remove_temp::<u32>(crate::analysis::remembered_budget_id())
+                        }) {
+                            self.settings.core_budget_mib = size >> 20;
                         }
                     });
             });

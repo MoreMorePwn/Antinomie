@@ -359,22 +359,6 @@ pub(super) fn selected_core_refresh(probe: SelectedCoreProbe) -> SelectedCoreRef
     }
 }
 
-pub(super) fn manual_status(core: &ProcessCoreCapture) -> String {
-    match core.phase {
-        ProcessCorePhase::Admission => "Requesting capture".into(),
-        ProcessCorePhase::UnknownAdmission => "Admission outcome unknown; checking status".into(),
-        ProcessCorePhase::GuestCapture => {
-            "Capturing process; waiting for resume confirmation".into()
-        }
-        ProcessCorePhase::Transfer => core.guest_size.map_or_else(
-            || format!("Saving {} octets", core.stored_size),
-            |size| format!("Saving {} / {size} octets", core.stored_size),
-        ),
-        ProcessCorePhase::Seal => "Finalizing retained core".into(),
-        ProcessCorePhase::Finished => crate::app::core_capture_status(core.state).into(),
-    }
-}
-
 /// Read bounded sidecars on the inspection worker; ELF data is read only on open.
 pub(super) fn catalog(roots: &[PathBuf], vm_id: Option<&str>) -> Result<CoreCatalog, String> {
     let mut result = CoreCatalog::default();
@@ -466,6 +450,7 @@ pub(super) fn catalog(roots: &[PathBuf], vm_id: Option<&str>) -> Result<CoreCata
             let deleted = artifacts.core_deleted.then(|| artifacts.core_label());
             result.acquired.push(AcquiredCore {
                 deleted,
+                sizes: sizes::CoreSizes::of(&artifacts),
                 vm_id: artifacts.vm_id,
                 boot_id: artifacts.boot_id,
                 run_id: artifacts.run_id,

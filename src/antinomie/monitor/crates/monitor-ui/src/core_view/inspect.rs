@@ -28,6 +28,9 @@ impl CoreView {
                 );
                 crate::theme::section(ui, &title);
                 ui.add(egui::Label::new(manual_status(core)).wrap());
+                if let Some(details) = sizes::manual_details(core) {
+                    ui.add(egui::Label::new(egui::RichText::new(details).weak()).wrap());
+                }
                 ui.label(format!(
                     "PID {} · task {} · start {} ns",
                     core.target.tgid, core.target.task_cookie, core.target.start_boot_ns
@@ -58,7 +61,20 @@ impl CoreView {
                 let title =
                     crate::evidence::title(ui, &core.directory, &format!("Run {}", core.run_id));
                 crate::theme::section(ui, &title);
-                ui.label(core.status());
+                ui.label(core.status_text());
+                if let Some(sizes) = &core.sizes
+                    && let Some(details) = sizes::details(
+                        sizes.requested,
+                        sizes.accepted,
+                        None,
+                        sizes.expected,
+                        sizes.saved,
+                        sizes.logical,
+                        sizes.reason.as_ref(),
+                    )
+                {
+                    ui.add(egui::Label::new(egui::RichText::new(details).weak()).wrap());
+                }
                 ui.add(egui::Label::new(format!("Run {}", core.run_id)).wrap());
                 let explanation = if core.deleted.is_some() {
                     "This core was deleted. The run keeps its record."

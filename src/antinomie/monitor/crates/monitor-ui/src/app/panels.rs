@@ -53,9 +53,20 @@ impl MonitorApp {
             .process_page
             .as_ref()
             .filter(|page| self.snapshot.boot_id.as_ref() == Some(&page.boot_id));
-        if let Some(action) = self
-            .process_picker
-            .show(ctx, page, enabled, self.settings.font_size)
+        let core_context = captures::CoreContext {
+            limits: self.snapshot.guest_core_limits,
+            default_mib: self.settings.core_budget_mib,
+            available: self
+                .snapshot
+                .vm_resources
+                .as_ref()
+                .and_then(|resources| resources.guest.as_ref())
+                .filter(|guest| !guest.stale)
+                .and_then(|guest| guest.memory_available_size),
+        };
+        if let Some(action) =
+            self.process_picker
+                .show(ctx, page, enabled, self.settings.font_size, core_context)
         {
             match action {
                 captures::ProcessAction::Refresh(after_pid) => {
@@ -73,7 +84,7 @@ impl MonitorApp {
                         self.send(Command::DebugAttach { identity });
                     }
                 }
-                captures::ProcessAction::DumpCore(identity) => {
+                captures::ProcessAction::DumpCore(identity, max_size, timeout_ms) => {
                     if self.snapshot.boot_id.as_ref() == Some(&identity.boot_id)
                         && self.manual_core_unavailable().is_none()
                     {
@@ -83,9 +94,14 @@ impl MonitorApp {
                                 request: ProcessCoreRequest {
                                     vm_id,
                                     target: identity,
+                                    max_size,
+                                    timeout_ms,
                                     ..ProcessCoreRequest::default()
                                 },
                             });
+                            if let Some(picked) = self.process_picker.core_picked.take() {
+                                self.settings.core_budget_mib = picked >> 20;
+                            }
                         }
                     }
                 }
