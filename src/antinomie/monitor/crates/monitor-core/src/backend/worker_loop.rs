@@ -721,3 +721,6 @@ pub(super) fn describe_source((revision, source): (Option<u32>, Option<&str>)) -
         (Some(_), Some(version), None) => format!("for Antinomie {version}, unversioned build"),
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -922,3 +922,6 @@ impl Worker {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

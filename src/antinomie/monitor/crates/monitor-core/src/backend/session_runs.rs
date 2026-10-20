@@ -522,3 +522,6 @@ pub(super) fn canonical_live_history(
     }
     bounded_live_history(unique.into_values().collect())
 }
+
+#[cfg(test)]
+mod tests;
