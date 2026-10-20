@@ -682,7 +682,7 @@ fn disassembly_functions_panel_has_no_module_note_and_rows_have_no_pane() {
         ["Copy address", "Copy bytes", "Copy instruction", "Copy row"]
     );
     let shown = texts(&menu.output);
-    assert!(shown.iter().any(|(text, _)| text == "Functions"));
+    assert!(shown.iter().any(|(text, _)| text == "Functions · 1"));
     assert!(!shown.iter().any(|(text, _)| text.starts_with("Module:")));
     for text in ["Results", "Details"] {
         assert!(!shown.iter().any(|(shown, _)| shown == text), "{text}");
@@ -1403,4 +1403,134 @@ fn lists_are_colored_by_meaning_and_entropy_stays_a_chart() {
             .collect::<Vec<_>>()
     );
     assert_eq!(text_color(&entropy, "4.000"), Some(crate::theme::text()));
+}
+
+/// A listing of functions: each is `(name, address, body rows)`, followed by
+/// its rows as instructions or source lines.
+fn code_report(kind: AnalysisKind, functions: &[(&str, u64, u32)]) -> (AnalysisReport, Listing) {
+    let mut entries = Vec::new();
+    let mut counted = Vec::new();
+    for (name, address, rows) in functions {
+        entries.push(instruction(
+            entries.len() as u64 + 1,
+            AnalysisData::Function {
+                name: (*name).into(),
+                address: *address,
+                size: 99,
+            },
+        ));
+        for line in 1..=*rows {
+            let id = entries.len() as u64 + 1;
+            entries.push(instruction(
+                id,
+                if kind == AnalysisKind::Disassembly {
+                    AnalysisData::Instruction {
+                        address: address + u64::from(line),
+                        bytes: "90".into(),
+                        mnemonic: "nop".into(),
+                        operands: String::new(),
+                        function: Some((*name).into()),
+                    }
+                } else {
+                    AnalysisData::SourceLine {
+                        function: (*name).into(),
+                        address: None,
+                        line,
+                    }
+                },
+            ));
+        }
+        counted.push(antinomie_monitor_core::AnalysisFunctionLines {
+            name: (*name).into(),
+            address: *address,
+            lines: u64::from(*rows),
+        });
+    }
+    let mut report = fixture();
+    let rows = entries.len();
+    report.sections.push(AnalysisSection {
+        kind,
+        state: AnalysisSectionState::Complete,
+        summary: String::new(),
+        tools: Vec::new(),
+        listing: None,
+        entries,
+    });
+    let report = with_listing(report, kind, rows);
+    let mut page = listing_page(&report, kind).unwrap();
+    page.functions = counted;
+    (report, Ok(page))
+}
+
+fn shown_in(
+    ctx: &egui::Context,
+    report: &AnalysisReport,
+    kind: AnalysisKind,
+    page: &Listing,
+) -> Vec<(String, egui::Rect)> {
+    let mut state = WorkspaceState::default();
+    let size = egui::vec2(1280.0, 820.0);
+    let mut output = egui::FullOutput::default();
+    for _ in 0..3 {
+        output = frame(
+            ctx,
+            report,
+            &mut state,
+            Some(kind),
+            size,
+            Vec::new(),
+            (None, Some(page)),
+        )
+        .0;
+    }
+    texts(&output)
+}
+
+#[test]
+fn a_function_has_its_instructions_in_disassembly_and_its_source_lines_in_decompilation() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let functions = [("_start", 0x1000, 7), ("main", 0x2000, 1)];
+    for (kind, header) in [
+        (AnalysisKind::Disassembly, "_start  ·  0x1000, 7 lines"),
+        (AnalysisKind::Decompilation, "_start  ·  0x1000, 7 lines"),
+    ] {
+        let (report, page) = code_report(kind, &functions);
+        let shown = shown_in(&ctx, &report, kind, &page);
+        let has = |text: &str| shown.iter().any(|(shown, _)| shown == text);
+        assert!(has("0x1000 · 7 lines"), "{kind:?} sidebar: {shown:?}");
+        assert!(has("0x2000 · 1 line"), "{kind:?} sidebar: {shown:?}");
+        assert!(has("Functions · 2"), "{kind:?}: {shown:?}");
+        assert!(has(header), "{kind:?} header row: {shown:?}");
+        assert!(
+            !shown
+                .iter()
+                .any(|(text, _)| text.contains("bytes") && text.contains("0x1000")),
+            "no byte size beside a function: {shown:?}"
+        );
+    }
+    // The count follows the whole listing, so the sidebar differs by view.
+    let (report, page) = code_report(AnalysisKind::Decompilation, &[("_start", 0x1000, 3)]);
+    let shown = shown_in(&ctx, &report, AnalysisKind::Decompilation, &page);
+    assert!(shown.iter().any(|(text, _)| text == "0x1000 · 3 lines"));
+}
+
+#[test]
+fn both_hosts_draw_the_sidebar_with_the_shared_widget() {
+    // The Cores view and Static analysis wrap `code_listing::function_list`;
+    // the same function reads the same in each.
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let (report, page) = code_report(AnalysisKind::Disassembly, &[("shared", 0x4000, 5)]);
+    let static_texts = shown_in(&ctx, &report, AnalysisKind::Disassembly, &page);
+    let function = crate::code_listing::Function {
+        name: "shared",
+        address: 0x4000,
+        lines: Some(5),
+    };
+    let detail = crate::code_listing::detail_text(&function);
+    assert!(
+        static_texts.iter().any(|(text, _)| *text == detail),
+        "{static_texts:?}"
+    );
 }

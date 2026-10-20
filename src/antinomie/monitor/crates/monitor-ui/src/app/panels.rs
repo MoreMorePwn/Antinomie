@@ -499,6 +499,7 @@ impl MonitorApp {
                 crate::workspace::DetailsOf::History => self.history_detail(ui),
                 crate::workspace::DetailsOf::Triage => self.show_triage_details(ui),
                 crate::workspace::DetailsOf::Syscall => self.details(ui),
+                crate::workspace::DetailsOf::Core => self.core_view.details(ui),
             },
             Panel::Activity => self.activity(ui),
             Panel::Terminal(id) => {

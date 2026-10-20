@@ -86,13 +86,14 @@ impl Panel {
 }
 
 /// Which main tab the bottom Details panel follows: the syscall trace, the
-/// network, memory, disks, history or triage panel. When only one is on screen it
-/// wins; when several are (split or detached), the one clicked last.
+/// network, memory, disks, history, triage or cores panel.
+/// When only one is on screen it wins; when several are (split or detached),
+/// the one clicked last.
 #[derive(Default)]
 pub(crate) struct DetailsFollow {
     followed: usize,
     /// Pass of the main window in which each followed panel was last drawn.
-    drawn: [Option<u64>; 6],
+    drawn: [Option<u64>; 7],
 }
 
 /// What the Details panel shows.
@@ -104,16 +105,18 @@ pub(crate) enum DetailsOf {
     History,
     Triage,
     DiskEntry,
+    Core,
 }
 
 impl DetailsFollow {
-    const SIDES: [DetailsOf; 6] = [
+    const SIDES: [DetailsOf; 7] = [
         DetailsOf::Syscall,
         DetailsOf::Packet,
         DetailsOf::MemoryRow,
         DetailsOf::History,
         DetailsOf::Triage,
         DetailsOf::DiskEntry,
+        DetailsOf::Core,
     ];
 
     fn side(panel: &Panel) -> Option<usize> {
@@ -124,6 +127,7 @@ impl DetailsFollow {
             Panel::RunHistory => Some(3),
             Panel::Triage => Some(4),
             Panel::Disks => Some(5),
+            Panel::CoreDump => Some(6),
             _ => None,
         }
     }
@@ -2431,5 +2435,14 @@ mod tests {
         assert_eq!(follow.of(&ctx), DetailsOf::DiskEntry);
         follow.chose(&Panel::Memory);
         assert_eq!(follow.of(&ctx), DetailsOf::MemoryRow);
+    }
+
+    #[test]
+    fn the_details_dock_follows_the_cores_tab() {
+        assert_eq!(DetailsFollow::side(&Panel::CoreDump), Some(6));
+        assert_eq!(DetailsFollow::SIDES[6], DetailsOf::Core);
+        let mut follow = DetailsFollow::default();
+        follow.chose(&Panel::CoreDump);
+        assert_eq!(follow.of(&egui::Context::default()), DetailsOf::Core);
     }
 }

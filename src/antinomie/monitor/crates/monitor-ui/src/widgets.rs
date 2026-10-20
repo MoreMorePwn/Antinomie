@@ -19,6 +19,7 @@
 //!   with [`table::row_mark`] in the first cell. Row height comes from
 //!   [`table::row_height`] and the header from [`table::header_height`].
 //!   Zebra, hover and selection fills come from the active theme's visuals.
+//! - Grouped facts on a page: [`card`]; a jump to another view: [`link`].
 //! - Status words: [`chip`] with a [`Tone`]; filter-bar switches: [`toggle_chip`].
 //!
 //! Nothing here holds a literal color; add new ones to `theme::Palette`.
@@ -26,11 +27,13 @@
 // screen in the next batches.
 #![allow(dead_code, unused_imports)]
 
+mod card;
 pub mod table;
 mod tabs;
 mod tone;
 mod window;
 
+pub use card::{card, link};
 pub use tabs::{segmented, tab, tab_row, tabs, TabItem};
 pub use tone::{chip, toggle_chip, Tone};
 pub use window::{footer, footer_split, window, Dialog};

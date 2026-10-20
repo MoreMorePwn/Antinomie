@@ -9,7 +9,7 @@ use antinomie_monitor_core::{
     AnalysisData, AnalysisEntry, AnalysisKind, AnalysisListingPage, AnalysisReport,
     AnalysisSection, LISTING_PAGE_MAX_ROWS,
 };
-use eframe::egui::{self, text::LayoutJob, Color32, FontId, RichText, TextFormat};
+use eframe::egui::{self, Color32, FontId, RichText};
 use egui_extras::{Column, TableBuilder};
 
 mod row_text;
@@ -25,6 +25,9 @@ pub(super) struct ListingState {
     /// Function headers already seen, in first-seen order.
     /// Keyed by "{address:x}:{name}". Empty until a page is shown.
     functions: Vec<ListedFunction>,
+    /// Lines each function has in this view, by identity; counted over the
+    /// whole listing by every page read.
+    lines: std::collections::HashMap<String, u64>,
     record: Vec<(&'static str, crate::query::RowValue)>,
     /// The structures view a Structures listing shows.
     pub(super) scope: Option<Structure>,
@@ -136,6 +139,7 @@ pub(super) fn show(
         }
     };
     remember_functions(&mut state.functions, section, page);
+    remember_lines(&mut state.lines, page);
     if page.total == 0 {
         ui.label(if state.applied_query.is_empty() {
             "This listing is empty."
@@ -172,7 +176,7 @@ pub(super) fn show(
                 ..Default::default()
             }))
             .show_inside(ui, |ui| {
-                ui.label(RichText::new("Functions").strong());
+                crate::code_listing::heading(ui, names.len(), names.len());
                 if ui.button("Export text").clicked() {
                     action = Some(ReportAction::Export {
                         report_id: report.id.clone(),
@@ -183,34 +187,29 @@ pub(super) fn show(
                 if names.is_empty() {
                     ui.add(egui::Label::new("No function symbols loaded.").wrap());
                 }
-                egui::ScrollArea::vertical()
-                    .id_salt(("listing-functions", kind_salt(kind)))
-                    .show(ui, |ui| {
-                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                        for item in &names {
-                            let identity = function_identity(item.address, &item.name);
-                            // One line: the name, then its address.
-                            let mut label = LayoutJob::default();
-                            label.append(
-                                &item.name,
-                                0.0,
-                                format(&egui::TextStyle::Body.resolve(ui.style()), theme::text()),
-                            );
-                            label.append(
-                                &format!("  0x{:x}", item.address),
-                                0.0,
-                                format(&mono, theme::muted()),
-                            );
-                            let selected = state.function.as_deref() == Some(identity.as_str());
-                            let mut response = ui.selectable_label(selected, label);
-                            if !report.source_path.is_empty() {
-                                response = response.on_hover_text(&report.source_path);
-                            }
-                            if response.clicked() {
-                                state.function = Some(identity);
-                            }
-                        }
-                    });
+                let identities: Vec<String> = names
+                    .iter()
+                    .map(|item| function_identity(item.address, &item.name))
+                    .collect();
+                let selected = state
+                    .function
+                    .as_ref()
+                    .and_then(|chosen| identities.iter().position(|identity| identity == chosen));
+                let chosen = crate::code_listing::function_list(
+                    ui,
+                    kind_salt(kind),
+                    names.len(),
+                    |index| crate::code_listing::Function {
+                        name: &names[index].name,
+                        address: names[index].address,
+                        lines: state.lines.get(&identities[index]).copied(),
+                    },
+                    selected,
+                    |_, _| {},
+                );
+                if let Some(index) = chosen {
+                    state.function = Some(identities[index].clone());
+                }
             });
     }
     let structure_columns: Vec<(&str, Column)> = match state.scope {
@@ -328,7 +327,7 @@ pub(super) fn show(
                                 .as_ref()
                                 .is_some_and(|(selected, _)| selected == listing_index);
                             row.set_selected(selected);
-                            cells(&mut row, kind, state.scope, entry, &mono);
+                            cells(&mut row, kind, state.scope, entry, &mono, &state.lines);
                             row.response().context_menu(|ui| {
                                 let cells: Vec<_> = columns
                                     .iter()
@@ -772,6 +771,16 @@ fn remember_functions(
     }
 }
 
+/// Keep the line counts a page read brought.
+fn remember_lines(lines: &mut std::collections::HashMap<String, u64>, page: &AnalysisListingPage) {
+    for function in &page.functions {
+        lines.insert(
+            function_identity(function.address, &function.name),
+            function.lines,
+        );
+    }
+}
+
 /// Every `@@ANTINOMIE-FUNCTION` marker in a saved Ghidra export.
 /// Identity is the address plus the name Ghidra wrote. A second read of the
 /// same text returns the same identities.
@@ -942,6 +951,7 @@ fn cells(
     scope: Option<Structure>,
     entry: &AnalysisEntry,
     mono: &FontId,
+    lines: &std::collections::HashMap<String, u64>,
 ) {
     let data = entry.record.as_ref().map(|record| &record.data);
     if let (AnalysisKind::Structures, Some(scope)) = (kind, scope) {
@@ -963,14 +973,7 @@ fn cells(
         return;
     }
     match (kind, data) {
-        (
-            _,
-            Some(AnalysisData::Function {
-                name,
-                address,
-                size,
-            }),
-        ) => {
+        (_, Some(AnalysisData::Function { name, address, .. })) => {
             // A function header spans the row visually: address, then name.
             let first = match kind {
                 AnalysisKind::Decompilation => String::new(),
@@ -979,14 +982,11 @@ fn cells(
             row.col(|ui| {
                 ui.label(mono_text(first, mono, theme::blue()).strong());
             });
-            let title = if *size > 0 {
-                format!(
-                    "{name}  ·  0x{address:x}, {}",
-                    crate::values::file_size(*size)
-                )
-            } else {
-                format!("{name}  ·  0x{address:x}")
-            };
+            let count = lines.get(&function_identity(*address, name)).copied();
+            let title = format!(
+                "{name}  ·  0x{address:x}, {}",
+                crate::code_listing::lines_text(count)
+            );
             if kind == AnalysisKind::Disassembly {
                 row.col(|_| {});
             }
@@ -1011,18 +1011,7 @@ fn cells(
                 ui.add(egui::Label::new(mono_text(bytes.clone(), mono, theme::muted())).truncate());
             });
             row.col(|ui| {
-                let mut job = LayoutJob::default();
-                let color = if mnemonic.starts_with("call") {
-                    theme::blue()
-                } else if mnemonic.starts_with('j') || mnemonic.starts_with("ret") {
-                    theme::warn()
-                } else if mnemonic == "(bad)" {
-                    theme::error()
-                } else {
-                    theme::text()
-                };
-                job.append(&format!("{mnemonic:<8} "), 0.0, format(mono, color));
-                job.append(operands, 0.0, format(mono, theme::text()));
+                let job = crate::code_listing::instruction(mnemonic, operands, mono);
                 ui.add(egui::Label::new(job).truncate())
                     .on_hover_text(format!("{mnemonic} {operands}"));
             });
@@ -1032,8 +1021,10 @@ fn cells(
                 ui.label(mono_text(line.to_string(), mono, theme::muted()));
             });
             row.col(|ui| {
-                ui.add(egui::Label::new(highlight(&entry.value, mono)).truncate())
-                    .on_hover_text(&entry.value);
+                ui.add(
+                    egui::Label::new(crate::code_listing::highlight(&entry.value, mono)).truncate(),
+                )
+                .on_hover_text(&entry.value);
             });
         }
         (
@@ -1097,89 +1088,6 @@ fn cells(
     }
 }
 
-fn format(font: &FontId, color: Color32) -> TextFormat {
-    TextFormat::simple(font.clone(), color)
-}
-
-const KEYWORDS: &[&str] = &[
-    "if", "else", "while", "for", "do", "return", "goto", "switch", "case", "default", "break",
-    "continue", "sizeof",
-];
-const TYPES: &[&str] = &[
-    "void",
-    "char",
-    "short",
-    "int",
-    "long",
-    "unsigned",
-    "signed",
-    "float",
-    "double",
-    "bool",
-    "undefined",
-    "undefined1",
-    "undefined2",
-    "undefined4",
-    "undefined8",
-    "uint",
-    "ulong",
-    "byte",
-    "word",
-    "dword",
-    "qword",
-    "code",
-    "struct",
-    "const",
-    "size_t",
-    "uchar",
-    "ushort",
-];
-
-/// Light C highlighting: comments, strings, numbers, keywords and types.
-fn highlight(line: &str, font: &FontId) -> LayoutJob {
-    let mut job = LayoutJob::default();
-    let trimmed = line.trim_start();
-    if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
-        job.append(line, 0.0, format(font, theme::muted()));
-        return job;
-    }
-    let mut rest = line;
-    while !rest.is_empty() {
-        let first = rest.chars().next().unwrap_or(' ');
-        let (token, color) = if first == '"' || first == '\'' {
-            let end = rest[1..]
-                .find(first)
-                .map_or(rest.len(), |at| at + 2)
-                .min(rest.len());
-            (&rest[..end], theme::good())
-        } else if first.is_ascii_digit() {
-            let end = rest
-                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '.'))
-                .unwrap_or(rest.len());
-            (&rest[..end], theme::warn())
-        } else if first.is_alphabetic() || first == '_' {
-            let end = rest
-                .find(|c: char| !(c.is_alphanumeric() || c == '_'))
-                .unwrap_or(rest.len());
-            let word = &rest[..end];
-            let color = if KEYWORDS.contains(&word) {
-                theme::error()
-            } else if TYPES.contains(&word) {
-                theme::blue()
-            } else {
-                theme::text()
-            };
-            (word, color)
-        } else {
-            let end = rest.char_indices().nth(1).map_or(rest.len(), |(at, _)| at);
-            (&rest[..end], theme::text())
-        };
-        job.append(token, 0.0, format(font, color));
-        rest = &rest[token.len()..];
-    }
-    job
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1225,28 +1133,5 @@ mod tests {
         assert_eq!(first[1].address, 4096);
         assert!(exported.contains("FUN_fffd6240"));
         assert!(exported.contains("FUN_00001000"));
-    }
-
-    #[test]
-    fn decompiled_lines_keep_keyword_string_and_comment_colors() {
-        let font = FontId::monospace(14.0);
-        let color = |line: &str, token: &str| {
-            let job = highlight(line, &font);
-            job.sections.iter().find_map(|section| {
-                let text = &job.text[section.byte_range.clone()];
-                if text == token {
-                    Some(section.format.color)
-                } else {
-                    None
-                }
-            })
-        };
-        assert_eq!(color("    return 1;", "return"), Some(theme::error()));
-        assert_eq!(color("    return 1;", "1"), Some(theme::warn()));
-        assert_eq!(color("    int value;", "int"), Some(theme::blue()));
-        assert_eq!(color("    call(\"hi\");", "\"hi\""), Some(theme::good()));
-        let comment = highlight("    // stay", &font);
-        assert_eq!(comment.sections.len(), 1);
-        assert_eq!(comment.sections[0].format.color, theme::muted());
     }
 }

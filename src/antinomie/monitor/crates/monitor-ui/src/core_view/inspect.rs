@@ -117,22 +117,44 @@ impl CoreView {
                     }
                 });
         }
+        use crate::widgets::{TabItem, Tone};
+        let notes = record.core.auxv.len() + record.core.notes.len() + record.core.files.len();
+        let mut strings = TabItem::new("Strings");
+        if let Some(found) = self.strings.count() {
+            strings = strings.badge(found.to_string(), Tone::Neutral);
+        }
         crate::widgets::tabs(
             ui,
             [
-                (Tab::Context, "Context"),
-                (Tab::Mappings, "Memory mappings"),
-                (Tab::Code, "Disassembly"),
-                (Tab::Notes, "Recovered notes"),
-            ]
-            .map(|(tab, label)| (tab, label.into())),
+                (Tab::Context, TabItem::new("Context")),
+                (
+                    Tab::Mappings,
+                    TabItem::new("Memory mappings")
+                        .badge(record.core.mappings.len().to_string(), Tone::Neutral),
+                ),
+                (Tab::Code, TabItem::new("Disassembly")),
+                (Tab::Strings, strings),
+                (
+                    Tab::Notes,
+                    TabItem::new("Recovered notes").badge(notes.to_string(), Tone::Neutral),
+                ),
+            ],
             &mut self.tab,
         );
         match self.tab {
             Tab::Context => self.context(ui, &record),
             Tab::Mappings => self.mappings(ui, &record),
             Tab::Code => self.disassembly(ui, &record),
-            Tab::Notes => notes_table(ui, &record, &mut self.notes_query),
+            Tab::Strings => {
+                if let Some(detail) = self.strings.show(ui, &record) {
+                    self.detail = Some(detail);
+                }
+            }
+            Tab::Notes => {
+                if let Some(detail) = notes_table(ui, &record, &mut self.notes_query) {
+                    self.detail = Some(detail);
+                }
+            }
         }
     }
     fn register_cell(&mut self, ui: &mut egui::Ui, record: &CoreRecord, name: &str, value: u64) {
@@ -182,6 +204,110 @@ impl CoreView {
     }
 
     pub(super) fn context(&mut self, ui: &mut egui::Ui, record: &CoreRecord) {
+        let Some(thread) = record.core.threads.get(self.thread_index) else {
+            self.thread_picker(ui, record);
+            return;
+        };
+        ui.horizontal_wrapped(|ui| {
+            self.thread_picker(ui, record);
+            ui.weak(format!(
+                "TID {} · parent PID {} · current signal {}",
+                thread.tid, thread.parent_pid, thread.signal
+            ));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Copy all").clicked() {
+                    let all: Vec<_> = thread
+                        .registers
+                        .iter()
+                        .map(|(name, value)| format!("{name}\t0x{value:016x}"))
+                        .collect();
+                    ui.ctx().copy_text(all.join("\n"));
+                }
+            });
+        });
+        crate::activity::notice(
+            ui,
+            crate::activity::Level::Info,
+            "Register values are recovered evidence. Stack unwinding, pointer chains, and debugger execution are not available for a saved core; attach the debugger to a live process for those.",
+        );
+        egui::ScrollArea::both()
+            .id_salt("core-registers")
+            .show(ui, |ui| {
+                let groups: &[(&str, &[&str])] = &[
+                    ("Instruction pointer", &["rip", "eip", "pc"]),
+                    ("Stack and frame", &["rsp", "esp", "rbp", "ebp"]),
+                    ("Flags", &["rflags", "eflags", "flags"]),
+                    (
+                        "General",
+                        &[
+                            "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11",
+                            "r12", "r13", "r14", "r15", "eax", "ebx", "ecx", "edx", "esi", "edi",
+                        ],
+                    ),
+                ];
+                let mut shown = std::collections::BTreeSet::new();
+                let mut sections: Vec<(&str, Vec<&(String, u64)>)> = Vec::new();
+                for (title, names) in groups {
+                    let present: Vec<_> = names
+                        .iter()
+                        .filter_map(|name| {
+                            thread
+                                .registers
+                                .iter()
+                                .find(|(register, _)| register == name)
+                        })
+                        .collect();
+                    shown.extend(present.iter().map(|(name, _)| name.clone()));
+                    if !present.is_empty() {
+                        sections.push((title, present));
+                    }
+                }
+                let other: Vec<_> = thread
+                    .registers
+                    .iter()
+                    .filter(|(name, _)| !shown.contains(name))
+                    .collect();
+                if !other.is_empty() {
+                    sections.push(("Other", other));
+                }
+                // The pointers and flags in one card, the rest in the other.
+                let split = sections
+                    .iter()
+                    .position(|(title, _)| *title == "General")
+                    .unwrap_or(sections.len());
+                let (pointers, rest) = sections.split_at(split);
+                let mut draw =
+                    |ui: &mut egui::Ui, title: &str, group: &[(&str, Vec<&(String, u64)>)]| {
+                        crate::widgets::card(
+                            ui,
+                            title,
+                            |_| {},
+                            |ui| {
+                                for (name, registers) in group {
+                                    if group.len() > 1 || *name == "Other" {
+                                        ui.label(RichText::new(*name).color(crate::theme::muted()));
+                                    }
+                                    for (register, value) in registers {
+                                        self.register_cell(ui, record, register, *value);
+                                    }
+                                }
+                            },
+                        );
+                    };
+                if ui.available_width() >= 700.0 {
+                    ui.columns(2, |columns| {
+                        draw(&mut columns[0], "Instruction pointer & stack", pointers);
+                        draw(&mut columns[1], "General", rest);
+                    });
+                } else {
+                    draw(ui, "Instruction pointer & stack", pointers);
+                    draw(ui, "General", rest);
+                }
+            });
+    }
+
+    fn thread_picker(&mut self, ui: &mut egui::Ui, record: &CoreRecord) {
+        ui.weak("Thread");
         egui::ComboBox::from_id_salt("core-thread")
             .selected_text(format!(
                 "Thread {}",
@@ -200,65 +326,6 @@ impl CoreView {
                     );
                 }
             });
-        let Some(thread) = record.core.threads.get(self.thread_index) else {
-            return;
-        };
-        ui.label(format!(
-            "TID {} · parent PID {} · current signal {}",
-            thread.tid, thread.parent_pid, thread.signal
-        ));
-        egui::ScrollArea::both().id_salt("core-registers").show(ui, |ui| {
-            let groups: &[(&str, &[&str])] = &[
-                ("Instruction pointer", &["rip", "eip", "pc"]),
-                ("Stack and frame", &["rsp", "esp", "rbp", "ebp"]),
-                ("Flags", &["rflags", "eflags", "flags"]),
-                (
-                    "General",
-                    &[
-                        "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12",
-                        "r13", "r14", "r15", "eax", "ebx", "ecx", "edx", "esi", "edi",
-                    ],
-                ),
-            ];
-            let mut shown = std::collections::BTreeSet::new();
-            for (title, names) in groups {
-                let present: Vec<_> = names
-                    .iter()
-                    .filter_map(|name| {
-                        thread
-                            .registers
-                            .iter()
-                            .find(|(register, _)| register == name)
-                    })
-                    .collect();
-                if present.is_empty() {
-                    continue;
-                }
-                ui.label(RichText::new(*title).strong().color(crate::theme::heading()));
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing.x = 16.0;
-                    for (name, value) in present {
-                        shown.insert(name.clone());
-                        self.register_cell(ui, record, name, *value);
-                    }
-                });
-            }
-            let other: Vec<_> = thread
-                .registers
-                .iter()
-                .filter(|(name, _)| !shown.contains(name))
-                .collect();
-            if !other.is_empty() {
-                ui.label(RichText::new("Other").strong().color(crate::theme::heading()));
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing.x = 16.0;
-                    for (name, value) in other {
-                        self.register_cell(ui, record, name, *value);
-                    }
-                });
-            }
-            ui.label("Register values are recovered evidence. Stack unwinding, pointer chains, and debugger execution are not available.");
-        });
     }
     pub(super) fn mappings(&mut self, ui: &mut egui::Ui, record: &CoreRecord) {
         let mut requested_page = None;
@@ -291,39 +358,124 @@ impl CoreView {
             self.window_offset = 0;
         }
         let choices = mapping_choices(&record.core);
-        let (selected_label, selected_tip) = choices
-            .get(self.mapping_index)
-            .map(|(label, tip)| (label.clone(), tip.clone()))
-            .unwrap_or_else(|| {
-                (
-                    "Select a mapping".into(),
-                    "Select a retained mapping matching the filter.".into(),
-                )
-            });
-        egui::ComboBox::from_id_salt("core-mapping")
-            .width(ui.available_width())
-            .selected_text(selected_label)
-            .show_ui(ui, |ui| {
-                for &index in &shown {
-                    let (label, tip) = &choices[index];
-                    let row = ui
-                        .selectable_value(&mut self.mapping_index, index, label)
-                        .on_hover_text(tip);
-                    if row.changed() {
-                        self.window_offset = 0;
-                        self.page = None;
-                    }
-                    row.context_menu(|ui| {
-                        crate::query::table_row_menu(
-                            ui,
-                            filter_id,
-                            &mapping_filter_row(&record.core, &record.core.mappings[index]),
-                        )
-                    });
+        let core = &record.core;
+        let order =
+            crate::table_sort::order(ui.ctx(), "core_mappings", shown.len(), |column, a, b| {
+                let (a, b) = (&core.mappings[shown[a]], &core.mappings[shown[b]]);
+                match column {
+                    0 => a.start.cmp(&b.start),
+                    1 => a.permissions().cmp(&b.permissions()),
+                    2 => a.memory_size.cmp(&b.memory_size),
+                    3 => a.available_size.cmp(&b.available_size),
+                    _ => mapping_name(core, a)
+                        .to_lowercase()
+                        .cmp(&mapping_name(core, b).to_lowercase()),
                 }
+            });
+        let font = egui::TextStyle::Monospace.resolve(ui.style()).size;
+        let mut picked = None;
+        crate::widgets::table::begin(ui);
+        egui_extras::TableBuilder::new(ui)
+            .id_salt(("core-mappings-table", &record.dir))
+            .striped(true)
+            .sense(egui::Sense::click())
+            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+            .max_scroll_height(crate::widgets::table::row_height(font) * 7.0)
+            .min_scrolled_height(0.0)
+            .column(
+                egui_extras::Column::initial(250.0)
+                    .at_least(130.0)
+                    .clip(true),
+            )
+            .column(egui_extras::Column::exact(64.0))
+            .column(
+                egui_extras::Column::initial(110.0)
+                    .at_least(60.0)
+                    .clip(true),
+            )
+            .column(
+                egui_extras::Column::initial(110.0)
+                    .at_least(60.0)
+                    .clip(true),
+            )
+            .column(egui_extras::Column::remainder().at_least(120.0).clip(true))
+            .header(crate::widgets::table::header_height(font), |mut header| {
+                header.col(|ui| crate::table_sort::header(ui, "core_mappings", 0, "Range"));
+                header.col(|ui| crate::table_sort::header(ui, "core_mappings", 1, "Perms"));
+                header.col(|ui| {
+                    crate::table_sort::header_aligned(
+                        ui,
+                        "core_mappings",
+                        2,
+                        "Size",
+                        egui::Align::Max,
+                    )
+                });
+                header.col(|ui| {
+                    crate::table_sort::header_aligned(
+                        ui,
+                        "core_mappings",
+                        3,
+                        "Captured",
+                        egui::Align::Max,
+                    )
+                });
+                header.col(|ui| crate::table_sort::header(ui, "core_mappings", 4, "File"));
             })
-            .response
-            .on_hover_text(selected_tip);
+            .body(|body| {
+                body.rows(
+                    crate::widgets::table::row_height(font),
+                    shown.len(),
+                    |mut row| {
+                        use crate::widgets::table::{cell_click, Cell, Mark};
+                        let index = shown[order[row.index()]];
+                        let mapping = &core.mappings[index];
+                        let selected = self.mapping_index == index;
+                        row.set_selected(selected);
+                        row.col(|ui| {
+                            crate::widgets::table::row_mark(
+                                ui,
+                                if selected { Mark::Selected } else { Mark::None },
+                            );
+                            cell_click(
+                                ui,
+                                Cell::Mono,
+                                &format!("0x{:x}-0x{:x}", mapping.start, mapping.end()),
+                            );
+                        });
+                        row.col(|ui| {
+                            cell_click(ui, Cell::Mono, &mapping.permissions());
+                        });
+                        row.col(|ui| {
+                            cell_click(ui, Cell::Number, &mapping.memory_size.to_string());
+                        });
+                        row.col(|ui| {
+                            cell_click(ui, Cell::Number, &mapping.available_size.to_string());
+                        });
+                        row.col(|ui| {
+                            cell_click(ui, Cell::Text, &mapping_name(core, mapping))
+                                .on_hover_text(&choices[index].0);
+                        });
+                        let response = row.response();
+                        response.context_menu(|ui| {
+                            crate::query::table_row_menu(
+                                ui,
+                                filter_id,
+                                &mapping_filter_row(core, mapping),
+                            )
+                        });
+                        if response.clicked() {
+                            picked = Some(index);
+                        }
+                    },
+                );
+            });
+        if let Some(index) = picked.filter(|&index| index != self.mapping_index) {
+            self.mapping_index = index;
+            self.window_offset = 0;
+            self.page = None;
+            self.detail = self.mapping_detail(record, index);
+        }
         let Some(mapping) = record.core.mappings.get(self.mapping_index) else {
             ui.label(if shown.is_empty() {
                 "No retained mapping matches this filter."
@@ -495,7 +647,7 @@ pub(super) fn function_filter_row(
     ]
 }
 
-fn mapping_name(core: &CoreDump, mapping: &CoreMapping) -> String {
+pub(super) fn mapping_name(core: &CoreDump, mapping: &CoreMapping) -> String {
     let mut paths = Vec::new();
     for file in &core.files {
         let path = file.path.trim();
@@ -603,7 +755,11 @@ pub(super) fn captured_byte(core: &CoreDump, address: u64) -> bool {
     })
 }
 
-fn notes_table(ui: &mut egui::Ui, record: &CoreRecord, query: &mut String) {
+fn notes_table(
+    ui: &mut egui::Ui,
+    record: &CoreRecord,
+    query: &mut String,
+) -> Option<details::CoreDetail> {
     use egui_extras::{Column, TableBuilder};
     const EM_DASH: &str = "—";
     ui.label(
@@ -754,6 +910,7 @@ fn notes_table(ui: &mut egui::Ui, record: &CoreRecord, query: &mut String) {
     let header_height =
         ui.text_style_height(&egui::TextStyle::Body).max(20.0) + ui.spacing().item_spacing.y;
     let table_height = (ui.available_height() - detail_height - header_height).max(80.0);
+    let mut detail = None;
     crate::widgets::table::begin(ui);
     TableBuilder::new(ui)
         .max_scroll_height(table_height)
@@ -790,6 +947,12 @@ fn notes_table(ui: &mut egui::Ui, record: &CoreRecord, query: &mut String) {
                     });
                 }
                 if row.response().clicked() {
+                    detail = Some(details::note(
+                        note.kind,
+                        &note.name,
+                        note.source,
+                        &note.value,
+                    ));
                     row.response().request_focus();
                     row.response().ctx.data_mut(|data| {
                         data.insert_temp(selection_id, note.clone());
@@ -841,6 +1004,7 @@ fn notes_table(ui: &mut egui::Ui, record: &CoreRecord, query: &mut String) {
                     });
             });
     }
+    detail
 }
 
 fn parse_address(text: &str) -> Result<u64, String> {
