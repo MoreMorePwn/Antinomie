@@ -415,7 +415,7 @@ fn stage(
                         staged.skipped_inputs.push(
                             super::ScannedInput::new(super::InputKind::Capture, &path)
                                 .sized()
-                                .skipped(super::ids::NO_PACKETS),
+                                .note(super::ids::NO_PACKETS),
                         );
                         continue;
                     }
