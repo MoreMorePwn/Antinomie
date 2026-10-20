@@ -259,11 +259,34 @@ it runs.
   connects; a debugger that detaches or dies leaves it running with its
   breakpoints removed. First release: all-stop, one process, software
   breakpoints, single-step of one thread, x86-64. Guest contract revision 17
-  (unchanged; older bases say the debugger is unavailable). Debug on start,
-  hardware breakpoints, signals and fork/exec following come next (the minimal
-  in-app panel is in the next entry). New dependency: `gdbstub 0.7.10` (MIT OR Apache-2.0) for the protocol.
+  (unchanged; older bases say the debugger is unavailable). Fork/exec following
+  comes next (Debug on start, hardware breakpoints and signals are in the next
+  entries). New dependency: `gdbstub 0.7.10` (MIT OR Apache-2.0) for the protocol.
   Every guest request costs about one 10 ms control poll, so registers take
   about 44 ms and a step about 44 ms; see `protocol/debugger.md`.
+- **The debugger gets Debug on start, threads, hardware breakpoints, signals and
+  fast requests.** Run dialog > Debugger > **Debug on start** parks the new
+  program before its first instruction (the loader's, for a dynamic program) and
+  opens the debugger on it; the run shows the gdb command to attach with and the
+  program waits until a debugger continues it or detaches. gdb now lists every
+  thread, steps one thread (`stepi` over a `syscall` stops on the next
+  instruction and over `rep movsb` retires the whole copy), sets hardware
+  breakpoints and watchpoints (`hbreak`, `watch`, `awatch`; four debug registers
+  shared by all of them, a fifth is refused cleanly and gdb carries on), reports
+  signal stops (`Program received signal SIGSEGV`) and passes or drops them, and
+  places position independent and dynamic programs from the auxiliary vector.
+  Hardware breakpoints leave nothing in the program's memory, and the program
+  cannot see the debug registers. Stop ends a debugged run at once, whether it
+  runs or sits at a breakpoint; a process core can be taken while the debugger
+  holds the program stopped; code a program rewrites while a breakpoint is in it
+  is no longer overwritten when the breakpoint comes out; a forked child that
+  inherited a breakpoint byte no longer dies of `SIGTRAP`; a single step meeting
+  a pending signal no longer loses the step or leaves the trap flag in a signal
+  frame. Requests take about 4 ms instead of 22 ms (registers in one request);
+  see `protocol/debugger.md`. Guest series 0035-0038, contract revision 17
+  (unchanged): a base built before this release keeps working and says plainly
+  what it cannot do (Debug on start, hardware kinds, signal passing). The panel
+  uses the new kinds and passes the signal a thread stopped on.
 - **The debugger has a panel in the app.** After **Attach debugger…** the
   Debugger window shows the process, a thread selector, the stop reason and
   address, and **Continue**, **Step**, **Stop**, **Refresh** and **Detach**
