@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use super::progress::worker_deadline;
 use super::worker::REPORT_MAX_SIZE;
 use super::*;
 use crate::{
@@ -115,16 +116,6 @@ pub(crate) fn fail(report: &mut AnalysisReport, state: AnalysisState, reason: im
         if section.state == AnalysisSectionState::Pending {
             section.state = AnalysisSectionState::Unavailable;
             section.summary = report.reason.clone().unwrap_or_default();
-        }
-    }
-}
-impl Job {
-    /// A deadline stops the worker, not the sections it already finished:
-    /// adopt them (and their validated listings) before the rest is marked
-    /// unfinished.
-    fn keep_finished_sections(&mut self) {
-        if progress::salvage(&self.directory, &mut self.report) {
-            adopt_listings(&self.directory, &mut self.report);
         }
     }
 }
@@ -645,27 +636,9 @@ impl Drop for Jobs {
 /// Time a job has to receive its specimen once it starts.
 const TRANSFER_DEADLINE: Duration = Duration::from_secs(120);
 
-pub(crate) fn worker_deadline(report: &AnalysisReport) -> Duration {
-    // The sum of the sections' own budgets, so one slow tool (capa at 4
-    // minutes) cannot use up the time of a later one (decompilation); this is
-    // the hard backstop behind each tool's own timeout.
-    let seconds: u64 = report
-        .sections
-        .iter()
-        .map(|section| match section.kind {
-            AnalysisKind::Decompilation => super::worker::DECOMPILER_SECONDS + 120,
-            AnalysisKind::Capabilities => 300,
-            AnalysisKind::Embedded => 200,
-            AnalysisKind::Identification => 160,
-            AnalysisKind::Disassembly | AnalysisKind::Rules => 90,
-            _ => 20,
-        })
-        .sum();
-    Duration::from_secs(seconds.max(60))
-}
 /// Move validated worker listings next to the report; a listing that fails
 /// validation is dropped and its category marked partial.
-fn adopt_listings(directory: &Path, report: &mut AnalysisReport) {
+pub(super) fn adopt_listings(directory: &Path, report: &mut AnalysisReport) {
     let output = directory.join("output/listings");
     let target = directory.join("listings");
     let mut total = 0u64;
