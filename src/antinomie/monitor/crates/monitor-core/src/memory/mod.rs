@@ -335,6 +335,19 @@ pub struct DumpProgress {
     pub total: u64,
 }
 
+impl DumpProgress {
+    /// "Writing RAM dump 41% - VM paused" (no figure before QEMU reports one).
+    pub fn status_text(&self) -> String {
+        if self.total == 0 || self.completed == 0 {
+            "Writing RAM dump - VM paused".into()
+        } else {
+            let percent =
+                (u128::from(self.completed.min(self.total)) * 100 / u128::from(self.total)) as u64;
+            format!("Writing RAM dump {percent}% - VM paused")
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RunState {

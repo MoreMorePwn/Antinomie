@@ -11,6 +11,7 @@ mod clipboard;
 mod debugger;
 mod dialogs;
 mod disks;
+mod dump_pause;
 mod evidence_delete;
 mod explorer;
 mod file_drop;

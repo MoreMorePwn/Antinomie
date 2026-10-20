@@ -21,6 +21,7 @@ impl MonitorApp {
         }
         self.menus(ctx);
         self.toolbar(ctx);
+        self.dump_pause_banner(ctx);
         self.health(ctx);
         self.sidebar(ctx);
         let mut layout = std::mem::take(&mut self.layout);
