@@ -183,6 +183,18 @@ impl ProcessPicker {
                         ("threads", RowValue::Number(i128::from(process.thread_count))),
                     ])
                 }).collect();
+                let processes: Vec<_> = crate::table_sort::order(ui.ctx(), "process_picker", processes.len(), |column, a, b| {
+                    let (a, b) = (processes[a], processes[b]);
+                    match column {
+                        0 => a.identity.tgid.cmp(&b.identity.tgid),
+                        1 => a.command.to_lowercase().cmp(&b.command.to_lowercase()),
+                        2 => a.uid.cmp(&b.uid),
+                        _ => a.thread_count.cmp(&b.thread_count),
+                    }
+                })
+                .into_iter()
+                .map(|index| processes[index])
+                .collect();
                 ui.weak(format!("{} / {total} processes in this page", processes.len()));
                 if self.selected.as_ref().is_some_and(|selected| !processes.iter().any(|process| &process.identity == selected)) { self.selected = None; }
                 // Table body yields space to the selection summary, final actions,
@@ -210,8 +222,10 @@ impl ProcessPicker {
                             .header(font_size + 12.0, |mut header| {
                                 for (column, label) in ["PID", "Name", "UID", "Threads"].into_iter().enumerate() {
                                     header.col(|ui| {
-                                        crate::widgets::table::head_aligned(
+                                        crate::table_sort::header_aligned(
                                             ui,
+                                            "process_picker",
+                                            column,
                                             label,
                                             crate::widgets::table::numeric_align(column != 1),
                                         )
@@ -367,6 +381,21 @@ pub(super) fn history(
             .cmp(&a.started_ms)
             .then_with(|| b.id.cmp(&a.id))
     });
+    // Newest first until a header click picks another order.
+    let shown: Vec<_> =
+        crate::table_sort::order(ui.ctx(), "capture_history", shown.len(), |column, a, b| {
+            let (a, b) = (shown[a], shown[b]);
+            match column {
+                0 => a.started_ms.cmp(&b.started_ms),
+                1 => scope(&a.scope)
+                    .to_lowercase()
+                    .cmp(&scope(&b.scope).to_lowercase()),
+                _ => status(a.state).cmp(status(b.state)),
+            }
+        })
+        .into_iter()
+        .map(|index| shown[index])
+        .collect();
     ui.weak(format!("{} / {} captures", shown.len(), captures.len()));
     let focused = ui.memory(|memory| memory.focused());
     let navigation = if !shown.is_empty() && focused == Some(pane_id) {
@@ -415,8 +444,12 @@ pub(super) fn history(
             }
             table
                 .header(row_height + 4.0, |mut header| {
-                    for label in ["Start time", "Capture", "State"] {
-                        header.col(|ui| crate::widgets::table::head(ui, label));
+                    for (column, label) in
+                        ["Start time", "Capture", "State"].into_iter().enumerate()
+                    {
+                        header.col(|ui| {
+                            crate::table_sort::header(ui, "capture_history", column, label)
+                        });
                     }
                 })
                 .body(|body| {

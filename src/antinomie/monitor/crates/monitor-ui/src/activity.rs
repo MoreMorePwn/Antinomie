@@ -196,10 +196,22 @@ impl Journal {
             );
         });
         ui.separator();
-        let visible: Vec<_> = self
+        let unsorted: Vec<_> = self
             .entries
             .iter()
             .filter(|entry| self.visible(entry.level))
+            .collect();
+        let visible: Vec<_> =
+            crate::table_sort::order(ui.ctx(), "activity", unsorted.len(), |column, a, b| {
+                let (a, b) = (unsorted[a], unsorted[b]);
+                match column {
+                    0 => a.unix_ms.cmp(&b.unix_ms),
+                    1 => (a.level as u8).cmp(&(b.level as u8)),
+                    _ => a.message.to_lowercase().cmp(&b.message.to_lowercase()),
+                }
+            })
+            .into_iter()
+            .map(|index| unsorted[index])
             .collect();
         if visible.is_empty() {
             ui.label(if self.entries.is_empty() {
@@ -218,8 +230,8 @@ impl Journal {
             .auto_shrink([false, false])
             .stick_to_bottom(true)
             .header(26.0, |mut header| {
-                for label in ["Time", "Level", "Message"] {
-                    header.col(|ui| crate::widgets::table::head(ui, label));
+                for (column, label) in ["Time", "Level", "Message"].into_iter().enumerate() {
+                    header.col(|ui| crate::table_sort::header(ui, "activity", column, label));
                 }
             })
             .body(|body| {

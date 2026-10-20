@@ -28,6 +28,7 @@ mod runs;
 mod samples_view;
 mod snapshots;
 mod summary;
+mod table_sort;
 mod terminal;
 mod theme;
 mod time_format;

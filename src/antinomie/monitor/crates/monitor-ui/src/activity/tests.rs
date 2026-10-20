@@ -306,3 +306,22 @@ fn a_disabled_form_still_allows_its_notice_to_be_dismissed() {
     }
     assert!(register(&ctx, Level::Warn, message.into()).1);
 }
+
+#[test]
+fn the_activity_table_sorts_by_a_clicked_header() {
+    use crate::table_sort::testing::{click, column_order};
+    let ctx = egui::Context::default();
+    let mut journal = Journal::default();
+    journal.log("ERROR", "bravo".into());
+    journal.log("INFO", "charlie".into());
+    journal.log("WARN", "alpha".into());
+    let mut show = |ui: &mut egui::Ui| journal.show(ui);
+    let names = ["alpha", "bravo", "charlie"];
+    let texts = click(&ctx, "Message", &mut show);
+    assert_eq!(column_order(&texts, &names), ["alpha", "bravo", "charlie"]);
+    let texts = click(&ctx, "Message", &mut show);
+    assert_eq!(column_order(&texts, &names), ["charlie", "bravo", "alpha"]);
+    // Level sorts Info, Warn, Error.
+    let texts = click(&ctx, "Level", &mut show);
+    assert_eq!(column_order(&texts, &names), ["charlie", "alpha", "bravo"]);
+}

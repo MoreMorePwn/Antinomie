@@ -42,6 +42,17 @@ pub(crate) fn guide(ctx: &egui::Context) {
                     || kind.to_lowercase().contains(&needle)
                     || meaning.to_lowercase().contains(&needle)
             }).collect();
+            let rows: Vec<_> = crate::table_sort::order(ui.ctx(), "filter-keywords", rows.len(), |column, a, b| {
+                let (a, b) = (rows[a], rows[b]);
+                match column {
+                    0 => a.0.to_lowercase().cmp(&b.0.to_lowercase()),
+                    1 => a.1.to_lowercase().cmp(&b.1.to_lowercase()),
+                    _ => a.2.to_lowercase().cmp(&b.2.to_lowercase()),
+                }
+            })
+            .into_iter()
+            .map(|index| rows[index])
+            .collect();
             use egui_extras::{Column, TableBuilder};
             crate::widgets::table::begin(ui);
             TableBuilder::new(ui)
@@ -51,8 +62,8 @@ pub(crate) fn guide(ctx: &egui::Context) {
                 .column(Column::initial(120.0))
                 .column(Column::remainder())
                 .header(22.0, |mut header| {
-                    for title in ["Field", "Type", "Meaning"] {
-                        header.col(|ui| crate::widgets::table::head(ui, title));
+                    for (column, title) in ["Field", "Type", "Meaning"].into_iter().enumerate() {
+                        header.col(|ui| crate::table_sort::header(ui, "filter-keywords", column, title));
                     }
                 })
                 .body(|body| {

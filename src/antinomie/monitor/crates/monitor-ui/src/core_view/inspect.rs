@@ -715,6 +715,26 @@ fn notes_table(ui: &mut egui::Ui, record: &CoreRecord, query: &mut String) {
         }
     }
     rows.retain(|row| filter.keep_table(&row.values()));
+    let order = crate::table_sort::order(ui.ctx(), "core_notes", rows.len(), |column, a, b| {
+        let (a, b) = (&rows[a], &rows[b]);
+        if let (3, Some(x), Some(y)) = (column, a.number, b.number) {
+            return x.cmp(&y);
+        }
+        let (a, b) = match column {
+            0 => (a.kind.to_lowercase(), b.kind.to_lowercase()),
+            1 => (a.name.to_lowercase(), b.name.to_lowercase()),
+            2 => (a.thread.to_lowercase(), b.thread.to_lowercase()),
+            3 => (a.value.to_lowercase(), b.value.to_lowercase()),
+            4 => (a.source.to_lowercase(), b.source.to_lowercase()),
+            _ => (a.availability.to_lowercase(), b.availability.to_lowercase()),
+        };
+        a.cmp(&b)
+    });
+    let mut slots: Vec<_> = rows.into_iter().map(Some).collect();
+    let rows: Vec<_> = order
+        .into_iter()
+        .filter_map(|index| slots[index].take())
+        .collect();
     let row_count = rows.len();
     ui.weak(format!("{row_count} / {total} notes"));
     let selection_id = ui.id().with(("core-note-detail", &record.dir));
@@ -746,8 +766,11 @@ fn notes_table(ui: &mut egui::Ui, record: &CoreRecord, query: &mut String) {
         .column(Column::auto().at_least(80.0))
         .column(Column::auto().at_least(88.0))
         .header(20.0, |mut header| {
-            for title in ["Kind", "Name", "Thread", "Value", "Source", "Availability"] {
-                header.col(|ui| crate::widgets::table::head(ui, title));
+            for (column, title) in ["Kind", "Name", "Thread", "Value", "Source", "Availability"]
+                .into_iter()
+                .enumerate()
+            {
+                header.col(|ui| crate::table_sort::header(ui, "core_notes", column, title));
             }
         })
         .body(|body| {
