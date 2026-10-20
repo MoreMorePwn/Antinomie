@@ -35,20 +35,80 @@ fn outcome(outcome: InputOutcome) -> (&'static str, egui::Color32) {
     }
 }
 
-/// "2 succeeded, 1 failed, 1 skipped"; outcomes nobody had are left out.
+/// How many inputs finished, were not scanned and failed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct OutcomeCounts {
+    pub complete: usize,
+    pub skipped: usize,
+    pub failed: usize,
+}
+
+pub(super) fn count_outcomes(inputs: &[ScannedInput]) -> OutcomeCounts {
+    let mut counts = OutcomeCounts::default();
+    for input in inputs {
+        match input.outcome {
+            InputOutcome::Succeeded => counts.complete += 1,
+            InputOutcome::Skipped => counts.skipped += 1,
+            InputOutcome::Failed => counts.failed += 1,
+        }
+    }
+    counts
+}
+
+/// "2 complete · 1 skipped · 1 failed": all three, zeros included.
 pub(super) fn outcome_counts(inputs: &[ScannedInput]) -> String {
-    [
-        (InputOutcome::Succeeded, "succeeded"),
-        (InputOutcome::Failed, "failed"),
-        (InputOutcome::Skipped, "skipped"),
-    ]
-    .into_iter()
-    .filter_map(|(kind, word)| {
-        let count = inputs.iter().filter(|input| input.outcome == kind).count();
-        (count > 0).then(|| format!("{count} {word}"))
-    })
-    .collect::<Vec<_>>()
-    .join(", ")
+    let counts = count_outcomes(inputs);
+    format!(
+        "{} complete · {} skipped · {} failed",
+        counts.complete, counts.skipped, counts.failed
+    )
+}
+
+/// The scan's status as a whole, from what happened to its inputs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Overall {
+    Complete,
+    Partial,
+    Failed,
+    Skipped,
+}
+
+impl Overall {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Complete => "Complete",
+            Self::Partial => "Partial",
+            Self::Failed => "Failed",
+            Self::Skipped => "Skipped",
+        }
+    }
+
+    pub(super) fn tone(self) -> egui::Color32 {
+        match self {
+            Self::Complete => theme::blue(),
+            Self::Partial => theme::warn(),
+            Self::Failed => theme::error(),
+            Self::Skipped => theme::muted(),
+        }
+    }
+}
+
+/// Partial only when something completed and something failed; Failed when
+/// something failed and nothing completed; Skipped only when every input was
+/// skipped; otherwise Complete. `None` for a scan with no inputs.
+pub(super) fn overall(inputs: &[ScannedInput]) -> Option<Overall> {
+    let counts = count_outcomes(inputs);
+    if inputs.is_empty() {
+        None
+    } else if counts.complete > 0 && counts.failed > 0 {
+        Some(Overall::Partial)
+    } else if counts.failed > 0 {
+        Some(Overall::Failed)
+    } else if counts.skipped == inputs.len() {
+        Some(Overall::Skipped)
+    } else {
+        Some(Overall::Complete)
+    }
 }
 
 /// Shown on a row whose capture or core is no longer on disk.
@@ -329,15 +389,28 @@ impl View {
             icon::CARET_RIGHT
         };
         let toggle = ui
-            .add(
-                egui::Button::new(
-                    RichText::new(format!("{caret} {}", title(inputs))).color(theme::text()),
-                )
-                .frame(false)
-                .truncate(),
-            )
-            .on_hover_text("Show or hide what the last scan passed to the rules")
-            .clicked();
+            .horizontal(|ui| {
+                let toggle = ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new(format!("{caret} {}", title(inputs)))
+                                .color(theme::text()),
+                        )
+                        .frame(false)
+                        .truncate(),
+                    )
+                    .on_hover_text("Show or hide what the last scan passed to the rules")
+                    .clicked();
+                if let Some(inputs) = inputs.filter(|inputs| !inputs.is_empty()) {
+                    ui.label(
+                        RichText::new(outcome_counts(inputs))
+                            .small()
+                            .color(theme::muted()),
+                    );
+                }
+                toggle
+            })
+            .inner;
         if toggle {
             self.inputs_open[index] = !open;
         }
@@ -362,11 +435,6 @@ impl View {
                 ui.weak("Nothing was passed to the rules.");
                 return;
             }
-            ui.label(
-                RichText::new(outcome_counts(inputs))
-                    .small()
-                    .color(theme::muted()),
-            );
             presence.update(ui.ctx(), inputs);
             for input in inputs.iter().take(SHOWN) {
                 let action = row(ui, input, presence.missing(input), engine, state);
@@ -451,6 +519,35 @@ mod tests {
     }
 
     #[test]
+    fn overall_status_follows_the_outcome_counts() {
+        use InputOutcome::{Failed as F, Skipped as K, Succeeded as C};
+        let cases: &[(&[InputOutcome], Option<Overall>)] = &[
+            (&[], None),
+            (&[C], Some(Overall::Complete)),
+            (&[C, C], Some(Overall::Complete)),
+            (&[C, K], Some(Overall::Complete)),
+            (&[C, K, K], Some(Overall::Complete)),
+            (&[C, F], Some(Overall::Partial)),
+            (&[C, K, F], Some(Overall::Partial)),
+            (&[F], Some(Overall::Failed)),
+            (&[F, F], Some(Overall::Failed)),
+            (&[F, K], Some(Overall::Failed)),
+            (&[K], Some(Overall::Skipped)),
+            (&[K, K], Some(Overall::Skipped)),
+        ];
+        for (outcomes, expected) in cases {
+            let rows: Vec<ScannedInput> = outcomes
+                .iter()
+                .map(|outcome| ScannedInput {
+                    outcome: *outcome,
+                    ..ScannedInput::default()
+                })
+                .collect();
+            assert_eq!(overall(&rows), *expected, "{outcomes:?}");
+        }
+    }
+
+    #[test]
     fn the_title_counts_inputs_and_rows_show_size_digest_and_outcome() {
         let ctx = egui::Context::default();
         let mut view = view(Some(inputs()));
@@ -460,7 +557,7 @@ mod tests {
         view.inputs_open[0] = true;
         let text = shown(&mut view, &ctx);
         for expected in [
-            "1 succeeded, 1 failed, 1 skipped",
+            "1 complete · 1 skipped · 1 failed",
             "Executable",
             "sample",
             "2048 bytes (2.0 KB)",
@@ -727,7 +824,7 @@ mod tests {
         let mut view = view(Some(rows));
         view.inputs_open[0] = true;
         let text = shown(&mut view, &ctx);
-        assert!(text.contains("1 succeeded, 1 skipped"), "{text}");
+        assert!(text.contains("1 complete · 1 skipped · 0 failed"), "{text}");
         assert!(
             text.contains("may not cover everything a Sysmon or auditd log would contain"),
             "{text}"

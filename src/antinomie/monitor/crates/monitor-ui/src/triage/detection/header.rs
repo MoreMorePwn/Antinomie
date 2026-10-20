@@ -38,8 +38,7 @@ pub(super) fn state(state: &State) -> &'static str {
     }
 }
 
-/// "3 matched rules · 2 succeeded, 1 failed, 1 skipped": the matches and what
-/// happened to each input, which is what the scan result is made of.
+/// "3 matched rules".
 fn matched_summary(report: &Report) -> String {
     let count = report.findings.len();
     let label = if count == 1 {
@@ -47,15 +46,20 @@ fn matched_summary(report: &Report) -> String {
     } else {
         "matched rules"
     };
-    let outcomes = report
-        .inputs
-        .as_deref()
-        .map(super::inputs::outcome_counts)
-        .unwrap_or_default();
-    if outcomes.is_empty() {
-        format!("{count} {label}")
-    } else {
-        format!("{count} {label} · {outcomes}")
+    format!("{count} {label}")
+}
+
+/// The badge of a result: what happened to its inputs, except that a scan
+/// with no enabled rules says so, and a result saved without inputs keeps
+/// the state it always had.
+fn status_badge(report: &Report) -> (&'static str, egui::Color32) {
+    let overall = match report.inputs.as_deref() {
+        Some(inputs) if report.state != State::NoRules => super::inputs::overall(inputs),
+        _ => None,
+    };
+    match overall {
+        Some(overall) => (overall.label(), overall.tone()),
+        None => (state(&report.state), state_tone(&report.state)),
     }
 }
 
@@ -285,14 +289,8 @@ impl View {
         }
         if let Some(Ok(report)) = self.results[index].as_ref() {
             parts.push(StatusPart::Count(matched_summary(report)));
-            // Input outcomes speak for a complete scan; only a limit of the
-            // engine itself (or a result saved without inputs) gets a badge.
-            if report.state != State::Complete || report.inputs.is_none() {
-                parts.push(StatusPart::Badge(
-                    state(&report.state),
-                    state_tone(&report.state),
-                ));
-            }
+            let (label, tone) = status_badge(report);
+            parts.push(StatusPart::Badge(label, tone));
             let (short, long) = evaluated_text(report);
             parts.push(StatusPart::Evaluated(short, long));
         }
@@ -326,7 +324,10 @@ impl View {
             long.push(full);
         };
         if let Some(Ok(report)) = self.results[index].as_ref() {
-            if let Some(line) = limitation_line(&report.state) {
+            // With recorded inputs the badge already says Partial or not, by
+            // the inputs alone; an engine-level "Partial" must not contradict it.
+            let engine_partial = report.state == State::Partial && report.inputs.is_some();
+            if let Some(line) = limitation_line(&report.state).filter(|_| !engine_partial) {
                 note(line.to_owned(), line.to_owned());
             }
             if report.omitted_evidence > 0 {
@@ -597,32 +598,35 @@ mod tests {
         assert!(!joined.contains("Scan: running"), "{joined}");
         // The bar shows the progress text; the result summary sits beside it.
         assert!(joined.contains("running"), "{joined}");
-        assert!(
-            joined.contains("1 matched rule · 1 succeeded, 1 failed, 1 skipped"),
-            "{joined}"
-        );
+        assert!(joined.contains("1 matched rule"), "{joined}");
+        assert!(joined.contains("Partial"), "{joined}");
     }
 
     #[test]
-    fn the_scan_result_shows_outcome_counts_and_never_partial_for_input_problems() {
+    fn the_badge_follows_the_inputs_and_the_counts_sit_beside_scanned_inputs() {
         let mut view = scanned_view();
         view.phase[0] = "idle".into();
         let joined = panel_text(&mut view);
+        assert!(joined.contains("1 matched rule"), "{joined}");
         assert!(
-            joined.contains("1 matched rule · 1 succeeded, 1 failed, 1 skipped"),
+            joined.contains("Scanned inputs (3)")
+                && joined.contains("1 complete · 1 skipped · 1 failed"),
             "{joined}"
         );
-        let lower = joined.to_lowercase();
-        for word in ["partial", "complete", "limited"] {
-            assert!(!lower.contains(word), "{word}: {joined}");
-        }
-        // A real engine limit still has its badge; results saved without
-        // inputs keep the state badge they always had.
+        // One complete and one failed input is Partial; nothing else is.
+        assert!(joined.contains("Partial"), "{joined}");
         let Some(Ok(report)) = view.results[0].as_mut() else {
             unreachable!()
         };
-        report.state = State::Partial;
-        assert!(panel_text(&mut view).contains("Partial"));
+        // An engine state does not override the inputs.
+        report.state = State::Complete;
+        report.inputs = Some(vec![
+            input(InputOutcome::Succeeded),
+            input(InputOutcome::Skipped),
+        ]);
+        let complete = panel_text(&mut view);
+        assert!(complete.contains("Complete"), "{complete}");
+        assert!(!complete.contains("Partial"), "{complete}");
         let Some(Ok(report)) = view.results[0].as_mut() else {
             unreachable!()
         };
@@ -633,7 +637,7 @@ mod tests {
             old.contains("1 matched rule") && old.contains("Complete"),
             "{old}"
         );
-        assert!(!old.contains("succeeded"), "{old}");
+        assert!(!old.contains("complete ·"), "{old}");
     }
 
     /// Every painted text of a pane of the given size, in paint order.
@@ -701,7 +705,7 @@ mod tests {
         let scan = rect_of(&texts, "Scan");
         for needle in [
             "Scan: canceled",
-            "1 matched rule · 1 succeeded, 1 failed, 1 skipped",
+            "1 matched rule",
             "1 object · 2,094 rules evaluated",
         ] {
             let item = rect_of(&texts, needle);
