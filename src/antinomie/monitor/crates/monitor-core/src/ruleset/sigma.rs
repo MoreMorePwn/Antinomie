@@ -2,8 +2,9 @@
 //! Sigma rule parsing and the captured-category check.
 use super::*;
 
-const SIGMA_CATEGORIES: [&str; 10] = [
+const SIGMA_CATEGORIES: [&str; 11] = [
     "process_creation",
+    "process_termination",
     "file_event",
     "file_delete",
     "file_rename",

@@ -287,6 +287,28 @@ fn build(
         call: call.call_id,
     };
     let time = (event.timestamp_ns != 0).then_some(Moment::GuestNs(event.timestamp_ns));
+    if let Some(ended) = call
+        .task_exit
+        .as_ref()
+        .filter(|ended| ended.pid == ended.tid)
+    {
+        // The process (its thread-group leader) ended in this call. Only what
+        // the trace recorded is reported: the call's own Syscall, Operation
+        // and Result describe what it was doing, not how it ended.
+        let mut ended_fields = BTreeMap::from([
+            ("ProcessId".into(), serde_json::json!(ended.pid)),
+            ("ThreadId".into(), serde_json::json!(ended.tid)),
+        ]);
+        text(&mut ended_fields, "Image", image.as_deref());
+        kernel_records::sysmon_user(&mut ended_fields, creds.as_ref());
+        events.push(Event {
+            category: "process_termination".into(),
+            fields: ended_fields,
+            evidence: evidence.clone(),
+            time: (ended.timestamp_ns != 0).then_some(Moment::GuestNs(ended.timestamp_ns)),
+            inferred: Vec::new(),
+        });
+    }
     let mut emit =
         |category: &str, fields: BTreeMap<String, serde_json::Value>, inferred: Vec<String>| {
             events.push(Event {

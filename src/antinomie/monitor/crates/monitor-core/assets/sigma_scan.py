@@ -16,7 +16,7 @@ MAX_RULE_SIZE = 1024 * 1024
 # Evaluation budget: rules and seconds. Reaching either leaves the scan partial.
 MAX_RULES = 4096
 EVALUATION_SECONDS = 90
-SUPPORTED_CATEGORIES = {"process_creation", "file_event", "file_delete", "file_rename", "file_access", "dns_query", "http_request", "network_connection", "antinomie_bpf", "antinomie_file_metadata", "auditd"}
+SUPPORTED_CATEGORIES = {"process_creation", "process_termination", "file_event", "file_delete", "file_rename", "file_access", "dns_query", "http_request", "network_connection", "antinomie_bpf", "antinomie_file_metadata", "auditd"}
 # Journal format versions this adapter reads. Version 2 added the per-event `_inferred` list; version 3 the credential and hash fields.
 JOURNAL_VERSIONS = {1, 2, 3}
 # `service: auditd` rules evaluate the auditd-style records, stored under this one category.
