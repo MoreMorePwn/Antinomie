@@ -4,23 +4,19 @@
 //! `boots/<boot>/network/<capture>.pcap` with a small JSON summary beside it;
 //! boots recorded before captures were started by hand have one
 //! `boots/<boot>/network.pcap` covering the whole boot.
-//! This module reads a capture back as one-line packet summaries, the way a
-//! packet list in Wireshark does, and hands raw frames to the detail view.
+//! The packet list and details are TShark's (see `packet_filter`); this module
+//! lists the captures, reads their raw frames, and builds the QEMU commands.
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
     fs::File,
     io::{BufReader, Read, Seek, SeekFrom},
     net::IpAddr,
     path::{Path, PathBuf},
 };
 
-mod dissect;
 mod pcap;
-mod reconstruct;
-mod summary;
 
-pub use self::{dissect::*, pcap::*, reconstruct::*, summary::*};
+pub use self::pcap::*;
 
 /// File name of a whole-boot network capture (boots before 0.3.0 recorded
 /// network traffic for as long as the VM ran).
@@ -192,6 +188,13 @@ pub fn list_captures(recordings: &Path) -> Vec<NetworkCapture> {
     found
 }
 
+/// The transport a TCP or UDP port in a packet row belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Transport {
+    Tcp,
+    Udp,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetworkPacket {
     /// Position in the capture, from 1.
@@ -219,9 +222,8 @@ pub struct NetworkPacket {
     /// TCP header flags (`TCP_SYN`, ...), for TCP segments.
     #[serde(default)]
     pub tcp_flags: Option<u8>,
-    /// TCP sequence number, when the segment header was captured.
     #[serde(default)]
-    pub tcp_seq: Option<u32>,
+    pub transport: Option<Transport>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -230,90 +232,6 @@ pub struct NetworkPage {
     /// Where the next read starts; equal to the file size at the end.
     pub next_offset: u64,
     pub next_number: u64,
-}
-
-/// What a decoded field holds, for its color in the packet tree.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FieldKind {
-    Number,
-    /// MAC and IP addresses.
-    Address,
-    Flags,
-    /// Host names, record and message types.
-    Name,
-    Text,
-    Bytes,
-}
-
-/// One line of a decoded layer and the frame bytes it covers.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PacketField {
-    pub name: String,
-    pub value: String,
-    pub kind: FieldKind,
-    /// Byte range in the frame.
-    pub start: usize,
-    pub len: usize,
-    /// 0 for a field of the layer, 1 for a part of the field above it.
-    pub depth: u8,
-}
-
-/// One protocol layer of a frame (Ethernet II, IPv4, TCP, DNS, ...), the
-/// way Wireshark's packet details tree shows it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PacketLayer {
-    pub name: String,
-    /// A one-line summary beside the name ("Src 10.0.2.15, Dst 10.0.2.3").
-    pub summary: String,
-    /// Byte range in the frame.
-    pub start: usize,
-    pub len: usize,
-    pub fields: Vec<PacketField>,
-}
-
-/// One captured Ethernet frame the monitor has already read from a pcap.
-pub struct CapturedFrame<'a> {
-    pub number: u64,
-    pub time_us: u64,
-    pub bytes: &'a [u8],
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReconstructedHttp {
-    pub method: String,
-    pub host: String,
-    pub uri: String,
-    pub version: String,
-    pub status: Option<u16>,
-    pub request_frames: Vec<u64>,
-    pub response_frames: Vec<u64>,
-    pub complete: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReconstructedDns {
-    pub id: u16,
-    pub name: String,
-    pub qtype: String,
-    pub class_name: String,
-    pub protocol: &'static str,
-    pub rcode: Option<u16>,
-    pub answers: Vec<String>,
-    pub query_frames: Vec<u64>,
-    pub response_frames: Vec<u64>,
-    pub retry: bool,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Reconstruction {
-    pub http: Vec<ReconstructedHttp>,
-    pub dns: Vec<ReconstructedDns>,
-    /// Cleartext TLS records seen. Their contents are not turned into URLs.
-    pub https_segments: u64,
-    /// HTTP/2 connection prefaces seen. Those streams are not decoded.
-    pub http2_prefaces: u64,
-    pub retransmissions_dropped: u64,
-    pub notes: Vec<String>,
 }
 
 #[cfg(test)]

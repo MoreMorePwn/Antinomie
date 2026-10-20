@@ -59,10 +59,6 @@ impl MonitorApp {
             run_finished: !self.live_history_run(&run),
             current_boot: self.snapshot.active_vm.as_deref() == Some(run.vm_id.as_str())
                 && self.snapshot.boot_id.as_deref() == Some(run.boot_id.as_str()),
-            #[cfg(test)]
-            packets: &[],
-            #[cfg(test)]
-            frames: None,
         };
         self.triage.set_address_lookup(self.settings.address_lookup);
         self.configure_detection();

@@ -8,8 +8,6 @@ fn input<'a>(archive: &'a Path, finished: bool) -> TriageInput<'a> {
     TriageInput {
         analysis: None,
         invocations: &[],
-        packets: &[],
-        frames: None,
         vm_id: Some("vm"),
         boot_id: Some("boot"),
         run_id: Some("done"),

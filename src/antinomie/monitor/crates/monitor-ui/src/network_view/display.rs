@@ -3,87 +3,101 @@
 use super::*;
 
 impl NetworkView {
-    pub(super) fn reconstruction(&self) -> Option<antinomie_monitor_core::network::Reconstruction> {
-        let frames = self
-            .payloads
-            .as_ref()
-            .filter(|cache| !cache.frames.is_empty())
-            .map(|cache| cache.frames.clone())?;
-        let captured: Vec<_> = self
-            .list
-            .packets
-            .iter()
-            .zip(frames.iter())
-            .map(
-                |(packet, bytes)| antinomie_monitor_core::network::CapturedFrame {
-                    number: packet.number,
-                    time_us: packet.time_us,
-                    bytes,
-                },
-            )
-            .collect();
-        Some(antinomie_monitor_core::network::reconstruct(&captured))
+    /// Whether TShark cannot run, and why. Without it the list holds raw
+    /// frames only and nothing is decoded.
+    pub(super) fn tshark_unavailable(&self) -> Option<String> {
+        match &self.display_worker {
+            Some(worker) => match worker.fields() {
+                FieldRegistry::Unavailable(error) => Some(error),
+                _ => None,
+            },
+            None => self.display_worker_error.clone(),
+        }
     }
 
-    pub(super) fn refresh_payloads(&mut self) {
-        const LIMIT: usize = 128;
-        let Some(path) = self.list.path.clone() else {
-            self.payloads = None;
+    /// Packets of the open capture the list can show: TShark's count of the
+    /// frames it has parsed, or the raw frames read without it.
+    pub(super) fn loaded_count(&self) -> usize {
+        match (&self.display_index, self.raw_frames()) {
+            (Some(index), false) => index.rows().done_count() as usize,
+            _ => self.list.packets.len(),
+        }
+    }
+
+    /// The list shows raw frames read from the pcap (TShark is unavailable).
+    pub(super) fn raw_frames(&self) -> bool {
+        self.tshark_unavailable().is_some()
+    }
+
+    pub(super) fn clear_detail(&mut self) {
+        self.detail = None;
+        self.detail_node = None;
+        if let Some(worker) = &self.display_worker {
+            worker.cancel_detail();
+        }
+    }
+
+    /// Take TShark's answer about the selected packet, when it has come.
+    pub(super) fn poll_detail(&mut self) {
+        let Some(worker) = &self.display_worker else {
             return;
         };
-        let offsets: Vec<u64> = self
-            .list
-            .packets
-            .iter()
-            .take(LIMIT)
-            .map(|packet| packet.offset)
-            .collect();
-        if self
-            .payloads
-            .as_ref()
-            .is_some_and(|cache| cache.path == path && cache.offsets == offsets)
+        if let Some(PacketFilterEvent::Detail {
+            generation,
+            number,
+            result,
+        }) = worker.poll_detail()
         {
-            return;
-        }
-        let mut frames = Vec::with_capacity(offsets.len());
-        for offset in &offsets {
-            match antinomie_monitor_core::network::frame(&path, *offset) {
-                Ok(bytes) => frames.push(bytes),
-                Err(error) => {
-                    self.payloads = Some(PayloadCache {
-                        path,
-                        offsets,
-                        frames: Vec::new(),
-                        note: Some(format!("Request reconstruction is unavailable: {error}")),
-                    });
-                    return;
-                }
+            if let Some(detail) = self
+                .detail
+                .as_mut()
+                .filter(|detail| detail.generation == generation && detail.number == number)
+            {
+                detail.state = match result {
+                    Ok(ready) => DetailState::Ready(ready),
+                    Err(error) => DetailState::Failed(error),
+                };
             }
         }
-        let note = if self.list.packets.len() > LIMIT {
-            Some(format!(
-                "Reconstruction uses the first {LIMIT} loaded packets, not the whole capture."
-            ))
-        } else if frames.is_empty() {
-            Some(
-                "Request reconstruction is unavailable for this view: the loaded packet list has no payload."
-                    .into(),
-            )
-        } else {
-            None
+    }
+
+    /// Ask TShark for the details of the selected packet, once per selection.
+    pub(super) fn request_detail(&mut self, number: u64, ctx: &egui::Context) {
+        if self
+            .detail
+            .as_ref()
+            .is_some_and(|detail| detail.number == number)
+        {
+            if self
+                .detail
+                .as_ref()
+                .is_some_and(|detail| matches!(detail.state, DetailState::Loading))
+            {
+                ctx.request_repaint_after(Duration::from_millis(50));
+            }
+            return;
+        }
+        let (Some(worker), Some(index)) = (&self.display_worker, &self.display_index) else {
+            return;
         };
-        self.payloads = Some(PayloadCache {
-            path,
-            offsets,
-            frames,
-            note,
+        if self.tshark_unavailable().is_some() {
+            return;
+        }
+        let generation = worker.request_detail(Arc::clone(index), number);
+        self.detail = Some(DetailView {
+            number,
+            generation,
+            state: DetailState::Loading,
         });
+        self.detail_node = None;
+        ctx.request_repaint_after(Duration::from_millis(50));
     }
 
     /// Keep the last valid filter. A display expression that does not parse,
     /// including an unknown dotted field, does not become a text search.
     pub(super) fn apply_filter(&mut self) {
-        let text = self.filter.trim();
+        let text = self.filter.trim().to_owned();
+        let text = text.as_str();
         if self.applied_filter != text
             && self
                 .list
@@ -93,8 +107,7 @@ impl NetworkView {
         {
             self.list.selected = None;
             self.list.frame = None;
-            self.list.layers.clear();
-            self.list.field = None;
+            self.clear_detail();
             self.display_jump_note = Some(
                 "The quick search hides the previously selected frame. Select a visible packet."
                     .into(),
@@ -102,7 +115,7 @@ impl NetworkView {
         }
         self.applied_filter = text.to_owned();
         self.filter_error = None;
-        if self.display_index.is_some() {
+        if !self.raw_frames() {
             let parsed = Filter::parse(text);
             self.list.rows = self
                 .display_page
@@ -187,6 +200,7 @@ impl NetworkView {
                 PacketFilterEvent::Page {
                     generation,
                     start,
+                    rows_done,
                     result,
                 } if generation == self.display_generation => {
                     self.display_pending = false;
@@ -194,6 +208,7 @@ impl NetworkView {
                         Ok(packets) => {
                             self.display_page = packets;
                             self.display_page_start = start;
+                            self.display_page_progress = rows_done;
                             if let Some(index) = self.display_next_index.take() {
                                 if self
                                     .display_index
@@ -222,8 +237,9 @@ impl NetworkView {
                             if self.display_validate_selection && position.is_none() {
                                 self.list.selected = None;
                                 self.list.frame = None;
-                                self.list.layers.clear();
-                                self.list.field = None;
+                                self.detail = None;
+                                self.detail_node = None;
+                                worker.cancel_detail();
                                 self.display_validate_selection = false;
                                 self.display_jump_note = Some(format!("The display filter hides frame {number}. Select a visible packet."));
                             } else {
@@ -231,7 +247,9 @@ impl NetworkView {
                                 self.list.selected = Some(packet.clone());
                                 self.capture_details = None;
                                 self.list.frame = None;
-                                self.list.field = None;
+                                self.detail = None;
+                                self.detail_node = None;
+                                worker.cancel_detail();
                                 self.display_jump_note = if position.is_none() {
                                     Some(format!("Frame {number} is selected in Details and hidden by the current display filter."))
                                 } else if !Filter::parse(&self.filter).matches(&packet) {
@@ -255,6 +273,21 @@ impl NetworkView {
                     }
                 }
                 _ => {}
+            }
+        }
+        // Rows TShark printed after the page on screen was read.
+        if !self.display_pending {
+            if let Some(index) = self.display_index.clone() {
+                let expected = index
+                    .matching_count
+                    .saturating_sub(self.display_page_start)
+                    .min(PAGE_SIZE as u64);
+                if (self.display_page.len() as u64) < expected
+                    && index.rows().done_count() > self.display_page_progress
+                {
+                    self.display_generation = worker.request_page(index, self.display_page_start);
+                    self.display_pending = true;
+                }
             }
         }
         if !self.display_pending {
@@ -292,7 +325,6 @@ impl NetworkView {
                             self.list.rows_for = None;
                             self.list.counts = None;
                             self.list.last_read = None;
-                            self.payloads = None;
                         }
                         self.display_identity = Some(identity);
                     }
@@ -340,6 +372,13 @@ impl NetworkView {
         }
         if self.display_pending || matches!(worker.fields(), FieldRegistry::Loading) {
             ctx.request_repaint_after(Duration::from_millis(50));
+        }
+        if self
+            .display_index
+            .as_ref()
+            .is_some_and(|index| index.rows().status() == ParseStatus::Parsing)
+        {
+            ctx.request_repaint_after(Duration::from_millis(250));
         }
         if self.display_jump.is_some() && self.display_index.is_none() && !self.display_pending {
             let error = match worker.fields() {

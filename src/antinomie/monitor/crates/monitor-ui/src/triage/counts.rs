@@ -65,6 +65,7 @@ enum Metric {
     Hosts,
     Http,
     Dns,
+    Sessions,
 }
 
 impl TriageView {
@@ -81,7 +82,7 @@ impl TriageView {
             Metric::Reads => scan.counts.reads,
             Metric::Changed => scan.counts.changed,
             Metric::File(tab) => scan.counts.tabs[tab.slot() - 8],
-            Metric::Ips | Metric::Hosts | Metric::Http | Metric::Dns => {
+            Metric::Ips | Metric::Hosts | Metric::Http | Metric::Dns | Metric::Sessions => {
                 let Some((_, ips, hosts)) = scan.network_counts else {
                     return Count::Unavailable;
                 };
@@ -90,6 +91,7 @@ impl TriageView {
                     Metric::Hosts => hosts,
                     Metric::Http => scan.counts.http,
                     Metric::Dns => scan.counts.dns,
+                    Metric::Sessions => scan.counts.sessions,
                     _ => unreachable!(),
                 }
             }
@@ -150,6 +152,7 @@ impl TriageView {
                 (NetTab::Hosts, "Hosts", Metric::Hosts),
                 (NetTab::Http, "HTTP", Metric::Http),
                 (NetTab::Dns, "DNS", Metric::Dns),
+                (NetTab::Sessions, "Sessions", Metric::Sessions),
             ] {
                 if tab(
                     ui,

@@ -388,7 +388,16 @@ pub(super) fn scan_archive_query(
             pcap_open,
             cancel,
             &network_request,
-            &mut |path, http, row, destination, port| {
+            &mut |path, kind, row, destination, port| {
+                let http = match kind {
+                    RowKind::Http => true,
+                    RowKind::Dns => false,
+                    RowKind::Session => {
+                        // Sessions have a table and no detection input.
+                        counts.sessions += 1;
+                        return Ok(());
+                    }
+                };
                 if http {
                     counts.http += 1;
                 } else {
@@ -419,6 +428,8 @@ pub(super) fn scan_archive_query(
             ips_omitted: 0,
             hosts: Vec::new(),
             hosts_omitted: 0,
+            sessions: Vec::new(),
+            sessions_omitted: 0,
             network_warning: Some(format!("Network index unavailable: {error}")),
         }),
         None => PacketIndex {
@@ -433,6 +444,8 @@ pub(super) fn scan_archive_query(
             ips_omitted: 0,
             hosts: Vec::new(),
             hosts_omitted: 0,
+            sessions: Vec::new(),
+            sessions_omitted: 0,
             network_warning: Some("No network capture is available for this run.".into()),
         },
     };
@@ -524,6 +537,8 @@ pub(super) fn scan_archive_query(
         ips_omitted: network.ips_omitted,
         hosts: network.hosts,
         hosts_omitted: network.hosts_omitted,
+        sessions: network.sessions,
+        sessions_omitted: network.sessions_omitted,
         network_warning: network.network_warning,
     })
 }

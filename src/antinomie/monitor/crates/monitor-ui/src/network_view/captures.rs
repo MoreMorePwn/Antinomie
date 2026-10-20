@@ -70,7 +70,7 @@ impl NetworkView {
                     .filter(|capture| self.record_shown.contains(&capture.file))
                 {
                     let selected = self.list.path.as_ref() == Some(&active.file);
-                    let loaded = selected.then_some(self.list.packets.len());
+                    let loaded = selected.then(|| self.loaded_count());
                     let title = crate::evidence::title(
                         ui,
                         &active.file.with_extension("metadata"),

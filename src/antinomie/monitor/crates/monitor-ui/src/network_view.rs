@@ -3,12 +3,10 @@
 //! network interface to its pcap file, outside the guest; the list follows
 //! that file live.
 use crate::theme::{self, PacketColor, ValueKind};
-use antinomie_monitor_core::network::{
-    self, FieldKind, NetworkCapture, NetworkPacket, PacketLayer,
-};
+use antinomie_monitor_core::network::{self, NetworkCapture, NetworkPacket, Transport};
 use antinomie_monitor_core::packet_filter::{
-    CaptureIdentity, FieldRegistry, PacketFilterEvent, PacketFilterIndex, PacketFilterWorker,
-    PAGE_SIZE,
+    CaptureIdentity, FieldRegistry, PacketDetail, PacketFilterEvent, PacketFilterIndex,
+    PacketFilterWorker, ParseStatus, PAGE_SIZE,
 };
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
@@ -20,16 +18,18 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Packets kept in the list; older ones stay in the file (open it in Wireshark).
 mod captures;
+mod detail_tree;
 mod display;
 mod packets;
 mod toolbar;
 
-use self::{captures::*, display::*, packets::*, toolbar::*};
+use self::{captures::*, detail_tree::*, display::*, packets::*, toolbar::*};
 
+/// Raw frames kept in the list when TShark is not installed; older ones stay
+/// in the file (open it in Wireshark).
 const MAX_PACKETS: usize = 200_000;
-/// Packets read per refresh, so a large file loads over a few frames.
+/// Raw frames read per refresh, so a large file loads over a few frames.
 const READ_BATCH: usize = 5_000;
 /// Entries of each quick-filter list.
 const QUICK_ENTRIES: usize = 100;
@@ -61,7 +61,9 @@ pub(crate) struct NetworkContext<'a> {
     pub font_size: f32,
 }
 
-/// The packets read from the open capture.
+/// The open capture. With TShark installed the packet list is the page of
+/// TShark's rows in `NetworkView`; `packets` holds raw frames (number, time,
+/// length) only when TShark is not installed.
 #[derive(Default)]
 struct PacketList {
     path: Option<PathBuf>,
@@ -75,10 +77,6 @@ struct PacketList {
     size_checked: Option<(Instant, bool)>,
     selected: Option<NetworkPacket>,
     frame: Option<(u64, Result<Vec<u8>, String>)>,
-    /// The selected frame's decoded layers, and the chosen layer (and field)
-    /// whose bytes are marked.
-    layers: Vec<PacketLayer>,
-    field: Option<(usize, Option<usize>)>,
     /// Packets matching the filter, and the filter and packet count they were
     /// computed for (new packets are filtered as they arrive).
     rows: Vec<usize>,
@@ -127,16 +125,26 @@ pub(crate) struct NetworkView {
     hide_list: bool,
     /// Details shows the clicked capture's record, until a packet is chosen.
     capture_details: Option<(NetworkCapture, bool)>,
-    /// Payload bytes for the packets currently loaded. `None` when a record
-    /// could not be read; an empty capture is not treated as reconstructed HTTP.
-    payloads: Option<PayloadCache>,
+    /// TShark's details of the selected packet, the lines the user expanded
+    /// or collapsed (by kind of line), and the line whose bytes are marked.
+    detail: Option<DetailView>,
+    detail_open: HashMap<String, bool>,
+    detail_node: Option<usize>,
+    /// Rows TShark had parsed when the page on screen was read.
+    display_page_progress: u64,
 }
 
-struct PayloadCache {
-    path: PathBuf,
-    offsets: Vec<u64>,
-    frames: Vec<Vec<u8>>,
-    note: Option<String>,
+/// The selected packet's details from TShark.
+struct DetailView {
+    number: u64,
+    generation: u64,
+    state: DetailState,
+}
+
+enum DetailState {
+    Loading,
+    Ready(Box<PacketDetail>),
+    Failed(String),
 }
 
 /// Native quick search, separate from the external display-filter grammar.
@@ -325,6 +333,7 @@ impl NetworkView {
         }
         if self.list.path.as_deref() == Some(file) {
             self.list = PacketList::new(None);
+            self.release_capture();
             self.reset_display_capture();
         }
     }
@@ -332,13 +341,22 @@ impl NetworkView {
     pub(crate) fn open(&mut self, path: Option<PathBuf>) {
         if self.list.path != path {
             self.list = PacketList::new(path);
+            self.release_capture();
             self.reset_display_capture();
+        }
+    }
+
+    /// The capture on screen is gone or replaced: stop parsing it.
+    fn release_capture(&self) {
+        if let Some(worker) = &self.display_worker {
+            worker.release();
         }
     }
 
     fn reset_display_capture(&mut self) {
         if let Some(worker) = &self.display_worker {
             worker.cancel();
+            worker.cancel_detail();
         }
         self.display_index = None;
         self.display_next_index = None;
@@ -353,7 +371,8 @@ impl NetworkView {
         self.display_jump = None;
         self.display_validate_selection = false;
         self.display_jump_note = None;
-        self.payloads = None;
+        self.clear_detail();
+        self.display_page_progress = 0;
     }
 
     /// Select an original PCAP frame, including a frame outside the current
@@ -385,8 +404,7 @@ impl NetworkView {
         self.display_follow_live = false;
         self.list.selected = None;
         self.list.frame = None;
-        self.list.layers.clear();
-        self.list.field = None;
+        self.clear_detail();
         Ok(())
     }
 
@@ -418,6 +436,7 @@ impl NetworkView {
                 .map(|(_, file)| file.clone())
                 .or_else(|| self.captures.first().map(|capture| capture.file.clone()));
             self.list = PacketList::new(first);
+            self.release_capture();
             self.reset_display_capture();
             self.seen_active = active.clone();
         } else if self.seen_active != active {
@@ -431,7 +450,7 @@ impl NetworkView {
         let is_live =
             active.is_some() && self.list.path.as_ref() == active.as_ref().map(|(_, file)| file);
         self.refresh_display(is_live, ui.ctx());
-        if self.display_index.is_none() {
+        if self.raw_frames() {
             self.list.refresh(is_live);
         }
         if active.is_some() {

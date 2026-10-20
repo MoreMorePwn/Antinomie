@@ -240,7 +240,7 @@ impl TabSink {
     }
 
     pub(super) fn new(request: &ScanRequest, cancel: &Arc<AtomicBool>) -> Self {
-        let slots = std::iter::once(1).chain(8..SLOTS);
+        let slots = std::iter::once(1).chain(8..8 + FILE_TABS);
         Self {
             pages: slots
                 .clone()

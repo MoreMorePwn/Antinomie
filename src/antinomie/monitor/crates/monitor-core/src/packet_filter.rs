@@ -2,6 +2,11 @@
 //! Display filters delegated to the separately installed, unmodified TShark
 //! executable. Live PCAP snapshots and all disk indexes are private; no engine
 //! code is linked, copied, or bundled with the monitor.
+pub use self::{
+    parse::PacketDetail,
+    pdml::{DetailNode, PacketTree},
+    rows::{ParseStatus, RowStore},
+};
 use crate::network::{self, NetworkPacket};
 use std::{
     fs::{self, File, OpenOptions},
@@ -13,7 +18,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
-        Arc, Condvar, Mutex,
+        Arc, Condvar, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread::{self, JoinHandle},
@@ -133,10 +138,29 @@ struct Snapshot {
     live: bool,
 }
 
-/// A complete result with disk-backed frame numbers and offsets.
+impl Snapshot {
+    /// File offset of frame `number`'s record in [`Self::capture_path`].
+    fn offset_of(&self, number: u64) -> Result<u64, String> {
+        let mut offsets =
+            File::open(self.scratch.path.join("offsets")).map_err(|e| e.to_string())?;
+        offsets
+            .seek(SeekFrom::Start(
+                number
+                    .checked_sub(1)
+                    .and_then(|n| n.checked_mul(8))
+                    .ok_or("invalid frame number")?,
+            ))
+            .map_err(|e| e.to_string())?;
+        read_u64(&mut offsets)
+    }
+}
+
+/// A complete result: which frames match, and the rows TShark printed for them.
 pub struct PacketFilterIndex {
     snapshot: Arc<Snapshot>,
-    matches: Scratch,
+    /// Frame numbers that match, ascending; `None` when every frame does.
+    matches: Option<Scratch>,
+    rows: Arc<RowStore>,
     pub matching_count: u64,
     pub expression: String,
 }
@@ -153,6 +177,10 @@ impl PacketFilterIndex {
     }
     pub fn first_time_us(&self) -> u64 {
         self.snapshot.first_time_us
+    }
+    /// The parse that fills the packet list: its progress and outcome.
+    pub fn rows(&self) -> &RowStore {
+        &self.rows
     }
 
     pub fn frame(&self, offset: u64) -> Result<Vec<u8>, String> {
@@ -172,6 +200,36 @@ impl PacketFilterIndex {
         Ok(())
     }
 
+    /// Frame numbers `start..start + count` of the matching frames.
+    fn numbers(&self, start: u64, count: u64) -> Result<Vec<u64>, String> {
+        let Some(matches) = &self.matches else {
+            return Ok((start + 1..=start + count).collect());
+        };
+        let mut file = File::open(matches.path.join("matches")).map_err(|e| e.to_string())?;
+        file.seek(SeekFrom::Start(
+            start.checked_mul(8).ok_or("packet page offset overflow")?,
+        ))
+        .map_err(|e| e.to_string())?;
+        (0..count).map(|_| read_u64(&mut file)).collect()
+    }
+
+    /// The packet list rows of `numbers` with their capture file offsets.
+    /// Rows TShark has not printed yet end the list.
+    fn packets(&self, numbers: &[u64]) -> Result<Vec<NetworkPacket>, String> {
+        let mut packets = self.rows.read(numbers)?;
+        if !packets.is_empty() {
+            let mut offsets = File::open(self.snapshot.scratch.path.join("offsets"))
+                .map_err(|e| e.to_string())?;
+            for packet in &mut packets {
+                offsets
+                    .seek(SeekFrom::Start((packet.number - 1) * 8))
+                    .map_err(|e| e.to_string())?;
+                packet.offset = read_u64(&mut offsets)?;
+            }
+        }
+        Ok(packets)
+    }
+
     fn lookup_frame(&self, number: u64) -> Result<(NetworkPacket, Option<u64>), String> {
         self.check_source()?;
         if number == 0 || number > self.packet_count() {
@@ -180,75 +238,48 @@ impl PacketFilterIndex {
                 self.packet_count()
             ));
         }
-        let mut offsets =
-            File::open(self.snapshot.scratch.path.join("offsets")).map_err(|e| e.to_string())?;
-        offsets
-            .seek(SeekFrom::Start((number - 1) * 8))
-            .map_err(|e| e.to_string())?;
-        let offset = read_u64(&mut offsets)?;
-        let packet = network::read_page(&self.snapshot.capture_path, offset, number - 1, 1)?
-            .packets
+        let packet = self
+            .packets(&[number])?
             .pop()
-            .ok_or("selected frame is missing from capture")?;
-        let mut matches =
-            File::open(self.matches.path.join("matches")).map_err(|e| e.to_string())?;
-        let (mut low, mut high) = (0, self.matching_count);
-        let mut position = None;
-        while low < high {
-            let middle = low + (high - low) / 2;
-            matches
-                .seek(SeekFrom::Start(middle * 8))
-                .map_err(|e| e.to_string())?;
-            let candidate = read_u64(&mut matches)?;
-            match candidate.cmp(&number) {
-                std::cmp::Ordering::Less => low = middle + 1,
-                std::cmp::Ordering::Greater => high = middle,
-                std::cmp::Ordering::Equal => {
-                    position = Some(middle);
-                    break;
+            .ok_or_else(|| format!("TShark has not parsed frame {number} yet"))?;
+        let position = match &self.matches {
+            None => Some(number - 1),
+            Some(matches) => {
+                let mut file =
+                    File::open(matches.path.join("matches")).map_err(|e| e.to_string())?;
+                let (mut low, mut high) = (0, self.matching_count);
+                let mut position = None;
+                while low < high {
+                    let middle = low + (high - low) / 2;
+                    file.seek(SeekFrom::Start(middle * 8))
+                        .map_err(|e| e.to_string())?;
+                    let candidate = read_u64(&mut file)?;
+                    match candidate.cmp(&number) {
+                        std::cmp::Ordering::Less => low = middle + 1,
+                        std::cmp::Ordering::Greater => high = middle,
+                        std::cmp::Ordering::Equal => {
+                            position = Some(middle);
+                            break;
+                        }
+                    }
                 }
+                position
             }
-        }
+        };
         self.check_source()?;
         Ok((packet, position))
     }
 
-    /// Decode a bounded page from the same immutable snapshot used by TShark.
-    /// Packet offsets and numbers remain those of the original capture.
+    /// A page of the packet list from the rows TShark printed. Rows past the
+    /// parse's progress are left out, so a page can be short while parsing.
     pub fn read_page(&self, start: u64, limit: usize) -> Result<Vec<NetworkPacket>, String> {
         self.check_source()?;
         let count = self
             .matching_count
             .saturating_sub(start)
             .min(limit.min(PAGE_SIZE) as u64);
-        let mut matches =
-            File::open(self.matches.path.join("matches")).map_err(|e| e.to_string())?;
-        matches
-            .seek(SeekFrom::Start(
-                start.checked_mul(8).ok_or("packet page offset overflow")?,
-            ))
-            .map_err(|e| e.to_string())?;
-        let mut offsets =
-            File::open(self.snapshot.scratch.path.join("offsets")).map_err(|e| e.to_string())?;
-        let mut packets = Vec::with_capacity(count as usize);
-        for _ in 0..count {
-            let number = read_u64(&mut matches)?;
-            offsets
-                .seek(SeekFrom::Start(
-                    number
-                        .checked_sub(1)
-                        .and_then(|n| n.checked_mul(8))
-                        .ok_or("invalid frame number")?,
-                ))
-                .map_err(|e| e.to_string())?;
-            let offset = read_u64(&mut offsets)?;
-            let mut page = network::read_page(&self.snapshot.capture_path, offset, number - 1, 1)?;
-            let packet = page
-                .packets
-                .pop()
-                .ok_or("indexed packet is missing from snapshot")?;
-            packets.push(packet);
-        }
+        let numbers = self.numbers(start, count)?;
+        let packets = self.packets(&numbers)?;
         self.check_source()?;
         Ok(packets)
     }
@@ -270,12 +301,21 @@ pub enum PacketFilterEvent {
     Page {
         generation: u64,
         start: u64,
+        /// Rows TShark had printed before the page was read: the page holds
+        /// every one of its frames up to that many.
+        rows_done: u64,
         result: Result<Vec<NetworkPacket>, String>,
     },
     Frame {
         generation: u64,
         number: u64,
         result: Result<(NetworkPacket, Option<u64>), String>,
+    },
+    /// TShark's details of one frame.
+    Detail {
+        generation: u64,
+        number: u64,
+        result: Result<Box<PacketDetail>, String>,
     },
 }
 
@@ -296,6 +336,13 @@ enum Job {
         index: Arc<PacketFilterIndex>,
         number: u64,
     },
+    Detail {
+        generation: u64,
+        index: Arc<PacketFilterIndex>,
+        number: u64,
+    },
+    /// Stop parsing the open capture and forget it.
+    Release,
 }
 
 struct Shared {
@@ -308,11 +355,36 @@ struct Shared {
     cleanup_error: Mutex<Option<String>>,
 }
 
-/// One latest-request-only worker. Child processes have deadlines, bounded
-/// output, cancellation, and are reaped before the next request begins.
+impl Shared {
+    fn new(stop: Arc<AtomicBool>) -> Self {
+        Self {
+            pending: Mutex::new(None),
+            wake: Condvar::new(),
+            generation: AtomicU64::new(0),
+            stop,
+            result: Mutex::new(None),
+            fields: Mutex::new(FieldRegistry::Loading),
+            cleanup_error: Mutex::new(None),
+        }
+    }
+}
+
+/// The capture the worker has open: its identity, and the parse of its rows.
+struct OpenCapture {
+    identity: CaptureIdentity,
+    rows: Arc<RowStore>,
+}
+
+/// Two latest-request-only workers. One makes the snapshot, evaluates the
+/// display filter and pages rows; the other asks TShark for the details of
+/// the selected frame, so a refresh never cancels it. The packet list itself
+/// is parsed on a third, per-capture thread. Child processes have deadlines,
+/// bounded output, cancellation, and are reaped before the next request.
 pub struct PacketFilterWorker {
     shared: Arc<Shared>,
+    detail: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
+    detail_thread: Option<JoinHandle<()>>,
 }
 
 impl PacketFilterWorker {
@@ -321,114 +393,24 @@ impl PacketFilterWorker {
     }
 
     fn with_program(program: PathBuf) -> Result<Self, String> {
-        let shared = Arc::new(Shared {
-            pending: Mutex::new(None),
-            wake: Condvar::new(),
-            generation: AtomicU64::new(0),
-            stop: Arc::new(AtomicBool::new(false)),
-            result: Mutex::new(None),
-            fields: Mutex::new(FieldRegistry::Loading),
-            cleanup_error: Mutex::new(None),
-        });
+        let shared = Arc::new(Shared::new(Arc::new(AtomicBool::new(false))));
+        let detail = Arc::new(Shared::new(Arc::new(AtomicBool::new(false))));
         let worker = Arc::clone(&shared);
+        let detail_program = program.clone();
+        let detail_worker = Arc::clone(&detail);
+        let detail_thread = thread::Builder::new()
+            .name("packet-detail".into())
+            .spawn(move || detail_loop(&detail_program, &detail_worker))
+            .map_err(|e| format!("packet detail worker: {e}"))?;
         let thread = thread::Builder::new()
             .name("packet-display-filter".into())
-            .spawn(move || {
-                let fields = discover_fields(&program, &worker);
-                *worker.fields.lock().unwrap_or_else(|e| e.into_inner()) = match fields {
-                    Ok(fields) => FieldRegistry::Ready(Arc::new(fields)),
-                    Err(error) => FieldRegistry::Unavailable(error),
-                };
-                let mut snapshot: Option<Arc<Snapshot>> = None;
-                loop {
-                    let job = {
-                        let mut pending = worker.pending.lock().unwrap_or_else(|e| e.into_inner());
-                        while pending.is_none() && !worker.stop.load(Ordering::Acquire) {
-                            pending = worker.wake.wait(pending).unwrap_or_else(|e| e.into_inner());
-                        }
-                        if worker.stop.load(Ordering::Acquire) {
-                            break;
-                        }
-                        pending.take()
-                    };
-                    let Some(job) = job else {
-                        continue;
-                    };
-                    let (generation, event) = match job {
-                        Job::Evaluate {
-                            generation,
-                            identity,
-                            expression,
-                            live,
-                        } => {
-                            let result = (|| {
-                                if snapshot
-                                    .as_ref()
-                                    .is_none_or(|s| s.identity != identity || s.live != live)
-                                {
-                                    snapshot = Some(Arc::new(make_snapshot(
-                                        &identity, &worker, generation, live,
-                                    )?));
-                                }
-                                evaluate(
-                                    &program,
-                                    Arc::clone(snapshot.as_ref().ok_or("missing packet snapshot")?),
-                                    &expression,
-                                    &worker,
-                                    generation,
-                                )
-                                .map(Arc::new)
-                            })();
-                            (
-                                generation,
-                                PacketFilterEvent::Evaluated {
-                                    generation,
-                                    identity,
-                                    expression,
-                                    result,
-                                },
-                            )
-                        }
-                        Job::Page {
-                            generation,
-                            index,
-                            start,
-                        } => {
-                            let result = index.read_page(start, PAGE_SIZE);
-                            (
-                                generation,
-                                PacketFilterEvent::Page {
-                                    generation,
-                                    start,
-                                    result,
-                                },
-                            )
-                        }
-                        Job::Frame {
-                            generation,
-                            index,
-                            number,
-                        } => {
-                            let result = index.lookup_frame(number);
-                            (
-                                generation,
-                                PacketFilterEvent::Frame {
-                                    generation,
-                                    number,
-                                    result,
-                                },
-                            )
-                        }
-                    };
-                    if !cancelled(&worker, generation) {
-                        *worker.result.lock().unwrap_or_else(|e| e.into_inner()) = Some(event);
-                    }
-                }
-            })
+            .spawn(move || filter_loop(&program, &worker))
             .map_err(|e| format!("packet worker: {e}"))?;
         Ok(Self {
             shared,
+            detail,
             thread: Some(thread),
+            detail_thread: Some(detail_thread),
         })
     }
 
@@ -450,6 +432,14 @@ impl PacketFilterWorker {
     }
     pub fn poll(&self) -> Option<PacketFilterEvent> {
         self.shared
+            .result
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+    }
+    /// The finished details request, if any.
+    pub fn poll_detail(&self) -> Option<PacketFilterEvent> {
+        self.detail
             .result
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -484,6 +474,40 @@ impl PacketFilterWorker {
         });
         generation
     }
+    /// Ask TShark for frame `number`'s details. A newer request replaces an
+    /// older one (its TShark is stopped).
+    pub fn request_detail(&self, index: Arc<PacketFilterIndex>, number: u64) -> u64 {
+        let generation = self.detail.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        *self.detail.result.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self
+            .detail
+            .pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(Job::Detail {
+            generation,
+            index,
+            number,
+        });
+        self.detail.wake.notify_one();
+        generation
+    }
+    /// Drop a details request that is no longer wanted.
+    pub fn cancel_detail(&self) {
+        self.detail.generation.fetch_add(1, Ordering::AcqRel);
+        *self
+            .detail
+            .pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
+        *self.detail.result.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+    /// Stop parsing the open capture (the view moved to another one or
+    /// closed). A later request for the same capture starts again.
+    pub fn release(&self) {
+        self.cancel();
+        self.cancel_detail();
+        self.submit(Job::Release);
+    }
     fn submit(&self, job: Job) {
         *self.shared.result.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self
@@ -506,19 +530,227 @@ impl PacketFilterWorker {
 
 impl Drop for PacketFilterWorker {
     fn drop(&mut self) {
-        self.shared.stop.store(true, Ordering::Release);
+        for shared in [&self.shared, &self.detail] {
+            shared.stop.store(true, Ordering::Release);
+        }
         self.cancel();
+        self.cancel_detail();
         self.shared.wake.notify_one();
-        // The worker retains process ownership while cancellation finishes, so
+        self.detail.wake.notify_one();
+        // The workers retain process ownership while cancellation finishes, so
         // destroying a VM view never blocks its UI on a busy external decoder.
-        if let Some(worker) = self.thread.take() {
-            drop(worker);
+        drop(self.thread.take());
+        drop(self.detail_thread.take());
+    }
+}
+
+/// Block until a job is pending; `None` when the worker is stopping.
+fn next_job(worker: &Shared) -> Option<Job> {
+    let mut pending = worker.pending.lock().unwrap_or_else(|e| e.into_inner());
+    loop {
+        if worker.stop.load(Ordering::Acquire) {
+            return None;
+        }
+        if let Some(job) = pending.take() {
+            return Some(job);
+        }
+        pending = worker.wake.wait(pending).unwrap_or_else(|e| e.into_inner());
+    }
+}
+
+fn publish(worker: &Shared, generation: u64, event: PacketFilterEvent) {
+    if !cancelled(worker, generation) {
+        *worker.result.lock().unwrap_or_else(|e| e.into_inner()) = Some(event);
+    }
+}
+
+fn detail_loop(program: &Path, worker: &Shared) {
+    while let Some(job) = next_job(worker) {
+        if let Job::Detail {
+            generation,
+            index,
+            number,
+        } = job
+        {
+            let result = parse::load_detail(program, &index.snapshot, number, worker, generation)
+                .map(Box::new);
+            publish(
+                worker,
+                generation,
+                PacketFilterEvent::Detail {
+                    generation,
+                    number,
+                    result,
+                },
+            );
         }
     }
 }
 
+fn filter_loop(program: &Path, worker: &Shared) {
+    let fields = discover_fields(program, worker);
+    *worker.fields.lock().unwrap_or_else(|e| e.into_inner()) = match fields {
+        Ok(fields) => FieldRegistry::Ready(Arc::new(fields)),
+        Err(error) => FieldRegistry::Unavailable(error),
+    };
+    let version = parse::tshark_version(program, worker).unwrap_or_default();
+    let mut snapshot: Option<Arc<Snapshot>> = None;
+    let mut open: Option<OpenCapture> = None;
+    while let Some(job) = next_job(worker) {
+        let (generation, event) = match job {
+            Job::Release => {
+                if let Some(open) = open.take() {
+                    open.rows.cancel();
+                }
+                snapshot = None;
+                continue;
+            }
+            Job::Detail { .. } => continue,
+            Job::Evaluate {
+                generation,
+                identity,
+                expression,
+                live,
+            } => {
+                let result = (|| {
+                    if snapshot
+                        .as_ref()
+                        .is_none_or(|s| s.identity != identity || s.live != live)
+                    {
+                        snapshot = Some(Arc::new(make_snapshot(
+                            &identity, worker, generation, live,
+                        )?));
+                    }
+                    let snapshot = Arc::clone(snapshot.as_ref().ok_or("missing packet snapshot")?);
+                    let rows = ensure_rows(program, &version, &mut open, &snapshot);
+                    evaluate(program, snapshot, rows, &expression, worker, generation).map(Arc::new)
+                })();
+                (
+                    generation,
+                    PacketFilterEvent::Evaluated {
+                        generation,
+                        identity,
+                        expression,
+                        result,
+                    },
+                )
+            }
+            Job::Page {
+                generation,
+                index,
+                start,
+            } => {
+                let rows_done = index.rows().done_count();
+                (
+                    generation,
+                    PacketFilterEvent::Page {
+                        generation,
+                        start,
+                        rows_done,
+                        result: index.read_page(start, PAGE_SIZE),
+                    },
+                )
+            }
+            Job::Frame {
+                generation,
+                index,
+                number,
+            } => (
+                generation,
+                PacketFilterEvent::Frame {
+                    generation,
+                    number,
+                    result: index.lookup_frame(number),
+                },
+            ),
+        };
+        publish(worker, generation, event);
+    }
+    if let Some(open) = open.take() {
+        open.rows.cancel();
+    }
+}
+
+/// The parse of `snapshot`'s packet list: the one already running or done for
+/// this capture (continued when the capture grew), a cached one, or a new one
+/// started now. The call returns at once; rows appear as TShark prints them.
+fn ensure_rows(
+    program: &Path,
+    version: &str,
+    open: &mut Option<OpenCapture>,
+    snapshot: &Arc<Snapshot>,
+) -> Arc<RowStore> {
+    let job = |rows: &Arc<RowStore>| parse::ParseJob {
+        program: program.to_path_buf(),
+        store: Arc::clone(rows),
+        snapshot: Arc::clone(snapshot),
+        version: version.to_owned(),
+    };
+    if let Some(current) = open.as_mut()
+        && current.identity.permits_append(&snapshot.identity)
+    {
+        let rows = Arc::clone(&current.rows);
+        current.identity = snapshot.identity.clone();
+        let grown = snapshot.packet_count > rows.total_count();
+        if grown && !rows.cached && !rows.running.load(Ordering::Acquire) {
+            parse::spawn_parse(job(&rows));
+        } else if !snapshot.live
+            && !rows.cached
+            && rows.status() == ParseStatus::Complete
+            && rows.done_count() == snapshot.packet_count
+            && !rows.cache_saved.swap(true, Ordering::AcqRel)
+        {
+            // A live capture just finished: keep its parse beside it.
+            let _ = parse::save_cache(&rows, &snapshot.identity, version);
+        }
+        return rows;
+    }
+    if let Some(previous) = open.take() {
+        previous.rows.cancel();
+    }
+    let rows = if snapshot.live {
+        None
+    } else {
+        parse::load_cache(&snapshot.identity, version, snapshot.packet_count)
+    };
+    let rows = rows.unwrap_or_else(|| match RowStore::scratch() {
+        Ok(rows) => {
+            parse::spawn_parse(job(&rows));
+            rows
+        }
+        Err(error) => RowStore::failed(error),
+    });
+    *open = Some(OpenCapture {
+        identity: snapshot.identity.clone(),
+        rows: Arc::clone(&rows),
+    });
+    rows
+}
+
 fn cancelled(shared: &Shared, generation: u64) -> bool {
     shared.stop.load(Ordering::Acquire) || shared.generation.load(Ordering::Acquire) != generation
+}
+
+/// Which of `names` the installed TShark knows, from its field registry
+/// (read once per process). Field names an older TShark lacks would fail a
+/// whole query, so callers ask first for the optional ones.
+pub fn known_fields(names: &[&str], cancel: Arc<AtomicBool>) -> Result<Vec<bool>, String> {
+    static REGISTRY: OnceLock<Vec<String>> = OnceLock::new();
+    let registry = match REGISTRY.get() {
+        Some(registry) => registry,
+        None => {
+            let fields = discover_fields(Path::new("tshark"), &Shared::new(cancel))?;
+            REGISTRY.get_or_init(|| fields.into_iter().map(|field| field.name).collect())
+        }
+    };
+    Ok(names
+        .iter()
+        .map(|name| {
+            registry
+                .binary_search_by(|known| known.as_str().cmp(name))
+                .is_ok()
+        })
+        .collect())
 }
 
 /// The exact complete-record prefix processed by a streaming field query.
@@ -550,15 +782,7 @@ pub fn snapshot_for_analysis(
     live: bool,
     cancel: Arc<AtomicBool>,
 ) -> Result<AnalysisSnapshot, String> {
-    let shared = Shared {
-        pending: Mutex::new(None),
-        wake: Condvar::new(),
-        generation: AtomicU64::new(0),
-        stop: cancel,
-        result: Mutex::new(None),
-        fields: Mutex::new(FieldRegistry::Loading),
-        cleanup_error: Mutex::new(None),
-    };
+    let shared = Shared::new(cancel);
     make_snapshot(identity, &shared, 0, live).map(|inner| AnalysisSnapshot { inner })
 }
 
@@ -579,15 +803,7 @@ pub fn stream_fields(
     if fields.is_empty() || fields.len() > 128 {
         return Err("field stream requires between 1 and 128 output fields".into());
     }
-    let shared = Shared {
-        pending: Mutex::new(None),
-        wake: Condvar::new(),
-        generation: AtomicU64::new(0),
-        stop: cancel,
-        result: Mutex::new(None),
-        fields: Mutex::new(FieldRegistry::Loading),
-        cleanup_error: Mutex::new(None),
-    };
+    let shared = Shared::new(cancel);
     let snapshot = make_snapshot(identity, &shared, 0, live)?;
     let mut command = Command::new("tshark");
     command
@@ -791,10 +1007,21 @@ fn make_snapshot(
 fn evaluate(
     program: &Path,
     snapshot: Arc<Snapshot>,
+    rows: Arc<RowStore>,
     expression: &str,
     shared: &Shared,
     generation: u64,
 ) -> Result<PacketFilterIndex, String> {
+    if expression.trim().is_empty() {
+        // Every frame matches; the packet list is TShark's own parse.
+        return Ok(PacketFilterIndex {
+            matching_count: snapshot.packet_count,
+            snapshot,
+            matches: None,
+            rows,
+            expression: expression.into(),
+        });
+    }
     let matches = Scratch::new()?;
     let output = matches.file("matches")?;
     let mut command = Command::new(program);
@@ -803,16 +1030,14 @@ fn evaluate(
         .arg("-2")
         .arg("-r")
         .arg(&snapshot.capture_path);
-    if !expression.trim().is_empty() {
-        command.arg("-Y").arg(expression);
-    }
+    command.arg("-Y").arg(expression);
     command.args(["-T", "fields", "-e", "frame.number", "-E", "occurrence=f"]);
     let packet_count = snapshot.packet_count;
     let matching_count = run_process(
         command,
         shared,
         Some(generation),
-        Duration::from_secs(120),
+        Duration::from_secs((120 + packet_count / 5_000).min(3600)),
         move |reader| {
             let mut output = BufWriter::new(output);
             let mut count = 0;
@@ -843,7 +1068,8 @@ fn evaluate(
     }
     Ok(PacketFilterIndex {
         snapshot,
-        matches,
+        matches: Some(matches),
+        rows,
         matching_count,
         expression: expression.into(),
     })
@@ -913,32 +1139,48 @@ fn read_lines(
     }
 }
 
+mod parse;
+mod pdml;
 mod process;
+mod rows;
 use process::run_process;
 
 #[cfg(test)]
 mod tests {
     use super::process::ProcessReader;
+    use super::rows::ROW_FIELDS;
     use super::*;
     use std::os::unix::net::UnixStream;
 
     fn shared() -> Shared {
-        Shared {
-            pending: Mutex::new(None),
-            wake: Condvar::new(),
-            generation: AtomicU64::new(0),
-            stop: Arc::new(AtomicBool::new(false)),
-            result: Mutex::new(None),
-            fields: Mutex::new(FieldRegistry::Loading),
-            cleanup_error: Mutex::new(None),
+        Shared::new(Arc::new(AtomicBool::new(false)))
+    }
+
+    /// The packet list of `snapshot`, parsed by the installed TShark.
+    fn parsed(snapshot: &Arc<Snapshot>) -> Arc<RowStore> {
+        let mut open = None;
+        let rows = ensure_rows(Path::new("tshark"), "test", &mut open, snapshot);
+        wait_parsed(&rows);
+        rows
+    }
+
+    fn wait_parsed(rows: &RowStore) {
+        for _ in 0..1200 {
+            if rows.status() != ParseStatus::Parsing {
+                return;
+            }
+            thread::sleep(Duration::from_millis(50));
         }
+        panic!("TShark did not finish parsing");
     }
 
     #[test]
     fn packet_filter_cleanup_notice_preserves_registry_and_clears_after_reap() {
         let worker = PacketFilterWorker {
             shared: Arc::new(shared()),
+            detail: Arc::new(shared()),
             thread: None,
+            detail_thread: None,
         };
         let registry = Arc::new(vec![PacketField {
             name: "frame.number".into(),
@@ -1085,6 +1327,7 @@ mod tests {
             let index = evaluate(
                 Path::new("tshark"),
                 Arc::clone(&snapshot),
+                parsed(&snapshot),
                 expression,
                 &state,
                 0,
@@ -1111,7 +1354,8 @@ mod tests {
         assert!(
             evaluate(
                 Path::new("tshark"),
-                snapshot,
+                Arc::clone(&snapshot),
+                parsed(&snapshot),
                 "no.such.field == 1",
                 &state,
                 0
@@ -1151,8 +1395,9 @@ mod tests {
             snapshot.complete_extent
         );
         if installed() {
-            let index =
-                evaluate(Path::new("tshark"), Arc::new(snapshot), "dns", &state, 0).unwrap();
+            let snapshot = Arc::new(snapshot);
+            let rows = parsed(&snapshot);
+            let index = evaluate(Path::new("tshark"), snapshot, rows, "dns", &state, 0).unwrap();
             assert_eq!(
                 index
                     .read_page(0, PAGE_SIZE)
@@ -1373,7 +1618,7 @@ mod tests {
                         assert_eq!(generation, expected_generation);
                         let index = result.unwrap();
                         assert_eq!(index.matching_count, 2);
-                        let generation = worker.request_page(Arc::clone(&index), 1);
+                        let mut generation = worker.request_page(Arc::clone(&index), 1);
                         let started = Instant::now();
                         loop {
                             if let Some(PacketFilterEvent::Page {
@@ -1383,8 +1628,13 @@ mod tests {
                             }) = worker.poll()
                             {
                                 assert_eq!(returned, generation);
-                                assert_eq!(result.unwrap()[0].number, 5);
-                                break;
+                                let page = result.unwrap();
+                                if let Some(packet) = page.first() {
+                                    assert_eq!(packet.number, 5);
+                                    break;
+                                }
+                                // TShark has not printed the row yet.
+                                generation = worker.request_page(Arc::clone(&index), 1);
                             }
                             assert!(started.elapsed() < Duration::from_secs(10));
                             thread::sleep(Duration::from_millis(20));
@@ -1396,6 +1646,427 @@ mod tests {
             }
             assert!(started.elapsed() < Duration::from_secs(10));
             thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn rows_are_tshark_columns_and_the_second_open_reads_the_cache() {
+        if !installed() {
+            return;
+        }
+        let (_fixture, path) = fixture();
+        let state = shared();
+        let identity = CaptureIdentity::read(&path).unwrap();
+        let snapshot = Arc::new(make_snapshot(&identity, &state, 0, false).unwrap());
+        let rows = parsed(&snapshot);
+        assert_eq!(rows.status(), ParseStatus::Complete);
+        assert_eq!(rows.done_count(), 5);
+        let index = evaluate(
+            Path::new("tshark"),
+            Arc::clone(&snapshot),
+            rows,
+            "",
+            &state,
+            0,
+        )
+        .unwrap();
+        assert_eq!(index.matching_count, 5);
+        let page = index.read_page(0, PAGE_SIZE).unwrap();
+        assert_eq!(page.len(), 5);
+        let request = &page[1];
+        assert_eq!(request.protocol, "HTTP");
+        assert!(
+            request.info.contains("GET /Api HTTP/1.1"),
+            "{}",
+            request.info
+        );
+        assert_eq!(request.source, "10.0.2.15");
+        assert_eq!(request.destination, "93.184.216.34");
+        assert_eq!(
+            (request.src_port, request.dst_port),
+            (Some(40000), Some(80))
+        );
+        assert_eq!(request.transport, Some(crate::network::Transport::Tcp));
+        assert_eq!(request.tcp_flags, Some(0x18));
+        assert_eq!(request.time_us, 1_700_000_001_000_000);
+        assert!(request.offset > 24);
+        assert_eq!(page[3].protocol, "DNS");
+        assert_eq!(page[3].transport, Some(crate::network::Transport::Udp));
+        let (found, position) = index.lookup_frame(4).unwrap();
+        assert_eq!((found.number, position), (4, Some(3)));
+        // The finished parse was kept beside the capture, and a new open
+        // reads it back without running TShark.
+        let cache = cache_dir_of(&path);
+        assert!(cache.join("meta.json").is_file());
+        let version = "test";
+        let again = parse::load_cache(&identity, version, 5).expect("cache is used");
+        assert!(again.cached);
+        assert_eq!(again.read(&[2, 4]).unwrap()[1].protocol, "DNS");
+        // A different capture file, packet count or TShark invalidates it.
+        assert!(parse::load_cache(&identity, "another TShark", 5).is_none());
+        assert!(parse::load_cache(&identity, version, 4).is_none());
+        fs::write(cache.join("rows.tsv"), b"damaged").unwrap();
+        assert!(parse::load_cache(&identity, version, 5).is_none());
+    }
+
+    fn cache_dir_of(path: &Path) -> PathBuf {
+        let mut name = path.file_name().unwrap().to_os_string();
+        name.push(".view");
+        path.with_file_name(name)
+    }
+
+    #[test]
+    fn details_are_tshark_lines_with_byte_ranges_inside_the_frame() {
+        if !installed() {
+            return;
+        }
+        let (_fixture, path) = fixture();
+        let state = shared();
+        let identity = CaptureIdentity::read(&path).unwrap();
+        let snapshot = Arc::new(make_snapshot(&identity, &state, 0, false).unwrap());
+        let detail = parse::load_detail(Path::new("tshark"), &snapshot, 2, &state, 0).unwrap();
+        assert_eq!(detail.number, 2);
+        let labels: Vec<_> = detail
+            .tree
+            .nodes
+            .iter()
+            .filter(|node| node.depth == 0)
+            .map(|node| node.label.clone())
+            .collect();
+        assert!(labels[0].starts_with("Frame 2:"), "{labels:?}");
+        assert!(
+            labels.iter().any(|l| l.starts_with("Ethernet II")),
+            "{labels:?}"
+        );
+        assert!(
+            labels
+                .iter()
+                .any(|l| l.starts_with("Transmission Control Protocol"))
+        );
+        assert!(
+            labels
+                .iter()
+                .any(|l| l.starts_with("Hypertext Transfer Protocol"))
+        );
+        let host = detail
+            .tree
+            .nodes
+            .iter()
+            .find(|node| node.label.starts_with("Host: Example.COM"))
+            .expect("HTTP host line");
+        let frame = network::frame(&snapshot.capture_path, snapshot.offset_of(2).unwrap()).unwrap();
+        assert_eq!(detail.frame_len, frame.len());
+        let range = host.range().expect("host bytes");
+        assert_eq!(&frame[range], b"Host: Example.COM\r\n");
+        for node in &detail.tree.nodes {
+            assert!(node.len == 0 || node.start + node.len <= frame.len());
+        }
+        assert!(parse::load_detail(Path::new("tshark"), &snapshot, 6, &state, 0).is_err());
+    }
+
+    #[test]
+    fn a_growing_capture_appends_rows_to_the_same_store() {
+        if !installed() {
+            return;
+        }
+        let (_fixture, path) = fixture();
+        let original = fs::read(&path).unwrap();
+        let captured = u32::from_le_bytes(original[32..36].try_into().unwrap()) as usize;
+        let first_record = original[24..24 + 16 + captured].to_vec();
+        let state = shared();
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(&first_record[..9]).unwrap();
+        let identity = CaptureIdentity::read(&path).unwrap();
+        let snapshot = Arc::new(make_snapshot(&identity, &state, 0, true).unwrap());
+        let mut open = None;
+        let rows = ensure_rows(Path::new("tshark"), "test", &mut open, &snapshot);
+        wait_parsed(&rows);
+        assert_eq!(rows.done_count(), 5);
+        assert!(!rows.cached);
+        file.write_all(&first_record[9..]).unwrap();
+        let grown = CaptureIdentity::read(&path).unwrap();
+        let next = Arc::new(make_snapshot(&grown, &state, 0, true).unwrap());
+        let again = ensure_rows(Path::new("tshark"), "test", &mut open, &next);
+        assert!(Arc::ptr_eq(&rows, &again));
+        wait_parsed(&again);
+        assert_eq!(again.done_count(), 6);
+        let all = again.read(&[1, 2, 3, 4, 5, 6]).unwrap();
+        assert_eq!(
+            all.iter().map(|p| p.number).collect::<Vec<_>>(),
+            [1, 2, 3, 4, 5, 6]
+        );
+        // TShark names the repeated SYN for what it is.
+        assert!(
+            all[5].info.contains("[TCP Retransmission]"),
+            "{}",
+            all[5].info
+        );
+        // A live capture is never cached; the finished one is, once.
+        assert!(!cache_dir_of(&path).exists());
+        let finished = Arc::new(make_snapshot(&grown, &state, 0, false).unwrap());
+        let done = ensure_rows(Path::new("tshark"), "test", &mut open, &finished);
+        assert!(Arc::ptr_eq(&rows, &done));
+        assert!(cache_dir_of(&path).join("meta.json").is_file());
+    }
+
+    #[test]
+    fn a_missing_tshark_fails_the_parse_without_rows() {
+        let (_fixture, path) = fixture();
+        let state = shared();
+        let identity = CaptureIdentity::read(&path).unwrap();
+        let snapshot = Arc::new(make_snapshot(&identity, &state, 0, false).unwrap());
+        let mut open = None;
+        let rows = ensure_rows(Path::new("/nonexistent/tshark"), "", &mut open, &snapshot);
+        wait_parsed(&rows);
+        assert!(matches!(rows.status(), ParseStatus::Failed(_)));
+        assert_eq!(rows.done_count(), 0);
+        assert!(rows.read(&[1]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn untrusted_rows_are_validated_sanitized_and_bounded() {
+        let mut values: Vec<String> = ROW_FIELDS.iter().map(|_| String::new()).collect();
+        values[0] = "7".into();
+        values[1] = "1700000000.123456789".into();
+        values[2] = "60".into();
+        values[3] = "60".into();
+        values[6] = "TLSv1.3".into();
+        values[7] = format!("Client Hello\x1b[31m{}", "x".repeat(5000));
+        values[8] = "10.0.0.1".into();
+        values[12] = "50000".into();
+        values[14] = "443".into();
+        values[16] = "0x00000002".into();
+        let packet = rows::from_tshark(&values).unwrap();
+        assert_eq!(packet.time_us, 1_700_000_000_123_456);
+        assert_eq!(packet.info.chars().count(), 1024);
+        assert!(!packet.info.contains('\x1b'));
+        assert_eq!(packet.tcp_flags, Some(2));
+        assert_eq!(packet.src_ip, Some("10.0.0.1".parse().unwrap()));
+        assert_eq!(packet.dst_ip, None);
+        for (index, bad) in [(0, "0"), (0, "x"), (2, "-1"), (3, "99999999999")] {
+            let mut broken = values.clone();
+            broken[index] = bad.into();
+            assert!(rows::from_tshark(&broken).is_err(), "{index} {bad}");
+        }
+        assert!(rows::from_tshark(&values[..16]).is_err());
+        // Quoted values hold tabs, doubled quotes and line breaks.
+        let record = "\"1\"\t\"a\tb\"\"c\nd\"\t\"\"";
+        assert_eq!(rows::split_record(record).unwrap(), ["1", "a\tb\"c\nd", ""]);
+        assert!(rows::split_record("\"open").is_err());
+    }
+
+    #[test]
+    fn rows_must_arrive_in_frame_order_within_the_capture() {
+        let store = RowStore::scratch().unwrap();
+        let mut writer = rows::RowWriter::open(&store).unwrap();
+        let mut values: Vec<String> = ROW_FIELDS.iter().map(|_| String::new()).collect();
+        values[2] = "60".into();
+        values[3] = "60".into();
+        values[0] = "1".into();
+        writer
+            .push(&store, &rows::from_tshark(&values).unwrap())
+            .unwrap();
+        values[0] = "3".into();
+        let skipped = writer.push(&store, &rows::from_tshark(&values).unwrap());
+        assert!(skipped.unwrap_err().contains("expected"));
+        // Nothing is readable until published.
+        assert!(store.read(&[1]).unwrap().is_empty());
+        writer.publish(&store).unwrap();
+        assert_eq!(store.read(&[1, 2]).unwrap().len(), 1);
+    }
+
+    /// Synthetic traffic (documentation addresses, `.test` names): TLS 1.2 and
+    /// 1.3 hellos, a QUIC Initial, cleartext HTTP/2, SSH, SMB, FTP, SMTP, IRC,
+    /// NTP, mDNS, ARP and DNS on a second port.
+    const PROTOCOLS: &[u8] = include_bytes!("packet_filter/testdata/protocols.pcap");
+
+    #[test]
+    fn tshark_labels_protocols_the_old_decoder_showed_as_tcp_or_udp() {
+        if !installed() {
+            return;
+        }
+        let scratch = Scratch::new().unwrap();
+        let path = scratch.path.join("protocols.pcap");
+        fs::write(&path, PROTOCOLS).unwrap();
+        let state = shared();
+        let identity = CaptureIdentity::read(&path).unwrap();
+        let snapshot = Arc::new(make_snapshot(&identity, &state, 0, false).unwrap());
+        let rows = parsed(&snapshot);
+        assert_eq!(rows.status(), ParseStatus::Complete);
+        let all: Vec<u64> = (1..=snapshot.packet_count).collect();
+        let packets = rows.read(&all).unwrap();
+        assert_eq!(packets.len() as u64, snapshot.packet_count);
+        let protocols: std::collections::BTreeSet<&str> =
+            packets.iter().map(|p| p.protocol.as_str()).collect();
+        for expected in [
+            "DNS", "TLSv1.2", "TLSv1.3", "HTTP2", "SSH", "HTTP", "SMB", "FTP", "SMTP", "NTP",
+            "ARP", "QUIC",
+        ] {
+            assert!(protocols.contains(expected), "{expected} in {protocols:?}");
+        }
+        let info = |protocol: &str| {
+            packets
+                .iter()
+                .find(|p| p.protocol == protocol)
+                .map(|p| p.info.clone())
+                .unwrap()
+        };
+        assert!(info("TLSv1.2").contains("Client Hello (SNI=secure.example.test)"));
+        assert!(info("QUIC").contains("Initial"));
+        assert!(info("SSH").contains("SSH-2.0"));
+        // The QUIC Initial's server name and ALPN come out of TShark without keys.
+        let quic = packets.iter().find(|p| p.protocol == "QUIC").unwrap();
+        let detail =
+            parse::load_detail(Path::new("tshark"), &snapshot, quic.number, &state, 0).unwrap();
+        let lines: Vec<&str> = detail.tree.nodes.iter().map(|n| n.label.as_str()).collect();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("Server Name: quic.example.test")),
+            "{lines:?}"
+        );
+        assert!(lines.iter().any(|l| l.contains("ALPN Next Protocol: h3")));
+        assert!(
+            detail
+                .tree
+                .nodes
+                .iter()
+                .all(|n| n.len == 0 || n.start + n.len <= detail.frame_len)
+        );
+    }
+
+    #[test]
+    fn malformed_captures_are_refused_and_garbage_frames_still_parse() {
+        let (_fixture, path) = fixture();
+        let good = fs::read(&path).unwrap();
+        let scratch = Scratch::new().unwrap();
+        let state = shared();
+        let open = |name: &str, bytes: &[u8], live: bool| {
+            let path = scratch.path.join(name);
+            fs::write(&path, bytes).unwrap();
+            let identity = CaptureIdentity::read(&path).unwrap();
+            (path, make_snapshot(&identity, &state, 0, live))
+        };
+        // A saved capture cut in the middle of a record is refused; a live
+        // one is read up to its last whole record.
+        let cut = &good[..good.len() - 20];
+        assert!(open("cut.pcap", cut, false).1.is_err());
+        assert_eq!(open("cut-live.pcap", cut, true).1.unwrap().packet_count, 4);
+        assert!(open("header.pcap", &[0; 40], false).1.is_err());
+        let mut huge = good[..24].to_vec();
+        huge.extend([1, 0, 0, 0, 0, 0, 0, 0, 0x70, 0x11, 0, 0, 0x70, 0x11, 0, 0]);
+        huge.extend([0; 64]);
+        assert!(open("huge.pcap", &huge, false).1.is_err());
+        if !installed() {
+            return;
+        }
+        // Frames of pseudo-random bytes: TShark reports them as malformed or
+        // unknown, and the viewer still gets a validated row and a tree each.
+        let mut garbage = good[..24].to_vec();
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        for number in 0..24u32 {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let len = 14 + (seed >> 40) as usize % 200;
+            let mut frame: Vec<u8> = (0..len)
+                .map(|at| (seed.rotate_left(at as u32 % 63) >> 7) as u8)
+                .collect();
+            if number % 2 == 0 {
+                // Plausible Ethernet and IPv4 headers with nonsense after them.
+                frame[12..14].copy_from_slice(&[8, 0]);
+                frame[14] = 0x45;
+            }
+            garbage.extend(number.to_le_bytes());
+            garbage.extend(0u32.to_le_bytes());
+            garbage.extend((len as u32).to_le_bytes());
+            garbage.extend((len as u32).to_le_bytes());
+            garbage.extend(frame);
+        }
+        let (path, snapshot) = open("garbage.pcap", &garbage, false);
+        let snapshot = Arc::new(snapshot.unwrap());
+        let rows = parsed(&snapshot);
+        assert_eq!(rows.status(), ParseStatus::Complete);
+        assert_eq!(rows.done_count(), 24);
+        for number in 1..=24 {
+            let detail =
+                parse::load_detail(Path::new("tshark"), &snapshot, number, &state, 0).unwrap();
+            assert!(!detail.tree.nodes.is_empty());
+            assert!(
+                detail
+                    .tree
+                    .nodes
+                    .iter()
+                    .all(|n| n.len == 0 || n.start + n.len <= detail.frame_len)
+            );
+        }
+        drop(path);
+    }
+
+    /// `ANTINOMIE_BIG_PCAP=<file> cargo test --release -p antinomie-monitor-core
+    /// large_capture_probe -- --ignored --nocapture`: the time to the first
+    /// page and to the whole parse of a large capture, and this process's
+    /// peak memory.
+    #[test]
+    #[ignore = "probe; needs ANTINOMIE_BIG_PCAP"]
+    fn large_capture_probe() {
+        let Ok(path) = std::env::var("ANTINOMIE_BIG_PCAP") else {
+            return;
+        };
+        let worker = PacketFilterWorker::new().unwrap();
+        while matches!(worker.fields(), FieldRegistry::Loading) {
+            thread::sleep(Duration::from_millis(20));
+        }
+        let identity = CaptureIdentity::read(Path::new(&path)).unwrap();
+        let started = Instant::now();
+        worker.request(identity, String::new(), false);
+        let index = loop {
+            if let Some(PacketFilterEvent::Evaluated { result, .. }) = worker.poll() {
+                break result.unwrap();
+            }
+            thread::sleep(Duration::from_millis(5));
+        };
+        println!(
+            "index ready after {:?}, {} packets",
+            started.elapsed(),
+            index.packet_count()
+        );
+        let first = loop {
+            let page = index.read_page(0, PAGE_SIZE).unwrap();
+            if page.len() == PAGE_SIZE {
+                break started.elapsed();
+            }
+            thread::sleep(Duration::from_millis(5));
+        };
+        println!("first page of {PAGE_SIZE} rows after {first:?}");
+        let slow = Instant::now();
+        let mut worst = Duration::ZERO;
+        while index.rows().status() == ParseStatus::Parsing {
+            let call = Instant::now();
+            index
+                .read_page(index.rows().done_count().saturating_sub(10), 10)
+                .unwrap();
+            worst = worst.max(call.elapsed());
+            thread::sleep(Duration::from_millis(50));
+        }
+        println!(
+            "parse finished {:?} after start ({:?}), status {:?}, rows {}, slowest page read while parsing {worst:?}",
+            started.elapsed(),
+            slow.elapsed(),
+            index.rows().status(),
+            index.rows().done_count()
+        );
+        let last = index.packet_count() - 100;
+        let read = Instant::now();
+        let page = index.read_page(last, 100).unwrap();
+        println!(
+            "page near the end: {} rows in {:?}",
+            page.len(),
+            read.elapsed()
+        );
+        let status = fs::read_to_string("/proc/self/status").unwrap();
+        for line in status.lines().filter(|l| l.starts_with("VmHWM")) {
+            println!("this process peak: {line}");
         }
     }
 }

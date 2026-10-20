@@ -218,6 +218,7 @@ impl NetworkView {
         if let Some(error) = &self.display_error {
             crate::activity::warning(ui, error);
         }
+        self.parse_status(ui);
         if let Some(note) = &self.display_jump_note {
             if note.starts_with("Locating frame") {
                 theme::loading_colored(ui, theme::muted(), note.as_str());
@@ -275,10 +276,10 @@ impl NetworkView {
         } else {
             self.filter.trim().to_owned()
         };
-        let total = if self.display_index.is_some() {
-            self.display_page.len()
-        } else {
+        let total = if self.raw_frames() {
             self.list.packets.len()
+        } else {
+            self.display_page.len()
         };
         if !shown_filter.is_empty() || cx.pending {
             ui.horizontal_wrapped(|ui| {
@@ -299,6 +300,42 @@ impl NetworkView {
                     }
                 }
             });
+        }
+    }
+
+    /// How far TShark has parsed the capture into the packet list.
+    fn parse_status(&mut self, ui: &mut egui::Ui) {
+        let Some(index) = &self.display_index else {
+            return;
+        };
+        let rows = index.rows();
+        let (done, total) = (rows.done_count(), index.packet_count());
+        match rows.status() {
+            ParseStatus::Complete => {}
+            ParseStatus::Parsing => {
+                ui.horizontal_wrapped(|ui| {
+                    theme::loading_colored(
+                        ui,
+                        theme::muted(),
+                        format!("TShark is parsing the capture: {done} of {total} packets"),
+                    );
+                    if ui.small_button("Stop parsing").clicked() {
+                        rows.cancel();
+                    }
+                });
+            }
+            ParseStatus::Failed(error) if error == "cancelled" => {
+                ui.colored_label(
+                    theme::muted(),
+                    format!("Parsing was stopped after {done} of {total} packets."),
+                );
+            }
+            ParseStatus::Failed(error) => {
+                crate::activity::warning(
+                    ui,
+                    format!("TShark parsed {done} of {total} packets: {error}"),
+                );
+            }
         }
     }
 
@@ -447,13 +484,10 @@ pub(super) fn packet_display_clauses(packet: &NetworkPacket) -> Vec<(String, Str
             clauses.push((label.into(), format!("{prefix}.{side} == {address}")));
         }
     }
-    let transport = if packet.tcp_flags.is_some() {
-        Some("tcp")
-    } else if matches!(packet.protocol.as_str(), "UDP" | "DNS" | "DHCP") {
-        Some("udp")
-    } else {
-        None
-    };
+    let transport = packet.transport.map(|transport| match transport {
+        Transport::Tcp => "tcp",
+        Transport::Udp => "udp",
+    });
     if let Some(transport) = transport {
         clauses.push(("Transport protocol".into(), transport.into()));
         for (label, side, port) in [

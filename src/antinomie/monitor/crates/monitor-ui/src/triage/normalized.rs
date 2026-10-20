@@ -183,6 +183,7 @@ pub(super) struct Counts {
     pub failed_attempts: u64,
     pub http: u64,
     pub dns: u64,
+    pub sessions: u64,
 }
 
 fn text(fields: &mut BTreeMap<String, serde_json::Value>, name: &str, value: Option<&str>) {
