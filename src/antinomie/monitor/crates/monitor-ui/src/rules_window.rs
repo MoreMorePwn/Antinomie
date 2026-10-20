@@ -151,7 +151,7 @@ impl Model {
         }
         self.tick(ctx, data_dir);
         let mut window_open = *open;
-        egui::Window::new("Rule manager")
+        crate::widgets::window("Rule manager")
             .id(egui::Id::new(WINDOW_ID))
             .open(&mut window_open)
             .resizable(true)
@@ -343,12 +343,12 @@ impl Model {
             self.ensure(data_dir);
         }
         ui.label(RichText::new("Installed packs and custom groups are the only production rules. Scans do not download rules or upload evidence.").color(theme::text()));
-        ui.horizontal_wrapped(|ui| {
+        crate::widgets::tab_row(ui, |ui| {
             for (id, label) in [("yara", "YARA"), ("ids", "IDS"), ("sigma", "Sigma")] {
-                if ui
-                    .selectable_value(&mut self.engine, id.into(), label)
+                if crate::widgets::tab(ui, self.engine == id, &crate::widgets::TabItem::new(label))
                     .clicked()
                 {
+                    self.engine = id.into();
                     self.rows.clear();
                     self.visible.clear();
                     self.detail = None;

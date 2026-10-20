@@ -53,9 +53,9 @@ fn badge_states_are_grouped_muted_or_accented_and_wrap_in_both_themes() {
             theme::apply(&ctx, light);
             theme::text_size(&ctx, font);
             assert_eq!(Count::Ready(1234).label(), "1,234");
-            assert_eq!(Count::Ready(0).color(true), theme::muted());
-            assert_eq!(Count::Ready(1).color(true), theme::blue());
-            assert_eq!(Count::Ready(1).color(false), theme::text());
+            assert_eq!(Count::Ready(0).tone(true), Tone::Neutral);
+            assert_eq!(Count::Ready(1).tone(true), Tone::Accent);
+            assert_eq!(Count::Ready(1).tone(false), Tone::Plain);
             for _ in 0..3 {
                 let mut bounds = egui::Rect::NOTHING;
                 let output = ctx.run(
