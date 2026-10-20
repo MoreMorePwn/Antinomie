@@ -462,6 +462,7 @@ impl MemoryView {
             .id_salt(("memory_result_wide", &result.run.id))
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                crate::widgets::table::begin(ui);
                 let mut builder = TableBuilder::new(ui)
                     .id_salt(("memory_result", &result.run.id))
                     .striped(true)
@@ -490,6 +491,7 @@ impl MemoryView {
                     .header(row_height + 4.0, |mut header| {
                         for (index, column) in table.columns.iter().enumerate() {
                             header.col(|ui| {
+                                crate::widgets::table::head_bg(ui);
                                 let arrow = match result.sort {
                                     Some(sort) if sort.column == index && sort.descending => {
                                         format!(" {}", egui_phosphor::regular::CARET_DOWN)
@@ -504,7 +506,7 @@ impl MemoryView {
                                         egui::Label::new(
                                             RichText::new(format!("{}{arrow}", column.name))
                                                 .strong()
-                                                .color(theme::heading()),
+                                                .color(theme::muted()),
                                         )
                                         .truncate()
                                         .sense(egui::Sense::click()),
@@ -523,12 +525,21 @@ impl MemoryView {
                         body.rows(row_height, result.shown.len(), |mut row| {
                             let row_index = result.shown[row.index()];
                             let data = &table.rows[row_index];
-                            row.set_selected(selected_row == Some(row_index));
+                            let row_selected = selected_row == Some(row_index);
+                            row.set_selected(row_selected);
                             let branch = result.branches.get(row.index());
                             for (index, (value, column)) in
                                 data.values.iter().zip(&table.columns).enumerate()
                             {
                                 row.col(|ui| {
+                                    crate::widgets::table::row_mark(
+                                        ui,
+                                        if row_selected && index == 0 {
+                                            crate::widgets::table::Mark::Selected
+                                        } else {
+                                            crate::widgets::table::Mark::None
+                                        },
+                                    );
                                     if let Some(branch) = branch.filter(|_| index == 0) {
                                         let reach = ui.spacing().item_spacing.y * 0.5;
                                         let lines = ui.max_rect().expand2(egui::vec2(0.0, reach));

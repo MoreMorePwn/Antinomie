@@ -9,9 +9,10 @@ pub(crate) fn guide(ctx: &egui::Context) {
     if !open {
         return;
     }
-    egui::Window::new("Filter guide")
+    crate::widgets::window("Filter guide")
         .open(&mut open)
         .resizable(true)
+        .default_size([760.0, 540.0])
         .show(ctx, |ui| {
             ui.label("Use typed fields to compare values. A bare word searches the row. Text comparisons are case-sensitive; lower(field) makes text matching case-insensitive.");
             ui.label("Unavailable values stay missing. Packet filters use the installed TShark engine and its own field registry.");
@@ -42,6 +43,7 @@ pub(crate) fn guide(ctx: &egui::Context) {
                     || meaning.to_lowercase().contains(&needle)
             }).collect();
             use egui_extras::{Column, TableBuilder};
+            crate::widgets::table::begin(ui);
             TableBuilder::new(ui)
                 .id_salt("filter-keywords")
                 .striped(true)
@@ -50,9 +52,7 @@ pub(crate) fn guide(ctx: &egui::Context) {
                 .column(Column::remainder())
                 .header(22.0, |mut header| {
                     for title in ["Field", "Type", "Meaning"] {
-                        header.col(|ui| {
-                            ui.strong(title);
-                        });
+                        header.col(|ui| crate::widgets::table::head(ui, title));
                     }
                 })
                 .body(|body| {

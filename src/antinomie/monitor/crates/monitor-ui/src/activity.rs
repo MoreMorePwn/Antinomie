@@ -209,6 +209,7 @@ impl Journal {
             });
             return;
         }
+        crate::widgets::table::begin(ui);
         TableBuilder::new(ui)
             .column(Column::exact(84.0))
             .column(Column::exact(60.0))
@@ -218,9 +219,7 @@ impl Journal {
             .stick_to_bottom(true)
             .header(26.0, |mut header| {
                 for label in ["Time", "Level", "Message"] {
-                    header.col(|ui| {
-                        ui.label(label);
-                    });
+                    header.col(|ui| crate::widgets::table::head(ui, label));
                 }
             })
             .body(|body| {

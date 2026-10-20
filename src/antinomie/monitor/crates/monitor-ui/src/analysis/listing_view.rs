@@ -289,6 +289,7 @@ pub(super) fn show(
                     ui.label("No rows of this function are in the loaded listing page.");
                 }
                 let height = ui.available_height().max(row_height);
+                crate::widgets::table::begin(ui);
                 let mut table = TableBuilder::new(ui)
                     .id_salt(("listing", kind_salt(kind)))
                     .striped(kind != AnalysisKind::Decompilation)
@@ -302,9 +303,7 @@ pub(super) fn show(
                 table
                     .header(row_height, |mut header| {
                         for (title, _) in columns {
-                            header.col(|ui| {
-                                ui.strong(*title);
-                            });
+                            header.col(|ui| crate::widgets::table::head(ui, *title));
                         }
                     })
                     .body(|body| {
