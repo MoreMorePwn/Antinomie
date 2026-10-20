@@ -308,12 +308,12 @@ fn suricata_config(classification: &Path, reference: &Path, threshold: &Path) ->
 /// having no packets), with those staging could not prepare.
 fn unscanned(report: &mut Report, staged: &Staged, reason: &str) {
     for capture in &staged.captures {
-        let reason = if capture.packets == 0 {
-            NO_PACKETS
+        if capture.packets == 0 {
+            // No packet activity is a finished scan with nothing to read.
+            report.input(capture_input(capture).note(NO_PACKETS));
         } else {
-            reason
-        };
-        report.input(capture_input(capture).skipped(reason));
+            report.input(capture_input(capture).skipped(reason));
+        }
     }
     for input in &staged.skipped_inputs {
         report.input(input.clone());
@@ -420,7 +420,15 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
         let mut report = Report::empty(Engine::Ids, staged.request.identity.clone());
         report.state = State::Missing;
         report.selection = staged.selection.clone();
-        if staged.captures.is_empty() && staged.skipped_inputs.is_empty() {
+        let quiet = !(staged.captures.is_empty() && staged.skipped_inputs.is_empty())
+            && staged
+                .skipped_inputs
+                .iter()
+                .all(|input| input.outcome == InputOutcome::Succeeded);
+        if quiet {
+            // The run captured no packet: nothing was missed, so nothing is limited.
+            report.state = State::Complete;
+        } else if staged.captures.is_empty() && staged.skipped_inputs.is_empty() {
             report.input(ScannedInput {
                 name: "Network capture".into(),
                 ..ScannedInput::new(InputKind::Capture, staged.request.directory.join("network"))
@@ -564,7 +572,7 @@ fn scan_with(staged: &Staged, work: &Path, tool: &str) -> Result<Report, String>
     for (index, capture) in staged.captures.iter().enumerate() {
         let mut row = capture_input(capture);
         if capture.packets == 0 {
-            report.input(row.skipped(NO_PACKETS));
+            report.input(row.note(NO_PACKETS));
             evaluated += 1;
             continue;
         }
@@ -931,7 +939,7 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_capture_is_skipped_and_suricata_is_not_started() {
+    fn an_empty_capture_is_complete_and_suricata_is_not_started() {
         let dir = temp_dir("skip");
         let pcap = dir.join("capture.pcap");
         fs::write(&pcap, pcap_header()).unwrap();
@@ -939,17 +947,17 @@ mod tests {
         let report = scan(&staged, &dir).unwrap();
         let inputs = report.inputs.unwrap();
         assert_eq!(inputs.len(), 1);
-        assert_eq!(inputs[0].outcome, InputOutcome::Skipped);
+        assert_eq!(inputs[0].outcome, InputOutcome::Succeeded);
         assert_eq!(inputs[0].reason, "no packets captured");
         assert_eq!(inputs[0].size, Some(24));
         // No version probe, no rule loading: the report holds no engine facts.
         assert!(report.sources.is_empty() && report.scanned_rules.is_none());
-        assert_eq!(report.state, State::Missing);
+        assert_eq!(report.state, State::Complete);
         assert!(
             !report
                 .warnings
                 .iter()
-                .any(|warning| warning.contains("partial"))
+                .any(|warning| warning.contains("partial") || warning.contains("missing"))
         );
         // A run with no capture at all says so on a row of its own.
         let none = scan(&staged_over(&dir, &[]), &dir).unwrap();
@@ -1019,7 +1027,8 @@ mod tests {
         assert_eq!(inputs[0].detail, "1,234 packets · 52,662 rules loaded");
         assert_eq!(inputs[1].outcome, InputOutcome::Failed);
         assert_eq!(inputs[1].reason, "Suricata exited with code 2: Error: boom");
-        assert_eq!(inputs[2].outcome, InputOutcome::Skipped);
+        assert_eq!(inputs[2].outcome, InputOutcome::Succeeded);
+        assert_eq!(inputs[2].reason, "no packets captured");
         // Inputs that failed or were skipped do not make the result partial.
         assert_eq!(report.state, State::Complete);
         assert_eq!(report.scanned_objects, 1234);
