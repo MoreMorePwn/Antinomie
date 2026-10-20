@@ -85,6 +85,37 @@ additive and an older guest answers `-EOPNOTSUPP`. Layouts are in
   following, non-stop, reconnect that re-adopts a session. (The minimal in-app panel is
   described next.)
 
+### Accepted ANT-T0120 configurable process-core size (0.7.0)
+
+The 64 MiB / 5 s ceiling of process cores is configurable. The guest series gains
+0039 (limits from guest RAM, chunked buffer, one budget enforcer, `CORE_CAPS`
+0x1066, `CORE_STATUS` STORED flag) and 0040 (control worker polls every tick while a
+finished core is read). The contract stays at revision 17; an older guest answers
+`CORE_CAPS` with `-EOPNOTSUPP` and the host keeps the 64 MiB / 5000 ms contract,
+and an older host never sends either request. Host: `core_limits.rs` (limits,
+validation messages, reasons), `backend/core_stream.rs` (pipelined reads, host
+disk and quota checks), a probe in `session_transport.rs`, budget and deadline
+choosers (`core_budget.rs`) in Run program, Dump core and Settings.
+
+* **Decisions**: default budget 256 MiB clamped to the guest; hard cap 1 GiB; the
+  guest maximum is half of RAM less 128 MiB (64 MiB to 1 GiB), pool twice that;
+  exit cores still allocate 64 MiB when armed; deadline 5 s + 10 ms per MiB up to
+  60 s. Buffering stays in the guest (no streaming during capture).
+* **Evidence** (BusyBox base, `core-size-check`, torture `crash-core`): light
+  33,996,800 bytes and heavy 134,660,096 bytes complete at budget 256 MiB (stack
+  and vsyscall pages captured; heavy at 64 MiB is Partial, reason budget, cut at
+  67,321,856 of 134,660,096); extreme 524,730,368 bytes complete at the 1 GiB cap
+  on a 3 GiB guest; a 335 MiB heap on a 512 MiB guest is Partial, reason guest
+  memory, never Complete; a 300 MiB manual core completes its transfer in 13.9 s;
+  a deadline of 2 s under software emulation is Partial, reason deadline; a 100 MiB
+  recording quota cuts a heavy core at the quota (reason quota); a host disk with
+  137 MiB free refuses a 129 MiB core before writing (reason host disk); canceling
+  a manual core at 50 % keeps a hashed prefix (reason canceled).
+* **Transfer**: 1.2 MiB/s before (guest poll of 10 ms, one read per pass) to
+  25-31 MiB/s after (eight reads in flight, joined writes, tick polling).
+* **Still true**: a manual core reports Partial with reason coverage when the
+  resident-only policy leaves mappings out, as before.
+
 ### Accepted in-app debugger panel (0.7.0)
 
 The Debugger window is the minimal in-app UI over the same engine. It does not
