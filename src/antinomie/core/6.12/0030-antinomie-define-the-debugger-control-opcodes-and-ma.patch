@@ -1,4 +1,4 @@
-From 9d23dc6b721f6aa8b437c0763fe64242dc5a4ee9 Mon Sep 17 00:00:00 2001
+From 4e04c714ae1bf58b5f763230385e9fcbf2600546 Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Tue, 20 Oct 2026 05:28:24 +0700
 Subject: [PATCH] antinomie: define the debugger control opcodes and make room
@@ -18,7 +18,7 @@ the opcodes are additive and an older kernel answers -EOPNOTSUPP.
  2 files changed, 105 insertions(+), 1 deletion(-)
 
 diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
-index ceba5bb7c..0bbd13c6b 100644
+index 39d488ec7..56ef8c362 100644
 --- a/kernel/antinomie/control_wire.h
 +++ b/kernel/antinomie/control_wire.h
 @@ -81,6 +81,58 @@
@@ -79,8 +79,8 @@ index ceba5bb7c..0bbd13c6b 100644
 +#define ANTC_DEBUG_BP_SOFTWARE 1
  /* Telemetry lifecycle records (no control command): phase-3 events whose one
   * field is a fixed little-endian structure. Layout names are versioned.
-  * lifecycle.creds, layout "antinomie.creds/1", 72 bytes: u32 uid, euid, suid,
-@@ -282,6 +334,58 @@
+  * lifecycle.creds, layout "antinomie.creds/2", 96 bytes: u32 uid, euid, suid,
+@@ -286,6 +338,58 @@
   * unprivileged), u32 fs_dev at 64 (new_encode_dev), u32 fs_type at 68,
   * u64 fs_id at 72, u64 refresh_pending_ms at 80 (0 when idle), s32 mem_error
   * at 88, zero at 92. A value is meaningful only when its VALID flag is set.

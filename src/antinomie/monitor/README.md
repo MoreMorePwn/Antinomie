@@ -337,8 +337,13 @@ Each launch has independent raw telemetry, objects, `run.json`, terminal output
 in `terminal-transcript.raw`, output/resize/EOF in `terminal.journal`, and a final
 `terminal-screen.ansi` screen with saved grid metadata. Terminal EOF does not
 prove detached descendants exited: recording stays active until VM stop.
-Stop requests SIGTERM for tracked tasks in the selected launch tree; programs
-can ignore it and concurrent forks can escape that signaling pass. The host
+Stop requests SIGTERM for tracked tasks in the selected launch tree. A program
+that ignores it is ended by the guest itself: after a grace period (4 seconds;
+`BackendOptions::stop_grace` sets another, 100 ms to 30 s) the guest sends
+SIGKILL to every task of the run still alive, repeats it while tasks remain, and
+Run History says "Stop needed SIGKILL". Concurrent forks can escape the first
+signaling pass but not the repeats. A process core that is being copied is not
+interrupted. The host
 currently allows 64 total launches per VM boot; restart the VM to begin another
 batch. Historical terminal views are read-only.
 

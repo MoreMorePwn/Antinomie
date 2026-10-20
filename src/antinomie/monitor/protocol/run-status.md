@@ -39,11 +39,43 @@ Exactly 64 octets, little endian. No native struct casts.
 | STOP_REQUESTED | 4 | At least one accepted Stop request targeted this run; not termination proof |
 | ASYNC_COMPLETE | 8 | Known outstanding async count is zero and no unsupported/incomplete tracking prevents a completion claim |
 | OBSERVATION_INCOMPLETE | 16 | Async lifecycle attribution or counting was incomplete; retain explicit completion uncertainty |
+| KILL_ESCALATED | 32 | The guest sent SIGKILL to the run after a Stop's grace period because tasks of the run outlived SIGTERM; set once, when the first SIGKILL was issued |
 
-Unknown flag bits, nonzero reserved data, mismatched root cookie, inconsistent
+Unknown flag bits (above 32), nonzero reserved data, mismatched root cookie, inconsistent
 TREE_EXITED/live count or a regressing generation are protocol errors. ROOT_EXITED
 with status zero means normal exit code zero, not unknown. Signal/exit codes use
 wait-status decoding; do not display the raw status as the program's exit code.
+
+## Stop and its escalation (revision 17)
+
+`ANTC_STOP_RUN` (0x1015) sends SIGTERM to every task that carries the run's
+launch cookie (descendants after root exit, `setsid()` children and orphaned
+grandchildren included) and sets STOP_REQUESTED. A task that ignores SIGTERM
+used to run on for ever; the guest now ends it itself, without any help from the
+host or a process in the guest:
+
+| Rule | Value |
+|---|---|
+| Grace period | 4000 ms by default. The request may be 24 bytes: `u32 grace_ms` at 16 (0 = default, else 100..30000) and `u32 reserved = 0` at 20. A 16-byte request keeps working and means the default. The host sends the 24-byte form only when `BackendOptions::stop_grace` is set (revision-17 guests only) |
+| Escalation | When the grace period ends, SIGKILL goes to every task of the run still alive, and again every 250 ms while tasks remain, at most 20 passes. The repeats catch a fork that raced the first pass |
+| A later Stop | Sends SIGTERM again and can only bring the deadline forward |
+| Core copy | A process core being copied is not interrupted (SIGKILL would truncate it): the escalation waits for the copy, for at most 15 s past the grace period. A root killed before its exit copy starts has no core, as for any SIGKILL |
+| Reporting | KILL_ESCALATED is set with the first SIGKILL, whichever task of the run needed it. The signal that ended the root is in the wait status: `Signaled 9` when the root itself was killed, `Signaled 15` or the program's own exit when it obeyed SIGTERM. A root that handled SIGTERM and exited by itself reports `Exited` while the flag still says another task needed SIGKILL |
+| Run state | Unchanged: `Stopped` needs STOP_REQUESTED, TREE_EXITED, ASYNC_COMPLETE and a root that died of a signal; a root that exited normally is `Finished` |
+
+The work runs on the system unbound workqueue; no thread, workqueue or process
+is created in the guest. A task stuck in uninterruptible sleep cannot be killed
+by any signal; the run then stays live and the status says so.
+
+## Run identity across a transport reconnect (host)
+
+A transport reconnect seals the recording of the old timeline and continues each
+live run in a new one. The run keeps its id, so a selection, an open terminal
+and a pending Stop still mean the same run, and Run History lists one record for
+it: the newest segment, with a note "Recording continues after a transport
+reconnect (recording segment N)" per reconnect naming the boot that holds the
+earlier part. The terminal sequence continues instead of restarting. Restoring a
+snapshot is a different timeline of the run and still gets a new id.
 
 ## Errors and Ownership
 

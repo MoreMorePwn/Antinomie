@@ -616,6 +616,26 @@ impl Worker {
                 }
                 let mut args = control::header(0);
                 args.extend(cookie.to_le_bytes());
+                // A revision-17 guest sends SIGKILL to the whole run when SIGTERM
+                // was not enough, after 4 s unless the options name another grace.
+                let escalates = self
+                    .snapshot
+                    .guest_kernel
+                    .as_ref()
+                    .and_then(|kernel| kernel.revision)
+                    .is_some_and(|revision| revision >= 17);
+                let mut grace = 4000;
+                if let Some(wanted) = self.options.stop_grace {
+                    if !escalates {
+                        return Err("a Stop grace period needs a revision-17 guest".into());
+                    }
+                    grace = u32::try_from(wanted.as_millis())
+                        .ok()
+                        .filter(|millis| (100..=30_000).contains(millis))
+                        .ok_or("the Stop grace period must be 100 ms to 30 s")?;
+                    args.extend(grace.to_le_bytes());
+                    args.extend(0u32.to_le_bytes());
+                }
                 let reply =
                     session.request(0x1015, &args, &mut self.snapshot, &self.sender, timeout)?;
                 if !reply.is_empty() {
@@ -624,7 +644,14 @@ impl Worker {
                 let run = session.runs.get_mut(&cookie).ok_or("unknown run")?;
                 run.summary.state = RunState::StopRequested;
                 run.persist_summary()?;
-                Ok("termination signals issued; descendant completion is not yet proven".into())
+                Ok(if escalates {
+                    format!(
+                        "SIGTERM issued to the run; the guest sends SIGKILL to anything still alive after {:.1} s, and the run status then says which signal ended it",
+                        f64::from(grace) / 1000.0
+                    )
+                } else {
+                    "SIGTERM issued to the run; this guest never escalates, so a task that ignores it keeps running (descendant completion is not yet proven)".into()
+                })
             }
             Command::RecorderStats => {
                 let stats_requested = Instant::now();

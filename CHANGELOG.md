@@ -143,6 +143,48 @@ it runs.
     invented for TShark or Suricata. The dnf and zypper package names were
     checked against the Fedora and openSUSE package indexes, except as noted
     in `dependencies/install.rs`.
+- **Audit fixes (guest).** Found by the feature-completeness and code audits
+  of 0.7.0. Guest contract revision stays 17; the kernel series gains patches
+  0032 to 0034 and changes 0029, which no release carries yet. Older bases
+  keep working; a revision-17 base is needed for the guest side of each item.
+  - **Stop can end a program that ignores SIGTERM.** After the SIGTERM the
+    guest itself, with no process of its own, waits a grace period (4 seconds;
+    `BackendOptions::stop_grace` sets 100 ms to 30 s) and then sends SIGKILL to
+    every task of the run still alive, including `setsid()` children and
+    orphaned grandchildren, and repeats it every 250 ms while any remain. A
+    process core being copied is not interrupted (the escalation waits, at most
+    15 s more). The run status gets a new flag, "Stop needed SIGKILL"; the
+    signal that ended the program is its wait status (Signal 9 after an
+    escalation, Signal 15 or its own exit code when it obeyed). Checked in a
+    VM with a program that ignores SIGTERM (ended after 4.3 s), one that
+    handles it (ended in 0.3 s, no escalation) and a tree of seven tasks.
+  - **A transport reconnect no longer splits a run into two records.** The run
+    keeps its id, so the selection, an open terminal and a pending Stop still
+    mean it, and its terminal sequence continues. Run History lists the newest
+    recording segment, with a note per reconnect that names the boot holding
+    the earlier part. Restoring a snapshot still starts a new run.
+  - **Process cores of programs with large untouched memory are no longer cut
+    short.** The guest kept a core in a buffer indexed by file offset, so a
+    segment beyond 64 MiB of file offset could not be stored: a program with a
+    large reserved but unused mapping lost everything after it (a core cut at
+    364,544 bytes in the reported case; 200 KiB for a 300 MiB mapping with one
+    page touched in the VM). The limit now counts the bytes stored, not the
+    file's size: holes are kept as holes, named in the transfer instead of
+    sent, written as sparse ranges and covered by the digest. The file may be
+    up to 16 GiB long; the 64 MiB ceiling on stored bytes is unchanged and
+    its configuration stays with the separate card. Live cores share this.
+  - The file-hash `CHANGED` flag compares inode identity, size, mtime, ctime
+    and the inode change counter, not just size and mtime, and a digest is
+    documented as the bytes at hashing time. An unlink by the sample itself
+    does not count as a change. The digest cache is keyed the same way and
+    uses a monotonic age instead of the wall clock; it missed every repeat exec
+    before (stepping the clock moved what it served) and now hits (`CACHED`).
+  - Credential records carry all five capability sets and the securebits
+    (`antinomie.creds/2`, 96 bytes; the host still reads `/1`), and a `prctl`
+    that changes the ambient or bounding set is recorded.
+  - A telemetry sender that cannot sleep waits at most 200 microseconds for room
+    in a full ring instead of up to the host's whole allowance.
+  - The hash worker no longer reads a file when it cannot publish the result.
 - **A debugger for guest processes, without ptrace and without anything in
   the guest.** Run > Attach debugger… (or the process picker) attaches to a
   running program and shows a ready-to-paste command, for example

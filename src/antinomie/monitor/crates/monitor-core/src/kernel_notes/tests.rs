@@ -42,7 +42,34 @@ fn creds_bytes(values: [u32; 12], caps: [u64; 3]) -> Vec<u8> {
         .flat_map(|value| value.to_le_bytes())
         .collect();
     bytes.extend(caps.iter().flat_map(|value| value.to_le_bytes()));
+    // Bounding set, ambient set, securebits and the reserved word.
+    bytes.extend([0; 24]);
     bytes
+}
+
+#[test]
+fn bounding_ambient_and_securebits_are_read_and_earlier_records_lack_them() {
+    let mut bytes = creds_bytes([0; 12], [1, 2, 3]);
+    bytes[72..80].copy_from_slice(&0x1ff_ffff_ffffu64.to_le_bytes());
+    bytes[80..88].copy_from_slice(&0x2000u64.to_le_bytes());
+    bytes[88..92].copy_from_slice(&0x2fu32.to_le_bytes());
+    bytes[40..44].copy_from_slice(&11u32.to_le_bytes());
+    let creds = credentials(&note(CREDS_KEY, CREDS_LAYOUT, bytes.clone())).unwrap();
+    assert_eq!(creds.change, CredentialChange::Prctl);
+    assert_eq!(
+        (creds.cap_bounding, creds.cap_ambient, creds.securebits),
+        (Some(0x1ff_ffff_ffff), Some(0x2000), Some(0x2f))
+    );
+    // A /1 record is the first 72 bytes; the three newer fields stay unknown.
+    let old = credentials(&note(CREDS_KEY, CREDS_LAYOUT_V1, bytes[..72].to_vec())).unwrap();
+    assert_eq!(old.cap_permitted, 2);
+    assert_eq!(
+        (old.cap_bounding, old.cap_ambient, old.securebits),
+        (None, None, None)
+    );
+    // The wrong length for a layout is never guessed at.
+    assert!(credentials(&note(CREDS_KEY, CREDS_LAYOUT_V1, bytes.clone())).is_some());
+    assert!(credentials(&note(CREDS_KEY, CREDS_LAYOUT, bytes[..72].to_vec())).is_none());
 }
 
 #[test]
@@ -86,8 +113,8 @@ fn an_unset_login_uid_is_unset_and_an_untracked_one_is_missing() {
 #[test]
 fn damaged_or_foreign_records_decode_to_nothing() {
     let good = creds_bytes([1; 12], [0; 3]);
-    assert!(credentials(&note(CREDS_KEY, CREDS_LAYOUT, good[..71].to_vec())).is_none());
-    assert!(credentials(&note(CREDS_KEY, "antinomie.creds/2", good.clone())).is_none());
+    assert!(credentials(&note(CREDS_KEY, CREDS_LAYOUT, good[..95].to_vec())).is_none());
+    assert!(credentials(&note(CREDS_KEY, "antinomie.creds/3", good.clone())).is_none());
     let mut incomplete = note(CREDS_KEY, CREDS_LAYOUT, good.clone());
     incomplete.fields[0].complete = false;
     assert!(credentials(&incomplete).is_none());

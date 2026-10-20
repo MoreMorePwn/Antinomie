@@ -7,6 +7,9 @@ use std::{
     path::{Path, PathBuf},
 };
 const METADATA_LIMIT: u64 = 64 * 1024;
+/// Longest core file the guest reports, holes included (`ANTC_CORE_LOGICAL_MAX`);
+/// the handle's `max_size` bounds the bytes stored, not this extent.
+pub(crate) const LOGICAL_LIMIT: u64 = 16 * 1024 * 1024 * 1024;
 pub(crate) const RECORD_LIMIT: usize = 4096;
 pub(crate) const ACTIVE_LIMIT: usize = 4;
 pub(crate) const LATEST_LIMIT: usize = 64;
@@ -61,10 +64,8 @@ pub fn load(directory: &Path) -> Result<ProcessCoreCapture, String> {
             .restored_from_capture_id
             .as_ref()
             .is_some_and(|id| id.is_empty() || id.len() > 128)
-        || record.stored_size > u64::from(record.max_size)
-        || record
-            .guest_size
-            .is_some_and(|size| size > u64::from(record.max_size))
+        || record.stored_size > LOGICAL_LIMIT
+        || record.guest_size.is_some_and(|size| size > LOGICAL_LIMIT)
         || record
             .issue
             .as_ref()

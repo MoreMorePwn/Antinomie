@@ -110,7 +110,8 @@ injection, multiprocess, host I/O.
 Debug on start, per-thread stepping with the others running, hardware
 breakpoints and watchpoints, signal stops and injection, fork/vfork/exec
 following, non-stop, the in-app register/memory/disassembly UI, manual core under
-a debug stop, kill of a stopped task by `STOP_RUN`, reconnect that re-adopts a
+a debug stop, kill of a stopped task by `STOP_RUN` (only the SIGKILL escalation
+after the Stop grace period reaches a task stopped by the engine), reconnect that re-adopts a
 session across a snapshot. A breakpoint left in memory is inherited by a
 `fork` child while the group runs; stepping with a signal pending can lose the
 step (the engine times out after 2 s and lets the thread run).

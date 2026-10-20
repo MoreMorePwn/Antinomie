@@ -13,8 +13,12 @@
  *     creates and deletes /tmp/ant-user as uid 1000, then execs the setuid
  *     copy, which runs with euid 0;
  *   - sets its login uid with /proc/self/loginuid;
+ *   - in another child: makes a capability inheritable and ambient, drops one
+ *     from the bounding set and sets a securebit (prctl);
  *   - after the copy is 40 ms old, execs /tmp/ant-child twice more (the second
  *     digest may be served from the guest's cache, flag CACHED);
+ *   - deletes three small files whose hashing waits behind a slow job while one
+ *     is rewritten and one has its mode changed (sizes 4001, 4002 and 4003);
  *   - writes 60 files of 256 KiB and deletes them back to back, so the guest's
  *     16-job queue overflows and the dropped requests are recorded;
  *   - removes its files and reports processes and directory entries that
@@ -29,7 +33,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <linux/prctl.h>
+#include <linux/securebits.h>
 #include <sys/fsuid.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
@@ -72,6 +79,35 @@ static int write_file(const char *path, size_t size, int pattern, mode_t mode)
 		done += n;
 	}
 	return close(fd);
+}
+
+/* A delete whose hashing job waits behind a 15 MiB one. touch: 1 rewrites the
+ * bytes through the open descriptor, 2 changes the mode, 0 does nothing. */
+static void changed_case(const char *name, size_t size, int touch)
+{
+	char slow[64];
+	unsigned char data[4096];
+	int fd;
+
+	snprintf(slow, sizeof(slow), "%s-slow", name);
+	write_file(slow, 15u << 20, 1, 0644);
+	unlink(slow);
+	fd = open(name, O_RDWR | O_CREAT | O_TRUNC, 0600);
+	if (fd < 0)
+		return;
+	memset(data, 'a', sizeof(data));
+	if (write(fd, data, size) != (ssize_t)size)
+		return (void)close(fd);
+	unlink(name);
+	if (touch == 1) {
+		memset(data, 'b', sizeof(data));
+		if (pwrite(fd, data, size, 0) != (ssize_t)size)
+			say("CHANGE rewrite failed");
+	} else if (touch == 2) {
+		if (fchmod(fd, 0640))
+			say("CHANGE chmod failed");
+	}
+	close(fd);
 }
 
 static int copy_self(const char *dest, mode_t mode)
@@ -202,6 +238,28 @@ static void drop_and_exec(void)
 	_exit(1);
 }
 
+/* The capability sets and securebits that capset does not cover: a child makes
+ * CAP_NET_RAW (13) inheritable and ambient, drops CAP_SYS_MODULE (16) from the
+ * bounding set and sets a securebit. Each is a credential change the tracer
+ * must record (layout antinomie.creds/2, reason PRCTL). */
+static void prctl_case(void)
+{
+	struct { unsigned int version; int pid; } header = { 0x20080522, 0 };
+	struct { unsigned int effective, permitted, inheritable; } data[2];
+	char line[96];
+
+	syscall(SYS_capget, &header, data);
+	data[0].inheritable |= 1U << 13;
+	header.version = 0x20080522;
+	syscall(SYS_capset, &header, data);
+	snprintf(line, sizeof(line), "PRCTL ambient raise %d", prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, 13, 0, 0));
+	say(line);
+	snprintf(line, sizeof(line), "PRCTL bset drop %d", prctl(PR_CAPBSET_DROP, 16, 0, 0, 0));
+	say(line);
+	snprintf(line, sizeof(line), "PRCTL securebits %d", prctl(PR_SET_SECUREBITS, SECBIT_NO_CAP_AMBIENT_RAISE, 0, 0, 0));
+	say(line);
+}
+
 int main(int argc, char **argv)
 {
 	struct names processes_before, processes_after, files_before, files_after;
@@ -270,6 +328,12 @@ int main(int argc, char **argv)
 		}
 	}
 	pid = fork();
+	if (!pid) {
+		prctl_case();
+		_exit(0);
+	}
+	waitpid(pid, &status, 0);
+	pid = fork();
 	if (!pid)
 		drop_and_exec();
 	waitpid(pid, &status, 0);
@@ -278,6 +342,14 @@ int main(int argc, char **argv)
 
 	unlink("/tmp/ant-child");
 	unlink("/tmp/ant-suid");
+	/* Three deletes whose hashing job waits behind a slow one while the file is
+	 * touched: 4001 bytes rewritten through a descriptor kept past the unlink
+	 * (same size; CHANGED), 4002 bytes whose mode changes (only the change time
+	 * moves; CHANGED, the digest is still the file's), 4003 bytes left alone. */
+	changed_case("/tmp/ant-c1", 4001, 1);
+	changed_case("/tmp/ant-c2", 4002, 2);
+	changed_case("/tmp/ant-c3", 4003, 0);
+	say("CHANGE cases done");
 	for (i = 0; i < 60; i++) {
 		snprintf(line, sizeof(line), "/tmp/ant-burst-%d", i);
 		if (write_file(line, 256 * 1024, 1, 0644))

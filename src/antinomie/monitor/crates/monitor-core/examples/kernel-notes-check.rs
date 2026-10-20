@@ -48,7 +48,7 @@ fn main() {
                 if let Some(creds) = kernel_notes::credentials(note) {
                     let login = creds.auid.map_or("unset".to_owned(), |id| id.to_string());
                     println!(
-                        "{head}: CREDS {:?} uid {} euid {} suid {} fsuid {} gid {} egid {} sgid {} fsgid {} auid {login} audit {} caps eff {:x} perm {:x}",
+                        "{head}: CREDS {:?} uid {} euid {} suid {} fsuid {} gid {} egid {} sgid {} fsgid {} auid {login} audit {} caps eff {:x} perm {:x} inh {:x} bset {} amb {} securebits {}",
                         creds.change,
                         creds.uid,
                         creds.euid,
@@ -60,7 +60,17 @@ fn main() {
                         creds.fsgid,
                         creds.audit,
                         creds.cap_effective,
-                        creds.cap_permitted
+                        creds.cap_permitted,
+                        creds.cap_inheritable,
+                        creds
+                            .cap_bounding
+                            .map_or("-".into(), |set| format!("{set:x}")),
+                        creds
+                            .cap_ambient
+                            .map_or("-".into(), |set| format!("{set:x}")),
+                        creds
+                            .securebits
+                            .map_or("-".into(), |bits| format!("{bits:#x}"))
                     );
                 } else if let Some(hash) = kernel_notes::file_hash(note) {
                     println!(

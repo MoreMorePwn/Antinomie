@@ -7,7 +7,11 @@ use super::*;
 const STATUS: u32 = 0x1060;
 const READ: u32 = 0x1061;
 const RELEASE: u32 = 0x1062;
+/// Most bytes a handle may store (the guest's `max_size`).
 const LIMIT: u64 = 64 * 1024 * 1024;
+/// Longest core file the guest reports: the stored bytes plus the holes
+/// (`ANTC_CORE_LOGICAL_MAX`).
+pub(super) const LOGICAL_LIMIT: u64 = crate::core_capture::LOGICAL_LIMIT;
 const COMMAND_TIMEOUT: Duration = Duration::from_millis(50);
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -103,7 +107,7 @@ impl CoreStatus {
             || result.root_cookie != cookie
             || result.tgid != tgid
             || !(1..=6).contains(&result.state)
-            || result.size > LIMIT
+            || result.size > LOGICAL_LIMIT
             || result.flags & if manual { !0x7f } else { !15 } != 0
             || if manual {
                 result.flags & 0x51 != 0x50
@@ -139,7 +143,10 @@ pub(super) struct Transfer {
     run: RunSummary,
     status: Option<CoreStatus>,
     sink: Sink,
+    /// Logical file offset reached on disk, holes included.
     offset: u64,
+    /// Bytes of it actually written, which `max_size` bounds.
+    allocated: u64,
     sha256: String,
     initialized: bool,
     reserved_len: u64,
@@ -165,6 +172,7 @@ impl Transfer {
             status: None,
             sink: Sink::new(run.directory.join("core")),
             offset: 0,
+            allocated: 0,
             sha256: String::new(),
             initialized: false,
             reserved_len: 0,
@@ -283,9 +291,10 @@ impl Session {
         let reserved = core.reserved_len;
         self.core_reserved_len = self.core_reserved_len.saturating_sub(reserved);
         core.reserved_len = 0;
-        let delta = acknowledged_len(core.offset, receipt.size, reserved)?;
+        let delta = acknowledged_len(core.allocated, receipt.allocated, reserved)?;
         self.core_stored_len = self.core_stored_len.saturating_add(delta);
         owner.core_stored_len = owner.core_stored_len.saturating_add(delta);
+        core.allocated = receipt.allocated;
         core.offset = receipt.size;
         core.sha256 = receipt.sha256;
         if receipt.has_file {
@@ -440,9 +449,6 @@ impl Session {
                 return Ok(());
             };
             let status = CoreStatus::parse(&reply, core.id, cookie, core.tgid)?;
-            if status.size > core.max_size {
-                return Err("guest process core exceeds its accepted reservation".into());
-            }
             let state = status.state;
             core.status = Some(status);
             core.last_activity = Instant::now();
@@ -498,12 +504,27 @@ impl Session {
         else {
             return Ok(());
         };
-        let chunk = control::specimen_chunk(&reply, core.offset, total, capacity)?;
+        let chunk = match control::core_chunk(&reply, core.offset, total, capacity)? {
+            control::CoreChunk::Data(chunk) => chunk,
+            control::CoreChunk::Hole(len) => {
+                // Zeros the guest never stored: a sparse range, no quota used.
+                core.sink.submit(Action::Hole {
+                    offset: core.offset,
+                    len,
+                })?;
+                core.reserved_len = 0;
+                core.last_activity = Instant::now();
+                return Ok(());
+            }
+        };
         let retained_len = chunk.len().min(self.available() as usize);
         if retained_len == 0 {
             return Err("recording quota exhausted during process-core transfer".into());
         }
         let data = &chunk[..retained_len];
+        if core.allocated + retained_len as u64 > core.max_size {
+            return Err("guest process core stored more than its accepted reservation".into());
+        }
         if core.offset == 0
             && data.len() >= 20
             && (&data[..7] != b"\x7fELF\x02\x01\x01"
@@ -817,8 +838,15 @@ mod tests {
             bad[offset..offset + 4].copy_from_slice(&128u32.to_le_bytes());
             assert!(CoreStatus::parse(&bad, 5, 6, 7).is_err());
         }
+        // The size is the file's logical extent, holes included: it may pass the
+        // 64 MiB that bounds the stored bytes, up to the guest's own bound.
+        let mut sparse = wire.clone();
+        sparse[32..40].copy_from_slice(&(LIMIT + 1).to_le_bytes());
+        assert_eq!(CoreStatus::parse(&sparse, 5, 6, 7).unwrap().size, LIMIT + 1);
+        sparse[32..40].copy_from_slice(&LOGICAL_LIMIT.to_le_bytes());
+        assert!(CoreStatus::parse(&sparse, 5, 6, 7).is_ok());
         let mut bad = wire;
-        bad[32..40].copy_from_slice(&(LIMIT + 1).to_le_bytes());
+        bad[32..40].copy_from_slice(&(LOGICAL_LIMIT + 1).to_le_bytes());
         assert!(CoreStatus::parse(&bad, 5, 6, 7).is_err());
         let mut bad = status();
         bad[72..76].copy_from_slice(&257u32.to_le_bytes());

@@ -33,6 +33,7 @@
 #define ANTC_RUN_STOP_REQUESTED 4
 #define ANTC_RUN_ASYNC_COMPLETE 8
 #define ANTC_RUN_OBSERVATION_INCOMPLETE 16
+#define ANTC_RUN_KILL_ESCALATED 32
 #define ANTC_STATS 0x1020
 #define ANTC_INFO 0x1021
 #define ANTC_INFO_SIZE 160
@@ -63,6 +64,8 @@
 #define ANTC_CORE_LOOKUP 0x1064
 #define ANTC_CORE_CANCEL 0x1065
 #define ANTC_CORE_STATUS_SIZE 80
+#define ANTC_CORE_READ_HOLE 1
+#define ANTC_CORE_LOGICAL_MAX 17179869184ULL
 #define ANTC_CORE_ARMED 1
 #define ANTC_CORE_COPYING 2
 #define ANTC_CORE_READY 3
@@ -135,13 +138,16 @@
 #define ANTC_DEBUG_BP_SOFTWARE 1
 /* Telemetry lifecycle records (no control command): phase-3 events whose one
  * field is a fixed little-endian structure. Layout names are versioned.
- * lifecycle.creds, layout "antinomie.creds/1", 72 bytes: u32 uid, euid, suid,
+ * lifecycle.creds, layout "antinomie.creds/2", 96 bytes: u32 uid, euid, suid,
  * fsuid at 0/4/8/12, gid, egid, sgid, fsgid at 16/20/24/28 (init user namespace;
  * 0xffffffff unmapped), u32 auid (loginuid) at 32 and u32 session id at 36
  * (0xffffffff unset), u32 reason at 40, u32 flags at 44 (bit0 AUDIT: the kernel
  * tracks loginuid), u64 cap_effective, cap_permitted, cap_inheritable at
- * 48/56/64. Recorded at a task's first traced call (START) and whenever any of
- * these change; the record belongs to the call it happened in.
+ * 48/56/64, u64 cap_bounding at 72, u64 cap_ambient at 80, u32 securebits at 88
+ * and zero at 92. Recorded at a task's first traced call (START) and whenever
+ * any of these change (all five capability sets and the securebits); the
+ * record belongs to the call it happened in. The first 72 bytes are the
+ * layout "antinomie.creds/1" of earlier builds, which the host still reads.
  * lifecycle.file_hash, layout "antinomie.hash/1", 80 bytes: u8 kind at 0,
  * u8 status at 1, u8 algorithms at 2 (bit0 SHA-256), u8 flags at 3, s32 error
  * at 4, u64 size (bytes at the event) at 8, u64 hashed bytes at 16, u64 size
@@ -151,7 +157,7 @@
  * lost since boot at 72 (queue, budget, memory or ring loss), zero at 76.
  * Published after the call returned, by a worker, with the call's identity.
  */
-#define ANTC_CREDS_SIZE 72
+#define ANTC_CREDS_SIZE 96
 #define ANTC_CRED_START 1
 #define ANTC_CRED_SETUID 2
 #define ANTC_CRED_SETGID 3
@@ -162,6 +168,7 @@
 #define ANTC_CRED_EXEC_CAPS 8
 #define ANTC_CRED_LOGINUID 9
 #define ANTC_CRED_OTHER 10
+#define ANTC_CRED_PRCTL 11
 #define ANTC_CRED_AUDIT 1
 #define ANTC_HASH_SIZE 80
 #define ANTC_HASH_EXEC 1
@@ -218,7 +225,15 @@
  * States: ARMED/COPYING/READY/PARTIAL/UNAVAILABLE/CANCELED. READY has
  * status0; PARTIAL retains a prefix with negative errno. Flags identify
  * root-only, native ELF64, Linux coredump_filter and coverage limitations.
- * CORE_READ has the same request/reply layout and bound as SPECIMEN_READ.
+ * CORE_READ has the same request/reply layout and bound as SPECIMEN_READ,
+ * except that a core file is sparse and the u32 at reply offset 20 (zero for
+ * data) is a flags word: bit0 HOLE (ANTC_CORE_READ_HOLE) means the count bytes
+ * at the offset are zeros that were never stored (Linux skips pages that are
+ * not resident) and no payload follows (reply length 24); count then names the
+ * whole hole up to the next stored byte, at most 1 GiB, and is not bounded by
+ * the requested capacity. A data reply never crosses into a hole. size and
+ * expected_size are the file's logical extent, at most 16 GiB; the handle's
+ * max_size bounds the bytes actually stored (data replies), not that extent.
  * Only READY/PARTIAL data is readable; it is immutable.
  * CORE_RELEASE: header flags=0, u64 id at8; removes/cancels the handle.
  * Four handles, 128MiB global reservation; terminal handles expire after
@@ -277,11 +292,18 @@
  * u16 pixel_width at 20, u16 pixel_height at 22. Empty success reply.
  * SIGNAL: header, u64 session_id at 8, u32 signal at 16,
  * u32 reserved=0 at 20. Signals launch process group. Empty success reply.
- * STOP_RUN: header flags=0, nonzero u64 root_task_cookie at 8 (16 bytes).
+ * STOP_RUN: header flags=0, nonzero u64 root_task_cookie at 8 (16 bytes), or
+ * 24 bytes with u32 grace_ms at 16 (0 selects the default, 4000; otherwise
+ * 100..30000) and u32 reserved=0 at 20.
  * Requests SIGTERM for each traced task with this inherited launch cookie,
  * including descendants after root exit or PTY/session reaping. Empty reply.
  * Status 0 means signal requests issued, not proven tree termination; -ESRCH
  * means no signalable matching task. Concurrent forks may escape this pass.
+ * After the grace period the guest itself sends SIGKILL to every task of the
+ * run still alive and repeats it every 250 ms (20 passes at most) while tasks
+ * remain, and sets RUN_STATUS flag KILL_ESCALATED (32). A process core being
+ * copied is not interrupted: the escalation waits for it, for at most 15 s
+ * past the grace period. A later STOP_RUN only brings the deadline forward.
  * RUN_STATUS: header flags=0, nonzero u64 root cookie at 8 (16 bytes).
  * Success: 64-byte reply specified in protocol/run-status.md. Task/tree
  * completion, root wait status, async observations and saving are distinct.

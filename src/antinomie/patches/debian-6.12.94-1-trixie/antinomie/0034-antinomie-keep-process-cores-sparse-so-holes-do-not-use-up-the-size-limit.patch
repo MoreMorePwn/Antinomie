@@ -1,0 +1,384 @@
+Description: antinomie: keep process cores sparse so holes do not use up the size limit
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-10-20
+
+Sparse process-core sink: max_size bounds stored bytes, holes are named in CORE_READ (flag HOLE) and the logical extent is bounded at 16 GiB.
+
+---
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index 3252203b9..ff53ea1c8 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -64,6 +64,8 @@
+ #define ANTC_CORE_LOOKUP 0x1064
+ #define ANTC_CORE_CANCEL 0x1065
+ #define ANTC_CORE_STATUS_SIZE 80
++#define ANTC_CORE_READ_HOLE 1
++#define ANTC_CORE_LOGICAL_MAX 17179869184ULL
+ #define ANTC_CORE_ARMED 1
+ #define ANTC_CORE_COPYING 2
+ #define ANTC_CORE_READY 3
+@@ -223,7 +225,15 @@
+  * States: ARMED/COPYING/READY/PARTIAL/UNAVAILABLE/CANCELED. READY has
+  * status0; PARTIAL retains a prefix with negative errno. Flags identify
+  * root-only, native ELF64, Linux coredump_filter and coverage limitations.
+- * CORE_READ has the same request/reply layout and bound as SPECIMEN_READ.
++ * CORE_READ has the same request/reply layout and bound as SPECIMEN_READ,
++ * except that a core file is sparse and the u32 at reply offset 20 (zero for
++ * data) is a flags word: bit0 HOLE (ANTC_CORE_READ_HOLE) means the count bytes
++ * at the offset are zeros that were never stored (Linux skips pages that are
++ * not resident) and no payload follows (reply length 24); count then names the
++ * whole hole up to the next stored byte, at most 1 GiB, and is not bounded by
++ * the requested capacity. A data reply never crosses into a hole. size and
++ * expected_size are the file's logical extent, at most 16 GiB; the handle's
++ * max_size bounds the bytes actually stored (data replies), not that extent.
+  * Only READY/PARTIAL data is readable; it is immutable.
+  * CORE_RELEASE: header flags=0, u64 id at8; removes/cancels the handle.
+  * Four handles, 128MiB global reservation; terminal handles expire after
+diff --git a/kernel/antinomie/process_core.c b/kernel/antinomie/process_core.c
+index ae05c2c1f..5f0a18c8f 100644
+--- a/kernel/antinomie/process_core.c
++++ b/kernel/antinomie/process_core.c
+@@ -23,13 +23,33 @@
+ #define ANT_CORE_TOTAL (128U * 1024 * 1024)
+ #define ANT_CORE_HANDLES 4
+ #define ANT_CORE_IDLE (180 * HZ)
++/* A core file is sparse: Linux skips pages that are not resident, and the
++ * sink keeps only the bytes that were written, in extents. max_size bounds
++ * those bytes (the real memory the handle reserves), never the file offset a
++ * far-away segment sits at; the logical extent has its own, much larger bound.
++ * A gap of at most 64 bytes between two writes is stored as zeros rather than
++ * as a hole, which keeps the alignment padding of ELF notes in one extent.
++ */
++#define ANT_CORE_LOGICAL_MAX ANTC_CORE_LOGICAL_MAX
++#define ANT_CORE_EXTENTS 32768
++#define ANT_CORE_FILL 64
++#define ANT_CORE_HOLE_MAX (1U << 30)
++
++struct ant_core_extent {
++	u64 offset;	/* file offset of the first byte */
++	u32 length;
++	u32 base;	/* where those bytes start in the data buffer */
++};
+ 
+ struct ant_core {
+ 	struct list_head node;
+ 	refcount_t refs;
+ 	void *data;
++	struct ant_core_extent *extents;
++	u32 extent_count;
+ 	u64 id, root_cookie, start_ns, finish_ns, expected_size;
+-	size_t size, max_size;
++	/* size: the file's logical end; stored: bytes in the buffer. */
++	size_t size, stored, max_size;
+ 	unsigned long touched, deadline;
+ 	u32 timeout_ms, state, flags, tgid, thread_count;
+ 	int status, wait_status, signal, sink_error;
+@@ -55,6 +75,7 @@ void ant_core_put(struct ant_core *core)
+ 		return;
+ 	reserved = core->max_size;
+ 	vfree(core->data);
++	vfree(core->extents);
+ 	kfree(core);
+ 	mutex_lock(&core_lock);
+ 	reserved_size -= reserved;
+@@ -96,6 +117,16 @@ static void expire_cores(struct work_struct *work)
+ 		schedule_delayed_work(&core_expiry_work, 30 * HZ);
+ }
+ 
++/* The data buffer (max_size bytes) and the extent table of one core. */
++static bool core_buffers(struct ant_core *core)
++{
++	core->data = __vmalloc(core->max_size, GFP_KERNEL | __GFP_ZERO |
++			       __GFP_NORETRY | __GFP_NOWARN);
++	core->extents = __vmalloc(ANT_CORE_EXTENTS * sizeof(*core->extents),
++				  GFP_KERNEL | __GFP_ZERO | __GFP_NORETRY | __GFP_NOWARN);
++	return core->data && core->extents;
++}
++
+ static struct ant_core *core_create(u32 max_size, u32 timeout_ms, bool allocate)
+ {
+ 	struct ant_core *core;
+@@ -121,10 +152,7 @@ static struct ant_core *core_create(u32 max_size, u32 timeout_ms, bool allocate)
+ 	refcount_set(&core->refs, 1);
+ 	INIT_LIST_HEAD(&core->node);
+ 	/* Optional acquisition must not escalate reclaim to arm its buffer. */
+-	if (allocate)
+-		core->data = __vmalloc(max_size, GFP_KERNEL | __GFP_ZERO |
+-				      __GFP_NORETRY | __GFP_NOWARN);
+-	if (allocate && !core->data) {
++	if (allocate && !core_buffers(core)) {
+ 		ant_core_put(core);
+ 		return ERR_PTR(-ENOMEM);
+ 	}
+@@ -277,25 +305,89 @@ static int sink_check(struct ant_core *core)
+ 	return error;
+ }
+ 
++/* The extent holding file offset, or the first one after it (to find the end
++ * of a hole). Extents are in file order and never overlap.
++ */
++static unsigned int extent_search(const struct ant_core *core, u64 offset)
++{
++	unsigned int low = 0, high = core->extent_count;
++
++	while (low < high) {
++		unsigned int mid = low + (high - low) / 2;
++		const struct ant_core_extent *extent = &core->extents[mid];
++
++		if (offset >= extent->offset + extent->length)
++			low = mid + 1;
++		else
++			high = mid;
++	}
++	return low;
++}
++
++/* The stored bytes at a file offset and how many follow in the same extent;
++ * NULL where the offset is in a hole or past the end.
++ */
++static void *core_span(const struct ant_core *core, u64 offset, u64 *available)
++{
++	unsigned int index;
++	const struct ant_core_extent *extent;
++
++	if (!core->data || !core->extents)
++		return NULL;
++	index = extent_search(core, offset);
++	if (index >= core->extent_count)
++		return NULL;
++	extent = &core->extents[index];
++	if (offset < extent->offset)
++		return NULL;
++	*available = extent->offset + extent->length - offset;
++	return core->data + extent->base + (offset - extent->offset);
++}
++
+ static ssize_t core_write_iter(struct kiocb *iocb, struct iov_iter *from)
+ {
+ 	struct ant_core *core = iocb->ki_filp->private_data;
+ 	size_t count = iov_iter_count(from);
+ 	loff_t pos = iocb->ki_pos;
++	struct ant_core_extent *extent;
++	u64 gap, fill;
+ 	int error = sink_check(core);
+ 
+ 	if (error)
+ 		return error;
+-	if (pos < 0 || pos > core->max_size || count > core->max_size - pos) {
++	/* The writer is sequential: it only skips forward. */
++	if (pos < 0 || (u64)pos < core->size) {
++		core->sink_error = -ESPIPE;
++		return -ESPIPE;
++	}
++	if ((u64)pos > ANT_CORE_LOGICAL_MAX || count > ANT_CORE_LOGICAL_MAX - pos) {
++		core->sink_error = -EFBIG;
++		return -EFBIG;
++	}
++	gap = pos - core->size;
++	extent = core->extent_count ? &core->extents[core->extent_count - 1] : NULL;
++	fill = extent && gap <= ANT_CORE_FILL ? gap : 0;
++	/* max_size bounds the bytes stored, not the file offset they sit at. */
++	if (count + fill > core->max_size - core->stored ||
++	    (!(extent && fill == gap) && core->extent_count == ANT_CORE_EXTENTS)) {
+ 		core->sink_error = -EFBIG;
+ 		return -EFBIG;
+ 	}
+-	if (copy_from_iter(core->data + pos, count, from) != count) {
++	if (copy_from_iter(core->data + core->stored + fill, count, from) != count) {
+ 		core->sink_error = -EFAULT;
+ 		return -EFAULT;
+ 	}
++	if (extent && fill == gap) {
++		extent->length += fill + count;
++	} else {
++		extent = &core->extents[core->extent_count++];
++		extent->offset = pos;
++		extent->length = count;
++		extent->base = core->stored;
++	}
++	core->stored += fill + count;
+ 	iocb->ki_pos += count;
+-	core->size = max_t(size_t, core->size, iocb->ki_pos);
++	core->size = pos + count;
+ 	return count;
+ }
+ 
+@@ -315,7 +407,7 @@ static loff_t core_llseek(struct file *file, loff_t offset, int whence)
+ 	} else {
+ 		return -EINVAL;
+ 	}
+-	if (pos < 0 || pos > core->max_size) {
++	if (pos < 0 || pos > ANT_CORE_LOGICAL_MAX) {
+ 		core->sink_error = -EFBIG;
+ 		return -EFBIG;
+ 	}
+@@ -334,9 +426,7 @@ int ant_core_live_prepare(struct ant_core *core, struct file **file)
+ 
+ 	if (error)
+ 		return error;
+-	core->data = __vmalloc(core->max_size, GFP_KERNEL | __GFP_ZERO |
+-			      __GFP_NORETRY | __GFP_NOWARN);
+-	if (!core->data)
++	if (!core_buffers(core))
+ 		return -ENOMEM;
+ 	*file = anon_inode_getfile("antinomie-live-core", &core_fops, core, O_RDWR);
+ 	if (IS_ERR(*file)) {
+@@ -357,21 +447,26 @@ void ant_core_live_begin(struct ant_core *core)
+ 
+ static u64 core_expected_size(struct ant_core *core)
+ {
+-	struct elf64_hdr *elf = core->data;
++	struct elf64_hdr *elf;
+ 	struct elf64_phdr *ph;
+-	u64 size = 0, extent;
++	u64 available, table, size = 0, extent;
+ 	unsigned int i;
+ 
+-	if (core->size < sizeof(*elf) ||
++	elf = core_span(core, 0, &available);
++	if (!elf || available < sizeof(*elf) ||
+ 	    memcmp(elf->e_ident, ELFMAG, SELFMAG) ||
+ 	    elf->e_ident[EI_CLASS] != ELFCLASS64 ||
+ 	    elf->e_ident[EI_DATA] != ELFDATA2LSB ||
+ 	    elf->e_type != ET_CORE || elf->e_machine != EM_X86_64 ||
+-	    elf->e_phentsize != sizeof(*ph) || elf->e_phnum == PN_XNUM ||
+-	    elf->e_phoff > core->size ||
+-	    elf->e_phnum > (core->size - elf->e_phoff) / sizeof(*ph))
++	    elf->e_phentsize != sizeof(*ph) || elf->e_phnum == PN_XNUM)
++		return 0;
++	/* The header and the program headers are written back to back, so they
++	 * sit in the first extent.
++	 */
++	table = (u64)elf->e_phnum * sizeof(*ph);
++	ph = core_span(core, elf->e_phoff, &available);
++	if (!ph || available < table)
+ 		return 0;
+-	ph = core->data + elf->e_phoff;
+ 	for (i = 0; i < elf->e_phnum; i++) {
+ 		if (check_add_overflow(ph[i].p_offset, ph[i].p_filesz, &extent))
+ 			return 0;
+@@ -385,34 +480,40 @@ static u64 core_expected_size(struct ant_core *core)
+  */
+ static u32 core_thread_count(struct ant_core *core)
+ {
+-	struct elf64_hdr *elf = core->data;
++	struct elf64_hdr *elf;
+ 	struct elf64_phdr *ph;
++	u64 available;
+ 	u32 count = 0;
+ 	unsigned int i;
+ 
+ 	if (!core->expected_size)
+ 		return 0;
+-	ph = core->data + elf->e_phoff;
++	elf = core_span(core, 0, &available);
++	ph = elf ? core_span(core, elf->e_phoff, &available) : NULL;
++	if (!ph)
++		return 0;
+ 	for (i = 0; i < elf->e_phnum; i++) {
+-		u64 offset = ph[i].p_offset, end;
++		u64 at = 0, length;
++		u8 *notes;
+ 
+-		if (ph[i].p_type != PT_NOTE || offset > core->size ||
+-		    check_add_overflow(offset, ph[i].p_filesz, &end))
++		if (ph[i].p_type != PT_NOTE)
++			continue;
++		notes = core_span(core, ph[i].p_offset, &available);
++		if (!notes)
+ 			continue;
+-		end = min_t(u64, end, core->size);
+-		while (offset <= end && sizeof(struct elf_note) <= end - offset) {
+-			struct elf_note *note = core->data + offset;
++		length = min_t(u64, ph[i].p_filesz, available);
++		while (sizeof(struct elf_note) <= length - at) {
++			struct elf_note *note = (struct elf_note *)(notes + at);
+ 			u64 name_size = ALIGN((u64)note->n_namesz, 4);
+ 			u64 data_size = ALIGN((u64)note->n_descsz, 4);
+ 
+-			offset += sizeof(*note);
+-			if (name_size > end - offset ||
+-			    data_size > end - offset - name_size)
++			at += sizeof(*note);
++			if (name_size > length - at || data_size > length - at - name_size)
+ 				break;
+ 			if (note->n_type == NT_PRSTATUS && note->n_namesz == 5 &&
+-			    !memcmp(core->data + offset, "CORE", 5))
++			    !memcmp(notes + at, "CORE", 5))
+ 				count++;
+-			offset += name_size + data_size;
++			at += name_size + data_size;
+ 		}
+ 	}
+ 	return count;
+@@ -429,7 +530,7 @@ void ant_core_live_finish(struct ant_core *core, int error, u32 thread_count, bo
+ 	else if (time_after_eq(jiffies, core->deadline) && !error)
+ 		error = -ETIMEDOUT;
+ 	if (!error && (!expected || core->size < expected))
+-		error = expected > core->max_size ? -EFBIG : -EIO;
++		error = expected > ANT_CORE_LOGICAL_MAX ? -EFBIG : -EIO;
+ 	if (retained != thread_count)
+ 		gap = true;
+ 	if (gap && !error)
+@@ -500,7 +601,7 @@ bool ant_monitor_core_exit(int wait_status, const kernel_siginfo_t *siginfo)
+ 	else if (time_after_eq(jiffies, core->deadline))
+ 		error = -ETIMEDOUT;
+ 	if (!error && (!core->expected_size || core->size < core->expected_size))
+-		error = core->expected_size > core->max_size ? -EFBIG : -EIO;
++		error = core->expected_size > ANT_CORE_LOGICAL_MAX ? -EFBIG : -EIO;
+ 	mutex_lock(&core_lock);
+ 	if (core->expected_size)
+ 		core->flags |= ANTC_CORE_NATIVE_ELF64;
+@@ -571,8 +672,9 @@ int ant_core_command(u32 opcode, const u8 *args, size_t args_len,
+ 		     void *reply, size_t capacity, size_t *reply_len)
+ {
+ 	struct ant_core *core;
+-	u64 id, offset;
+-	u32 count;
++	u64 id, offset, available;
++	u32 count, flags, index;
++	void *data;
+ 	int error = 0;
+ 	bool removed = false;
+ 
+@@ -640,15 +742,32 @@ int ant_core_command(u32 opcode, const u8 *args, size_t args_len,
+ 			error = -EINVAL;
+ 			goto put;
+ 		}
++		/* Retained caller reference pins the immutable terminal buffer. */
++		mutex_unlock(&core_lock);
+ 		count = min_t(u64, count, core->size - offset);
++		data = count ? core_span(core, offset, &available) : NULL;
++		flags = 0;
++		if (data) {
++			count = min_t(u64, count, available);
++			memcpy(reply + 24, data, count);
++			*reply_len = 24 + count;
++		} else if (count) {
++			/* A hole: the zeros up to the next stored byte are named,
++			 * not sent. The host writes them as a sparse range.
++			 */
++			index = extent_search(core, offset);
++			count = min_t(u64, (index < core->extent_count ?
++					    core->extents[index].offset : core->size) - offset,
++				      ANT_CORE_HOLE_MAX);
++			flags = ANTC_CORE_READ_HOLE;
++			*reply_len = 24;
++		} else {
++			*reply_len = 24;
++		}
+ 		put_unaligned_le64(offset, reply);
+ 		put_unaligned_le64(core->size, reply + 8);
+ 		put_unaligned_le32(count, reply + 16);
+-		put_unaligned_le32(0, reply + 20);
+-		/* Retained caller reference pins the immutable terminal buffer. */
+-		mutex_unlock(&core_lock);
+-		memcpy(reply + 24, core->data + offset, count);
+-		*reply_len = 24 + count;
++		put_unaligned_le32(flags, reply + 20);
+ 		ant_core_put(core);
+ 		return 0;
+ 	}

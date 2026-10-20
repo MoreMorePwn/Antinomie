@@ -406,6 +406,16 @@ mod tests {
             (vm, location)
         }
         fn save_run(&self, vm: &VmConfig, directory: &std::path::Path, id: &str, boot: &str) {
+            self.save_run_with_notes(vm, directory, id, boot, Vec::new());
+        }
+        fn save_run_with_notes(
+            &self,
+            vm: &VmConfig,
+            directory: &std::path::Path,
+            id: &str,
+            boot: &str,
+            notes: Vec<String>,
+        ) {
             let directory = directory.join("runs").join(id);
             storage::private_dir(&directory).unwrap();
             let run = RunSummary {
@@ -422,7 +432,7 @@ mod tests {
                 terminal_eof: true,
                 state: RunState::Finalized,
                 recording_error: None,
-                notes: Vec::new(),
+                notes,
                 execution: None,
                 analysis: None,
             };
@@ -905,6 +915,47 @@ mod tests {
         }
         let history = crate::recording::list_vm_runs(&fixture.options, &vm.id).unwrap();
         assert_eq!(history.len(), 1024);
+    }
+
+    #[test]
+    fn a_run_that_lived_through_reconnects_is_one_record_the_newest_segment() {
+        use crate::api::RECONNECT_NOTE_PREFIX;
+        let fixture = Fixture::new();
+        let (vm, location) = fixture.create(VmConfig {
+            id: "history-one-run".into(),
+            ..VmConfig::default()
+        });
+        let note = |n: usize| format!("{RECONNECT_NOTE_PREFIX} (recording segment {n}); earlier");
+        let root = location.recording_directory.clone();
+        // One run, three segments under one id, and an unrelated run.
+        fixture.save_run(&vm, &root, "same-run", "boot-a");
+        fixture.save_run_with_notes(
+            &vm,
+            &root.join("boots/boot-b"),
+            "same-run",
+            "boot-b",
+            vec![note(2)],
+        );
+        fixture.save_run_with_notes(
+            &vm,
+            &root.join("boots/boot-c"),
+            "same-run",
+            "boot-c",
+            vec!["user note".into(), note(2), note(3)],
+        );
+        fixture.save_run(&vm, &root, "other-run", "boot-a");
+        let history = crate::recording::list_vm_runs(&fixture.options, &vm.id).unwrap();
+        assert_eq!(history.len(), 2, "{history:?}");
+        let run = history.iter().find(|run| run.id == "same-run").unwrap();
+        assert_eq!((run.boot_id.as_str(), run.segments()), ("boot-c", 3));
+        assert_eq!(
+            history
+                .iter()
+                .find(|run| run.id == "other-run")
+                .unwrap()
+                .segments(),
+            1
+        );
     }
 
     #[test]

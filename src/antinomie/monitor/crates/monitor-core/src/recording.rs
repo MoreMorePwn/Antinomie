@@ -859,11 +859,15 @@ pub fn list_vm_runs(
                 let Ok(Some(run)) = saved_run(&root, &entry.path(), vm_id) else {
                     continue;
                 };
-                if !runs
+                // A run that lived through a transport reconnect has a record in
+                // each segment's boot under one id; the newest segment is listed.
+                match runs
                     .iter()
-                    .any(|existing: &RunSummary| existing.id == run.id)
+                    .position(|existing: &RunSummary| existing.id == run.id)
                 {
-                    runs.push(run);
+                    None => runs.push(run),
+                    Some(at) if run.segments() > runs[at].segments() => runs[at] = run,
+                    Some(_) => {}
                 }
             }
         }

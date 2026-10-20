@@ -681,22 +681,28 @@ with one fixed-structure field, so the ANTT envelope, ABI 9 and the field
 framing are unchanged. No new record kind exists, so no transport version
 moves: a host that does not know the keys sees an unknown lifecycle field, and a
 recording from before them simply has none. Layouts are versioned by name
-(`antinomie.creds/1`, `antinomie.hash/1`) and given byte for byte in the
+(`antinomie.creds/2`, `antinomie.hash/1`) and given byte for byte in the
 mirrored `control.h`.
 
 | Record | Key and layout | When | Belongs to |
 |---|---|---|---|
-| Credentials | `lifecycle.creds`, `antinomie.creds/1`, 72 bytes | A traced task's first traced call (reason START); then each time `uid`, `euid`, `suid`, `fsuid`, the gid equivalents or `cap_effective`/`cap_permitted`/`cap_inheritable` change in `commit_creds()`; and when the audit login uid is set | The call that made the change; START belongs to the task's first call |
+| Credentials | `lifecycle.creds`, `antinomie.creds/2`, 96 bytes | A traced task's first traced call (reason START); then each time `uid`, `euid`, `suid`, `fsuid`, the gid equivalents, any of the five capability sets (effective, permitted, inheritable, bounding, ambient) or the `securebits` change in `commit_creds()`; and when the audit login uid is set | The call that made the change; START belongs to the task's first call |
 | File hash | `lifecycle.file_hash`, `antinomie.hash/1`, 80 bytes | Successful exec commit (the image the kernel will run); `unlink`/`unlinkat` that succeeded (the file's content as it was) | The call that triggered it, published later by a worker |
 
 Credentials carry the ids in the initial user namespace, the audit login uid and
 session id (`0xffffffff` unset, and `flags` bit 0 says whether the kernel tracks
-them at all), and the capability sets. The change reason is derived from the
-syscall in progress: setuid/setreuid, setgid/setregid, setresuid/setresgid,
-setfsuid/setfsgid, capset, an exec that changed an id (setuid/setgid image), an
-exec that changed only capabilities (file capabilities, root exec), the login
-uid, or other (for example `prctl`, user namespaces). A change with no id or
-capability difference writes nothing.
+them at all), all five capability sets and the securebits. The first 72 bytes
+are the earlier `antinomie.creds/1` layout (three capability sets); a `/2`
+record adds the bounding set at 72, the ambient set at 80 and the securebits at
+88, and a host reads either. The ambient and bounding sets are what a
+privilege-persisting sample changes with `prctl(PR_CAP_AMBIENT)`,
+`PR_CAPBSET_DROP` and `PR_SET_SECUREBITS`, so those changes are recorded too.
+The change reason is derived from the syscall in progress: setuid/setreuid,
+setgid/setregid, setresuid/setresgid, setfsuid/setfsgid, capset, `prctl`
+(reason PRCTL), an exec that changed an id (setuid/setgid image), an exec that
+changed only capabilities (file capabilities, root exec), the login uid, or
+other (for example user namespaces). A change with no id, capability set or
+securebits difference writes nothing.
 
 Hashing is SHA-256 only. The SigmaHQ Linux pack has no rule that reads a hash
 field, and Sysmon for Linux rules that do read `Hashes` use SHA256, so MD5 would
@@ -707,10 +713,31 @@ cost reads without a consumer. Budget and failure rules:
 | Largest file read | 16 MiB (`ANTC_HASH_FILE_MAX`); a larger file is not opened and the record says TOO_LARGE with the size |
 | Queue | 16 jobs and 64 MiB of queued file bytes; a full queue or byte budget drops the request and records QUEUE_FULL or BUDGET |
 | Filesystems | ext4, tmpfs, ramfs; any other is recorded UNSUPPORTED_FS without being opened (a remote or user-space filesystem could block) |
-| Other outcomes | NOT_REGULAR, NO_MEMORY, READ_ERROR with the errno, and a `CHANGED` flag when size or mtime moved while reading |
+| Other outcomes | NOT_REGULAR, NO_MEMORY, READ_ERROR with the errno, and a `CHANGED` flag when the file's state differs from the call's (see below) |
 | Loss | A record that could not be sent is counted; every later record carries the cumulative count |
 | Path | The traced task only allocates a 450-byte job and takes path references; a worker on the system unbound workqueue (no workqueue of its own) reopens the file read-only through `kernel_file_open` with no fsnotify event, no access-time update and no file-table accounting, one 64 KiB chunk at a time |
-| Repeats | A 32-entry cache keyed by device, inode, generation, size, mtime and ctime lets an exec storm of one program read it once; the record is flagged CACHED |
+| Repeats | A 32-entry cache keyed by device, inode, generation, size, mtime, ctime and the inode change counter (`i_version`) lets an exec storm of one program read it once; the record is flagged CACHED. An entry lives at most 30 s on the monotonic clock, and a filesystem without a change counter (ramfs) is never cached, because its coarse timestamps cannot tell a rewrite within one tick apart. The wall clock plays no part |
+| Worker | If the worker cannot allocate the context it publishes with, it skips the read and counts the loss instead of hashing a file whose record would be thrown away; the allocation is retried for the next job |
+
+**What a digest describes.** The file is read by a worker some time after the
+call returned, so the digest is the bytes at hashing time, never at the call.
+At the call the tracer records the file's state: device, inode and generation,
+size, modification and change time, and the inode change counter (armed by
+reading it, so that a later write moves it even when it leaves the coarse
+timestamps and the size alone). After the read the worker takes the state again
+and sets `CHANGED` if anything differs, including a change that restored the
+size and mtime. The residual window is inherent to deferred hashing: on a
+filesystem without a change counter (ramfs) a rewrite within one timestamp tick
+that keeps the size is not seen, and a write followed by one that restores size
+and mtime and lands between the last check and the worker's read cannot be told
+from no write. Changes that only touch metadata (chmod, rename, a new link) move
+the change time and report `CHANGED` too although the bytes are intact; the
+digest is still delivered. The one exception is the unlink of the file by a
+traced task, typical of a sample that executes itself and then deletes its
+image: a queued or running job whose file matched its state just before the
+unlink takes the post-unlink state as its expectation, so the delete does not
+read as a write while an earlier modification still does. For a delete record
+the state is taken again after the unlink succeeded, for the same reason.
 
 An exec whose image is a script's interpreter sets flag INTERPRETER: the hash
 is of the interpreter that ran, which is not the file the call named. The first
@@ -719,3 +746,35 @@ call to belong to and is not hashed. Nothing here starts a process, opens a
 descriptor in the guest or registers a BPF program; the pinned dentry and mount
 live a few milliseconds longer than they otherwise would, which is the only
 guest-observable effect (a deleted file's space is released when its job ends).
+
+
+## 19. Revision 17: sparse process cores (0.7.0)
+
+A process core is a sparse file: Linux skips the pages that are not resident and
+seeks over them, so the file offset of a segment can be far beyond the bytes
+that were written. The retained-core buffer of revisions 15 and 16 was a flat
+array indexed by file offset and `max_size` long, which bounded the file offset
+instead of the data: a process with a large reserved but untouched mapping lost
+everything after the first such hole and its core was cut at the data before it
+(364,544 bytes in the reported case), although a few megabytes were resident.
+
+The guest now stores only the bytes that were written, in extents, and
+`max_size` (at most 64 MiB, unchanged) bounds those bytes. The file's logical
+extent has its own bound of 16 GiB (`ANTC_CORE_LOGICAL_MAX`). Gaps of at most 64
+bytes (ELF note padding) are stored as zeros; larger gaps are holes, at most
+32768 extents per core. The writer is sequential, so a write before the current
+end is refused. STATUS `size` and `expected_size` are the logical extent.
+
+CORE_READ replies keep the SPECIMEN_READ layout. The u32 at reply offset 20
+(always zero before) is a flags word: bit 0 `HOLE` means the `count` bytes at
+the offset were never stored, read as zeros and are not sent (the reply is 24
+bytes). `count` then names the whole hole up to the next stored byte, at most
+1 GiB, and is not bounded by the requested capacity. A data reply never crosses
+into a hole. The host writes a hole as a sparse range of the saved file
+(`allocated_size` in `core.json` is the bytes actually written) and includes it
+in the digest; a hole uses no recording quota. The same rules apply to live
+(manual) cores, which share the sink. A host that reads the flags word as zero
+sees the data layout unchanged, so only revision-17 bases send a hole.
+
+Stop's SIGKILL escalation and the `KILL_ESCALATED` run-status flag are specified
+in `run-status.md`.

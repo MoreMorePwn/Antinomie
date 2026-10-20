@@ -8,7 +8,7 @@ Additive control opcodes for the debugger and a larger command table; contract r
 
 ---
 diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
-index ceba5bb7c..0bbd13c6b 100644
+index 39d488ec7..56ef8c362 100644
 --- a/kernel/antinomie/control_wire.h
 +++ b/kernel/antinomie/control_wire.h
 @@ -81,6 +81,58 @@
@@ -69,8 +69,8 @@ index ceba5bb7c..0bbd13c6b 100644
 +#define ANTC_DEBUG_BP_SOFTWARE 1
  /* Telemetry lifecycle records (no control command): phase-3 events whose one
   * field is a fixed little-endian structure. Layout names are versioned.
-  * lifecycle.creds, layout "antinomie.creds/1", 72 bytes: u32 uid, euid, suid,
-@@ -282,6 +334,58 @@
+  * lifecycle.creds, layout "antinomie.creds/2", 96 bytes: u32 uid, euid, suid,
+@@ -286,6 +338,58 @@
   * unprivileged), u32 fs_dev at 64 (new_encode_dev), u32 fs_type at 68,
   * u64 fs_id at 72, u64 refresh_pending_ms at 80 (0 when idle), s32 mem_error
   * at 88, zero at 92. A value is meaningful only when its VALID flag is set.
