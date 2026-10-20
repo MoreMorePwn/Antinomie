@@ -21,7 +21,7 @@ pub(crate) fn decode(
     if cookie == 0
         || read64(0)? != cookie
         || read64(56)? != 0
-        || flags & !31 != 0
+        || flags & !63 != 0
         || generation < previous_generation
         || total_task_count == 0
         || live_task_count > total_task_count
@@ -105,6 +105,24 @@ mod tests {
         );
     }
     #[test]
+    fn a_stop_that_needed_sigkill_says_so_and_names_the_signal() {
+        // ROOT | TREE | STOP | ASYNC | KILL_ESCALATED, root killed by SIGKILL.
+        let escalated = decode(&reply(47, 0, 0, 9), 7, 1).unwrap();
+        assert!(escalated.kill_escalated());
+        assert_eq!(
+            escalated.root_exit,
+            Some(WaitStatus::Signaled {
+                signal: 9,
+                core_dumped: false
+            })
+        );
+        assert_eq!(state(&escalated), RunState::Stopped);
+        // A root that obeyed SIGTERM ended the run without the escalation.
+        let polite = decode(&reply(15, 0, 0, 15), 7, 1).unwrap();
+        assert!(!polite.kill_escalated());
+        assert_eq!(state(&polite), RunState::Stopped);
+    }
+    #[test]
     fn malformed_generation_flags_lengths_and_wait_status_are_rejected() {
         let valid = reply(11, 0, 0, 0);
         for len in 0..64 {
@@ -112,7 +130,7 @@ mod tests {
         }
         assert!(decode(&valid, 8, 0).is_err());
         assert!(decode(&valid, 7, 3).is_err());
-        assert!(decode(&reply(32, 1, 0, 0), 7, 0).is_err());
+        assert!(decode(&reply(64, 1, 0, 0), 7, 0).is_err());
         assert!(decode(&reply(11, 1, 0, 0), 7, 0).is_err());
         assert!(decode(&reply(11, 0, 1, 0), 7, 0).is_err());
         assert!(decode(&reply(27, 0, 0, 0), 7, 0).is_err());

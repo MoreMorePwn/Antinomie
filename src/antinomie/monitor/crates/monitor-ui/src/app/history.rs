@@ -757,14 +757,19 @@ pub(super) fn root_exit(run: &RunSummary) -> String {
 pub(super) fn execution_detail(run: &RunSummary) -> String {
     match &run.execution {
         Some(status) => format!(
-            "{}; {} live tasks; {} pending async; {} total tasks; {} async losses; flags {:#x}; generation {}",
+            "{}; {} live tasks; {} pending async; {} total tasks; {} async losses; flags {:#x}; generation {}{}",
             run_status(run),
             status.live_task_count,
             status.pending_async_count,
             status.total_task_count,
             status.async_loss_count,
             status.flags,
-            status.generation
+            status.generation,
+            if status.kill_escalated() {
+                "; Stop needed SIGKILL after the grace period"
+            } else {
+                ""
+            }
         ),
         None => format!(
             "{}; full-tree execution evidence unavailable",

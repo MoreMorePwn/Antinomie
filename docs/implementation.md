@@ -1039,9 +1039,12 @@ The user approved these changes on 2026-10-05:
   inherited independently of successful lifecycle transmission. Host also
   reads legacy minor 0 / 128-byte headers with explicitly unknown ownership.
 - STOP_RUN opcode `0x1015`: version header (8 bytes), root task cookie u64 at
-  offset 8, total 16 bytes. Signals matching tracked tasks with SIGTERM;
+  offset 8, total 16 bytes (or 24 with a `u32 grace_ms`, see
+  `protocol/run-status.md`). Signals matching tracked tasks with SIGTERM;
   success means signals issued, not atomic full-tree termination. No matching
-  tasks returns `-ESRCH`. Existing SIGNAL semantics remain separate.
+  tasks returns `-ESRCH`. After a grace period (4 s by default) the guest sends
+  SIGKILL to every task of the run still alive and reports KILL_ESCALATED in
+  RUN_STATUS. Existing SIGNAL semantics remain separate.
 - PTY EOF/root exit alone do not prove detached descendants finished. Per-run
   recording remains active until VM stop, with that distinction visible.
 - Cleanup removes old generated test VM disks/captures only after migration

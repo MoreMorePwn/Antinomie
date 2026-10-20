@@ -5,7 +5,7 @@ use crate::{api::RunArtifactState, storage};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{File, OpenOptions},
-    io::Write,
+    io::{Seek, SeekFrom, Write},
     os::unix::fs::OpenOptionsExt,
     path::PathBuf,
     sync::{
@@ -29,6 +29,12 @@ pub(super) enum Action {
         data: Vec<u8>,
         metadata: serde_json::Value,
     },
+    /// `len` zero bytes at `offset` that the guest never stored: a sparse
+    /// range of the file. They are part of the file's size and digest.
+    Hole {
+        offset: u64,
+        len: u64,
+    },
     Finish {
         state: RunArtifactState,
         generation: u64,
@@ -41,13 +47,17 @@ pub(super) enum Action {
 pub(super) enum Kind {
     Init,
     Write,
+    Hole,
     Finish,
     #[cfg(test)]
     Hold,
 }
 pub(super) struct Receipt {
     pub kind: Kind,
+    /// Logical size: every byte so far, holes included.
     pub size: u64,
+    /// Bytes actually written to disk (`size` less the holes).
+    pub allocated: u64,
     pub sha256: String,
     pub has_file: bool,
     pub final_state: Option<RunArtifactState>,
@@ -65,6 +75,7 @@ struct State {
     directory: PathBuf,
     file: Option<File>,
     size: u64,
+    allocated: u64,
     digest: Sha256,
     has_file: bool,
     sealed: Arc<AtomicBool>,
@@ -135,6 +146,7 @@ impl Sink {
                 directory,
                 file: None,
                 size: 0,
+                allocated: 0,
                 digest: Sha256::new(),
                 has_file: false,
                 sealed: sealed.clone(),
@@ -162,6 +174,11 @@ impl Sink {
             && (data.is_empty() || data.len() > CHUNK_SIZE)
         {
             return Err("core disk chunk exceeds its bound".into());
+        }
+        if let Action::Hole { len, .. } = &action
+            && (*len == 0 || *len > crate::control::CORE_HOLE_MAX)
+        {
+            return Err("core disk hole exceeds its bound".into());
         }
         let pool = pool()?;
         let state = self.state.take().ok_or("core sink state is missing")?;
@@ -217,6 +234,7 @@ fn publish(state: &State, mut metadata: serde_json::Value) -> Result<(), String>
         return Err("injected core metadata publication failure".into());
     }
     metadata["stored_size"] = state.size.into();
+    metadata["allocated_size"] = state.allocated.into();
     if metadata.get("file").is_some() && state.has_file {
         metadata["file"] = serde_json::to_value(state.directory.join("process.elf"))
             .map_err(|error| error.to_string())?;
@@ -270,12 +288,40 @@ fn write_chunk(state: &mut State, offset: u64, data: &[u8]) -> Result<(), String
             Ok(count) => {
                 state.digest.update(&remaining[..count]);
                 state.size += count as u64;
+                state.allocated += count as u64;
                 remaining = &remaining[count..];
             }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(error) => return Err(format!("core file write: {error}")),
         }
     }
+    Ok(())
+}
+/// Extend the file by a hole: the range reads as zeros and takes no disk
+/// space. The digest still covers it, in 64 KiB steps.
+fn write_hole(state: &mut State, offset: u64, len: u64) -> Result<(), String> {
+    if offset != state.size {
+        return Err("core disk hole offset is not contiguous".into());
+    }
+    let file = state
+        .file
+        .as_mut()
+        .ok_or("core file is missing for a hole")?;
+    let end = offset
+        .checked_add(len)
+        .ok_or("core hole overflows the file size")?;
+    file.set_len(end)
+        .map_err(|error| format!("core file extend: {error}"))?;
+    file.seek(SeekFrom::Start(end))
+        .map_err(|error| format!("core file seek: {error}"))?;
+    let zeros = [0u8; 65536];
+    let mut left = len;
+    while left > 0 {
+        let step = left.min(zeros.len() as u64) as usize;
+        state.digest.update(&zeros[..step]);
+        left -= step as u64;
+    }
+    state.size = end;
     Ok(())
 }
 fn execute(state: &mut State, action: Action) -> Receipt {
@@ -302,6 +348,7 @@ fn execute(state: &mut State, action: Action) -> Receipt {
             });
             (Kind::Write, result)
         }
+        Action::Hole { offset, len } => (Kind::Hole, write_hole(state, offset, len)),
         Action::Finish {
             state: requested,
             generation: version,
@@ -368,6 +415,7 @@ fn execute(state: &mut State, action: Action) -> Receipt {
     Receipt {
         kind,
         size: state.size,
+        allocated: state.allocated,
         sha256: format!("{:x}", state.digest.clone().finalize()),
         has_file: state.has_file,
         final_state,
@@ -466,6 +514,64 @@ mod tests {
         );
         assert!(wait(&mut sink).result.is_err());
         std::fs::remove_file(blocked).unwrap();
+    }
+    #[test]
+    fn a_hole_extends_the_file_without_disk_blocks_and_stays_in_the_digest() {
+        use std::os::unix::fs::MetadataExt;
+        let root = std::env::temp_dir().join(format!("ant-core-hole-{}", storage::unique_id()));
+        let mut sink = Sink::new(root.clone());
+        // A hole cannot come first: the file does not exist yet.
+        assert!(sink.submit(Action::Hole { offset: 0, len: 8 }).unwrap());
+        assert!(wait(&mut sink).result.is_err());
+        let write = |sink: &mut Sink, offset: u64, data: &[u8]| {
+            assert!(
+                sink.submit(Action::Write {
+                    offset,
+                    data: data.to_vec(),
+                    metadata: serde_json::json!({})
+                })
+                .unwrap()
+            );
+            wait(sink)
+        };
+        assert!(write(&mut sink, 0, b"head").result.is_ok());
+        let hole = 3 << 20;
+        assert!(
+            sink.submit(Action::Hole {
+                offset: 4,
+                len: hole
+            })
+            .unwrap()
+        );
+        let receipt = wait(&mut sink);
+        assert!(receipt.result.is_ok());
+        assert_eq!((receipt.size, receipt.allocated), (4 + hole, 4));
+        // The next write must continue exactly where the hole ended.
+        assert!(
+            write(&mut sink, 4, b"late")
+                .result
+                .unwrap_err()
+                .contains("contiguous")
+        );
+        let last = write(&mut sink, 4 + hole, b"tail");
+        assert!(last.result.is_ok());
+        assert_eq!((last.size, last.allocated), (8 + hole, 8));
+        let mut expected = b"head".to_vec();
+        expected.resize(4 + hole as usize, 0);
+        expected.extend(b"tail");
+        assert_eq!(last.sha256, format!("{:x}", Sha256::digest(&expected)));
+        let file = root.join("process.elf");
+        assert_eq!(std::fs::read(&file).unwrap(), expected);
+        // 512-byte blocks actually allocated: far less than the 3 MiB hole.
+        assert!(std::fs::metadata(&file).unwrap().blocks() * 512 < hole / 2);
+        assert!(
+            sink.submit(Action::Hole {
+                offset: 8 + hole,
+                len: crate::control::CORE_HOLE_MAX + 1
+            })
+            .is_err()
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn partial_enospc_acknowledges_only_written_prefix_and_can_seal_it() {

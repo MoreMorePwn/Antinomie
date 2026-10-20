@@ -9,8 +9,10 @@
 //! guesses: a value the kernel did not record, or recorded as unavailable,
 //! stays `None`.
 //!
-//! * `lifecycle.creds` (layout `antinomie.creds/1`, 72 bytes) is the task's
-//!   credentials at its first traced call and after every change.
+//! * `lifecycle.creds` (layout `antinomie.creds/2`, 96 bytes; `/1`, 72 bytes,
+//!   from earlier builds is still read) is the task's credentials at its first
+//!   traced call and after every change, with all five capability sets and the
+//!   securebits in `/2`.
 //! * `lifecycle.file_hash` (layout `antinomie.hash/1`, 80 bytes) is the SHA-256
 //!   of an executed image or of a file about to be deleted, or the reason it
 //!   was not computed. A worker publishes it after the call returned, still
@@ -21,9 +23,11 @@ use crate::api::EventSummary;
 
 pub const CREDS_KEY: &str = "lifecycle.creds";
 pub const HASH_KEY: &str = "lifecycle.file_hash";
-const CREDS_LAYOUT: &str = "antinomie.creds/1";
+const CREDS_LAYOUT: &str = "antinomie.creds/2";
+const CREDS_LAYOUT_V1: &str = "antinomie.creds/1";
 const HASH_LAYOUT: &str = "antinomie.hash/1";
-pub(crate) const CREDS_SIZE: usize = 72;
+pub(crate) const CREDS_SIZE: usize = 96;
+const CREDS_SIZE_V1: usize = 72;
 pub(crate) const HASH_SIZE: usize = 80;
 /// "Unmapped" for a user or group id, "unset" for the login uid and session.
 pub const UNSET: u32 = u32::MAX;
@@ -72,6 +76,8 @@ pub enum CredentialChange {
     ExecCaps,
     LoginUid,
     Other,
+    /// `prctl` changed the ambient or bounding set, the securebits or keepcaps.
+    Prctl,
     Unknown(u32),
 }
 
@@ -88,6 +94,7 @@ impl CredentialChange {
             8 => Self::ExecCaps,
             9 => Self::LoginUid,
             10 => Self::Other,
+            11 => Self::Prctl,
             other => Self::Unknown(other),
         }
     }
@@ -114,11 +121,20 @@ pub struct Credentials {
     pub cap_effective: u64,
     pub cap_permitted: u64,
     pub cap_inheritable: u64,
+    /// Bounding and ambient sets and the securebits; `None` in a `/1` record,
+    /// which did not carry them.
+    pub cap_bounding: Option<u64>,
+    pub cap_ambient: Option<u64>,
+    pub securebits: Option<u32>,
 }
 
 /// The credentials record of `event`, when it is a complete one.
 pub fn credentials(event: &EventSummary) -> Option<Credentials> {
-    let data = payload(event, CREDS_KEY, CREDS_LAYOUT, CREDS_SIZE)?;
+    let current = payload(event, CREDS_KEY, CREDS_LAYOUT, CREDS_SIZE);
+    let data = match current {
+        Some(data) => data,
+        None => payload(event, CREDS_KEY, CREDS_LAYOUT_V1, CREDS_SIZE_V1)?,
+    };
     let audit = u32_at(data, 44) & 1 != 0;
     let set = |value: u32| (audit && value != UNSET).then_some(value);
     Some(Credentials {
@@ -137,6 +153,9 @@ pub fn credentials(event: &EventSummary) -> Option<Credentials> {
         cap_effective: u64_at(data, 48),
         cap_permitted: u64_at(data, 56),
         cap_inheritable: u64_at(data, 64),
+        cap_bounding: current.map(|data| u64_at(data, 72)),
+        cap_ambient: current.map(|data| u64_at(data, 80)),
+        securebits: current.map(|data| u32_at(data, 88)),
     })
 }
 

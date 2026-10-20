@@ -40,6 +40,8 @@ pub(super) struct Owner {
     desired: Option<RunArtifactState>,
     generation: u64,
     reserved_len: u64,
+    /// Bytes written to disk so far; `summary.stored_size` also counts holes.
+    allocated: u64,
     checked: Option<Instant>,
     activity: Instant,
     pub done: bool,
@@ -89,6 +91,7 @@ impl Owner {
             desired: None,
             generation: 0,
             reserved_len: 0,
+            allocated: 0,
             checked: None,
             activity: Instant::now(),
             done: false,
@@ -228,10 +231,10 @@ pub(super) fn validate_saved(saved: &ProcessCoreCapture) -> Result<(), String> {
         || saved.nonce == [0, 0]
         || saved.guest_handle.is_none_or(|id| id == 0)
         || saved.pause_released != Some(true)
-        || saved.stored_size > u64::from(saved.max_size)
+        || saved.stored_size > core_capture::LOGICAL_LIMIT
         || saved
             .guest_size
-            .is_none_or(|size| size > u64::from(saved.max_size))
+            .is_none_or(|size| size > core_capture::LOGICAL_LIMIT)
     {
         return Err("manual core checkpoint lacks bounded resumed ownership".into());
     }
@@ -373,8 +376,8 @@ impl Session {
             owner.summary.target.task_cookie,
             owner.summary.target.tgid,
         )?;
-        if status.size > u64::from(owner.summary.max_size) {
-            return Err("manual core exceeded its requested extent".into());
+        if status.size > core_capture::LOGICAL_LIMIT {
+            return Err("manual core exceeded the longest extent a guest may report".into());
         }
         owner.summary.guest_handle = Some(id);
         owner.summary.guest_size = terminal(status.state).then_some(status.size);
@@ -396,12 +399,13 @@ impl Session {
         };
         self.core_reserved_len = self.core_reserved_len.saturating_sub(owner.reserved_len);
         let delta = receipt
-            .size
-            .checked_sub(owner.summary.stored_size)
+            .allocated
+            .checked_sub(owner.allocated)
             .filter(|delta| *delta <= owner.reserved_len)
             .ok_or("manual core disk receipt exceeds reserved extent")?;
         owner.reserved_len = 0;
         self.core_stored_len = self.core_stored_len.saturating_add(delta);
+        owner.allocated = receipt.allocated;
         owner.summary.stored_size = receipt.size;
         owner.summary.sha256 = Some(receipt.sha256);
         if receipt.has_file {
@@ -588,10 +592,25 @@ impl Session {
             return Ok(());
         };
         let chunk =
-            control::specimen_chunk(&reply, owner.summary.stored_size, status.size, capacity)?;
+            match control::core_chunk(&reply, owner.summary.stored_size, status.size, capacity)? {
+                control::CoreChunk::Data(chunk) => chunk,
+                control::CoreChunk::Hole(len) => {
+                    // Zeros the guest never stored: a sparse range, no quota used.
+                    owner.sink.submit(Action::Hole {
+                        offset: owner.summary.stored_size,
+                        len,
+                    })?;
+                    owner.reserved_len = 0;
+                    owner.activity = Instant::now();
+                    return Ok(());
+                }
+            };
         let retained = chunk.len().min(self.available() as usize);
         if retained == 0 {
             return Err("recording quota exhausted during manual core transfer".into());
+        }
+        if owner.allocated + retained as u64 > u64::from(owner.summary.max_size) {
+            return Err("manual core stored more than its requested limit".into());
         }
         if owner.summary.stored_size == 0
             && retained >= 20

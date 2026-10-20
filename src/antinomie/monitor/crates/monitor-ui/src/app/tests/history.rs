@@ -386,6 +386,20 @@ fn root_exit_is_independent_of_full_tree_completion_and_legacy_state() {
     assert_eq!(run_status(&run), "Running");
     assert_eq!(root_exit(&run), "Exit 7");
     assert!(execution_detail(&run).contains("3 live tasks; 1 pending async"));
+    assert!(!execution_detail(&run).contains("SIGKILL"));
+    // A Stop that the guest had to finish with SIGKILL says so.
+    let escalated = {
+        let mut run = run.clone();
+        let execution = run.execution.as_mut().unwrap();
+        execution.flags |= 32;
+        execution.root_exit = Some(WaitStatus::Signaled {
+            signal: 9,
+            core_dumped: false,
+        });
+        run
+    };
+    assert_eq!(root_exit(&escalated), "Signal 9");
+    assert!(execution_detail(&escalated).contains("Stop needed SIGKILL after the grace period"));
     run.execution = None;
     run.state = RunState::Finalized;
     assert_eq!(root_exit(&run), "Unknown");

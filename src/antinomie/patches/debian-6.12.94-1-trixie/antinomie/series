@@ -33,3 +33,6 @@
 0029-antinomie-record-task-credentials-and-hash-executed-and-deleted-files.patch
 0030-antinomie-define-the-debugger-control-opcodes-and-make-room-for-them.patch
 0031-antinomie-add-a-ptrace-free-process-debug-engine.patch
+0032-antinomie-bound-the-spin-of-a-telemetry-sender-that-may-not-sleep.patch
+0033-antinomie-escalate-stop-to-sigkill-for-the-whole-run-after-a-grace-period.patch
+0034-antinomie-keep-process-cores-sparse-so-holes-do-not-use-up-the-size-limit.patch

@@ -355,6 +355,55 @@ pub(crate) fn specimen_chunk(
     }
     Ok(&reply[24..])
 }
+/// What one CORE_READ reply holds: stored bytes, or a named hole.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum CoreChunk<'a> {
+    Data(&'a [u8]),
+    /// This many bytes at the offset were never stored (Linux skips pages that
+    /// are not resident); they read as zeros and no payload follows.
+    Hole(u64),
+}
+/// Largest hole one reply may name (guest `ANT_CORE_HOLE_MAX`).
+pub(crate) const CORE_HOLE_MAX: u64 = 1 << 30;
+/// Flags word of a CORE_READ reply: the hole bit (`ANTC_CORE_READ_HOLE`).
+const CORE_READ_HOLE: u32 = 1;
+
+/// Decode a CORE_READ reply, which is a specimen chunk whose reserved word is a
+/// flags word: zero for data of at most `capacity` bytes, or the hole bit for
+/// a payload-free hole of up to `CORE_HOLE_MAX` bytes (not bounded by
+/// `capacity`). Neither may reach past `total`.
+pub(crate) fn core_chunk(
+    reply: &[u8],
+    offset: u64,
+    total: u64,
+    capacity: u32,
+) -> Result<CoreChunk<'_>, String> {
+    use crate::parser::{u32_at, u64_at};
+    if reply.len() < 24 {
+        return Err("truncated core reply".into());
+    }
+    let count = u32_at(reply, 16).map_err(|e| e.to_string())?;
+    let flags = u32_at(reply, 20).map_err(|e| e.to_string())?;
+    let within = offset
+        .checked_add(u64::from(count))
+        .is_some_and(|end| end <= total);
+    if u64_at(reply, 0).map_err(|e| e.to_string())? != offset
+        || u64_at(reply, 8).map_err(|e| e.to_string())? != total
+        || count == 0
+        || !within
+    {
+        return Err("invalid or noncontiguous core reply".into());
+    }
+    match flags {
+        0 if count <= capacity && reply.len() == 24 + count as usize => {
+            Ok(CoreChunk::Data(&reply[24..]))
+        }
+        CORE_READ_HOLE if reply.len() == 24 && u64::from(count) <= CORE_HOLE_MAX => {
+            Ok(CoreChunk::Hole(u64::from(count)))
+        }
+        _ => Err("invalid core reply flags, length or extent".into()),
+    }
+}
 /// Decode an INFO reply: the kernel's revision, source id and release.
 pub(crate) fn info(reply: &[u8]) -> Result<crate::api::GuestKernel, String> {
     if reply.len() != INFO_SIZE {
@@ -461,6 +510,29 @@ mod tests {
         assert!(specimen_chunk(&chunk, 1, 3, 3).is_err());
         assert!(specimen_chunk(&chunk, 0, 3, 2).is_err());
         assert!(specimen_chunk(&chunk[..26], 0, 3, 3).is_err());
+        // A core reply is the same chunk, or a payload-free hole.
+        assert_eq!(
+            core_chunk(&chunk, 0, 3, 3).unwrap(),
+            CoreChunk::Data(b"abc")
+        );
+        let mut hole = chunk[..24].to_vec();
+        hole[16..20].copy_from_slice(&1000u32.to_le_bytes());
+        hole[8..16].copy_from_slice(&5000u64.to_le_bytes());
+        hole[20..24].copy_from_slice(&1u32.to_le_bytes());
+        assert_eq!(
+            core_chunk(&hole, 0, 5000, 3).unwrap(),
+            CoreChunk::Hole(1000)
+        );
+        assert!(core_chunk(&hole, 0, 999, 3).is_err());
+        assert!(core_chunk(&hole, 1, 5000, 3).is_err());
+        let mut padded = hole.clone();
+        padded.push(0);
+        assert!(core_chunk(&padded, 0, 5000, 3).is_err());
+        hole[20..24].copy_from_slice(&2u32.to_le_bytes());
+        assert!(core_chunk(&hole, 0, 5000, 3).is_err());
+        hole[20..24].copy_from_slice(&1u32.to_le_bytes());
+        hole[16..20].copy_from_slice(&0u32.to_le_bytes());
+        assert!(core_chunk(&hole, 0, 5000, 3).is_err());
         assert_eq!(specimen_read(4, 0, 3).len(), 32);
         assert_eq!(acquire("/tmp/a", 1000, 1000).unwrap().len(), 38);
     }

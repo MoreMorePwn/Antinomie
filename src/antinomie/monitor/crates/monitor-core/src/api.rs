@@ -379,6 +379,10 @@ pub struct BackendOptions {
     /// Bounds of the buffer for telemetry that arrives before its launch is acknowledged.
     pub pre_ack: crate::PreAckLimits,
     pub shutdown_timeout: Duration,
+    /// How long the guest waits after Stop's SIGTERM before it sends SIGKILL to
+    /// the whole run (100 ms to 30 s). `None` leaves the guest's own default of
+    /// 4 s, which every revision-17 base applies; a value needs revision 17.
+    pub stop_grace: Option<Duration>,
     pub bootstrap_gpa: Option<u64>,
     pub force_tcg: bool,
     pub headless: bool,
@@ -398,6 +402,7 @@ impl Default for BackendOptions {
             capture_quota_size: 4 * 1024 * 1024 * 1024,
             pre_ack: crate::PreAckLimits::default(),
             shutdown_timeout: Duration::from_secs(10),
+            stop_grace: None,
             bootstrap_gpa: None,
             force_tcg: false,
             headless: false,
@@ -729,8 +734,24 @@ pub struct RunExecution {
 }
 
 pub(crate) const ASYNC_LOSS_NOTE_PREFIX: &str = "Async observation loss reported";
+/// Starts the note a run gets in each recording segment that follows a
+/// transport reconnect. The run keeps its identity; the note counts segments.
+pub(crate) const RECONNECT_NOTE_PREFIX: &str = "Recording continues after a transport reconnect";
 
 impl RunSummary {
+    /// How many recording segments this run has: one, plus one for each
+    /// transport reconnect it lived through. A reconnect seals the recording
+    /// and continues the same run (same id) in a new timeline, so the run has
+    /// one record in Run History, the newest segment, and its earlier
+    /// segments stay in the recordings of their boots.
+    pub fn segments(&self) -> usize {
+        1 + self
+            .notes
+            .iter()
+            .filter(|note| note.starts_with(RECONNECT_NOTE_PREFIX))
+            .count()
+    }
+
     /// Whether current status or a retained loss note reports async capture loss.
     ///
     /// | Result | Meaning |
@@ -748,6 +769,14 @@ impl RunSummary {
 }
 
 impl RunExecution {
+    /// Whether a Stop ended on SIGKILL sent by the guest after its grace period,
+    /// because the run's tasks outlived SIGTERM. The signal that ended the root
+    /// is in `root_exit`; a root that handled SIGTERM and exited itself has no
+    /// escalation even when other tasks of the run needed it.
+    pub fn kill_escalated(&self) -> bool {
+        self.flags & 32 != 0
+    }
+
     /// Whether the guest reported async capture loss, independently of transport drops.
     ///
     /// | Result | Meaning |

@@ -19,6 +19,11 @@ struct HostCheckpoint {
     #[serde(default)]
     manual_core_handles: Vec<ProcessCoreCapture>,
     captures: Vec<CaptureCheckpoint>,
+    /// Terminal sequence reached by each run, by run id: a run that continues
+    /// under the same id after a reconnect must not restart its sequence, or a
+    /// window that shows it would drop the new output as already seen.
+    #[serde(default)]
+    terminal_sequences: BTreeMap<String, u64>,
 }
 #[derive(Serialize, Deserialize)]
 struct CaptureCheckpoint {
@@ -115,6 +120,11 @@ impl Session {
             boot_bundle_identity: self.bundle.base_identity.clone(),
             disk_bundle_identity: self.disk_bundle.base_identity.clone(),
             runs: self.runs.values().map(|run| run.summary.clone()).collect(),
+            terminal_sequences: self
+                .runs
+                .values()
+                .map(|run| (run.summary.id.clone(), run.sequence))
+                .collect(),
             core_handles: self
                 .run_artifacts
                 .values()
@@ -153,6 +163,8 @@ impl Session {
     ) -> Result<Self, String> {
         let RestoredGuest { process, transport } = guest;
         checkpoint.validate(&vm, &bundle, &disk_bundle)?;
+        // Without a snapshot this is a transport reconnect of the same guest.
+        let reconnect = snapshot_id.is_none();
         let boot_id = storage::unique_id();
         let boot_dir = crate::locations::locations(options, &vm.id)?
             .recording_directory
@@ -185,7 +197,14 @@ impl Session {
                 return Err("host checkpoint contains duplicate or zero run identities".into());
             }
             let source_run_id = summary.id.clone();
-            summary.id = storage::unique_id();
+            let source_boot_id = summary.boot_id.clone();
+            let segment = summary.segments() + 1;
+            // A reconnect continues the run: same id, so a selection, an open
+            // terminal and a pending Stop still mean this run. A restored
+            // snapshot is another timeline of it and gets its own identity.
+            if !reconnect {
+                summary.id = storage::unique_id();
+            }
             restored_run_ids.insert(source_run_id.clone(), summary.id.clone());
             summary.vm_id = vm.id.clone();
             summary.boot_id = boot_id.clone();
@@ -208,9 +227,20 @@ impl Session {
             summary.execution = None;
             let mut run = ProgramRun::new(summary, options.capture_quota_size)?;
             // Run History lists both records; this one says which it continues.
-            run.add_note(format!(
-                "Continues run {source_run_id} after the guest was reconnected or restored"
-            ));
+            if reconnect {
+                run.add_note(format!(
+                    "{RECONNECT_NOTE_PREFIX} (recording segment {segment}); the earlier part is kept in the recording of boot {source_boot_id}"
+                ));
+                run.sequence = checkpoint
+                    .terminal_sequences
+                    .get(&source_run_id)
+                    .copied()
+                    .unwrap_or(0);
+            } else {
+                run.add_note(format!(
+                    "Continues run {source_run_id} after the guest was restored from a snapshot"
+                ));
+            }
             run.boot_bundle_identity = bundle.base_identity.clone();
             run.disk_base_identity = disk_bundle.base_identity.clone();
             run.execution_generation = execution_generation;
