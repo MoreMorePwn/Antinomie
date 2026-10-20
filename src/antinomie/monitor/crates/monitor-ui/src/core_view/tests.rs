@@ -353,6 +353,7 @@ fn late_catalog_reply_is_rejected_for_vm_and_roots_and_current_refresh_is_queued
                     file: None,
                     state: antinomie_monitor_core::RunArtifactState::WaitingForRootExit,
                     deleted: None,
+                    sizes: None,
                 }],
                 ..Default::default()
             }),
@@ -711,6 +712,7 @@ fn sidebar_selection_shows_unfinished_capture_without_old_core_context() {
         file: None,
         state: antinomie_monitor_core::RunArtifactState::WaitingForRootExit,
         deleted: None,
+        sizes: None,
     });
     let output = settle(&ctx, &mut fixture.view, size);
     let content = texts(&output);
@@ -1525,6 +1527,7 @@ fn cancel_process_core_shows_only_while_a_capture_is_in_progress_and_cancels_tha
         file: None,
         state,
         deleted: None,
+        sizes: None,
     };
     let button = |texts: &[(String, egui::Rect)]| {
         texts
@@ -1639,6 +1642,7 @@ fn acquired_core(
         file: None,
         state,
         deleted: None,
+        sizes: None,
     }
 }
 

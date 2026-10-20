@@ -629,6 +629,16 @@ impl MonitorApp {
                                     .suffix(" GiB"),
                             );
                             ui.end_row();
+                            ui.label("Process cores: default budget");
+                            ui.add(
+                                egui::DragValue::new(&mut self.settings.core_budget_mib)
+                                    .range(1..=1024)
+                                    .suffix(" MiB"),
+                            )
+                            .on_hover_text(
+                                "Stored-byte budget a process core starts with. Each guest accepts up to a maximum of its own, so the budget in effect can be lower.",
+                            );
+                            ui.end_row();
                             ui.label("Shutdown timeout");
                             ui.add(
                                 egui::DragValue::new(&mut self.settings.timeout)

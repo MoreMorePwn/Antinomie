@@ -19,6 +19,15 @@ pub(crate) struct LaunchCapabilities {
     pub graphical: bool,
     pub core_on_exit: bool,
     pub debug_on_start: bool,
+    /// What the guest accepts for process cores, once it has said.
+    pub core_limits: Option<antinomie_monitor_core::CoreLimits>,
+    /// The remembered default budget, MiB.
+    pub core_default_mib: u32,
+}
+
+/// Where the Run form leaves the budget the user picked, for the caller to remember.
+pub(crate) fn remembered_budget_id() -> egui::Id {
+    egui::Id::new("remembered-core-budget")
 }
 
 /// Program fields and the analysis selection; true when the user asked to
@@ -40,7 +49,7 @@ pub(crate) fn launch_fields(
             fields(&mut columns[0], request, args, env, capabilities.graphical);
             crate::theme::section(&mut columns[1], "Analysis");
             selection(&mut columns[1], &mut request.analysis, tools, &mut install);
-            capture_selection(&mut columns[1], request, capabilities.core_on_exit);
+            capture_selection(&mut columns[1], request, capabilities);
             debugger_selection(&mut columns[1], request, capabilities.debug_on_start);
         });
     } else {
@@ -48,13 +57,18 @@ pub(crate) fn launch_fields(
         ui.add_space(6.0);
         crate::theme::section(ui, "Analysis");
         selection(ui, &mut request.analysis, tools, &mut install);
-        capture_selection(ui, request, capabilities.core_on_exit);
+        capture_selection(ui, request, capabilities);
         debugger_selection(ui, request, capabilities.debug_on_start);
     }
     install
 }
 
-fn capture_selection(ui: &mut egui::Ui, request: &mut ExecRequest, core_supported: bool) {
+fn capture_selection(
+    ui: &mut egui::Ui,
+    request: &mut ExecRequest,
+    capabilities: LaunchCapabilities,
+) {
+    let core_supported = capabilities.core_on_exit;
     ui.add_space(12.0);
     crate::theme::section(ui, "Memory");
     ui.checkbox(&mut request.memory_dump_on_exit, "Memory Dump on Exit")
@@ -67,8 +81,14 @@ fn capture_selection(ui: &mut egui::Ui, request: &mut ExecRequest, core_supporte
         core_enabled,
         egui::Checkbox::new(&mut request.core_dump_on_exit, "Core Dump on Exit"),
     )
-    .on_hover_text("Capture the launched root process before exit, including thread registers and selected memory. Linux x86-64; memory is filtered and bounded to 64 MiB, so captures may be partial. Some fatal exits, including SIGKILL, may leave register context unavailable. Thread synchronization and page faults may delay exit.")
+    .on_hover_text("Capture the launched root process before exit, including thread registers and selected memory. Linux x86-64; memory is filtered and bounded by the budget below, so captures may be partial. Some fatal exits, including SIGKILL, may leave register context unavailable. Thread synchronization and page faults may delay exit.")
     .on_disabled_hover_text(core_unavailable_reason(core_supported));
+    if core_enabled && request.core_dump_on_exit {
+        core_budget_row(ui, request, capabilities);
+    } else {
+        request.core_max_size = None;
+        request.core_timeout_ms = None;
+    }
     if !core_enabled {
         ui.add(
             egui::Label::new(egui::RichText::new(core_unavailable_reason(core_supported)).weak())
@@ -79,6 +99,46 @@ fn capture_selection(ui: &mut egui::Ui, request: &mut ExecRequest, core_supporte
     crate::theme::section(ui, "Network");
     ui.checkbox(&mut request.capture_network, "Capture network from start until tree exits")
         .on_hover_text("Record VM network packets during this run. Packets are VM-wide, not attributed to this process.");
+}
+
+/// Budget and deadline of the exit core, with what the guest accepts.
+fn core_budget_row(ui: &mut egui::Ui, request: &mut ExecRequest, capabilities: LaunchCapabilities) {
+    let limits = capabilities.core_limits;
+    let mut budget = request.core_max_size.unwrap_or_else(|| {
+        crate::core_budget::initial(limits.as_ref(), capabilities.core_default_mib)
+    });
+    let mut timeout = request.core_timeout_ms.unwrap_or_else(|| {
+        crate::core_budget::default_timeout_ms(limits.as_ref(), u64::from(budget))
+    });
+    if let Some(limits) = limits.as_ref()
+        && u64::from(budget) > limits.max_size
+    {
+        budget = limits.effective_budget(budget >> 20);
+        timeout = crate::core_budget::default_timeout_ms(Some(limits), u64::from(budget));
+    }
+    ui.indent("core-budget", |ui| {
+        if let Some(picked) =
+            crate::core_budget::show(ui, "run-core", &mut budget, &mut timeout, limits.as_ref())
+        {
+            ui.data_mut(|data| data.insert_temp(remembered_budget_id(), picked));
+        }
+        let (text, warn) = crate::core_budget::caption(limits.as_ref(), None, u64::from(budget));
+        let text = egui::RichText::new(text);
+        ui.add(
+            egui::Label::new(if warn {
+                text.color(crate::theme::warn())
+            } else {
+                text.weak()
+            })
+            .wrap(),
+        );
+    });
+    // Until the guest has said what it accepts, the request keeps the contract
+    // every guest has: 64 MiB and 5 s.
+    if limits.is_some() {
+        request.core_max_size = Some(budget);
+        request.core_timeout_ms = Some(timeout);
+    }
 }
 
 fn debugger_selection(ui: &mut egui::Ui, request: &mut ExecRequest, supported: bool) {
@@ -571,8 +631,19 @@ mod tests {
                 ..ExecRequest::default()
             };
             let _ = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default()
-                    .show(ctx, |ui| capture_selection(ui, &mut request, supported));
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    capture_selection(
+                        ui,
+                        &mut request,
+                        LaunchCapabilities {
+                            graphical: false,
+                            core_on_exit: supported,
+                            debug_on_start: false,
+                            core_limits: None,
+                            core_default_mib: 256,
+                        },
+                    )
+                });
             });
             assert!(!request.core_dump_on_exit);
         }
@@ -582,7 +653,19 @@ mod tests {
             ..ExecRequest::default()
         };
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| capture_selection(ui, &mut request, true));
+            egui::CentralPanel::default().show(ctx, |ui| {
+                capture_selection(
+                    ui,
+                    &mut request,
+                    LaunchCapabilities {
+                        graphical: false,
+                        core_on_exit: true,
+                        debug_on_start: false,
+                        core_limits: None,
+                        core_default_mib: 256,
+                    },
+                )
+            });
         });
         assert!(request.core_dump_on_exit);
     }

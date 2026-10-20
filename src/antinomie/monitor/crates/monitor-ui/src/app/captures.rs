@@ -26,6 +26,20 @@ pub(super) struct ProcessPicker {
     pub pending: Option<u64>,
     /// Name or PID text the list is narrowed to.
     pub filter: String,
+    /// Dump core: the budget (bytes) and deadline the request will carry, and the
+    /// budget the user picked, which becomes the remembered default.
+    pub core_budget: u32,
+    pub core_timeout_ms: u32,
+    pub core_picked: Option<u32>,
+}
+
+/// What the Dump core dialog needs to know about the guest.
+#[derive(Clone, Copy)]
+pub(super) struct CoreContext {
+    pub limits: Option<antinomie_monitor_core::CoreLimits>,
+    pub default_mib: u32,
+    /// Guest MemAvailable, when a recent sample says.
+    pub available: Option<u64>,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -39,7 +53,7 @@ pub(super) enum ProcessPurpose {
 pub(super) enum ProcessAction {
     Refresh(u32),
     Attach(GuestProcessIdentity),
-    DumpCore(GuestProcessIdentity),
+    DumpCore(GuestProcessIdentity, u32, u32),
     Debug(GuestProcessIdentity),
 }
 
@@ -55,6 +69,7 @@ impl ProcessPicker {
         page: Option<&GuestProcessPage>,
         enabled: bool,
         font_size: f32,
+        core_context: CoreContext,
     ) -> Option<ProcessAction> {
         if !self.open {
             return None;
@@ -104,7 +119,27 @@ impl ProcessPicker {
                     ui.add(egui::Label::new("Attach gdb, IDA, Ghidra or radare2 to a process. Nothing runs in the guest: the kernel stops and inspects the process without ptrace, so it sees no tracer. The process keeps running until a debugger connects.").wrap());
                 }
                 if core {
-                    ui.add(egui::Label::new("Briefly pause this process and its threads, capture a native ELF core, then resume. Resident memory only; unavailable pages remain marked. Limit: 64 MiB, 5 seconds.").wrap());
+                    ui.add(egui::Label::new("Briefly pause this process and its threads, capture a native ELF core, then resume. Resident memory only; unavailable pages remain marked.").wrap());
+                    let limits = core_context.limits;
+                    // Start from the remembered default, and follow a guest that lowers it.
+                    if self.core_budget == 0
+                        || limits.is_some_and(|limits| u64::from(self.core_budget) > limits.max_size)
+                    {
+                        self.core_budget = crate::core_budget::initial(limits.as_ref(), core_context.default_mib);
+                        self.core_timeout_ms = crate::core_budget::default_timeout_ms(limits.as_ref(), u64::from(self.core_budget));
+                    }
+                    if let Some(picked) = crate::core_budget::show(
+                        ui,
+                        "dump-core",
+                        &mut self.core_budget,
+                        &mut self.core_timeout_ms,
+                        limits.as_ref(),
+                    ) {
+                        self.core_picked = Some(picked);
+                    }
+                    let (text, warn) = crate::core_budget::caption(limits.as_ref(), core_context.available, u64::from(self.core_budget));
+                    let text = RichText::new(text);
+                    ui.add(egui::Label::new(if warn { text.color(theme::warn()) } else { text.weak() }).wrap());
                 }
                 ui.horizontal_wrapped(|ui| {
                     if icon(
@@ -238,7 +273,7 @@ impl ProcessPicker {
                     {
                         if let Some(identity) = self.selected.clone() {
                             action = Some(if core {
-                                ProcessAction::DumpCore(identity)
+                                ProcessAction::DumpCore(identity, self.core_budget, self.core_timeout_ms)
                             } else if debug {
                                 ProcessAction::Debug(identity)
                             } else {

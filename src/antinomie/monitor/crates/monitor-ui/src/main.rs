@@ -4,6 +4,7 @@ mod app;
 mod archive;
 mod bpf;
 mod build_wizard;
+mod core_budget;
 mod core_view;
 mod data_view;
 mod dependencies_window;

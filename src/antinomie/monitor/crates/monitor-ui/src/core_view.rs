@@ -24,8 +24,9 @@ mod decompile;
 mod disassembly;
 mod inspect;
 mod list;
+mod sizes;
 
-use self::{catalog::*, decompile::*, inspect::*};
+use self::{catalog::*, decompile::*, inspect::*, sizes::manual_status};
 
 const PAGE_SIZE: usize = 16 * 1024;
 const WINDOW_SIZE: u64 = 16 * 1024 * 1024;
@@ -119,6 +120,8 @@ struct AcquiredCore {
     state: antinomie_monitor_core::RunArtifactState,
     /// The core was deleted: "Deleted", as the run's artifact list words it.
     deleted: Option<&'static str>,
+    /// Sizes and reason the run recorded for its exit core.
+    sizes: Option<sizes::CoreSizes>,
 }
 
 impl AcquiredCore {
@@ -126,6 +129,15 @@ impl AcquiredCore {
     fn status(&self) -> &'static str {
         self.deleted
             .unwrap_or_else(|| crate::app::core_capture_status(self.state))
+    }
+
+    /// The row text: the state, with sizes and reason when the run recorded them.
+    fn status_text(&self) -> String {
+        match self.deleted {
+            Some(label) => label.to_owned(),
+            None => sizes::acquired_status(self.state, self.sizes.as_ref())
+                .unwrap_or_else(|| self.status().to_owned()),
+        }
     }
 }
 

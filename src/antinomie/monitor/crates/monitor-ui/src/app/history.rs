@@ -841,9 +841,19 @@ fn enabled_features(ui: &mut egui::Ui, run: &RunSummary, labels: Option<run_labe
                 "Network capture" => Some(labels.network),
                 _ => None,
             });
+            let budget = (label == "Core dump on exit")
+                .then_some(request.core_max_size)
+                .flatten()
+                .map(|size| {
+                    let deadline = request.core_timeout_ms.map_or(String::new(), |ms| {
+                        format!(" · deadline {:.1} s", f64::from(ms) / 1000.0)
+                    });
+                    format!(" · budget {} MiB{deadline}", size >> 20)
+                })
+                .unwrap_or_default();
             features.push(match state {
-                Some(state) => format!("{label} · {state}"),
-                None => label.to_owned(),
+                Some(state) => format!("{label}{budget} · {state}"),
+                None => format!("{label}{budget}"),
             });
         }
     }

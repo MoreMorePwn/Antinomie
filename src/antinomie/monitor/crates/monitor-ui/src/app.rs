@@ -96,6 +96,8 @@ struct Settings {
     triage_detection: antinomie_monitor_core::analysis::detection::Settings,
     bundle: String,
     quota_gib: u32,
+    /// Default stored-byte budget of a process core, MiB (clamped to what each guest accepts).
+    core_budget_mib: u32,
     timeout: u64,
     font_size: f32,
     /// Tint syscall trace rows by syscall group.
@@ -149,6 +151,7 @@ impl Default for Settings {
             triage_detection: Default::default(),
             bundle: String::new(),
             quota_gib: 4,
+            core_budget_mib: crate::core_budget::default_mib(),
             timeout: 10,
             font_size: 16.0,
             trace_colors: true,

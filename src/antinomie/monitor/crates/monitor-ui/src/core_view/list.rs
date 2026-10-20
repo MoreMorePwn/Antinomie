@@ -310,7 +310,8 @@ impl CoreView {
                     let title = crate::evidence::title(ui, &core.directory, &fallback);
                     let selected = self.selected_directory.as_ref() == Some(&core.directory)
                         || self.selected.as_ref().is_some_and(|record| record.dir == core.directory);
-                    let state = core.status();
+                    let state = core.status_text();
+                    let state = state.as_str();
                     let color = match core.state {
                         antinomie_monitor_core::RunArtifactState::Failed => crate::theme::error(),
                         antinomie_monitor_core::RunArtifactState::Partial
@@ -611,9 +612,28 @@ fn manual_filter_row(
         ),
         (
             "capture.expected_size",
-            core.guest_size
+            core.expected_size
+                .or(core.guest_size)
                 .map_or(V::Missing, |size| V::Number(i128::from(size))),
         ),
+        (
+            "capture.requested_size",
+            V::Number(i128::from(core.requested_max_size.unwrap_or(core.max_size))),
+        ),
+        (
+            "capture.accepted_size",
+            V::Number(i128::from(core.max_size)),
+        ),
+        (
+            "capture.saved_size",
+            core.allocated_size
+                .map_or(V::Missing, |size| V::Number(i128::from(size))),
+        ),
+        (
+            "capture.logical_size",
+            V::Number(i128::from(core.stored_size)),
+        ),
+        ("capture.reason", reason_value(core.reason.as_ref())),
         (
             "core.partial",
             match core.state {
@@ -624,6 +644,23 @@ fn manual_filter_row(
         ),
     ]);
     row
+}
+
+fn number_value(size: Option<u64>) -> crate::query::RowValue {
+    size.map_or(crate::query::RowValue::Missing, |size| {
+        crate::query::RowValue::Number(i128::from(size))
+    })
+}
+
+/// The reason code as filter text (`budget`, `guest_memory`, ...); missing when complete.
+fn reason_value(reason: Option<&antinomie_monitor_core::CoreReason>) -> crate::query::RowValue {
+    reason.map_or(crate::query::RowValue::Missing, |reason| {
+        let code = serde_json::to_value(reason.code)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_default();
+        crate::query::RowValue::Text(code)
+    })
 }
 
 fn acquired_filter_row(
@@ -652,6 +689,30 @@ fn acquired_filter_row(
             V::Bool(core.state == antinomie_monitor_core::RunArtifactState::Complete),
         ),
         ("capture.run_id", V::Text(core.run_id.clone())),
+        (
+            "capture.requested_size",
+            number_value(core.sizes.as_ref().and_then(|sizes| sizes.requested)),
+        ),
+        (
+            "capture.accepted_size",
+            number_value(core.sizes.as_ref().and_then(|sizes| sizes.accepted)),
+        ),
+        (
+            "capture.saved_size",
+            number_value(core.sizes.as_ref().and_then(|sizes| sizes.saved)),
+        ),
+        (
+            "capture.logical_size",
+            number_value(core.sizes.as_ref().and_then(|sizes| sizes.logical)),
+        ),
+        (
+            "capture.expected_size",
+            number_value(core.sizes.as_ref().and_then(|sizes| sizes.expected)),
+        ),
+        (
+            "capture.reason",
+            reason_value(core.sizes.as_ref().and_then(|sizes| sizes.reason.as_ref())),
+        ),
         (
             "core.partial",
             match core.state {
