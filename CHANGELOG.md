@@ -24,6 +24,19 @@ it runs.
   several times faster: reads are pipelined and the guest polls every tick
   while a core is read. Needs a base built for this release; the contract
   revision stays 17 and earlier bases and apps keep working.
+- **Settings, Snapshots and Run program in the new window style.** Settings has
+  a page list at the left (Appearance, Recording, Detection, Network lookup,
+  Analysis tools, Disks, Advanced) and one page at the right; the page scrolls
+  and the footer stays in view on an 820 px screen. Address lookup still
+  defaults to TShark GeoIP only. Snapshots has the primary **New snapshot...**
+  action, a Graph / Tree switch, and the selected checkpoint in a card beside
+  the graph; creating, restoring, renaming, deleting, branches and progress are
+  unchanged. **Run program** gets the new layout, a footer with the VM state at
+  the left and Cancel, Analyze Only and Run at the right, and a **Source**
+  choice: a **Guest path**, or an **Upload** of a host file (the existing upload
+  as executable, after which the window continues from its guest path). The
+  Arguments field shows "One argument per line" and an example argument on
+  each line below it while empty. The analysis checkbox tree is unchanged.
 - **Light, dark and blue themes, and a new look for tables, tabs and windows.**
   Settings > Appearance has a **Theme** choice of Dark, Light and Blue (the dark
   theme on deep navy surfaces instead of grey); it applies at once and is
