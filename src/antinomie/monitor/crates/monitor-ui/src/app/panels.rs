@@ -584,7 +584,7 @@ pub(super) fn show_terminal_viewport(
     };
     if class == egui::ViewportClass::Embedded {
         let mut open = terminal.open;
-        egui::Window::new(format!(
+        crate::widgets::window(format!(
             "{} / PID {}",
             terminal.run.request.path, terminal.run.pid
         ))

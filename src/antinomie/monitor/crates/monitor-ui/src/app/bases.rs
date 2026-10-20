@@ -35,7 +35,7 @@ impl MonitorApp {
             )
         });
         let show_older = &mut self.show_older_bases;
-        egui::Window::new("Download base")
+        crate::widgets::window("Download base")
             .id(Dialog::Download.window_id())
             .open(open)
             .collapsible(false)

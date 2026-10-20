@@ -48,6 +48,39 @@ fn check(dependency: Dependency, name: &'static str, missing: bool) -> Check {
     }
 }
 
+/// Click the lowest text on screen that reads `label`.
+fn click_lowest_label(app: &mut MonitorApp, ctx: &egui::Context, size: egui::Vec2, label: &str) {
+    for _ in 0..3 {
+        render(app, ctx, size);
+    }
+    let visible = texts(&render(app, ctx, size));
+    let pos = visible
+        .iter()
+        .filter(|(text, _)| text == label)
+        .max_by(|a, b| a.1.center().y.total_cmp(&b.1.center().y))
+        .unwrap_or_else(|| panic!("missing {label}: {visible:?}"))
+        .1
+        .center();
+    for pressed in [true, false] {
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                events: vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                ..Default::default()
+            },
+            |ctx| app.draw(ctx),
+        );
+    }
+}
+
 fn shown(app: &mut MonitorApp, ctx: &egui::Context) -> Vec<String> {
     for _ in 0..3 {
         render(app, ctx, SIZE);
@@ -183,7 +216,8 @@ fn skipping_and_finishing_are_remembered() {
     click_label(&mut app, &ctx, SIZE, "Next");
     assert_eq!(app.getting_started.step, Step::Dependencies);
     app.getting_started.step = Step::Finish;
-    click_label(&mut app, &ctx, SIZE, "Finish");
+    // "Finish" is also the last step's tab: the button is the lower one.
+    click_lowest_label(&mut app, &ctx, SIZE, "Finish");
     assert!(app.settings.getting_started.finished);
     assert!(!app.getting_started.open, "it never blocks the app");
     // Saved with the other settings and read back at the next launch.

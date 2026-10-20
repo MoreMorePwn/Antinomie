@@ -24,6 +24,21 @@ it runs.
   several times faster: reads are pipelined and the guest polls every tick
   while a core is read. Needs a base built for this release; the contract
   revision stays 17 and earlier bases and apps keep working.
+- **Light, dark and blue themes, and a new look for tables, tabs and windows.**
+  Settings > Appearance has a **Theme** choice of Dark, Light and Blue (the dark
+  theme on deep navy surfaces instead of grey); it applies at once and is
+  remembered, and settings saved by an earlier version keep their light or dark
+  choice. Every color the app draws now comes from one token set per theme,
+  matching the redesign mockup. Tables get a panel-colored header with muted
+  semibold labels and a rule under it, zebra rows, hover and selection fills
+  and an accent bar on the selected row. Every in-page tab strip (Triage
+  sections and counts, Static Analysis, Core dumps, Run History, the Rule
+  manager's engines and the Getting started steps) is drawn as thin-bordered
+  tabs with an accent underline on the selected one. Spawned windows have a
+  title row with the name at the left and a close button, a 1 px line, rounded
+  corners and a shadow; nothing dims behind them and they still move freely.
+  **Getting started** is now wide enough for all six steps on one row at every
+  text size, and its size is locked. No table contents changed.
 
 - **A Disks tab shows what is on a stopped VM's disk.** The new tab sits
   between Memory and Core dumps. Its **Current disk (VM off)** entry is

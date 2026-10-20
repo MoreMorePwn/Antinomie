@@ -491,7 +491,7 @@ impl CoreView {
         }
         let mut open = true;
         let mut cancel = false;
-        egui::Window::new("Import process core")
+        crate::widgets::window("Import process core")
             .id(egui::Id::new("core_import"))
             .open(&mut open)
             .collapsible(false)

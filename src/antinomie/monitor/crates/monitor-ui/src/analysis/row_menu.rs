@@ -123,7 +123,7 @@ impl RowWindows {
         let mut action = None;
         if let Some(entry) = &self.details {
             let mut open = true;
-            egui::Window::new(title("Details", entry))
+            crate::widgets::window(title("Details", entry))
                 .id(egui::Id::new(("analysis-row-details", salt)))
                 .open(&mut open)
                 .default_size([420.0, 320.0])
@@ -139,7 +139,7 @@ impl RowWindows {
                 return action;
             }
             let mut open = true;
-            egui::Window::new(title("Bytes", &window.entry))
+            crate::widgets::window(title("Bytes", &window.entry))
                 .id(egui::Id::new(("analysis-row-bytes", salt)))
                 .open(&mut open)
                 .default_size([640.0, 360.0])

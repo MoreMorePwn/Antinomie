@@ -655,7 +655,7 @@ impl SamplesView {
         let mut open = true;
         let screen = ctx.screen_rect();
         let largest = egui::vec2(1240.0, 820.0).min(screen.size() - egui::vec2(96.0, 300.0));
-        egui::Window::new("Malware samples")
+        crate::widgets::window("Malware samples")
             .id(egui::Id::new(WINDOW_ID))
             .collapsible(false)
             .resizable(true)
@@ -711,7 +711,7 @@ impl SamplesView {
     fn first_use(&mut self, ctx: &egui::Context, cx: &SamplesContext<'_>) {
         let mut open = true;
         let mut cancel = false;
-        egui::Window::new("Malware samples")
+        crate::widgets::window("Malware samples")
             .id(egui::Id::new(WINDOW_ID).with("first_use"))
             .collapsible(false)
             .resizable(false)

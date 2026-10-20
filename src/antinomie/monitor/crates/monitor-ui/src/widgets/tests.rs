@@ -88,8 +88,8 @@ fn clicking_a_tab_selects_it_and_a_disabled_tab_stays_put() {
             selected.set(value);
         });
     };
-    let mut output = run(&ctx, vec![], SIZE, &mut draw);
-    output = run(&ctx, vec![], SIZE, &mut draw);
+    run(&ctx, vec![], SIZE, &mut draw);
+    let output = run(&ctx, vec![], SIZE, &mut draw);
     let at = |label: &str, output: &egui::FullOutput| {
         text_rects(output)
             .into_iter()
@@ -154,7 +154,7 @@ fn tabs_wrap_inside_a_narrow_pane_at_every_text_size() {
 fn a_window_keeps_its_title_above_a_body_that_caps_its_height_and_closes_on_x() {
     let ctx = context();
     let mut open = true;
-    let mut draw = |ctx: &egui::Context, open: &mut bool| {
+    let draw = |ctx: &egui::Context, open: &mut bool| {
         window("Probe window")
             .id(egui::Id::new("probe-window"))
             .open(open)

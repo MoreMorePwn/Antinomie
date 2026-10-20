@@ -389,7 +389,7 @@ impl DiskView {
         let mut close = false;
         let mut done = None;
         let mut queued = None;
-        egui::Window::new("Import disk image")
+        crate::widgets::window("Import disk image")
             .id(egui::Id::new("disk_import"))
             .collapsible(false)
             .resizable(false)

@@ -24,7 +24,7 @@ pub(crate) fn show(
 ) -> Option<Command> {
     let mut command = None;
     let running = install.is_some_and(|install| !install.finished);
-    egui::Window::new("Analysis tools")
+    crate::widgets::window("Analysis tools")
         .id(egui::Id::new(WINDOW_ID))
         .open(open)
         .collapsible(false)

@@ -407,7 +407,7 @@ impl View {
                 return false;
             };
             let mut open = true;
-            egui::Window::new(format!("{} · {}", name(report.engine), finding.title))
+            crate::widgets::window(format!("{} · {}", name(report.engine), finding.title))
                 .id(egui::Id::new((
                     "detection-finding",
                     key.engine,

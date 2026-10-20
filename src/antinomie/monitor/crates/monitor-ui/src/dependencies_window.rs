@@ -136,7 +136,7 @@ impl DependenciesWindow {
             return false;
         }
         let mut recheck = false;
-        egui::Window::new("App dependencies")
+        crate::widgets::window("App dependencies")
             .id(egui::Id::new(WINDOW_ID))
             .open(&mut self.open)
             .collapsible(false)
