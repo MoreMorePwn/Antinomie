@@ -1,7 +1,7 @@
 [package]
 name = "antinomie-monitor-ui"
 version.workspace = true
-edition.workspace = true
+edition = "2024"
 license.workspace = true
 authors.workspace = true
 
@@ -24,3 +24,9 @@ rusqlite = { version = "0.40.2", features = ["hooks"] }
 
 [dev-dependencies]
 winit = { version = "=0.30.13", default-features = false, features = ["x11"] }
+
+[lints.clippy]
+# Edition 2024 allows let chains, so clippy now asks for them. The crate is
+# still written (and formatted, see rustfmt.toml) the 2021 way; migrate module
+# by module rather than in one reformatting commit.
+collapsible_if = "allow"

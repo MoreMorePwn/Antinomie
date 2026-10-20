@@ -116,7 +116,9 @@ fn main() -> eframe::Result<()> {
     let args = Arguments::parse();
     // Before eframe or background workers start; changes only this process.
     if args.graphics_driver == GraphicsDriver::D3d12 {
-        std::env::set_var("GALLIUM_DRIVER", "d3d12");
+        // SAFETY: Nothing else is running yet. No thread has been started, so
+        // no other thread can read or write the environment.
+        unsafe { std::env::set_var("GALLIUM_DRIVER", "d3d12") };
     }
     let restore_bundle = args.bundle.is_none();
     let mut options = BackendOptions::default();

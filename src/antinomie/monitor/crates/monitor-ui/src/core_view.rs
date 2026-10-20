@@ -539,7 +539,7 @@ const NOTE_FIELDS: &[crate::query::FieldSpec<'static>] = &[
     crate::query::FieldSpec::text("availability", "Captured or unavailable"),
 ];
 
-extern "C" {
+unsafe extern "C" {
     fn kill(pid: i32, sig: i32) -> i32;
     fn waitpid(pid: i32, status: *mut i32, options: i32) -> i32;
 }
