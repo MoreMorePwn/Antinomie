@@ -3,10 +3,13 @@
 //! a wall-clock timeout and an explicit environment.
 use std::{
     io::Read,
-    os::unix::process::ExitStatusExt,
+    os::unix::process::{CommandExt, ExitStatusExt},
     path::Path,
-    process::{Command, Stdio},
-    sync::atomic::{AtomicBool, Ordering},
+    process::{Child, Command, Stdio},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -165,6 +168,9 @@ pub(crate) fn run_cancellable(
         .env("USER", "analysis")
         .env("LOGNAME", "analysis")
         .current_dir("/tmp")
+        // Its own process group, so a timeout stops the tool's children too
+        // (capa's PyInstaller launcher forks the real interpreter).
+        .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(if log_stderr {
@@ -176,52 +182,37 @@ pub(crate) fn run_cancellable(
         command.env(key, value);
     }
     let mut child = command.spawn().map_err(|e| format!("{path}: {e}"))?;
-    let mut stdout = child.stdout.take().ok_or("tool stdout unavailable")?;
+    let stdout = child.stdout.take().ok_or("tool stdout unavailable")?;
     let stderr = child.stderr.take();
-    let reader = thread::spawn(move || {
-        let mut output = Vec::new();
-        let _ = (&mut stdout)
-            .take(max_output as u64 + 1)
-            .read_to_end(&mut output);
-        // Drain the rest so the tool never blocks on a full pipe.
-        let _ = std::io::copy(&mut stdout, &mut std::io::sink());
-        output
-    });
-    let error_reader = stderr.map(|mut stderr| {
-        thread::spawn(move || {
-            let mut output = Vec::new();
-            let _ = (&mut stderr)
-                .take(max_output as u64 + 1)
-                .read_to_end(&mut output);
-            let _ = std::io::copy(&mut stderr, &mut std::io::sink());
-            output
-        })
-    });
+    let reader = read_pipe(stdout, max_output);
+    let error_reader = stderr.map(|stderr| read_pipe(stderr, max_output));
     let deadline = Instant::now() + timeout;
     let mut timed_out = false;
     let status = loop {
         match child.try_wait().map_err(|e| format!("{path}: {e}"))? {
             Some(status) => break status,
             None if cancel.load(Ordering::Relaxed) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                kill_group(&mut child);
                 return Err("cancelled".into());
             }
             None if Instant::now() >= deadline => {
                 timed_out = true;
-                let _ = child.kill();
+                kill_group(&mut child);
                 break child.wait().map_err(|e| format!("{path}: {e}"))?;
             }
             None => thread::sleep(Duration::from_millis(50)),
         }
     };
-    let mut output = reader.join().map_err(|_| "tool reader failed")?;
-    let stderr = match error_reader {
-        Some(reader) => reader
-            .join()
-            .map_err(|_| "tool diagnostics failed".to_owned())?,
-        None => Vec::new(),
+    // The tool exited; anything it left behind in its group is stopped so the
+    // pipes reach end of file.
+    let _ = rustix::process::kill_process_group(group(&child), rustix::process::Signal::KILL);
+    let output_wait = if timed_out {
+        KILLED_PIPE_WAIT
+    } else {
+        PIPE_WAIT
     };
+    let mut output = reader.collect(output_wait);
+    let stderr = error_reader.map_or_else(Vec::new, |reader| reader.collect(output_wait));
     let truncated = output.len() > max_output || stderr.len() > max_output;
     output.truncate(max_output);
     let stderr = String::from_utf8_lossy(&stderr[..stderr.len().min(max_output)]).into_owned();
@@ -234,6 +225,46 @@ pub(crate) fn run_cancellable(
         code: status.code(),
         signal: status.signal(),
     })
+}
+
+/// Longest wait for a pipe to close after the tool exited normally, and after
+/// it was killed. A grandchild that escaped the group keeps a pipe open; its
+/// output is abandoned rather than blocking the worker.
+const PIPE_WAIT: Duration = Duration::from_secs(30);
+const KILLED_PIPE_WAIT: Duration = Duration::from_secs(2);
+
+struct PipeReader(mpsc::Receiver<Vec<u8>>);
+
+impl PipeReader {
+    fn collect(self, wait: Duration) -> Vec<u8> {
+        self.0.recv_timeout(wait).unwrap_or_default()
+    }
+}
+
+fn read_pipe(mut pipe: impl Read + Send + 'static, max_output: usize) -> PipeReader {
+    let (send, receive) = mpsc::channel();
+    thread::spawn(move || {
+        let mut output = Vec::new();
+        let _ = (&mut pipe)
+            .take(max_output as u64 + 1)
+            .read_to_end(&mut output);
+        // Hand the output over first: draining the rest only keeps the tool
+        // from blocking on a full pipe.
+        let _ = send.send(output);
+        let _ = std::io::copy(&mut pipe, &mut std::io::sink());
+    });
+    PipeReader(receive)
+}
+
+fn group(child: &Child) -> rustix::process::Pid {
+    rustix::process::Pid::from_raw(child.id() as i32).expect("child pid is positive")
+}
+
+/// SIGKILL the tool's whole process group, then reap the tool.
+fn kill_group(child: &mut Child) {
+    let _ = rustix::process::kill_process_group(group(child), rustix::process::Signal::KILL);
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// The first line a tool prints for `args` (its version), or the tool name.
@@ -313,5 +344,50 @@ mod tests {
             timed.failure_text("Tool", slow).as_deref(),
             Some("Tool timed out after 1 s: Error: stuck")
         );
+    }
+
+    /// A launcher that forks a worker which keeps stdout open (capa's
+    /// PyInstaller layout): the timeout must stop the worker too and return.
+    #[test]
+    fn a_timeout_kills_the_whole_process_group() {
+        let dir = std::env::temp_dir().join(format!("ant-group-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pidfile = dir.join("grandchild.pid");
+        let script = format!("(sleep 300 & echo $! > {}; wait) & wait", pidfile.display());
+        let timeout = Duration::from_secs(1);
+        let started = Instant::now();
+        let run = run_with("/bin/sh", &["-c", &script], &[], timeout, 4096, true).unwrap();
+        let took = started.elapsed();
+        assert!(run.timed_out, "timed_out");
+        assert!(took < Duration::from_secs(4), "returned after {took:?}");
+        let pid: i32 = std::fs::read_to_string(&pidfile)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let gone = (0..40).any(|_| {
+            thread::sleep(Duration::from_millis(50));
+            !Path::new(&format!("/proc/{pid}/stat")).exists()
+                || std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                    .is_ok_and(|stat| stat.contains(") Z"))
+        });
+        assert!(gone, "grandchild {pid} still running");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn leftover_children_of_a_finished_tool_do_not_hold_the_pipe() {
+        let started = Instant::now();
+        let run = run_with(
+            "/bin/sh",
+            &["-c", "sleep 300 & echo done"],
+            &[],
+            Duration::from_secs(20),
+            4096,
+            false,
+        )
+        .unwrap();
+        assert_eq!(run.stdout.trim(), "done");
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }
