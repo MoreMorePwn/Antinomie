@@ -476,6 +476,29 @@ it runs.
   warning text; older saved results still open. They are not migrated, so one
   saved as partial only for these reasons keeps showing Partial until the scan
   is run again.
+- **Fixed: a tool that timed out kept running and stalled the analysis.**
+  An analysis tool is now started in its own process group, and a timeout or a
+  cancel kills the whole group, not only the first process. capa's launcher
+  forks the real interpreter, which used to keep running at full CPU and hold
+  the output pipe open, so the analysis never finished. A pipe that still
+  does not close two seconds after a kill is abandoned instead of waited for.
+- **Fixed: a worker deadline discarded the sections that had finished.** The
+  analysis worker now publishes its report after every section, and the host
+  keeps the finished sections (and their validated full listings) when the
+  worker is stopped at its deadline or crashes. Only the unfinished sections
+  are marked as not finished. While the worker runs, each section shows what
+  it is doing (waiting, running, or its result) instead of "pending
+  acquisition". The worker's deadline is now the sum of its sections' own
+  budgets, so a slow capa run no longer uses up the time decompilation needs.
+- **capa on a statically linked program says why it stopped.** capa analyses
+  the whole bundled C library of a static program and often runs out of its
+  4 minutes; the Capabilities section now says so.
+- **Fixed: a RAM dump on exit looked like a failure.** While QEMU writes the
+  RAM dump the VM is paused. A banner now shows "Writing RAM dump 41% - VM
+  paused" with a progress bar, Run, upload, capture and debugger actions are
+  disabled, and the terminal's automatic resize and the debugger's polling are
+  held back instead of being refused with "Failed: the VM is paused while its
+  memory is written".
 
 ## 0.6.2 — 2026-10-19
 
