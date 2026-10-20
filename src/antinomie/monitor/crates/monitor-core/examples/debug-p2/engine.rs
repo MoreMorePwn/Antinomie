@@ -359,11 +359,32 @@ pub fn forkbp(context: &mut Context) -> Result<String, String> {
         .set_breakpoint(target, 1)
         .map_err(|e| e.to_string())?;
     let mut hits = 0;
+    let mut passed = 0;
     for _ in 0..40 {
         prog.dbg
             .resume(ResumeAction::Continue)
             .map_err(|e| e.to_string())?;
-        let event = wait_state(&mut prog.dbg, 20)?;
+        let mut event = wait_state(&mut prog.dbg, 20)?;
+        // A debugger passes the signals gdb's `handle` table says nostop (SIGCHLD,
+        // SIGALRM, SIGWINCH, ...) and goes on, as gdb does. glibc's fork() blocks
+        // every signal around the clone: a child that exits before the parent
+        // unblocks them leaves a queued SIGCHLD, which the engine shows to the
+        // debugger exactly as a tracer would see it.
+        while let StopKind::Signal { signal } = event.kind {
+            let quiet = u8::try_from(signal)
+                .is_ok_and(|number| !signal_policy::default_action(number).stop);
+            if !quiet {
+                return Err(format!("unexpected stop {:?}", event.kind));
+            }
+            passed += 1;
+            prog.dbg
+                .resume(ResumeAction::ContinueSignal {
+                    tid: event.tid,
+                    signal,
+                })
+                .map_err(|e| e.to_string())?;
+            event = wait_state(&mut prog.dbg, 20)?;
+        }
         if !matches!(event.kind, StopKind::Breakpoint { .. }) {
             return Err(format!("unexpected stop {:?}", event.kind));
         }
@@ -389,7 +410,7 @@ pub fn forkbp(context: &mut Context) -> Result<String, String> {
         .map_err(|e| e.to_string())?;
     context.finish(prog)?;
     Ok(format!(
-        "{children} forked children ran hw_code() with the parent's breakpoint byte in their memory and exited cleanly (no SIGTRAP); {hits} parent hits"
+        "{children} forked children ran hw_code() with the parent's breakpoint byte in their memory and exited cleanly (no SIGTRAP); {hits} parent hits, {passed} queued SIGCHLD passed on like gdb does"
     ))
 }
 

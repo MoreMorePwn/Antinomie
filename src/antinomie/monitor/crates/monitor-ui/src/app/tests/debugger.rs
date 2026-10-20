@@ -128,10 +128,12 @@ fn the_session_window_offers_the_endpoint_and_detach() {
 mod panel {
     use super::*;
     use antinomie_monitor_core::debug::{
+        signal_policy::{SignalAction, SignalNote, SignalTable},
         view::{
             BreakpointEntry, BreakpointKind, Controller, DebugAction, DebugRequest, DebugThread,
-            DebugView, MemoryWindow, Pending, RegisterEntry, RegisterSnapshot, RunState,
-            StopReason, ViewCaps, WindowKind,
+            DebugView, FollowMode, ForkChoice, ForkPolicy, ForkPrompt, InferiorState, InferiorView,
+            MemoryWindow, Pending, RegisterEntry, RegisterSnapshot, RunState, StopReason, ViewCaps,
+            WindowKind,
         },
         RegKind,
     };
@@ -158,6 +160,7 @@ mod panel {
             single_step: true,
             hardware_breakpoints: 0,
             hardware_watchpoints: 0,
+            follow: false,
         });
         view.epoch = 5;
         view.run = RunState::Stopped {
@@ -175,11 +178,13 @@ mod panel {
                 tid: 77,
                 stopped: true,
                 pc: PC,
+                signal: 0,
             },
             DebugThread {
                 tid: 78,
                 stopped: true,
                 pc: 0x401200,
+                signal: 0,
             },
         ];
         let entry = |name, value, kind| RegisterEntry { name, value, kind };
@@ -220,6 +225,9 @@ mod panel {
         observer_fixture(app);
         app.snapshot.debug = Some(info());
         app.snapshot.debug_view = Some(Arc::new(view));
+        // The remembered choices go out once; tests of other things skip them.
+        app.debugger.track_session(Some(u64::from(info().tcp_port)));
+        app.debugger.take_announce();
     }
 
     fn shown(app: &mut MonitorApp, ctx: &egui::Context) -> Vec<String> {
@@ -528,5 +536,343 @@ mod panel {
         assert!(app.debugger.waiting(&view));
         app.debugger.track_session(None);
         assert!(!app.debugger.waiting(&view));
+    }
+
+    fn inferior(
+        pid: u32,
+        parent: Option<u32>,
+        selected: bool,
+        state: InferiorState,
+    ) -> InferiorView {
+        InferiorView {
+            pid,
+            parent,
+            selected,
+            vfork: false,
+            state,
+        }
+    }
+
+    fn with_children() -> DebugView {
+        let mut view = stopped(3);
+        view.caps.follow = true;
+        view.selected_pid = 42;
+        view.inferiors = vec![
+            inferior(
+                42,
+                None,
+                true,
+                InferiorState::Stopped(StopReason::Breakpoint {
+                    addr: PC,
+                    kind: BreakpointKind::Software,
+                }),
+            ),
+            inferior(43, Some(42), false, InferiorState::Held),
+            inferior(44, Some(42), false, InferiorState::Running),
+        ];
+        view
+    }
+
+    #[test]
+    fn processes_are_listed_and_hidden_when_there_is_nothing_to_follow() {
+        let ctx = context();
+        let mut app = app();
+        let mut lone = stopped(3);
+        lone.caps.follow = false;
+        lone.inferiors = vec![inferior(42, None, true, InferiorState::Running)];
+        open(&mut app, lone);
+        assert!(!shown(&mut app, &ctx).iter().any(|text| text == "Processes"));
+        app.snapshot.debug_view = Some(Arc::new(with_children()));
+        let texts = shown(&mut app, &ctx);
+        let has = |wanted: &str| texts.iter().any(|text| text.trim() == wanted);
+        assert!(has("Processes"), "{texts:?}");
+        assert!(has(">42  stopped (swbreak)"), "{texts:?}");
+        assert!(has("43  child of 42  held"), "{texts:?}");
+        assert!(has("44  child of 42  running"), "{texts:?}");
+        assert!(has("Let go") && has("Show"));
+    }
+
+    #[test]
+    fn show_and_let_go_send_the_process_actions() {
+        let ctx = context();
+        let mut app = app();
+        open(&mut app, with_children());
+        click_label(&mut app, &ctx, SIZE, "Show");
+        assert_eq!(
+            requests(&app).last().map(|request| &request.action),
+            Some(&DebugAction::SelectInferior { pid: 43 }),
+            "the selected process has no Show"
+        );
+        app.snapshot.debug_view = Some(Arc::new(with_children()));
+        click_label(&mut app, &ctx, SIZE, "Let go");
+        assert!(requests(&app)
+            .iter()
+            .any(|request| matches!(request.action, DebugAction::DetachInferior { pid: 42 })));
+    }
+
+    #[test]
+    fn the_fork_prompt_appears_and_sends_the_choice() {
+        let ctx = context();
+        let mut app = app();
+        let mut view = with_children();
+        open(&mut app, view.clone());
+        assert!(!shown(&mut app, &ctx)
+            .iter()
+            .any(|text| text.contains("forked child")));
+        view.fork_prompt = Some(ForkPrompt {
+            parent: 42,
+            child: 45,
+            vfork: false,
+        });
+        app.snapshot.debug_view = Some(Arc::new(view));
+        let texts = shown(&mut app, &ctx);
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == "Process 42 forked child 45"),
+            "{texts:?}"
+        );
+        click_label(&mut app, &ctx, SIZE, "Follow child");
+        assert_eq!(
+            requests(&app).last().map(|request| &request.action),
+            Some(&DebugAction::ForkDecision {
+                follow: ForkChoice::Child,
+                detach_other: true
+            })
+        );
+        let mut vfork = with_children();
+        vfork.fork_prompt = Some(ForkPrompt {
+            parent: 42,
+            child: 46,
+            vfork: true,
+        });
+        app.snapshot.debug_view = Some(Arc::new(vfork));
+        assert!(shown(&mut app, &ctx)
+            .iter()
+            .any(|text| text == "Process 42 vforked child 46"));
+    }
+
+    #[test]
+    fn the_fork_policy_is_chosen_and_greyed_for_a_base_that_cannot_follow() {
+        let ctx = context();
+        let mut app = app();
+        open(&mut app, with_children());
+        click_label(&mut app, &ctx, SIZE, "Let the other process run");
+        assert_eq!(
+            requests(&app).last().map(|request| &request.action),
+            Some(&DebugAction::SetForkPolicy(ForkPolicy {
+                follow: FollowMode::Parent,
+                detach_other: false
+            }))
+        );
+        assert!(!app.settings.debugger.detach_other, "and it is remembered");
+        let mut cannot = with_children();
+        cannot.caps.follow = false;
+        app.snapshot.debug_view = Some(Arc::new(cannot));
+        let before = requests(&app).len();
+        click_label(&mut app, &ctx, SIZE, "Let the other process run");
+        assert_eq!(requests(&app).len(), before, "disabled without caps.follow");
+    }
+
+    #[test]
+    fn thread_rows_show_running_and_the_pending_signal() {
+        let running = DebugThread {
+            tid: 9,
+            stopped: false,
+            pc: 0x10,
+            signal: 0,
+        };
+        let faulted = DebugThread {
+            tid: 10,
+            stopped: true,
+            pc: 0x20,
+            signal: 11,
+        };
+        assert_eq!(
+            crate::app::debugger::lists::thread_text(&running, false),
+            " 9  running  0x10"
+        );
+        assert_eq!(
+            crate::app::debugger::lists::thread_text(&faulted, true),
+            ">10  stopped SIGSEGV  0x20"
+        );
+        let ctx = context();
+        let mut app = app();
+        let mut view = stopped(3);
+        view.threads.push(running);
+        view.threads.push(faulted);
+        open(&mut app, view);
+        let texts = shown(&mut app, &ctx);
+        assert!(texts.iter().any(|text| text == "9  running  0x10"));
+        assert!(texts.iter().any(|text| text == "10  stopped SIGSEGV  0x20"));
+    }
+
+    #[test]
+    fn threads_and_processes_stay_visible_read_only_while_gdb_controls() {
+        let ctx = context();
+        let mut app = app();
+        let mut view = with_children();
+        view.controller = Controller::Gdb;
+        open(&mut app, view);
+        let texts = shown(&mut app, &ctx);
+        assert!(texts.iter().any(|text| text.starts_with("43  child of 42")));
+        assert!(texts.iter().any(|text| text.starts_with(">77")));
+        click_label(&mut app, &ctx, SIZE, "Show");
+        assert!(requests(&app).is_empty());
+    }
+
+    #[test]
+    fn the_signal_editor_sends_one_request_per_change_and_marks_differences() {
+        let ctx = context();
+        let mut app = app();
+        let mut view = stopped(3);
+        view.signals.set(
+            1,
+            SignalAction {
+                stop: false,
+                print: true,
+                pass: true,
+            },
+        );
+        view.signal_log = vec![
+            SignalNote {
+                tid: 12,
+                number: 17,
+                passed: true,
+                stopped: false,
+            },
+            SignalNote {
+                tid: 12,
+                number: 11,
+                passed: true,
+                stopped: true,
+            },
+        ];
+        open(&mut app, view);
+        click_label(&mut app, &ctx, SIZE, "Signals");
+        let texts = unclipped(&mut app, &ctx);
+        assert!(texts
+            .iter()
+            .any(|text| text == "SIGCHLD to thread 12 passed"));
+        assert!(texts.iter().any(|text| text == "SIGSEGV stopped thread 12"));
+        assert!(texts.iter().any(|text| text == "SIGHUP (1)"));
+        assert_eq!(
+            texts.iter().filter(|text| *text == "changed").count(),
+            1,
+            "only SIGHUP differs"
+        );
+        click_label(&mut app, &ctx, SIZE, "Reset to defaults");
+        assert_eq!(
+            requests(&app).last().map(|request| &request.action),
+            Some(&DebugAction::SetSignalTable(SignalTable::default()))
+        );
+        assert!(app.settings.debugger.signals.is_default());
+    }
+
+    fn click_at(app: &mut MonitorApp, ctx: &egui::Context, pos: egui::Pos2) {
+        for pressed in [true, false] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
+                    events: vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ctx| app.draw(ctx),
+            );
+        }
+    }
+
+    #[test]
+    fn a_checkbox_sends_that_signals_new_action_and_it_is_remembered() {
+        let ctx = context();
+        let mut app = app();
+        open(&mut app, stopped(3));
+        click_label(&mut app, &ctx, SIZE, "Signals");
+        for _ in 0..3 {
+            render(&mut app, &ctx, SIZE);
+        }
+        let output = render(&mut app, &ctx, SIZE);
+        let all = texts(&output);
+        let find = |wanted: &str| {
+            all.iter()
+                .find(|(text, _)| text == wanted)
+                .unwrap_or_else(|| panic!("{wanted}: {all:?}"))
+                .1
+        };
+        let print_head = find("Print");
+        let row = find("SIGHUP (1)");
+        click_at(
+            &mut app,
+            &ctx,
+            egui::pos2(print_head.left() + 7.0, row.center().y),
+        );
+        let action = SignalAction {
+            stop: true,
+            print: false,
+            pass: true,
+        };
+        assert_eq!(
+            requests(&app).last().map(|request| &request.action),
+            Some(&DebugAction::SetSignalPolicy { signal: 1, action })
+        );
+        assert_eq!(app.settings.debugger.signals.action(1), action);
+    }
+
+    #[test]
+    fn a_fork_policy_edit_is_remembered() {
+        let mut app = app();
+        app.remember_debug_choice(&DebugAction::SetForkPolicy(ForkPolicy {
+            follow: FollowMode::Child,
+            detach_other: false,
+        }));
+        assert_eq!(
+            app.settings.debugger.fork_policy().follow,
+            FollowMode::Child
+        );
+        assert!(!app.settings.debugger.fork_policy().detach_other);
+    }
+
+    #[test]
+    fn a_new_session_sends_the_remembered_choices_once() {
+        let ctx = context();
+        let mut app = app();
+        app.settings.debugger.signals.set(
+            11,
+            SignalAction {
+                stop: false,
+                print: false,
+                pass: true,
+            },
+        );
+        app.settings.debugger.remember_policy(ForkPolicy {
+            follow: FollowMode::Ask,
+            detach_other: false,
+        });
+        observer_fixture(&mut app);
+        app.snapshot.debug = Some(info());
+        app.snapshot.debug_view = Some(Arc::new(stopped(3)));
+        for _ in 0..4 {
+            render(&mut app, &ctx, SIZE);
+        }
+        let sent = requests(&app);
+        assert_eq!(sent.len(), 2, "{sent:?}");
+        assert!(
+            matches!(&sent[0].action, DebugAction::SetSignalTable(table) if table.action(11).pass)
+        );
+        assert_eq!(
+            sent[1].action,
+            DebugAction::SetForkPolicy(ForkPolicy {
+                follow: FollowMode::Ask,
+                detach_other: false
+            })
+        );
     }
 }

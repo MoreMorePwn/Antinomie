@@ -139,6 +139,9 @@ struct Settings {
     explorer_root: Option<PathBuf>,
     /// Help > Getting started: skipped steps and whether it has been shown.
     getting_started: crate::getting_started::Progress,
+    /// Debugger panel: the signal table and fork policy for new sessions.
+    #[serde(deserialize_with = "debugger::prefs::lenient_prefs")]
+    debugger: debugger::DebuggerPrefs,
     /// The latest program each VM ran, for the sidebar.
     last_runs: BTreeMap<String, LastRun>,
 }
@@ -195,6 +198,7 @@ impl Default for Settings {
             explorer_collapsed: false,
             explorer_root: None,
             getting_started: Default::default(),
+            debugger: Default::default(),
             last_runs: BTreeMap::new(),
         }
     }

@@ -36,6 +36,10 @@ pub(crate) struct DebuggerPanel {
     pub(super) code: Option<CodeCache>,
     /// The last view epoch seen, to reset on a new session.
     seen_session: Option<u64>,
+    /// A session began and the remembered choices are not yet sent.
+    announce: bool,
+    /// The fork prompt's "Let the other process run" is off.
+    pub(super) prompt_hold_other: bool,
 }
 
 impl DebuggerPanel {
@@ -48,7 +52,13 @@ impl DebuggerPanel {
         if self.seen_session != session {
             *self = Self::default();
             self.seen_session = session;
+            self.announce = session.is_some();
         }
+    }
+
+    /// Whether the remembered choices are still to be sent; true once per session.
+    pub(crate) fn take_announce(&mut self) -> bool {
+        std::mem::take(&mut self.announce)
     }
 
     /// The decoded window for the code pane, decoding only when it changed.
@@ -122,6 +132,16 @@ impl MonitorApp {
 
     /// Send one request for the stop on screen.
     pub(crate) fn debug_action(&mut self, view: &DebugView, action: DebugAction) {
+        self.debug_request(view, action, true);
+    }
+
+    /// Send one request nobody waits for (the remembered choices at the start
+    /// of a session): the panel stays usable while it is handled.
+    pub(super) fn debug_action_quiet(&mut self, view: &DebugView, action: DebugAction) {
+        self.debug_request(view, action, false);
+    }
+
+    fn debug_request(&mut self, view: &DebugView, action: DebugAction, track: bool) {
         let panel = &mut self.debugger;
         panel.next_id += 1;
         let id = panel.next_id;
@@ -134,8 +154,10 @@ impl MonitorApp {
             panel.inflight.clear();
         }
         if let Some(command) = self.send_request(Command::DebugUi(request)) {
-            self.debugger.inflight.insert(command, id);
-            self.debugger.last_sent = id;
+            if track {
+                self.debugger.inflight.insert(command, id);
+                self.debugger.last_sent = id;
+            }
         }
     }
 }

@@ -76,6 +76,10 @@ fn caps() -> DebugCaps {
         batch_regs: false,
         debug_on_start: false,
         auxv: false,
+        follow: false,
+        nonstop: false,
+        adopt: false,
+        thread_hw: false,
         hardware_breakpoints: 0,
         hardware_watchpoints: 0,
         breakpoint_len_mask: 1,
@@ -127,12 +131,14 @@ impl DebugBackend for Backend {
                 stopped: true,
                 pc: 0x4018c0,
                 signal: 0,
+                vfork_wait: false,
             },
             ThreadInfo {
                 tid: TID + 1,
                 stopped: true,
                 pc: 0x4018c0,
                 signal: 0,
+                vfork_wait: false,
             },
         ])
     }

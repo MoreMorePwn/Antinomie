@@ -7,7 +7,11 @@
 //! (software today, hardware and watchpoints later), a stop has a reason with
 //! signal and watchpoint variants, and a request names the stop it was made
 //! against so a reply to a stop that is over is dropped, never applied.
-use super::{regs::RegKind, target::StopKind};
+use super::{
+    regs::RegKind,
+    signal_policy::{SignalAction, SignalNote, SignalTable},
+    target::StopKind,
+};
 use std::fmt;
 
 /// Who drives the process. One at a time: a debugger client connecting over
@@ -74,6 +78,18 @@ pub enum StopReason {
     },
     /// Stopped before its first instruction (debug on start, Phase 2).
     Entry,
+    /// The thread made a process with fork (debugger Phase 3).
+    Fork {
+        child: u32,
+    },
+    /// The thread is in vfork; the child shares its memory.
+    Vfork {
+        child: u32,
+    },
+    /// The vfork child let go of the memory (exec or exit).
+    VforkDone,
+    /// The process executed a new program and the session continues in it.
+    Exec,
 }
 impl StopReason {
     pub fn from_kind(kind: StopKind) -> Self {
@@ -94,6 +110,10 @@ impl StopReason {
                 number: u8::try_from(signal).unwrap_or(0),
             },
             StopKind::Entry => Self::Entry,
+            StopKind::Fork { child } => Self::Fork { child: child.tgid },
+            StopKind::Vfork { child } => Self::Vfork { child: child.tgid },
+            StopKind::VforkDone { .. } => Self::VforkDone,
+            StopKind::Exec => Self::Exec,
         }
     }
 }
@@ -111,6 +131,10 @@ impl fmt::Display for StopReason {
             Self::Step => write!(formatter, "step"),
             Self::Signal { number } => write!(formatter, "signal {number}"),
             Self::Entry => write!(formatter, "entry"),
+            Self::Fork { child } => write!(formatter, "fork (child {child})"),
+            Self::Vfork { child } => write!(formatter, "vfork (child {child})"),
+            Self::VforkDone => write!(formatter, "vfork done"),
+            Self::Exec => write!(formatter, "exec"),
         }
     }
 }
@@ -171,6 +195,88 @@ pub struct DebugThread {
     pub tid: u32,
     pub stopped: bool,
     pub pc: u64,
+    /// The Linux signal a stopped thread has not yet received, else 0.
+    pub signal: u32,
+}
+
+/// Where one process of the session stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InferiorState {
+    Running,
+    Stopped(StopReason),
+    /// A child the guest holds where the fork put it, not yet chosen to run.
+    Held,
+    /// The process ended; the value is its wait status.
+    Exited(u32),
+}
+
+/// One process of the session: the program, and every child of a fork the panel
+/// has taken hold of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InferiorView {
+    pub pid: u32,
+    pub parent: Option<u32>,
+    /// The panel's registers, memory and breakpoints are about this process.
+    pub selected: bool,
+    /// A vfork child, sharing its parent's memory until it execs.
+    pub vfork: bool,
+    pub state: InferiorState,
+}
+
+/// What the panel does when the program forks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FollowMode {
+    /// A forked child runs free and is not debugged (the Phase 2 behavior).
+    Off,
+    /// Stay with the parent.
+    #[default]
+    Parent,
+    /// Go with the child.
+    Child,
+    /// Stop at the fork and let the user choose.
+    Ask,
+}
+impl FollowMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Do not follow",
+            Self::Parent => "Follow the parent",
+            Self::Child => "Follow the child",
+            Self::Ask => "Ask at each fork",
+        }
+    }
+}
+
+/// gdb's `follow-fork-mode` and `detach-on-fork` for the panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ForkPolicy {
+    pub follow: FollowMode,
+    /// Let the process that is not followed run free. Off: it is kept stopped,
+    /// listed under Processes, until the user chooses.
+    pub detach_other: bool,
+}
+impl Default for ForkPolicy {
+    fn default() -> Self {
+        Self {
+            follow: FollowMode::default(),
+            detach_other: true,
+        }
+    }
+}
+
+/// Which process of a fork to follow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForkChoice {
+    Parent,
+    Child,
+}
+
+/// The program forked and the panel is waiting for the user (`FollowMode::Ask`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ForkPrompt {
+    pub parent: u32,
+    pub child: u32,
+    pub vfork: bool,
 }
 
 /// One register of the stopped thread.
@@ -287,6 +393,8 @@ pub struct ViewCaps {
     pub single_step: bool,
     pub hardware_breakpoints: u32,
     pub hardware_watchpoints: u32,
+    /// The guest can follow forks and execs.
+    pub follow: bool,
 }
 
 /// Everything the debugger panel shows. Replaced as a whole whenever any part
@@ -308,6 +416,15 @@ pub struct DebugView {
     pub stack: Option<MemoryWindow>,
     pub memory: Option<MemoryWindow>,
     pub breakpoints: Vec<BreakpointEntry>,
+    /// Every process of the session, parent first.
+    pub inferiors: Vec<InferiorView>,
+    pub selected_pid: u32,
+    pub fork_prompt: Option<ForkPrompt>,
+    pub fork_policy: ForkPolicy,
+    /// The panel's `handle` table.
+    pub signals: SignalTable,
+    /// The latest signals the table let through or stopped on (bounded).
+    pub signal_log: Vec<SignalNote>,
     /// The latest thing that did not work, until the next request.
     pub notice: Option<String>,
 }
@@ -327,6 +444,12 @@ impl DebugView {
             stack: None,
             memory: None,
             breakpoints: Vec::new(),
+            inferiors: Vec::new(),
+            selected_pid: 0,
+            fork_prompt: None,
+            fork_policy: ForkPolicy::default(),
+            signals: SignalTable::default(),
+            signal_log: Vec::new(),
             notice: None,
         }
     }
@@ -379,6 +502,28 @@ pub enum DebugAction {
         addr: u64,
         size: usize,
     },
+    /// Show another process of the session.
+    SelectInferior {
+        pid: u32,
+    },
+    /// The program forked and the panel asked: follow one, and say what becomes of
+    /// the other.
+    ForkDecision {
+        follow: ForkChoice,
+        detach_other: bool,
+    },
+    /// Let a process go (a held child, or one that is no longer wanted).
+    DetachInferior {
+        pid: u32,
+    },
+    SetForkPolicy(ForkPolicy),
+    /// One signal's `stop print pass`.
+    SetSignalPolicy {
+        signal: u8,
+        action: SignalAction,
+    },
+    /// The whole table (the one the app remembered), or gdb's defaults.
+    SetSignalTable(SignalTable),
 }
 impl DebugAction {
     /// Whether the action only makes sense against the stop the panel saw.
@@ -389,6 +534,11 @@ impl DebugAction {
                 | Self::AddBreakpoint { .. }
                 | Self::RemoveBreakpoint { .. }
                 | Self::SetBreakpointEnabled { .. }
+                | Self::SelectInferior { .. }
+                | Self::DetachInferior { .. }
+                | Self::SetForkPolicy(_)
+                | Self::SetSignalPolicy { .. }
+                | Self::SetSignalTable(_)
         )
     }
 }

@@ -88,7 +88,7 @@ fn caps_reply(regsets: &[(u32, u32, u32)]) -> Vec<u8> {
 #[test]
 fn capability_reply_is_validated() {
     let reply = caps_reply(&[(1, 216, 1), (2, 512, 1), (0x202, 0, 0)]);
-    let caps = parse_caps(&reply).unwrap();
+    let caps = parse_caps(&reply, false).unwrap();
     assert_eq!(caps.arch, ArchTag::X86_64);
     assert!(caps.software_breakpoints && caps.hardware_single_step && caps.multi_thread);
     assert!(!caps.shadow_reads);
@@ -96,26 +96,35 @@ fn capability_reply_is_validated() {
     assert_eq!(caps.regsets.len(), 3);
     assert!(caps.regset(1).unwrap().writable && !caps.regset(0x202).unwrap().writable);
     for len in 0..reply.len() {
-        assert!(parse_caps(&reply[..len]).is_err(), "length {len}");
+        assert!(parse_caps(&reply[..len], false).is_err(), "length {len}");
     }
     let mut bad = reply.clone();
     bad[0] = 2;
-    assert!(parse_caps(&bad).is_err(), "unknown ABI");
+    assert!(parse_caps(&bad, false).is_err(), "unknown ABI");
     let mut bad = reply.clone();
     bad[4] = 40;
-    assert!(parse_caps(&bad).is_err(), "unknown architecture");
+    assert!(parse_caps(&bad, false).is_err(), "unknown architecture");
     let mut bad = reply.clone();
     bad[11] = 0x80;
-    assert!(parse_caps(&bad).is_err(), "unknown capability flag");
+    assert!(parse_caps(&bad, false).is_err(), "unknown capability flag");
     let mut bad = reply.clone();
     bad[32..36].copy_from_slice(&16001u32.to_le_bytes());
-    assert!(parse_caps(&bad).is_err(), "transfer size over the bound");
+    assert!(
+        parse_caps(&bad, false).is_err(),
+        "transfer size over the bound"
+    );
     let mut bad = reply.clone();
     bad[36..40].copy_from_slice(&9u32.to_le_bytes());
-    assert!(parse_caps(&bad).is_err(), "table longer than the maximum");
+    assert!(
+        parse_caps(&bad, false).is_err(),
+        "table longer than the maximum"
+    );
     let mut bad = reply;
     bad[CAPS_SIZE + 8] = 2;
-    assert!(parse_caps(&bad).is_err(), "unknown register-set flag");
+    assert!(
+        parse_caps(&bad, false).is_err(),
+        "unknown register-set flag"
+    );
 }
 
 #[test]
@@ -127,6 +136,7 @@ fn attach_request_layout() {
         arch: ArchTag::X86_64,
         nonce: [3, 4],
         stop_now: true,
+        adopt: false,
     };
     let args = attach_request(&request).unwrap();
     assert_eq!(args.len(), 48);
@@ -169,6 +179,7 @@ fn request_copy(request: &AttachRequest) -> AttachRequest {
         arch: request.arch,
         nonce: request.nonce,
         stop_now: request.stop_now,
+        adopt: request.adopt,
     }
 }
 
@@ -262,8 +273,18 @@ fn status_reply_is_validated() {
     bad[16] = 9;
     assert!(parse_status(&bad).is_err(), "unknown state");
     let mut bad = reply.clone();
-    bad[90] = 1;
-    assert!(parse_status(&bad).is_err(), "reserved bytes set");
+    bad[85] = 1;
+    assert!(parse_status(&bad).is_err(), "unknown session flag");
+    let mut bad = reply.clone();
+    bad[81] = 1;
+    assert!(parse_status(&bad).is_err(), "unknown option");
+    let mut child = reply.clone();
+    child[80..84].copy_from_slice(&(OPT_FORK | OPT_EXEC).to_le_bytes());
+    child[84..88].copy_from_slice(&(SF_CHILD_PENDING | SF_SHARED_MM).to_le_bytes());
+    child[88..96].copy_from_slice(&4u64.to_le_bytes());
+    let status = parse_status(&child).unwrap();
+    assert!(status.is_child_pending());
+    assert_eq!((status.options, status.parent_session), (3, 4));
     let mut signal = reply.clone();
     signal[32..36].copy_from_slice(&EVENT_SIGNAL.to_le_bytes());
     signal[72..76].copy_from_slice(&11u32.to_le_bytes());

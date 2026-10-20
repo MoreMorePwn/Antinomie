@@ -466,8 +466,11 @@ impl Worker {
         let vm = self.snapshot_vm(id)?;
         if let Some(session) = self.session.as_ref() {
             session.manual_snapshot_guard()?;
-            self.debug_snapshot_guard()?;
         }
+        // A debugged process is saved as it is (stopped at a breakpoint, bytes in
+        // memory): the session is guest state like any other and a restore finds it
+        // again. The debugger's requests wait while the guest is paused.
+        let _debug_pause = self.debug.pause();
         let running = self.snapshot.active_vm.as_deref() == Some(id);
         if self.session.is_some() && !running {
             return Err("stop the other VM before saving a snapshot".into());
@@ -643,8 +646,8 @@ impl Worker {
         let vm = self.snapshot_vm(id)?;
         if let Some(session) = self.session.as_ref() {
             session.manual_snapshot_guard()?;
-            self.debug_snapshot_guard()?;
         }
+        let debug_pause = self.debug.pause();
         if self.session.is_some() && self.snapshot.active_vm.as_deref() != Some(id) {
             return Err("stop the other VM before restoring".into());
         }
@@ -798,10 +801,15 @@ impl Worker {
                 session.update_captures(&mut self.snapshot);
                 self.session = Some(session);
                 self.stopping.store(false, Ordering::Relaxed);
+                drop(debug_pause);
+                self.debug_guest_moved("the snapshot was restored", true);
                 Ok("Snapshot resumed in a new recording timeline".into())
             }
             Ok(None) => {
                 self.snapshot.state = VmState::Stopped;
+                // A rebooted guest has no debug sessions.
+                self.end_debug();
+                drop(debug_pause);
                 self.start(id)?;
                 Ok("Snapshot disk restored; guest booted in a new timeline".into())
             }
@@ -830,6 +838,7 @@ impl Worker {
             self.stop_network_capture()?;
         }
         let _transition = self.begin_guest_transition()?;
+        let debug_pause = self.debug.pause();
         let mut old = self.session.take().ok_or("VM is stopped")?;
         if let Err(error) = old.suspend_run_network(
             "transport reconnect seals the previous network interval; a fresh segment resumes afterwards",
@@ -911,6 +920,8 @@ impl Worker {
         fresh.update_runs(&mut self.snapshot);
         fresh.update_captures(&mut self.snapshot);
         self.session = Some(fresh);
+        drop(debug_pause);
+        self.debug_guest_moved("the transport was reconnected", false);
         receipt?;
         self.refresh_vm_snapshots(&id)?;
         Ok("Transport reconnected in a new recording timeline; unresolved commands were not retried".into())
