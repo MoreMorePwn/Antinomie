@@ -40,6 +40,38 @@ it runs.
   **Getting started** is now wide enough for all six steps on one row at every
   text size, and its size is locked. No table contents changed.
 
+- **Detection shows what happened to each input.** Beside *Scanned inputs* the
+  tab now reads "N complete · N skipped · N failed". The scan's status follows
+  from those counts: Partial only when at least one input completed and at
+  least one failed, Failed when something failed and nothing completed,
+  Skipped only when every input was skipped, and Complete otherwise (completed
+  plus skipped with no failure is Complete). A run with no packet activity is
+  Complete, not Skipped or Missing: an empty capture is a finished input with
+  nothing to read. The Sigma note that events are converted from the syscall
+  trace is ordinary text and never a warning. The line saying a row is a rule
+  match and not a verdict is removed.
+
+- **The Triage Summary names MITRE ATT&CK techniques.** A reference reads
+  "T1059 Command and Scripting Interpreter" or "T1059.004 Command and Scripting
+  Interpreter: Unix Shell", from a table of ATT&CK Enterprise v20.0 technique
+  names bundled with the app (no network). `scripts/generate-mitre-attack.py`
+  regenerates it from the public STIX data; the terms are in the third-party
+  notices.
+
+- **Every table sorts by a clicked column header.** Run History, Activity, the
+  process picker, capture history, the Detection event journal (the events on
+  the current page), the filter guide, core notes and the downloaded samples
+  list (which gained a header row) join the tables that already sorted. The
+  first click sorts ascending, the next descending, and an arrow marks the
+  column. The **All live traces** buttons in Run History and Capture History
+  are gone.
+
+- **A detached window no longer freezes the app when it sits idle.** Buffer
+  swaps no longer wait for the compositor. A window the compositor stops
+  showing, such as a detached terminal left idle on WSLg, receives no frame
+  callback, so its swap never returned; the detached windows are drawn from the
+  main window's update on the one UI thread, so every window stopped answering.
+
 - **A Disks tab shows what is on a stopped VM's disk.** The new tab sits
   between Memory and Core dumps. Its **Current disk (VM off)** entry is
   disabled while the VM runs, with a **Stop VM** button that does what the
