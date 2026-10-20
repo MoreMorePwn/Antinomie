@@ -93,6 +93,7 @@ fn compare(a: &Atom, b: &Atom, descending: bool) -> std::cmp::Ordering {
 }
 
 pub(super) fn header(ui: &mut egui::Ui, table: &str, column: usize, title: &str) {
+    crate::widgets::table::head_bg(ui);
     let id = egui::Id::new(("triage-sort", table));
     let current = ui.ctx().data(|data| data.get_temp::<Spec>(id));
     let arrow = current
@@ -102,7 +103,7 @@ pub(super) fn header(ui: &mut egui::Ui, table: &str, column: usize, title: &str)
         egui::Button::new(
             RichText::new(format!("{title}{arrow}"))
                 .strong()
-                .color(theme::text()),
+                .color(theme::muted()),
         )
         .frame(false),
     );

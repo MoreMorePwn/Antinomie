@@ -298,6 +298,7 @@ impl MonitorApp {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.set_min_width((font / 16.0 * 760.0).max(ui.available_width()));
+                crate::widgets::table::begin(ui);
                 TableBuilder::new(ui)
                     .id_salt(("syscall_table", width_class))
                     .striped(true)
@@ -317,23 +318,14 @@ impl MonitorApp {
                     .header(header_height, |mut header| {
                         for column in TraceColumn::ALL {
                             header.col(|ui| {
-                                let cell = ui.max_rect().expand2(egui::vec2(
-                                    ui.spacing().item_spacing.x / 2.0,
-                                    ui.spacing().item_spacing.y / 2.0,
-                                ));
-                                ui.painter().rect_filled(cell, 0.0, palette.raised);
-                                ui.painter().hline(
-                                    cell.x_range(),
-                                    cell.bottom() - 0.5,
-                                    egui::Stroke::new(1.0_f32, palette.line),
-                                );
+                                crate::widgets::table::head_bg(ui);
                                 let sorted =
                                     self.trace_sort.filter(|(sorted, _)| *sorted == column);
                                 let mut job = egui::text::LayoutJob::default();
                                 job.append(
                                     column.title(),
                                     0.0,
-                                    egui::TextFormat::simple(body_font.clone(), palette.text),
+                                    egui::TextFormat::simple(body_font.clone(), palette.muted),
                                 );
                                 if let Some((_, descending)) = sorted {
                                     job.append(

@@ -705,6 +705,7 @@ fn table(
             // Rows select on click; text selection would swallow it.
             ui.style_mut().interaction.selectable_labels = false;
             let max_height = ui.available_height().max(height);
+            crate::widgets::table::begin(ui);
             let mut table = TableBuilder::new(ui)
                 .id_salt("analysis-table")
                 .striped(true)
@@ -729,6 +730,7 @@ fn table(
                 .header(height, |mut header| {
                     for &column in columns {
                         header.col(|ui| {
+                            crate::widgets::table::head_bg(ui);
                             let suffix = view
                                 .sort
                                 .filter(|(sort, _)| *sort == column)
@@ -736,8 +738,11 @@ fn table(
                                 .unwrap_or("");
                             if ui
                                 .add(
-                                    egui::Label::new(format!("{}{suffix}", column.label()))
-                                        .sense(egui::Sense::click()),
+                                    egui::Label::new(crate::widgets::table::head_text(format!(
+                                        "{}{suffix}",
+                                        column.label()
+                                    )))
+                                    .sense(egui::Sense::click()),
                                 )
                                 .on_hover_text(format!("Sort by {}", column.label()))
                                 .clicked()

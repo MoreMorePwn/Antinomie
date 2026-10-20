@@ -228,6 +228,7 @@ fn table_rows_with(
         .ctx()
         .data(|data| data.get_temp::<egui::Id>(egui::Id::new(("triage-filter-target", id))));
     let max_height = ui.available_height().max(60.0);
+    crate::widgets::table::begin(ui);
     let mut builder = TableBuilder::new(ui)
         .id_salt(("triage-062", id))
         .striped(true)
@@ -262,10 +263,17 @@ fn table_rows_with(
                     .as_ref()
                     .map_or(row.index(), |order| order[row.index()])];
                 let key = evidence_key(cells);
-                row.set_selected(selected.as_ref() == Some(&key));
+                let row_selected = selected.as_ref() == Some(&key);
+                row.set_selected(row_selected);
                 let branch = branches.map(|branches| &branches[row.index()]);
                 for (column, cell) in cells.iter().enumerate() {
                     row.col(|ui| {
+                        if column == 0 && row_selected {
+                            crate::widgets::table::row_mark(
+                                ui,
+                                crate::widgets::table::Mark::Selected,
+                            );
+                        }
                         let indent = branch.filter(|_| column == 0).map(|branch| {
                             let reach = ui.spacing().item_spacing.y * 0.5;
                             let lines = ui.max_rect().expand2(egui::vec2(0.0, reach));
@@ -374,6 +382,7 @@ fn finding_table_rows(
         .data(|data| data.get_temp::<egui::Id>(egui::Id::new(("triage-filter-target", id))));
     let row_height = ui.text_style_height(&egui::TextStyle::Body).max(14.0) + 8.0;
     let max_height = ui.available_height().max(60.0);
+    crate::widgets::table::begin(ui);
     let mut builder = TableBuilder::new(ui)
         .id_salt(("triage-062", id))
         .striped(true)

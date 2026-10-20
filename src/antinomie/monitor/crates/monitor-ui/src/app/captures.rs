@@ -100,7 +100,7 @@ impl ProcessPicker {
         let width = 600.0_f32.min((viewport.width() - 64.0).max(200.0));
         let core = self.purpose == ProcessPurpose::Core;
         let debug = self.purpose == ProcessPurpose::Debug;
-        egui::Window::new(if core {
+        crate::widgets::window(if core {
             "Dump core"
         } else if debug {
             "Attach debugger"
@@ -195,6 +195,7 @@ impl ProcessPicker {
                     .id_salt("process_columns")
                     .show(ui, |ui| {
                         ui.set_min_width(440.0_f32.max(font_size * 20.0));
+                        crate::widgets::table::begin(ui);
                         TableBuilder::new(ui)
                             .id_salt("process_picker")
                             .sense(egui::Sense::click())
@@ -207,9 +208,13 @@ impl ProcessPicker {
                             .max_scroll_height(height)
                             .min_scrolled_height(0.0)
                             .header(font_size + 12.0, |mut header| {
-                                for label in ["PID", "Name", "UID", "Threads"] {
+                                for (column, label) in ["PID", "Name", "UID", "Threads"].into_iter().enumerate() {
                                     header.col(|ui| {
-                                        ui.strong(label);
+                                        crate::widgets::table::head_aligned(
+                                            ui,
+                                            label,
+                                            crate::widgets::table::numeric_align(column != 1),
+                                        )
                                     });
                                 }
                             })
@@ -219,19 +224,26 @@ impl ProcessPicker {
                                     row.set_selected(
                                         self.selected.as_ref() == Some(&process.identity),
                                     );
-                                    for text in [
+                                    for (column, text) in [
                                         process.identity.tgid.to_string(),
                                         process.command.clone(),
                                         process.uid.to_string(),
                                         process.thread_count.to_string(),
-                                    ] {
+                                    ]
+                                    .into_iter()
+                                    .enumerate()
+                                    {
                                         row.col(|ui| {
-                                            ui.add(
-                                                egui::Label::new(&text)
-                                                    .selectable(false)
-                                                    .truncate(),
-                                            )
-                                            .on_hover_text(&text);
+                                            let label = egui::Label::new(&text)
+                                                .selectable(false)
+                                                .truncate();
+                                            crate::widgets::table::aligned(
+                                                ui,
+                                                crate::widgets::table::numeric_align(column != 1),
+                                                |ui| {
+                                                    ui.add(label).on_hover_text(&text);
+                                                },
+                                            );
                                         });
                                     }
                                     if row.response().clicked() && self.pending.is_none() {
@@ -387,6 +399,7 @@ pub(super) fn history(
         .id_salt("capture_columns")
         .show(ui, |ui| {
             ui.set_min_width(400.0);
+            crate::widgets::table::begin(ui);
             let mut table = TableBuilder::new(ui)
                 .id_salt("capture_history")
                 .column(Column::initial(225.0).at_least(150.0).resizable(true))
@@ -403,16 +416,23 @@ pub(super) fn history(
             table
                 .header(row_height + 4.0, |mut header| {
                     for label in ["Start time", "Capture", "State"] {
-                        header.col(|ui| {
-                            theme::section(ui, label);
-                        });
+                        header.col(|ui| crate::widgets::table::head(ui, label));
                     }
                 })
                 .body(|body| {
                     body.rows(row_height, shown.len(), |mut row| {
                         let capture = shown[row.index()];
-                        row.set_selected(selected == Some(capture.id.as_str()));
+                        let row_selected = selected == Some(capture.id.as_str());
+                        row.set_selected(row_selected);
                         row.col(|ui| {
+                            crate::widgets::table::row_mark(
+                                ui,
+                                if row_selected {
+                                    crate::widgets::table::Mark::Selected
+                                } else {
+                                    crate::widgets::table::Mark::None
+                                },
+                            );
                             ui.add(
                                 egui::Label::new(crate::time_format::unix_ms(capture.started_ms))
                                     .truncate()
@@ -720,6 +740,7 @@ pub(super) fn process_tree(
         .id_salt("capture_process_tree_columns")
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            crate::widgets::table::begin(ui);
             TableBuilder::new(ui)
                 .id_salt("capture_process_tree")
                 .sense(egui::Sense::click())
@@ -734,17 +755,24 @@ pub(super) fn process_tree(
                 .column(Column::exact(char_width * 12.0 + 8.0))
                 .header(row_height + 4.0, |mut header| {
                     for label in ["Process", "PID", "Calls", "Exit"] {
-                        header.col(|ui| {
-                            theme::section(ui, label);
-                        });
+                        header.col(|ui| crate::widgets::table::head(ui, label));
                     }
                 })
                 .body(|body| {
                     body.rows(row_height, layout.rows.len(), |mut row| {
                         let process = &processes[layout.rows[row.index()].process as usize];
                         let branch = layout.prefix(row.index());
-                        row.set_selected(selected == Some(process.pid));
+                        let row_selected = selected == Some(process.pid);
+                        row.set_selected(row_selected);
                         row.col(|ui| {
+                            crate::widgets::table::row_mark(
+                                ui,
+                                if row_selected {
+                                    crate::widgets::table::Mark::Selected
+                                } else {
+                                    crate::widgets::table::Mark::None
+                                },
+                            );
                             let reach = ui.spacing().item_spacing.y * 0.5;
                             let lines = ui.max_rect().expand2(egui::vec2(0.0, reach));
                             branch.paint(ui.painter(), lines, char_width);

@@ -197,7 +197,7 @@ impl Viewer {
         }
         let path = directory.join(JOURNAL_FILE);
         let mut open = true;
-        egui::Window::new("Event journal")
+        crate::widgets::window("Event journal")
             .id(egui::Id::new("detection-event-journal"))
             .open(&mut open)
             .default_size([900.0, 640.0])
@@ -403,6 +403,7 @@ impl Viewer {
             });
         } else {
             let height = (ui.available_height() - 230.0).clamp(140.0, 420.0);
+            crate::widgets::table::begin(ui);
             let mut table = TableBuilder::new(ui)
                 .id_salt("journal-rows")
                 .striped(true)
@@ -425,18 +426,25 @@ impl Viewer {
             table
                 .header(ROW_HEIGHT, |mut header| {
                     for label in ["Event", "Category", "Time", "Process", "Fields"] {
-                        header.col(|ui| {
-                            ui.strong(label);
-                        });
+                        header.col(|ui| crate::widgets::table::head(ui, label));
                     }
                 })
                 .body(|body| {
                     body.rows(ROW_HEIGHT, page.rows.len(), |mut line| {
                         let row = &page.rows[line.index()];
-                        line.set_selected(self.selected == Some(row.id));
+                        let row_selected = self.selected == Some(row.id);
+                        line.set_selected(row_selected);
                         let process = process_text(&row.event);
                         let fields = field_text(&row.event);
                         line.col(|ui| {
+                            crate::widgets::table::row_mark(
+                                ui,
+                                if row_selected {
+                                    crate::widgets::table::Mark::Selected
+                                } else {
+                                    crate::widgets::table::Mark::None
+                                },
+                            );
                             ui.monospace(row.id.to_string());
                         });
                         line.col(|ui| {

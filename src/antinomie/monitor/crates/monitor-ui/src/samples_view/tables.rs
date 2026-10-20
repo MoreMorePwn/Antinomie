@@ -133,6 +133,7 @@ impl SamplesView {
         let row_height = theme::row_height(cx.font_size).max(ui.spacing().interact_size.y + 4.0);
         let mut download = None;
         let mut clicked = None;
+        crate::widgets::table::begin(ui);
         TableBuilder::new(ui)
             .id_salt("samples_results")
             .sense(egui::Sense::click())
@@ -152,6 +153,7 @@ impl SamplesView {
             .header(row_height, |mut header| {
                 for column in Col::ALL {
                     header.col(|ui| {
+                        crate::widgets::table::head_bg(ui);
                         let mark = match self.sort {
                             Some(sort) if sort.column == column => {
                                 if sort.descending {
@@ -167,7 +169,7 @@ impl SamplesView {
                                 egui::Label::new(
                                     RichText::new(format!("{}{mark}", column.label()))
                                         .strong()
-                                        .color(theme::heading()),
+                                        .color(theme::muted()),
                                 )
                                 .sense(egui::Sense::click()),
                             )
@@ -344,6 +346,7 @@ impl SamplesView {
         let pending = self.pending.is_some() || self.awaiting.is_some();
         let mono = theme::mono(cx.font_size - 1.0);
         let row_height = theme::row_height(cx.font_size).max(ui.spacing().interact_size.y + 4.0);
+        crate::widgets::table::begin(ui);
         TableBuilder::new(ui)
             .id_salt("samples_stored")
             .striped(true)
