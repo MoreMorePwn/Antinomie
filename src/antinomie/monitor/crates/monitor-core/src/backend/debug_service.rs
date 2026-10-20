@@ -420,14 +420,8 @@ impl Worker {
             return None;
         }
         let session = self.session.as_mut()?;
-        let revision = self
-            .snapshot
-            .guest_kernel
-            .as_ref()
-            .and_then(|kernel| kernel.revision)?;
-        if revision < 17 {
-            return None;
-        }
+        // The restored guest's description is not read yet; the probe itself
+        // tells whether it speaks the contract (an older one refuses).
         let boot_id = self.snapshot.boot_id.clone().unwrap_or_default();
         let mut link = WorkerLink {
             session,

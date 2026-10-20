@@ -432,6 +432,31 @@ impl<W: Wire> Session<'_, W> {
         }
     }
 
+    /// A non-stop client acknowledges its last notification with `vStopped` even
+    /// as it detaches: answer it (and nothing else) so it is not told the
+    /// connection died. Gives up after a moment.
+    fn answer_last_acknowledgement(&mut self) {
+        let until = Instant::now() + Duration::from_millis(300);
+        while Instant::now() < until {
+            let Ok(Some(byte)) = self.wire.read_byte(RUNNING_POLL) else {
+                continue;
+            };
+            match self.client.framer.feed(byte) {
+                Some(Incoming::Packet(payload)) => {
+                    if !self.client.no_ack {
+                        let _ = self.write(b"+");
+                    }
+                    if payload == b"vStopped" {
+                        let _ = self.reply(b"OK");
+                    }
+                    return;
+                }
+                Some(Incoming::BadPacket) => return,
+                _ => {}
+            }
+        }
+    }
+
     pub(super) fn write(&mut self, data: &[u8]) -> Result<(), DebugError> {
         self.wire
             .send(data)
@@ -661,6 +686,9 @@ impl<W: Wire> Session<'_, W> {
             Reply::Later => {}
             Reply::Then(payload, outcome) => {
                 self.reply(&payload)?;
+                if self.client.nonstop && self.client.held.is_some() {
+                    self.answer_last_acknowledgement();
+                }
                 return Ok(Some(outcome));
             }
         }
