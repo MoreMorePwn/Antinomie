@@ -118,9 +118,10 @@ fn summary_is_compact_with_thousands_of_rows_and_section_renders_only_its_kind()
                 });
             },
         );
-        assert!(texts(&output)
-            .iter()
-            .any(|(text, _)| text == "Partial / 2048 rows"));
+        let shown = texts(&output);
+        for text in ["Partial", "2048 rows"] {
+            assert!(shown.iter().any(|(shown, _)| shown == text), "{text}");
+        }
         assert!(!texts(&output)
             .iter()
             .any(|(text, _)| text.starts_with("Row ")));

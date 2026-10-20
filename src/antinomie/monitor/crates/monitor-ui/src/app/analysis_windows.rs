@@ -169,6 +169,10 @@ impl MonitorApp {
             Some(crate::analysis::ReportAction::OpenAnalysisTools) => {
                 self.open_library(crate::workspace::LibraryPage::Tools)
             }
+            Some(crate::analysis::ReportAction::OpenTriageProperties) => {
+                self.triage.show_properties();
+                self.focus_panel = Some(crate::workspace::Panel::Triage);
+            }
             Some(crate::analysis::ReportAction::OpenSection { report_id, kind }) => {
                 if let Err(reason) = self.open_analysis_section(report_id, kind) {
                     self.report_error(reason);

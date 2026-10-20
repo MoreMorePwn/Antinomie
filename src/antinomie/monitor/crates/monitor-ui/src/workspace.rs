@@ -86,14 +86,14 @@ impl Panel {
 }
 
 /// Which main tab the bottom Details panel follows: the syscall trace, the
-/// network, memory, disks, history, triage or cores panel.
+/// network, memory, disks, history, triage, cores or static analysis panel.
 /// When only one is on screen it wins; when several are (split or detached),
 /// the one clicked last.
 #[derive(Default)]
 pub(crate) struct DetailsFollow {
     followed: usize,
     /// Pass of the main window in which each followed panel was last drawn.
-    drawn: [Option<u64>; 7],
+    drawn: [Option<u64>; 8],
 }
 
 /// What the Details panel shows.
@@ -106,10 +106,11 @@ pub(crate) enum DetailsOf {
     Triage,
     DiskEntry,
     Core,
+    Static,
 }
 
 impl DetailsFollow {
-    const SIDES: [DetailsOf; 7] = [
+    const SIDES: [DetailsOf; 8] = [
         DetailsOf::Syscall,
         DetailsOf::Packet,
         DetailsOf::MemoryRow,
@@ -117,6 +118,7 @@ impl DetailsFollow {
         DetailsOf::Triage,
         DetailsOf::DiskEntry,
         DetailsOf::Core,
+        DetailsOf::Static,
     ];
 
     fn side(panel: &Panel) -> Option<usize> {
@@ -128,6 +130,7 @@ impl DetailsFollow {
             Panel::Triage => Some(4),
             Panel::Disks => Some(5),
             Panel::CoreDump => Some(6),
+            Panel::StaticAnalysis | Panel::AnalysisSection { .. } => Some(7),
             _ => None,
         }
     }
@@ -2444,5 +2447,19 @@ mod tests {
         let mut follow = DetailsFollow::default();
         follow.chose(&Panel::CoreDump);
         assert_eq!(follow.of(&egui::Context::default()), DetailsOf::Core);
+    }
+
+    #[test]
+    fn the_details_dock_follows_static_analysis_and_its_separate_panes() {
+        let pane = Panel::AnalysisSection {
+            report_id: "report".into(),
+            kind: AnalysisKind::Strings,
+        };
+        assert_eq!(DetailsFollow::side(&Panel::StaticAnalysis), Some(7));
+        assert_eq!(DetailsFollow::side(&pane), Some(7));
+        assert_eq!(DetailsFollow::SIDES[7], DetailsOf::Static);
+        let mut follow = DetailsFollow::default();
+        follow.chose(&pane);
+        assert_eq!(follow.of(&egui::Context::default()), DetailsOf::Static);
     }
 }

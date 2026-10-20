@@ -35,9 +35,67 @@ pub(crate) struct WorkspaceState {
     content: content::ContentState,
     capa: capa_matrix::CapaState,
     rows: RowWindows,
+    /// The row last handed to the Details panel, so it is handed over once.
+    published: Option<AnalysisEntry>,
+}
+
+/// The row the Details panel shows for Static analysis.
+#[derive(Clone)]
+struct ChosenRow {
+    entry: AnalysisEntry,
+    specimen_len: Option<u64>,
+    category: &'static str,
+}
+
+const CHOSEN_ROW: &str = "static-details-row";
+
+/// The Details panel body: the row selected last in a Static analysis pane.
+pub(crate) fn details(ui: &mut egui::Ui) {
+    let chosen = ui
+        .ctx()
+        .data(|data| data.get_temp::<ChosenRow>(egui::Id::new(CHOSEN_ROW)));
+    let Some(chosen) = chosen else {
+        ui.weak("Nothing selected. Select a row in Static analysis to inspect it here.");
+        return;
+    };
+    ui.horizontal_wrapped(|ui| {
+        ui.label(egui::RichText::new(&chosen.entry.label).strong());
+        ui.weak(format!("from Static · {}", chosen.category));
+    });
+    ui.separator();
+    row_menu::details(ui, chosen.specimen_len, &chosen.entry);
 }
 
 impl WorkspaceState {
+    /// Hand the row selected in the shown category to the Details panel when
+    /// it differs from the one handed over last.
+    fn publish(
+        &mut self,
+        ctx: &egui::Context,
+        report: &AnalysisReport,
+        forced: Option<AnalysisKind>,
+    ) {
+        if forced.is_none() && self.tab == Tab::Content {
+            return;
+        }
+        let Some(kind) = forced.or(self.kind) else {
+            return;
+        };
+        let Some(entry) = tabs::selected_row(report, self, forced) else {
+            return;
+        };
+        if self.published.as_ref() == Some(entry) {
+            return;
+        }
+        let chosen = ChosenRow {
+            entry: entry.clone(),
+            specimen_len: report.specimen_len,
+            category: section_title(kind),
+        };
+        self.published = Some(chosen.entry.clone());
+        ctx.data_mut(|data| data.insert_temp(egui::Id::new(CHOSEN_ROW), chosen));
+    }
+
     pub(crate) fn set_record(&mut self, id: &str, name: &str, path: &str, tags: Vec<String>) {
         self.record_id = id.to_owned();
         self.record_name = name.to_owned();
@@ -136,7 +194,6 @@ struct ViewState {
     /// Last filter that compiled. An invalid expression does not replace this.
     applied: String,
     query_error: Option<String>,
-    sort: Option<(Column, bool)>,
     selected: Option<(bool, u64)>,
     listing: super::listing_view::ListingState,
 }
@@ -244,6 +301,7 @@ fn render(
     }
     // The Content tab reads the same specimen preview as the bytes window.
     let bytes_visible = forced.is_some() || state.tab != Tab::Content;
+    state.publish(ui.ctx(), report, forced);
     let windows = state.rows.show(
         ui.ctx(),
         (&report.id, forced),
@@ -450,25 +508,33 @@ fn overview(
         ui.columns(2, |columns| {
             egui::ScrollArea::vertical()
                 .id_salt("analysis-overview-identity")
-                .show(&mut columns[0], |ui| identity(ui, report));
+                .show(&mut columns[0], |ui| action = identity(ui, report));
             egui::ScrollArea::vertical()
                 .id_salt("analysis-overview")
-                .show(&mut columns[1], |ui| action = categories(ui, report, state));
+                .show(&mut columns[1], |ui| {
+                    if let Some(next) = categories(ui, report, state) {
+                        action = Some(next);
+                    }
+                });
         });
     } else {
         egui::ScrollArea::vertical()
             .id_salt("analysis-overview")
             .show(ui, |ui| {
-                identity(ui, report);
-                ui.separator();
-                action = categories(ui, report, state);
+                action = identity(ui, report);
+                ui.add_space(8.0);
+                if let Some(next) = categories(ui, report, state) {
+                    action = Some(next);
+                }
             });
     }
     action
 }
 
 /// The report's state, the file's path and hashes, and its object format.
-fn identity(ui: &mut egui::Ui, report: &AnalysisReport) {
+/// Triage › Properties shows the same identity for the run; the card links there.
+fn identity(ui: &mut egui::Ui, report: &AnalysisReport) -> Option<ReportAction> {
+    let mut action = None;
     if matches!(
         report.state,
         AnalysisState::Partial | AnalysisState::Unavailable | AnalysisState::Cancelled
@@ -519,64 +585,138 @@ fn identity(ui: &mut egui::Ui, report: &AnalysisReport) {
         }
     }
     rows.push(("Report".to_owned(), report.id.clone()));
-    egui::Grid::new("analysis-identity")
-        .num_columns(2)
-        .striped(true)
-        .show(ui, |ui| {
-            for (label, value) in rows {
-                ui.strong(&label);
-                ui.horizontal(|ui| {
-                    if ui
-                        .small_button(egui_phosphor::regular::COPY)
-                        .on_hover_text(format!("Copy {label}"))
-                        .clicked()
-                    {
-                        ui.ctx().copy_text(value.clone());
-                    }
-                    ui.add(egui::Label::new(egui::RichText::new(value).monospace()).wrap());
-                });
-                ui.end_row();
+    crate::widgets::card(
+        ui,
+        "Identity",
+        |ui| {
+            if crate::widgets::link(ui, "Triage › Properties")
+                .on_hover_text("The same identity and hashes with the file's other properties")
+                .clicked()
+            {
+                action = Some(ReportAction::OpenTriageProperties);
             }
-        });
+        },
+        |ui| {
+            egui::Grid::new("analysis-identity")
+                .num_columns(2)
+                .striped(true)
+                .show(ui, |ui| {
+                    for (label, value) in rows {
+                        ui.strong(&label);
+                        ui.horizontal(|ui| {
+                            if ui
+                                .small_button(egui_phosphor::regular::COPY)
+                                .on_hover_text(format!("Copy {label}"))
+                                .clicked()
+                            {
+                                ui.ctx().copy_text(value.clone());
+                            }
+                            ui.add(egui::Label::new(egui::RichText::new(value).monospace()).wrap());
+                        });
+                        ui.end_row();
+                    }
+                });
+        },
+    );
+    action
 }
 
-/// Each category with its state and size; a name opens its tab.
+/// Every category the analysis can run: its state and size, a name that
+/// opens its tab and the way to open it in a separate pane. One this report
+/// does not have is listed disabled, with the reason as its tooltip.
 fn categories(
     ui: &mut egui::Ui,
     report: &AnalysisReport,
     state: &mut WorkspaceState,
 ) -> Option<ReportAction> {
+    use crate::widgets::{chip, Tone};
     let mut action = None;
-    for section in &report.sections {
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .selectable_label(false, section_title(section.kind))
-                .on_hover_text(&section.summary)
-                .clicked()
-            {
-                state.show(section.kind);
+    crate::widgets::card(
+        ui,
+        "Categories",
+        |_| {},
+        |ui| {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(
+                        "Click a category to open it; the icon opens it in a separate pane",
+                    )
+                    .color(crate::theme::muted()),
+                )
+                .wrap(),
+            );
+            for kind in ALL_KINDS {
+                let Some(section) = report.sections.iter().find(|section| section.kind == kind)
+                else {
+                    ui.horizontal(|ui| {
+                        ui.add_enabled(false, egui::Label::new(section_title(kind)))
+                            .on_disabled_hover_text(NOT_REQUESTED);
+                        chip(ui, "Not requested", Tone::Neutral);
+                    });
+                    continue;
+                };
+                egui::Sides::new().show(
+                    ui,
+                    |ui| {
+                        if crate::widgets::link(ui, section_title(kind))
+                            .on_hover_text(&section.summary)
+                            .clicked()
+                        {
+                            state.show(kind);
+                        }
+                    },
+                    |ui| {
+                        if ui
+                            .button(egui_phosphor::regular::ARROW_SQUARE_OUT)
+                            .on_hover_text("Open category in a separate pane")
+                            .clicked()
+                        {
+                            action = Some(ReportAction::OpenSection {
+                                report_id: report.id.clone(),
+                                kind,
+                            });
+                        }
+                        let rows = section
+                            .listing
+                            .as_ref()
+                            .map_or(section.entries.len() as u64, |listing| listing.rows);
+                        ui.label(egui::RichText::new(format!("{rows} rows")).monospace());
+                        chip(ui, state_word(report, section), state_tone(section));
+                    },
+                );
             }
-            ui.label(format!(
-                "{} / {} rows",
-                state_word(report, section),
-                section
-                    .listing
-                    .as_ref()
-                    .map_or(section.entries.len() as u64, |listing| listing.rows)
-            ));
-            if ui
-                .button(egui_phosphor::regular::ARROW_SQUARE_OUT)
-                .on_hover_text("Open category in a separate pane")
-                .clicked()
-            {
-                action = Some(ReportAction::OpenSection {
-                    report_id: report.id.clone(),
-                    kind: section.kind,
-                });
-            }
-        });
-    }
+        },
+    );
     action
+}
+
+/// Why a category that is not in the report cannot be opened.
+pub(super) const NOT_REQUESTED: &str =
+    "Not part of this analysis; start one with this check selected";
+
+const ALL_KINDS: [AnalysisKind; 11] = [
+    AnalysisKind::Metadata,
+    AnalysisKind::Structures,
+    AnalysisKind::Strings,
+    AnalysisKind::Entropy,
+    AnalysisKind::Hardening,
+    AnalysisKind::Rules,
+    AnalysisKind::Identification,
+    AnalysisKind::Capabilities,
+    AnalysisKind::Disassembly,
+    AnalysisKind::Decompilation,
+    AnalysisKind::Embedded,
+];
+
+fn state_tone(section: &AnalysisSection) -> crate::widgets::Tone {
+    use crate::widgets::Tone;
+    use antinomie_monitor_core::AnalysisSectionState as S;
+    match section.state {
+        S::Complete => Tone::Good,
+        S::Partial => Tone::Warn,
+        S::Unavailable => Tone::Error,
+        S::Pending => Tone::Neutral,
+    }
 }
 
 /// The specimen's name: the record's when it has one, else the path's last part.
@@ -612,7 +752,7 @@ fn visible(
     } else {
         view.applied.to_lowercase()
     };
-    let mut indices: Vec<_> = section
+    let indices: Vec<_> = section
         .entries
         .iter()
         .enumerate()
@@ -625,13 +765,6 @@ fn visible(
         })
         .map(|(index, _)| index)
         .collect();
-    if let Some((column, descending)) = view.sort {
-        indices.sort_by(|&left, &right| {
-            let order = column.compare(&section.entries[left], &section.entries[right]);
-            let order = if descending { order.reverse() } else { order };
-            order.then_with(|| left.cmp(&right))
-        });
-    }
     indices
 }
 
@@ -698,6 +831,10 @@ fn table(
     let columns = records::columns(section.kind, filter, legacy);
     let height = ui.text_style_height(&egui::TextStyle::Body) + 12.0;
     let mut command = None;
+    let table_id = format!("analysis-{:?}-{filter:?}", section.kind);
+    let order = crate::table_sort::order(ui.ctx(), &table_id, indices.len(), |position, a, b| {
+        columns[position].compare(&section.entries[indices[a]], &section.entries[indices[b]])
+    });
     egui::ScrollArea::horizontal()
         .id_salt("analysis-table-horizontal")
         .auto_shrink([false, false])
@@ -728,38 +865,15 @@ fn table(
             }
             table
                 .header(height, |mut header| {
-                    for &column in columns {
+                    for (position, &column) in columns.iter().enumerate() {
                         header.col(|ui| {
-                            crate::widgets::table::head_bg(ui);
-                            let suffix = view
-                                .sort
-                                .filter(|(sort, _)| *sort == column)
-                                .map(|(_, descending)| if descending { " v" } else { " ^" })
-                                .unwrap_or("");
-                            if ui
-                                .add(
-                                    egui::Label::new(crate::widgets::table::head_text(format!(
-                                        "{}{suffix}",
-                                        column.label()
-                                    )))
-                                    .sense(egui::Sense::click()),
-                                )
-                                .on_hover_text(format!("Sort by {}", column.label()))
-                                .clicked()
-                            {
-                                view.sort = Some((
-                                    column,
-                                    view.sort.is_some_and(|(sort, descending)| {
-                                        sort == column && !descending
-                                    }),
-                                ));
-                            }
+                            crate::table_sort::header(ui, &table_id, position, column.label())
                         });
                     }
                 })
                 .body(|body| {
                     body.rows(height, indices.len(), |mut row| {
-                        let index = indices[row.index()];
+                        let index = indices[order[row.index()]];
                         let entry = &section.entries[index];
                         let id = records::identity(index, entry);
                         row.set_selected(view.selected == Some(id));
@@ -836,14 +950,13 @@ mod tests {
         }
     }
     #[test]
-    fn filter_sort_preserve_selected_record_identity() {
+    fn filter_preserves_selected_record_identity() {
         let section = section();
         let mut view = ViewState {
             selected: Some((true, 16)),
-            sort: Some((Column::Size, false)),
             ..Default::default()
         };
-        assert_eq!(visible(&section, Structure::All, &mut view, &[]), [1, 0, 2]);
+        assert_eq!(visible(&section, Structure::All, &mut view, &[]), [0, 1, 2]);
         assert_eq!(selected_entry(&section, &view).unwrap().offset, Some(16));
         view.query = "value2".into();
         assert_eq!(visible(&section, Structure::All, &mut view, &[]), [1]);

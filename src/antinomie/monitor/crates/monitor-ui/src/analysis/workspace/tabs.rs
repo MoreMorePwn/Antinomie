@@ -139,9 +139,9 @@ pub(super) fn show(
     ui.add_space(4.0);
     crate::widgets::tab_row(ui, |ui| {
         for tab in Tab::ALL {
-            let present = tab
+            let section = tab
                 .kind()
-                .is_none_or(|kind| report.sections.iter().any(|section| section.kind == kind));
+                .and_then(|kind| report.sections.iter().find(|section| section.kind == kind));
             let pending = tab.kind().is_some_and(|kind| pending(report, kind));
             let title = if pending {
                 format!(
@@ -153,8 +153,10 @@ pub(super) fn show(
                 tab.label().to_owned()
             };
             let mut item = crate::widgets::TabItem::new(title);
-            if !present {
-                item = item.dimmed("Not part of this analysis; start one with this check selected");
+            if tab.kind().is_some() && section.is_none() {
+                item = item.disabled(super::NOT_REQUESTED);
+            } else if let Some(rows) = section.and_then(|section| counted(tab, section)) {
+                item = item.badge(rows.to_string(), crate::widgets::Tone::Neutral);
             }
             if crate::widgets::tab(ui, state.tab == tab, &item).clicked() {
                 state.tab = tab;
@@ -266,29 +268,33 @@ fn file_info(
     state: &mut WorkspaceState,
     listing: Option<&Result<AnalysisListingPage, String>>,
 ) -> Option<ReportAction> {
-    crate::widgets::tab_row(ui, |ui| {
-        for view in FileInfo::ALL {
-            let title = match view.target() {
-                Some((kind, _)) if pending(report, kind) => {
-                    format!(
-                        "{} {}",
-                        egui_phosphor::regular::HOURGLASS_MEDIUM,
-                        view.label()
-                    )
-                }
-                _ => view.label().to_owned(),
-            };
-            if crate::widgets::tab(
-                ui,
-                state.file_info == view,
-                &crate::widgets::TabItem::new(title),
-            )
-            .clicked()
-            {
-                state.file_info = view;
+    let items = FileInfo::ALL.map(|view| {
+        let title = match view.target() {
+            Some((kind, _)) if pending(report, kind) => {
+                format!(
+                    "{} {}",
+                    egui_phosphor::regular::HOURGLASS_MEDIUM,
+                    view.label()
+                )
             }
+            _ => view.label().to_owned(),
+        };
+        let mut item = crate::widgets::TabItem::new(title);
+        if view
+            .target()
+            .is_some_and(|(kind, _)| !report.sections.iter().any(|section| section.kind == kind))
+        {
+            item = item.disabled(super::NOT_REQUESTED);
         }
+        (view, item)
     });
+    egui::ScrollArea::horizontal()
+        .id_salt("file-info-views")
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            crate::widgets::segmented(ui, items, &mut state.file_info);
+        });
+    ui.add_space(4.0);
     match state.file_info.target() {
         None => {
             state.kind = None;
@@ -324,6 +330,18 @@ fn category(
     results(ui, report, state, listing, None)
 }
 
+/// The row count a tab shows as its badge: the categories that list findings.
+fn counted(tab: Tab, section: &AnalysisSection) -> Option<u64> {
+    if !matches!(tab, Tab::Strings | Tab::Binwalk | Tab::Yara | Tab::Capa) {
+        return None;
+    }
+    let rows = section
+        .listing
+        .as_ref()
+        .map_or(section.entries.len() as u64, |listing| listing.rows);
+    (rows > 0).then_some(rows)
+}
+
 fn pending(report: &AnalysisReport, kind: AnalysisKind) -> bool {
     super::super::in_progress(report)
         && report.sections.iter().any(|section| {
@@ -338,9 +356,18 @@ fn selected_offset(report: &AnalysisReport, state: &WorkspaceState) -> Option<u6
     if state.tab == Tab::Content {
         return None;
     }
-    let kind = state.kind?;
+    records::file_offset(selected_row(report, state, None)?, report.specimen_len)
+}
+
+/// The row selected in the visible category (`forced` for a separate pane).
+pub(in crate::analysis) fn selected_row<'a>(
+    report: &'a AnalysisReport,
+    state: &'a WorkspaceState,
+    forced: Option<AnalysisKind>,
+) -> Option<&'a AnalysisEntry> {
+    let kind = forced.or(state.kind)?;
     let view = state.views.get(state.active_view.as_ref()?)?;
-    let entry = match &view.listing.selected {
+    match &view.listing.selected {
         Some((_, entry)) => Some(entry),
         None => {
             let section = report
@@ -349,6 +376,5 @@ fn selected_offset(report: &AnalysisReport, state: &WorkspaceState) -> Option<u6
                 .find(|section| section.kind == kind)?;
             selected_entry(section, view)
         }
-    }?;
-    records::file_offset(entry, report.specimen_len)
+    }
 }
