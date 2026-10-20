@@ -162,6 +162,28 @@ impl MonitorApp {
                 self.clear_run_filter();
             }
         }
+        // Header clicks reorder the rows; the keyboard walks them as shown.
+        let order =
+            crate::table_sort::order(ui.ctx(), "run_history", runs.len(), |column, a, b| {
+                let (a, b) = (&runs[a], &runs[b]);
+                match column {
+                    0 => a.started_ms.cmp(&b.started_ms),
+                    1 => a
+                        .request
+                        .path
+                        .to_lowercase()
+                        .cmp(&b.request.path.to_lowercase()),
+                    2 => a
+                        .request
+                        .args
+                        .join(" ")
+                        .to_lowercase()
+                        .cmp(&b.request.args.join(" ").to_lowercase()),
+                    3 => run_status(a).cmp(run_status(b)),
+                    _ => root_exit(a).cmp(&root_exit(b)),
+                }
+            });
+        let runs: Vec<&RunSummary> = order.iter().map(|&index| &runs[index]).collect();
         let pane_id = ui.id().with("run-history-focus");
         let pane = ui.interact(
             ui.available_rect_before_wrap(),
@@ -216,9 +238,10 @@ impl MonitorApp {
                     .min_scrolled_height(0.0);
                 if let Some(index) = navigation { table = table.scroll_to_row(index, Some(egui::Align::Center)); }
                 table.header(28.0, |mut header| {
-                        for name in ["Start time", "Executable", "Arguments", "Tree status", "Root exit", ""] {
-                            header.col(|ui| crate::widgets::table::head(ui, name));
+                        for (column, name) in ["Start time", "Executable", "Arguments", "Tree status", "Root exit"].into_iter().enumerate() {
+                            header.col(|ui| crate::table_sort::header(ui, "run_history", column, name));
                         }
+                        header.col(|ui| crate::widgets::table::head(ui, ""));
                     })
                     .body(|body| {
                         body.rows(self.settings.font_size + 16.0, runs.len(), |mut row| {

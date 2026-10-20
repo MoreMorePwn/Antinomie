@@ -5,7 +5,7 @@ use std::collections::{hash_map::DefaultHasher, BTreeMap};
 use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(super) struct Spec {
+pub(crate) struct Spec {
     pub column: usize,
     pub descending: bool,
 }
@@ -92,7 +92,7 @@ fn compare(a: &Atom, b: &Atom, descending: bool) -> std::cmp::Ordering {
     }
 }
 
-pub(super) fn header(ui: &mut egui::Ui, table: &str, column: usize, title: &str) {
+pub(crate) fn header(ui: &mut egui::Ui, table: &str, column: usize, title: &str) {
     crate::widgets::table::head_bg(ui);
     let id = egui::Id::new(("triage-sort", table));
     let current = ui.ctx().data(|data| data.get_temp::<Spec>(id));
@@ -126,6 +126,11 @@ pub(super) fn header(ui: &mut egui::Ui, table: &str, column: usize, title: &str)
             ui.close_menu();
         }
     });
+}
+
+/// The order a table's header clicks chose, if any.
+pub(crate) fn current(ctx: &egui::Context, table: &str) -> Option<Spec> {
+    ctx.data(|data| data.get_temp::<Spec>(egui::Id::new(("triage-sort", table))))
 }
 
 pub(super) fn take_request(ctx: &egui::Context, table: &str) -> Option<Option<Spec>> {

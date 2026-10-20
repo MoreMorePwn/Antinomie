@@ -403,6 +403,31 @@ impl Viewer {
             });
         } else {
             let height = (ui.available_height() - 230.0).clamp(140.0, 420.0);
+            // The journal is read a page at a time: a header click orders the
+            // events on this page.
+            let order = crate::table_sort::order(
+                ui.ctx(),
+                "journal-rows",
+                page.rows.len(),
+                |column, a, b| {
+                    let (a, b) = (&page.rows[a], &page.rows[b]);
+                    match column {
+                        0 => a.id.cmp(&b.id),
+                        1 => a
+                            .event
+                            .category
+                            .to_lowercase()
+                            .cmp(&b.event.category.to_lowercase()),
+                        2 => moment_key(a.event.time).cmp(&moment_key(b.event.time)),
+                        3 => process_text(&a.event)
+                            .to_lowercase()
+                            .cmp(&process_text(&b.event).to_lowercase()),
+                        _ => field_text(&a.event)
+                            .to_lowercase()
+                            .cmp(&field_text(&b.event).to_lowercase()),
+                    }
+                },
+            );
             crate::widgets::table::begin(ui);
             let mut table = TableBuilder::new(ui)
                 .id_salt("journal-rows")
@@ -418,20 +443,24 @@ impl Viewer {
             if let Some(index) = self
                 .scroll_to
                 .take()
-                .and_then(|id| page.rows.iter().position(|row| row.id == id))
+                .and_then(|id| order.iter().position(|&slot| page.rows[slot].id == id))
             {
                 table = table.scroll_to_row(index, Some(egui::Align::Center));
             }
             let mut chosen = None;
             table
                 .header(ROW_HEIGHT, |mut header| {
-                    for label in ["Event", "Category", "Time", "Process", "Fields"] {
-                        header.col(|ui| crate::widgets::table::head(ui, label));
+                    for (column, label) in ["Event", "Category", "Time", "Process", "Fields"]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        header
+                            .col(|ui| crate::table_sort::header(ui, "journal-rows", column, label));
                     }
                 })
                 .body(|body| {
                     body.rows(ROW_HEIGHT, page.rows.len(), |mut line| {
-                        let row = &page.rows[line.index()];
+                        let row = &page.rows[order[line.index()]];
                         let row_selected = self.selected == Some(row.id);
                         line.set_selected(row_selected);
                         let process = process_text(&row.event);
@@ -611,6 +640,15 @@ fn field_text(event: &Event) -> String {
 
 /// Calls carry the guest clock, which needs the recording's anchor to become
 /// wall time; without one the raw guest value is shown.
+/// Orders events by time; events without one come last.
+fn moment_key(time: Option<Moment>) -> (u8, u64) {
+    match time {
+        Some(Moment::GuestNs(ns)) => (0, ns),
+        Some(Moment::EpochUs(us)) => (1, us),
+        None => (2, 0),
+    }
+}
+
 fn time_text(time: Option<Moment>, clock: Option<HostClockAnchor>) -> String {
     match time {
         Some(Moment::GuestNs(ns)) => clock

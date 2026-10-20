@@ -347,6 +347,29 @@ impl SamplesView {
         let mono = theme::mono(cx.font_size - 1.0);
         let row_height = theme::row_height(cx.font_size).max(ui.spacing().interact_size.y + 4.0);
         crate::widgets::table::begin(ui);
+        let order =
+            crate::table_sort::order(ui.ctx(), "samples_stored", stored.len(), |column, a, b| {
+                let (a, b) = (&stored[a], &stored[b]);
+                match column {
+                    0 => a
+                        .info
+                        .file_name
+                        .to_lowercase()
+                        .cmp(&b.info.file_name.to_lowercase()),
+                    1 => a
+                        .info
+                        .signature
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .cmp(&b.info.signature.as_deref().unwrap_or("").to_lowercase()),
+                    2 => arch(&a.info)
+                        .unwrap_or_default()
+                        .cmp(&arch(&b.info).unwrap_or_default()),
+                    3 => a.info.file_size.cmp(&b.info.file_size),
+                    _ => a.pushes.len().cmp(&b.pushes.len()),
+                }
+            });
         TableBuilder::new(ui)
             .id_salt("samples_stored")
             .striped(true)
@@ -359,9 +382,18 @@ impl SamplesView {
             .column(Column::initial(180.0))
             .column(Column::initial(90.0))
             .column(Column::remainder().at_least(380.0))
+            .header(row_height, |mut header| {
+                for (column, title) in ["File", "Signature", "Architecture", "Size", "Sent"]
+                    .into_iter()
+                    .enumerate()
+                {
+                    header.col(|ui| crate::table_sort::header(ui, "samples_stored", column, title));
+                }
+                header.col(|ui| crate::widgets::table::head(ui, ""));
+            })
             .body(|body| {
                 body.rows(row_height, stored.len(), |mut row| {
-                    let sample = &stored[row.index()];
+                    let sample = &stored[order[row.index()]];
                     let info = &sample.info;
                     let arch = arch(info);
                     let runs_here = info.is_script() || arch.as_deref() == Some("x86-64");
