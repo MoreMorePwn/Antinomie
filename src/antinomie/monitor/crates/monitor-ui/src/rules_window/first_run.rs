@@ -30,6 +30,12 @@ impl Model {
         self.loaded
     }
 
+    /// Installed packs (enabled or not; custom groups are not packs), once
+    /// the registry is read.
+    pub(crate) fn pack_count(&self) -> Option<usize> {
+        self.loaded.then_some(self.registry.packs.len())
+    }
+
     pub(crate) fn is_busy(&self) -> bool {
         self.job.is_some()
     }
@@ -147,6 +153,15 @@ impl Model {
         catalog: antinomie_monitor_core::ruleset::Catalog,
     ) {
         self.catalog = Some(catalog);
+        self.loaded = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_packs_for_test(
+        &mut self,
+        packs: Vec<antinomie_monitor_core::ruleset::InstalledPack>,
+    ) {
+        self.registry.packs = packs;
         self.loaded = true;
     }
 }

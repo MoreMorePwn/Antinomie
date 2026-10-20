@@ -88,6 +88,7 @@ fn cancel_remains_reachable_when_the_active_base_is_hidden_or_removed() {
 fn startup_checking_does_not_show_a_missing_base_warning() {
     let mut app = app();
     app.snapshot.bases_checking = true;
+    open_bases_page(&mut app);
     let ctx = egui::Context::default();
     theme::install(&ctx);
     let size = egui::vec2(1280.0, 900.0);
@@ -123,40 +124,80 @@ fn base_labels_name_outdated_newer_and_unrecorded_revisions() {
     assert!(base_choice_label(&base).contains("built before versioning"));
 }
 
+/// Click a sortable header: its text may carry the sort arrow.
+fn click_header(app: &mut MonitorApp, ctx: &egui::Context, size: egui::Vec2, title: &str) {
+    for _ in 0..3 {
+        render(app, ctx, size);
+    }
+    let pos = texts(&render(app, ctx, size))
+        .iter()
+        .find(|(text, _)| text.starts_with(title))
+        .unwrap_or_else(|| panic!("missing header {title}"))
+        .1
+        .center();
+    for pressed in [true, false] {
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                events: vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                ..Default::default()
+            },
+            |ctx| app.draw(ctx),
+        );
+    }
+}
+
+fn open_bases_page(app: &mut MonitorApp) {
+    app.open_library(crate::workspace::LibraryPage::BaseImages);
+}
+
 #[test]
-fn base_rows_are_left_aligned_and_a_click_only_selects() {
+fn base_rows_sort_by_header_and_a_click_only_selects() {
     let ctx = egui::Context::default();
     theme::install(&ctx);
     let size = egui::vec2(1280.0, 820.0);
     let mut app = app();
-    app.snapshot.bases = vec![test_base("first", true), test_base("second", true)];
+    let mut alpha = test_base("first", true);
+    alpha.label = "Alpha".into();
+    alpha.size_bytes = 5 << 30;
+    let mut beta = test_base("second", true);
+    beta.label = "Beta".into();
+    beta.size_bytes = 1 << 30;
+    app.snapshot.bases = vec![alpha, beta];
+    open_bases_page(&mut app);
     for _ in 0..3 {
         let _ = render(&mut app, &ctx, size);
     }
-    let texts = texts(&render(&mut app, &ctx, size));
-    let rows: Vec<_> = texts
-        .iter()
-        .filter(|(text, _)| {
-            text.contains(&format!(
-                "Linux 6.12.94 · Antinomie {}",
-                antinomie_monitor_core::first_app_version(APP_REVISION).unwrap()
-            ))
-        })
-        .map(|(_, rect)| *rect)
-        .collect();
-    let title = texts
-        .iter()
-        .find(|(text, _)| text == "Base images")
-        .expect("base images title")
-        .1;
-    assert_eq!(rows.len(), 2);
-    // Left-aligned with the section title (after the row's status
-    // mark), not centred in the sidebar.
+    let row_top = |app: &mut MonitorApp, name: &str| {
+        texts(&render(app, &ctx, size))
+            .iter()
+            .find(|(text, _)| text.starts_with(name))
+            .unwrap_or_else(|| panic!("missing {name}"))
+            .1
+            .top()
+    };
+    assert!(row_top(&mut app, "Alpha") < row_top(&mut app, "Beta"));
+    click_header(&mut app, &ctx, size, "Size");
     assert!(
-        rows.iter().all(|row| row.left() < title.left() + 16.0),
-        "{rows:?} {title:?}"
+        row_top(&mut app, "Beta") < row_top(&mut app, "Alpha"),
+        "the smaller base comes first"
     );
-    let target = rows[1].center();
+    click_header(&mut app, &ctx, size, "Size");
+    assert!(row_top(&mut app, "Alpha") < row_top(&mut app, "Beta"));
+    let target = texts(&render(&mut app, &ctx, size))
+        .iter()
+        .find(|(text, _)| text.starts_with("Beta"))
+        .unwrap()
+        .1
+        .center();
     let click = |pressed| egui::Event::PointerButton {
         pos: target,
         button: egui::PointerButton::Primary,
@@ -181,85 +222,25 @@ fn base_rows_are_left_aligned_and_a_click_only_selects() {
     // Selecting a base starts nothing: no dialog, no command.
     assert!(app.submitted.is_empty());
     assert!(app.confirm.is_none());
+    click_label(&mut app, &ctx, size, "New VM from this base…");
+    assert!(app.create_open, "the selected base's action opens New VM");
 }
 
 #[test]
-fn section_headers_share_a_layout_and_the_add_control_lights_on_hover() {
-    fn lit(output: &egui::FullOutput, point: egui::Pos2) -> bool {
-        fn find(shape: &egui::Shape, point: egui::Pos2) -> bool {
-            match shape {
-                egui::Shape::Rect(rect) => {
-                    rect.fill == theme::primary() && rect.rect.contains(point)
-                }
-                egui::Shape::Vec(shapes) => shapes.iter().any(|shape| find(shape, point)),
-                _ => false,
-            }
-        }
-        output.shapes.iter().any(|shape| find(&shape.shape, point))
-    }
+fn the_base_images_page_adds_a_base_by_import_download_or_build() {
     let ctx = egui::Context::default();
     theme::install(&ctx);
     let size = egui::vec2(1280.0, 820.0);
-    let mut app = app();
-    app.snapshot.bases = vec![test_base("first", true)];
-    for _ in 0..3 {
-        let _ = render(&mut app, &ctx, size);
+    type Opened = fn(&MonitorApp) -> bool;
+    let buttons: [(&str, Opened); 3] = [
+        ("Import base…", |app| app.import_open),
+        ("Build base…", |app| app.build_open),
+        ("Download base…", |app| app.download_open),
+    ];
+    for (label, opened) in buttons {
+        let mut app = app();
+        open_bases_page(&mut app);
+        click_label(&mut app, &ctx, size, label);
+        assert!(opened(&app), "{label}");
     }
-    let output = render(&mut app, &ctx, size);
-    let shown = texts(&output);
-    let header = |title: &str| {
-        let title = shown
-            .iter()
-            .find(|(text, _)| text == title)
-            .unwrap_or_else(|| panic!("missing {title}"))
-            .1;
-        let add = shown
-            .iter()
-            .find(|(text, rect)| {
-                text == egui_phosphor::regular::PLUS
-                    && rect.center().y > title.top()
-                    && rect.center().y < title.bottom()
-            })
-            .unwrap_or_else(|| panic!("missing + beside {title:?}"))
-            .1;
-        (title, add)
-    };
-    let (vm_title, vm_add) = header("Virtual machines");
-    let (base_title, base_add) = header("Base images");
-    // Glyph side bearings differ by about a pixel between the two titles.
-    assert!(
-        (vm_title.left() - base_title.left()).abs() < 2.0,
-        "{vm_title:?} {base_title:?}"
-    );
-    assert!((vm_add.center().x - base_add.center().x).abs() < 0.5);
-    assert!((vm_add.height() - base_add.height()).abs() < 0.5);
-    assert!(!lit(&output, base_add.center()));
-
-    let target = base_add.center();
-    let frame = |app: &mut MonitorApp, events| {
-        ctx.run(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
-                events,
-                ..Default::default()
-            },
-            |ctx| app.draw(ctx),
-        )
-    };
-    let _ = frame(&mut app, vec![egui::Event::PointerMoved(target)]);
-    let hovered = frame(&mut app, vec![]);
-    assert!(lit(&hovered, target), "hovered + must light up");
-    let click = |pressed| egui::Event::PointerButton {
-        pos: target,
-        button: egui::PointerButton::Primary,
-        pressed,
-        modifiers: egui::Modifiers::default(),
-    };
-    let _ = frame(&mut app, vec![click(true)]);
-    let _ = frame(&mut app, vec![click(false)]);
-    let opened = frame(&mut app, vec![]);
-    assert!(texts(&opened)
-        .iter()
-        .any(|(text, _)| text == "Import base…"));
-    assert!(lit(&opened, target), "+ stays lit while its menu is open");
 }

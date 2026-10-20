@@ -46,7 +46,7 @@ fn startup_reloads_local_selection_without_opening_the_manager() {
             assert!(Instant::now() < deadline, "{}", app.rules_summary);
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert!(!app.rules_open);
+        assert!(app.library_requests.is_empty());
         assert!(!app.rules_summary.contains("Disabled fixture"));
         assert!(app.rules_generation > 0);
         let selection = ruleset::snapshot(&root, "yara", &ruleset::ToolConfig::default()).unwrap();
@@ -93,6 +93,6 @@ fn unreadable_registry_is_visible_and_not_retried_each_frame() {
         app.rules_generation, generation,
         "do not start an unbounded retry loop"
     );
-    assert!(!app.rules_open);
+    assert!(app.library_requests.is_empty());
     std::fs::remove_dir_all(root).unwrap();
 }

@@ -107,7 +107,7 @@ impl View {
         });
     }
 
-    /// The collapsible list of installed packs; the Rule manager button sits
+    /// The collapsible list of installed packs; the Detection rules button sits
     /// on the same row as its title.
     pub(super) fn rule_sets(&mut self, ui: &mut egui::Ui, index: usize) {
         let loading = self.registry_rx.is_some() && self.sets[index].is_empty();
@@ -142,7 +142,7 @@ impl View {
                     .on_hover_text("Show or hide the installed rule sets")
                     .clicked();
             },
-            |ui| manager = ui.button("Rule manager…").clicked(),
+            |ui| manager = ui.button("Detection rules").clicked(),
         );
         self.open_manager |= manager;
         if toggle {
@@ -722,7 +722,7 @@ mod tests {
             .any(|(text, _)| text.contains("objects evaluated")));
         // The rule-set title and the manager button share a row.
         let sets = rect_of(&texts, "Rule sets");
-        let manager = rect_of(&texts, "Rule manager");
+        let manager = rect_of(&texts, "Detection rules");
         assert!((sets.center().y - manager.center().y).abs() < 6.0);
     }
 

@@ -95,45 +95,8 @@ impl MonitorApp {
             }
             self.download_open = open;
         }
-        if self.tools_open {
-            let mut open = true;
-            if let Some(command) = crate::tools_window::show(
-                ctx,
-                &mut open,
-                &self.snapshot.analysis_tools,
-                self.snapshot.tool_install.as_ref(),
-                !self.closing,
-            ) {
-                self.send(command);
-            }
-            self.tools_open = open;
-        }
         if self.rules_summary.is_empty() {
             self.rules_summary = "Loading rules…".into();
-        }
-        if self.rules_open {
-            let mut open = true;
-            let tools = antinomie_monitor_core::ruleset::ToolConfig::from_sigma_setting(
-                &self.triage.detection_settings().effective_sigma_python(),
-            );
-            match self.rules_ui.show(
-                ctx,
-                &mut open,
-                &self.options.data_dir,
-                &mut self.settings.outbound_catalog,
-                &tools,
-                self.triage.detection_settings(),
-            ) {
-                Some(crate::rules_window::RulesAction::AppDependencies) => {
-                    self.dependencies.open = true;
-                }
-                Some(crate::rules_window::RulesAction::AnalysisTools) => self.tools_open = true,
-                None => {}
-            }
-            // The triage view owns the live detection settings; keep the saved copy in step.
-            self.settings.triage_detection = self.triage.detection_settings().clone();
-            self.settings.triage_detection.rules_root.clear();
-            self.rules_open = open;
         }
         if self.samples.open {
             let vm = self.selected_vm().cloned();
@@ -504,8 +467,6 @@ impl MonitorApp {
             Dialog::Settings => self.settings_open,
             Dialog::Import => self.import_open,
             Dialog::Download => self.download_open,
-            Dialog::Tools => self.tools_open,
-            Dialog::Rules => self.rules_open,
             Dialog::Samples => self.samples.open,
             Dialog::Snapshots => self.vm_snapshots.open,
             Dialog::SnapshotDecision => self.vm_snapshots.decision_open(),
@@ -539,8 +500,6 @@ impl MonitorApp {
             Dialog::Settings => self.settings_open = false,
             Dialog::Import => self.import_open = false,
             Dialog::Download => self.download_open = false,
-            Dialog::Tools => self.tools_open = false,
-            Dialog::Rules => self.rules_open = false,
             Dialog::Samples => self.samples.open = false,
             Dialog::Snapshots | Dialog::SnapshotDecision => self.vm_snapshots.close(),
             Dialog::Dependencies => self.dependencies.open = false,

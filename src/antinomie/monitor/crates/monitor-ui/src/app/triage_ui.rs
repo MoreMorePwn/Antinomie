@@ -67,7 +67,7 @@ impl MonitorApp {
                 &self.options.data_dir,
             ));
         if self.triage.take_rule_manager() {
-            self.rules_open = true;
+            self.open_library(crate::workspace::LibraryPage::Rules);
         }
         let jump = self.triage.show(ui, input);
         self.settings.triage_detection = self.triage.detection_settings().clone();

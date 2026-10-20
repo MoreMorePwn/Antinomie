@@ -166,7 +166,9 @@ impl MonitorApp {
             Some(crate::analysis::ReportAction::Cancel(analysis_id)) => {
                 self.send(Command::CancelAnalysis { analysis_id })
             }
-            Some(crate::analysis::ReportAction::OpenAnalysisTools) => self.tools_open = true,
+            Some(crate::analysis::ReportAction::OpenAnalysisTools) => {
+                self.open_library(crate::workspace::LibraryPage::Tools)
+            }
             Some(crate::analysis::ReportAction::OpenSection { report_id, kind }) => {
                 if let Err(reason) = self.open_analysis_section(report_id, kind) {
                     self.report_error(reason);

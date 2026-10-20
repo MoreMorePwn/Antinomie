@@ -74,6 +74,9 @@ fn getting_started_keeps_every_step_on_one_row_in_a_locked_window() {
             .map(|step| {
                 shown
                     .iter()
+                    // The window is drawn after the sidebar, whose Library
+                    // rows can share a step's name.
+                    .rev()
                     .find(|(text, _)| text == step.title())
                     .unwrap_or_else(|| panic!("step {} missing at {font}: {shown:?}", step.title()))
                     .1

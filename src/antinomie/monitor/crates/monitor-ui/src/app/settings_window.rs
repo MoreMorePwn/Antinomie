@@ -326,13 +326,13 @@ impl MonitorApp {
                 );
                 hint(
                     ui,
-                    "Only the Rule manager Check and Download buttons use the network. Scans stay offline.",
+                    "Only the Detection rules Check and Download buttons use the network. Scans stay offline.",
                 );
             });
             ui.end_row();
             ui.label("Rule packs");
             if ui.button("Open Rules…").clicked() {
-                self.rules_open = true;
+                self.open_library(crate::workspace::LibraryPage::Rules);
             }
             ui.end_row();
         });
@@ -388,7 +388,7 @@ impl MonitorApp {
         }
         ui.add_space(8.0);
         if ui.button("Manage tools…").clicked() {
-            self.tools_open = true;
+            self.open_library(crate::workspace::LibraryPage::Tools);
         }
     }
 

@@ -149,6 +149,30 @@ pub fn cell_rich(ui: &mut egui::Ui, kind: Cell, text: RichText) -> egui::Respons
     }
 }
 
+/// `cell` for a table whose rows are clickable: the text is not selectable,
+/// so a click on it reaches the row.
+pub fn cell_click(ui: &mut egui::Ui, kind: Cell, text: &str) -> egui::Response {
+    let text = RichText::new(text);
+    match kind {
+        Cell::Text => ui.add(egui::Label::new(text).selectable(false).truncate()),
+        Cell::Mono => ui.add(
+            egui::Label::new(text.monospace())
+                .selectable(false)
+                .truncate(),
+        ),
+        Cell::Number => {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.add(
+                    egui::Label::new(text.monospace())
+                        .selectable(false)
+                        .truncate(),
+                )
+            })
+            .inner
+        }
+    }
+}
+
 /// The 3 px bar at a row's left edge; call in the row's first cell.
 pub fn row_mark(ui: &mut egui::Ui, mark: Mark) {
     let color = match mark {

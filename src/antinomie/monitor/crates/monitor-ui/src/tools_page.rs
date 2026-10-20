@@ -1,4 +1,4 @@
-//! Tools > Analysis tools: the optional static-analysis tools, whether the
+//! Library > Analysis tools: the optional static-analysis tools, whether the
 //! system has them, and installing Antinomie's own copy when it does not.
 use crate::theme;
 use antinomie_monitor_core::{
@@ -7,30 +7,23 @@ use antinomie_monitor_core::{
 };
 use eframe::egui::{self, RichText};
 
-/// The window's egui ID (Escape closes it).
-pub(crate) const WINDOW_ID: &str = "analysis_tools";
-
 fn size(bytes: u64) -> String {
     crate::values::file_size(bytes)
 }
 
-/// Draw the window; returns a command to send.
+/// Draw the page; returns a command to send.
 pub(crate) fn show(
-    ctx: &egui::Context,
-    open: &mut bool,
+    ui: &mut egui::Ui,
     tools: &[ToolStatus],
     install: Option<&ToolInstall>,
     enabled: bool,
 ) -> Option<Command> {
     let mut command = None;
     let running = install.is_some_and(|install| !install.finished);
-    crate::widgets::window("Analysis tools")
-        .id(egui::Id::new(WINDOW_ID))
-        .open(open)
-        .collapsible(false)
-        .resizable(true)
-        .default_width(620.0)
-        .show(ctx, |ui| {
+    egui::ScrollArea::vertical()
+        .id_salt("analysis_tools")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
             ui.label(
                 "Static analysis uses these tools when they are installed on this system. \
                  When one is missing, Antinomie can download it from its upstream release \

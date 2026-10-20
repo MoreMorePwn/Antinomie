@@ -203,14 +203,14 @@ fn explorer_persists_root_and_old_preferences_remain_compatible() {
 }
 
 #[test]
-fn explorer_remains_below_bases_with_folded_lists_and_large_fonts() {
+fn explorer_remains_below_the_library_with_folded_lists_and_large_fonts() {
     for (size, font_size) in [
         (egui::vec2(1280.0, 900.0), 16.0),
         (egui::vec2(800.0, 600.0), 24.0),
     ] {
-        for bases_folded in [false, true] {
+        for library_folded in [false, true] {
             let mut app = app();
-            app.settings.bases_collapsed = bases_folded;
+            app.settings.library_collapsed = library_folded;
             app.snapshot.bases = (0..12)
                 .map(|index| test_base(&format!("base {index}"), true))
                 .collect();
@@ -228,7 +228,12 @@ fn explorer_remains_below_bases_with_folded_lists_and_large_fonts() {
                     .unwrap_or_else(|| panic!("missing {name} at {size:?}: {visible:?}"))
                     .1
             };
-            assert!(rect("Explorer").top() > rect("Base images").bottom());
+            let last = if library_folded {
+                "Library"
+            } else {
+                "Analysis tools"
+            };
+            assert!(rect("Explorer").top() > rect(last).bottom());
             assert!(rect("Choose folder…").bottom() < size.y);
             click_label(&mut app, &ctx, size, "Explorer");
             assert!(app.settings.explorer_collapsed);

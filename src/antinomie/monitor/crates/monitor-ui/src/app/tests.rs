@@ -20,6 +20,7 @@ mod large_runs;
 mod launch;
 mod launch_source;
 mod layout;
+mod library;
 mod memory_probe;
 mod network;
 mod pending;
@@ -78,8 +79,7 @@ pub(crate) fn app() -> MonitorApp {
         download_open: false,
         build_open: false,
         about_open: false,
-        tools_open: false,
-        rules_open: false,
+        library_requests: Vec::new(),
         rules_ui: crate::rules_window::Model::default(),
         rules_summary: String::new(),
         rules_generation: 0,

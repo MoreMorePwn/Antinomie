@@ -29,6 +29,27 @@ pub(crate) enum Panel {
     Details,
     Activity,
     Terminal(String),
+    /// A Library page: opened from the sidebar, a menu or a link, closed by
+    /// its tab; never restored with the saved arrangement.
+    Library(LibraryPage),
+}
+
+/// The pages of the sidebar's Library section.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum LibraryPage {
+    BaseImages,
+    Rules,
+    Tools,
+}
+
+impl LibraryPage {
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            Self::BaseImages => "Base images",
+            Self::Rules => "Detection rules",
+            Self::Tools => "Analysis tools",
+        }
+    }
 }
 
 impl Panel {
@@ -59,6 +80,7 @@ impl Panel {
             Self::Details => "Details",
             Self::Activity => "Activity",
             Self::Terminal(_) => "Terminal",
+            Self::Library(page) => page.title(),
         }
     }
 }
@@ -284,8 +306,10 @@ impl WorkspaceLayout {
         for index in 0..self.dock.surfaces_count() {
             if self.dock.is_surface_valid(SurfaceIndex(index)) {
                 self.dock[SurfaceIndex(index)].retain_tabs(|tab| {
-                    if matches!(tab, Panel::Terminal(_) | Panel::AnalysisSection { .. })
-                        || seen.contains(tab)
+                    if matches!(
+                        tab,
+                        Panel::Terminal(_) | Panel::AnalysisSection { .. } | Panel::Library(_)
+                    ) || seen.contains(tab)
                     {
                         false
                     } else {
@@ -321,6 +345,23 @@ impl WorkspaceLayout {
         }
     }
 
+    /// Show a Library page: its tab joins the main tabs (beside Summary, or
+    /// wherever the main tabs went) and takes the focus; an open one is only
+    /// focused.
+    fn open_library(&mut self, page: LibraryPage) {
+        let panel = Panel::Library(page);
+        if self.dock.find_tab(&panel).is_none() {
+            match self.dock.find_tab(&Panel::Summary) {
+                Some((surface, node, _)) => self.dock[surface][node].append_tab(panel.clone()),
+                None => self
+                    .dock
+                    .main_surface_mut()
+                    .push_to_first_leaf(panel.clone()),
+            }
+        }
+        self.focus(panel);
+    }
+
     pub(crate) fn focus(&mut self, panel: Panel) {
         if let Some((surface, node, tab)) = self.dock.find_tab(&panel) {
             self.dock.set_active_tab((surface, node, tab));
@@ -348,6 +389,9 @@ impl WorkspaceLayout {
             }
         }
         self.remove_empty_windows();
+        for page in app.take_library_pages() {
+            self.open_library(page);
+        }
         egui::CentralPanel::default()
             .frame(theme::frame(theme::bg()))
             .show(ctx, |ui| self.show_surface(app, ui, SurfaceIndex::main()));
@@ -759,7 +803,7 @@ impl WorkspaceLayout {
         for panel in panels {
             if let Panel::Terminal(id) = panel {
                 app.close_terminal_view(&id);
-            } else if matches!(panel, Panel::AnalysisSection { .. }) {
+            } else if matches!(panel, Panel::AnalysisSection { .. } | Panel::Library(_)) {
                 continue;
             } else {
                 self.return_home(panel);
@@ -796,7 +840,10 @@ impl TabViewer for Viewer<'_> {
         false
     }
     fn closeable(&mut self, tab: &mut Panel) -> bool {
-        matches!(tab, Panel::Terminal(_) | Panel::AnalysisSection { .. })
+        matches!(
+            tab,
+            Panel::Terminal(_) | Panel::AnalysisSection { .. } | Panel::Library(_)
+        )
     }
     fn on_close(&mut self, tab: &mut Panel) -> bool {
         if let Panel::Terminal(id) = tab {
