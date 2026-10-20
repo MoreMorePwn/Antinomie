@@ -110,6 +110,45 @@ pub(super) fn file_slots() -> impl Iterator<Item = usize> {
 }
 
 impl TriageView {
+    /// The visibility toggles of the filter bar. Hide stdio and Hide library
+    /// start on; Failed attempts starts off.
+    pub(super) fn file_toggles(&mut self, ui: &mut egui::Ui) {
+        use crate::widgets::toggle_chip;
+        let failed = self
+            .scan
+            .as_ref()
+            .map_or(0, |scan| scan.counts.failed_attempts);
+        let visibility = &mut self.scan_request.file_visibility;
+        let mut changed = false;
+        if toggle_chip(ui, "Hide stdio", visibility.hide_standard_io, None)
+            .on_hover_text("Hide stdin, stdout, stderr")
+            .clicked()
+        {
+            visibility.hide_standard_io = !visibility.hide_standard_io;
+            changed = true;
+        }
+        if toggle_chip(ui, "Hide library", visibility.hide_libraries, None)
+            .on_hover_text("Hide shared libraries and the loader cache")
+            .clicked()
+        {
+            visibility.hide_libraries = !visibility.hide_libraries;
+            changed = true;
+        }
+        if toggle_chip(ui, "Failed attempts", visibility.show_failed, Some(failed))
+            .on_hover_text("Calls the kernel refused, in the change tabs and Changed files. They do not count as changes. Opened and Read always list failed attempts with their result.")
+            .clicked()
+        {
+            visibility.show_failed = !visibility.show_failed;
+            changed = true;
+        }
+        if changed {
+            for index in file_slots() {
+                self.scan_request.offsets[index] = 0;
+            }
+            self.request_query_refresh();
+        }
+    }
+
     pub(super) fn files(&mut self, ui: &mut egui::Ui, input: &TriageInput<'_>) {
         self.file_tabs(ui);
         let tab = self.files;
@@ -118,7 +157,14 @@ impl TriageView {
             let (rows, omitted) = scan.file_rows(tab);
             (rows, rows as u64 + omitted)
         });
-        self.query_controls(ui, index, FILE_FIELDS, tab.example(), retained, total);
+        self.query_bar(
+            ui,
+            index,
+            FILE_FIELDS,
+            tab.example(),
+            (retained, total),
+            Bar::Files,
+        );
         let Some(scan) = &self.scan else {
             theme::loading_weak(ui, "Indexing this run’s files…");
             return;

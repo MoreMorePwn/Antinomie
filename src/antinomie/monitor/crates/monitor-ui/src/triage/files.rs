@@ -168,11 +168,7 @@ impl Change {
                 },
                 false,
             ),
-            cell(
-                file_category::location_text(&self.locations),
-                theme::text(),
-                false,
-            ),
+            file_category::location_cell(&self.locations),
             cell(format!("call {}", self.call), theme::text(), true),
         ];
         row[0].values = vec![
@@ -551,11 +547,7 @@ impl FileIndex {
                     true,
                 ),
                 cell(result_label(ret), theme::text(), false),
-                cell(
-                    file_category::location_text(&read_locations),
-                    theme::text(),
-                    false,
-                ),
+                file_category::location_cell(&read_locations),
                 cell(read_access.label(), theme::text(), false),
                 cell(format!("call {}", call.call_id), theme::text(), true),
             ];

@@ -170,6 +170,7 @@ pub(super) fn scan_archive_query(
         Ok(())
     })?;
     let cookies = resolve_cookies(&cookie_sets);
+    let mut suspicious = Suspicious::new();
     let mut counts = normalized::Counts {
         calls: scoped_count,
         ..Default::default()
@@ -245,6 +246,7 @@ pub(super) fn scan_archive_query(
             for mut finding in suspicious_rows_state(std::slice::from_ref(invocation), Some(&files))
             {
                 counts.findings += 1;
+                tally(&mut suspicious, &finding.values);
                 finding.values.push((
                     "process.exe",
                     process_image(&files, event)
@@ -522,6 +524,7 @@ pub(super) fn scan_archive_query(
         #[cfg(test)]
         coverage,
         process: finish_processes(nodes),
+        suspicious,
         findings,
         findings_omitted,
         opened,

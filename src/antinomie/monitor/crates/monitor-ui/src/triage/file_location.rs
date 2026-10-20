@@ -30,6 +30,11 @@ impl Location {
         }
     }
 
+    /// The classes a reader should look at first.
+    pub(super) fn flagged(self) -> bool {
+        matches!(self, Self::Persistence | Self::Credentials | Self::Hidden)
+    }
+
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Persistence => "Persistence",

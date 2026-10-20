@@ -620,6 +620,27 @@ pub(super) fn location_text(found: &[Location]) -> String {
     }
 }
 
+/// The Location cell: warn-coloured when the path is one a reader should look
+/// at first (hidden, persistence, credentials).
+pub(super) fn location_cell(found: &[Location]) -> Cell {
+    let color = if found.iter().any(|location| location.flagged()) {
+        theme::warn()
+    } else {
+        theme::text()
+    };
+    cell(location_text(found), color, false)
+}
+
+/// Whether a row's `file.location` values include a flagged class.
+pub(super) fn row_flagged(values: &[(&str, RowValue)]) -> bool {
+    values.iter().any(|(key, value)| match (*key, value) {
+        ("file.location", RowValue::List(tags)) => tags
+            .iter()
+            .any(|tag| matches!(tag.as_str(), "hidden" | "persistence" | "credentials")),
+        _ => false,
+    })
+}
+
 /// Values every file row carries for filters, besides its own fields.
 pub(super) fn cross_values(
     outcome: Outcome,
@@ -721,7 +742,7 @@ pub(super) fn category_row(
             },
             false,
         ),
-        cell(location_text(&found), theme::text(), false),
+        location_cell(&found),
         cell(access.label(), theme::text(), false),
         cell(format!("call {}", call.call_id), theme::text(), true),
     ];

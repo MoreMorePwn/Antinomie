@@ -124,6 +124,15 @@ impl MonitorApp {
                 self.focus_panel = Some(Panel::Disks);
             }
         }
+        if self.triage.take_open_packets() {
+            if let Err(error) = self.open_triage_packets() {
+                self.status = error.clone();
+                self.log("ERROR", error);
+            }
+        }
+        if let Some(filter) = self.triage.take_trace_scope() {
+            self.scope_trace(filter);
+        }
         if let Some(frame_number) = self.triage.take_packet_jump() {
             let capture = self.triage.take_packet_capture();
             if let Err(error) = self.jump_triage_packet_capture(frame_number, capture) {
@@ -138,11 +147,29 @@ impl MonitorApp {
         self.jump_triage_packet_capture(frame, None)
     }
 
+    /// Open Packets: the run's own capture, no frame chosen.
+    fn open_triage_packets(&mut self) -> Result<(), String> {
+        let path = self.triage_packet_path(None)?;
+        self.network_view.open(Some(path));
+        self.focus_panel = Some(Panel::Network);
+        Ok(())
+    }
+
     fn jump_triage_packet_capture(
         &mut self,
         frame: u64,
         capture: Option<PathBuf>,
     ) -> Result<(), String> {
+        let path = self.triage_packet_path(capture)?;
+        self.network_view.open(Some(path));
+        self.network_view.jump_to_evidence(frame)?;
+        self.focus_panel = Some(Panel::Network);
+        Ok(())
+    }
+
+    /// The capture a Triage packet request may open: the named one when this
+    /// run owns it, else the run's own.
+    fn triage_packet_path(&self, capture: Option<PathBuf>) -> Result<PathBuf, String> {
         let run = self
             .selected_run
             .as_deref()
@@ -175,10 +202,18 @@ impl MonitorApp {
                 .ok_or("This run has no packet capture for the selected evidence")?
                 .0
         };
-        self.network_view.open(Some(path));
-        self.network_view.jump_to_evidence(frame)?;
-        self.focus_panel = Some(Panel::Network);
-        Ok(())
+        Ok(path)
+    }
+
+    /// Show one process in Trace: the trace filter is set to `filter`.
+    fn scope_trace(&mut self, filter: String) {
+        self.selected_process = None;
+        self.archive_selected = true;
+        self.filter = filter;
+        self.applied_filter.clone_from(&self.filter);
+        self.reset_trace_selection();
+        self.request_page(0);
+        self.focus_trace();
     }
 
     pub(super) fn jump_triage_call(&mut self, key: trace::InvocationKey) {

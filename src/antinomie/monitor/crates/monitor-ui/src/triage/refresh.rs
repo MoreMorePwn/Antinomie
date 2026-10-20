@@ -5,6 +5,9 @@ use super::*;
 /// The answer of an index thread that found the recording as the last index saw it.
 pub(super) const UNCHANGED: &str = "unchanged";
 
+const HOST_TIME_NOTE: &str = "Times use the host timezone. ~ marks a guest event time estimated from a host receipt/start anchor, including transport latency.";
+const NETWORK_TIME_NOTE: &str = "Packet timestamps use QEMU's capture clock, displayed in the host timezone. They may differ from the host run clock; capture ownership determines which run is indexed.";
+
 /// Format of the file indexes built from a recording: which tabs exist and
 /// what their rows and counts mean. It is part of the source stamp, so an
 /// index made by an older format is never mistaken for current and is
@@ -116,6 +119,119 @@ impl TriageView {
                     Some(self.clock.now() + Duration::from_secs(self.refresh_seconds));
             }
         }
+    }
+
+    /// The Refresh, interval and status row of the sections that keep it.
+    pub(super) fn refresh_row(&mut self, ui: &mut egui::Ui, input: &TriageInput<'_>) {
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(input.archive.is_some(), egui::Button::new("Refresh"))
+                .on_disabled_hover_text("A whole-run index starts after the recording is saved")
+                .clicked()
+            {
+                self.refresh_now(input);
+            }
+            ui.label("Every");
+            self.interval_edit(ui);
+            if self.scan_rx.is_some() {
+                theme::spinner(ui);
+            }
+            ui.colored_label(theme::muted(), self.refresh_status(input));
+            ui.weak("Host time").on_hover_text(HOST_TIME_NOTE);
+        });
+    }
+
+    fn refresh_now(&mut self, input: &TriageInput<'_>) {
+        self.request_refresh();
+        self.ensure_scan(
+            input.archive,
+            input.pcap,
+            input.pcap_open,
+            input.vm_id,
+            input.boot_id,
+            input.run_id,
+        );
+    }
+
+    fn interval_edit(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .add(
+                egui::DragValue::new(&mut self.refresh_seconds)
+                    .range(1..=300)
+                    .suffix(" s"),
+            )
+            .changed()
+        {
+            self.refresh_seconds = self.refresh_seconds.clamp(1, 300);
+            self.next_refresh = Some(self.clock.now() + Duration::from_secs(self.refresh_seconds));
+        }
+    }
+
+    /// The one status at the right of the tab bar, for the sections that have
+    /// no refresh row: a menu with Refresh now and the interval. The text
+    /// reads `Refreshed 12 s ago · every 5 s`. Returns whether it fits in
+    /// `room`, so the caller can place it on its own line instead.
+    pub(super) fn refresh_trail(
+        &mut self,
+        ui: &mut egui::Ui,
+        input: &TriageInput<'_>,
+        room: Option<f32>,
+    ) -> bool {
+        let mut text = format!(
+            "{} · every {} s",
+            self.refresh_status(input),
+            self.refresh_seconds
+        );
+        if text.chars().count() > 64 {
+            text = text.chars().take(63).collect::<String>() + "…";
+        }
+        let rich = RichText::new(text).small().color(theme::muted());
+        if let Some(room) = room {
+            let width = ui.fonts(|fonts| {
+                fonts
+                    .layout_no_wrap(
+                        rich.text().to_owned(),
+                        egui::FontId::proportional(11.0),
+                        theme::muted(),
+                    )
+                    .size()
+                    .x
+            });
+            // The label, the menu button's padding and the spinner.
+            if width + 56.0 > room {
+                return false;
+            }
+        }
+        ui.scope(|ui| {
+            let widgets = &mut ui.visuals_mut().widgets;
+            for style in [&mut widgets.inactive, &mut widgets.noninteractive] {
+                style.weak_bg_fill = egui::Color32::TRANSPARENT;
+                style.bg_stroke = egui::Stroke::NONE;
+            }
+            ui.menu_button(rich, |ui| {
+                if ui
+                    .add_enabled(input.archive.is_some(), egui::Button::new("Refresh now"))
+                    .on_disabled_hover_text("A whole-run index starts after the recording is saved")
+                    .clicked()
+                {
+                    self.refresh_now(input);
+                    ui.close_menu();
+                }
+                ui.horizontal(|ui| {
+                    ui.label("Every");
+                    self.interval_edit(ui);
+                });
+                ui.weak(if self.section == Section::Network {
+                    NETWORK_TIME_NOTE
+                } else {
+                    HOST_TIME_NOTE
+                });
+            });
+            if self.scan_rx.is_some() {
+                theme::spinner(ui);
+            }
+        });
+        true
     }
 
     pub(super) fn refresh_status(&self, input: &TriageInput<'_>) -> String {

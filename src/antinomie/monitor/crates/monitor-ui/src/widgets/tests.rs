@@ -217,3 +217,32 @@ fn chips_and_tones_use_the_active_theme() {
         assert_eq!(Tone::Live.fg(), theme.palette().live);
     }
 }
+
+#[test]
+fn toggle_chips_show_their_state_and_count_and_segmented_shows_badges() {
+    let ctx = context();
+    let mut selected = 0;
+    let mut out = egui::FullOutput::default();
+    for n in 0..3 {
+        out = run(&ctx, vec![], SIZE, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                toggle_chip(ui, "Hide stdio", true, None);
+                toggle_chip(ui, "Failed attempts", false, Some(2));
+                segmented(
+                    ui,
+                    [
+                        (0, TabItem::new("Tree").badge("5", Tone::Neutral)),
+                        (1, TabItem::new("Suspicious").badge("3", Tone::Warn)),
+                    ],
+                    &mut selected,
+                );
+            });
+        });
+        let _ = n;
+    }
+    let shown = text_rects(&out);
+    assert!(shown.iter().any(|(text, _)| text.ends_with("Hide stdio")));
+    assert!(shown.iter().any(|(text, _)| text == "Failed attempts 2"));
+    assert!(shown.iter().any(|(text, _)| text == "Tree5"));
+    assert!(shown.iter().any(|(text, _)| text == "Suspicious3"));
+}

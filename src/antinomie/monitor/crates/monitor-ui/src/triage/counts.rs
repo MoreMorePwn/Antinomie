@@ -55,6 +55,7 @@ pub(super) fn tab(
 
 #[derive(Clone, Copy)]
 enum Metric {
+    Processes,
     Findings,
     Opened,
     Reads,
@@ -77,6 +78,7 @@ impl TriageView {
             return Count::Unavailable;
         };
         let count = match metric {
+            Metric::Processes => scan.process.len() as u64,
             Metric::Findings => scan.counts.findings,
             Metric::Opened => scan.counts.opened,
             Metric::Reads => scan.counts.reads,
@@ -99,28 +101,29 @@ impl TriageView {
         Count::Ready(count)
     }
 
+    /// Process tree and Suspicious activity, one segmented control.
     pub(super) fn process_tabs(&mut self, ui: &mut egui::Ui) {
-        let count = self.section_count(Metric::Findings);
-        widgets::tab_row(ui, |ui| {
-            if widgets::tab(
-                ui,
-                self.process == ProcessTab::Tree,
-                &TabItem::new("Process tree"),
-            )
-            .clicked()
-            {
-                self.process = ProcessTab::Tree;
-            }
-            if tab(
-                ui,
-                self.process == ProcessTab::Suspicious,
-                "Suspicious activity",
-                count,
-                true,
-            ) {
-                self.process = ProcessTab::Suspicious;
-            }
-        });
+        let processes = self.section_count(Metric::Processes);
+        let findings = self.section_count(Metric::Findings);
+        let warn = match findings {
+            Count::Ready(count) if count > 0 => Tone::Warn,
+            _ => Tone::Neutral,
+        };
+        widgets::segmented(
+            ui,
+            [
+                (
+                    ProcessTab::Tree,
+                    TabItem::new("Process tree").badge(processes.label(), processes.tone(false)),
+                ),
+                (
+                    ProcessTab::Suspicious,
+                    TabItem::new("Suspicious activity").badge(findings.label(), warn),
+                ),
+            ],
+            &mut self.process,
+        );
+        ui.add_space(6.0);
     }
 
     pub(super) fn file_tabs(&mut self, ui: &mut egui::Ui) {

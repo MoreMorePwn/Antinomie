@@ -71,3 +71,30 @@ pub fn chip(ui: &mut egui::Ui, text: impl Into<String>, tone: Tone) -> egui::Res
         })
         .response
 }
+
+/// A filter-bar toggle: a pill that is on (check mark) or off (dimmed, struck
+/// through), with an optional muted count. Returns the click; the caller flips
+/// the flag.
+pub fn toggle_chip(ui: &mut egui::Ui, label: &str, on: bool, count: Option<u64>) -> egui::Response {
+    let palette = theme::palette();
+    let color = if on { palette.text } else { palette.muted };
+    let mut text = if on {
+        format!("{} {label}", egui_phosphor::regular::CHECK)
+    } else {
+        label.to_owned()
+    };
+    if let Some(count) = count {
+        text.push_str(&format!(" {count}"));
+    }
+    let mut rich = RichText::new(text).small().color(color);
+    if !on {
+        rich = rich.strikethrough();
+    }
+    ui.add(
+        egui::Button::new(rich)
+            .fill(palette.raised)
+            .stroke(egui::Stroke::new(1.0_f32, palette.line))
+            .corner_radius(10)
+            .min_size(egui::vec2(0.0, 20.0)),
+    )
+}
