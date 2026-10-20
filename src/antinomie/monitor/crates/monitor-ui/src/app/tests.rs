@@ -111,6 +111,7 @@ pub(crate) fn app() -> MonitorApp {
         capture_history: Vec::new(),
         capture_tab: false,
         process_picker: captures::ProcessPicker::default(),
+        debugger: super::debugger::DebuggerPanel::default(),
         pending_observer: None,
         pending_core: None,
         pending_network: None,

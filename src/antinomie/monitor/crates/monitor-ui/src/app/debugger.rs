@@ -1,8 +1,28 @@
 // SPDX-License-Identifier: MIT
 //! Attach the debugger to a running guest process and show how to reach it.
 //! The engine is in the guest kernel and the RSP server on the host; this
-//! window only starts and ends the session and offers the connection commands.
+//! window starts and ends the session, shows how to reach it from gdb, and is
+//! the minimal in-app debugger: run control, threads, breakpoints, disassembly
+//! around the instruction pointer, registers, stack and memory.
 use super::*;
+use antinomie_monitor_core::{
+    debug::view::{DebugAction, DebugView},
+    DebugSessionInfo,
+};
+
+mod code;
+mod data;
+mod header;
+mod lists;
+mod state;
+
+pub(crate) use state::DebuggerPanel;
+
+/// Something the panel asks of the app once the window has been drawn.
+pub(super) enum PanelAction {
+    Detach { kill: bool },
+    Debug(DebugAction),
+}
 
 impl MonitorApp {
     /// Why the debugger cannot be attached now, if it cannot.
@@ -35,73 +55,72 @@ impl MonitorApp {
         self.send(Command::ListProcesses { after_pid: 0 });
     }
 
-    /// The attached session: its endpoints, ready to copy, and the detach controls.
+    /// The attached session: the debugger panel and its connection details.
     pub(super) fn debugger_window(&mut self, ctx: &egui::Context) {
         let Some(info) = self.snapshot.debug.clone() else {
+            self.debugger.track_session(None);
             return;
         };
-        let mut action = None;
+        self.debugger.track_session(Some(u64::from(info.tcp_port)));
+        let view = self.debug_view();
+        if let Some(view) = &view {
+            self.debugger.prune(view);
+        }
+        let mut actions = Vec::new();
+        let panel = &mut self.debugger;
         egui::Window::new(format!("Debugger / PID {}", info.target.tgid))
             .id(egui::Id::new("debugger_session"))
             .collapsible(true)
             .resizable(true)
-            .default_width(560.0)
+            .default_size([1450.0, 780.0])
             .show(ctx, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("State").color(theme::muted()));
-                    ui.label(&info.target_state);
-                    ui.label(RichText::new("Client").color(theme::muted()));
-                    ui.label(if info.client_connected {
-                        "connected"
-                    } else {
-                        "waiting"
-                    });
-                    ui.label(RichText::new("Architecture").color(theme::muted()));
-                    ui.label(&info.architecture);
-                });
-                if let Some(ended) = &info.ended {
-                    crate::activity::warning(ui, format!("Session ended: {ended}"));
-                }
-                ui.add_space(4.0);
-                ui.add(
-                    egui::Label::new(
-                        "The process keeps running until a debugger connects, then it stops. \
-                         A debugger that disconnects leaves it running. Connections are local \
-                         to this computer.",
-                    )
-                    .wrap(),
-                );
-                ui.add_space(4.0);
-                for (label, command) in [
-                    ("gdb (TCP, 127.0.0.1)", &info.gdb_command),
-                    ("gdb (Unix socket, needs socat)", &info.gdb_unix_command),
-                ] {
-                    ui.label(RichText::new(label).color(theme::muted()));
-                    ui.horizontal_wrapped(|ui| {
-                        ui.add(
-                            egui::Label::new(RichText::new(command).monospace()).selectable(true),
-                        );
-                        if icon(ui, egui_phosphor::regular::COPY, "Copy command", true) {
-                            ui.ctx().copy_text(command.clone());
-                        }
-                    });
-                }
-                ui.add_space(4.0);
-                ui.horizontal_wrapped(|ui| {
-                    if ui.button("Detach").clicked() {
-                        action = Some(false);
-                    }
-                    if ui
-                        .button("Detach and kill process")
-                        .on_hover_text("Ends the process with SIGKILL")
-                        .clicked()
-                    {
-                        action = Some(true);
-                    }
-                });
+                show(ui, panel, &info, view.as_deref(), &mut actions);
             });
-        if let Some(kill) = action {
-            self.send(Command::DebugDetach { kill });
+        for action in actions {
+            match action {
+                PanelAction::Detach { kill } => self.send(Command::DebugDetach { kill }),
+                PanelAction::Debug(action) => {
+                    if let Some(view) = &view {
+                        self.debug_action(view, action);
+                    }
+                }
+            }
         }
     }
+}
+
+/// The whole panel: header, then three columns (threads and breakpoints,
+/// disassembly, registers and memory).
+fn show(
+    ui: &mut egui::Ui,
+    panel: &mut DebuggerPanel,
+    info: &DebugSessionInfo,
+    view: Option<&DebugView>,
+    actions: &mut Vec<PanelAction>,
+) {
+    header::show(ui, panel, info, view, actions);
+    if let Some(ended) = &info.ended {
+        crate::activity::warning(ui, format!("Session ended: {ended}"));
+    }
+    let Some(view) = view else {
+        theme::loading_weak(ui, "Connecting to the debug engine…");
+        return;
+    };
+    if let Some(notice) = &view.notice {
+        crate::activity::warning(ui, notice);
+    }
+    if let Some(problem) = panel.input_error.clone() {
+        crate::activity::warning(ui, problem);
+    }
+    ui.separator();
+    use egui_extras::{Size, StripBuilder};
+    StripBuilder::new(ui)
+        .size(Size::relative(0.16).at_least(260.0))
+        .size(Size::remainder().at_least(380.0))
+        .size(Size::relative(0.5).at_least(560.0))
+        .horizontal(|mut strip| {
+            strip.cell(|ui| lists::show(ui, panel, view, actions));
+            strip.cell(|ui| code::show(ui, panel, view, actions));
+            strip.cell(|ui| data::show(ui, panel, view, actions));
+        });
 }

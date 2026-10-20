@@ -344,15 +344,9 @@ impl CoreView {
             .show_rows(ui, row_height, row_count, |ui, range| {
                 for row in range {
                     let address = mapping.start + self.window_offset + row as u64 * 16;
-                    let mut line = format!("{address:016x}  ");
-                    let mut ascii = String::new();
-                    for column in 0..16 {
-                        let Some(at) = address.checked_add(column) else {
-                            break;
-                        };
+                    let line = crate::hex_view::row_text(address, |at| {
                         if at >= mapping.end() {
-                            line.push_str("   ");
-                            continue;
+                            return crate::hex_view::Cell::Outside;
                         }
                         let value = self
                             .page
@@ -360,29 +354,17 @@ impl CoreView {
                             .filter(|(base, data)| at >= *base && at - *base < data.len() as u64)
                             .map(|(base, data)| data[(at - *base) as usize]);
                         match value {
-                            Some(Some(byte)) => {
-                                line.push_str(&format!("{byte:02x} "));
-                                ascii.push(if byte.is_ascii_graphic() || byte == b' ' {
-                                    char::from(byte)
-                                } else {
-                                    '.'
-                                });
-                            }
-                            Some(None) => {
-                                line.push_str("?? ");
-                                ascii.push('?');
-                            }
+                            Some(Some(byte)) => crate::hex_view::Cell::Byte(byte),
+                            Some(None) => crate::hex_view::Cell::Unavailable,
                             None => {
-                                line.push_str("·· ");
-                                ascii.push(' ');
                                 if requested_page.is_none() {
                                     requested_page = Some(at / PAGE_SIZE as u64 * PAGE_SIZE as u64);
                                 }
+                                crate::hex_view::Cell::Loading
                             }
                         }
-                    }
-                    line.push_str(&format!(" {ascii}"));
-                    ui.add(egui::Label::new(RichText::new(line).monospace()).extend());
+                    });
+                    crate::hex_view::paint_row(ui, line);
                 }
             });
         if let Some(address) = requested_page {

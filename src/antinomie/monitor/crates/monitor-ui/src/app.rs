@@ -344,6 +344,8 @@ pub struct MonitorApp {
     capture_history: Vec<CaptureSummary>,
     capture_tab: bool,
     process_picker: captures::ProcessPicker,
+    /// The in-app debugger panel's own state (inputs, requests in flight).
+    debugger: debugger::DebuggerPanel,
     pending_observer: Option<u64>,
     pending_core: Option<u64>,
     /// A network capture start or stop request in flight.
@@ -523,6 +525,7 @@ impl MonitorApp {
             capture_history: Vec::new(),
             capture_tab: false,
             process_picker: captures::ProcessPicker::default(),
+            debugger: debugger::DebuggerPanel::default(),
             pending_observer: None,
             pending_core: None,
             pending_network: None,

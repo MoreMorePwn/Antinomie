@@ -50,6 +50,8 @@ impl MonitorApp {
             Command::DebugAttach { .. } | Command::DebugDetach { .. }
         );
         let sample = matches!(&command, Command::UploadSample { .. });
+        // Debugger panel clicks are frequent and answered through the view.
+        let panel_request = matches!(&command, Command::DebugUi(_));
         let network = matches!(
             &command,
             Command::StartNetworkCapture | Command::StopNetworkCapture
@@ -154,7 +156,9 @@ impl MonitorApp {
                     if sample {
                         self.samples.sent(id);
                     }
-                    self.status = "Request queued".into();
+                    if !panel_request {
+                        self.status = "Request queued".into();
+                    }
                 }
                 Err(error) => {
                     self.status = error.clone();
@@ -319,6 +323,7 @@ impl MonitorApp {
                     if self.pending_kill == Some(id) {
                         self.pending_kill = None;
                     }
+                    self.debugger.command_result(id, success);
                     if self.consume_stale_command_id(id) {
                         continue;
                     }
