@@ -14,6 +14,7 @@ mod kernel_backend;
 mod regs;
 mod rsp_server;
 mod rsp_target;
+pub mod signals;
 mod target;
 #[cfg(test)]
 mod tests;
@@ -29,3 +30,4 @@ pub use target::{
     RegsetInfo, ResumeAction, StopEvent, StopKind, TargetState, ThreadInfo,
 };
 pub use ui_control::PanelHandle;
+pub use view::{BreakpointKind, WatchAccess};

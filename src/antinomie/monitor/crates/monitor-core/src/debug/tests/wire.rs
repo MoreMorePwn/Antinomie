@@ -192,7 +192,7 @@ fn attach_and_cont_replies() {
 
 #[test]
 fn control_requests_layout() {
-    let cont = cont_request(7, Some(95), 4);
+    let cont = cont_request(7, Some(95), 4, None);
     assert_eq!(cont.len(), 40);
     assert_eq!(
         u32::from_le_bytes(cont[4..8].try_into().unwrap()),
@@ -202,8 +202,19 @@ fn control_requests_layout() {
     assert_eq!(u64::from_le_bytes(cont[16..24].try_into().unwrap()), 95);
     assert_eq!(cont[24..32], [0; 8]);
     assert_eq!(u64::from_le_bytes(cont[32..40].try_into().unwrap()), 4);
-    let plain = cont_request(7, None, 4);
+    let plain = cont_request(7, None, 4, None);
     assert_eq!(u32::from_le_bytes(plain[4..8].try_into().unwrap()), 0);
+    // A signal for thread 95: number at 24, thread at 28.
+    let signalled = cont_request(7, None, 4, Some((95, 11)));
+    assert_eq!(
+        u32::from_le_bytes(signalled[24..28].try_into().unwrap()),
+        11
+    );
+    assert_eq!(
+        u32::from_le_bytes(signalled[28..32].try_into().unwrap()),
+        95
+    );
+    assert_eq!(u32::from_le_bytes(signalled[20..24].try_into().unwrap()), 0);
     assert_eq!(detach_request(7, true).len(), 16);
     assert_eq!(
         u32::from_le_bytes(detach_request(7, true)[4..8].try_into().unwrap()),
@@ -253,6 +264,13 @@ fn status_reply_is_validated() {
     let mut bad = reply.clone();
     bad[90] = 1;
     assert!(parse_status(&bad).is_err(), "reserved bytes set");
+    let mut signal = reply.clone();
+    signal[32..36].copy_from_slice(&EVENT_SIGNAL.to_le_bytes());
+    signal[72..76].copy_from_slice(&11u32.to_le_bytes());
+    assert!(matches!(
+        parse_status(&signal).unwrap().stop_event().unwrap().kind,
+        crate::debug::StopKind::Signal { signal: 11 }
+    ));
     let mut exited = reply;
     exited[32..36].copy_from_slice(&EVENT_EXIT.to_le_bytes());
     assert!(parse_status(&exited).unwrap().stop_event().is_none());
@@ -352,4 +370,64 @@ fn register_and_memory_requests_round_trip() {
     written[0..4].copy_from_slice(&3u32.to_le_bytes());
     assert!(parse_mem_write(&written, 3).is_ok());
     assert!(parse_mem_write(&written, 4).is_err());
+}
+
+#[test]
+fn several_register_sets_in_one_reply() {
+    let request = regs_read_many_request(7, 95, 0b11, 4);
+    assert_eq!(request.len(), 32);
+    assert_eq!(
+        u32::from_le_bytes(request[4..8].try_into().unwrap()),
+        REGS_ALL
+    );
+    assert_eq!(u32::from_le_bytes(request[16..20].try_into().unwrap()), 95);
+    assert_eq!(
+        u32::from_le_bytes(request[20..24].try_into().unwrap()),
+        0b11
+    );
+    let part = |nt: u32, fill: u8, length: usize| {
+        let mut part = Vec::new();
+        part.extend(nt.to_le_bytes());
+        part.extend((length as u32).to_le_bytes());
+        part.extend([0u8; 8]);
+        part.extend(vec![fill; length]);
+        part
+    };
+    let mut reply = Vec::new();
+    reply.extend(2u32.to_le_bytes());
+    reply.extend([0u8; 12]);
+    reply.extend(part(1, 0xaa, 216));
+    reply.extend(part(2, 0xbb, 512));
+    let blobs = parse_regs_many(&reply, &[1, 2]).unwrap();
+    assert_eq!(blobs.len(), 2);
+    assert_eq!((blobs[0].nt_type, blobs[0].data.len()), (1, 216));
+    assert_eq!((blobs[1].nt_type, blobs[1].data[0]), (2, 0xbb));
+    // Wrong order, wrong count, a short or trailing byte: all refused.
+    assert!(parse_regs_many(&reply, &[2, 1]).is_err());
+    assert!(parse_regs_many(&reply, &[1]).is_err());
+    assert!(parse_regs_many(&reply[..reply.len() - 1], &[1, 2]).is_err());
+    let mut trailing = reply.clone();
+    trailing.push(0);
+    assert!(parse_regs_many(&trailing, &[1, 2]).is_err());
+    for length in 0..reply.len().min(40) {
+        assert!(parse_regs_many(&reply[..length], &[1, 2]).is_err());
+    }
+}
+
+#[test]
+fn thread_entries_carry_the_pending_signal() {
+    let mut reply = Vec::new();
+    reply.extend(1u32.to_le_bytes());
+    reply.extend(1u32.to_le_bytes());
+    reply.extend(95u32.to_le_bytes());
+    reply.extend(2u32.to_le_bytes());
+    reply.extend(6u32.to_le_bytes());
+    reply.extend(11u32.to_le_bytes());
+    reply.extend(0x4018c0u64.to_le_bytes());
+    reply.extend([0u8; 8]);
+    let threads = parse_threads(&reply).unwrap();
+    assert_eq!(
+        (threads[0].tid, threads[0].signal, threads[0].stopped),
+        (95, 11, true)
+    );
 }

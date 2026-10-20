@@ -3,8 +3,9 @@
 //! port. Packets are written by hand so these tests pin the exact replies a
 //! debugger sees, independent of gdbstub's own packet code.
 use crate::debug::{
-    ArchTag, DebugBackend, DebugCaps, DebugError, DebugServer, DetachMode, RegsetBlob, RegsetInfo,
-    ResumeAction, StopEvent, StopKind, TargetState, ThreadInfo,
+    ArchTag, BreakpointKind, DebugBackend, DebugCaps, DebugError, DebugServer, DetachMode,
+    RegsetBlob, RegsetInfo, ResumeAction, StopEvent, StopKind, TargetState, ThreadInfo,
+    WatchAccess,
     amd64::{FXSAVE_SIZE, NT_PRFPREG, NT_PRSTATUS, USER_REGS_SIZE},
 };
 use std::{
@@ -26,6 +27,9 @@ struct Mock {
     fp: Vec<u8>,
     memory: Vec<u8>,
     breakpoints: Vec<u64>,
+    /// Debug-register requests held, and how many the mock has room for.
+    hardware: Vec<(BreakpointKind, u64, u32)>,
+    hardware_slots: usize,
     log: Vec<String>,
     /// Polls of a running target before its next event, and that event.
     next: Option<(u32, TargetState)>,
@@ -42,6 +46,8 @@ impl Mock {
             fp: vec![0u8; FXSAVE_SIZE],
             memory: (0..0x100u32).map(|index| index as u8).collect(),
             breakpoints: Vec::new(),
+            hardware: Vec::new(),
+            hardware_slots: 4,
             log: Vec::new(),
             next: None,
         }))
@@ -66,6 +72,10 @@ fn caps() -> DebugCaps {
         hardware_single_step: true,
         shadow_reads: true,
         multi_thread: true,
+        signals: true,
+        batch_regs: false,
+        debug_on_start: false,
+        auxv: false,
         hardware_breakpoints: 0,
         hardware_watchpoints: 0,
         breakpoint_len_mask: 1,
@@ -116,11 +126,13 @@ impl DebugBackend for Backend {
                 tid: TID,
                 stopped: true,
                 pc: 0x4018c0,
+                signal: 0,
             },
             ThreadInfo {
                 tid: TID + 1,
                 stopped: true,
                 pc: 0x4018c0,
+                signal: 0,
             },
         ])
     }
@@ -189,6 +201,37 @@ impl DebugBackend for Backend {
         mock.breakpoints.retain(|existing| *existing != addr);
         Ok(())
     }
+    fn insert_breakpoint(
+        &mut self,
+        kind: BreakpointKind,
+        addr: u64,
+        len: u32,
+    ) -> Result<(), DebugError> {
+        if kind == BreakpointKind::Software {
+            return self.set_breakpoint(addr, len);
+        }
+        let mut mock = self.0.lock().unwrap();
+        if mock.hardware.len() >= mock.hardware_slots {
+            return Err(DebugError::NoSlots);
+        }
+        mock.log.push(format!("hw+ {kind:?} {addr:#x} {len}"));
+        mock.hardware.push((kind, addr, len));
+        Ok(())
+    }
+    fn remove_breakpoint(
+        &mut self,
+        kind: BreakpointKind,
+        addr: u64,
+        len: u32,
+    ) -> Result<(), DebugError> {
+        if kind == BreakpointKind::Software {
+            return self.clear_breakpoint(addr, len);
+        }
+        let mut mock = self.0.lock().unwrap();
+        mock.log.push(format!("hw- {kind:?} {addr:#x} {len}"));
+        mock.hardware.retain(|held| *held != (kind, addr, len));
+        Ok(())
+    }
     fn detach(&mut self, mode: DetachMode) -> Result<(), DebugError> {
         self.0.lock().unwrap().log.push(format!("detach {mode:?}"));
         Ok(())
@@ -202,6 +245,21 @@ struct Fixture {
 }
 impl Fixture {
     fn start(state: TargetState) -> Self {
+        Self::start_with(state, caps())
+    }
+    /// The debug registers on offer, four slots.
+    fn start_hardware(state: TargetState) -> Self {
+        Self::start_with(
+            state,
+            DebugCaps {
+                hardware_breakpoints: 4,
+                hardware_watchpoints: 4,
+                watch_len_mask: 0x8b,
+                ..caps()
+            },
+        )
+    }
+    fn start_with(state: TargetState, caps: DebugCaps) -> Self {
         let mock = Mock::new();
         {
             let mut inner = mock.lock().unwrap();
@@ -213,8 +271,7 @@ impl Fixture {
         let directory =
             std::env::temp_dir().join(format!("ant-rsp-test-{}", crate::storage::unique_id()));
         std::fs::create_dir_all(&directory).unwrap();
-        let server =
-            DebugServer::start(Box::new(Backend(mock.clone(), caps())), &directory).unwrap();
+        let server = DebugServer::start(Box::new(Backend(mock.clone(), caps)), &directory).unwrap();
         Self {
             mock,
             server,
@@ -266,6 +323,8 @@ struct Client {
     stream: Stream,
     pending: Vec<u8>,
     acks: bool,
+    /// The server was started with debug registers: the handshake expects them.
+    hardware: bool,
 }
 fn checksum(data: &[u8]) -> u8 {
     data.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte))
@@ -281,6 +340,7 @@ impl Client {
             stream,
             pending: Vec::new(),
             acks: true,
+            hardware: false,
         }
     }
     fn write(&mut self, bytes: &[u8]) {
@@ -353,10 +413,14 @@ impl Client {
         assert!(reply.contains("swbreak+"), "{reply}");
         assert!(reply.contains("qXfer:features:read+"), "{reply}");
         assert!(reply.contains("PacketSize=4000"), "{reply}");
-        assert!(
-            !reply.contains("hwbreak+"),
-            "hardware breakpoints are not offered: {reply}"
-        );
+        if !self.hardware {
+            assert!(
+                !reply.contains("hwbreak+"),
+                "hardware breakpoints are not offered: {reply}"
+            );
+        } else {
+            assert!(reply.contains("hwbreak+"), "{reply}");
+        }
         assert!(
             !reply.contains("QNonStop"),
             "non-stop is not implemented: {reply}"
@@ -776,4 +840,161 @@ fn only_this_users_tcp_connections_are_served() {
     ));
     let v6: SocketAddr = "[::1]:9".parse().unwrap();
     assert!(!crate::debug::rsp_server::tcp_peer_is_this_user(&v6, &v6));
+}
+
+#[test]
+fn debug_registers_are_offered_only_when_the_guest_has_them_and_run_out_cleanly() {
+    let fixture = Fixture::start_hardware(TargetState::Stopped(StopEvent {
+        sequence: 0,
+        kind: StopKind::Interrupt,
+        tid: TID,
+        pc: 0,
+    }));
+    let mut client = fixture.unix();
+    client.hardware = true;
+    client.handshake();
+    assert_eq!(client.send("Z1,4018c0,1"), "OK");
+    assert_eq!(client.send("Z1,4018c0,1"), "OK", "asked twice, held once");
+    assert_eq!(client.send("Z2,1000,8"), "OK");
+    // Five bytes at 0x1001 are three aligned pieces: 1, 2 and 2 bytes. That is
+    // five slots in all with the two above: one too many, and nothing is left
+    // half set.
+    assert_eq!(client.send("Z2,1001,5"), "E1c");
+    assert_eq!(fixture.mock.lock().unwrap().hardware.len(), 2);
+    // Room for the three pieces once the others are gone.
+    assert_eq!(client.send("z1,4018c0,1"), "OK");
+    assert_eq!(client.send("z1,4018c0,1"), "OK");
+    assert_eq!(client.send("Z4,1001,5"), "OK");
+    let held = fixture.mock.lock().unwrap().hardware.clone();
+    assert_eq!(
+        held,
+        vec![
+            (BreakpointKind::Watch(WatchAccess::Write), 0x1000, 8),
+            (BreakpointKind::Watch(WatchAccess::Access), 0x1001, 1),
+            (BreakpointKind::Watch(WatchAccess::Access), 0x1002, 2),
+            (BreakpointKind::Watch(WatchAccess::Access), 0x1004, 2),
+        ]
+    );
+    // A read watchpoint cannot be done with the debug registers.
+    assert_ne!(client.send("Z3,2000,4"), "OK");
+    assert_eq!(client.send("z4,1001,5"), "OK");
+    assert_eq!(fixture.mock.lock().unwrap().hardware.len(), 1);
+    assert_eq!(client.send("Z1,4018c0,1"), "OK");
+    // The reports a debugger reads.
+    fixture.mock.lock().unwrap().next = Some((
+        1,
+        TargetState::Stopped(StopEvent {
+            sequence: 0,
+            kind: StopKind::HardwareBreakpoint { addr: 0x4018c0 },
+            tid: TID,
+            pc: 0x4018c0,
+        }),
+    ));
+    client.send_no_wait("vCont;c");
+    assert_eq!(
+        client.packet().unwrap(),
+        format!("T05thread:{};hwbreak:;", thread_id())
+    );
+    fixture.mock.lock().unwrap().next = Some((
+        1,
+        TargetState::Stopped(StopEvent {
+            sequence: 0,
+            kind: StopKind::Watchpoint {
+                addr: 0x1000,
+                access: WatchAccess::Write,
+            },
+            tid: TID,
+            pc: 0x4018c7,
+        }),
+    ));
+    client.send_no_wait("vCont;c");
+    assert_eq!(
+        client.packet().unwrap(),
+        format!("T05thread:{};watch:1000;", thread_id())
+    );
+    fixture.mock.lock().unwrap().next = Some((
+        1,
+        TargetState::Stopped(StopEvent {
+            sequence: 0,
+            kind: StopKind::Watchpoint {
+                addr: 0x1002,
+                access: WatchAccess::Access,
+            },
+            tid: TID,
+            pc: 0x4018c7,
+        }),
+    ));
+    client.send_no_wait("vCont;c");
+    assert_eq!(
+        client.packet().unwrap(),
+        format!("T05thread:{};awatch:1002;", thread_id())
+    );
+    // Detach clears every hardware request the client left.
+    assert_eq!(client.send("D"), "OK");
+    assert!(client.closed());
+    fixture.wait_log("hw- Watch(Write) 0x1000 8");
+    fixture.wait_count("hw- Hardware 0x4018c0 1", 2);
+    assert!(fixture.mock.lock().unwrap().hardware.is_empty());
+}
+
+#[test]
+fn signal_stops_use_gdbs_numbers_and_a_resume_names_the_signal_to_pass() {
+    let fixture = stopped_fixture();
+    let mut client = fixture.unix();
+    client.handshake();
+    // Linux SIGUSR1 (10) is GDB's 30 (0x1e); SIGSEGV is 11 in both.
+    for (linux, gdb) in [(10u32, "1e"), (11, "0b"), (7, "0a"), (17, "14")] {
+        fixture.mock.lock().unwrap().next = Some((
+            1,
+            TargetState::Stopped(StopEvent {
+                sequence: 0,
+                kind: StopKind::Signal { signal: linux },
+                tid: TID,
+                pc: 0x4018c0,
+            }),
+        ));
+        client.send_no_wait("vCont;c");
+        assert_eq!(
+            client.packet().unwrap(),
+            format!("T{gdb}thread:{};", thread_id())
+        );
+        // Pass it (C<sig>), step into its handler (S<sig>).
+        fixture.mock.lock().unwrap().next = Some((
+            1,
+            TargetState::Stopped(StopEvent {
+                sequence: 0,
+                kind: StopKind::Step,
+                tid: TID,
+                pc: 0x401000,
+            }),
+        ));
+        client.send_no_wait(&format!("vCont;S{gdb}:{}", thread_id()));
+        assert_eq!(
+            client.packet().unwrap(),
+            format!("T05thread:{};", thread_id())
+        );
+        let log = fixture.log();
+        assert!(
+            log.contains(&format!("StepSignal {{ tid: {TID}, signal: {linux} }}")),
+            "{log:?}"
+        );
+    }
+    fixture.mock.lock().unwrap().next = Some((
+        1,
+        TargetState::Stopped(StopEvent {
+            sequence: 0,
+            kind: StopKind::Signal { signal: 10 },
+            tid: TID,
+            pc: 0x4018c0,
+        }),
+    ));
+    client.send_no_wait("vCont;c");
+    client.packet().unwrap();
+    client.send_no_wait(&format!("vCont;C1e:{}", thread_id()));
+    fixture.wait_log(&format!("ContinueSignal {{ tid: {TID}, signal: 10 }}"));
+    // A plain continue drops the signal.
+    client.write(&[3]);
+    client.packet().unwrap();
+    client.send_no_wait("vCont;c");
+    fixture.wait_count("Continue", 1);
 }

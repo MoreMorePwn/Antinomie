@@ -831,6 +831,7 @@ fn enabled_features(ui: &mut egui::Ui, run: &RunSummary, labels: Option<run_labe
     for (on, label) in [
         (request.memory_dump_on_exit, "Memory dump on exit"),
         (request.core_dump_on_exit, "Core dump on exit"),
+        (request.debug_on_start, "Debug on start"),
         (request.capture_network, "Network capture"),
     ] {
         if on {

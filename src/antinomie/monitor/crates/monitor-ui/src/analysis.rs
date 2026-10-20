@@ -18,6 +18,7 @@ pub(crate) use workspace::{workspace, workspace_section, WorkspaceState};
 pub(crate) struct LaunchCapabilities {
     pub graphical: bool,
     pub core_on_exit: bool,
+    pub debug_on_start: bool,
 }
 
 /// Program fields and the analysis selection; true when the user asked to
@@ -40,6 +41,7 @@ pub(crate) fn launch_fields(
             crate::theme::section(&mut columns[1], "Analysis");
             selection(&mut columns[1], &mut request.analysis, tools, &mut install);
             capture_selection(&mut columns[1], request, capabilities.core_on_exit);
+            debugger_selection(&mut columns[1], request, capabilities.debug_on_start);
         });
     } else {
         fields(ui, request, args, env, capabilities.graphical);
@@ -47,6 +49,7 @@ pub(crate) fn launch_fields(
         crate::theme::section(ui, "Analysis");
         selection(ui, &mut request.analysis, tools, &mut install);
         capture_selection(ui, request, capabilities.core_on_exit);
+        debugger_selection(ui, request, capabilities.debug_on_start);
     }
     install
 }
@@ -76,6 +79,29 @@ fn capture_selection(ui: &mut egui::Ui, request: &mut ExecRequest, core_supporte
     crate::theme::section(ui, "Network");
     ui.checkbox(&mut request.capture_network, "Capture network from start until tree exits")
         .on_hover_text("Record VM network packets during this run. Packets are VM-wide, not attributed to this process.");
+}
+
+fn debugger_selection(ui: &mut egui::Ui, request: &mut ExecRequest, supported: bool) {
+    ui.add_space(12.0);
+    crate::theme::section(ui, "Debugger");
+    let enabled = supported && request.run_in == RunIn::AppTerminal;
+    if !enabled {
+        request.debug_on_start = false;
+    }
+    let reason = if supported {
+        "Debug on start requires Run in: App terminal."
+    } else {
+        "Debug on start requires a base built for Antinomie 0.7.0."
+    };
+    ui.add_enabled(
+        enabled,
+        egui::Checkbox::new(&mut request.debug_on_start, "Debug on start"),
+    )
+    .on_hover_text("Stop the program before its first instruction (the loader's, for a dynamic program) and open the debugger on it. The run shows the gdb command to attach with; the program waits until a debugger continues it. Nothing runs in the guest for this.")
+    .on_disabled_hover_text(reason);
+    if !enabled {
+        ui.add(egui::Label::new(egui::RichText::new(reason).weak()).wrap());
+    }
 }
 
 fn core_unavailable_reason(core_supported: bool) -> &'static str {
@@ -559,6 +585,27 @@ mod tests {
             egui::CentralPanel::default().show(ctx, |ui| capture_selection(ui, &mut request, true));
         });
         assert!(request.core_dump_on_exit);
+    }
+
+    #[test]
+    fn debug_on_start_is_offered_only_where_it_can_work() {
+        for (supported, run_in, kept) in [
+            (true, RunIn::AppTerminal, true),
+            (false, RunIn::AppTerminal, false),
+            (true, RunIn::GuestDesktop, false),
+        ] {
+            let ctx = egui::Context::default();
+            let mut request = ExecRequest {
+                run_in,
+                debug_on_start: true,
+                ..ExecRequest::default()
+            };
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default()
+                    .show(ctx, |ui| debugger_selection(ui, &mut request, supported));
+            });
+            assert_eq!(request.debug_on_start, kept);
+        }
     }
 
     fn report(

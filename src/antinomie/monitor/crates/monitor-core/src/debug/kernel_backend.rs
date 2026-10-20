@@ -8,6 +8,7 @@ use super::{
         ArchTag, DebugBackend, DebugCaps, DebugError, DetachMode, GuestLink, LinkError, RegsetBlob,
         ResumeAction, StopEvent, StopKind, TargetState, ThreadInfo,
     },
+    view::BreakpointKind,
     wire,
 };
 use crate::observation::GuestProcessIdentity;
@@ -17,6 +18,7 @@ const EBUSY: i32 = 16;
 const EFAULT: i32 = 14;
 const EINVAL: i32 = 22;
 const ESRCH: i32 = 3;
+const ENOSPC: i32 = 28;
 const EOPNOTSUPP: i32 = 95;
 const ESTALE: i32 = 116;
 
@@ -26,6 +28,7 @@ fn map_link(error: LinkError) -> DebugError {
         Some(ESTALE) => DebugError::Stale,
         Some(ESRCH) => DebugError::Gone,
         Some(EFAULT) => DebugError::Fault,
+        Some(ENOSPC) => DebugError::NoSlots,
         Some(EOPNOTSUPP) => DebugError::Unsupported(error.message),
         Some(EINVAL) => DebugError::Invalid(error.message),
         Some(errno) => DebugError::Guest {
@@ -135,6 +138,26 @@ impl KernelDebugBackend {
         self.session
     }
 
+    /// A hardware request the guest advertised support for.
+    fn check_hardware(&self, kind: BreakpointKind, len: u32) -> Result<(), DebugError> {
+        let caps = &self.caps;
+        let supported = match kind {
+            BreakpointKind::Hardware => caps.hardware_breakpoints > 0 && len == 1,
+            _ => {
+                caps.hardware_watchpoints > 0
+                    && matches!(len, 1 | 2 | 4 | 8)
+                    && caps.watch_len_mask & (1 << (len - 1)) != 0
+            }
+        };
+        if supported {
+            Ok(())
+        } else {
+            Err(DebugError::Unsupported(format!(
+                "{kind:?} of {len} bytes in the debug registers"
+            )))
+        }
+    }
+
     fn call(&mut self, opcode: u32, args: &[u8]) -> Result<Vec<u8>, DebugError> {
         self.link.request(opcode, args).map_err(map_link)
     }
@@ -189,6 +212,7 @@ impl DebugBackend for KernelDebugBackend {
                 tid: entry.tid,
                 stopped: entry.stopped,
                 pc: entry.pc,
+                signal: entry.signal,
             })
             .collect())
     }
@@ -199,13 +223,20 @@ impl DebugBackend for KernelDebugBackend {
     }
 
     fn resume(&mut self, action: ResumeAction) -> Result<(), DebugError> {
-        let step = match action {
-            ResumeAction::Continue => None,
-            ResumeAction::Step { tid } => Some(tid),
+        let (step, signal) = match action {
+            ResumeAction::Continue => (None, None),
+            ResumeAction::Step { tid } => (Some(tid), None),
+            ResumeAction::ContinueSignal { tid, signal } => (None, Some((tid, signal))),
+            ResumeAction::StepSignal { tid, signal } => (Some(tid), Some((tid, signal))),
         };
+        if signal.is_some() && !self.caps.signals {
+            return Err(DebugError::Unsupported(
+                "this guest cannot pass signals to the program".into(),
+            ));
+        }
         let reply = self.call(
             wire::CONT,
-            &wire::cont_request(self.session, step, self.generation),
+            &wire::cont_request(self.session, step, self.generation, signal),
         )?;
         wire::parse_cont(&reply).map_err(protocol)?;
         Ok(())
@@ -222,6 +253,55 @@ impl DebugBackend for KernelDebugBackend {
             &wire::regs_read_request(self.session, tid, nt_type, self.generation),
         )?;
         wire::parse_regs(&reply, nt_type).map_err(protocol)
+    }
+
+    fn read_regsets(&mut self, tid: u32, nt_types: &[u32]) -> Result<Vec<RegsetBlob>, DebugError> {
+        let mut mask = 0u32;
+        for nt_type in nt_types {
+            match self
+                .caps
+                .regsets
+                .iter()
+                .position(|set| set.nt_type == *nt_type)
+            {
+                Some(index) if index < 32 => mask |= 1 << index,
+                _ => {
+                    return Err(DebugError::Unsupported(format!(
+                        "register set {nt_type} is not offered by the guest"
+                    )));
+                }
+            }
+        }
+        // The guest answers in table order: ask in that order, then arrange.
+        let table: Vec<u32> = self
+            .caps
+            .regsets
+            .iter()
+            .map(|set| set.nt_type)
+            .enumerate()
+            .filter(|(index, _)| mask & (1 << index) != 0)
+            .map(|(_, nt_type)| nt_type)
+            .collect();
+        if !self.caps.batch_regs || nt_types.len() < 2 || table.len() != nt_types.len() {
+            return nt_types
+                .iter()
+                .map(|nt_type| self.read_regset(tid, *nt_type))
+                .collect();
+        }
+        let reply = self.call(
+            wire::REGS_READ,
+            &wire::regs_read_many_request(self.session, tid, mask, self.generation),
+        )?;
+        let mut blobs = wire::parse_regs_many(&reply, &table).map_err(protocol)?;
+        Ok(nt_types
+            .iter()
+            .filter_map(|nt_type| {
+                blobs
+                    .iter()
+                    .position(|blob| blob.nt_type == *nt_type)
+                    .map(|index| blobs.swap_remove(index))
+            })
+            .collect())
     }
 
     fn write_regset(&mut self, tid: u32, blob: &RegsetBlob) -> Result<(), DebugError> {
@@ -291,6 +371,46 @@ impl DebugBackend for KernelDebugBackend {
     fn clear_breakpoint(&mut self, addr: u64, len: u32) -> Result<(), DebugError> {
         let request = wire::breakpoint_request(self.session, addr, len, self.generation);
         self.call(wire::BP_CLEAR, &request).map(|_| ())
+    }
+
+    fn insert_breakpoint(
+        &mut self,
+        kind: BreakpointKind,
+        addr: u64,
+        len: u32,
+    ) -> Result<(), DebugError> {
+        if kind == BreakpointKind::Software {
+            return self.set_breakpoint(addr, len);
+        }
+        self.check_hardware(kind, len)?;
+        let request = wire::breakpoint_kind_request(self.session, kind, addr, len, self.generation);
+        self.call(wire::BP_SET, &request).map(|_| ())
+    }
+
+    fn remove_breakpoint(
+        &mut self,
+        kind: BreakpointKind,
+        addr: u64,
+        len: u32,
+    ) -> Result<(), DebugError> {
+        if kind == BreakpointKind::Software {
+            return self.clear_breakpoint(addr, len);
+        }
+        let request = wire::breakpoint_kind_request(self.session, kind, addr, len, self.generation);
+        self.call(wire::BP_CLEAR, &request).map(|_| ())
+    }
+
+    fn auxv(&mut self) -> Result<Vec<u8>, DebugError> {
+        if !self.caps.auxv {
+            return Err(DebugError::Unsupported(
+                "this guest cannot read the auxiliary vector".into(),
+            ));
+        }
+        let reply = self.call(
+            wire::AUXV,
+            &wire::auxv_request(self.session, self.generation),
+        )?;
+        wire::parse_auxv(&reply).map_err(protocol)
     }
 
     /// Detach is asynchronous in the guest (it stops the group, removes the

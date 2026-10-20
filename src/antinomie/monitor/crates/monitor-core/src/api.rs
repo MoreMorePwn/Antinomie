@@ -124,7 +124,10 @@ mod guest_tests {
         )
         .unwrap();
         assert!(
-            !request.capture_network && !request.memory_dump_on_exit && !request.core_dump_on_exit
+            !request.capture_network
+                && !request.memory_dump_on_exit
+                && !request.core_dump_on_exit
+                && !request.debug_on_start
         );
         assert!(!serde_json::to_string(&vm).unwrap().contains("password"));
     }
@@ -433,6 +436,11 @@ pub struct ExecRequest {
     /// Capture the native x86-64 root process group before its address space exits.
     #[serde(default)]
     pub core_dump_on_exit: bool,
+    /// Debug on start: the guest parks the new program before its first user
+    /// instruction and the app opens the debugger on it (a revision-17 base with
+    /// the Phase 2 debugger; the run starts "Stopped at entry").
+    #[serde(default)]
+    pub debug_on_start: bool,
 }
 
 /// Persisted `artifacts.json` in a run directory links independently retained evidence.
@@ -1217,6 +1225,7 @@ impl Default for ExecRequest {
             capture_network: false,
             memory_dump_on_exit: false,
             core_dump_on_exit: false,
+            debug_on_start: false,
         }
     }
 }

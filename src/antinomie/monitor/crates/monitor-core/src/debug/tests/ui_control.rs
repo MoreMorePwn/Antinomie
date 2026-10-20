@@ -10,7 +10,7 @@ use crate::debug::{
     ui_control::{PanelControl, PanelHandle, Pump},
     view::{
         BreakpointKind, Controller, DebugAction, DebugRequest, DebugView, Pending, RunState,
-        StopReason, WindowKind,
+        StopReason, WatchAccess, WindowKind,
     },
 };
 use std::{
@@ -71,6 +71,10 @@ fn caps() -> DebugCaps {
         hardware_single_step: true,
         shadow_reads: true,
         multi_thread: true,
+        signals: true,
+        batch_regs: false,
+        debug_on_start: false,
+        auxv: false,
         hardware_breakpoints: 0,
         hardware_watchpoints: 0,
         breakpoint_len_mask: 1,
@@ -108,11 +112,13 @@ impl DebugBackend for Fake {
                 tid: TID,
                 stopped: true,
                 pc: engine.pc,
+                signal: 0,
             },
             ThreadInfo {
                 tid: TID + 1,
                 stopped: true,
                 pc: 0x40_1100,
+                signal: 0,
             },
         ])
     }
@@ -128,8 +134,10 @@ impl DebugBackend for Fake {
         let mut engine = self.0.lock().unwrap();
         engine.calls.push(format!("{action:?}"));
         match action {
-            ResumeAction::Continue => engine.state = TargetState::Running,
-            ResumeAction::Step { .. } => {
+            ResumeAction::Continue | ResumeAction::ContinueSignal { .. } => {
+                engine.state = TargetState::Running
+            }
+            ResumeAction::Step { .. } | ResumeAction::StepSignal { .. } => {
                 engine.pc += 1;
                 engine.stop(StopKind::Step);
             }
@@ -188,6 +196,32 @@ impl DebugBackend for Fake {
         engine.breakpoints.retain(|existing| *existing != addr);
         Ok(())
     }
+    fn insert_breakpoint(
+        &mut self,
+        kind: BreakpointKind,
+        addr: u64,
+        len: u32,
+    ) -> Result<(), DebugError> {
+        if kind == BreakpointKind::Software {
+            return self.set_breakpoint(addr, len);
+        }
+        let mut engine = self.0.lock().unwrap();
+        engine.calls.push(format!("hw+ {kind:?} {addr:#x} {len}"));
+        Ok(())
+    }
+    fn remove_breakpoint(
+        &mut self,
+        kind: BreakpointKind,
+        addr: u64,
+        len: u32,
+    ) -> Result<(), DebugError> {
+        if kind == BreakpointKind::Software {
+            return self.clear_breakpoint(addr, len);
+        }
+        let mut engine = self.0.lock().unwrap();
+        engine.calls.push(format!("hw- {kind:?} {addr:#x} {len}"));
+        Ok(())
+    }
     fn detach(&mut self, mode: DetachMode) -> Result<(), DebugError> {
         self.0
             .lock()
@@ -215,8 +249,20 @@ struct Rig {
 }
 impl Rig {
     fn new() -> Self {
+        Self::with_caps(caps())
+    }
+    /// A guest with the debug registers (Phase 2).
+    fn hardware() -> Self {
+        Self::with_caps(DebugCaps {
+            hardware_breakpoints: 4,
+            hardware_watchpoints: 4,
+            watch_len_mask: 0x8b,
+            ..caps()
+        })
+    }
+    fn with_caps(caps: DebugCaps) -> Self {
         let engine = Engine::new();
-        let fake = Fake(engine.clone(), caps());
+        let fake = Fake(engine.clone(), caps);
         let (mut control, handle) = PanelControl::new(fake.caps());
         control.timing(Duration::ZERO, Duration::ZERO, Duration::from_secs(5));
         Self {
@@ -749,4 +795,103 @@ fn a_real_client_connecting_takes_the_process_from_the_panel() {
         .shutdown(DetachMode::Resume, Duration::from_secs(5))
         .unwrap();
     let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn hardware_breakpoints_and_watchpoints_reach_the_guest_as_aligned_pieces() {
+    let mut rig = Rig::hardware();
+    rig.stopped();
+    rig.send(DebugAction::AddBreakpoint {
+        addr: CODE + 0x20,
+        kind: BreakpointKind::Hardware,
+    });
+    // A write watch on an aligned 8 bytes is one piece; a read watch becomes an
+    // access watch (the registers have no read-only mode); an unaligned one
+    // is split.
+    rig.send(DebugAction::AddBreakpoint {
+        addr: STACK + 0x10,
+        kind: BreakpointKind::Watch(WatchAccess::Write),
+    });
+    rig.send(DebugAction::AddBreakpoint {
+        addr: STACK + 0x21,
+        kind: BreakpointKind::Watch(WatchAccess::Read),
+    });
+    rig.pump();
+    let calls = rig.calls();
+    for want in [
+        format!("hw+ Hardware {:#x} 1", CODE + 0x20),
+        format!("hw+ Watch(Write) {:#x} 8", STACK + 0x10),
+        format!("hw+ Watch(Access) {:#x} 1", STACK + 0x21),
+        format!("hw+ Watch(Access) {:#x} 2", STACK + 0x22),
+        format!("hw+ Watch(Access) {:#x} 4", STACK + 0x24),
+        format!("hw+ Watch(Access) {:#x} 1", STACK + 0x28),
+    ] {
+        assert!(calls.contains(&want), "{want} missing in {calls:?}");
+    }
+    assert_eq!(rig.view().breakpoints.len(), 3);
+    rig.send(DebugAction::RemoveBreakpoint { addr: STACK + 0x21 });
+    rig.pump();
+    assert!(rig.count("hw- Watch(Access)") == 4);
+    // A guest without them still refuses, with its reason.
+    let mut plain = Rig::new();
+    plain.stopped();
+    plain.send(DebugAction::AddBreakpoint {
+        addr: CODE,
+        kind: BreakpointKind::Hardware,
+    });
+    plain.pump();
+    assert!(plain.view().breakpoints.is_empty());
+    assert!(
+        plain
+            .view()
+            .notice
+            .as_deref()
+            .unwrap_or("")
+            .contains("not available")
+    );
+}
+
+#[test]
+fn a_thread_stopped_on_a_signal_gets_it_on_continue_or_step_except_a_trap() {
+    let mut rig = Rig::new();
+    rig.pump();
+    {
+        let mut engine = rig.engine.lock().unwrap();
+        engine.stop(StopKind::Signal { signal: 11 });
+    }
+    rig.pump_until(|view| view.run.stopped_sequence().is_some() && !view.loading);
+    assert!(matches!(
+        rig.view().run,
+        RunState::Stopped {
+            reason: StopReason::Signal { number: 11 },
+            ..
+        }
+    ));
+    rig.send(DebugAction::Step { tid: TID });
+    rig.pump();
+    assert!(
+        rig.calls()
+            .contains(&format!("StepSignal {{ tid: {TID}, signal: 11 }}")),
+        "{:?}",
+        rig.calls()
+    );
+    rig.pump_until(|view| view.run.stopped_sequence().is_some() && !view.loading);
+    // The step ended as a step: nothing left to pass.
+    rig.send(DebugAction::Continue);
+    rig.pump();
+    assert!(rig.calls().contains(&"Continue".to_string()));
+    {
+        let mut engine = rig.engine.lock().unwrap();
+        engine.stop(StopKind::Signal { signal: 5 });
+    }
+    rig.pump_until(|view| view.run.stopped_sequence().is_some() && !view.loading);
+    rig.send(DebugAction::Continue);
+    rig.pump();
+    assert!(
+        !rig.calls()
+            .iter()
+            .any(|call| call.starts_with("ContinueSignal")),
+        "SIGTRAP is not passed: {:?}",
+        rig.calls()
+    );
 }

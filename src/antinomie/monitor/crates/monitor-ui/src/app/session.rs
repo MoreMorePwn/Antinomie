@@ -735,6 +735,7 @@ fn requests_match(left: &ExecRequest, right: &ExecRequest) -> bool {
         && left.capture_network == right.capture_network
         && left.memory_dump_on_exit == right.memory_dump_on_exit
         && left.core_dump_on_exit == right.core_dump_on_exit
+        && left.debug_on_start == right.debug_on_start
 }
 
 /// Terminals keep a listing copy of their run: the analysis report is read
